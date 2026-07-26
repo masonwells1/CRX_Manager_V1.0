@@ -190,4 +190,35 @@ describe('BulkOrderImport', () => {
     };
     expect(args.p_items[0].product_id).toBe('product-b');
   });
+
+  it('keeps mixed-result failure details open while refreshing successful orders', async () => {
+    const onSuccess = vi.fn();
+    const onPartialSuccess = vi.fn();
+    const { container } = render(
+      <BulkOrderImport
+        {...defaultProps}
+        onSuccess={onSuccess}
+        onPartialSuccess={onPartialSuccess}
+      />,
+    );
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit',
+      'O-GOOD,North Farm,SKU-B,2,20',
+      'O-BAD,North Farm,Same Name,2,20',
+    ].join('\n');
+    const file = new File([csv], 'mixed.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/mixed\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-GOOD/);
+    fireEvent.click(screen.getByRole('button', { name: /import 2 orders/i }));
+
+    const failures = await screen.findByRole('list', { name: /order import failure details/i });
+    expect(failures).toHaveTextContent('Order O-BAD');
+    expect(onPartialSuccess).toHaveBeenCalledTimes(1);
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
 });

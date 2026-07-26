@@ -16,6 +16,7 @@ interface BulkOrderImportProps {
   open: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  onPartialSuccess?: () => void;
 }
 
 interface ParsedOrderItem {
@@ -70,7 +71,12 @@ const ITEM_FIELD_MAPPINGS: Record<string, string[]> = {
   item_notes: ['item_notes', 'item_comment', 'line_notes'],
 };
 
-export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderImportProps) {
+export default function BulkOrderImport({
+  open,
+  onClose,
+  onSuccess,
+  onPartialSuccess,
+}: BulkOrderImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
   const [file, setFile] = useState<File | null>(null);
@@ -452,7 +458,11 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         await logActivity({ event: 'orders_bulk_imported', description: `Bulk imported ${successCount} order(s)`, performedBy: profile.id });
       }
       toast('success', `Imported ${successCount} order${successCount !== 1 ? 's' : ''}`);
-      onSuccess();
+      if (failedCount === 0) {
+        onSuccess();
+      } else {
+        onPartialSuccess?.();
+      }
     }
   };
 
