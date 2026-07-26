@@ -115,6 +115,7 @@ export default function SupplierPricing() {
   const workspaceRequestRef = useRef(0);
   const workspaceRefreshPendingRef = useRef(false);
   const importRequestRef = useRef(0);
+  const importRequestPendingRef = useRef(false);
   const basisWorkspaceRequestRef = useRef(0);
   const selectedVendorIdRef = useRef(selectedVendorId);
   const selectedProductIdRef = useRef(selectedProductId);
@@ -123,6 +124,11 @@ export default function SupplierPricing() {
   useEffect(() => { selectedVendorIdRef.current = selectedVendorId; }, [selectedVendorId]);
   useEffect(() => { selectedProductIdRef.current = selectedProductId; }, [selectedProductId]);
   useEffect(() => { reviewRef.current = review; }, [review]);
+
+  const commitReview = useCallback((nextReview: SupplierImportReview | null) => {
+    reviewRef.current = nextReview;
+    setReview(nextReview);
+  }, []);
 
   const stageImportIdem = useIdempotencyKey('stage_supplier_price_import', profile?.id || '');
   const approveImportIdem = useIdempotencyKey('approve_supplier_price_import', profile?.id || '');
@@ -134,10 +140,20 @@ export default function SupplierPricing() {
 
   const loadWorkspace = useCallback(async () => {
     const requestId = ++workspaceRequestRef.current;
+    const reviewIdToRefresh = reviewRef.current?.id ?? null;
+    importRequestRef.current += 1;
+    if (importRequestPendingRef.current) {
+      importRequestPendingRef.current = false;
+      setBusy(false);
+    }
     workspaceRefreshPendingRef.current = true;
     setLoading(true);
     try {
       const result = await getSupplierPricingWorkspace();
+      if (workspaceRequestRef.current !== requestId) return;
+      const refreshedReview = reviewIdToRefresh && result.imports.some((item) => item.id === reviewIdToRefresh)
+        ? await getSupplierPriceImport(reviewIdToRefresh)
+        : null;
       if (workspaceRequestRef.current !== requestId) return;
       const nextVendorId = result.vendors.some((vendor) => vendor.id === selectedVendorIdRef.current)
         ? selectedVendorIdRef.current
@@ -145,11 +161,9 @@ export default function SupplierPricing() {
       const nextProductId = result.products.some((product) => product.id === selectedProductIdRef.current)
         ? selectedProductIdRef.current
         : result.products[0]?.id || '';
-      const reviewStillExists = reviewRef.current && result.imports.some((item) => item.id === reviewRef.current?.id);
       setWorkspace(result);
       selectedVendorIdRef.current = nextVendorId;
       selectedProductIdRef.current = nextProductId;
-      reviewRef.current = reviewStillExists ? reviewRef.current : null;
       setSelectedVendorId(nextVendorId);
       setSelectedProductId(nextProductId);
       setQuickQuote((current) => {
@@ -170,7 +184,7 @@ export default function SupplierPricing() {
           : blankLink;
       });
       setAliasVendorId((current) => result.vendors.some((vendor) => vendor.id === current) ? current : '');
-      setReview(reviewStillExists ? reviewRef.current : null);
+      commitReview(refreshedReview);
       setSelectedRowIds(new Set());
       setApproveOpen(false);
       setRejectOpen(false);
@@ -189,12 +203,11 @@ export default function SupplierPricing() {
       setWorkspace(null);
       selectedVendorIdRef.current = '';
       selectedProductIdRef.current = '';
-      reviewRef.current = null;
       setSelectedVendorId('');
       setSelectedProductId('');
       setLinkForm(blankLink);
       setQuickQuote(blankQuickQuote);
-      setReview(null);
+      commitReview(null);
       setSelectedRowIds(new Set());
       setApproveOpen(false);
       setRejectOpen(false);
@@ -213,7 +226,7 @@ export default function SupplierPricing() {
         setLoading(false);
       }
     }
-  }, [toast]);
+  }, [commitReview, toast]);
 
   useEffect(() => {
     void loadWorkspace();
@@ -355,7 +368,7 @@ export default function SupplierPricing() {
       });
       stageImportIdem.resetKey();
       setSelectedVendorId(parsed.vendorId);
-      setReview(result);
+      commitReview(result);
       toast('success', `Staged ${result.row_count} manual quote row(s) for review.`);
       await refreshWorkspaceAndBasis();
     } catch (error) {
@@ -407,7 +420,7 @@ export default function SupplierPricing() {
         idempotencyKey: stageImportIdem.getKey(),
       });
       stageImportIdem.resetKey();
-      setReview(result);
+      commitReview(result);
       toast('success', 'Quick quote staged for review. No sell price was changed.');
       await refreshWorkspaceAndBasis();
     } catch (error) {
@@ -428,7 +441,7 @@ export default function SupplierPricing() {
         idempotencyKey: approveImportIdem.getKey(),
       });
       approveImportIdem.resetKey();
-      setReview(result);
+      commitReview(result);
       setApproveOpen(false);
       toast('success', result.summary || `${result.approved_count ?? 0} supplier observation(s) approved.`);
       await refreshWorkspaceAndBasis();
@@ -454,7 +467,7 @@ export default function SupplierPricing() {
         idempotencyKey: rejectImportIdem.getKey(),
       });
       rejectImportIdem.resetKey();
-      setReview(result);
+      commitReview(result);
       setRejectOpen(false);
       setRejectReason('');
       toast('success', result.summary || 'Import rejected. No supplier observations were changed.');
@@ -491,7 +504,7 @@ export default function SupplierPricing() {
       correctionIdem.resetKey();
       setCorrectionRow(null);
       toast('success', result.summary || 'Correction recorded. The prior quote is superseded.');
-      if (review) setReview(await getSupplierPriceImport(review.id));
+      if (review) commitReview(await getSupplierPriceImport(review.id));
       await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
@@ -502,17 +515,20 @@ export default function SupplierPricing() {
 
   const openImport = async (importId: string) => {
     const requestId = ++importRequestRef.current;
+    importRequestPendingRef.current = true;
     setBusy(true);
     try {
       const result = await getSupplierPriceImport(importId);
       if (importRequestRef.current !== requestId) return;
-      reviewRef.current = result;
-      setReview(result);
+      commitReview(result);
       setActiveTab('quotes');
     } catch (error) {
       if (importRequestRef.current === requestId) toast('error', sanitizeError(error));
     } finally {
-      if (importRequestRef.current === requestId) setBusy(false);
+      if (importRequestRef.current === requestId) {
+        importRequestPendingRef.current = false;
+        setBusy(false);
+      }
     }
   };
 

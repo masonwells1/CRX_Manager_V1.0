@@ -82,6 +82,56 @@ function renderSupplierPricing() {
   );
 }
 
+function makeImportSummary(
+  id: string,
+  vendorName: string,
+  status: 'needs_review' | 'approved' = 'needs_review',
+) {
+  return {
+    id,
+    vendor_id: `vendor-${id}`,
+    vendor_name: vendorName,
+    document_date: '2026-07-18',
+    ingestion_method: 'quote_sheet' as const,
+    status,
+    row_count: 1,
+    eligible_row_count: status === 'needs_review' ? 1 : 0,
+    approved_observation_count: status === 'approved' ? 1 : 0,
+    source_document_name: `${id}.pdf`,
+    created_at: '2026-07-18T12:00:00Z',
+  };
+}
+
+function makeImportDetail(
+  id: string,
+  vendorName: string,
+  productName: string,
+  status: 'needs_review' | 'approved' = 'needs_review',
+) {
+  return {
+    ...makeImportSummary(id, vendorName, status),
+    format_version: 'crx-supplier-quote-phase1b-v1',
+    rows: [{
+      id: `row-${id}`,
+      row_number: 1,
+      product_id: `product-${id}`,
+      product_name: productName,
+      product_supplier_link_id: `link-${id}`,
+      supplier_sku: `SKU-${id}`,
+      supplier_product_name: productName,
+      cost_cents: 12_500n,
+      price_unit: 'case',
+      package_quantity: 1,
+      effective_from: '2026-07-18',
+      effective_to: null,
+      price_kind: 'quote',
+      row_status: status === 'approved' ? 'approved' as const : 'new' as const,
+      validation_errors: [],
+      observation_id: status === 'approved' ? `observation-${id}` : null,
+    }],
+  };
+}
+
 describe('SupplierPricing page', () => {
   afterEach(() => cleanup());
 
@@ -163,43 +213,8 @@ describe('SupplierPricing page', () => {
   });
 
   it('keeps the latest import detail when rapid opens resolve out of order', async () => {
-    const importSummary = (id: string, vendorName: string) => ({
-      id,
-      vendor_id: `vendor-${id}`,
-      vendor_name: vendorName,
-      document_date: '2026-07-18',
-      ingestion_method: 'quote_sheet' as const,
-      status: 'needs_review' as const,
-      row_count: 1,
-      eligible_row_count: 1,
-      approved_observation_count: 0,
-      source_document_name: `${id}.pdf`,
-      created_at: '2026-07-18T12:00:00Z',
-    });
-    const importDetail = (id: string, vendorName: string, productName: string) => ({
-      ...importSummary(id, vendorName),
-      format_version: 'crx-supplier-quote-phase1b-v1',
-      rows: [{
-        id: `row-${id}`,
-        row_number: 1,
-        product_id: `product-${id}`,
-        product_name: productName,
-        product_supplier_link_id: `link-${id}`,
-        supplier_sku: `SKU-${id}`,
-        supplier_product_name: productName,
-        cost_cents: 12_500n,
-        price_unit: 'case',
-        package_quantity: 1,
-        effective_from: '2026-07-18',
-        effective_to: null,
-        price_kind: 'quote',
-        row_status: 'new' as const,
-        validation_errors: [],
-        observation_id: null,
-      }],
-    });
-    const importA = importDetail('import-a', 'Supplier A', 'Product from A');
-    const importB = importDetail('import-b', 'Supplier B', 'Product from B');
+    const importA = makeImportDetail('import-a', 'Supplier A', 'Product from A');
+    const importB = makeImportDetail('import-b', 'Supplier B', 'Product from B');
     let resolveA!: (value: typeof importA) => void;
     let resolveB!: (value: typeof importB) => void;
     const pendingA = new Promise<typeof importA>((resolve) => { resolveA = resolve; });
@@ -210,8 +225,8 @@ describe('SupplierPricing page', () => {
       products: [],
       links: [],
       imports: [
-        importSummary('import-a', 'Supplier A'),
-        importSummary('import-b', 'Supplier B'),
+        makeImportSummary('import-a', 'Supplier A'),
+        makeImportSummary('import-b', 'Supplier B'),
       ],
       aliases: [],
       evidence: [],
@@ -240,6 +255,66 @@ describe('SupplierPricing page', () => {
     });
     expect(screen.getAllByText('Product from B')).toHaveLength(2);
     expect(screen.queryAllByText('Product from A')).toHaveLength(0);
+  });
+
+  it('invalidates a pending import on refresh and reloads a same-ID status change', async () => {
+    const importA = makeImportDetail('import-a', 'Supplier A', 'Product from A');
+    const importBNeedsReview = makeImportDetail('import-b', 'Supplier B', 'Product from B');
+    const importBApproved = makeImportDetail('import-b', 'Supplier B', 'Product from B', 'approved');
+    const initialWorkspace = {
+      vendors: [],
+      products: [],
+      links: [],
+      imports: [
+        makeImportSummary('import-a', 'Supplier A'),
+        makeImportSummary('import-b', 'Supplier B'),
+      ],
+      aliases: [],
+      evidence: [],
+    };
+    const withoutA = {
+      ...initialWorkspace,
+      imports: [makeImportSummary('import-b', 'Supplier B')],
+    };
+    const withBApproved = {
+      ...initialWorkspace,
+      imports: [makeImportSummary('import-b', 'Supplier B', 'approved')],
+    };
+    let resolveA!: (value: typeof importA) => void;
+    const pendingA = new Promise<typeof importA>((resolve) => { resolveA = resolve; });
+    let importBLoads = 0;
+    mockGetWorkspace
+      .mockResolvedValueOnce(initialWorkspace)
+      .mockResolvedValueOnce(withoutA)
+      .mockResolvedValueOnce(withBApproved);
+    mockGetImport.mockImplementation((id: string) => {
+      if (id === 'import-a') return pendingA;
+      importBLoads += 1;
+      return Promise.resolve(importBLoads === 1 ? importBNeedsReview : importBApproved);
+    });
+
+    renderSupplierPricing();
+    fireEvent.click(await screen.findByRole('button', { name: /Supplier A/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Supplier A/ })).not.toBeInTheDocument());
+
+    await act(async () => {
+      resolveA(importA);
+      await pendingA;
+    });
+    expect(screen.queryAllByText('Product from A')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /Supplier B/ }));
+    expect(await screen.findAllByText('Product from B')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Approve selected observations' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Approve selected observations' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Reject import' })).not.toBeInTheDocument();
+    });
+    expect(importBLoads).toBe(2);
+    expect(screen.getAllByText('approved').length).toBeGreaterThan(0);
   });
 
   it('clears an already-populated workspace when the current refresh fails', async () => {
