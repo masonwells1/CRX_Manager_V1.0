@@ -56,34 +56,35 @@ export default function RelatedNotes({ entityType, entityId, onCreateTask }: Rel
   return (
     <Card padding={false}>
       {/* Header */}
-      <button
-        type="button"
-        className="w-full flex items-center justify-between p-4 text-left"
-        onClick={() => setExpanded(!isExpanded)}
-      >
-        <div className="flex items-center gap-2">
-          <MessageSquare className="w-4 h-4 text-crx-green" />
-          <h3 className="text-sm font-semibold text-nav-dark">
-            Team Notes {!loading && `(${notes.length})`}
-          </h3>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={<Plus className="w-3.5 h-3.5" />}
-            showChevron={false}
-            onClick={(e) => { e.stopPropagation(); onCreateTask(); }}
-          >
-            Create Task
-          </Button>
+      <div className="flex items-center p-4">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center justify-between text-left"
+          onClick={() => setExpanded(!isExpanded)}
+          aria-expanded={isExpanded}
+        >
+          <div className="flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-crx-green" />
+            <h3 className="text-sm font-semibold text-nav-dark">
+              Team Notes {!loading && `(${notes.length})`}
+            </h3>
+          </div>
           {isExpanded ? (
             <ChevronUp className="w-4 h-4 text-gray-400" />
           ) : (
             <ChevronDown className="w-4 h-4 text-gray-400" />
           )}
-        </div>
-      </button>
+        </button>
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={<Plus className="w-3.5 h-3.5" />}
+          showChevron={false}
+          onClick={onCreateTask}
+        >
+          Create Task
+        </Button>
+      </div>
 
       {/* Body */}
       {isExpanded && (

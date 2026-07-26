@@ -30,6 +30,12 @@ describe('Stage B2 Product presentation adoption', () => {
     expect(source).toContain('product_id: item.product_id');
   });
 
+  it('keeps the JobDetail action header wrapped at phone width', () => {
+    const source = readFileSync(resolve(root, 'src/pages/JobDetail.tsx'), 'utf8');
+    expect(source).toContain('flex flex-col gap-4 sm:flex-row sm:items-center');
+    expect(source).toContain('flex flex-wrap items-center gap-2 sm:justify-end');
+  });
+
   it.each([
     'src/components/quotes/BulkQuoteImport.tsx',
     'src/components/orders/BulkOrderImport.tsx',

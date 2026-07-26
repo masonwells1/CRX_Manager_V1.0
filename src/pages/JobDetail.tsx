@@ -2979,8 +2979,8 @@ export default function JobDetail() {
           </span>
         </div>
       )}
-      <div className="flex items-center gap-4">
-        <div className="flex-1">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-nav-dark">
             {isNew ? (jobNumber ? `New Job — ${jobNumber}` : 'New Job') : jobNumber}
           </h1>
@@ -2994,7 +2994,7 @@ export default function JobDetail() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           {!isNew && fieldRows.some((f) => f.field_id) && chemRows.some((c) => c.product_id) && (
             <>
               <Button variant="secondary" onClick={() => setPrintOptionsOpen(true)} loading={generatingSheet !== null}>
