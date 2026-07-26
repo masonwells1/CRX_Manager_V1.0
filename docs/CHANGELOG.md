@@ -20,6 +20,17 @@ error), clears `deleted_at`, logs `vendor_reactivated` to the activity feed, and
 standard SECURITY DEFINER + pg_temp + explicit ACL + in-migration verification pattern.
 `delete_vendor` itself is unchanged — only the UI language moved.
 
+**RLS follow-up, same day:** the PR #236 automated review caught a real P1 — the sole vendors
+SELECT policy requires `deleted_at IS NULL`, so Row Level Security silently hid every
+deactivated vendor and the Show Inactive view was always empty (Reactivate unreachable).
+Confirmed against live `pg_policy`, then fixed with one additive admin-only SELECT policy
+`vendors_select_inactive_admin` scoped to soft-deleted rows (**APPLIED LIVE 2026-07-26** after
+both reviewer charters returned CLEAN on the first run; submitted as `20260726220000`,
+server-assigned ledger version `20260726215154`, disk file B7-renamed to match). Active-row
+visibility is unchanged and no write policy was added — reactivation still goes only through
+the `reactivate_vendor` RPC. Post-apply proof: live `pg_policy` shows exactly the two intended
+SELECT-only policies.
+
 ## 2026-07-26 — void_vendor_payment vendor-liveness gate APPLIED LIVE
 
 Section 9 follow-up MEDIUM-1: `void_vendor_payment` flipped a bill from paid back to unpaid without
