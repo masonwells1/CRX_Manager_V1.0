@@ -728,6 +728,82 @@ describe('SupplierPricing page', () => {
     );
   });
 
+  it('never reuses an older PDF path after the selected PDF changes during upload', async () => {
+    const product = {
+      id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      product_name: 'PDF Identity Product',
+      sku: 'PDF-IDENTITY',
+      inventory_unit: 'gallon',
+    };
+    const link = {
+      id: 'link-pdf-identity',
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: 'PDF-SUP',
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    };
+    const workspace = {
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [product],
+      links: [link],
+      imports: [], aliases: [], evidence: [],
+    };
+    let resolveFirstUpload!: (path: string) => void;
+    const firstUpload = new Promise<string>((resolve) => { resolveFirstUpload = resolve; });
+    mockGetWorkspace.mockResolvedValue(workspace);
+    mockUploadSupplierSourcePdf
+      .mockReturnValueOnce(firstUpload)
+      .mockResolvedValueOnce('supplier-evidence/b.pdf');
+    mockStageSupplierPriceImport.mockResolvedValue(
+      makeImportDetail('pdf-identity', 'Supplier One', product.product_name),
+    );
+
+    const { container } = renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+    const pdfInput = container.querySelector<HTMLInputElement>('input[accept*="application/pdf"]');
+    expect(pdfInput).not.toBeNull();
+    const firstPdf = new File(['a'], 'A.pdf', { type: 'application/pdf' });
+    const secondPdf = new File(['b'], 'B.pdf', { type: 'application/pdf' });
+    fireEvent.change(pdfInput!, { target: { files: [firstPdf] } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    await waitFor(() => expect(mockUploadSupplierSourcePdf).toHaveBeenCalledWith(firstPdf, 'actor-1'));
+    fireEvent.change(pdfInput!, { target: { files: [secondPdf] } });
+
+    await act(async () => {
+      resolveFirstUpload('supplier-evidence/a.pdf');
+      await firstUpload;
+    });
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'The source PDF changed while it was uploading. Stage again with the current PDF.',
+    ));
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    await waitFor(() => expect(mockStageSupplierPriceImport).toHaveBeenCalledTimes(1));
+    expect(mockUploadSupplierSourcePdf).toHaveBeenNthCalledWith(2, secondPdf, 'actor-1');
+    expect(mockStageSupplierPriceImport).toHaveBeenCalledWith(expect.objectContaining({
+      sourceDocumentPath: 'supplier-evidence/b.pdf',
+      sourceDocumentName: 'B.pdf',
+      sourceDocumentMime: 'application/pdf',
+    }));
+  });
+
   it('routes comparable supplier evidence to the single-Product governed flow', async () => {
     mockGetWorkspace.mockResolvedValue({
       vendors: [{ id: 'vendor-1', name: 'The Andersons' }],

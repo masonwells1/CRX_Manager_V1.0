@@ -94,7 +94,6 @@ export default function SupplierPricing() {
   const [selectedProductId, setSelectedProductId] = useState('');
   const [documentDate, setDocumentDate] = useState(today());
   const [sourcePdf, setSourcePdf] = useState<File | null>(null);
-  const [uploadedPdfPath, setUploadedPdfPath] = useState<string | null>(null);
   const [review, setReview] = useState<SupplierImportReview | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [approveOpen, setApproveOpen] = useState(false);
@@ -120,6 +119,9 @@ export default function SupplierPricing() {
   const selectedVendorIdRef = useRef(selectedVendorId);
   const selectedProductIdRef = useRef(selectedProductId);
   const reviewRef = useRef(review);
+  const sourcePdfRef = useRef<File | null>(null);
+  const sourcePdfSelectionRef = useRef(0);
+  const uploadedPdfRef = useRef<{ selectionId: number; path: string } | null>(null);
 
   useEffect(() => { selectedVendorIdRef.current = selectedVendorId; }, [selectedVendorId]);
   useEffect(() => { selectedProductIdRef.current = selectedProductId; }, [selectedProductId]);
@@ -306,16 +308,28 @@ export default function SupplierPricing() {
 
   const attachPdf = (file: File | null) => {
     stageImportIdem.resetKey();
+    sourcePdfSelectionRef.current += 1;
+    sourcePdfRef.current = file;
+    uploadedPdfRef.current = null;
     setSourcePdf(file);
-    setUploadedPdfPath(null);
   };
 
-  const ensurePdfStored = async (): Promise<string | null> => {
-    if (!sourcePdf || !profile) return null;
-    if (uploadedPdfPath) return uploadedPdfPath;
-    const path = await uploadSupplierSourcePdf(sourcePdf, profile.id);
-    setUploadedPdfPath(path);
-    return path;
+  const ensurePdfStored = async (): Promise<{ file: File | null; path: string | null }> => {
+    const file = sourcePdfRef.current;
+    if (!file || !profile) return { file: null, path: null };
+    const selectionId = sourcePdfSelectionRef.current;
+    if (uploadedPdfRef.current?.selectionId === selectionId) {
+      return { file, path: uploadedPdfRef.current.path };
+    }
+    const path = await uploadSupplierSourcePdf(file, profile.id);
+    if (
+      sourcePdfSelectionRef.current !== selectionId
+      || sourcePdfRef.current !== file
+    ) {
+      throw new Error('The source PDF changed while it was uploading. Stage again with the current PDF.');
+    }
+    uploadedPdfRef.current = { selectionId, path };
+    return { file, path };
   };
 
   const handleExport = async () => {
@@ -353,15 +367,15 @@ export default function SupplierPricing() {
     setBusy(true);
     try {
       const parsed = await parseSupplierQuoteWorkbook(await file.arrayBuffer());
-      const sourcePath = await ensurePdfStored();
+      const sourceEvidence = await ensurePdfStored();
       const result = await stageSupplierPriceImport({
         vendorId: parsed.vendorId,
         documentDate,
         ingestionMethod: 'quote_sheet',
         formatVersion: parsed.formatVersion,
-        sourceDocumentPath: sourcePath,
-        sourceDocumentName: sourcePdf?.name ?? null,
-        sourceDocumentMime: sourcePdf ? 'application/pdf' : null,
+        sourceDocumentPath: sourceEvidence.path,
+        sourceDocumentName: sourceEvidence.file?.name ?? null,
+        sourceDocumentMime: sourceEvidence.file ? 'application/pdf' : null,
         rows: parsed.rows,
         performedBy: profile.id,
         idempotencyKey: stageImportIdem.getKey(),
@@ -399,7 +413,7 @@ export default function SupplierPricing() {
     const workspaceRequestId = workspaceRequestRef.current;
     setBusy(true);
     try {
-      const sourcePath = await ensurePdfStored();
+      const sourceEvidence = await ensurePdfStored();
       if (
         workspaceRequestRef.current !== workspaceRequestId
         || workspaceRefreshPendingRef.current
@@ -413,9 +427,9 @@ export default function SupplierPricing() {
         documentDate,
         ingestionMethod: 'quick_quote',
         formatVersion: 'crx-supplier-quick-quote-phase1b-v1',
-        sourceDocumentPath: sourcePath,
-        sourceDocumentName: sourcePdf?.name ?? null,
-        sourceDocumentMime: sourcePdf ? 'application/pdf' : null,
+        sourceDocumentPath: sourceEvidence.path,
+        sourceDocumentName: sourceEvidence.file?.name ?? null,
+        sourceDocumentMime: sourceEvidence.file ? 'application/pdf' : null,
         rows: [{
           product_supplier_link_id: quickQuote.linkId,
           new_cost: quickQuote.newCost,
@@ -671,6 +685,7 @@ export default function SupplierPricing() {
               type="button"
               variant="secondary"
               icon={<FileText className="h-4 w-4" />}
+              disabled={busy}
               onClick={() => pdfInputRef.current?.click()}
             >
               {sourcePdf ? sourcePdf.name : 'Attach PDF for audit'}
