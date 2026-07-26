@@ -2108,11 +2108,17 @@ function generatedMutatingRpcInventory(): Set<string> {
 }
 
 const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
-  // Currently empty (2026-07-22). The live registry/type regeneration through
-  // 20260722064814 moved every former entry into
-  // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
-  // window: an RPC introduced by a PR migration that is not yet live belongs
-  // here until the next truthful live type regeneration.
+  // This bucket is the normal pre-apply window: an RPC introduced by a PR
+  // migration that is not yet live belongs here until the next truthful live
+  // type regeneration moves it into MUTATING_RPCS_WITH_IDEMPOTENCY.
+  //
+  // Introduced by 20260722222743_product_families_return_policy_foundation
+  // (not applied live as of 2026-07-26). It is NOT an exemption: the function
+  // declares p_idempotency_key text DEFAULT NULL, hard-fails with
+  // IDEMPOTENCY_KEY_REQUIRED when the key is blank, and replays through
+  // check_idempotency with a request-fingerprint mismatch guard. Remove this
+  // entry after the migration applies live and types are regenerated.
+  'set_product_phase3_metadata',
 ]);
 
 /**

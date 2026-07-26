@@ -1,8 +1,8 @@
 # CRX Live Foundation Gauntlet Summary
 
-Last updated: 2026-07-20
+Last updated: 2026-07-26
 
-The July 14 all-section Codex-only run has a built, rollback-proven, Codex-adversarially clean remediation branch. Direct corrected-diff Claude verification is complete with no BLOCKER/HIGH finding. Mason approved the live cutover on July 15: all three migrations are live, `process-blend-ticket` is v25 ACTIVE/JWT-enabled, live-derived artifacts are refreshed, the rollback smoke passes, and all 17 invariant sweeps are clean. The July 19 Section 1 refresh found two MED security hardening items. The July 20 Section 2 refresh found one HIGH and one MED statement correctness gap; current live rows do not yet exhibit either shape. Historical cleanup remains separate.
+The July 14 all-section Codex-only run has a built, rollback-proven, Codex-adversarially clean remediation branch. Direct corrected-diff Claude verification is complete with no BLOCKER/HIGH finding. Mason approved the live cutover on July 15: all three migrations are live, `process-blend-ticket` is v25 ACTIVE/JWT-enabled, live-derived artifacts are refreshed, the rollback smoke passes, and all 17 invariant sweeps are clean. The July 19 Section 1 refresh found two MED security hardening items. The July 20 Section 2 refresh found one HIGH and one MED statement correctness gap; current live rows do not yet exhibit either shape. The July 22 Section 3 refresh found one HIGH inventory-location ledger bypass, one MED Net Position preview drift, and one LOW grant-hardening item. The July 26 Section 4 refresh found no confirmed quote-to-payment lifecycle wiring defects, with only a stale-checkout scope warning. Historical cleanup remains separate.
 
 ## Ranked Fix Queue
 
@@ -13,15 +13,18 @@ The July 14 all-section Codex-only run has a built, rollback-proven, Codex-adver
 | 3 | HIGH | Customer statements | Carry opening balance into bounded-date statements | Section 2 refresh: live statement logic sums only rows inside the selected period, while AR UI labels that sum `Ending Balance`. | New migration with explicit opening balance plus a bounded-date rollback smoke and invariant. |
 | 4 | HIGH | Commission historical data | Resolve eight empty unposted `SEED` batches ($1,500 header total) | New RPC/UI guards make them unpostable, but the rows remain. | Mason decides whether to void/quarantine them; do not mutate automatically. |
 | 5 | MED | Customer statements | Make same-day running balance deterministic | Section 2 refresh: live statement window and output order use only transaction date/type, which are not unique. | Add source rank/stable ID and an explicit `ROWS` frame; test same-day peers. |
-| 6 | MED | SECURITY DEFINER grants | Revoke anon/Public access to six number-generator RPCs | Section 1 refresh: live routine grants expose `next_*_number()` helpers to `PUBLIC` and `anon` with no active-role gate. | New migration: revoke from `PUBLIC`/`anon`, add/centralize active-role gating, and add a live grant sweep. |
-| 7 | MED | Field activity attribution | Bind `save_field` actor to `auth.uid()` | Section 1 refresh: `save_field` writes caller-supplied `p_performed_by` into `activity_feed.performed_by` without mismatch rejection. | Add strict actor guard and a sweep for audit-column writes. |
-| 8 | MED | PO historical data | Correct PO-2026-0008 status and review overreceipts | Seven open lines are hidden by old aggregate receipt totals. New code uses linewise completion. | Owner-approved reconciliation after reviewing source documents/physical receipts. |
-| 9 | MED | Historical test/legacy rows | Decide one E2E invoice, five empty completed deliveries, and PO-2026-0015 receipt gap | Row-level probes identify historical/test data, not a current code path failure. | Present a separate live-data checklist; preserve rows until approved. |
-| 10 | MED | Inventory operations | Reconcile 18 negative inventory rows | Negative on-hand is intentional discrepancy evidence. | Use physical counts and `reconcile_negative_inventory`; never zero-clamp. |
+| 6 | HIGH | Inventory location audit trail | Inline edit can change `inventory.location` without transfer ledger | Section 3 refresh: InventoryPage admin inline edit writes `inventory.location` directly; live triggers do not record or block location updates. | Replace with a transfer RPC plus trigger/static guard against direct location updates. |
+| 7 | MED | SECURITY DEFINER grants | Revoke anon/Public access to six number-generator RPCs | Section 1 refresh: live routine grants expose `next_*_number()` helpers to `PUBLIC` and `anon` with no active-role gate. | New migration: revoke from `PUBLIC`/`anon`, add/centralize active-role gating, and add a live grant sweep. |
+| 8 | MED | Field activity attribution | Bind `save_field` actor to `auth.uid()` | Section 1 refresh: `save_field` writes caller-supplied `p_performed_by` into `activity_feed.performed_by` without mismatch rejection. | Add strict actor guard and a sweep for audit-column writes. |
+| 9 | MED | Inventory preview consistency | Product pickers rebuild Net Position without server over-receive clamp | Section 3 refresh: NewOrder, QuickDeliveryModal, and OrderDetail compute PO remaining as ordered minus received while `get_inventory_position` clamps negative remaining to zero. | Use `get_inventory_position()` or shared tested helper for all picker stock previews. |
+| 10 | LOW | Receiving helper grants | Revoke anon EXECUTE from `match_quick_receive_items` | Section 3 refresh: function self-gates on active office roles, but live grant still allows anon EXECUTE on a PO/vendor/cost helper. | Add it to the live grant sweep and revoke `PUBLIC`/`anon`. |
+| 11 | MED | PO historical data | Correct PO-2026-0008 status and review overreceipts | Seven open lines are hidden by old aggregate receipt totals. New code uses linewise completion. | Owner-approved reconciliation after reviewing source documents/physical receipts. |
+| 12 | MED | Historical test/legacy rows | Decide one E2E invoice, five empty completed deliveries, and PO-2026-0015 receipt gap | Row-level probes identify historical/test data, not a current code path failure. | Present a separate live-data checklist; preserve rows until approved. |
+| 13 | MED | Inventory operations | Reconcile 18 negative inventory rows | Negative on-hand is intentional discrepancy evidence. | Use physical counts and `reconcile_negative_inventory`; never zero-clamp. |
 
 ## Current Queue Position
 
-Sections 1 and 2 were refreshed on 2026-07-19 and 2026-07-20. Section 3 is queued next.
+Sections 1, 2, 3, and 4 were refreshed on 2026-07-19, 2026-07-20, 2026-07-22, and 2026-07-26. Section 5 is queued next.
 
 ## Visibility Notes
 

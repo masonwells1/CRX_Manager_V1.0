@@ -2,7 +2,7 @@
 
 Read-only queue for the recurring CRX Live Foundation Gauntlet. Each run reviews one section against current repo code plus live Supabase database structure only, writes one dated report, updates this index, then stops.
 
-Last updated: 2026-07-21
+Last updated: 2026-07-26
 
 The July 14 full all-section run supersedes the older per-row queue notes below for current risk and remediation status. See [2026-07-14-full-gauntlet-codex-only-remediation.md](2026-07-14-full-gauntlet-codex-only-remediation.md). The table remains as section history until the fixes are deployed and production-verified.
 
@@ -11,7 +11,7 @@ The July 14 full all-section run supersedes the older per-row queue notes below 
 - The 2026-07-14 remediation wave and the sections 2–6 closeout are live, and their guard artifacts are pinned by the permanent regression suite (`src/lib/bugClassRegressionGuards.test.ts`, `src/lib/gauntletRemediationGuards.test.ts`, `src/lib/gauntletSections26Remediation.test.ts`, PR #189).
 - Section 5 drift items from the 2026-07-05 row: the pg_proc fixture snapshot and `src/types/supabase.ts` were fully regenerated 2026-07-21 after the 2026-07-20 live applies (per-line split billing, Supplier Pricing 1b + follow-ups).
 - Section 6's HIGH (`save_job_applied_record` duplicates) was fixed 2026-07-10 (table-native idempotency key + partial unique index) and the RPC is tracked in `MUTATING_RPCS_WITH_IDEMPOTENCY`.
-- Rows 1–4 reference report files recorded only in automation memory; those filenames are not in the repo. Treat the 2026-06-17 and 2026-07-14 committed reports as the durable history.
+- Older row history referenced report files recorded only in automation memory; the refreshed Section 1-4 rows now point at committed or newly written gauntlet artifacts where present. Treat the 2026-06-17 and 2026-07-14 committed reports as the durable pre-refresh history.
 - Business-area review slices now exist: `node scripts/run-area.mjs --list` (vitest + smoke + invariant sweeps per area; see `scripts/test-areas.json`).
 
 ## Current Queue
@@ -20,8 +20,8 @@ The July 14 full all-section run supersedes the older per-row queue notes below 
 |---|---|---|---|---|---|
 | 1 | Security, roles, route gating, RLS, SECURITY DEFINER RPC access | Refresh complete | 2026-07-19 | [2026-07-19-section-01-security-roles-rls-secdef-refresh.md](2026-07-19-section-01-security-roles-rls-secdef-refresh.md) | 0 BLOCKER / 0 HIGH / 2 MED / 0 LOW. MED: anon-executable SECDEF number generators; `save_field` activity actor spoofing. |
 | 2 | Money, invoices, payments, AR aging, statements, credits, write-offs, finance charges | Refresh complete | 2026-07-20 | [2026-07-20-section-02-money-invoices-payments-ar-refresh.md](2026-07-20-section-02-money-invoices-payments-ar-refresh.md) | 0 BLOCKER / 1 HIGH / 1 MED / 0 LOW. HIGH: period statements omit opening balance. MED: same-day running-balance order is nondeterministic. |
-| 3 | Inventory, holds, prebooks, Net Free, quote draw-down, deliveries, receiving | Refresh recorded in automation memory | 2026-06-29 | `2026-06-29-section-03-inventory-holds-prebooks-deliveries-receiving-refresh.md` | Automation memory recorded 0 BLOCKER / 1 HIGH / 1 MED; report file is not present in this stale checkout. |
-| 4 | Quote to order to delivery to invoice to payment lifecycle wiring | Refresh recorded in automation memory | 2026-07-01 | `2026-07-01-section-04-quote-order-delivery-invoice-payment-lifecycle-refresh.md` | Automation memory recorded 0 app findings; live function metadata follow-up was partially blocked by linked CLI auth. |
+| 3 | Inventory, holds, prebooks, Net Free, quote draw-down, deliveries, receiving | Refresh complete | 2026-07-22 | [2026-07-22-section-03-inventory-holds-prebooks-deliveries-receiving-refresh.md](2026-07-22-section-03-inventory-holds-prebooks-deliveries-receiving-refresh.md) | 0 BLOCKER / 1 HIGH / 1 MED / 1 LOW. HIGH: inline inventory location edits bypass transfer ledger. MED: product pickers rebuild Net Position without the server over-receive clamp. LOW: `match_quick_receive_items` anon EXECUTE grant is unnecessary though self-gated. |
+| 4 | Quote to order to delivery to invoice to payment lifecycle wiring | Refresh complete | 2026-07-26 | [2026-07-26-section-04-quote-order-delivery-invoice-payment-lifecycle-refresh.md](2026-07-26-section-04-quote-order-delivery-invoice-payment-lifecycle-refresh.md) | 0 BLOCKER / 0 HIGH / 0 MED / 0 LOW. No confirmed lifecycle wiring findings; scope warning: detached checkout is 27 commits behind local `origin/main` and live migrations are newer than disk. |
 | 5 | Database drift: migrations on disk vs schema registry vs live database catalog, CHECK constraints, overloads, generated columns, search_path | Needs fix | 2026-07-05 | [2026-07-05-section-05-database-drift-refresh.md](2026-07-05-section-05-database-drift-refresh.md) | HIGH: this checkout is behind `origin/main` and live schema migrations; MED: schema registry trails disk migrations. |
 | 6 | Idempotency and double-submit safety for mutating RPCs and frontend callers | Needs fix | 2026-07-08 | [2026-07-08-section-06-idempotency-double-submit-refresh.md](2026-07-08-section-06-idempotency-double-submit-refresh.md) | HIGH: `save_job_applied_record` can create duplicate applied-info records on retry/double-submit; MED: static idempotency coverage test missed the new mutating RPC. |
 | 7 | Commissions, commission splits, entity recipients, payout batches, cancellations/voids | Complete (consolidated) | 2026-06-17 | [2026-06-17-sections-02-15-full-gauntlet.md](2026-06-17-sections-02-15-full-gauntlet.md) | No blocker or high found in consolidated run. |
@@ -42,4 +42,4 @@ This file was present before the Section 5 run and was not modified by this auto
 
 ## Next Section
 
-Section 3 is queued next: Inventory, holds, prebooks, Net Free, quote draw-down, deliveries, receiving.
+Section 5 is queued next: Database drift: migrations on disk vs schema registry vs live database catalog, CHECK constraints, overloads, generated columns, search_path.

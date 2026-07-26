@@ -2,6 +2,14 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-26 — Preserve in-flight gauntlet S3/S4 + phase 3 artifacts from a detached HEAD
+
+- Committed work that had been sitting uncommitted in the `C:\CRX_Manager` checkout on a detached HEAD (`bf2a60ef`, 28 commits behind `origin/main`) and was therefore at risk. No behavior changed; this is a preservation commit.
+- Gauntlet Section 3 (inventory/holds/prebooks/deliveries/receiving, 2026-07-22) and Section 4 (quote→order→delivery→invoice→payment lifecycle, 2026-07-26) refresh reports, plus the corresponding re-ranked fix queue in `live-foundation-gauntlet-summary.md`/`-index.md`. Section 3 added one HIGH (inventory-location inline edit bypasses the transfer ledger), one MED (Net Position preview drift in product pickers), and one LOW (anon EXECUTE on `match_quick_receive_items`). Section 4 found no confirmed lifecycle wiring defects, with a stale-checkout scope warning.
+- Codex→Claude supplier pricing phase 3 handoffs (stage A 2026-07-22, stage B 2026-07-25), sweep report 2026-07-26, and the return-policy phase 3 smoke pair (`smoke-supplier-pricing-phase3-return-policy.sql`, `prove-…-concurrency.mjs`).
+- Added `supabase/migrations/20260722222743_product_families_return_policy_foundation.sql` **as a file only**. This commit applies nothing. Its live status was not verified in this session, and it still requires the normal RLS/security and drift-review migration gates before any live apply is considered.
+- `docs/claude-memory/` (162 local files) was deliberately left untracked — it is absent from both `HEAD` and `origin/main` and is local-only by design.
+
 ## 2026-07-22 — Field-level profitability report (X4/E4/T10) built
 
 - New read-only RPC `get_field_profitability(p_season)` (migration applied live 2026-07-22, ledger version `20260722092928`) + `/field-profitability` page (PR #204). Margin per acre at (field, billed customer, season) from posted field-app invoices: header-COGS based, integer largest-remainder allocation, RLS-mirror sales-rep scoping, per-customer group shares, job-backed (transfer_job_to_invoice) invoices report exactly per billed customer in the '(unassigned field)' bucket (mutable job_fields/fbd state deliberately NOT presented as historical field attribution), which honors durable invoice_shares splits. Codex (gpt-5.6-sol) built it; six adversarial Codex review rounds drove 5 confirmed HIGH fixes + 2 evidence-backed dispositions (per-line split groups have no per-field customer mapping by design; invoices.customer_id is the billed customer for every current writer — verified in live function bodies and catalog). Final hardening: job-backed acres anchor to the invoice_shares.acres snapshot stored at posting (current FBD/owner state supplies spread proportions only), zero-weight children report in the unassigned bucket, and the row type is null-accurate for the unassigned row.
