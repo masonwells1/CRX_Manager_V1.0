@@ -367,6 +367,7 @@ export default function SupplierPricing() {
         idempotencyKey: stageImportIdem.getKey(),
       });
       stageImportIdem.resetKey();
+      selectedVendorIdRef.current = parsed.vendorId;
       setSelectedVendorId(parsed.vendorId);
       commitReview(result);
       toast('success', `Staged ${result.row_count} manual quote row(s) for review.`);
@@ -395,9 +396,18 @@ export default function SupplierPricing() {
       toast('error', 'The selected supplier link is no longer available. Refresh and choose a current link.');
       return;
     }
+    const workspaceRequestId = workspaceRequestRef.current;
     setBusy(true);
     try {
       const sourcePath = await ensurePdfStored();
+      if (
+        workspaceRequestRef.current !== workspaceRequestId
+        || workspaceRefreshPendingRef.current
+      ) {
+        setQuickQuote(blankQuickQuote);
+        toast('error', 'Supplier pricing changed while the PDF was uploading. Choose a current link and try again.');
+        return;
+      }
       const result = await stageSupplierPriceImport({
         vendorId: selectedVendorId,
         documentDate,

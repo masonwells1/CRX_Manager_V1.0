@@ -12,7 +12,9 @@ const {
   mockSentryCaptureException,
   mockStageSupplierPriceImport,
   mockStageVendorAlias,
+  mockUploadSupplierSourcePdf,
   mockUpsertProductSupplierLink,
+  mockParseSupplierQuoteWorkbook,
 } = vi.hoisted(() => ({
   mockToast: vi.fn(),
   mockGetWorkspace: vi.fn(),
@@ -23,7 +25,9 @@ const {
   mockSentryCaptureException: vi.fn(),
   mockStageSupplierPriceImport: vi.fn(),
   mockStageVendorAlias: vi.fn(),
+  mockUploadSupplierSourcePdf: vi.fn(),
   mockUpsertProductSupplierLink: vi.fn(),
+  mockParseSupplierQuoteWorkbook: vi.fn(),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -49,7 +53,7 @@ vi.mock('../lib/supplierPricing', async () => {
     reviewVendorAlias: vi.fn(),
     stageSupplierPriceImport: mockStageSupplierPriceImport,
     stageVendorAlias: mockStageVendorAlias,
-    uploadSupplierSourcePdf: vi.fn(),
+    uploadSupplierSourcePdf: mockUploadSupplierSourcePdf,
     upsertProductSupplierLink: mockUpsertProductSupplierLink,
   };
 });
@@ -66,6 +70,11 @@ vi.mock('../lib/productPricing', async () => {
     previewProductPricingChanges: mockPreviewPricing,
     applyProductPricingChangeSet: vi.fn(),
   };
+});
+
+vi.mock('../lib/supplierPricingWorkbook', async () => {
+  const actual = await vi.importActual<typeof import('../lib/supplierPricingWorkbook')>('../lib/supplierPricingWorkbook');
+  return { ...actual, parseSupplierQuoteWorkbook: mockParseSupplierQuoteWorkbook };
 });
 
 vi.mock('../lib/sentry', () => ({
@@ -137,6 +146,7 @@ describe('SupplierPricing page', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUploadSupplierSourcePdf.mockResolvedValue('supplier-evidence/source.pdf');
     mockGetBasisWorkspace.mockResolvedValue({
       enabled: false,
       product: {
@@ -210,6 +220,57 @@ describe('SupplierPricing page', () => {
     await waitFor(() => {
       expect(mockGetWorkspace).toHaveBeenCalledTimes(workspaceLoads + 1);
     });
+  });
+
+  it('keeps the workbook supplier selected through its immediate workspace refresh', async () => {
+    const vendors = [
+      { id: 'vendor-a', name: 'Supplier A' },
+      { id: 'vendor-b', name: 'Supplier B' },
+    ];
+    const stagedImport = {
+      ...makeImportDetail('import-b', 'Supplier B', 'Workbook Product'),
+      vendor_id: 'vendor-b',
+    };
+    mockGetWorkspace
+      .mockResolvedValueOnce({
+        vendors,
+        products: [],
+        links: [],
+        imports: [],
+        aliases: [],
+        evidence: [],
+      })
+      .mockResolvedValueOnce({
+        vendors,
+        products: [],
+        links: [],
+        imports: [makeImportSummary('import-b', 'Supplier B')],
+        aliases: [],
+        evidence: [],
+      });
+    mockParseSupplierQuoteWorkbook.mockResolvedValue({
+      vendorId: 'vendor-b',
+      formatVersion: 'crx-supplier-quote-phase1b-v1',
+      rows: [],
+    });
+    mockStageSupplierPriceImport.mockResolvedValue(stagedImport);
+    mockGetImport.mockResolvedValue(stagedImport);
+
+    const { container } = renderSupplierPricing();
+    const supplierSelect = await screen.findByLabelText('Supplier');
+    expect(supplierSelect).toHaveValue('vendor-a');
+    const workbookInput = container.querySelector<HTMLInputElement>('input[accept^=".xlsx"]');
+    expect(workbookInput).not.toBeNull();
+    fireEvent.change(workbookInput!, {
+      target: {
+        files: [new File(['workbook'], 'supplier-b.xlsx', {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        })],
+      },
+    });
+
+    await waitFor(() => expect(supplierSelect).toHaveValue('vendor-b'));
+    expect(mockStageSupplierPriceImport).toHaveBeenCalledWith(expect.objectContaining({ vendorId: 'vendor-b' }));
   });
 
   it('keeps the latest import detail when rapid opens resolve out of order', async () => {
@@ -600,6 +661,71 @@ describe('SupplierPricing page', () => {
     await waitFor(() => expect(linkedProduct).toHaveValue(''));
     expect(stageButton).toBeEnabled();
     expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+  });
+
+  it('cancels Quick Quote staging when Refresh removes its Product during PDF upload', async () => {
+    const product = {
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      product_name: 'Upload Race Product',
+      sku: 'UPLOAD-RACE',
+      inventory_unit: 'gallon',
+    };
+    const link = {
+      id: 'link-upload-race',
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: 'UPLOAD-SUP',
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    };
+    const initial = {
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [product],
+      links: [link],
+      imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = { ...initial, products: [], links: [link] };
+    let resolveUpload!: (path: string) => void;
+    const pendingUpload = new Promise<string>((resolve) => { resolveUpload = resolve; });
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+    mockUploadSupplierSourcePdf.mockReturnValueOnce(pendingUpload);
+
+    const { container } = renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+    const pdfInput = container.querySelector<HTMLInputElement>('input[accept*="application/pdf"]');
+    expect(pdfInput).not.toBeNull();
+    fireEvent.change(pdfInput!, {
+      target: { files: [new File(['pdf'], 'supplier-quote.pdf', { type: 'application/pdf' })] },
+    });
+
+    mockStageSupplierPriceImport.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    await waitFor(() => expect(mockUploadSupplierSourcePdf).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(linkedProduct).toHaveValue(''));
+
+    await act(async () => {
+      resolveUpload('supplier-evidence/upload-race.pdf');
+      await pendingUpload;
+    });
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Supplier pricing changed while the PDF was uploading. Choose a current link and try again.',
+    );
   });
 
   it('routes comparable supplier evidence to the single-Product governed flow', async () => {
