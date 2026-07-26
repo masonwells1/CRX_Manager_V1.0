@@ -2,6 +2,27 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-26 — Section 9 pre-apply vendor-delete race correction
+
+The governed pre-apply review of pending migration
+`20260722222742_section9_po_ap_high_remediation.sql` found and reproduced a race where
+`create_vendor_bill` could read an active vendor, lose to concurrent `delete_vendor`, then insert an
+unpaid bill for the now-soft-deleted vendor. Because `get_ap_aging` excludes deleted vendors, the
+payable could disappear from AP aging.
+
+The unapplied candidate now locks the active vendor row before PO validation and bill insertion.
+The network-isolated PostgreSQL 17 harness proves both winning orders: bill creation makes deletion
+wait and reject on the new unpaid bill; vendor deletion makes creation wait and reject the deleted
+vendor. The Section 9 invariant predicate now rejects outstanding bills attached to soft-deleted
+vendors, and the focused contract test binds the lock before the bill insert. Local tests,
+typecheck, build, lint, the expanded concurrency harness, all 18 live pre-apply predicates, and the
+exact candidate plus full registered live smoke in a forced-rollback transaction are green. The
+rollback proof left all 29 fingerprinted live function/trigger/policy/grant objects unchanged.
+
+**Not applied:** the live ledger, live data, migration history, feature flag, and Stage C remain
+unchanged. A fresh independent exact-SHA Sol review and Mason's separate live-apply approval are
+still required.
+
 ## 2026-07-26 — PR #230/#231 reconciliation: Stage B2 merged, stale PR closed, unique artifacts preserved
 
 Three-way reconciliation (Codex + Claude Opus handoffs, Claude Fable as local reconciliation lead,

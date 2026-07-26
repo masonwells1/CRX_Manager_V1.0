@@ -370,7 +370,8 @@ BEGIN
   SELECT name INTO v_vendor_name
   FROM public.vendors
   WHERE id = p_vendor_id
-    AND deleted_at IS NULL;
+    AND deleted_at IS NULL
+  FOR UPDATE;
   IF v_vendor_name IS NULL THEN
     RAISE EXCEPTION
       'VENDOR_NOT_FOUND: vendor % does not exist or is soft-deleted',

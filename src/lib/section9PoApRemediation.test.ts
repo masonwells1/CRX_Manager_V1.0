@@ -45,7 +45,7 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
     );
   });
 
-  it('locks and revalidates the PO before inserting an active bill', () => {
+  it('locks and revalidates the vendor and PO before inserting an active bill', () => {
     const start = migration.indexOf(
       'CREATE OR REPLACE FUNCTION public.create_vendor_bill(',
     );
@@ -55,13 +55,21 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
       start,
     );
     const body = migration.slice(start, end);
+    const vendorLock = body.indexOf(
+      'FROM public.vendors\n' +
+        '  WHERE id = p_vendor_id\n' +
+        '    AND deleted_at IS NULL\n' +
+        '  FOR UPDATE;',
+    );
     const poLock = body.indexOf('FROM public.purchase_orders\n    WHERE id = p_purchase_order_id\n    FOR UPDATE;');
     const statusGate = body.indexOf('PO_NOT_BILLABLE');
     const insert = body.indexOf('INSERT INTO public.vendor_bills');
 
-    expect(poLock).toBeGreaterThan(-1);
+    expect(vendorLock).toBeGreaterThan(-1);
+    expect(poLock).toBeGreaterThan(vendorLock);
     expect(statusGate).toBeGreaterThan(poLock);
     expect(insert).toBeGreaterThan(statusGate);
+    expect(insert).toBeGreaterThan(vendorLock);
     expect(body).toContain("'submitted',\n      'partially_received',\n      'fully_received'");
     expect(body).toContain(
       'p_subtotal_cents IS NULL OR p_subtotal_cents <= 0',
@@ -118,11 +126,14 @@ describe('Section 9 PO/AP HIGH remediation contracts', () => {
 
     expect(registry).toContain('smoke-section9-po-ap-high-remediation.sql');
     expect(sweep).toContain('vendors:browser-mutation-privilege');
+    expect(sweep).toContain('vendor_bills:deleted-vendor:');
     expect(sweep).toContain('vendor_bills:invalid-po:');
     expect(sweep).toMatch(
       /FULL JOIN \(\s*SELECT product_id, quantity_on_order\s*FROM public\.inventory\s*WHERE location = 'Main Warehouse'\s*\) i/,
     );
     expect(concurrency).toContain('SECTION9_PO_AP_CONCURRENCY_PASS');
+    expect(concurrency).toContain('VENDOR_HAS_UNPAID_BILLS');
+    expect(concurrency).toContain('VENDOR_NOT_FOUND');
     expect(concurrency).toContain("'--network', 'none'");
     expect(concurrency).toContain('SQL exited before marker');
 

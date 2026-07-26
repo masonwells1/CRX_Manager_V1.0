@@ -1,8 +1,8 @@
 -- predicate: section9-po-ap-controls
 -- Section 9 HIGH controls: PO on-order cache equals authoritative open
 -- remainder at Main Warehouse; browser roles cannot mutate vendors; active
--- bills cannot reference draft/cancelled POs; and the three remediated AP RPCs
--- retain their fail-closed body controls.
+-- bills cannot reference deleted vendors or draft/cancelled POs; and the three
+-- remediated AP RPCs retain their fail-closed body controls.
 -- Historical catch: 2026-07-22 Live Foundation Gauntlet Section 9.
 -- Contract: EXPECT ZERO rows.
 
@@ -70,6 +70,17 @@ WHERE EXISTS (
 UNION ALL
 
 SELECT
+  'vendor_bills:deleted-vendor:' || vb.id::text AS violation_key,
+  'active vendor bill references a soft-deleted vendor' AS reason
+FROM public.vendor_bills vb
+JOIN public.vendors v ON v.id = vb.vendor_id
+WHERE vb.deleted_at IS NULL
+  AND vb.status NOT IN ('paid', 'voided')
+  AND v.deleted_at IS NOT NULL
+
+UNION ALL
+
+SELECT
   'vendor_bills:invalid-po:' || vb.id::text AS violation_key,
   'active vendor bill references a draft or cancelled purchase order' AS reason
 FROM public.vendor_bills vb
@@ -88,6 +99,8 @@ WHERE NOT EXISTS (
   SELECT 1
   FROM ap_functions
   WHERE proname = 'create_vendor_bill'
+    AND prosrc ~
+      'FROM public\.vendors[[:space:]]+WHERE id = p_vendor_id[[:space:]]+AND deleted_at IS NULL[[:space:]]+FOR UPDATE'
     AND prosrc LIKE '%FROM public.purchase_orders%FOR UPDATE%'
     AND prosrc LIKE '%PO_NOT_BILLABLE%'
     AND prosrc LIKE '%submitted%partially_received%fully_received%'

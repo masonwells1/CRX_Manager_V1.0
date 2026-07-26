@@ -2,7 +2,8 @@
 /**
  * Network-isolated PostgreSQL 17 two-session proof for the Section 9
  * create_vendor_bill vs cancel_purchase_order race, in both winning orders,
- * plus same-product lost-update and opposite-product-order deadlock probes.
+ * create_vendor_bill vs delete_vendor race in both winning orders, plus
+ * same-product lost-update and opposite-product-order deadlock probes.
  *
  * The disposable functions contain only the reviewed lock/status/bill slice;
  * marker assertions bind that slice to the checked-in full migration bodies.
@@ -159,6 +160,10 @@ function assertCheckedInMarkers() {
   const cancel = readFileSync(CANCEL_MIGRATION, 'utf8').replace(/\r\n/g, '\n');
   assert.match(
     migration,
+    /FROM public\.vendors\n\s+WHERE id = p_vendor_id\n\s+AND deleted_at IS NULL\n\s+FOR UPDATE;/,
+  );
+  assert.match(
+    migration,
     /FROM public\.purchase_orders\n\s+WHERE id = p_purchase_order_id\n\s+FOR UPDATE;/,
   );
   assert.match(migration, /v_po_status NOT IN \(\n\s+'submitted',\n\s+'partially_received',\n\s+'fully_received'/);
@@ -178,38 +183,84 @@ function assertCheckedInMarkers() {
 function installSchema() {
   runSql(`
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE public.vendors (
+  id uuid PRIMARY KEY,
+  name text NOT NULL,
+  deleted_at timestamptz,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE public.purchase_orders (
   id uuid PRIMARY KEY,
   status text NOT NULL
 );
 CREATE TABLE public.vendor_bills (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  purchase_order_id uuid NOT NULL REFERENCES public.purchase_orders(id),
+  vendor_id uuid NOT NULL REFERENCES public.vendors(id),
+  purchase_order_id uuid REFERENCES public.purchase_orders(id),
   status text NOT NULL DEFAULT 'unpaid',
   deleted_at timestamptz
 );
 
 CREATE OR REPLACE FUNCTION public.proof_create_vendor_bill(
+  p_vendor_id uuid,
   p_po_id uuid,
   p_pause_seconds numeric DEFAULT 0
 )
 RETURNS uuid LANGUAGE plpgsql AS $proof$
 DECLARE
+  v_vendor_name text;
   v_status text;
   v_bill uuid;
 BEGIN
-  SELECT status INTO v_status
-  FROM public.purchase_orders
-  WHERE id = p_po_id
+  SELECT name INTO v_vendor_name
+  FROM public.vendors
+  WHERE id = p_vendor_id
+    AND deleted_at IS NULL
   FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'PO_NOT_FOUND'; END IF;
-  IF v_status NOT IN ('submitted', 'partially_received', 'fully_received') THEN
-    RAISE EXCEPTION 'PO_NOT_BILLABLE: %', v_status;
+  IF NOT FOUND THEN RAISE EXCEPTION 'VENDOR_NOT_FOUND'; END IF;
+  IF p_po_id IS NOT NULL THEN
+    SELECT status INTO v_status
+    FROM public.purchase_orders
+    WHERE id = p_po_id
+    FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'PO_NOT_FOUND'; END IF;
+    IF v_status NOT IN ('submitted', 'partially_received', 'fully_received') THEN
+      RAISE EXCEPTION 'PO_NOT_BILLABLE: %', v_status;
+    END IF;
   END IF;
   PERFORM pg_sleep(p_pause_seconds);
-  INSERT INTO public.vendor_bills (purchase_order_id)
-  VALUES (p_po_id) RETURNING id INTO v_bill;
+  INSERT INTO public.vendor_bills (vendor_id, purchase_order_id)
+  VALUES (p_vendor_id, p_po_id) RETURNING id INTO v_bill;
   RETURN v_bill;
+END;
+$proof$;
+
+CREATE OR REPLACE FUNCTION public.proof_delete_vendor(
+  p_vendor_id uuid,
+  p_pause_seconds numeric DEFAULT 0
+)
+RETURNS void LANGUAGE plpgsql AS $proof$
+DECLARE
+  v_vendor_id uuid;
+BEGIN
+  SELECT id INTO v_vendor_id
+  FROM public.vendors
+  WHERE id = p_vendor_id
+    AND deleted_at IS NULL
+  FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'VENDOR_NOT_FOUND'; END IF;
+  PERFORM pg_sleep(p_pause_seconds);
+  IF EXISTS (
+    SELECT 1 FROM public.vendor_bills
+    WHERE vendor_id = p_vendor_id
+      AND status NOT IN ('paid', 'voided')
+      AND deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'VENDOR_HAS_UNPAID_BILLS';
+  END IF;
+  UPDATE public.vendors
+  SET deleted_at = now(), updated_at = now()
+  WHERE id = p_vendor_id;
 END;
 $proof$;
 
@@ -301,13 +352,18 @@ FOR EACH ROW EXECUTE FUNCTION public.proof_recompute_status_trigger();
 
 async function proveCreateWins() {
   const po = '00000000-0000-0000-0000-000000000901';
-  runSql(`INSERT INTO purchase_orders VALUES ('${po}', 'submitted');`);
+  const vendor = '00000000-0000-0000-0000-000000000801';
+  runSql(`
+INSERT INTO vendors (id, name) VALUES ('${vendor}', 'Create Wins');
+INSERT INTO purchase_orders VALUES ('${po}', 'submitted');
+`);
   const creator = startSqlWithMarker(`
 BEGIN;
+SELECT name FROM vendors WHERE id='${vendor}' AND deleted_at IS NULL FOR UPDATE;
 SELECT status FROM purchase_orders WHERE id='${po}' FOR UPDATE;
 SELECT 'CREATE_LOCKED';
 SELECT pg_sleep(2);
-INSERT INTO vendor_bills (purchase_order_id) VALUES ('${po}');
+INSERT INTO vendor_bills (vendor_id, purchase_order_id) VALUES ('${vendor}', '${po}');
 COMMIT;
 `, 'CREATE_LOCKED');
   await creator.ready;
@@ -328,7 +384,11 @@ SELECT proof_cancel_purchase_order('${po}', 0);
 
 async function proveCancelWins() {
   const po = '00000000-0000-0000-0000-000000000902';
-  runSql(`INSERT INTO purchase_orders VALUES ('${po}', 'submitted');`);
+  const vendor = '00000000-0000-0000-0000-000000000802';
+  runSql(`
+INSERT INTO vendors (id, name) VALUES ('${vendor}', 'Cancel Wins');
+INSERT INTO purchase_orders VALUES ('${po}', 'submitted');
+`);
   const canceller = startSqlWithMarker(`
 BEGIN;
 SELECT status FROM purchase_orders WHERE id='${po}' FOR UPDATE;
@@ -340,7 +400,7 @@ COMMIT;
   await canceller.ready;
   const creator = startSqlWithMarker(`
 SELECT 'CREATE_STARTED';
-SELECT proof_create_vendor_bill('${po}', 0);
+SELECT proof_create_vendor_bill('${vendor}', '${po}', 0);
 `, 'CREATE_STARTED');
   const [cancelResult, createResult] = await Promise.all([
     canceller.completion,
@@ -351,6 +411,76 @@ SELECT proof_create_vendor_bill('${po}', 0);
   assert.match(createResult.stderr, /PO_NOT_BILLABLE: cancelled/);
   assert.equal(scalar(`SELECT status FROM purchase_orders WHERE id='${po}';`), 'cancelled');
   assert.equal(scalar(`SELECT count(*) FROM vendor_bills WHERE purchase_order_id='${po}';`), '0');
+}
+
+async function proveBillCreateWinsVendorDelete() {
+  const vendor = '00000000-0000-0000-0000-000000000803';
+  runSql(`INSERT INTO vendors (id, name) VALUES ('${vendor}', 'Bill Wins');`);
+  const creator = startSqlWithMarker(`
+BEGIN;
+SELECT name FROM vendors
+WHERE id='${vendor}' AND deleted_at IS NULL
+FOR UPDATE;
+SELECT 'VENDOR_LOCKED_BY_CREATOR';
+SELECT pg_sleep(2);
+INSERT INTO vendor_bills (vendor_id) VALUES ('${vendor}');
+COMMIT;
+`, 'VENDOR_LOCKED_BY_CREATOR');
+  await creator.ready;
+  const deleter = startSqlWithMarker(`
+SELECT 'DELETE_STARTED';
+SELECT proof_delete_vendor('${vendor}', 0);
+`, 'DELETE_STARTED');
+  const [createResult, deleteResult] = await Promise.all([
+    creator.completion,
+    deleter.completion,
+  ]);
+  assert.equal(createResult.code, 0, createResult.stderr);
+  assert.notEqual(deleteResult.code, 0, 'delete unexpectedly beat committed bill');
+  assert.match(deleteResult.stderr, /VENDOR_HAS_UNPAID_BILLS/);
+  assert.equal(
+    scalar(`SELECT (deleted_at IS NULL)::int FROM vendors WHERE id='${vendor}';`),
+    '1',
+  );
+  assert.equal(
+    scalar(`SELECT count(*) FROM vendor_bills WHERE vendor_id='${vendor}';`),
+    '1',
+  );
+}
+
+async function proveVendorDeleteWinsBillCreate() {
+  const vendor = '00000000-0000-0000-0000-000000000804';
+  runSql(`INSERT INTO vendors (id, name) VALUES ('${vendor}', 'Delete Wins');`);
+  const deleter = startSqlWithMarker(`
+BEGIN;
+SELECT id FROM vendors
+WHERE id='${vendor}' AND deleted_at IS NULL
+FOR UPDATE;
+SELECT 'VENDOR_LOCKED_BY_DELETE';
+SELECT pg_sleep(2);
+UPDATE vendors SET deleted_at=now(), updated_at=now() WHERE id='${vendor}';
+COMMIT;
+`, 'VENDOR_LOCKED_BY_DELETE');
+  await deleter.ready;
+  const creator = startSqlWithMarker(`
+SELECT 'BILL_CREATE_STARTED';
+SELECT proof_create_vendor_bill('${vendor}', NULL, 0);
+`, 'BILL_CREATE_STARTED');
+  const [deleteResult, createResult] = await Promise.all([
+    deleter.completion,
+    creator.completion,
+  ]);
+  assert.equal(deleteResult.code, 0, deleteResult.stderr);
+  assert.notEqual(createResult.code, 0, 'bill unexpectedly attached after vendor delete');
+  assert.match(createResult.stderr, /VENDOR_NOT_FOUND/);
+  assert.equal(
+    scalar(`SELECT (deleted_at IS NOT NULL)::int FROM vendors WHERE id='${vendor}';`),
+    '1',
+  );
+  assert.equal(
+    scalar(`SELECT count(*) FROM vendor_bills WHERE vendor_id='${vendor}';`),
+    '0',
+  );
 }
 
 async function proveSameProductDoesNotLoseUpdate() {
@@ -424,6 +554,8 @@ try {
   installSchema();
   await proveCreateWins();
   await proveCancelWins();
+  await proveBillCreateWinsVendorDelete();
+  await proveVendorDeleteWinsBillCreate();
   await proveSameProductDoesNotLoseUpdate();
   await proveOppositeProductOrderDoesNotDeadlock();
   console.log('SECTION9_PO_AP_CONCURRENCY_PASS');
