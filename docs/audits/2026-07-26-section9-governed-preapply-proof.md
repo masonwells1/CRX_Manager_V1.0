@@ -25,7 +25,8 @@ an explicitly approved live apply.
 | Correction commit | `10e6850a7524a243a2a9d2c15e2a43e4fca1ae44` |
 | Proof-binding commit | `ed2c2d42d10f5e5ad218a1e807c68657b8e00149` |
 | Migration git blob | `d56b84e964400ac95b2da367baf208de6b336af9` |
-| Migration SHA-256 | `E180B15765E6ABA23DBF780B06E6FAF99D1362FC2AD6AAD2C85A3B7186BC0032` |
+| Migration SHA-256 (git blob, LF-normalized, 27,375 bytes) | `7382C24446A45E6631B455A2B6190968781A46E8C4262B963D30C3A1606B89F4` |
+| Migration SHA-256 (Windows working-tree file, CRLF, 28,223 bytes) | `E180B15765E6ABA23DBF780B06E6FAF99D1362FC2AD6AAD2C85A3B7186BC0032` |
 | Live PostgreSQL | `17.6` |
 
 The migration differs from the PR #218 bytes only by the reviewed vendor-row
