@@ -1,20 +1,36 @@
 -- Section 1 number-generator / save_field security regression smoke.
 -- Run only after migration 20260725234503 is applied. It checks exact grants,
--- one overload and search_path for every hardened function; no-auth and
--- wrong-role denial plus allowed-role execution for each number generator; and
--- save_field's no-partial-write, nullable actor, truthful actor, and replay
--- behavior. It always rolls back.
+-- one overload and search_path; every advertised allowed role, active wrong
+-- roles, and inactive otherwise-allowed actors for every number generator;
+-- exact next-number output after valid current-format and safely ignored
+-- malformed/out-of-scope fixtures; and save_field's no-partial-write,
+-- nullable actor, truthful actor, and replay behavior. It always rolls back.
+--
+-- Preservation note: the source generator bodies are intentionally unchanged.
+-- The commission fixture uses a malformed *other-year* value because its
+-- captured current body filters by LIKE before casting; a same-year malformed
+-- suffix is outside this security lane's preservation contract.
 
 DO $smoke$
 DECLARE
   v_admin uuid;
   v_other uuid;
-  v_allowed uuid;
   v_denied uuid;
+  v_inactive uuid;
+  v_allowed uuid;
+  v_role text;
   v_target record;
   v_fn_oid oid;
   v_number text;
-  v_err text;
+  v_expected text;
+  v_seed_value text;
+  v_malformed_value text;
+  v_regex text;
+  v_strip_regex text;
+  v_current_max integer;
+  v_seed integer;
+  v_year text := extract(year FROM current_date)::text;
+  v_restore_inactive boolean;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_customer uuid;
   v_field uuid;
@@ -34,13 +50,13 @@ BEGIN
 
   FOR v_target IN
     SELECT * FROM (VALUES
-      ('next_application_record_number', ARRAY['admin','sales_rep','applicator']::text[]),
-      ('next_commission_payment_number', ARRAY['admin']::text[]),
-      ('next_cycle_count_number', ARRAY['admin']::text[]),
-      ('next_delivery_number', ARRAY['admin','sales_rep','driver']::text[]),
-      ('next_job_number', ARRAY['admin','sales_rep','applicator']::text[]),
-      ('next_po_number', ARRAY['admin','sales_rep']::text[])
-    ) AS expected(fn, allowed_roles)
+      ('next_application_record_number', ARRAY['admin','sales_rep','applicator']::text[], 'application_records', 'record_number', 'APP', 4, true),
+      ('next_commission_payment_number', ARRAY['admin']::text[], 'commission_payments', 'payment_number', 'CP', 4, true),
+      ('next_cycle_count_number', ARRAY['admin']::text[], 'cycle_counts', 'count_number', 'CC', 5, true),
+      ('next_delivery_number', ARRAY['admin','sales_rep','driver']::text[], 'deliveries', 'delivery_number', 'DEL', 5, false),
+      ('next_job_number', ARRAY['admin','sales_rep','applicator']::text[], 'jobs', 'job_number', 'JOB', 4, true),
+      ('next_po_number', ARRAY['admin','sales_rep']::text[], 'purchase_orders', 'po_number', 'PO', 4, true)
+    ) AS expected(fn, allowed_roles, source_table, number_column, prefix, width, yearly)
   LOOP
     v_fn_oid := format('public.%I()', v_target.fn)::regprocedure;
     IF (SELECT count(*) FROM pg_proc p WHERE p.oid = v_fn_oid) <> 1 THEN
@@ -61,6 +77,33 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: % grant/search_path contract is wrong', v_target.fn;
     END IF;
 
+    IF v_target.yearly THEN
+      v_regex := '^' || v_target.prefix || '-' || v_year || '-\\d+$';
+      v_strip_regex := '^' || v_target.prefix || '-' || v_year || '-';
+    ELSE
+      v_regex := '^' || v_target.prefix || '-\\d+$';
+      v_strip_regex := '^' || v_target.prefix || '-';
+    END IF;
+    EXECUTE format(
+      'SELECT COALESCE(MAX(CASE WHEN %1$I ~ $1 THEN regexp_replace(%1$I, $2, '''')::integer ELSE 0 END), 0) FROM public.%2$I',
+      v_target.number_column, v_target.source_table
+    ) USING v_regex, v_strip_regex INTO v_current_max;
+    IF v_current_max > 2147483600 THEN
+      RAISE EXCEPTION 'SMOKE_SETUP: % current sequence is too close to integer limit', v_target.fn;
+    END IF;
+    v_seed := v_current_max + 17;
+    IF v_target.yearly THEN
+      v_seed_value := v_target.prefix || '-' || v_year || '-' || lpad(v_seed::text, v_target.width, '0');
+      v_expected := v_target.prefix || '-' || v_year || '-' || lpad((v_seed + 1)::text, v_target.width, '0');
+      v_malformed_value := v_target.prefix || '-' || (v_year::integer - 1)::text || '-not-a-number-' || v_suffix;
+    ELSE
+      v_seed_value := v_target.prefix || '-' || lpad(v_seed::text, v_target.width, '0');
+      v_expected := v_target.prefix || '-' || lpad((v_seed + 1)::text, v_target.width, '0');
+      v_malformed_value := v_target.prefix || '-not-a-number-' || v_suffix;
+    END IF;
+    EXECUTE format('INSERT INTO public.%I (%I) VALUES ($1), ($2)', v_target.source_table, v_target.number_column)
+      USING v_seed_value, v_malformed_value;
+
     PERFORM set_config('request.jwt.claims', '', true);
     BEGIN
       EXECUTE format('SELECT public.%I()', v_target.fn) INTO v_number;
@@ -72,18 +115,13 @@ BEGIN
       END IF;
     END;
 
-    SELECT id INTO v_allowed FROM profiles
-    WHERE is_active = true AND role = ANY(v_target.allowed_roles)
-    ORDER BY created_at LIMIT 1;
     SELECT id INTO v_denied FROM profiles
     WHERE is_active = true AND NOT (role = ANY(v_target.allowed_roles))
     ORDER BY created_at LIMIT 1;
-    IF v_allowed IS NULL OR v_denied IS NULL THEN
-      RAISE EXCEPTION 'SMOKE_SETUP: % needs active allowed and denied roles', v_target.fn;
+    IF v_denied IS NULL THEN
+      RAISE EXCEPTION 'SMOKE_SETUP: % needs an active denied role', v_target.fn;
     END IF;
-
-    PERFORM set_config('request.jwt.claims',
-      json_build_object('sub', v_denied, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_denied, 'role', 'authenticated')::text, true);
     BEGIN
       EXECUTE format('SELECT public.%I()', v_target.fn) INTO v_number;
       RAISE EXCEPTION 'SMOKE_FAIL: % allowed wrong role', v_target.fn;
@@ -94,12 +132,48 @@ BEGIN
       END IF;
     END;
 
-    PERFORM set_config('request.jwt.claims',
-      json_build_object('sub', v_allowed, 'role', 'authenticated')::text, true);
-    EXECUTE format('SELECT public.%I()', v_target.fn) INTO v_number;
-    IF v_number IS NULL OR btrim(v_number) = '' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: % allowed role returned no number', v_target.fn;
+    -- Prefer an existing inactive allowed actor. The rollback-safe fallback
+    -- temporarily deactivates an allowed profile if the live fixture lacks one.
+    v_restore_inactive := false;
+    SELECT id INTO v_inactive FROM profiles
+    WHERE is_active = false AND role = ANY(v_target.allowed_roles)
+    ORDER BY created_at LIMIT 1;
+    IF v_inactive IS NULL THEN
+      SELECT id INTO v_inactive FROM profiles
+      WHERE is_active = true AND role = ANY(v_target.allowed_roles)
+      ORDER BY created_at LIMIT 1;
+      IF v_inactive IS NULL THEN
+        RAISE EXCEPTION 'SMOKE_SETUP: % needs an otherwise-allowed actor', v_target.fn;
+      END IF;
+      UPDATE profiles SET is_active = false WHERE id = v_inactive;
+      v_restore_inactive := true;
     END IF;
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_inactive, 'role', 'authenticated')::text, true);
+    BEGIN
+      EXECUTE format('SELECT public.%I()', v_target.fn) INTO v_number;
+      RAISE EXCEPTION 'SMOKE_FAIL: % allowed inactive actor', v_target.fn;
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+      IF SQLERRM NOT LIKE 'INSUFFICIENT_ROLE%' THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: % inactive actor expected INSUFFICIENT_ROLE, got %', v_target.fn, SQLERRM;
+      END IF;
+    END;
+    IF v_restore_inactive THEN UPDATE profiles SET is_active = true WHERE id = v_inactive; END IF;
+
+    FOREACH v_role IN ARRAY v_target.allowed_roles LOOP
+      SELECT id INTO v_allowed FROM profiles
+      WHERE is_active = true AND role = v_role
+      ORDER BY created_at LIMIT 1;
+      IF v_allowed IS NULL THEN
+        RAISE EXCEPTION 'SMOKE_SETUP: % needs active allowed role %', v_target.fn, v_role;
+      END IF;
+      PERFORM set_config('request.jwt.claims', json_build_object('sub', v_allowed, 'role', 'authenticated')::text, true);
+      EXECUTE format('SELECT public.%I()', v_target.fn) INTO v_number;
+      IF v_number IS DISTINCT FROM v_expected THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: % role % expected %, got % (malformed fixture was not ignored)',
+          v_target.fn, v_role, v_expected, v_number;
+      END IF;
+    END LOOP;
   END LOOP;
 
   INSERT INTO customers (farm_name)
@@ -124,8 +198,7 @@ BEGIN
     END IF;
   END;
 
-  PERFORM set_config('request.jwt.claims',
-    json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   BEGIN
     PERFORM public.save_field(NULL, v_payload, '[]'::jsonb, v_other, 'smk-s1-forge-' || v_suffix);
     RAISE EXCEPTION 'SMOKE_FAIL: save_field accepted forged actor';

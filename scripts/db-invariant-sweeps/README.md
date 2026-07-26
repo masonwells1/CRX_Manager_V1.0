@@ -34,6 +34,7 @@ This runner makes those queries **standing executable gates** that run **before*
 | `ungated-secdef-mutators.sql` | (b) authenticated SECDEF that mutates and references no auth.uid()/role helper | **zero** (the round-2 definitive predicate, standing) |
 | `actor-forgery.sql` | (c) actor-param role-check/COALESCE without ACTOR_MISMATCH | over-broad by design; allowlist semantic-safe |
 | `actor-forgery-fin-audit.sql` | (i) actor param referenced inside a `financial_audit_log` INSERT without ACTOR_MISMATCH (blind-spot closer for (c)) | over-broad by design; allowlist verified attribution-only |
+| `actor-forgery-activity-feed.sql` | (j) actor-shaped param writes `activity_feed.performed_by` without a semantic `auth.uid()` mismatch guard | **zero**; exception wording is not the guard contract |
 | `auth-bound-role-ungated.sql` | (d) auth.uid()-bound mutator with no role check (the `create_direct_order` W1 variant) | **zero** |
 | `secdef-searchpath.sql` | (e) SECDEF missing `search_path` | **zero** (no allowlist case) |
 | `overloads.sql` | (f) public proname with >1 signature | **zero** (no allowlist case) |
@@ -106,6 +107,28 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs --explain <predicate>  # header 
   safe disposition into a live hole while the allowlist still says "safe."
 - The allowlist is itself a Codex artifact: hand Codex the allowlist **diff** to attack (per §5 of the
   review) — adjudicating exemptions is exactly what a second model is good at.
+
+### `actor-forgery-activity-feed` contract
+
+This predicate is a **zero-row, no-allowlist** control. It inspects authenticated-executable public
+SECURITY DEFINER functions which accept an actor-shaped parameter and insert into
+`activity_feed.performed_by`. Existing canonical `ACTOR_MISMATCH` guards remain accepted. For any
+noncanonical exception text, it passes only when the actor parameter has a semantic `auth.uid()`
+mismatch guard before the write: either compared directly to `auth.uid()` or to a local initialized
+from `auth.uid()`, with a rejecting `RAISE EXCEPTION`. This preserves the established canonical gate
+while preventing a safe noncanonical token from becoming a false positive. A returned row is a real
+unsafe attribution path — fix it in a reviewed migration; do not add it to `allowlist.json`.
+
+For the current pre-apply catalog, the expected result is exactly one row:
+`save_field(uuid, jsonb, jsonb, uuid, text)`. After migration `20260725234503` applies, the expected
+result is zero rows. Both claims require a fresh read-only live execution; the isolated fixture below
+proves the predicate mechanics only.
+
+Run its isolated PostgreSQL 17 regression fixture with:
+
+```
+node scripts/db-invariant-sweeps/actor-forgery-activity-feed-predicate.test.mjs
+```
 
 ## Seeded state (2026-06-10, first live validation)
 

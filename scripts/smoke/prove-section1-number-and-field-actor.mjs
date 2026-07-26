@@ -66,7 +66,7 @@ function assertInputs() {
     'REVOKE EXECUTE ON FUNCTION public.next_application_record_number() FROM PUBLIC, anon;',
     'GRANT EXECUTE ON FUNCTION public.save_field(uuid, jsonb, jsonb, uuid, text) TO authenticated, service_role;',
   ]) assert.ok(migration.includes(marker), `migration marker missing: ${marker}`);
-  for (const marker of [PASS_TOKEN, 'grant/search_path contract', 'nullable-actor replay']) {
+  for (const marker of [PASS_TOKEN, 'grant/search_path contract', 'inactive actor', 'nullable-actor replay']) {
     assert.ok(smoke.includes(marker), `smoke marker missing: ${marker}`);
   }
 }
@@ -210,7 +210,25 @@ INSERT INTO public.profiles (id, role, is_active) VALUES
   ('00000000-0000-0000-0000-000000000002', 'sales_rep', true),
   ('00000000-0000-0000-0000-000000000003', 'applicator', true),
   ('00000000-0000-0000-0000-000000000004', 'driver', true),
-  ('00000000-0000-0000-0000-000000000005', 'viewer', true);
+  ('00000000-0000-0000-0000-000000000005', 'viewer', true),
+  ('00000000-0000-0000-0000-000000000006', 'admin', false);
+
+-- Baseline rows exercise the unchanged captured number-generator bodies. The
+-- rollback smoke adds a higher valid value plus a safely ignored malformed or
+-- out-of-scope value, then asserts the exact next number for every role.
+INSERT INTO public.application_records (record_number)
+SELECT 'APP-' || to_char(current_date, 'YYYY') || '-0004';
+INSERT INTO public.commission_payments (payment_number)
+SELECT 'CP-' || to_char(current_date, 'YYYY') || '-0004';
+INSERT INTO public.cycle_counts (count_number)
+SELECT 'CC-' || to_char(current_date, 'YYYY') || '-00004';
+INSERT INTO public.deliveries (delivery_number) VALUES ('DEL-00004');
+INSERT INTO public.jobs (job_number)
+SELECT 'JOB-' || to_char(current_date, 'YYYY') || '-0004';
+INSERT INTO public.purchase_orders (po_number)
+SELECT 'PO-' || to_char(current_date, 'YYYY') || '-0004';
+INSERT INTO public.commission_payments (payment_number)
+SELECT 'CP-' || to_char(current_date - interval '1 year', 'YYYY') || '-not-a-number';
 `);
 }
 

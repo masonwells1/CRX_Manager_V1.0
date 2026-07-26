@@ -9,7 +9,7 @@
   "specs": {
     "section1_number_and_field_actor": {
       "chain": "smoke-section1-number-and-field-actor.sql",
-      "description": "Section 1 SECURITY DEFINER boundary: all six number generators have exactly one overload, exact pinned search paths, authenticated/service_role-only EXECUTE, no PUBLIC/anon grant, AUTH_REQUIRED and active-role gates; save_field has the same grant/search-path/overload shape, rejects no-auth and forged actors before writes, records a NULL-parameter save under the authenticated actor, and replays without a duplicate field or activity row. Terminal rollback.",
+    "description": "Section 1 SECURITY DEFINER boundary: all six number generators have exactly one overload, exact pinned search paths, authenticated/service_role-only EXECUTE, no PUBLIC/anon grant, AUTH_REQUIRED, active wrong-role, and inactive otherwise-allowed-actor gates; EVERY advertised allowed role returns the same exact next number after a valid current-format fixture plus a safely ignored malformed/out-of-scope fixture. This preserves the captured generator bodies (the commission malformed fixture is other-year because its current LIKE+cast body does not parse a same-year malformed suffix). save_field has the same grant/search-path/overload shape, rejects no-auth and forged actors before writes, records a NULL-parameter save under the authenticated actor, and replays without a duplicate field or activity row. Terminal rollback.",
       "covers": ["next_application_record_number", "next_commission_payment_number", "next_cycle_count_number", "next_delivery_number", "next_job_number", "next_po_number", "save_field"],
       "area": ["security", "idempotency"]
     },
