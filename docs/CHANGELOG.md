@@ -38,8 +38,9 @@ adding `profiles.is_active = true` (**APPLIED LIVE 2026-07-26** after both revie
 returned CLEAN; submitted as `20260726230000`, server-assigned ledger version `20260726223520`,
 disk file B7-renamed to match; behaviorally proven live: active admin sees the inactive vendors,
 a deactivated admin sees none — via a fully rolled-back simulation, no live data mutated). The
-pre-existing systemic gap (older policies and `is_admin()` omit `is_active`) is tracked as a
-separate follow-up task. (2) Toggling Show Inactive could leave two vendor fetches racing, with
+remaining systemic gap is older policies with *inline* role-only checks (e.g. `vendors_select`
+itself); the `is_admin()`/`is_sales_rep()` helpers were verified live to already include
+`is_active = true`. That inline-policy sweep is tracked as a separate follow-up task. (2) Toggling Show Inactive could leave two vendor fetches racing, with
 the stale one overwriting the fresh list — fixed with a fetch sequence guard in `Vendors.tsx`
 (only the newest in-flight fetch may touch state).
 
