@@ -1,14 +1,18 @@
 /**
  * Vendors.tsx — Vendor master-data management (PR-25, 2026-05-10)
  *
- * Admin-only page to add, edit, and soft-delete vendors. Vendors are
- * referenced by purchase orders (legacy `vendor` text column) and vendor
- * bills (`vendor_id` FK). Soft-delete refuses if any unpaid bills exist.
+ * Admin-only page to add, edit, deactivate, and reactivate vendors.
+ * Vendors are referenced by purchase orders (legacy `vendor` text column)
+ * and vendor bills (`vendor_id` FK). "Deactivate" is the soft-delete from
+ * delete_vendor() (refused if unpaid bills exist); the RPC name is
+ * unchanged, only the UI language is. Reactivate clears the soft-delete
+ * via reactivate_vendor() (migration 20260726213000) and is blocked if an
+ * active vendor now uses the same normalized name.
  *
  * Uses save_vendor() and delete_vendor() RPCs from migration 20260510120000.
  */
-import { useEffect, useState, useCallback } from 'react';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { Plus, Pencil, Trash2, RotateCcw } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -39,9 +43,11 @@ export default function Vendors() {
   const { profile } = useAuth();
   const saveIdem = useIdempotencyKey('save_vendor', profile?.id || '');
   const deleteIdem = useIdempotencyKey('delete_vendor', profile?.id || '');
+  const reactivateIdem = useIdempotencyKey('reactivate_vendor', profile?.id || '');
 
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showInactive, setShowInactive] = useState(false);
 
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -51,13 +57,23 @@ export default function Vendors() {
   const [deleteTarget, setDeleteTarget] = useState<Vendor | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const [reactivateTarget, setReactivateTarget] = useState<Vendor | null>(null);
+  const [reactivating, setReactivating] = useState(false);
+
+  // Codex P2 fix (PR #236): toggling Show Inactive can leave two fetches in
+  // flight; if the older one resolves last, its stale list would overwrite
+  // the current view. Each fetch takes a sequence number and only the newest
+  // is allowed to touch state.
+  const fetchSeq = useRef(0);
   const fetchVendors = useCallback(async () => {
+    const seq = ++fetchSeq.current;
     setLoading(true);
-    const { data, error } = await supabase
-      .from('vendors')
-      .select('*')
-      .is('deleted_at', null)
-      .order('name', { ascending: true });
+    let query = supabase.from('vendors').select('*');
+    query = showInactive
+      ? query.not('deleted_at', 'is', null)
+      : query.is('deleted_at', null);
+    const { data, error } = await query.order('name', { ascending: true });
+    if (seq !== fetchSeq.current) return;
     if (error) {
       toast('error', 'Failed to load vendors');
       setLoading(false);
@@ -65,7 +81,7 @@ export default function Vendors() {
     }
     setVendors((data || []) as Vendor[]);
     setLoading(false);
-  }, [toast]);
+  }, [toast, showInactive]);
 
   useEffect(() => {
     fetchVendors();
@@ -90,6 +106,11 @@ export default function Vendors() {
   const openDeleteModal = (v: Vendor) => {
     deleteIdem.resetKey();
     setDeleteTarget(v);
+  };
+
+  const openReactivateModal = (v: Vendor) => {
+    reactivateIdem.resetKey();
+    setReactivateTarget(v);
   };
 
   const openEditModal = (v: Vendor) => {
@@ -157,7 +178,7 @@ export default function Vendors() {
       if (error) throw error;
       assertRpcResult<{ success: boolean; vendor_id: string }>(data, 'delete_vendor');
       deleteIdem.resetKey();
-      toast('success', `Vendor "${deleteTarget.name}" deleted`);
+      toast('success', `Vendor "${deleteTarget.name}" deactivated`);
       setDeleteTarget(null);
       fetchVendors();
     } catch (err) {
@@ -166,8 +187,37 @@ export default function Vendors() {
     setDeleting(false);
   };
 
+  const handleReactivate = async () => {
+    if (!reactivateTarget) return;
+    setReactivating(true);
+    try {
+      const key = reactivateIdem.getKey();
+      const { data, error } = await supabase.rpc('reactivate_vendor', {
+        p_vendor_id: reactivateTarget.id,
+        p_idempotency_key: key,
+      });
+      if (error) throw error;
+      assertRpcResult<{ success: boolean; vendor_id: string }>(data, 'reactivate_vendor');
+      reactivateIdem.resetKey();
+      toast('success', `Vendor "${reactivateTarget.name}" reactivated`);
+      setReactivateTarget(null);
+      fetchVendors();
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setReactivating(false);
+  };
+
   const columns: Column<Vendor>[] = [
-    { key: 'name', header: 'Name', render: (r) => <span className="font-medium">{r.name}</span> },
+    {
+      key: 'name',
+      header: 'Name',
+      render: (r) => (
+        <span className={showInactive ? 'font-medium text-secondary' : 'font-medium'}>
+          {r.name}
+        </span>
+      ),
+    },
     { key: 'contact_name', header: 'Contact', render: (r) => r.contact_name || '-' },
     { key: 'phone', header: 'Phone', render: (r) => r.phone || '-' },
     { key: 'email', header: 'Email', render: (r) => r.email || '-' },
@@ -184,20 +234,32 @@ export default function Vendors() {
       header: '',
       render: (r) => (
         <div className="flex gap-2">
-          <button
-            onClick={(e) => { e.stopPropagation(); openEditModal(r); }}
-            className="text-crx-green hover:text-crx-green/70"
-            title="Edit"
-          >
-            <Pencil className="w-4 h-4" />
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); openDeleteModal(r); }}
-            className="text-red-600 hover:text-red-700"
-            title="Delete"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {showInactive ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); openReactivateModal(r); }}
+              className="text-crx-green hover:text-crx-green/70 flex items-center gap-1 text-sm"
+              title="Reactivate"
+            >
+              <RotateCcw className="w-4 h-4" /> Reactivate
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={(e) => { e.stopPropagation(); openEditModal(r); }}
+                className="text-crx-green hover:text-crx-green/70"
+                title="Edit"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); openDeleteModal(r); }}
+                className="text-red-600 hover:text-red-700"
+                title="Deactivate"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </>
+          )}
         </div>
       ),
     },
@@ -209,16 +271,25 @@ export default function Vendors() {
         title="Vendors"
         subtitle="Manage suppliers for purchase orders and bills."
         actions={(
-          <Button icon={<Plus className="w-4 h-4" />} onClick={openCreateModal}>
-            Add Vendor
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" onClick={() => setShowInactive(!showInactive)}>
+              {showInactive ? 'Show Active' : 'Show Inactive'}
+            </Button>
+            {!showInactive && (
+              <Button icon={<Plus className="w-4 h-4" />} onClick={openCreateModal}>
+                Add Vendor
+              </Button>
+            )}
+          </div>
         )}
       />
 
       <Card>
         {!loading && vendors.length === 0 ? (
           <div className="text-center py-10 text-secondary text-sm">
-            No vendors yet. Add your first vendor to get started.
+            {showInactive
+              ? 'No inactive vendors.'
+              : 'No vendors yet. Add your first vendor to get started.'}
           </div>
         ) : (
           <DataTable<Vendor> data={vendors} columns={columns} loading={loading} />
@@ -286,20 +357,37 @@ export default function Vendors() {
         </div>
       </Modal>
 
-      {/* Delete confirmation */}
+      {/* Deactivate confirmation */}
       <ConfirmModal
         open={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
-        title="Delete Vendor"
+        title="Deactivate Vendor"
         message={
           deleteTarget
-            ? `Soft-delete vendor "${deleteTarget.name}"? Refused if any unpaid bills exist for this vendor.`
+            ? `Deactivate vendor "${deleteTarget.name}"? They are hidden from lists but all history is kept, and you can reactivate them anytime. Refused if any unpaid bills exist.`
             : ''
         }
-        confirmLabel="Delete"
+        confirmLabel="Deactivate"
         loading={deleting}
         variant="danger"
+      />
+
+      {/* Reactivate confirmation */}
+      <ConfirmModal
+        open={reactivateTarget !== null}
+        onClose={() => setReactivateTarget(null)}
+        onConfirm={handleReactivate}
+        title="Reactivate Vendor"
+        message={
+          reactivateTarget
+            ? `Reactivate vendor "${reactivateTarget.name}"? They become available again for bills and payments. Blocked if an active vendor already uses the same name.`
+            : ''
+        }
+        confirmLabel="Reactivate"
+        loading={reactivating}
+        variant="info"
+        icon={RotateCcw}
       />
     </div>
   );

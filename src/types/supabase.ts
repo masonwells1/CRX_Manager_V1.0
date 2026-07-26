@@ -13985,6 +13985,10 @@ export type Database = {
         }
         Returns: number
       }
+      reactivate_vendor: {
+        Args: { p_idempotency_key?: string; p_vendor_id: string }
+        Returns: Json
+      }
       reassign_delivery: {
         Args: {
           p_delivery_id: string

@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-23 (live migration watermark `20260723193312` — Supplier Pricing Phase 3 Stage A return-policy foundation applied under its server-assigned ledger version; it is dormant with 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`. Supplier-pricing Product-page and monthly XLSX paths remain governed through preview/approval/apply, and `process-document` v19 permanently rejects supplier price/product lists before OCR; operational counts remain the dated 2026-07-18 snapshot below)
+**Last verified:** 2026-07-26 (live migration watermark `20260726223520` — four migrations applied live today, all verified via Supabase MCP post-apply: the section-9 `void_vendor_payment` vendor-liveness gate (`20260726201208`), the admin-only `reactivate_vendor` RPC (`20260726212043`), and two RLS policies on the `vendors` table making the new Show Inactive view work — admin read access to soft-deleted vendors (`20260726215154`) tightened to active admins only (`20260726223520`). Vendor "Delete" is now framed as Deactivate/Reactivate in the UI. Supplier Pricing Stage A remains dormant (`supplier_cost_basis_enabled=false`); `process-document` v19 still rejects supplier price/product lists before OCR; operational counts remain the dated 2026-07-18 snapshot below)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check

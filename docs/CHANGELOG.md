@@ -2,6 +2,48 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-26 — Vendor Deactivate/Reactivate (restore path for soft-deleted vendors)
+
+Owner-approved follow-up to the vendor-liveness gate below: vendor "Delete" never destroyed data
+(it soft-deletes via `deleted_at`), but the UI called it Delete and there was no way back — and
+the new `VENDOR_DELETED` guard on `void_vendor_payment` made that dead end operational. This
+change (a) reframes the Vendors page action as **Deactivate** with honest copy (history kept,
+reversible), (b) adds a **Show Inactive** view listing deactivated vendors, and (c) adds a
+**Reactivate** button backed by a new `reactivate_vendor(p_vendor_id, p_idempotency_key)` RPC
+(**APPLIED LIVE 2026-07-26** with Mason's in-chat OK after both reviewer charters returned CLEAN;
+submitted as `20260726213000`, server-assigned ledger version `20260726212043`, disk file
+B7-renamed to match; live body md5-verified against the on-disk migration post-apply).
+The RPC is admin-only, locks the deactivated vendor row, refuses with `VENDOR_NAME_CONFLICT`
+when an active vendor already uses the same normalized identity (partial unique index
+`vendors_active_normalized_name_key` as hard backstop, `unique_violation` mapped to the same
+error), clears `deleted_at`, logs `vendor_reactivated` to the activity feed, and carries the
+standard SECURITY DEFINER + pg_temp + explicit ACL + in-migration verification pattern.
+`delete_vendor` itself is unchanged — only the UI language moved.
+
+**RLS follow-up, same day:** the PR #236 automated review caught a real P1 — the sole vendors
+SELECT policy requires `deleted_at IS NULL`, so Row Level Security silently hid every
+deactivated vendor and the Show Inactive view was always empty (Reactivate unreachable).
+Confirmed against live `pg_policy`, then fixed with one additive admin-only SELECT policy
+`vendors_select_inactive_admin` scoped to soft-deleted rows (**APPLIED LIVE 2026-07-26** after
+both reviewer charters returned CLEAN on the first run; submitted as `20260726220000`,
+server-assigned ledger version `20260726215154`, disk file B7-renamed to match). Active-row
+visibility is unchanged and no write policy was added — reactivation still goes only through
+the `reactivate_vendor` RPC. Post-apply proof: live `pg_policy` shows exactly the two intended
+SELECT-only policies.
+
+**Second review round, same day:** the follow-up Codex review of the P1 fix raised two real P2s,
+both fixed. (1) The new policy checked `role = 'admin'` only, so a *deactivated* admin holding a
+still-valid session would keep read access to inactive vendors — tightened with an ALTER POLICY
+adding `profiles.is_active = true` (**APPLIED LIVE 2026-07-26** after both reviewer charters
+returned CLEAN; submitted as `20260726230000`, server-assigned ledger version `20260726223520`,
+disk file B7-renamed to match; behaviorally proven live: active admin sees the inactive vendors,
+a deactivated admin sees none — via a fully rolled-back simulation, no live data mutated). The
+remaining systemic gap is older policies with *inline* role-only checks (e.g. `vendors_select`
+itself); the `is_admin()`/`is_sales_rep()` helpers were verified live to already include
+`is_active = true`. That inline-policy sweep is tracked as a separate follow-up task. (2) Toggling Show Inactive could leave two vendor fetches racing, with
+the stale one overwriting the fresh list — fixed with a fetch sequence guard in `Vendors.tsx`
+(only the newest in-flight fetch may touch state).
+
 ## 2026-07-26 — void_vendor_payment vendor-liveness gate APPLIED LIVE
 
 Section 9 follow-up MEDIUM-1: `void_vendor_payment` flipped a bill from paid back to unpaid without
