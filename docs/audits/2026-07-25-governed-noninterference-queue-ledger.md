@@ -174,9 +174,9 @@ landing request for Section 2.
 Candidate `b754bf8db85c1ed163dd3d7af17f678ace32e30f` is a documentation/audit
 refresh with a fresh independent Sol **CLEAN** verdict. It records **0
 defects**, **2 MEDIUM coverage gaps**, and a blocked authenticated binary-PDF
-proof. Focused proof passed **112** tests; the full suite passed **3,888**
-tests. The limitation is deliberate: mocked renderer tests do not demonstrate
-a real authenticated browser download, visual pagination, or binary output.
+proof. Focused proof passed **112** tests. The limitation is deliberate:
+mocked renderer tests do not demonstrate a real authenticated browser download,
+visual pagination, or binary output.
 
 The candidate is neither pushed nor on `main`; no production state changed.
 
@@ -188,11 +188,11 @@ send can create a different time-derived idempotency key and therefore is not
 deduplicated as the same intentional action. Read-only live metadata observed
 seven active deployed functions with `verify_jwt=true`.
 
-Focused proof passed **85** tests and the full suite passed **3,888**. Limits
-remain: metadata did not prove deployed-bundle parity, deployed secrets, or a
-real authenticated OCR/email transaction. The candidate is not pushed, not on
-`main`, and not deployed by this work; a real safe non-production proof and
-any remediation/deployment require their own authorization.
+Focused proof passed **85** tests. Limits remain: metadata did not prove
+deployed-bundle parity, deployed secrets, or a real authenticated OCR/email
+transaction. The candidate is not pushed, not on `main`, and not deployed by
+this work; a real safe non-production proof and any remediation/deployment
+require their own authorization.
 
 ## Proof boundary
 
