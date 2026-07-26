@@ -333,6 +333,60 @@ describe('SupplierPricing page', () => {
     expect(mockStageVendorAlias).not.toHaveBeenCalled();
   });
 
+  it('removes a Quick Quote link when its Product disappears but the link remains', async () => {
+    const product = {
+      id: '99999999-9999-4999-8999-999999999999',
+      product_name: 'Duplicate Name',
+      sku: 'EXACT-SKU',
+      inventory_unit: 'gallon',
+    };
+    const link = {
+      id: 'link-still-returned',
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: 'SUP-1',
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    };
+    const initial = {
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [product],
+      links: [link],
+      imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = {
+      ...initial,
+      products: [],
+      links: [link],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+
+    renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    expect(screen.getByRole('option', { name: /SKU: EXACT-SKU.*Supplier SKU: SUP-1/ })).toBeInTheDocument();
+    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+
+    mockStageSupplierPriceImport.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(linkedProduct).toHaveValue(''));
+    expect(screen.queryByRole('option', { name: /EXACT-SKU/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+  });
+
   it('routes comparable supplier evidence to the single-Product governed flow', async () => {
     mockGetWorkspace.mockResolvedValue({
       vendors: [{ id: 'vendor-1', name: 'The Andersons' }],

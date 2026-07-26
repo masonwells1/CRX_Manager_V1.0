@@ -155,6 +155,7 @@ export default function SupplierPricing() {
           && item.vendor_id === nextVendorId
           && item.is_active
           && item.is_reusable
+          && result.products.some((product) => product.id === item.product_id)
         ));
         return link ? current : blankQuickQuote;
       });
@@ -262,11 +263,18 @@ export default function SupplierPricing() {
     })),
     [workspace],
   );
+  const activeProductById = useMemo(
+    () => new Map((workspace?.products ?? []).map((product) => [product.id, product])),
+    [workspace],
+  );
   const vendorLinks = useMemo(
     () => (workspace?.links ?? []).filter((link) => (
-      link.vendor_id === selectedVendorId && link.is_active && link.is_reusable
+      link.vendor_id === selectedVendorId
+      && link.is_active
+      && link.is_reusable
+      && activeProductById.has(link.product_id)
     )),
-    [selectedVendorId, workspace],
+    [activeProductById, selectedVendorId, workspace],
   );
   const selectedEvidence = useMemo(
     () => workspace?.evidence.find((item) => item.product_id === selectedProductId) ?? null,
@@ -358,7 +366,8 @@ export default function SupplierPricing() {
       return;
     }
     const currentLink = vendorLinks.find((link) => link.id === quickQuote.linkId);
-    if (!currentLink) {
+    const currentProduct = currentLink ? activeProductById.get(currentLink.product_id) : null;
+    if (!currentLink || !currentProduct) {
       setQuickQuote(blankQuickQuote);
       toast('error', 'The selected supplier link is no longer available. Refresh and choose a current link.');
       return;
@@ -674,7 +683,7 @@ export default function SupplierPricing() {
               }}
               options={vendorLinks.map((link) => ({
                 value: link.id,
-                label: `${link.product_name} — ${link.supplier_sku || 'no supplier SKU'}`,
+                label: `${productOptionLabel(activeProductById.get(link.product_id)!)} — Supplier SKU: ${link.supplier_sku || 'not recorded'}`,
               }))}
               placeholder="Choose linked Product"
             />
