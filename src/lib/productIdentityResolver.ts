@@ -8,7 +8,7 @@ export interface ProductIdentityCandidate {
 export type ProductIdentityResolution<T extends ProductIdentityCandidate> =
   | { status: 'unique'; product: T }
   | { status: 'missing'; product: null }
-  | { status: 'ambiguous'; product: null };
+  | { status: 'ambiguous'; product: null; candidates: T[] };
 
 export function normalizeProductIdentity(value: string | null | undefined): string {
   return (value || '').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -20,8 +20,8 @@ function distinctById<T extends ProductIdentityCandidate>(products: T[]): T[] {
 
 /**
  * Resolves an exact normalized Product identity without treating siblings as
- * interchangeable. A unique SKU wins over name matches so a SKU that happens
- * to equal another Product's name remains a safe, exact identifier.
+ * interchangeable. Name and SKU matches form one UUID-deduplicated candidate
+ * set, so a SKU that equals a different Product's name fails closed.
  */
 export function resolveExactProductIdentity<T extends ProductIdentityCandidate>(
   value: string | null | undefined,
@@ -31,17 +31,14 @@ export function resolveExactProductIdentity<T extends ProductIdentityCandidate>(
   if (!normalized) return { status: 'missing', product: null };
 
   const active = products.filter((product) => product.is_active !== false);
-  const skuMatches = distinctById(active.filter(
-    (product) => product.sku && normalizeProductIdentity(product.sku) === normalized,
+  const matches = distinctById(active.filter(
+    (product) => (
+      normalizeProductIdentity(product.product_name) === normalized
+      || (product.sku != null && normalizeProductIdentity(product.sku) === normalized)
+    ),
   ));
-  if (skuMatches.length === 1) return { status: 'unique', product: skuMatches[0] };
-  if (skuMatches.length > 1) return { status: 'ambiguous', product: null };
-
-  const nameMatches = distinctById(active.filter(
-    (product) => normalizeProductIdentity(product.product_name) === normalized,
-  ));
-  if (nameMatches.length === 1) return { status: 'unique', product: nameMatches[0] };
-  if (nameMatches.length > 1) return { status: 'ambiguous', product: null };
+  if (matches.length === 1) return { status: 'unique', product: matches[0] };
+  if (matches.length > 1) return { status: 'ambiguous', product: null, candidates: matches };
   return { status: 'missing', product: null };
 }
 

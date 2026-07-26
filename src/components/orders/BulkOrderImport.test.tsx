@@ -68,6 +68,8 @@ describe('BulkOrderImport', () => {
           data: [
             { id: 'product-a', product_name: 'Same Name', sku: 'SKU-A', is_active: true },
             { id: 'product-b', product_name: 'Same Name', sku: 'SKU-B', is_active: true },
+            { id: 'product-name-x', product_name: 'Cross Identity', sku: 'NAME-X', is_active: true },
+            { id: 'product-sku-x', product_name: 'Other Product', sku: 'Cross Identity', is_active: true },
           ],
           error: null,
         });
@@ -141,6 +143,28 @@ describe('BulkOrderImport', () => {
     expect(failures).toHaveTextContent('Order O-MISSING');
     expect(failures).toHaveTextContent('"Unknown Product" has no matching Product');
     expect(failures).toHaveTextContent('use a unique SKU and retry');
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+  });
+
+  it('rejects a cross-field name/SKU collision before bulk_import_order', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit',
+      'O-CROSS,North Farm,Cross Identity,2,20',
+    ].join('\n');
+    const file = new File([csv], 'cross-field.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/cross-field\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-CROSS/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
+
+    await screen.findByText(/successfully imported:/i);
+    const failures = screen.getByRole('list', { name: /order import failure details/i });
+    expect(failures).toHaveTextContent('"Cross Identity" has an ambiguous Product match');
     expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
   });
 

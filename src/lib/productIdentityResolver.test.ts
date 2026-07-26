@@ -7,29 +7,50 @@ import {
 const products = [
   { id: 'a', product_name: 'Same Name', sku: 'SKU-A', is_active: true },
   { id: 'b', product_name: 'Same Name', sku: 'SKU-B', is_active: true },
-  { id: 'c', product_name: 'SKU-A', sku: 'SKU-C', is_active: true },
+  { id: 'c', product_name: 'Unique Name', sku: 'SKU-C', is_active: true },
   { id: 'd', product_name: 'Inactive', sku: 'OLD', is_active: false },
 ];
 
 describe('resolveExactProductIdentity', () => {
   it('fails closed for ambiguous same-name siblings', () => {
-    expect(resolveExactProductIdentity(' same   name ', products)).toEqual({
-      status: 'ambiguous',
-      product: null,
-    });
+    const resolution = resolveExactProductIdentity(' same   name ', products);
+    expect(resolution.status).toBe('ambiguous');
+    if (resolution.status === 'ambiguous') {
+      expect(resolution.candidates.map(({ id }) => id)).toEqual(['a', 'b']);
+    }
   });
 
-  it('keeps a unique SKU valid across same-name siblings and name collisions', () => {
+  it('resolves a unique SKU', () => {
     expect(resolveExactProductIdentity('sku-a', products)).toMatchObject({
       status: 'unique',
       product: { id: 'a' },
     });
   });
 
-  it('deduplicates matches by immutable Product UUID', () => {
-    expect(resolveExactProductIdentity('SKU-B', [...products, products[1]])).toMatchObject({
+  it('resolves a unique exact name', () => {
+    expect(resolveExactProductIdentity(' unique   name ', products)).toMatchObject({
       status: 'unique',
-      product: { id: 'b' },
+      product: { id: 'c' },
+    });
+  });
+
+  it('fails closed when one Product name equals another Product SKU', () => {
+    const resolution = resolveExactProductIdentity('X', [
+      { id: 'name-match', product_name: 'X', sku: 'NAME-SKU', is_active: true },
+      { id: 'sku-match', product_name: 'Other', sku: 'X', is_active: true },
+    ]);
+    expect(resolution.status).toBe('ambiguous');
+    if (resolution.status === 'ambiguous') {
+      expect(resolution.candidates.map(({ id }) => id)).toEqual(['name-match', 'sku-match']);
+    }
+  });
+
+  it('deduplicates a Product matched by both fields by immutable UUID', () => {
+    expect(resolveExactProductIdentity('X', [
+      { id: 'same-id', product_name: 'X', sku: 'X', is_active: true },
+    ])).toMatchObject({
+      status: 'unique',
+      product: { id: 'same-id' },
     });
   });
 
@@ -41,10 +62,7 @@ describe('resolveExactProductIdentity', () => {
 
 describe('resolveFuzzyProductIdentity', () => {
   it('keeps exact same-name siblings unresolved', () => {
-    expect(resolveFuzzyProductIdentity('Same Name', products)).toEqual({
-      product: null,
-      score: 0,
-    });
+    expect(resolveFuzzyProductIdentity('Same Name', products)).toEqual({ product: null, score: 0 });
   });
 
   it('keeps tied fuzzy siblings unresolved', () => {

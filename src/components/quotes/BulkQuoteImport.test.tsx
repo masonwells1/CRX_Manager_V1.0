@@ -182,6 +182,37 @@ describe('BulkQuoteImport', () => {
     expect(await screen.findByText(/ambiguous/i)).toBeInTheDocument();
   });
 
+  it('rejects a cross-field name/SKU collision before save_quote', async () => {
+    mocks.from.mockImplementation((table: string) => {
+      const dataByTable: Record<string, unknown[]> = {
+        customers: [{ id: 'customer-1', farm_name: 'North Farm' }],
+        products: [
+          { id: 'product-name-x', product_name: 'Cross Identity', sku: 'NAME-X', is_active: true, inventory_unit: 'Gallon' },
+          { id: 'product-sku-x', product_name: 'Other Product', sku: 'Cross Identity', is_active: true, inventory_unit: 'Gallon' },
+        ],
+        unit_conversions: [{ unit: 'oz', factor_oz: 1 }, { unit: 'Gallon', factor_oz: 128 }],
+      };
+      return mocks.chainable({ data: dataByTable[table] ?? [], error: null });
+    });
+    const { container } = render(<BulkQuoteImport {...defaultProps} />);
+    const csv = [
+      'quote_number,customer_farm_name,section_name,product_name,acres,price_per_unit,oz_per_acre,status',
+      'Q-CROSS,North Farm,Spring,Cross Identity,10,20,32,draft',
+    ].join('\n');
+    const file = new File([csv], 'cross-field.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/cross-field\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/Q-CROSS/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 quote/i }));
+
+    expect(await screen.findByText(/ambiguous/i)).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('save_quote', expect.anything());
+  });
+
   it('uses a unique SKU to preserve the exact sibling UUID', async () => {
     mocks.from.mockImplementation((table: string) => {
       const dataByTable: Record<string, unknown[]> = {
