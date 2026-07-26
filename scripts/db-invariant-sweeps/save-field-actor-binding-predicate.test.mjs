@@ -113,6 +113,24 @@ INSERT INTO public.profiles VALUES ('00000000-0000-0000-0000-000000000001', 'adm
   VALUES ('field_saved', 'untagged dollar fake guard', v_actor, 'field', v_field_id);`);
   assert.deepEqual(rows(), [VIOLATION], 'full fake bind/guard in an untagged dollar-quoted literal must be unsafe');
   createSaveField(`
+  /* $dead$ */
+  INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
+  VALUES ('field_saved', 'comment bracket attack', p_performed_by, 'field', v_field_id);
+  /* $dead$ */
+  v_actor := auth.uid();
+  INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
+  VALUES ('field_saved', 'later safe-looking sink', v_actor, 'field', v_field_id);`);
+  assert.deepEqual(rows(), [VIOLATION], 'comment-contained dollar tokens must not bracket away an unsafe executable sink');
+  createSaveField(`
+  PERFORM '$dead$';
+  INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
+  VALUES ('field_saved', 'string bracket attack', p_performed_by, 'field', v_field_id);
+  PERFORM '$dead$';
+  v_actor := auth.uid();
+  INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
+  VALUES ('field_saved', 'later safe-looking sink', v_actor, 'field', v_field_id);`);
+  assert.deepEqual(rows(), [VIOLATION], 'string-contained dollar tokens must not bracket away an unsafe executable sink');
+  createSaveField(`
   v_actor := auth.uid();
   INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
   VALUES ('field_saved', 'late guard', p_performed_by, 'field', v_field_id);
@@ -121,7 +139,17 @@ INSERT INTO public.profiles VALUES ('00000000-0000-0000-0000-000000000001', 'adm
   END IF;`);
   assert.deepEqual(rows(), [VIOLATION], 'a guard after the caller-trusted write must be unsafe');
   psql(readFileSync(MIGRATION, 'utf8'));
+  assert.equal(
+    psql("SELECT encode(sha256(convert_to(prosrc, 'UTF8')), 'hex') FROM pg_proc WHERE oid = 'public.save_field(uuid,jsonb,jsonb,uuid,text)'::regprocedure").stdout.trim(),
+    '10a53c6b4c218a3836b0a5269fc558cc214eb8741a2df6669133885919f50ff2',
+    'exact migration must emit the reviewed SHA-256 body'
+  );
   assert.deepEqual(rows(), [], 'exact migration must satisfy the narrow actor-binding contract');
+  const secureDefinition = psql("SELECT pg_get_functiondef('public.save_field(uuid,jsonb,jsonb,uuid,text)'::regprocedure)").stdout;
+  const alteredDefinition = secureDefinition.replace('RETURN v_field_id;', 'RETURN v_field_id ;');
+  assert.notEqual(alteredDefinition, secureDefinition, 'secure-body alteration fixture must modify the definition');
+  psql(alteredDefinition);
+  assert.deepEqual(rows(), [VIOLATION], 'any alteration to the reviewed secure body must fail closed');
   console.log('SAVE_FIELD_ACTOR_BINDING_PREDICATE_TEST_PASS');
 } finally {
   if (CONTAINER.startsWith(PREFIX)) docker(['rm', '--force', CONTAINER], { allowFailure: true });

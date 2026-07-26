@@ -34,7 +34,7 @@ This runner makes those queries **standing executable gates** that run **before*
 | `ungated-secdef-mutators.sql` | (b) authenticated SECDEF that mutates and references no auth.uid()/role helper | **zero** (the round-2 definitive predicate, standing) |
 | `actor-forgery.sql` | (c) actor-param role-check/COALESCE without ACTOR_MISMATCH | over-broad by design; allowlist semantic-safe |
 | `actor-forgery-fin-audit.sql` | (i) actor param referenced inside a `financial_audit_log` INSERT without ACTOR_MISMATCH (blind-spot closer for (c)) | over-broad by design; allowlist verified attribution-only |
-| `save-field-actor-binding.sql` | (j) exact `save_field(uuid,jsonb,jsonb,uuid,text)` actor binding, guard ordering, and `activity_feed` attribution | pre-apply: exactly `save_field`; post-apply: **zero** |
+| `save-field-actor-binding.sql` | (j) exact reviewed `save_field(uuid,jsonb,jsonb,uuid,text)` body fingerprint | pre-apply/body drift: exactly `save_field`; exact post-apply body: **zero** |
 | `auth-bound-role-ungated.sql` | (d) auth.uid()-bound mutator with no role check (the `create_direct_order` W1 variant) | **zero** |
 | `secdef-searchpath.sql` | (e) SECDEF missing `search_path` | **zero** (no allowlist case) |
 | `overloads.sql` | (f) public proname with >1 signature | **zero** (no allowlist case) |
@@ -110,13 +110,13 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs --explain <predicate>  # header 
 
 ### `save-field-actor-binding` contract
 
-This is a narrow, no-allowlist regression control for the exact audited function
-`save_field(uuid,jsonb,jsonb,uuid,text)`. It requires `v_actor := auth.uid()` before every
-write/idempotency action; the real `p_performed_by` mismatch rejection before those actions; and the
-`activity_feed.performed_by` sink to use `v_actor`, not `p_performed_by`. Error tokens, comments, and
-dead `ACTOR_MISMATCH` strings do not count as proof: the predicate strips block comments, line comments,
-and quoted-string contents before every positional check. The scope is intentionally narrow: it prevents
-this demonstrated regression without claiming that a catalog regex can safely parse every actor style.
+This is a narrow, no-allowlist, fail-closed regression control for the exact audited function
+`save_field(uuid,jsonb,jsonb,uuid,text)`. It pins the SHA-256 of `pg_proc.prosrc` emitted by migration
+`20260725234503`; a missing signature or any body change returns the violation. The pin is deliberate:
+PL/pgSQL lexical forms can make regex-based security acceptance ambiguous. Any legitimate future edit
+therefore requires a fresh security review and intentional fingerprint update. The isolated fixture
+derives/checks the reviewed fingerprint after applying the exact migration and proves adversarial bodies
+and a changed reviewed body fail closed.
 
 For the current pre-apply catalog, the expected result is exactly one row:
 `save_field(uuid, jsonb, jsonb, uuid, text)`. After migration `20260725234503` applies, the expected
