@@ -335,7 +335,6 @@ describe('money and inventory gauntlet fixes', () => {
 
     for (const path of [
       'src/pages/NewPurchaseOrder.tsx',
-      'src/pages/PurchaseOrderDetail.tsx',
       'src/components/purchase-orders/BulkPOImport.tsx',
     ]) {
       const writer = source(path);
@@ -343,6 +342,19 @@ describe('money and inventory gauntlet fixes', () => {
       expect(writer).toContain('unit_cost: purchaseOrderCentsToDollars(unitCostCents)');
       expect(writer).toContain('unit_cost_cents: unitCostCents');
     }
+
+    const purchaseOrderDetail = source('src/pages/PurchaseOrderDetail.tsx');
+    const purchaseOrderEditPayload = source('src/lib/purchaseOrderEditPayload.ts');
+    expect(purchaseOrderDetail).toContain(
+      'const itemsPayload = buildPurchaseOrderEditItemsPayload(editItems)',
+    );
+    expect(purchaseOrderEditPayload).toContain(
+      'const unitCostCents = purchaseOrderUnitCostCents(',
+    );
+    expect(purchaseOrderEditPayload).toContain(
+      'unit_cost: purchaseOrderCentsToDollars(unitCostCents)',
+    );
+    expect(purchaseOrderEditPayload).toContain('unit_cost_cents: unitCostCents');
   });
 
   it('preserves an existing PO line cost when an edit omits cost fields', () => {

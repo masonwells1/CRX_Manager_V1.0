@@ -15,8 +15,8 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import {
   purchaseOrderCentsToDollars,
   purchaseOrderLineTotalCents,
-  purchaseOrderUnitCostCents,
 } from '../lib/purchaseOrderMoney';
+import { buildPurchaseOrderEditItemsPayload } from '../lib/purchaseOrderEditPayload';
 import { notifyDamagedReceiving, notifyOverReceive } from '../lib/notificationTriggers';
 import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -26,6 +26,13 @@ import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import HelpTip from '../components/ui/HelpTip';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition, LinkedEntityType } from '../types';
+import { Sentry } from '../lib/sentry';
+import { ProductOptionDetails, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
+
+type PickerProduct = ProductOptionPresentationModel & {
+  unit_size?: string | null;
+};
 
 /* ─── Condition badge helpers ─── */
 const conditionVariant = (c: string): 'success' | 'error' | 'warning' | 'default' => {
@@ -100,10 +107,11 @@ export default function PurchaseOrderDetail() {
     quantity_ordered: string;
     unit_cost: string;
     quantity_received: number;
+    product: PickerProduct | null;
   }>>([]);
   const [editProductSearch, setEditProductSearch] = useState<number | null>(null); // index of item being changed
   const [editProductQuery, setEditProductQuery] = useState('');
-  const [editProductResults, setEditProductResults] = useState<Array<{ id: string; product_name: string; unit_size: string }>>([]);
+  const [editProductResults, setEditProductResults] = useState<PickerProduct[]>([]);
 
   /* Receiving history */
   const [receivingHistory, setReceivingHistory] = useState<ReceivingRecord[]>([]);
@@ -120,22 +128,34 @@ export default function PurchaseOrderDetail() {
   const canReceive = canManagePO;
 
   const fetchPO = useCallback(async () => {
-    const { data: poData } = await supabase
+    const { data: poData, error: poError } = await supabase
       .from('purchase_orders')
       .select('*')
       .eq('id', id!)
       .maybeSingle();
 
+    if (poError) {
+      Sentry.captureException(poError, { tags: { source: 'fetch', action: 'load_purchase_order' } });
+      toast('error', 'Failed to load purchase order');
+      setLoading(false);
+      return;
+    }
     if (poData) {
       setPo(poData as PurchaseOrder);
-      const { data: itemsData } = await supabase
+      const { data: itemsData, error: itemsError } = await supabase
         .from('purchase_order_items')
-        .select('*, product:products(product_name)')
+        .select('*, product:products(*, product_family:product_families(name))')
         .eq('purchase_order_id', id!);
+      if (itemsError) {
+        Sentry.captureException(itemsError, { tags: { source: 'fetch', action: 'load_purchase_order_items' } });
+        toast('error', 'Failed to load purchase order Products');
+        setLoading(false);
+        return;
+      }
       setItems((itemsData || []) as unknown as PurchaseOrderItem[]);
     }
     setLoading(false);
-  }, [id]);
+  }, [id, toast]);
 
   const fetchReceivingHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -437,6 +457,7 @@ export default function PurchaseOrderDetail() {
       quantity_ordered: String(item.quantity_ordered),
       unit_cost: String(item.unit_cost),
       quantity_received: item.quantity_received,
+      product: (item.product || null) as unknown as PickerProduct | null,
     })));
     setEditProductSearch(null);
     setEditProductQuery('');
@@ -450,35 +471,31 @@ export default function PurchaseOrderDetail() {
       return;
     }
     const timer = setTimeout(async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('products')
-        .select('id, product_name, unit_size')
+        .select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)')
         .ilike('product_name', `%${editProductQuery}%`)
         .eq('is_active', true)
         .limit(8);
-      setEditProductResults((data || []) as Array<{ id: string; product_name: string; unit_size: string }>);
+      if (error) {
+        Sentry.captureException(error, { tags: { source: 'fetch', action: 'search_purchase_order_products' } });
+        toast('error', 'Product search failed. Retry before changing this line.');
+        setEditProductResults([]);
+        return;
+      }
+      setEditProductResults((data || []) as unknown as PickerProduct[]);
     }, 250);
     return () => clearTimeout(timer);
-  }, [editProductQuery, editProductSearch]);
+  }, [editProductQuery, editProductSearch, toast]);
 
   const handleSaveEdit = async () => {
     if (!po || !profile) return;
     setSaving(true);
 
     try {
-      const itemsPayload = editItems.map((item) => {
-        const unitCostCents = purchaseOrderUnitCostCents(parseFloat(item.unit_cost));
-        return {
-          id: item.id,  // Send ID so backend can UPDATE in-place (critical for partially received POs)
-          product_id: item.product_id,
-          product_name: item.product_name,
-          unit_size: item.unit_size || null,
-          quantity_ordered: parseFloat(item.quantity_ordered),
-          unit_cost: purchaseOrderCentsToDollars(unitCostCents),
-          unit_cost_cents: unitCostCents,
-          quantity_received: item.quantity_received || 0,
-        };
-      });
+      // Keep received lines in-place and preserve the exact selected Product UUID
+      // for editable lines when the RPC updates this PO atomically.
+      const itemsPayload = buildPurchaseOrderEditItemsPayload(editItems);
 
       const savePOKey = savePOIdem.getKey();
       const { data, error } = await supabase.rpc('save_purchase_order', {
@@ -1103,6 +1120,7 @@ export default function PurchaseOrderDetail() {
                     {isReceived ? (
                       <>
                         <p className="text-sm font-medium text-nav-dark">{item.product_name}</p>
+                        {item.product && <ProductOptionDetails product={item.product} />}
                         <p className="text-xs text-amber-600">Received line locked · {item.quantity_received} received</p>
                       </>
                     ) : editProductSearch === idx ? (
@@ -1117,26 +1135,24 @@ export default function PurchaseOrderDetail() {
                         {editProductResults.length > 0 && (
                           <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
                             {editProductResults.map((p) => (
-                              <button
+                              <ProductSearchResultRow
                                 key={p.id}
-                                type="button"
-                                className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
+                                product={p}
+                                trailing={null}
                                 onClick={() => {
                                   const newItems = [...editItems];
                                   newItems[idx] = {
                                     ...newItems[idx],
                                     product_id: p.id,
-                                    product_name: p.product_name,
+                                    product_name: p.product_name || 'Unnamed product',
                                     unit_size: p.unit_size || '',
+                                    product: p,
                                   };
                                   setEditItems(newItems);
                                   setEditProductSearch(null);
                                   setEditProductQuery('');
                                 }}
-                              >
-                                <span className="font-medium">{p.product_name}</span>
-                                {p.unit_size && <span className="text-secondary ml-1">({p.unit_size})</span>}
-                              </button>
+                              />
                             ))}
                           </div>
                         )}
@@ -1157,6 +1173,7 @@ export default function PurchaseOrderDetail() {
                         >
                           {item.product_name}
                         </button>
+                        {item.product && <ProductOptionDetails product={item.product} />}
                         <p className="text-xs text-crx-green">Click to change product</p>
                       </div>
                     )}

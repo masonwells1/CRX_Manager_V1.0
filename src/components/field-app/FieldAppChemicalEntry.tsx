@@ -15,6 +15,10 @@ import {
   formatPhi,
 } from '../../lib/labelGuardrails';
 import type { GuardrailMode } from '../../lib/labelGuardrailSetting';
+import { ProductSearchResultRow } from '../products/ProductSearchResultRow';
+import type { ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
+
+type PickerProduct = Product & ProductOptionPresentationModel;
 
 export interface ChemicalLine {
   id: string;
@@ -137,7 +141,7 @@ export default function FieldAppChemicalEntry({
   applicationDate = null,
 }: FieldAppChemicalEntryProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<Product[]>([]);
+  const [searchResults, setSearchResults] = useState<PickerProduct[]>([]);
   const [showSearch, setShowSearch] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
@@ -158,7 +162,7 @@ export default function FieldAppChemicalEntry({
     setSearchError(false);
     const { data, error } = await supabase
       .from('products')
-      .select('*')
+      .select('*, product_family:product_families(name)')
       .eq('is_active', true)
       .or(`product_name.ilike.%${q}%,epa_registration.ilike.%${q}%`)
       .order('product_name')
@@ -172,7 +176,7 @@ export default function FieldAppChemicalEntry({
       return;
     }
     setSearchError(false);
-    setSearchResults((data || []) as Product[]);
+    setSearchResults((data || []) as unknown as PickerProduct[]);
   }, []);
 
   useEffect(() => {
@@ -468,15 +472,12 @@ export default function FieldAppChemicalEntry({
                           <div className="px-3 py-2 text-sm text-gray-400">No products match "{searchQuery}"</div>
                         )}
                         {!searching && !searchError && searchResults.map((p) => (
-                          <button
-                            type="button"
+                          <ProductSearchResultRow
                             key={p.id}
-                            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
+                            product={p}
                             onClick={() => selectProduct(p, line.id)}
-                          >
-                            <span className="block font-medium">{p.product_name}</span>
-                            {p.epa_registration && <span className="block text-xs text-gray-400">EPA: {p.epa_registration}</span>}
-                          </button>
+                            trailing={p.epa_registration ? `EPA: ${p.epa_registration}` : null}
+                          />
                         ))}
                       </div>
                     )}

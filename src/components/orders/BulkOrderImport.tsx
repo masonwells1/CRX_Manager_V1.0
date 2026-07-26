@@ -10,6 +10,7 @@ import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
+import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -311,6 +312,17 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     setUploading(true);
     let successCount = 0;
     let failedCount = 0;
+    const productResult = await supabase
+      .from('products')
+      .select('id, product_name, sku, is_active')
+      .eq('is_active', true);
+    if (productResult.error) {
+      Sentry.captureException(productResult.error, { extra: { context: 'Failed to load Product identities for order import' } });
+      toast('error', 'Failed to load Products. No orders were imported.');
+      setUploading(false);
+      return;
+    }
+    const productCatalog = productResult.data || [];
 
     for (const order of validation.valid) {
       try {
@@ -342,22 +354,29 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         const totalProfit = totalPrice - totalCost;
         const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
 
-        // Resolve product_id per item up front (preserves the friendly Sentry
-        // breadcrumb for unknown products), then ship the whole order through
-        // bulk_import_order which inserts orders + items atomically.
-        const itemsPayload = await Promise.all(
-          order.items.map(async (item, idx) => {
-            const { data: product, error: prodError } = await supabase
-              .from('products')
-              .select('id')
-              .ilike('product_name', item.product_name)
-              .maybeSingle();
-            if (prodError) {
-              Sentry.captureException(new Error(String(prodError.message)), { extra: { context: 'Failed to look up product' } });
-            }
+        const resolvedItems = order.items.map((item) => ({
+          item,
+          resolution: resolveExactProductIdentity(item.product_name, productCatalog),
+        }));
+        const unresolved = resolvedItems.filter(({ resolution }) => resolution.status !== 'unique');
+        if (unresolved.length > 0) {
+          Sentry.captureException(new Error('Order import Product identity is missing or ambiguous'), {
+            extra: {
+              context: 'BulkOrderImport Product resolution',
+              orderNumber: order.order_number,
+              products: unresolved.map(({ item, resolution }) => `${item.product_name}:${resolution.status}`),
+            },
+          });
+          failedCount++;
+          continue;
+        }
 
-            return {
-              product_id: product?.id || null,
+        // The entire order is rejected above unless every Product resolves to
+        // one active immutable UUID. Never send null or a sibling guess.
+        const itemsPayload = resolvedItems.map(({ item, resolution }, idx) => {
+          const product = resolution.status === 'unique' ? resolution.product : null;
+          return {
+              product_id: product!.id,
               product_name: item.product_name,
               price_per_unit: item.price_per_unit,
               unit_cost: item.unit_cost || 0,
@@ -366,8 +385,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
               notes: item.notes,
               sort_order: idx + 1,
             };
-          })
-        );
+        });
 
         // Audit #31: atomic per-order create — order + items rolled together.
         // The idempotency key is generated once at parse time and stored on

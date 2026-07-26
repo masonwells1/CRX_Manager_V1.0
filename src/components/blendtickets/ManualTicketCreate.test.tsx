@@ -72,7 +72,7 @@ async function chooseSearchOption(placeholder: string, optionName: string) {
   const input = screen.getByPlaceholderText(placeholder);
   fireEvent.click(input);
   fireEvent.change(input, { target: { value: optionName.slice(0, 5) } });
-  const option = await screen.findByRole('option', { name: optionName });
+  const option = await screen.findByRole('option', { name: new RegExp(optionName, 'i') });
   fireEvent.mouseDown(option);
   fireEvent.click(option);
   return input;
@@ -332,9 +332,9 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
     render(<ManualTicketCreate {...defaultProps} />);
     fireEvent.click(screen.getByRole('button', { name: /add product/i }));
     const productInput = await chooseSearchOption('Select Product', 'Roundup PowerMax');
-    expect(productInput).toHaveValue('Roundup PowerMax');
+    expect((productInput as HTMLInputElement).value).toContain('Roundup PowerMax');
     fireEvent.click(productInput);
-    const selectedProductOption = await screen.findByRole('option', { name: 'Roundup PowerMax' });
+    const selectedProductOption = await screen.findByRole('option', { name: /Roundup PowerMax/i });
     expect(selectedProductOption).toHaveAttribute('aria-selected', 'true');
   });
 });

@@ -2,12 +2,29 @@
 
 **Owner:** Mason Wells
 **Approved:** 2026-07-22
-**Status:** Stage A live and dormant; Stage B1 in progress. Stage C remains parked for Mason's row-by-row classification approval and exact checksum.
+**Status:** Stage A live and dormant; Stage B1 landed; Stage B2 integrated and in testing/review. Stage C remains parked for Mason's row-by-row classification approval and exact checksum.
 **Orchestrator:** GPT-5.6 Sol, high reasoning
 **Coordination lane:** this contract is persisted on the dedicated `codex/supplier-pricing-phase3` docs branch
 **Current B1 implementation lane:** isolated branch `codex/supplier-pricing-phase3-stage-b1`; never reuse the coordination/docs branch or worktree `7582`
 
-## Current Runner Instruction — Stage B1
+## Current Runner Instruction — Stage B2
+
+Stage B1 has landed. Stage B2 is active on the dedicated
+`codex/supplier-pricing-phase3-stage-b2` branch. The first implementation slice
+owns all transactional Product-ID writers and import ambiguity guards.
+InventoryPage's hold and manual-add writers were integrated only after the
+Section 3 collision boundary was released. Stage B2 is now in testing/review;
+it is not accepted until the required authenticated browser proof and fresh
+exact-SHA independent Sol adversarial review pass.
+
+The active B2 deny set remains explicit:
+
+- do not merge the B2 PR or start Stage C;
+- do not apply a live migration or mutate live Product, family, policy, return, credit, inventory, or pricing data;
+- do not enable or change `supplier_cost_basis_enabled`;
+- do not touch or reuse worktree `7582`.
+
+## Historical Runner Instruction — Stage B1
 
 Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, or create the pre-Stage-A Goal.** Continue only from the active Stage B coordination packet and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The current authorized outcome is a green, review-resolved B1 PR parked before merge; B2 remains locked until B1 is accepted and landed.
 

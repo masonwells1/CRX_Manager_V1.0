@@ -10,6 +10,9 @@ import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
 import { Sentry } from '../../lib/sentry';
 import { formatUSD as fmt } from '../../lib/money';
 import type { Product } from '../../types';
+import { resolveFuzzyProductIdentity } from '../../lib/productIdentityResolver';
+import { ProductOptionDetails, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
+import { ProductSearchResultRow } from '../products/ProductSearchResultRow';
 import {
   purchaseOrderCentsToDollars,
   purchaseOrderLineTotalCents,
@@ -31,6 +34,8 @@ import {
 } from '../../lib/bulkPOImportRetry';
 
 // ---------- interfaces ----------
+
+type PickerProduct = Product & ProductOptionPresentationModel;
 
 interface ParsedPOItem {
   extracted_name: string;
@@ -79,39 +84,11 @@ function buildParsedPOIntentKey(po: ParsedPO): string | null {
   });
 }
 
-function calculateSimilarity(str1: string, str2: string): number {
-  if (str1 === str2) return 1;
-  if (str1.length === 0 || str2.length === 0) return 0;
-  if (str1.includes(str2) || str2.includes(str1)) return 0.85;
-  const longer = str1.length > str2.length ? str1 : str2;
-  const shorter = str1.length > str2.length ? str2 : str1;
-  let matches = 0;
-  for (let i = 0; i < shorter.length; i++) {
-    if (longer.includes(shorter[i])) matches++;
-  }
-  return matches / longer.length;
-}
-
 function fuzzyMatchProductWithScore(
   extractedName: string,
-  products: Product[],
-): { product: Product | null; score: number } {
-  const normalizedSearch = extractedName.toLowerCase().replace(/[^a-z0-9]/g, '');
-  let bestMatch: Product | null = null;
-  let bestScore = 0;
-
-  for (const product of products) {
-    if (!product.is_active) continue;
-    const normalizedProductName = product.product_name.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (normalizedProductName === normalizedSearch) return { product, score: 1 };
-    const score = calculateSimilarity(normalizedSearch, normalizedProductName);
-    if (score > bestScore && score > 0.5) {
-      bestScore = score;
-      bestMatch = product;
-    }
-  }
-
-  return { product: bestScore >= 0.7 ? bestMatch : null, score: bestScore };
+  products: PickerProduct[],
+): { product: PickerProduct | null; score: number } {
+  return resolveFuzzyProductIdentity(extractedName, products);
 }
 
 // ---------- Vision OCR parsing ----------
@@ -120,7 +97,7 @@ async function parseWithVisionOCR(
   file: File,
   filename: string,
   sourceIndex: number,
-  products: Product[],
+  products: PickerProduct[],
 ): Promise<ParsedPO> {
   const result = await processDocumentWithOCR(file, 'purchase_order');
 
@@ -204,7 +181,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     skipped: number;
     failed: number;
   } | null>(null);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<PickerProduct[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [showRawText, setShowRawText] = useState<number | null>(null);
   const pendingIntentsRef = useRef<PendingBulkPOIntents>({});
@@ -229,14 +206,14 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const fetchProducts = async () => {
     const { data, error } = await supabase
       .from('products')
-      .select('*')
+      .select('*, product_family:product_families(name)')
       .eq('is_active', true)
       .order('product_name');
     if (error) {
       toast('error', 'Failed to load products');
       return;
     }
-    const prods = (data || []) as Product[];
+    const prods = (data || []) as unknown as PickerProduct[];
     setProducts(prods);
     setVendors([...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[]);
   };
@@ -378,12 +355,13 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const handleImport = async () => {
     if (!parsedPOs || !profile) return;
 
-    const importable = parsedPOs.filter((po) =>
-      po.items.some((item) => item.matched_product && item.quantity_ordered > 0),
-    );
+    const importable = parsedPOs.filter((po) => {
+      const positiveItems = po.items.filter((item) => item.quantity_ordered > 0);
+      return positiveItems.length > 0 && positiveItems.every((item) => item.matched_product);
+    });
 
     if (importable.length === 0) {
-      toast('error', 'No POs have items with matched products to import');
+      toast('error', 'Resolve every positive-quantity Product row before importing a PO.');
       return;
     }
 
@@ -395,6 +373,11 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
     for (const po of importable) {
       try {
+        if (po.items.some((item) => item.quantity_ordered > 0 && !item.matched_product)) {
+          toast('error', `${po.source_file}: resolve every positive-quantity Product before importing.`);
+          failedCount++;
+          continue;
+        }
         const validItems = po.items.filter((i) => i.matched_product && i.quantity_ordered > 0);
         if (validItems.length === 0) {
           failedCount++;
@@ -560,7 +543,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
     // Persisted browser state is only a hint. The server owns duplicate
     // detection because an admin may have deleted the original PO since this
     // marker was written, intentionally making the document importable again.
-    return intentKey !== null;
+    const positiveItems = po.items.filter((item) => item.quantity_ordered > 0);
+    return intentKey !== null
+      && positiveItems.length > 0
+      && positiveItems.every((item) => item.matched_product);
   }).length ?? 0;
 
   const filteredProducts = products.filter((p) => {
@@ -829,9 +815,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                                           <p className="text-sm font-medium text-nav-dark hover:text-crx-green transition-colors">
                                             {item.matched_product.product_name}
                                           </p>
-                                          {item.matched_product.sku && (
-                                            <p className="text-xs text-gray-400">{item.matched_product.sku}</p>
-                                          )}
+                                          <ProductOptionDetails product={item.matched_product as PickerProduct} />
                                         </button>
                                       ) : (
                                         <button
@@ -996,19 +980,12 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                   <p className="text-sm text-secondary py-4 text-center">No products found</p>
                 ) : (
                   filteredProducts.map((p) => (
-                    <button
+                    <ProductSearchResultRow
                       key={p.id}
+                      product={p}
                       onClick={() => assignProduct(productSearchOpen.poIdx, productSearchOpen.itemIdx, p)}
-                      className="w-full text-left px-3 py-2.5 hover:bg-crx-green-tint transition-colors flex items-center justify-between"
-                    >
-                      <div>
-                        <p className="font-medium text-nav-dark text-sm">{p.product_name}</p>
-                        <p className="text-xs text-gray-400">
-                          {[p.sku, p.vendor].filter(Boolean).join(' / ')}
-                        </p>
-                      </div>
-                      <span className="font-mono text-sm text-secondary">{fmt(p.current_cost || 0)}</span>
-                    </button>
+                      trailing={fmt(p.current_cost || 0)}
+                    />
                   ))
                 )}
               </div>

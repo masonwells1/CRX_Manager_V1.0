@@ -30,6 +30,10 @@ import type {
   QuickReceiveItem,
   QuickReceiveMatchResult,
 } from '../../types';
+import { ProductOptionDetails, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
+import { ProductSearchResultRow } from '../products/ProductSearchResultRow';
+
+type PickerProduct = Product & ProductOptionPresentationModel;
 
 /* ─── helpers ─── */
 let keyCounter = 0;
@@ -74,7 +78,7 @@ export default function QuickReceivePanel() {
   const [storageLocation, setStorageLocation] = useState('Main Warehouse');
   const [items, setItems] = useState<QuickReceiveItem[]>([]);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<PickerProduct[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
 
   /* ─── product search modal ─── */
@@ -94,16 +98,23 @@ export default function QuickReceivePanel() {
   /* ─── load products + vendors ─── */
   useEffect(() => {
     (async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('products')
-        .select('*')
+        .select('*, product_family:product_families(name)')
         .eq('is_active', true)
         .order('product_name');
-      const prods = (data || []) as Product[];
+      if (error) {
+        Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_quick_receive_products' } });
+        toast('error', 'Failed to load Products. Retry before receiving inventory.');
+        return;
+      }
+      const prods = (data || []) as unknown as PickerProduct[];
       setProducts(prods);
       const uv = [...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[];
       setVendors(uv.sort());
     })();
+  // Toast identity is not a data dependency; this catalog loads once per panel mount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* ─── item crud ─── */
@@ -510,8 +521,8 @@ export default function QuickReceivePanel() {
                             <p className="font-medium text-nav-dark text-sm truncate">
                               {item.product_name}
                             </p>
-                            {item.sku && (
-                              <p className="text-xs text-gray-400">{item.sku}</p>
+                            {products.find((candidate) => candidate.id === item.product_id) && (
+                              <ProductOptionDetails product={products.find((candidate) => candidate.id === item.product_id)!} />
                             )}
                           </button>
                         ) : (
@@ -942,19 +953,12 @@ export default function QuickReceivePanel() {
                   <p className="text-sm text-secondary py-4 text-center">No products found</p>
                 ) : (
                   filteredProducts.map((p) => (
-                    <button
+                    <ProductSearchResultRow
                       key={p.id}
+                      product={p}
                       onClick={() => assignProduct(productSearchOpen, p)}
-                      className="w-full text-left px-3 py-2.5 hover:bg-crx-green-tint transition-colors flex items-center justify-between"
-                    >
-                      <div>
-                        <p className="font-medium text-nav-dark text-sm">{p.product_name}</p>
-                        <p className="text-xs text-gray-400">
-                          {[p.sku, p.vendor].filter(Boolean).join(' / ')}
-                        </p>
-                      </div>
-                      <span className="text-xs text-secondary">{p.unit_size || ''}</span>
-                    </button>
+                      trailing={p.vendor || null}
+                    />
                   ))
                 )}
               </div>

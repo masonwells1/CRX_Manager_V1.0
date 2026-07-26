@@ -25,6 +25,9 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday } from '../lib/dateUtils';
 import { useOCRThresholds } from '../hooks/useOCRThresholds';
 import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field, Job } from '../types';
+import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+
+type PickerProduct = Product & ProductOptionPresentationModel;
 
 export function BlendTicketDetail() {
   const { id } = useParams<{ id: string }>();
@@ -45,7 +48,7 @@ export function BlendTicketDetail() {
   const [ticket, setTicket] = useState<BlendTicket | null>(null);
   const [images, setImages] = useState<BlendTicketImage[]>([]);
   const [products, setProducts] = useState<BlendTicketProduct[]>([]);
-  const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -203,7 +206,7 @@ export function BlendTicketDetail() {
           .order('sequence_order'),
         supabase
           .from('products')
-          .select('*')
+          .select('*, product_family:product_families(name)')
           .eq('is_active', true)
           .order('product_name'),
         supabase
@@ -299,7 +302,8 @@ export function BlendTicketDetail() {
       }
       setImages(imagesWithSignedUrls);
       setProducts((productsResult.data || []) as BlendTicketProduct[]);
-      setAllProducts((allProductsResult.data || []) as Product[]);
+      if (allProductsResult.error) throw allProductsResult.error;
+      setAllProducts((allProductsResult.data || []) as unknown as PickerProduct[]);
       setCustomers((customersResult.data || []) as Customer[]);
       const allFields = (fieldsResult.data || []) as Field[];
       setAvailableFields(allFields);
@@ -1395,7 +1399,7 @@ export function BlendTicketDetail() {
                   Product
                 </label>
                 <SearchableSelect
-                  options={allProducts.map((p) => ({ value: p.id, label: p.product_name }))}
+                  options={allProducts.map((p) => ({ value: p.id, label: productOptionLabel(p) }))}
                   value={product.product_id || ''}
                   onChange={(value) => {
                     updateProduct(index, 'product_id', value || null);
@@ -1406,6 +1410,9 @@ export function BlendTicketDetail() {
                   }}
                   placeholder="Select Product"
                 />
+                {allProducts.find((candidate) => candidate.id === product.product_id) && (
+                  <ProductOptionDetails product={allProducts.find((candidate) => candidate.id === product.product_id)!} />
+                )}
               </div>
 
               <div className="col-span-4 md:col-span-1">

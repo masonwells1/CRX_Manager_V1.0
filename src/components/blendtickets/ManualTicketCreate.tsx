@@ -11,6 +11,9 @@ import { validateBlendMath } from '../../lib/blendMathValidator';
 import { localToday } from '../../lib/dateUtils';
 import type { Customer, Product, BlendRecipe, BlendRecipeItem } from '../../types';
 import { Sentry } from '../../lib/sentry';
+import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../products/ProductOptionPresentation';
+
+type PickerProduct = Product & ProductOptionPresentationModel;
 
 interface ManualTicketCreateProps {
   customers: Customer[];
@@ -179,7 +182,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   const [formData, setFormData] = useState(initialManualFormData);
 
   const [products, setProducts] = useState<ManualProduct[]>([]);
-  const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
   const [recipes, setRecipes] = useState<(BlendRecipe & { items: BlendRecipeItem[] })[]>([]);
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [saving, setSaving] = useState(false);
@@ -268,11 +271,15 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
     const loadData = async () => {
       const { data: prodData, error: prodError } = await supabase
         .from('products')
-        .select('*')
+        .select('*, product_family:product_families(name)')
         .eq('is_active', true)
         .order('product_name');
-      if (prodError) Sentry.captureException(new Error(String(prodError.message)), { extra: { context: 'Failed to load products' } });
-      if (prodData) setAllProducts(prodData as Product[]);
+      if (prodError) {
+        Sentry.captureException(new Error(String(prodError.message)), { extra: { context: 'Failed to load products' } });
+        setError('Failed to load Products. Retry before creating this ticket.');
+      } else {
+        setAllProducts((prodData || []) as unknown as PickerProduct[]);
+      }
 
       // Fetch active blend recipes with their items
       const { data: recipeData, error: recipeError } = await supabase
@@ -693,7 +700,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
               <div className="col-span-12 md:col-span-3">
                 <label className="block text-xs font-medium text-gray-700 mb-1">Product</label>
                 <SearchableSelect
-                  options={allProducts.map((p) => ({ value: p.id, label: p.product_name }))}
+                  options={allProducts.map((p) => ({ value: p.id, label: productOptionLabel(p) }))}
                   value={product.product_id || ''}
                   onChange={(value) => {
                     updateProduct(product.tempId, 'product_id', value || null);
@@ -704,6 +711,9 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
                   }}
                   placeholder="Select Product"
                 />
+                {allProducts.find((candidate) => candidate.id === product.product_id) && (
+                  <ProductOptionDetails product={allProducts.find((candidate) => candidate.id === product.product_id)!} />
+                )}
               </div>
 
               <div className="col-span-4 md:col-span-1">

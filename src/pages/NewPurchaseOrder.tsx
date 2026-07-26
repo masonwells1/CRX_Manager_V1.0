@@ -19,6 +19,11 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { formatUSD as fmt } from '../lib/money';
 import type { Product } from '../types';
+import { Sentry } from '../lib/sentry';
+import { ProductOptionDetails, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
+
+type PickerProduct = Product & ProductOptionPresentationModel;
 
 interface POItemDraft {
   key: string;
@@ -45,7 +50,7 @@ export default function NewPurchaseOrder() {
   const [items, setItems] = useState<POItemDraft[]>([
     { key: nextKey(), product_id: '', quantity_ordered: 0, unit_cost: 0, unit_size: '' },
   ]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<PickerProduct[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedPoId, setSavedPoId] = useState<string | null>(null);
@@ -79,16 +84,24 @@ export default function NewPurchaseOrder() {
   }, [poIntentHash]);
 
   const fetchProducts = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('products')
-      .select('*')
+      .select('*, product_family:product_families(name)')
       .eq('is_active', true)
       .order('product_name');
-    const prods = (data || []) as Product[];
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_purchase_order_products' } });
+      toast('error', 'Failed to load Products. Retry before creating this purchase order.');
+      setProductsLoading(false);
+      return;
+    }
+    const prods = (data || []) as unknown as PickerProduct[];
     setProducts(prods);
     const uniqueVendors = [...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[];
     setVendors(uniqueVendors.sort());
     setProductsLoading(false);
+  // The catalog loader is intentionally stable for the initial page fetch.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -393,7 +406,7 @@ export default function NewPurchaseOrder() {
                               className="text-left"
                             >
                               <p className="font-medium text-nav-dark">{prod.product_name}</p>
-                              {prod.sku && <p className="text-xs text-gray-400">{prod.sku}</p>}
+                              <ProductOptionDetails product={prod} />
                             </button>
                           ) : (
                             <button
@@ -520,21 +533,12 @@ export default function NewPurchaseOrder() {
                   <p className="text-sm text-secondary py-4 text-center">No products found</p>
                 ) : (
                   filteredProducts.map((p) => (
-                    <button
+                    <ProductSearchResultRow
                       key={p.id}
+                      product={p}
                       onClick={() => assignProduct(productSearchOpen, p)}
-                      className="w-full text-left px-3 py-2.5 hover:bg-crx-green-tint transition-colors flex items-center justify-between"
-                    >
-                      <div>
-                        <p className="font-medium text-nav-dark text-sm">{p.product_name}</p>
-                        <p className="text-xs text-gray-400">
-                          {[p.sku, p.vendor].filter(Boolean).join(' / ')}
-                        </p>
-                      </div>
-                      <span className="font-mono text-sm text-secondary">
-                        {fmt(p.current_cost || 0)}
-                      </span>
-                    </button>
+                      trailing={fmt(p.current_cost || 0)}
+                    />
                   ))
                 )}
               </div>

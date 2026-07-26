@@ -26,6 +26,12 @@ import { parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCents, formatUSD as fmt } from '../lib/money';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { RebateProgram, RebateClaim, RebateClaimStatus } from '../types';
+import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+
+type RebatePickerProduct = ProductOptionPresentationModel & {
+  vendor: string | null;
+  manufacturer: string | null;
+};
 
 type TabKey = 'programs' | 'claims';
 
@@ -75,7 +81,7 @@ export default function Rebates() {
   const [claimFilter, setClaimFilter] = useState<'all' | 'pending' | 'submitted' | 'approved' | 'paid'>('all');
 
   // Shared lookups
-  const [products, setProducts] = useState<{ id: string; product_name: string; vendor: string | null; manufacturer: string | null }[]>([]);
+  const [products, setProducts] = useState<RebatePickerProduct[]>([]);
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
   const [orders, setOrders] = useState<{ id: string; order_number: string; customer_id: string }[]>([]);
 
@@ -124,14 +130,17 @@ export default function Rebates() {
 
   const fetchLookups = async () => {
     const [prodRes, custRes, ordRes] = await Promise.all([
-      supabase.from('products').select('id, product_name, vendor, manufacturer').eq('is_active', true).order('product_name'),
+      supabase.from('products').select('id, product_name, sku, vendor, manufacturer, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)').eq('is_active', true).order('product_name'),
       supabase.from('customers').select('id, farm_name').order('farm_name'),
       supabase.from('orders').select('id, order_number, customer_id').is('deleted_at', null).order('order_date', { ascending: false }).limit(200),
     ]);
-    if (prodRes.error) toast('error', 'Failed to load products');
+    if (prodRes.error) {
+      toast('error', 'Failed to load Products. Retry before saving a rebate.');
+      Sentry.captureException(prodRes.error, { tags: { source: 'fetch', action: 'load_rebate_products' } });
+    }
     if (custRes.error) toast('error', 'Failed to load customers');
     if (ordRes.error) toast('error', 'Failed to load orders');
-    setProducts(prodRes.data || []);
+    setProducts((prodRes.data || []) as unknown as RebatePickerProduct[]);
     setCustomers(custRes.data || []);
     setOrders(ordRes.data || []);
   };
@@ -717,10 +726,13 @@ export default function Rebates() {
                 <option value="">All products from manufacturer</option>
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.product_name}
+                    {productOptionLabel(p)}
                   </option>
                 ))}
               </select>
+              {products.find((product) => product.id === pForm.product_id) && (
+                <ProductOptionDetails product={products.find((product) => product.id === pForm.product_id)!} />
+              )}
             </div>
             <div>
               <label className="text-sm font-medium text-nav-dark">Rebate Type</label>
@@ -885,11 +897,14 @@ export default function Rebates() {
             >
               <option value="">Optional...</option>
               {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.product_name}
-                </option>
-              ))}
-            </select>
+                  <option key={p.id} value={p.id}>
+                    {productOptionLabel(p)}
+                  </option>
+                ))}
+              </select>
+              {products.find((product) => product.id === cForm.product_id) && (
+                <ProductOptionDetails product={products.find((product) => product.id === cForm.product_id)!} />
+              )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">
