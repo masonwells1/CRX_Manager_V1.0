@@ -25,7 +25,7 @@ const MIGRATION = path.join(
   ROOT,
   'supabase',
   'migrations',
-  '20260726190000_section9_po_ap_high_remediation.sql',
+  '20260726190515_section9_po_ap_high_remediation.sql',
 );
 const CANCEL_MIGRATION = path.join(
   ROOT,

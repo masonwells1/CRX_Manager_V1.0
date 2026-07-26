@@ -11702,6 +11702,10 @@ export type Database = {
         }
         Returns: Json
       }
+      _recompute_po_on_order_for_products: {
+        Args: { p_product_ids: string[] }
+        Returns: undefined
+      }
       _require_auth: { Args: never; Returns: string }
       _resolve_product_cost_basis_row: { Args: { p_row: Json }; Returns: Json }
       _reverse_completed_cycle_count_impl: {
@@ -11786,6 +11790,59 @@ export type Database = {
           p_performed_by: string
           p_po_id: string
           p_po_payload: Json
+        }
+        Returns: Json
+      }
+      _section9_cancel_purchase_order_serialized: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_po_id: string
+          p_reason?: string
+        }
+        Returns: Json
+      }
+      _section9_delete_purchase_order_serialized: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_po_id: string
+        }
+        Returns: Json
+      }
+      _section9_receive_po_items_serialized: {
+        Args: {
+          p_allow_over_receive?: boolean
+          p_idempotency_key?: string
+          p_items: Json
+          p_performed_by: string
+        }
+        Returns: Json
+      }
+      _section9_reverse_receiving_record_serialized: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_reason?: string
+          p_record_id: string
+        }
+        Returns: Json
+      }
+      _section9_save_purchase_order_serialized: {
+        Args: {
+          p_idempotency_key?: string
+          p_items: Json
+          p_performed_by: string
+          p_po_id: string
+          p_po_payload: Json
+        }
+        Returns: Json
+      }
+      _section9_submit_purchase_order_serialized: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_po_id: string
         }
         Returns: Json
       }
