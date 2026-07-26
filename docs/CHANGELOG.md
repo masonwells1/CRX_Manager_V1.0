@@ -2,6 +2,50 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-26 — Section 9 PO/AP HIGH remediation APPLIED LIVE
+
+With Mason's in-chat approval ("fix any issues we need then apply and merge everything"), the
+Section 9 migration was applied to the live database through the full governed gate: both reviewer
+charters (`rls-security-reviewer`, `migration-drift-reviewer`) returned CLEAN machine verdicts via
+the trusted `write-apply-proofs.mjs` wrapper, and the sanctioned MCP `apply_migration` path was
+used. The drift reviewer's CHECK 6 first required renaming the file above the then-live high-water
+(`20260722222742` → `20260726190000`, content-identical, git blob `d56b84e9` unchanged); Supabase
+then assigned ledger version `20260726190515` and the disk file was B7-renamed to match.
+
+Live changes: PO on-order is now recomputed from the authoritative open-PO remainder under a global
+advisory lock (six PO RPCs renamed to locked `_section9_*_serialized` impls behind thin public
+wrappers); browser roles lost all direct `vendors` mutation grants and write policies;
+`create_vendor_bill` locks the active vendor row before the PO lock, closing the vendor-delete race;
+`get_ap_aging` fails closed on historical dates (`HISTORICAL_AP_UNAVAILABLE`); and
+`update_vendor_bill` locks the stored row before checking both accounting periods.
+
+**Post-apply proof:** the migration's own verification blocks passed in-transaction; the
+`section9-po-ap-controls` invariant predicate went from exactly the 5 expected pre-apply findings to
+ZERO rows live; live `pg_proc` bodies confirm the new fail-closed controls. Migration history row
+820, `KNOWN_ISSUES.md`, the pending-migration test gate, and the smoke/test file references were
+updated to the applied state in the same change.
+
+## 2026-07-26 — Section 9 pre-apply vendor-delete race correction
+
+The governed pre-apply review of pending migration
+`20260722222742_section9_po_ap_high_remediation.sql` found and reproduced a race where
+`create_vendor_bill` could read an active vendor, lose to concurrent `delete_vendor`, then insert an
+unpaid bill for the now-soft-deleted vendor. Because `get_ap_aging` excludes deleted vendors, the
+payable could disappear from AP aging.
+
+The unapplied candidate now locks the active vendor row before PO validation and bill insertion.
+The network-isolated PostgreSQL 17 harness proves both winning orders: bill creation makes deletion
+wait and reject on the new unpaid bill; vendor deletion makes creation wait and reject the deleted
+vendor. The Section 9 invariant predicate now rejects outstanding bills attached to soft-deleted
+vendors, and the focused contract test binds the lock before the bill insert. Local tests,
+typecheck, build, lint, the expanded concurrency harness, all 18 live pre-apply predicates, and the
+exact candidate plus full registered live smoke in a forced-rollback transaction are green. The
+rollback proof left all 29 fingerprinted live function/trigger/policy/grant objects unchanged.
+
+**Not applied:** the live ledger, live data, migration history, feature flag, and Stage C remain
+unchanged. A fresh independent exact-SHA Sol review and Mason's separate live-apply approval are
+still required.
+
 ## 2026-07-26 — PR #230/#231 reconciliation: Stage B2 merged, stale PR closed, unique artifacts preserved
 
 Three-way reconciliation (Codex + Claude Opus handoffs, Claude Fable as local reconciliation lead,

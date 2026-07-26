@@ -2100,7 +2100,7 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set(['20260722222742']);
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2213,10 +2213,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
-  trg_po_items_recompute_on_order:
-    'trigger-only PO on-order derived-cache recomputation; direct browser EXECUTE is revoked',
-  trg_po_status_recompute_on_order:
-    'trigger-only PO on-order derived-cache recomputation; direct browser EXECUTE is revoked',
 };
 
 
