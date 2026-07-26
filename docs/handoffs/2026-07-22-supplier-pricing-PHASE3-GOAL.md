@@ -11,6 +11,13 @@
 
 Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, or create the pre-Stage-A Goal.** Continue only from the active Stage B coordination packet and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The current authorized outcome is a green, review-resolved B1 PR parked before merge; B2 remains locked until B1 is accepted and landed.
 
+The active B1 deny set remains explicit:
+
+- do not merge the B1 PR or start B2;
+- do not apply a live migration or mutate live Product, family, policy, return, credit, inventory, or pricing data;
+- do not enable or change `supplier_cost_basis_enabled`; and
+- do not touch or reuse worktree `7582`.
+
 ## Historical Mission — Completed Stage A Context
 
 The mission and launch language in this section records the pre-Stage-A authorization that produced the now-live dormant Stage A foundation. It is retained for provenance and must not be executed again.
