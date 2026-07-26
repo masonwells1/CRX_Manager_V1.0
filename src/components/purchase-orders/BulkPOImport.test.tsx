@@ -109,6 +109,55 @@ describe('BulkPOImport', () => {
     expect(screen.queryByText(/import pos/i)).not.toBeInTheDocument();
   });
 
+  it('fails closed when OCR returns an ambiguous same-name Product', async () => {
+    mocks.from.mockReturnValue(chainable({
+      data: [
+        product,
+        { ...product, id: 'product-sibling', sku: 'ATR-4L-SIBLING' },
+      ],
+      error: null,
+    }));
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'AMBIGUOUS.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+
+    const importButton = await screen.findByRole('button', { name: /import 0 pos/i });
+    expect(importButton).toBeDisabled();
+    expect(screen.getByRole('button', { name: /select product/i })).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('save_purchase_order', expect.anything());
+  });
+
+  it('rejects a whole PO when any positive-quantity row is unresolved', async () => {
+    mocks.processDocumentWithOCR.mockResolvedValue({
+      success: true,
+      raw_text: 'parsed',
+      document_type: 'purchase_order',
+      parsed_data: {
+        vendor_name: 'Vendor A',
+        invoice_number: 'NO-PARTIAL',
+        invoice_date: '2026-07-16',
+        items: [
+          { product_name: product.sku, quantity: 2, unit_cost: 10, unit_size: 'GAL' },
+          { product_name: 'Unknown Product', quantity: 1, unit_cost: 20, unit_size: 'GAL' },
+        ],
+      },
+      confidence: 1,
+      processing_time_ms: 1,
+    });
+
+    render(<BulkPOImport {...defaultProps} />);
+    fireEvent.change(document.querySelector('#po-pdf-upload')!, {
+      target: { files: [new File(['one'], 'NO-PARTIAL.pdf', { type: 'application/pdf' })] },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /process 1 file/i }));
+
+    expect(await screen.findByRole('button', { name: /import 0 pos/i })).toBeDisabled();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('save_purchase_order', expect.anything());
+  });
+
   it('reports a server duplicate as skipped instead of newly imported', async () => {
     mocks.rpc.mockImplementation(async (name: string) => {
       if (name === 'save_purchase_order') {

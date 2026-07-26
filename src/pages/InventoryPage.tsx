@@ -27,6 +27,10 @@ import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
 import Tabs from '../components/ui/Tabs';
 import type { Inventory, InventoryPositionRow, Product, InventoryHold, Customer } from '../types';
+import type { ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
+
+type PickerProduct = Product & ProductOptionPresentationModel;
 
 interface InventoryRow extends Inventory {
   product_name: string;
@@ -98,7 +102,7 @@ export default function InventoryPage() {
   const [availablePOs, setAvailablePOs] = useState<Array<{id: string; po_number: string; ordered: number; received: number; unit_cost: number; purchase_order_id: string; product_id: string; unit_size: string | null}>>([]);
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustNote, setAdjustNote] = useState('');
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<PickerProduct[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [addProductId, setAddProductId] = useState('');
   const [addLocation, setAddLocation] = useState('Main Warehouse');
@@ -286,7 +290,7 @@ export default function InventoryPage() {
   const fetchProducts = async () => {
     const { data, error } = await supabase
       .from('products')
-      .select('*')
+      .select('*, product_family:product_families(name)')
       .eq('is_active', true)
       .order('product_name');
     if (error) {
@@ -294,7 +298,7 @@ export default function InventoryPage() {
       toast('error', 'Failed to load products. Please try again.');
       return;
     }
-    setProducts((data || []) as Product[]);
+    setProducts((data || []) as unknown as PickerProduct[]);
   };
 
   const fetchCustomers = async () => {
@@ -1389,20 +1393,16 @@ export default function InventoryPage() {
                 <p className="px-3 py-4 text-sm text-secondary text-center">No products found</p>
               ) : (
                 filteredProducts.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => {
-                      setHoldProductId(p.id);
-                      setHoldWarning('');
-                    }}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0 ${
-                      holdProductId === p.id ? 'bg-crx-green/10 text-crx-green font-medium' : 'text-nav-dark'
-                    }`}
-                  >
-                    <span>{p.product_name}</span>
-                    {p.sku && <span className="text-secondary ml-2">({p.sku})</span>}
-                  </button>
+                  <div key={p.id} className={holdProductId === p.id ? 'bg-crx-green/10' : ''}>
+                    <ProductSearchResultRow
+                      onClick={() => {
+                        setHoldProductId(p.id);
+                        setHoldWarning('');
+                      }}
+                      product={p}
+                      trailing={null}
+                    />
+                  </div>
                 ))
               )}
             </div>
@@ -1479,20 +1479,16 @@ export default function InventoryPage() {
                 <p className="px-3 py-4 text-sm text-secondary text-center">No products found</p>
               ) : (
                 filteredProducts.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => {
-                      setAddProductId(p.id);
-                      setAddUnitSize(p.unit_size || '');
-                    }}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0 ${
-                      addProductId === p.id ? 'bg-crx-green/10 text-crx-green font-medium' : 'text-nav-dark'
-                    }`}
-                  >
-                    <span>{p.product_name}</span>
-                    {p.sku && <span className="text-secondary ml-2">({p.sku})</span>}
-                  </button>
+                  <div key={p.id} className={addProductId === p.id ? 'bg-crx-green/10' : ''}>
+                    <ProductSearchResultRow
+                      onClick={() => {
+                        setAddProductId(p.id);
+                        setAddUnitSize(p.unit_size || '');
+                      }}
+                      product={p}
+                      trailing={null}
+                    />
+                  </div>
                 ))
               )}
             </div>

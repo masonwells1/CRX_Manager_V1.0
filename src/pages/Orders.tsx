@@ -708,6 +708,7 @@ export default function Orders() {
           setShowImportModal(false);
           fetchOrders();
         }}
+        onPartialSuccess={fetchOrders}
       />
 
       <BulkDeleteConfirmModal

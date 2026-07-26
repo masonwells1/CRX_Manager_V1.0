@@ -81,6 +81,9 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import { Sentry } from '../lib/sentry';
 import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, BlendRecipeItem, LinkedEntityType, JobNotification, UnitConversion } from '../types';
 import type { Json } from '../types/supabase';
+import type { ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+import { JobChemicalProductPicker } from '../components/jobs/JobChemicalProductPicker';
+import { buildJobChemicalsPayload } from '../lib/jobChemicalPayload';
 import { sendEmail } from '../lib/emailService';
 import {
   parsePreNotificationTemplate,
@@ -96,6 +99,8 @@ import {
   countSentPostNotifications,
   describePostNotificationSend,
 } from '../lib/postNotification';
+
+type PickerProduct = Product & ProductOptionPresentationModel;
 
 interface JobDbRow {
   id: string;
@@ -314,7 +319,7 @@ export default function JobDetail() {
   // lookup. Keep those entry points closed until the lookup has succeeded so
   // neither can fall back to legacy total_acres while it is unavailable.
   const [fieldsLookupReady, setFieldsLookupReady] = useState(false);
-  const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [applicators, setApplicators] = useState<Profile[]>([]);
   // Staff-held license rows per profile (B5 license gates)
@@ -1426,7 +1431,7 @@ export default function JobDetail() {
     const [custResult, fieldResult, prodResult, vehicleResult, appResult, recipeResult] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
       supabase.from('fields').select('*').order('field_name'),
-      supabase.from('products').select('*').eq('is_active', true).order('product_name'),
+      supabase.from('products').select('*, product_family:product_families(name)').eq('is_active', true).order('product_name'),
       supabase.from('vehicles').select('*').eq('status', 'active').order('vehicle_name'),
       // PR-07 follow-up: applicator picker only uses a.id + a.full_name + a.role; safe via view.
       supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
@@ -1437,7 +1442,11 @@ export default function JobDetail() {
       setAllFields((fieldResult.data || []) as Field[]);
       setFieldsLookupReady(true);
     }
-    setAllProducts((prodResult.data || []) as Product[]);
+    if (prodResult.error) {
+      Sentry.captureException(prodResult.error, { tags: { source: 'fetch', action: 'load_job_products' } });
+      toast('error', 'Failed to load Products. Retry before editing job chemicals.');
+    }
+    setAllProducts((prodResult.data || []) as unknown as PickerProduct[]);
     setVehicles((vehicleResult.data || []) as Vehicle[]);
     setApplicators((appResult.data || []) as Profile[]);
     setRecipes((recipeResult.data || []) as BlendRecipe[]);
@@ -2152,22 +2161,7 @@ export default function JobDetail() {
         sort_order: i,
       }));
 
-      const chemsPayload = chemRows.map((c, i) => ({
-        product_id: c.product_id,
-        quantity: parseFloat(c.quantity) || 0,
-        unit: c.unit || null,
-        rate_per_acre: parseFloat(c.rate_per_acre) || null,
-        rate_unit: c.rate_unit || null,
-        cost_per_unit_cents: parseInt(c.cost_per_unit_cents) || 0,
-        price_per_unit_cents: parseInt(c.price_per_unit_cents) || 0,
-        diluent_rate: c.diluent_rate || null,
-        rei_hours: c.rei_hours || null,
-        phi_days: c.phi_days || null,
-        warehouse: c.warehouse || null,
-        vendor: c.vendor || null,
-        customer_supplied: c.customer_supplied || false,
-        sort_order: i,
-      }));
+      const chemsPayload = buildJobChemicalsPayload(chemRows);
 
       const newAssigneeIsApplicator = applicators.some((p) => p.id === applicatorId && p.role === 'applicator');
       // Mirrors the trigger's role='applicator' + active guard; the picker is active-only, so we never notify about a displacement that didn't happen.
@@ -2985,8 +2979,8 @@ export default function JobDetail() {
           </span>
         </div>
       )}
-      <div className="flex items-center gap-4">
-        <div className="flex-1">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-nav-dark">
             {isNew ? (jobNumber ? `New Job — ${jobNumber}` : 'New Job') : jobNumber}
           </h1>
@@ -3000,7 +2994,7 @@ export default function JobDetail() {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           {!isNew && fieldRows.some((f) => f.field_id) && chemRows.some((c) => c.product_id) && (
             <>
               <Button variant="secondary" onClick={() => setPrintOptionsOpen(true)} loading={generatingSheet !== null}>
@@ -3573,12 +3567,11 @@ export default function JobDetail() {
                     <div className="grid grid-cols-12 gap-2 items-end">
                       <div className="col-span-12 md:col-span-3">
                         <label className="block text-xs font-medium text-secondary mb-1">Chemical</label>
-                        <SearchableSelect
-                          options={allProducts.map((p) => ({ value: p.id, label: p.product_name }))}
+                        <JobChemicalProductPicker
+                          products={allProducts}
                           value={c.product_id}
                           onChange={(value) => updateChemRow(i, 'product_id', value)}
                           disabled={!canEdit}
-                          placeholder="Select product..."
                         />
                       </div>
                       <div className="col-span-6 md:col-span-2">

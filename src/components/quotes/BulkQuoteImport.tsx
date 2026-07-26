@@ -10,6 +10,7 @@ import { generateIdempotencyKey } from '../../lib/idempotency';
 import { Sentry } from '../../lib/sentry';
 import { logActivity } from '../../lib/activityLogger';
 import type { Json } from '../../types/supabase';
+import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
 
 interface BulkQuoteImportProps {
   open: boolean;
@@ -434,7 +435,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
     try {
       const [custRes, prodRes, convRes] = await Promise.all([
         supabase.from('customers').select('id, farm_name'),
-        supabase.from('products').select('id, product_name, sku, current_cost, inventory_unit, unit_size'),
+        supabase.from('products').select('id, product_name, sku, current_cost, inventory_unit, unit_size, is_active').eq('is_active', true),
         supabase.from('unit_conversions').select('*'),
       ]);
 
@@ -457,12 +458,6 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
 
       const customerMap = new Map(
         customers.map((c) => [c.farm_name.toLowerCase().trim(), c.id])
-      );
-      const productMap = new Map(
-        products.flatMap((p) => [
-          [p.product_name.toLowerCase().trim(), p.id],
-          p.sku ? [p.sku.toLowerCase().trim(), p.id] : null,
-        ].filter(Boolean) as [string, string][])
       );
       const productDetailsById = new Map(products.map((p) => [p.id, p]));
 
@@ -503,13 +498,22 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           }
           const customerId = customerIds[0];
 
-          const missingProducts = Array.from(new Set(
-            items
-              .filter((item) => !productMap.has(item.product_name.toLowerCase().trim()))
-              .map((item) => item.product_name)
-          )).sort((a, b) => a.localeCompare(b));
+          const productByItem = new Map<ParsedQuoteItem, (typeof products)[number]>();
+          const missingProducts: string[] = [];
+          const ambiguousProducts: string[] = [];
+          for (const item of items) {
+            const resolution = resolveExactProductIdentity(item.product_name, products);
+            if (resolution.status === 'unique') productByItem.set(item, resolution.product);
+            else if (resolution.status === 'ambiguous') ambiguousProducts.push(item.product_name);
+            else missingProducts.push(item.product_name);
+          }
           if (missingProducts.length > 0) {
-            details.push(`Quote ${quoteNumber}: Product(s) not found - ${missingProducts.join(', ')}`);
+            details.push(`Quote ${quoteNumber}: Product(s) not found - ${[...new Set(missingProducts)].sort().join(', ')}`);
+            failCount++;
+            continue;
+          }
+          if (ambiguousProducts.length > 0) {
+            details.push(`Quote ${quoteNumber}: Product(s) ambiguous - ${[...new Set(ambiguousProducts)].sort().join(', ')}. Use a unique SKU.`);
             failCount++;
             continue;
           }
@@ -559,8 +563,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           const sectionsPayload = Array.from(sectionGroups.entries()).map(([sectionName, sectionItems], sectionIndex) => {
             const sectionItemsPayload = sectionItems
               .map((item, itemIndex) => {
-              const productId = productMap.get(item.product_name.toLowerCase().trim())!;
-
+              const productId = productByItem.get(item)!.id;
               const product = productDetailsById.get(productId);
               const inventoryUnit = product?.inventory_unit || product?.unit_size;
               const hasPriceOverride = typeof item.price_per_unit === 'number';

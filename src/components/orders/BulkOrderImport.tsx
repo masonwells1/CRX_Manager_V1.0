@@ -10,11 +10,13 @@ import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
+import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
 
 interface BulkOrderImportProps {
   open: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  onPartialSuccess?: () => void;
 }
 
 interface ParsedOrderItem {
@@ -47,6 +49,11 @@ interface ValidationResult {
   invalid: Array<{ row: number; error: string; data: Record<string, string> }>;
 }
 
+interface OrderImportFailure {
+  orderNumber: string;
+  details: string[];
+}
+
 const ORDER_FIELD_MAPPINGS: Record<string, string[]> = {
   order_number: ['order_number', 'order_no', 'order#', 'invoice_number', 'invoice_no', 'invoice#'],
   customer_name: ['customer_name', 'customer', 'farm_name', 'farm', 'buyer'],
@@ -64,14 +71,23 @@ const ITEM_FIELD_MAPPINGS: Record<string, string[]> = {
   item_notes: ['item_notes', 'item_comment', 'line_notes'],
 };
 
-export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderImportProps) {
+export default function BulkOrderImport({
+  open,
+  onClose,
+  onSuccess,
+  onPartialSuccess,
+}: BulkOrderImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
-  const [uploadResults, setUploadResults] = useState<{ success: number; failed: number } | null>(null);
+  const [uploadResults, setUploadResults] = useState<{
+    success: number;
+    failed: number;
+    failures: OrderImportFailure[];
+  } | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -311,6 +327,18 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     setUploading(true);
     let successCount = 0;
     let failedCount = 0;
+    const failures: OrderImportFailure[] = [];
+    const productResult = await supabase
+      .from('products')
+      .select('id, product_name, sku, is_active')
+      .eq('is_active', true);
+    if (productResult.error) {
+      Sentry.captureException(productResult.error, { extra: { context: 'Failed to load Product identities for order import' } });
+      toast('error', 'Failed to load Products. No orders were imported.');
+      setUploading(false);
+      return;
+    }
+    const productCatalog = productResult.data || [];
 
     for (const order of validation.valid) {
       try {
@@ -323,11 +351,19 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         if (custError) {
           Sentry.captureException(new Error(String(custError.message)), { extra: { context: 'Failed to look up customer' } });
           failedCount++;
+          failures.push({
+            orderNumber: order.order_number,
+            details: [`Customer lookup failed for "${order.customer_name}". Correct the customer and retry.`],
+          });
           continue;
         }
 
         if (!customer) {
           failedCount++;
+          failures.push({
+            orderNumber: order.order_number,
+            details: [`Customer "${order.customer_name}" was not found. Correct the customer and retry.`],
+          });
           continue;
         }
 
@@ -342,22 +378,35 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         const totalProfit = totalPrice - totalCost;
         const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
 
-        // Resolve product_id per item up front (preserves the friendly Sentry
-        // breadcrumb for unknown products), then ship the whole order through
-        // bulk_import_order which inserts orders + items atomically.
-        const itemsPayload = await Promise.all(
-          order.items.map(async (item, idx) => {
-            const { data: product, error: prodError } = await supabase
-              .from('products')
-              .select('id')
-              .ilike('product_name', item.product_name)
-              .maybeSingle();
-            if (prodError) {
-              Sentry.captureException(new Error(String(prodError.message)), { extra: { context: 'Failed to look up product' } });
-            }
+        const resolvedItems = order.items.map((item) => ({
+          item,
+          resolution: resolveExactProductIdentity(item.product_name, productCatalog),
+        }));
+        const unresolved = resolvedItems.filter(({ resolution }) => resolution.status !== 'unique');
+        if (unresolved.length > 0) {
+          Sentry.captureException(new Error('Order import Product identity is missing or ambiguous'), {
+            extra: {
+              context: 'BulkOrderImport Product resolution',
+              orderNumber: order.order_number,
+              products: unresolved.map(({ item, resolution }) => `${item.product_name}:${resolution.status}`),
+            },
+          });
+          failedCount++;
+          failures.push({
+            orderNumber: order.order_number,
+            details: unresolved.map(({ item, resolution }) => (
+              `"${item.product_name}" has ${resolution.status === 'ambiguous' ? 'an ambiguous Product match' : 'no matching Product'}; use a unique SKU and retry.`
+            )),
+          });
+          continue;
+        }
 
-            return {
-              product_id: product?.id || null,
+        // The entire order is rejected above unless every Product resolves to
+        // one active immutable UUID. Never send null or a sibling guess.
+        const itemsPayload = resolvedItems.map(({ item, resolution }, idx) => {
+          const product = resolution.status === 'unique' ? resolution.product : null;
+          return {
+              product_id: product!.id,
               product_name: item.product_name,
               price_per_unit: item.price_per_unit,
               unit_cost: item.unit_cost || 0,
@@ -366,8 +415,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
               notes: item.notes,
               sort_order: idx + 1,
             };
-          })
-        );
+        });
 
         // Audit #31: atomic per-order create — order + items rolled together.
         // The idempotency key is generated once at parse time and stored on
@@ -395,10 +443,14 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing order' } });
         failedCount++;
+        failures.push({
+          orderNumber: order.order_number,
+          details: ['The order could not be imported. Review its values and retry.'],
+        });
       }
     }
 
-    setUploadResults({ success: successCount, failed: failedCount });
+    setUploadResults({ success: successCount, failed: failedCount, failures });
     setUploading(false);
 
     if (successCount > 0) {
@@ -406,7 +458,11 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         await logActivity({ event: 'orders_bulk_imported', description: `Bulk imported ${successCount} order(s)`, performedBy: profile.id });
       }
       toast('success', `Imported ${successCount} order${successCount !== 1 ? 's' : ''}`);
-      onSuccess();
+      if (failedCount === 0) {
+        onSuccess();
+      } else {
+        onPartialSuccess?.();
+      }
     }
   };
 
@@ -541,7 +597,24 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
                 <div className="text-sm text-secondary space-y-1">
                   <p>Successfully imported: {uploadResults.success}</p>
                   {uploadResults.failed > 0 && (
-                    <p className="text-red-600">Failed: {uploadResults.failed}</p>
+                    <>
+                      <p className="text-red-600">Failed: {uploadResults.failed}</p>
+                      <ul
+                        aria-label="Order import failure details"
+                        className="mt-2 space-y-2 text-red-700"
+                      >
+                        {uploadResults.failures.map((failure) => (
+                          <li key={failure.orderNumber}>
+                            <span className="font-medium">Order {failure.orderNumber}</span>
+                            <ul className="ml-5 list-disc">
+                              {failure.details.map((detail) => (
+                                <li key={detail}>{detail}</li>
+                              ))}
+                            </ul>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
                   )}
                 </div>
               </div>
