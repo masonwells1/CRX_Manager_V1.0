@@ -19,6 +19,7 @@ import { formatCents as fmtCurrency } from '../../lib/money';
 import { fetchOpenBookings, type OpenBooking } from '../../lib/openBookings';
 import { validateInventoryPositionShape } from '../../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../../lib/inventoryPositionLookup';
+import { ProductOptionDetails } from '../products/ProductOptionPresentation';
 import type { Product, Profile, InventoryPositionRow } from '../../types';
 
 interface QuickItem {
@@ -92,7 +93,7 @@ export default function QuickDeliveryModal({
     const fetchData = async () => {
       try {
         const [prodResult, driverResult] = await Promise.all([
-          supabase.from('products').select('*').eq('is_active', true).order('product_name'),
+          supabase.from('products').select('*, product_family:product_families(name)').eq('is_active', true).order('product_name'),
           // PR-07 follow-up: driver picker only uses d.id + d.full_name; safe via view.
           supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
         ]);
@@ -686,6 +687,7 @@ export default function QuickDeliveryModal({
                 className="w-full text-left p-3 border border-gray-200 rounded-lg hover:border-crx-green hover:bg-gray-50 transition-colors"
               >
                 <div className="font-medium text-nav-dark">{product.product_name}</div>
+                <ProductOptionDetails product={product} />
                 {product.manufacturer && (
                   <div className="text-xs text-secondary mt-1">{product.manufacturer}</div>
                 )}

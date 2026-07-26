@@ -59,6 +59,8 @@ import TransactionThread from '../components/ui/TransactionThread';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import { useStaleQuoteCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
+import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
+import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 import type {
   Quote,
   QuoteSection,
@@ -538,7 +540,7 @@ export default function QuoteBuilder() {
   const fetchReferenceData = useCallback(async () => {
     const [custRes, prodRes, convRes, fieldsRes] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
-      supabase.from('products').select('*').eq('is_active', true).order('product_name'),
+      supabase.from('products').select('*, product_family:product_families(name)').eq('is_active', true).order('product_name'),
       supabase.from('unit_conversions').select('*'),
       supabase.from('fields').select('id, field_name, customer_id, total_acres, measured_acres, override_acres').eq('is_active', true).order('field_name'),
     ]);
@@ -588,7 +590,7 @@ export default function QuoteBuilder() {
       supabase.from('quote_sections').select('*').eq('quote_id', quoteId).order('sort_order'),
       supabase
         .from('quote_items')
-        .select('*, product:products(*)')
+        .select('*, product:products(*, product_family:product_families(name))')
         .eq('quote_id', quoteId)
         .order('sort_order'),
     ]);
@@ -3272,11 +3274,7 @@ export default function QuoteBuilder() {
                                   <p className="font-medium text-nav-dark truncate max-w-[200px]">
                                     {prod.product_name}
                                   </p>
-                                  {prod.sku && (
-                                    <p className="text-xs text-gray-400">
-                                      {prod.sku}
-                                    </p>
-                                  )}
+                                  <ProductOptionDetails product={prod} />
                                 </button>
                               ) : (
                                 <button
@@ -3624,41 +3622,14 @@ export default function QuoteBuilder() {
                 // columns) — matches what the line will show once added.
                 const perAcre = catalogPricePerAcre(p, tier, unitConversions);
                 return (
-                <button
+                <ProductSearchResultRow
                   key={p.id}
+                  product={p}
                   onClick={() => {
-                    if (productSearchOpen) {
-                      assignProduct(
-                        productSearchOpen.sectionKey,
-                        productSearchOpen.itemKey,
-                        p
-                      );
-                    }
+                    if (productSearchOpen) assignProduct(productSearchOpen.sectionKey, productSearchOpen.itemKey, p);
                   }}
-                  className="w-full text-left px-3 py-2.5 hover:bg-crx-green-tint transition-colors flex items-center justify-between"
-                >
-                  <div>
-                    <p className="font-medium text-nav-dark text-sm">
-                      {p.product_name}
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      {[p.sku, p.category, p.vendor].filter(Boolean).join(' / ')}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-mono text-sm text-nav-dark">
-                      {fmt(getTierPrice(p, tier))}
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      T{tier} price
-                    </p>
-                    {perAcre != null && (
-                      <p className="text-xs font-mono text-crx-green" title={`Approx. $/acre at tier ${tier}, applied at this product's standard rate`}>
-                        {fmt(perAcre)}/ac
-                      </p>
-                    )}
-                  </div>
-                </button>
+                  trailing={<><p className="font-mono text-sm text-nav-dark">{fmt(getTierPrice(p, tier))}</p><p className="text-xs text-gray-400">T{tier} price</p>{perAcre != null && <p className="text-xs font-mono text-crx-green" title={`Approx. $/acre at tier ${tier}, applied at this product's standard rate`}>{fmt(perAcre)}/ac</p>}</>}
+                />
                 );
               })
             )}

@@ -28,6 +28,23 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
   return self;
 }
 
+function buildDeferredChain(): { chain: Record<string, unknown>; resolve: (result: { data: unknown; error: unknown }) => void } {
+  let resolve!: (result: { data: unknown; error: unknown }) => void;
+  const promise = new Promise<{ data: unknown; error: unknown }>((done) => { resolve = done; });
+  const chain: Record<string, unknown> = {};
+  const method = (..._args: unknown[]) => chain;
+  const methods = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq',
+    'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains',
+    'containedBy', 'range', 'filter', 'not', 'or', 'and', 'match',
+    'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
+    'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal'];
+  for (const methodName of methods) chain[methodName] = method;
+  chain.then = promise.then.bind(promise);
+  chain.catch = promise.catch.bind(promise);
+  chain.finally = promise.finally.bind(promise);
+  return { chain, resolve };
+}
+
 vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
@@ -104,6 +121,135 @@ describe('InvoiceDetail', () => {
       expect(mockToast).toHaveBeenCalledWith('error', 'Invoice not found');
     });
     expect(mockNavigate).toHaveBeenCalledWith('/invoices');
+  });
+
+  it('shows a Product search failure instead of silently rendering an empty picker', async () => {
+    const invoice = {
+      id: 'inv-product-error', invoice_number: 'INV-PRODUCT-ERROR', status: 'draft', type: 'standard',
+      customer_id: 'cust-1', order_id: 'ord-1', subtotal_cents: 0, tax_cents: 0, total_cents: 0,
+      balance_cents: 0, invoice_date: '2026-03-15', due_date: null, notes: '', created_at: '2026-03-15T00:00:00Z',
+    };
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'products') return buildChain({ data: null, error: { message: 'Product query failed' } });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail('inv-product-error');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    fireEvent.change(screen.getByPlaceholderText('Search products by name or SKU...'), { target: { value: 'at' } });
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to search Products'));
+  });
+
+  it('keeps only the latest Product search and invalidates stale results after selection', async () => {
+    const invoice = {
+      id: 'inv-product-race', invoice_number: 'INV-PRODUCT-RACE', status: 'draft', type: 'standard',
+      customer_id: 'cust-1', order_id: 'ord-1', subtotal_cents: 0, tax_cents: 0, total_cents: 0,
+      balance_cents: 0, invoice_date: '2026-03-15', due_date: null, notes: '', created_at: '2026-03-15T00:00:00Z',
+    };
+    const stale = buildDeferredChain();
+    const latest = buildDeferredChain();
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'products') return mockFrom.mock.calls.filter(([name]) => name === 'products').length === 1 ? stale.chain : latest.chain;
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail('inv-product-race');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    const input = screen.getByPlaceholderText('Search products by name or SKU...');
+    fireEvent.change(input, { target: { value: 'old' } });
+    await waitFor(() => expect(mockFrom.mock.calls.filter(([name]) => name === 'products')).toHaveLength(1));
+    fireEvent.change(input, { target: { value: 'new' } });
+    stale.resolve({ data: [{ id: 'product-stale-uuid', product_name: 'Stale Product', sku: null, tier1_price: 1, current_cost: 1 }], error: null });
+    await waitFor(() => expect(screen.queryByText('Stale Product')).not.toBeInTheDocument());
+    await waitFor(() => expect(mockFrom.mock.calls.filter(([name]) => name === 'products')).toHaveLength(2));
+
+    latest.resolve({ data: [{ id: 'product-new-uuid', product_name: 'Latest Product', sku: null, tier1_price: 22, current_cost: 11 }], error: null });
+    expect(await screen.findByText('Product ID: product-new-uuid')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Product ID: product-new-uuid'));
+    await waitFor(() => expect(screen.queryByPlaceholderText('Search products by name or SKU...')).not.toBeInTheDocument());
+    expect(screen.getAllByText('Latest Product').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    expect(screen.queryByText('Stale Product')).not.toBeInTheDocument();
+  });
+
+  it('does not repopulate Product results after a short-query clear invalidates an in-flight search', async () => {
+    const invoice = {
+      id: 'inv-product-clear', invoice_number: 'INV-PRODUCT-CLEAR', status: 'draft', type: 'standard',
+      customer_id: 'cust-1', order_id: 'ord-1', subtotal_cents: 0, tax_cents: 0, total_cents: 0,
+      balance_cents: 0, invoice_date: '2026-03-15', due_date: null, notes: '', created_at: '2026-03-15T00:00:00Z',
+    };
+    const stale = buildDeferredChain();
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'products') return stale.chain;
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail('inv-product-clear');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    const input = screen.getByPlaceholderText('Search products by name or SKU...');
+    fireEvent.change(input, { target: { value: 'old' } });
+    await waitFor(() => expect(mockFrom).toHaveBeenCalledWith('products'));
+    fireEvent.change(input, { target: { value: '' } });
+
+    stale.resolve({ data: [{ id: 'product-stale-clear-uuid', product_name: 'Stale After Clear', sku: null }], error: null });
+    await waitFor(() => expect(screen.queryByText('Stale After Clear')).not.toBeInTheDocument());
+    expect(screen.getByText('Type at least 2 characters to search')).toBeInTheDocument();
+  });
+
+  it('removes completed Product results immediately when a new valid query is typed', async () => {
+    const invoice = {
+      id: 'inv-product-between-searches', invoice_number: 'INV-PRODUCT-BETWEEN-SEARCHES', status: 'draft', type: 'standard',
+      customer_id: 'cust-1', order_id: 'ord-1', subtotal_cents: 0, tax_cents: 0, total_cents: 0,
+      balance_cents: 0, invoice_date: '2026-03-15', due_date: null, notes: '', created_at: '2026-03-15T00:00:00Z',
+    };
+    const latest = buildDeferredChain();
+    let invoiceCalls = 0;
+    let productCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'products') {
+        productCalls += 1;
+        return productCalls === 1
+          ? buildChain({ data: [{ id: 'product-old-complete-uuid', product_name: 'Completed Old Product', sku: null }], error: null })
+          : latest.chain;
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail('inv-product-between-searches');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    const input = screen.getByPlaceholderText('Search products by name or SKU...');
+    fireEvent.change(input, { target: { value: 'old' } });
+    expect(await screen.findByText('Product ID: product-old-complete-uuid')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'new' } });
+    expect(screen.queryByText('Completed Old Product')).not.toBeInTheDocument();
+    expect(screen.getByText('Searching Products...')).toBeInTheDocument();
   });
 
   it('renders invoice detail when data loads', async () => {

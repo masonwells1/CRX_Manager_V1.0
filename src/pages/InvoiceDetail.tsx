@@ -32,6 +32,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import TransactionThread from '../components/ui/TransactionThread';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
+import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 
 interface LineItem {
   id?: string;
@@ -150,6 +151,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // Product search for adding items
   const [productSearch, setProductSearch] = useState('');
   const [productResults, setProductResults] = useState<Product[]>([]);
+  const [productSearchLoading, setProductSearchLoading] = useState(false);
   const [showProductModal, setShowProductModal] = useState(false);
 
   // Print PDF
@@ -157,6 +159,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const printingRef = useRef(false);
   // Latest invoice id the route is showing — older in-flight fetches bail (stale guard).
   const activeInvoiceIdRef = useRef<string | undefined>(undefined);
+  const productSearchRequestRef = useRef(0);
 
   // Email invoice
   const [emailing, setEmailing] = useState(false);
@@ -568,15 +571,44 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
 
   // Product search
   const searchProducts = useCallback(async (q: string) => {
-    if (q.length < 2) { setProductResults([]); return; }
-    const { data } = await supabase
-      .from('products')
-      .select('*')
-      .eq('is_active', true)
-      .or(`product_name.ilike.%${q}%,sku.ilike.%${q}%`)
-      .order('product_name')
-      .limit(20);
-    setProductResults((data || []) as Product[]);
+    const requestId = ++productSearchRequestRef.current;
+    if (q.length < 2) {
+      setProductResults([]);
+      setProductSearchLoading(false);
+      return;
+    }
+    setProductSearchLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*, product_family:product_families(name)')
+        .eq('is_active', true)
+        .or(`product_name.ilike.%${q}%,sku.ilike.%${q}%`)
+        .order('product_name')
+        .limit(20);
+      if (requestId !== productSearchRequestRef.current) return;
+      if (error) {
+        Sentry.captureException(error, { extra: { context: 'search_invoice_products' } });
+        toast('error', 'Failed to search Products');
+        setProductResults([]);
+      } else {
+        setProductResults((data || []) as Product[]);
+      }
+    } catch (error) {
+      if (requestId !== productSearchRequestRef.current) return;
+      Sentry.captureException(error, { extra: { context: 'search_invoice_products' } });
+      toast('error', 'Failed to search Products');
+      setProductResults([]);
+    } finally {
+      if (requestId === productSearchRequestRef.current) setProductSearchLoading(false);
+    }
+  }, [toast]);
+
+  const clearProductSearch = useCallback(() => {
+    productSearchRequestRef.current += 1;
+    setProductSearch('');
+    setProductResults([]);
+    setProductSearchLoading(false);
   }, []);
 
   useEffect(() => {
@@ -628,7 +660,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       },
     ]);
     setShowProductModal(false);
-    setProductSearch('');
+    clearProductSearch();
   };
 
   // Update line item
@@ -1891,7 +1923,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       )}
 
       {/* Product Search Modal */}
-      <Modal open={showProductModal} onClose={() => setShowProductModal(false)} title="Add Product" size="large">
+      <Modal open={showProductModal} onClose={() => { setShowProductModal(false); clearProductSearch(); }} title="Add Product" size="large">
         <div className="space-y-4">
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -1899,29 +1931,24 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               type="text"
               placeholder="Search products by name or SKU..."
               value={productSearch}
-              onChange={(e) => setProductSearch(e.target.value)}
+              onChange={(e) => {
+                const nextQuery = e.target.value;
+                productSearchRequestRef.current += 1;
+                setProductSearch(nextQuery);
+                setProductResults([]);
+                setProductSearchLoading(nextQuery.length >= 2);
+              }}
               // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
               autoFocus
               className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
-          {productResults.length > 0 ? (
+          {productSearchLoading ? (
+            <p className="text-sm text-secondary text-center py-4">Searching Products...</p>
+          ) : productResults.length > 0 ? (
             <div className="max-h-60 overflow-auto divide-y divide-gray-50">
               {productResults.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => addProduct(p)}
-                  className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between"
-                >
-                  <div>
-                    <div className="text-sm font-medium text-nav-dark">{p.product_name}</div>
-                    <div className="text-xs text-secondary">{p.sku || 'No SKU'} • {p.vendor || 'No vendor'}</div>
-                  </div>
-                  <div className="text-right text-xs text-secondary">
-                    <div>T1: ${(p.tier1_price || 0).toFixed(2)}</div>
-                    <div>Cost: ${(p.current_cost || 0).toFixed(2)}</div>
-                  </div>
-                </button>
+                <ProductSearchResultRow key={p.id} product={p} onClick={() => addProduct(p)} trailing={<><div>T1: ${(p.tier1_price || 0).toFixed(2)}</div><div>Cost: ${(p.current_cost || 0).toFixed(2)}</div></>} />
               ))}
             </div>
           ) : productSearch.length >= 2 ? (

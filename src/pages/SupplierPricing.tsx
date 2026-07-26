@@ -21,9 +21,11 @@ import Select from '../components/ui/Select';
 import Tabs from '../components/ui/Tabs';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { ProductOptionDetails, productOptionLabel } from '../components/products/ProductOptionPresentation';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { localToday } from '../lib/dateUtils';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { Sentry } from '../lib/sentry';
 import {
   getProductCostBasisWorkspace,
   type ProductCostBasisWorkspace,
@@ -92,7 +94,6 @@ export default function SupplierPricing() {
   const [selectedProductId, setSelectedProductId] = useState('');
   const [documentDate, setDocumentDate] = useState(today());
   const [sourcePdf, setSourcePdf] = useState<File | null>(null);
-  const [uploadedPdfPath, setUploadedPdfPath] = useState<string | null>(null);
   const [review, setReview] = useState<SupplierImportReview | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [approveOpen, setApproveOpen] = useState(false);
@@ -110,7 +111,27 @@ export default function SupplierPricing() {
   const [basisLoading, setBasisLoading] = useState(false);
   const workbookInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const workspaceRequestRef = useRef(0);
+  const workspaceRefreshPendingRef = useRef(false);
+  const importRequestRef = useRef(0);
+  const importRequestPendingRef = useRef(false);
   const basisWorkspaceRequestRef = useRef(0);
+  const selectedVendorIdRef = useRef(selectedVendorId);
+  const selectedProductIdRef = useRef(selectedProductId);
+  const reviewRef = useRef(review);
+  const sourcePdfRef = useRef<File | null>(null);
+  const sourcePdfSelectionRef = useRef(0);
+  const uploadedPdfRef = useRef<{ selectionId: number; path: string } | null>(null);
+  const quickQuoteIntentRef = useRef(0);
+
+  useEffect(() => { selectedVendorIdRef.current = selectedVendorId; }, [selectedVendorId]);
+  useEffect(() => { selectedProductIdRef.current = selectedProductId; }, [selectedProductId]);
+  useEffect(() => { reviewRef.current = review; }, [review]);
+
+  const commitReview = useCallback((nextReview: SupplierImportReview | null) => {
+    reviewRef.current = nextReview;
+    setReview(nextReview);
+  }, []);
 
   const stageImportIdem = useIdempotencyKey('stage_supplier_price_import', profile?.id || '');
   const approveImportIdem = useIdempotencyKey('approve_supplier_price_import', profile?.id || '');
@@ -121,18 +142,103 @@ export default function SupplierPricing() {
   const correctionIdem = useIdempotencyKey('correct_supplier_price_observation', profile?.id || '');
 
   const loadWorkspace = useCallback(async () => {
+    const requestId = ++workspaceRequestRef.current;
+    const reviewIdToRefresh = reviewRef.current?.id ?? null;
+    importRequestRef.current += 1;
+    if (importRequestPendingRef.current) {
+      importRequestPendingRef.current = false;
+      setBusy(false);
+    }
+    workspaceRefreshPendingRef.current = true;
     setLoading(true);
     try {
       const result = await getSupplierPricingWorkspace();
+      if (workspaceRequestRef.current !== requestId) return;
+      let refreshedReview: SupplierImportReview | null = null;
+      if (reviewIdToRefresh && result.imports.some((item) => item.id === reviewIdToRefresh)) {
+        try {
+          refreshedReview = await getSupplierPriceImport(reviewIdToRefresh);
+        } catch (reviewError) {
+          if (workspaceRequestRef.current !== requestId) return;
+          Sentry.captureException(reviewError instanceof Error ? reviewError : new Error(String(reviewError)), {
+            extra: { context: 'refresh_supplier_price_import' },
+          });
+          toast('error', sanitizeError(reviewError));
+        }
+      }
+      if (workspaceRequestRef.current !== requestId) return;
+      const nextVendorId = result.vendors.some((vendor) => vendor.id === selectedVendorIdRef.current)
+        ? selectedVendorIdRef.current
+        : result.vendors[0]?.id || '';
+      const nextProductId = result.products.some((product) => product.id === selectedProductIdRef.current)
+        ? selectedProductIdRef.current
+        : result.products[0]?.id || '';
       setWorkspace(result);
-      setSelectedVendorId((current) => current || result.vendors[0]?.id || '');
-      setSelectedProductId((current) => current || result.products[0]?.id || '');
+      selectedVendorIdRef.current = nextVendorId;
+      selectedProductIdRef.current = nextProductId;
+      setSelectedVendorId(nextVendorId);
+      setSelectedProductId(nextProductId);
+      setQuickQuote((current) => {
+        const link = result.links.find((item) => (
+          item.id === current.linkId
+          && item.vendor_id === nextVendorId
+          && item.is_active
+          && item.is_reusable
+          && result.products.some((product) => product.id === item.product_id)
+        ));
+        return link ? current : blankQuickQuote;
+      });
+      setLinkForm((current) => {
+        const product = result.products.find((item) => item.id === current.productId);
+        const vendor = result.vendors.find((item) => item.id === current.vendorId);
+        return product && vendor
+          ? { ...current, conversionUnit: product.inventory_unit || '' }
+          : blankLink;
+      });
+      setAliasVendorId((current) => result.vendors.some((vendor) => vendor.id === current) ? current : '');
+      commitReview(refreshedReview);
+      setSelectedRowIds(new Set());
+      setApproveOpen(false);
+      setRejectOpen(false);
+      setRejectReason('');
+      setAliasReviewIntent(null);
+      setCorrectionRow(null);
+      setCorrectionCost('');
+      setCorrectionReason('');
+      setBasisWorkspace(null);
+      basisWorkspaceRequestRef.current += 1;
     } catch (error) {
+      if (workspaceRequestRef.current !== requestId) return;
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+        extra: { context: 'load_supplier_pricing_workspace' },
+      });
+      setWorkspace(null);
+      selectedVendorIdRef.current = '';
+      selectedProductIdRef.current = '';
+      setSelectedVendorId('');
+      setSelectedProductId('');
+      setLinkForm(blankLink);
+      setQuickQuote(blankQuickQuote);
+      commitReview(null);
+      setSelectedRowIds(new Set());
+      setApproveOpen(false);
+      setRejectOpen(false);
+      setRejectReason('');
+      setCorrectionRow(null);
+      setCorrectionCost('');
+      setCorrectionReason('');
+      setAliasVendorId('');
+      setAliasReviewIntent(null);
+      setBasisWorkspace(null);
+      basisWorkspaceRequestRef.current += 1;
       toast('error', sanitizeError(error));
     } finally {
-      setLoading(false);
+      if (workspaceRequestRef.current === requestId) {
+        workspaceRefreshPendingRef.current = false;
+        setLoading(false);
+      }
     }
-  }, [toast]);
+  }, [commitReview, toast]);
 
   useEffect(() => {
     void loadWorkspace();
@@ -171,14 +277,11 @@ export default function SupplierPricing() {
 
   useEffect(() => {
     void loadBasisWorkspace(selectedProductId);
-  }, [loadBasisWorkspace, selectedProductId]);
+  }, [loadBasisWorkspace, selectedProductId, workspace]);
 
   const refreshWorkspaceAndBasis = useCallback(async () => {
-    await Promise.all([
-      loadWorkspace(),
-      selectedProductId ? loadBasisWorkspace(selectedProductId) : Promise.resolve(),
-    ]);
-  }, [loadBasisWorkspace, loadWorkspace, selectedProductId]);
+    await loadWorkspace();
+  }, [loadWorkspace]);
 
   const vendorOptions = useMemo(
     () => (workspace?.vendors ?? []).map((vendor) => ({ value: vendor.id, label: vendor.name })),
@@ -187,15 +290,22 @@ export default function SupplierPricing() {
   const productOptions = useMemo(
     () => (workspace?.products ?? []).map((product) => ({
       value: product.id,
-      label: product.sku ? `${product.product_name} (${product.sku})` : product.product_name,
+      label: productOptionLabel(product),
     })),
+    [workspace],
+  );
+  const activeProductById = useMemo(
+    () => new Map((workspace?.products ?? []).map((product) => [product.id, product])),
     [workspace],
   );
   const vendorLinks = useMemo(
     () => (workspace?.links ?? []).filter((link) => (
-      link.vendor_id === selectedVendorId && link.is_active && link.is_reusable
+      link.vendor_id === selectedVendorId
+      && link.is_active
+      && link.is_reusable
+      && activeProductById.has(link.product_id)
     )),
-    [selectedVendorId, workspace],
+    [activeProductById, selectedVendorId, workspace],
   );
   const selectedEvidence = useMemo(
     () => workspace?.evidence.find((item) => item.product_id === selectedProductId) ?? null,
@@ -208,16 +318,28 @@ export default function SupplierPricing() {
 
   const attachPdf = (file: File | null) => {
     stageImportIdem.resetKey();
+    sourcePdfSelectionRef.current += 1;
+    sourcePdfRef.current = file;
+    uploadedPdfRef.current = null;
     setSourcePdf(file);
-    setUploadedPdfPath(null);
   };
 
-  const ensurePdfStored = async (): Promise<string | null> => {
-    if (!sourcePdf || !profile) return null;
-    if (uploadedPdfPath) return uploadedPdfPath;
-    const path = await uploadSupplierSourcePdf(sourcePdf, profile.id);
-    setUploadedPdfPath(path);
-    return path;
+  const ensurePdfStored = async (): Promise<{ file: File | null; path: string | null }> => {
+    const file = sourcePdfRef.current;
+    if (!file || !profile) return { file: null, path: null };
+    const selectionId = sourcePdfSelectionRef.current;
+    if (uploadedPdfRef.current?.selectionId === selectionId) {
+      return { file, path: uploadedPdfRef.current.path };
+    }
+    const path = await uploadSupplierSourcePdf(file, profile.id);
+    if (
+      sourcePdfSelectionRef.current !== selectionId
+      || sourcePdfRef.current !== file
+    ) {
+      throw new Error('The source PDF changed while it was uploading. Stage again with the current PDF.');
+    }
+    uploadedPdfRef.current = { selectionId, path };
+    return { file, path };
   };
 
   const handleExport = async () => {
@@ -255,22 +377,23 @@ export default function SupplierPricing() {
     setBusy(true);
     try {
       const parsed = await parseSupplierQuoteWorkbook(await file.arrayBuffer());
-      const sourcePath = await ensurePdfStored();
+      const sourceEvidence = await ensurePdfStored();
       const result = await stageSupplierPriceImport({
         vendorId: parsed.vendorId,
         documentDate,
         ingestionMethod: 'quote_sheet',
         formatVersion: parsed.formatVersion,
-        sourceDocumentPath: sourcePath,
-        sourceDocumentName: sourcePdf?.name ?? null,
-        sourceDocumentMime: sourcePdf ? 'application/pdf' : null,
+        sourceDocumentPath: sourceEvidence.path,
+        sourceDocumentName: sourceEvidence.file?.name ?? null,
+        sourceDocumentMime: sourceEvidence.file ? 'application/pdf' : null,
         rows: parsed.rows,
         performedBy: profile.id,
         idempotencyKey: stageImportIdem.getKey(),
       });
       stageImportIdem.resetKey();
+      selectedVendorIdRef.current = parsed.vendorId;
       setSelectedVendorId(parsed.vendorId);
-      setReview(result);
+      commitReview(result);
       toast('success', `Staged ${result.row_count} manual quote row(s) for review.`);
       await refreshWorkspaceAndBasis();
     } catch (error) {
@@ -282,21 +405,46 @@ export default function SupplierPricing() {
   };
 
   const handleQuickQuote = async () => {
+    if (workspaceRefreshPendingRef.current) {
+      toast('error', 'Supplier pricing is refreshing. Wait for it to finish, then choose a current link.');
+      return;
+    }
     if (!profile || !selectedVendorId || !quickQuote.linkId || !quickQuote.newCost.trim()) {
       toast('error', 'Supplier, linked Product, and quoted cost are required.');
       return;
     }
+    const currentLink = vendorLinks.find((link) => link.id === quickQuote.linkId);
+    const currentProduct = currentLink ? activeProductById.get(currentLink.product_id) : null;
+    if (!currentLink || !currentProduct) {
+      setQuickQuote(blankQuickQuote);
+      toast('error', 'The selected supplier link is no longer available. Refresh and choose a current link.');
+      return;
+    }
+    const workspaceRequestId = workspaceRequestRef.current;
+    const quickQuoteIntentId = quickQuoteIntentRef.current;
     setBusy(true);
     try {
-      const sourcePath = await ensurePdfStored();
+      const sourceEvidence = await ensurePdfStored();
+      if (
+        workspaceRequestRef.current !== workspaceRequestId
+        || workspaceRefreshPendingRef.current
+      ) {
+        setQuickQuote(blankQuickQuote);
+        toast('error', 'Supplier pricing changed while the PDF was uploading. Choose a current link and try again.');
+        return;
+      }
+      if (quickQuoteIntentRef.current !== quickQuoteIntentId) {
+        toast('error', 'Quick quote details changed while the PDF was uploading. Review the current details and stage again.');
+        return;
+      }
       const result = await stageSupplierPriceImport({
         vendorId: selectedVendorId,
         documentDate,
         ingestionMethod: 'quick_quote',
         formatVersion: 'crx-supplier-quick-quote-phase1b-v1',
-        sourceDocumentPath: sourcePath,
-        sourceDocumentName: sourcePdf?.name ?? null,
-        sourceDocumentMime: sourcePdf ? 'application/pdf' : null,
+        sourceDocumentPath: sourceEvidence.path,
+        sourceDocumentName: sourceEvidence.file?.name ?? null,
+        sourceDocumentMime: sourceEvidence.file ? 'application/pdf' : null,
         rows: [{
           product_supplier_link_id: quickQuote.linkId,
           new_cost: quickQuote.newCost,
@@ -311,7 +459,7 @@ export default function SupplierPricing() {
         idempotencyKey: stageImportIdem.getKey(),
       });
       stageImportIdem.resetKey();
-      setReview(result);
+      commitReview(result);
       toast('success', 'Quick quote staged for review. No sell price was changed.');
       await refreshWorkspaceAndBasis();
     } catch (error) {
@@ -332,7 +480,7 @@ export default function SupplierPricing() {
         idempotencyKey: approveImportIdem.getKey(),
       });
       approveImportIdem.resetKey();
-      setReview(result);
+      commitReview(result);
       setApproveOpen(false);
       toast('success', result.summary || `${result.approved_count ?? 0} supplier observation(s) approved.`);
       await refreshWorkspaceAndBasis();
@@ -358,7 +506,7 @@ export default function SupplierPricing() {
         idempotencyKey: rejectImportIdem.getKey(),
       });
       rejectImportIdem.resetKey();
-      setReview(result);
+      commitReview(result);
       setRejectOpen(false);
       setRejectReason('');
       toast('success', result.summary || 'Import rejected. No supplier observations were changed.');
@@ -395,7 +543,7 @@ export default function SupplierPricing() {
       correctionIdem.resetKey();
       setCorrectionRow(null);
       toast('success', result.summary || 'Correction recorded. The prior quote is superseded.');
-      if (review) setReview(await getSupplierPriceImport(review.id));
+      if (review) commitReview(await getSupplierPriceImport(review.id));
       await refreshWorkspaceAndBasis();
     } catch (error) {
       toast('error', sanitizeError(error));
@@ -405,19 +553,37 @@ export default function SupplierPricing() {
   };
 
   const openImport = async (importId: string) => {
+    const requestId = ++importRequestRef.current;
+    importRequestPendingRef.current = true;
     setBusy(true);
     try {
-      setReview(await getSupplierPriceImport(importId));
+      const result = await getSupplierPriceImport(importId);
+      if (importRequestRef.current !== requestId) return;
+      commitReview(result);
       setActiveTab('quotes');
     } catch (error) {
-      toast('error', sanitizeError(error));
+      if (importRequestRef.current === requestId) toast('error', sanitizeError(error));
     } finally {
-      setBusy(false);
+      if (importRequestRef.current === requestId) {
+        importRequestPendingRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
   const handleLinkSave = async () => {
+    if (workspaceRefreshPendingRef.current) {
+      toast('error', 'Supplier pricing is refreshing. Wait for it to finish before saving a link.');
+      return;
+    }
     if (!profile || !isAdmin) return;
+    const selectedProduct = workspace?.products.find((product) => product.id === linkForm.productId);
+    const selectedVendor = workspace?.vendors.find((vendor) => vendor.id === linkForm.vendorId);
+    if (!selectedProduct || !selectedVendor) {
+      setLinkForm(blankLink);
+      toast('error', 'The selected Product or supplier is no longer available. Refresh and choose current values.');
+      return;
+    }
     setBusy(true);
     try {
       await upsertProductSupplierLink({
@@ -437,7 +603,16 @@ export default function SupplierPricing() {
   };
 
   const handleAliasStage = async () => {
+    if (workspaceRefreshPendingRef.current) {
+      toast('error', 'Supplier pricing is refreshing. Wait for it to finish before staging a vendor alias.');
+      return;
+    }
     if (!profile || !aliasText.trim() || !aliasVendorId) return;
+    if (!workspace?.vendors.some((vendor) => vendor.id === aliasVendorId)) {
+      setAliasVendorId('');
+      toast('error', 'The selected supplier is no longer available. Refresh and choose a current supplier.');
+      return;
+    }
     setBusy(true);
     try {
       await stageVendorAlias({
@@ -497,6 +672,7 @@ export default function SupplierPricing() {
             value={selectedVendorId}
             onChange={(event) => {
               stageImportIdem.resetKey();
+              quickQuoteIntentRef.current += 1;
               setSelectedVendorId(event.target.value);
               setQuickQuote(blankQuickQuote);
             }}
@@ -509,6 +685,7 @@ export default function SupplierPricing() {
             value={documentDate}
             onChange={(event) => {
               stageImportIdem.resetKey();
+              quickQuoteIntentRef.current += 1;
               setDocumentDate(event.target.value);
             }}
           />
@@ -525,6 +702,7 @@ export default function SupplierPricing() {
               type="button"
               variant="secondary"
               icon={<FileText className="h-4 w-4" />}
+              disabled={busy}
               onClick={() => pdfInputRef.current?.click()}
             >
               {sourcePdf ? sourcePdf.name : 'Attach PDF for audit'}
@@ -576,6 +754,7 @@ export default function SupplierPricing() {
               value={quickQuote.linkId}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 const link = vendorLinks.find((item) => item.id === event.target.value);
                 setQuickQuote((current) => ({
                   ...current,
@@ -585,7 +764,7 @@ export default function SupplierPricing() {
               }}
               options={vendorLinks.map((link) => ({
                 value: link.id,
-                label: `${link.product_name} — ${link.supplier_sku || 'no supplier SKU'}`,
+                label: `${productOptionLabel(activeProductById.get(link.product_id)!)} — Supplier SKU: ${link.supplier_sku || 'not recorded'}`,
               }))}
               placeholder="Choose linked Product"
             />
@@ -596,6 +775,7 @@ export default function SupplierPricing() {
               value={quickQuote.newCost}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({ ...current, newCost: event.target.value }));
               }}
             />
@@ -605,6 +785,7 @@ export default function SupplierPricing() {
               value={quickQuote.effectiveDate}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({ ...current, effectiveDate: event.target.value }));
               }}
             />
@@ -613,6 +794,7 @@ export default function SupplierPricing() {
               value={quickQuote.priceKind}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({
                   ...current,
                   priceKind: event.target.value as typeof current.priceKind,
@@ -625,6 +807,7 @@ export default function SupplierPricing() {
               value={quickQuote.priceUnit}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({ ...current, priceUnit: event.target.value }));
               }}
             />
@@ -634,11 +817,12 @@ export default function SupplierPricing() {
               value={quickQuote.packageQuantity}
               onChange={(event) => {
                 stageImportIdem.resetKey();
+                quickQuoteIntentRef.current += 1;
                 setQuickQuote((current) => ({ ...current, packageQuantity: event.target.value }));
               }}
             />
           </div>
-          <Button className="mt-4" type="button" loading={busy} onClick={handleQuickQuote}>
+          <Button className="mt-4" type="button" loading={busy} disabled={loading || busy} onClick={handleQuickQuote}>
             Stage quick quote
           </Button>
         </Card>
@@ -743,7 +927,8 @@ export default function SupplierPricing() {
             <button
               key={item.id}
               type="button"
-              className="flex w-full items-center justify-between rounded-lg border border-gray-200 p-3 text-left hover:bg-gray-50"
+              disabled={busy || loading}
+              className="flex w-full items-center justify-between rounded-lg border border-gray-200 p-3 text-left hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => void openImport(item.id)}
             >
               <span>
@@ -772,6 +957,9 @@ export default function SupplierPricing() {
           options={productOptions}
           placeholder="Choose Product"
         />
+        {workspace?.products.find((product) => product.id === selectedProductId) && (
+          <ProductOptionDetails product={workspace.products.find((product) => product.id === selectedProductId)!} />
+        )}
       </Card>
       <Card>
         {selectedEvidence ? (
@@ -906,7 +1094,7 @@ export default function SupplierPricing() {
             <label className="flex items-center gap-2 self-end pb-3 text-sm font-medium text-secondary"><input type="checkbox" checked={linkForm.isPreferred} onChange={(event) => { linkIdem.resetKey(); setLinkForm((current) => ({ ...current, isPreferred: event.target.checked })); }} />Preferred supplier</label>
           </div>
           <p className="mt-3 text-xs text-secondary">Direction: supplier package cost ÷ inventory units per supplier unit = normalized cost per {linkProduct?.inventory_unit || 'product inventory unit'}. The conversion unit is locked to the product.</p>
-          <Button className="mt-4" type="button" icon={<Link2 className="h-4 w-4" />} loading={busy} onClick={handleLinkSave}>Save confirmed link</Button>
+          <Button className="mt-4" type="button" icon={<Link2 className="h-4 w-4" />} loading={busy} disabled={loading || busy} onClick={handleLinkSave}>Save confirmed link</Button>
         </Card>
       )}
       <Card>
@@ -935,7 +1123,7 @@ export default function SupplierPricing() {
             <Input label="Alias spelling" value={aliasText} onChange={(event) => { aliasStageIdem.resetKey(); setAliasText(event.target.value); }} />
             <Select label="Proposed canonical vendor" value={aliasVendorId} onChange={(event) => { aliasStageIdem.resetKey(); setAliasVendorId(event.target.value); }} options={vendorOptions} placeholder="Choose canonical vendor" />
           </div>
-          <Button className="mt-4" type="button" loading={busy} onClick={handleAliasStage}>Stage for review</Button>
+          <Button className="mt-4" type="button" loading={busy} disabled={loading || busy} onClick={handleAliasStage}>Stage for review</Button>
         </Card>
       )}
       <Card>
@@ -966,7 +1154,7 @@ export default function SupplierPricing() {
         title="Supplier"
         accent="Pricing"
         subtitle="Manual supplier evidence only. Observation approval changes no sell prices; cost-basis changes require a separate preview and approval."
-        actions={<Button type="button" variant="secondary" icon={<RefreshCw className="h-4 w-4" />} loading={loading} onClick={() => void refreshWorkspaceAndBasis()}>Refresh</Button>}
+        actions={<Button type="button" variant="secondary" aria-busy={loading} icon={<RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />} onClick={() => void refreshWorkspaceAndBasis()}>Refresh</Button>}
       />
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
         <strong>No OCR or AI extraction:</strong> staff transcribe supplier PDFs into the protected .xlsx sheet. PDFs are retained only as audit evidence.

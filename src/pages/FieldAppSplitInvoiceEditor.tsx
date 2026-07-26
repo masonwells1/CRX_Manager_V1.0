@@ -18,6 +18,7 @@ import { pctsToMicro } from '../lib/splitVectorMath';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { localToday } from '../lib/dateUtils';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../lib/splitBillingSetting';
+import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 
 /**
  * Per-line split-billing EDITOR (flag-gated, OFF by default).
@@ -76,8 +77,7 @@ interface FieldOption {
   field_name: string;
 }
 
-interface ProductOption {
-  id: string;
+interface ProductOption extends ProductOptionPresentationModel {
   product_name: string;
 }
 
@@ -254,7 +254,7 @@ export default function FieldAppSplitInvoiceEditor() {
       try {
         const [flds, prods, svcs, jbs] = await Promise.all([
           supabase.from('fields').select('id, field_name').eq('is_active', true).order('field_name').limit(1000),
-          supabase.from('products').select('id, product_name').eq('is_active', true).order('product_name').limit(1000),
+          supabase.from('products').select('id, product_name, sku, unit_size, packaging_variant, container_size, container_unit, inventory_unit, return_policy, is_full_tote_only, product_family:product_families(name)').eq('is_active', true).order('product_name').limit(1000),
           supabase.from('application_services').select('id, name').eq('is_active', true).order('sort_order'),
           supabase
             .from('jobs')
@@ -267,17 +267,35 @@ export default function FieldAppSplitInvoiceEditor() {
             .limit(200),
         ]);
         if (cancelled) return;
-        setFieldOptions(((flds.data as Array<{ id: string; field_name: string | null }> | null) ?? []).map((f) => ({ id: f.id, field_name: f.field_name || 'Unnamed field' })));
-        setProductOptions(((prods.data as Array<{ id: string; product_name: string | null }> | null) ?? []).map((p) => ({ id: p.id, product_name: p.product_name || 'Unnamed product' })));
-        setServiceOptions(((svcs.data as Array<{ id: string; name: string | null }> | null) ?? []).map((s) => ({ id: s.id, name: s.name || 'Unnamed service' })));
-        setJobOptions(
-          ((jbs.data as Array<{ id: string; job_number: string | null; job_date: string | null; customer: { farm_name?: string | null } | null }> | null) ?? []).map((j) => ({
-            id: j.id,
-            label: `${j.job_number || 'Job'}${j.job_date ? ` — ${j.job_date}` : ''}${j.customer?.farm_name ? ` (${j.customer.farm_name})` : ''}`,
-          })),
-        );
+        const pickerErrors = [flds.error, prods.error, svcs.error, jbs.error].filter(Boolean);
+        if (pickerErrors.length > 0) {
+          pickerErrors.forEach((error) => {
+            Sentry.captureException(error, { extra: { context: 'load_field_app_split_invoice_pickers' } });
+          });
+          toast('error', 'Some field application invoice pickers could not be loaded.');
+        }
+        if (!flds.error) {
+          setFieldOptions(((flds.data as Array<{ id: string; field_name: string | null }> | null) ?? []).map((f) => ({ id: f.id, field_name: f.field_name || 'Unnamed field' })));
+        }
+        if (!prods.error) {
+          setProductOptions(((prods.data as Array<ProductOption> | null) ?? []).map((p) => ({ ...p, product_name: p.product_name || 'Unnamed product' })));
+        }
+        if (!svcs.error) {
+          setServiceOptions(((svcs.data as Array<{ id: string; name: string | null }> | null) ?? []).map((s) => ({ id: s.id, name: s.name || 'Unnamed service' })));
+        }
+        if (!jbs.error) {
+          setJobOptions(
+            ((jbs.data as Array<{ id: string; job_number: string | null; job_date: string | null; customer: { farm_name?: string | null } | null }> | null) ?? []).map((j) => ({
+              id: j.id,
+              label: `${j.job_number || 'Job'}${j.job_date ? ` — ${j.job_date}` : ''}${j.customer?.farm_name ? ` (${j.customer.farm_name})` : ''}`,
+            })),
+          );
+        }
       } catch (err) {
-        if (!cancelled) toast('error', sanitizeError(err));
+        if (!cancelled) {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_field_app_split_invoice_pickers' } });
+          toast('error', sanitizeError(err));
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -1040,8 +1058,9 @@ export default function FieldAppSplitInvoiceEditor() {
                             className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
                           >
                             <option value="">Select a product…</option>
-                            {productOptions.map((p) => (<option key={p.id} value={p.id}>{p.product_name}</option>))}
+                            {productOptions.map((p) => (<option key={p.id} value={p.id}>{productOptionLabel(p)}</option>))}
                           </select>
+                          {productOptions.find((p) => p.id === l.product_id) && <ProductOptionDetails product={productOptions.find((p) => p.id === l.product_id)!} />}
                         </label>
                         <label className="block">
                           <span className="text-xs font-medium text-secondary">Total quantity</span>

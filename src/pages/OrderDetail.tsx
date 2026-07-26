@@ -35,6 +35,7 @@ import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
+import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
 /** Temporary new item (not yet saved to DB — has no real id) */
@@ -291,7 +292,7 @@ export default function OrderDetail() {
 
   // Fetch products + inventory when entering edit mode (lazy load — only when needed)
   const fetchProducts = useCallback(async () => {
-    const productsRes = await supabase.from('products').select('*').eq('is_active', true).order('product_name');
+    const productsRes = await supabase.from('products').select('*, product_family:product_families(name)').eq('is_active', true).order('product_name');
     const { data: positionData, error: positionError } = await supabase.rpc('get_inventory_position');
 
     if (productsRes.error) {
@@ -2079,6 +2080,7 @@ export default function OrderDetail() {
                       <span className="text-xs text-secondary ml-2">(already in order)</span>
                     )}
                   </div>
+                  <ProductOptionDetails product={product} />
                   {product.manufacturer && (
                     <div className="text-xs text-secondary mt-1">{product.manufacturer}</div>
                   )}

@@ -2,12 +2,25 @@
 
 **Owner:** Mason Wells
 **Approved:** 2026-07-22
-**Status:** ARMED, NOT STARTED
+**Status:** Stage A live and dormant; Stage B1 in progress. Stage C remains parked for Mason's row-by-row classification approval and exact checksum.
 **Orchestrator:** GPT-5.6 Sol, high reasoning
 **Coordination lane:** this contract is persisted on the dedicated `codex/supplier-pricing-phase3` docs branch
-**Implementation lane:** after reconciliation, create a different clean isolated `codex/` worktree from the exact post-#213 `origin/main`; never worktree `7582`
+**Current B1 implementation lane:** isolated branch `codex/supplier-pricing-phase3-stage-b1`; never reuse the coordination/docs branch or worktree `7582`
 
-## Mission
+## Current Runner Instruction — Stage B1
+
+Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, or create the pre-Stage-A Goal.** Continue only from the active Stage B coordination packet and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The current authorized outcome is a green, review-resolved B1 PR parked before merge; B2 remains locked until B1 is accepted and landed.
+
+The active B1 deny set remains explicit:
+
+- do not merge the B1 PR or start B2;
+- do not apply a live migration or mutate live Product, family, policy, return, credit, inventory, or pricing data;
+- do not enable or change `supplier_cost_basis_enabled`; and
+- do not touch or reuse worktree `7582`.
+
+## Historical Mission — Completed Stage A Context
+
+The mission and launch language in this section records the pre-Stage-A authorization that produced the now-live dormant Stage A foundation. It is retained for provenance and must not be executed again.
 
 After PR #213 is merged and fully reconciled across GitHub, repo artifacts, the live migration ledger, and Graphify, build the smallest complete Phase 3 families-and-return-policy system without merging Product rows or changing live data.
 
@@ -23,7 +36,7 @@ The unattended run does **not** mean "Phase 3 live." It must stop before merge, 
 
 The detailed approved scope is in `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`.
 
-## Watcher State: Fail Closed
+## Historical Watcher State: Fail Closed — Completed; Do Not Restart
 
 While PR #213 is not reconciled, the fresh task is a read-only watcher running in one durable thread on a 15-minute heartbeat. It may poll #213, fetch remote refs, and inspect repo/live read-only state. It must not edit files, create the Goal, repair or rebase #213, resolve conflicts, respond to CodeRabbit, or interpret individual green checks as a merge.
 
@@ -54,7 +67,7 @@ Any failed or ambiguous reconciliation condition prevents Goal creation. After t
 
 If `main` advances after the start packet, stop before further edits, refresh overlap and Graphify, and continue only through a clean safe fast-forward or worktree recreation. Never use destructive recovery.
 
-## Authorization Boundary
+## Historical Authorization Boundary — Superseded by the Active Stage B Handoff
 
 The hands-off run may:
 
@@ -81,13 +94,13 @@ It may not:
 
 ## Staged Delivery Contract
 
-### Stage A — schema and database enforcement
+### Stage A — schema and database enforcement (live; dormant)
 
-Build a migration that is compatible with the current UI: `product_families`, nullable Product-family metadata, an `unknown` safe default, one reusable return-policy guard, RPC enforcement, trigger backstops, RLS/grants, and rollback-only disposable proof. Do not classify Product rows.
+The completed Stage A deliverable added a migration compatible with the then-current UI: `product_families`, nullable Product-family metadata, an `unknown` safe default, one reusable return-policy guard, RPC enforcement, trigger backstops, RLS/grants, and rollback-only disposable proof. It did not classify Product rows.
 
-Open a protected Stage A PR after clean Fable and exact-SHA Sol reviews, wait for required checks and Vercel, read CodeRabbit, and fix every real finding. Any code change requires rerunning the owning tests plus fresh exact-commit Fable and Sol reviews. Park only when the PR is green and review-resolved. Merging the PR and applying its migration remain explicit Mason gates.
+The protected Stage A PR passed the required review and proof sequence before Mason authorized its merge and live migration. Those gates are historical evidence, not instructions to open or apply another Stage A change.
 
-### Stage B — exact-SKU Product-picker UI
+### Stage B — exact-SKU Product-picker UI (B1 in progress)
 
 Only after Stage A is merged and its live migration is explicitly approved and proven, refresh from `main` and rerun the repo-wide Graphify/source Product-selector inventory. Implement the shared Product-option presentation across every included transactional selector in the approved plan.
 
@@ -130,7 +143,9 @@ Only one writer may edit a given stage at a time. Fable and the independent Sol 
 - Preflight and postflight evidence both show the global cost-basis flag false.
 - Final Fable and Sol verdicts are clean on the same exact commit.
 
-## Goal Start Instruction
+## Historical Goal Start Instruction — Already Satisfied; Do Not Execute
+
+The following idempotent Goal-start sequence is retained only to explain how the original Phase 3 Goal was created. Current runners must use the Stage B1 instruction near the top of this document instead.
 
 Once, and only once, a heartbeat returns `READY`, perform an idempotent start sequence keyed to this contract (`supplier-pricing-phase3-after-pr213`). Do not rely on read-then-create alone. Use the platform's conditional Goal creation/unfinished-Goal uniqueness guard so concurrent or repeated heartbeats can create at most one Goal; after any create rejection, re-read Goal state and accept it only when the active Goal matches this contract key and objective. Verify matching Goal ownership, and only then disable this watcher. If creation fails without a matching active Goal, leave the watcher active and report `FAILED`; never disable first and never create a duplicate.
 

@@ -1,6 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockToast,
@@ -9,6 +9,12 @@ const {
   mockGetBasisWorkspace,
   mockPreviewPricing,
   mockResetIdempotencyKey,
+  mockSentryCaptureException,
+  mockStageSupplierPriceImport,
+  mockStageVendorAlias,
+  mockUploadSupplierSourcePdf,
+  mockUpsertProductSupplierLink,
+  mockParseSupplierQuoteWorkbook,
 } = vi.hoisted(() => ({
   mockToast: vi.fn(),
   mockGetWorkspace: vi.fn(),
@@ -16,6 +22,12 @@ const {
   mockGetBasisWorkspace: vi.fn(),
   mockPreviewPricing: vi.fn(),
   mockResetIdempotencyKey: vi.fn(),
+  mockSentryCaptureException: vi.fn(),
+  mockStageSupplierPriceImport: vi.fn(),
+  mockStageVendorAlias: vi.fn(),
+  mockUploadSupplierSourcePdf: vi.fn(),
+  mockUpsertProductSupplierLink: vi.fn(),
+  mockParseSupplierQuoteWorkbook: vi.fn(),
 }));
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -39,10 +51,10 @@ vi.mock('../lib/supplierPricing', async () => {
     getSupplierQuoteSheet: vi.fn(),
     approveSupplierPriceImport: vi.fn(),
     reviewVendorAlias: vi.fn(),
-    stageSupplierPriceImport: vi.fn(),
-    stageVendorAlias: vi.fn(),
-    uploadSupplierSourcePdf: vi.fn(),
-    upsertProductSupplierLink: vi.fn(),
+    stageSupplierPriceImport: mockStageSupplierPriceImport,
+    stageVendorAlias: mockStageVendorAlias,
+    uploadSupplierSourcePdf: mockUploadSupplierSourcePdf,
+    upsertProductSupplierLink: mockUpsertProductSupplierLink,
   };
 });
 
@@ -60,6 +72,15 @@ vi.mock('../lib/productPricing', async () => {
   };
 });
 
+vi.mock('../lib/supplierPricingWorkbook', async () => {
+  const actual = await vi.importActual<typeof import('../lib/supplierPricingWorkbook')>('../lib/supplierPricingWorkbook');
+  return { ...actual, parseSupplierQuoteWorkbook: mockParseSupplierQuoteWorkbook };
+});
+
+vi.mock('../lib/sentry', () => ({
+  Sentry: { captureException: mockSentryCaptureException },
+}));
+
 import SupplierPricing from './SupplierPricing';
 
 function renderSupplierPricing() {
@@ -70,9 +91,62 @@ function renderSupplierPricing() {
   );
 }
 
+function makeImportSummary(
+  id: string,
+  vendorName: string,
+  status: 'needs_review' | 'approved' = 'needs_review',
+) {
+  return {
+    id,
+    vendor_id: `vendor-${id}`,
+    vendor_name: vendorName,
+    document_date: '2026-07-18',
+    ingestion_method: 'quote_sheet' as const,
+    status,
+    row_count: 1,
+    eligible_row_count: status === 'needs_review' ? 1 : 0,
+    approved_observation_count: status === 'approved' ? 1 : 0,
+    source_document_name: `${id}.pdf`,
+    created_at: '2026-07-18T12:00:00Z',
+  };
+}
+
+function makeImportDetail(
+  id: string,
+  vendorName: string,
+  productName: string,
+  status: 'needs_review' | 'approved' = 'needs_review',
+) {
+  return {
+    ...makeImportSummary(id, vendorName, status),
+    format_version: 'crx-supplier-quote-phase1b-v1',
+    rows: [{
+      id: `row-${id}`,
+      row_number: 1,
+      product_id: `product-${id}`,
+      product_name: productName,
+      product_supplier_link_id: `link-${id}`,
+      supplier_sku: `SKU-${id}`,
+      supplier_product_name: productName,
+      cost_cents: 12_500n,
+      price_unit: 'case',
+      package_quantity: 1,
+      effective_from: '2026-07-18',
+      effective_to: null,
+      price_kind: 'quote',
+      row_status: status === 'approved' ? 'approved' as const : 'new' as const,
+      validation_errors: [],
+      observation_id: status === 'approved' ? `observation-${id}` : null,
+    }],
+  };
+}
+
 describe('SupplierPricing page', () => {
+  afterEach(() => cleanup());
+
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUploadSupplierSourcePdf.mockResolvedValue('supplier-evidence/source.pdf');
     mockGetBasisWorkspace.mockResolvedValue({
       enabled: false,
       product: {
@@ -142,12 +216,703 @@ describe('SupplierPricing page', () => {
 
     await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('product-1'));
     const workspaceLoads = mockGetWorkspace.mock.calls.length;
-    const basisLoads = mockGetBasisWorkspace.mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => {
       expect(mockGetWorkspace).toHaveBeenCalledTimes(workspaceLoads + 1);
-      expect(mockGetBasisWorkspace).toHaveBeenCalledTimes(basisLoads + 1);
     });
+  });
+
+  it('keeps the workbook supplier selected through its immediate workspace refresh', async () => {
+    const vendors = [
+      { id: 'vendor-a', name: 'Supplier A' },
+      { id: 'vendor-b', name: 'Supplier B' },
+    ];
+    const stagedImport = {
+      ...makeImportDetail('import-b', 'Supplier B', 'Workbook Product'),
+      vendor_id: 'vendor-b',
+    };
+    mockGetWorkspace
+      .mockResolvedValueOnce({
+        vendors,
+        products: [],
+        links: [],
+        imports: [],
+        aliases: [],
+        evidence: [],
+      })
+      .mockResolvedValueOnce({
+        vendors,
+        products: [],
+        links: [],
+        imports: [makeImportSummary('import-b', 'Supplier B')],
+        aliases: [],
+        evidence: [],
+      });
+    mockParseSupplierQuoteWorkbook.mockResolvedValue({
+      vendorId: 'vendor-b',
+      formatVersion: 'crx-supplier-quote-phase1b-v1',
+      rows: [],
+    });
+    mockStageSupplierPriceImport.mockResolvedValue(stagedImport);
+    mockGetImport.mockResolvedValue(stagedImport);
+
+    const { container } = renderSupplierPricing();
+    const supplierSelect = await screen.findByLabelText('Supplier');
+    expect(supplierSelect).toHaveValue('vendor-a');
+    const workbookInput = container.querySelector<HTMLInputElement>('input[accept^=".xlsx"]');
+    expect(workbookInput).not.toBeNull();
+    fireEvent.change(workbookInput!, {
+      target: {
+        files: [new File(['workbook'], 'supplier-b.xlsx', {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        })],
+      },
+    });
+
+    await waitFor(() => expect(supplierSelect).toHaveValue('vendor-b'));
+    expect(mockStageSupplierPriceImport).toHaveBeenCalledWith(expect.objectContaining({ vendorId: 'vendor-b' }));
+  });
+
+  it('keeps the latest import detail when rapid opens resolve out of order', async () => {
+    const importA = makeImportDetail('import-a', 'Supplier A', 'Product from A');
+    const importB = makeImportDetail('import-b', 'Supplier B', 'Product from B');
+    let resolveA!: (value: typeof importA) => void;
+    let resolveB!: (value: typeof importB) => void;
+    const pendingA = new Promise<typeof importA>((resolve) => { resolveA = resolve; });
+    const pendingB = new Promise<typeof importB>((resolve) => { resolveB = resolve; });
+
+    mockGetWorkspace.mockResolvedValue({
+      vendors: [],
+      products: [],
+      links: [],
+      imports: [
+        makeImportSummary('import-a', 'Supplier A'),
+        makeImportSummary('import-b', 'Supplier B'),
+      ],
+      aliases: [],
+      evidence: [],
+    });
+    mockGetImport.mockImplementation((id: string) => id === 'import-a' ? pendingA : pendingB);
+
+    renderSupplierPricing();
+    const openA = await screen.findByRole('button', { name: /Supplier A/ });
+    const openB = screen.getByRole('button', { name: /Supplier B/ });
+    act(() => {
+      openA.click();
+      openB.click();
+    });
+    expect(mockGetImport).toHaveBeenNthCalledWith(1, 'import-a');
+    expect(mockGetImport).toHaveBeenNthCalledWith(2, 'import-b');
+
+    await act(async () => {
+      resolveB(importB);
+      await pendingB;
+    });
+    expect(await screen.findAllByText('Product from B')).toHaveLength(2);
+
+    await act(async () => {
+      resolveA(importA);
+      await pendingA;
+    });
+    expect(screen.getAllByText('Product from B')).toHaveLength(2);
+    expect(screen.queryAllByText('Product from A')).toHaveLength(0);
+  });
+
+  it('invalidates a pending import on refresh and reloads a same-ID status change', async () => {
+    const importA = makeImportDetail('import-a', 'Supplier A', 'Product from A');
+    const importBNeedsReview = makeImportDetail('import-b', 'Supplier B', 'Product from B');
+    const importBApproved = makeImportDetail('import-b', 'Supplier B', 'Product from B', 'approved');
+    const initialWorkspace = {
+      vendors: [],
+      products: [],
+      links: [],
+      imports: [
+        makeImportSummary('import-a', 'Supplier A'),
+        makeImportSummary('import-b', 'Supplier B'),
+      ],
+      aliases: [],
+      evidence: [],
+    };
+    const withoutA = {
+      ...initialWorkspace,
+      imports: [makeImportSummary('import-b', 'Supplier B')],
+    };
+    const withBApproved = {
+      ...initialWorkspace,
+      imports: [makeImportSummary('import-b', 'Supplier B', 'approved')],
+    };
+    let resolveA!: (value: typeof importA) => void;
+    const pendingA = new Promise<typeof importA>((resolve) => { resolveA = resolve; });
+    let importBLoads = 0;
+    mockGetWorkspace
+      .mockResolvedValueOnce(initialWorkspace)
+      .mockResolvedValueOnce(withoutA)
+      .mockResolvedValueOnce(withBApproved);
+    mockGetImport.mockImplementation((id: string) => {
+      if (id === 'import-a') return pendingA;
+      importBLoads += 1;
+      return Promise.resolve(importBLoads === 1 ? importBNeedsReview : importBApproved);
+    });
+
+    renderSupplierPricing();
+    fireEvent.click(await screen.findByRole('button', { name: /Supplier A/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Supplier A/ })).not.toBeInTheDocument());
+
+    await act(async () => {
+      resolveA(importA);
+      await pendingA;
+    });
+    expect(screen.queryAllByText('Product from A')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /Supplier B/ }));
+    expect(await screen.findAllByText('Product from B')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Approve selected observations' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Approve selected observations' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Reject import' })).not.toBeInTheDocument();
+    });
+    expect(importBLoads).toBe(2);
+    expect(screen.getAllByText('approved').length).toBeGreaterThan(0);
+  });
+
+  it('clears an already-populated workspace when the current refresh fails', async () => {
+    const populated = {
+      vendors: [{ id: 'vendor-1', name: 'Current vendor' }],
+      products: [{ id: '11111111-1111-4111-8111-111111111111', product_name: 'Current Product', sku: 'CUR-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(populated).mockRejectedValueOnce(new Error('metadata hydration failed'));
+
+    renderSupplierPricing();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
+    const productSelect = screen.getByLabelText('Product');
+    await waitFor(() => expect(productSelect).toHaveValue(populated.products[0].id));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'metadata hydration failed'));
+    expect(mockSentryCaptureException).toHaveBeenCalled();
+    expect(productSelect).toHaveValue('');
+    expect(screen.queryByRole('option', { name: /Current Product/ })).not.toBeInTheDocument();
+  });
+
+  it('preserves a refreshed workspace when only the current import review refetch fails', async () => {
+    const workspace = {
+      vendors: [{ id: 'vendor-1', name: 'Current vendor' }],
+      products: [{ id: '11111111-1111-4111-8111-111111111111', product_name: 'Current Product', sku: 'CUR-1', inventory_unit: 'gallon' }],
+      links: [],
+      imports: [makeImportSummary('import-1', 'Current vendor')],
+      aliases: [],
+      evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValue(workspace);
+    mockGetImport
+      .mockResolvedValueOnce(makeImportDetail('import-1', 'Current vendor', 'Current Product'))
+      .mockRejectedValueOnce(new Error('review refetch unavailable'));
+
+    renderSupplierPricing();
+    fireEvent.click(await screen.findByRole('button', { name: /Current vendor/ }));
+    expect(await screen.findByRole('button', { name: 'Approve selected observations' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'review refetch unavailable'));
+    expect(mockSentryCaptureException).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ extra: { context: 'refresh_supplier_price_import' } }),
+    );
+    expect(screen.queryByRole('button', { name: 'Approve selected observations' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Current vendor/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Comparison' }));
+    const productSelect = screen.getByLabelText('Product');
+    await waitFor(() => expect(productSelect).toHaveValue(workspace.products[0].id));
+    expect(screen.getByRole('option', { name: /Current Product/ })).toBeInTheDocument();
+  });
+
+  it('ignores stale workspace completions after a newer refresh wins', async () => {
+    const newest = {
+      vendors: [],
+      products: [{ id: '22222222-2222-4222-8222-222222222222', product_name: 'Newest Product', sku: 'NEW-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    let resolveFirst!: (value: typeof newest) => void;
+    const first = new Promise<typeof newest>((resolve) => { resolveFirst = resolve; });
+    mockGetWorkspace.mockImplementationOnce(() => first).mockResolvedValueOnce(newest);
+
+    renderSupplierPricing();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Comparison' }));
+    expect(await screen.findByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirst({
+        vendors: [],
+        products: [{ id: '33333333-3333-4333-8333-333333333333', product_name: 'Stale Product', sku: 'OLD-1', inventory_unit: 'gallon' }],
+        links: [], imports: [], aliases: [], evidence: [],
+      });
+      await first;
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('option', { name: /Stale Product/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+    });
+  });
+
+  it('ignores a stale workspace failure after a newer refresh succeeds', async () => {
+    let rejectFirst!: (reason?: unknown) => void;
+    const first = new Promise<never>((_resolve, reject) => { rejectFirst = reject; });
+    const newest = {
+      vendors: [],
+      products: [{ id: '66666666-6666-4666-8666-666666666666', product_name: 'Newest Product', sku: 'NEW-2', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockImplementationOnce(() => first).mockResolvedValueOnce(newest);
+
+    renderSupplierPricing();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Comparison' }));
+    expect(await screen.findByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+
+    await act(async () => {
+      rejectFirst(new Error('stale hydration failure'));
+      await first.catch(() => undefined);
+    });
+    await waitFor(() => {
+      expect(mockToast).not.toHaveBeenCalledWith('error', 'stale hydration failure');
+      expect(mockSentryCaptureException).not.toHaveBeenCalled();
+      expect(screen.getByRole('option', { name: /Newest Product/ })).toBeInTheDocument();
+    });
+  });
+
+  it('replaces selections that no longer belong to a successful refreshed workspace', async () => {
+    const initial = {
+      vendors: [{ id: 'vendor-old', name: 'Old vendor' }],
+      products: [{ id: '44444444-4444-4444-8444-444444444444', product_name: 'Old Product', sku: 'OLD-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = {
+      vendors: [{ id: 'vendor-new', name: 'New vendor' }],
+      products: [{ id: '55555555-5555-4555-8555-555555555555', product_name: 'New Product', sku: 'NEW-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+
+    renderSupplierPricing();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
+    const productSelect = screen.getByLabelText('Product');
+    await waitFor(() => expect(productSelect).toHaveValue(initial.products[0].id));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(productSelect).toHaveValue(refreshed.products[0].id));
+  });
+
+  it('loads cost basis exactly once for the final reconciled Product after refresh', async () => {
+    const initial = {
+      vendors: [],
+      products: [{ id: 'basis-old', product_name: 'Old Basis Product', sku: 'BASIS-OLD', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = {
+      vendors: [],
+      products: [{ id: 'basis-new', product_name: 'New Basis Product', sku: 'BASIS-NEW', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+
+    renderSupplierPricing();
+    await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('basis-old'));
+    mockGetBasisWorkspace.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(mockGetBasisWorkspace).toHaveBeenCalledWith('basis-new'));
+    expect(mockGetBasisWorkspace).toHaveBeenCalledTimes(1);
+    expect(mockGetBasisWorkspace).not.toHaveBeenCalledWith('basis-old');
+  });
+
+  it('reconciles every stale vendor/product/link form ID before a refreshed workspace can submit it', async () => {
+    const oldWorkspace = {
+      vendors: [{ id: 'vendor-old', name: 'Old vendor' }],
+      products: [{ id: '77777777-7777-4777-8777-777777777777', product_name: 'Old Product', sku: 'OLD-1', inventory_unit: 'gallon' }],
+      links: [{
+        id: 'link-old', product_id: '77777777-7777-4777-8777-777777777777', product_name: 'Old Product',
+        vendor_id: 'vendor-old', vendor_name: 'Old vendor', supplier_sku: 'OLD-SKU', supplier_product_name: 'Old Product',
+        supplier_uom: 'case', supplier_pack_description: null, inventory_units_per_supplier_unit: 1,
+        conversion_unit: 'gallon', comparison_status: 'comparable' as const, comparison_note: null,
+        link_status: 'confirmed' as const, is_reusable: true, is_preferred: false, is_active: true,
+      }],
+      imports: [], aliases: [], evidence: [],
+    };
+    const refreshedWorkspace = {
+      vendors: [{ id: 'vendor-new', name: 'New vendor' }],
+      products: [{ id: '88888888-8888-4888-8888-888888888888', product_name: 'New Product', sku: 'NEW-1', inventory_unit: 'gallon' }],
+      links: [], imports: [], aliases: [], evidence: [],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(oldWorkspace).mockResolvedValueOnce(refreshedWorkspace);
+
+    renderSupplierPricing();
+    await screen.findByRole('option', { name: /Old Product/ });
+    fireEvent.change(screen.getByLabelText('Linked Product'), { target: { value: 'link-old' } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Product links/ }));
+    fireEvent.change(screen.getByLabelText('Product'), { target: { value: oldWorkspace.products[0].id } });
+    fireEvent.change(screen.getByLabelText('Supplier'), { target: { value: 'vendor-old' } });
+    fireEvent.change(screen.getByLabelText('Supplier SKU'), { target: { value: 'OLD-SKU' } });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Vendor aliases/ }));
+    fireEvent.change(screen.getByLabelText('Alias spelling'), { target: { value: 'Old alias' } });
+    fireEvent.change(screen.getByLabelText('Proposed canonical vendor'), { target: { value: 'vendor-old' } });
+
+    mockUpsertProductSupplierLink.mockClear();
+    mockStageSupplierPriceImport.mockClear();
+    mockStageVendorAlias.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.getByLabelText('Proposed canonical vendor')).toHaveValue(''));
+
+    fireEvent.click(screen.getByRole('tab', { name: /Product links/ }));
+    expect(screen.getByLabelText('Product')).toHaveValue('');
+    expect(screen.getByLabelText('Supplier')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Save confirmed link' }));
+    expect(mockUpsertProductSupplierLink).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Quote review' }));
+    expect(screen.getByLabelText('Linked Product')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Vendor aliases/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
+    expect(mockStageVendorAlias).not.toHaveBeenCalled();
+  });
+
+  it('removes a Quick Quote link when its Product disappears but the link remains', async () => {
+    const product = {
+      id: '99999999-9999-4999-8999-999999999999',
+      product_name: 'Duplicate Name',
+      sku: 'EXACT-SKU',
+      inventory_unit: 'gallon',
+    };
+    const link = {
+      id: 'link-still-returned',
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: 'SUP-1',
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    };
+    const initial = {
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [product],
+      links: [link],
+      imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = {
+      ...initial,
+      products: [],
+      links: [link],
+    };
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+
+    renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    expect(screen.getByRole('option', { name: /SKU: EXACT-SKU.*Supplier SKU: SUP-1/ })).toBeInTheDocument();
+    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+
+    mockStageSupplierPriceImport.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(linkedProduct).toHaveValue(''));
+    expect(screen.queryByRole('option', { name: /EXACT-SKU/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+  });
+
+  it('blocks Quick Quote staging while a refresh that removes its Product is unresolved', async () => {
+    const product = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      product_name: 'Refresh Race Product',
+      sku: 'RACE-SKU',
+      inventory_unit: 'gallon',
+    };
+    const link = {
+      id: 'link-refresh-race',
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: 'RACE-SUP',
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    };
+    const initial = {
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [product],
+      links: [link],
+      imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = { ...initial, products: [], links: [link] };
+    let resolveRefresh: ((workspace: typeof refreshed) => void) | undefined;
+    const pendingRefresh = new Promise<typeof refreshed>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockReturnValueOnce(pendingRefresh);
+
+    renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+
+    mockStageSupplierPriceImport.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    const stageButton = screen.getByRole('button', { name: 'Stage quick quote' });
+    expect(stageButton).toBeDisabled();
+    fireEvent.click(stageButton);
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveRefresh?.(refreshed);
+      await pendingRefresh;
+    });
+    await waitFor(() => expect(linkedProduct).toHaveValue(''));
+    expect(stageButton).toBeEnabled();
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+  });
+
+  it('cancels Quick Quote staging when Refresh removes its Product during PDF upload', async () => {
+    const product = {
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      product_name: 'Upload Race Product',
+      sku: 'UPLOAD-RACE',
+      inventory_unit: 'gallon',
+    };
+    const link = {
+      id: 'link-upload-race',
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: 'UPLOAD-SUP',
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    };
+    const initial = {
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [product],
+      links: [link],
+      imports: [], aliases: [], evidence: [],
+    };
+    const refreshed = { ...initial, products: [], links: [link] };
+    let resolveUpload!: (path: string) => void;
+    const pendingUpload = new Promise<string>((resolve) => { resolveUpload = resolve; });
+    mockGetWorkspace.mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
+    mockUploadSupplierSourcePdf.mockReturnValueOnce(pendingUpload);
+
+    const { container } = renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+    const pdfInput = container.querySelector<HTMLInputElement>('input[accept*="application/pdf"]');
+    expect(pdfInput).not.toBeNull();
+    fireEvent.change(pdfInput!, {
+      target: { files: [new File(['pdf'], 'supplier-quote.pdf', { type: 'application/pdf' })] },
+    });
+
+    mockStageSupplierPriceImport.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    await waitFor(() => expect(mockUploadSupplierSourcePdf).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(linkedProduct).toHaveValue(''));
+
+    await act(async () => {
+      resolveUpload('supplier-evidence/upload-race.pdf');
+      await pendingUpload;
+    });
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Supplier pricing changed while the PDF was uploading. Choose a current link and try again.',
+    );
+  });
+
+  it('cancels Quick Quote staging when the selected exact Product changes during PDF upload', async () => {
+    const firstProduct = {
+      id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      product_name: 'Sibling Product',
+      sku: 'SIBLING-A',
+      inventory_unit: 'gallon',
+    };
+    const secondProduct = {
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      product_name: 'Sibling Product',
+      sku: 'SIBLING-B',
+      inventory_unit: 'gallon',
+    };
+    const makeLink = (id: string, product: typeof firstProduct) => ({
+      id,
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: `SUP-${product.sku}`,
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    });
+    const firstLink = makeLink('link-sibling-a', firstProduct);
+    const secondLink = makeLink('link-sibling-b', secondProduct);
+    let resolveUpload!: (path: string) => void;
+    const pendingUpload = new Promise<string>((resolve) => { resolveUpload = resolve; });
+    mockGetWorkspace.mockResolvedValue({
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [firstProduct, secondProduct],
+      links: [firstLink, secondLink],
+      imports: [], aliases: [], evidence: [],
+    });
+    mockUploadSupplierSourcePdf.mockReturnValueOnce(pendingUpload);
+
+    const { container } = renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    fireEvent.change(linkedProduct, { target: { value: firstLink.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+    const pdfInput = container.querySelector<HTMLInputElement>('input[accept*="application/pdf"]');
+    expect(pdfInput).not.toBeNull();
+    fireEvent.change(pdfInput!, {
+      target: { files: [new File(['pdf'], 'supplier-quote.pdf', { type: 'application/pdf' })] },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    await waitFor(() => expect(mockUploadSupplierSourcePdf).toHaveBeenCalledTimes(1));
+    fireEvent.change(linkedProduct, { target: { value: secondLink.id } });
+    expect(linkedProduct).toHaveValue(secondLink.id);
+
+    await act(async () => {
+      resolveUpload('supplier-evidence/local-intent-race.pdf');
+      await pendingUpload;
+    });
+
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+    expect(linkedProduct).toHaveValue(secondLink.id);
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'Quick quote details changed while the PDF was uploading. Review the current details and stage again.',
+    );
+  });
+
+  it('never reuses an older PDF path after the selected PDF changes during upload', async () => {
+    const product = {
+      id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      product_name: 'PDF Identity Product',
+      sku: 'PDF-IDENTITY',
+      inventory_unit: 'gallon',
+    };
+    const link = {
+      id: 'link-pdf-identity',
+      product_id: product.id,
+      product_name: product.product_name,
+      vendor_id: 'vendor-1',
+      vendor_name: 'Supplier One',
+      supplier_sku: 'PDF-SUP',
+      supplier_product_name: product.product_name,
+      supplier_uom: 'case',
+      supplier_pack_description: null,
+      inventory_units_per_supplier_unit: 1,
+      conversion_unit: 'gallon',
+      comparison_status: 'comparable' as const,
+      comparison_note: null,
+      link_status: 'confirmed' as const,
+      is_reusable: true,
+      is_preferred: false,
+      is_active: true,
+    };
+    const workspace = {
+      vendors: [{ id: 'vendor-1', name: 'Supplier One' }],
+      products: [product],
+      links: [link],
+      imports: [], aliases: [], evidence: [],
+    };
+    let resolveFirstUpload!: (path: string) => void;
+    const firstUpload = new Promise<string>((resolve) => { resolveFirstUpload = resolve; });
+    mockGetWorkspace.mockResolvedValue(workspace);
+    mockUploadSupplierSourcePdf
+      .mockReturnValueOnce(firstUpload)
+      .mockResolvedValueOnce('supplier-evidence/b.pdf');
+    mockStageSupplierPriceImport.mockResolvedValue(
+      makeImportDetail('pdf-identity', 'Supplier One', product.product_name),
+    );
+
+    const { container } = renderSupplierPricing();
+    const linkedProduct = await screen.findByLabelText('Linked Product');
+    fireEvent.change(linkedProduct, { target: { value: link.id } });
+    fireEvent.change(screen.getByLabelText('Quoted cost (dollars)'), { target: { value: '12.50' } });
+    const pdfInput = container.querySelector<HTMLInputElement>('input[accept*="application/pdf"]');
+    expect(pdfInput).not.toBeNull();
+    const firstPdf = new File(['a'], 'A.pdf', { type: 'application/pdf' });
+    const secondPdf = new File(['b'], 'B.pdf', { type: 'application/pdf' });
+    fireEvent.change(pdfInput!, { target: { files: [firstPdf] } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    await waitFor(() => expect(mockUploadSupplierSourcePdf).toHaveBeenCalledWith(firstPdf, 'actor-1'));
+    fireEvent.change(pdfInput!, { target: { files: [secondPdf] } });
+
+    await act(async () => {
+      resolveFirstUpload('supplier-evidence/a.pdf');
+      await firstUpload;
+    });
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'The source PDF changed while it was uploading. Stage again with the current PDF.',
+    ));
+    expect(mockStageSupplierPriceImport).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stage quick quote' }));
+    await waitFor(() => expect(mockStageSupplierPriceImport).toHaveBeenCalledTimes(1));
+    expect(mockUploadSupplierSourcePdf).toHaveBeenNthCalledWith(2, secondPdf, 'actor-1');
+    expect(mockStageSupplierPriceImport).toHaveBeenCalledWith(expect.objectContaining({
+      sourceDocumentPath: 'supplier-evidence/b.pdf',
+      sourceDocumentName: 'B.pdf',
+      sourceDocumentMime: 'application/pdf',
+    }));
   });
 
   it('routes comparable supplier evidence to the single-Product governed flow', async () => {
@@ -357,7 +1122,6 @@ describe('SupplierPricing page', () => {
       }] : [],
       purchase_candidates: [],
     }));
-
     renderSupplierPricing();
     fireEvent.click(await screen.findByRole('tab', { name: 'Comparison' }));
     expect(await screen.findByRole('link', { name: 'Open Product cost-basis flow' }))
