@@ -63,12 +63,12 @@ export default function RelatedNotes({ entityType, entityId, onCreateTask }: Rel
           onClick={() => setExpanded(!isExpanded)}
           aria-expanded={isExpanded}
         >
-          <div className="flex items-center gap-2">
+          <span className="flex items-center gap-2">
             <MessageSquare className="w-4 h-4 text-crx-green" />
-            <h3 className="text-sm font-semibold text-nav-dark">
+            <span className="text-sm font-semibold text-nav-dark">
               Team Notes {!loading && `(${notes.length})`}
-            </h3>
-          </div>
+            </span>
+          </span>
           {isExpanded ? (
             <ChevronUp className="w-4 h-4 text-gray-400" />
           ) : (

@@ -46,13 +46,21 @@ function calculateSimilarity(left: string, right: string): number {
   if (left === right) return 1;
   if (!left || !right) return 0;
   if (left.includes(right) || right.includes(left)) return 0.85;
-  const longer = left.length > right.length ? left : right;
-  const shorter = left.length > right.length ? right : left;
-  let matches = 0;
-  for (const character of shorter) {
-    if (longer.includes(character)) matches += 1;
+
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + substitutionCost,
+      );
+    }
+    previous.splice(0, previous.length, ...current);
   }
-  return matches / longer.length;
+  return 1 - (previous[right.length] / Math.max(left.length, right.length));
 }
 
 /**

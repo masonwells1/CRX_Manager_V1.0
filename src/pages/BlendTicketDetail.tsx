@@ -302,7 +302,13 @@ export function BlendTicketDetail() {
       }
       setImages(imagesWithSignedUrls);
       setProducts((productsResult.data || []) as BlendTicketProduct[]);
-      if (allProductsResult.error) throw allProductsResult.error;
+      if (allProductsResult.error) {
+        Sentry.captureException(allProductsResult.error, {
+          level: 'warning',
+          extra: { context: 'blend_ticket_product_catalog' },
+        });
+        toast('warning', 'The Product catalog could not be loaded. Existing ticket details are still available.');
+      }
       setAllProducts((allProductsResult.data || []) as unknown as PickerProduct[]);
       setCustomers((customersResult.data || []) as Customer[]);
       const allFields = (fieldsResult.data || []) as Field[];

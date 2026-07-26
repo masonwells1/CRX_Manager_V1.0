@@ -41,4 +41,16 @@ describe('buildPurchaseOrderEditItemsPayload', () => {
       },
     ]);
   });
+
+  it('rejects an invalid ordered quantity before building the RPC payload', () => {
+    expect(() => buildPurchaseOrderEditItemsPayload([{
+      id: 'invalid-line',
+      product_id: 'product-id',
+      product_name: 'Product',
+      unit_size: 'Gal',
+      quantity_ordered: '',
+      unit_cost: '10',
+      quantity_received: 0,
+    }])).toThrow('Invalid quantity ordered for purchase order line invalid-line');
+  });
 });

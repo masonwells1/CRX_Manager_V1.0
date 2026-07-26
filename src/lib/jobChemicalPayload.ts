@@ -15,11 +15,13 @@ export interface JobChemicalPayloadSource {
 }
 
 export function buildJobChemicalsPayload(rows: JobChemicalPayloadSource[]) {
-  return rows.map((row, index) => ({
+  return rows.map((row, index) => {
+    const parsedRatePerAcre = Number.parseFloat(row.rate_per_acre);
+    return {
     product_id: row.product_id,
     quantity: parseFloat(row.quantity) || 0,
     unit: row.unit || null,
-    rate_per_acre: parseFloat(row.rate_per_acre) || null,
+    rate_per_acre: Number.isFinite(parsedRatePerAcre) ? parsedRatePerAcre : null,
     rate_unit: row.rate_unit || null,
     cost_per_unit_cents: parseInt(row.cost_per_unit_cents) || 0,
     price_per_unit_cents: parseInt(row.price_per_unit_cents) || 0,
@@ -30,5 +32,6 @@ export function buildJobChemicalsPayload(rows: JobChemicalPayloadSource[]) {
     vendor: row.vendor || null,
     customer_supplied: row.customer_supplied || false,
     sort_order: index,
-  }));
+    };
+  });
 }

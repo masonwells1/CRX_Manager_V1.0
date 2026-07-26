@@ -72,7 +72,8 @@ async function chooseSearchOption(placeholder: string, optionName: string) {
   const input = screen.getByPlaceholderText(placeholder);
   fireEvent.click(input);
   fireEvent.change(input, { target: { value: optionName.slice(0, 5) } });
-  const option = await screen.findByRole('option', { name: new RegExp(optionName, 'i') });
+  const escapedOptionName = optionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const option = await screen.findByRole('option', { name: new RegExp(escapedOptionName, 'i') });
   fireEvent.mouseDown(option);
   fireEvent.click(option);
   return input;

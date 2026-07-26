@@ -16,12 +16,16 @@ export interface PurchaseOrderEditableLine {
 export function buildPurchaseOrderEditItemsPayload(items: PurchaseOrderEditableLine[]) {
   return items.map((item) => {
     const unitCostCents = purchaseOrderUnitCostCents(parseFloat(item.unit_cost));
+    const quantityOrdered = Number.parseFloat(item.quantity_ordered);
+    if (!Number.isFinite(quantityOrdered)) {
+      throw new Error(`Invalid quantity ordered for purchase order line ${item.id}`);
+    }
     return {
       id: item.id,
       product_id: item.product_id,
       product_name: item.product_name,
       unit_size: item.unit_size || null,
-      quantity_ordered: parseFloat(item.quantity_ordered),
+      quantity_ordered: quantityOrdered,
       unit_cost: purchaseOrderCentsToDollars(unitCostCents),
       unit_cost_cents: unitCostCents,
       quantity_received: item.quantity_received || 0,

@@ -80,4 +80,10 @@ describe('resolveFuzzyProductIdentity', () => {
       product: { id: 'chosen-uuid' },
     });
   });
+
+  it('does not inflate an anagram-like OCR candidate into a match', () => {
+    expect(resolveFuzzyProductIdentity('abcde', [
+      { id: 'anagram', product_name: 'edcba', is_active: true },
+    ])).toEqual({ product: null, score: 0 });
+  });
 });

@@ -148,7 +148,7 @@ export default function PurchaseOrderDetail() {
         .eq('purchase_order_id', id!);
       if (itemsError) {
         Sentry.captureException(itemsError, { tags: { source: 'fetch', action: 'load_purchase_order_items' } });
-        toast('error', 'Failed to load purchase order Products');
+        toast('error', 'Failed to load purchase order products');
         setLoading(false);
         return;
       }

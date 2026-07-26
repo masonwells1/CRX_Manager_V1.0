@@ -64,6 +64,18 @@ function Harness({ rpc }: { rpc: (name: string, args: Record<string, unknown>) =
 }
 
 describe('JobChemicalProductPicker', () => {
+  it('preserves a zero rate and keeps RPC cents JSON-serializable', () => {
+    const [payload] = buildJobChemicalsPayload([{
+      ...blankChemical,
+      rate_per_acre: '0',
+    }]);
+
+    expect(payload.rate_per_acre).toBe(0);
+    expect(payload.cost_per_unit_cents).toBe(1000);
+    expect(payload.price_per_unit_cents).toBe(1200);
+    expect(() => JSON.stringify(payload)).not.toThrow();
+  });
+
   it('distinguishes same-name siblings and sends selected UUID B in the owning save_job payload', async () => {
     const rpc = vi.fn();
     render(<Harness rpc={rpc} />);
