@@ -590,7 +590,7 @@ export default function QuoteBuilder() {
       supabase.from('quote_sections').select('*').eq('quote_id', quoteId).order('sort_order'),
       supabase
         .from('quote_items')
-        .select('*, product:products(*)')
+        .select('*, product:products(*, product_family:product_families(name))')
         .eq('quote_id', quoteId)
         .order('sort_order'),
     ]);

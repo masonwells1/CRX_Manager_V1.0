@@ -20,10 +20,13 @@ const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => {
  * Build a Supabase-like chain mock using real Promises.
  * Every chained method returns `self`, and `.then()` resolves with `result`.
  */
-function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
+function buildChain(
+  result: { data: unknown; error: unknown },
+  onSelect?: (columns: unknown) => void,
+): Record<string, unknown> {
   const self: Record<string, unknown> = {};
   const method = (..._args: unknown[]) => self;
-  const methods = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq',
+  const methods = ['insert', 'update', 'upsert', 'delete', 'eq', 'neq',
     'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains',
     'containedBy', 'range', 'filter', 'not', 'or', 'and', 'match',
     'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
@@ -31,6 +34,10 @@ function buildChain(result: { data: unknown; error: unknown }): Record<string, u
   for (const m of methods) {
     self[m] = method;
   }
+  self.select = (columns: unknown) => {
+    onSelect?.(columns);
+    return self;
+  };
   const promise = Promise.resolve(result);
   self.then = promise.then.bind(promise);
   self.catch = promise.catch.bind(promise);
@@ -186,5 +193,89 @@ describe('QuoteBuilder', () => {
     await waitFor(() => {
       expect(screen.getByTestId('commission-split-editor')).toBeInTheDocument();
     });
+  });
+
+  it('loads and renders the real Product family on a persisted quote row', async () => {
+    const product = {
+      id: '11111111-1111-4111-8111-111111111111',
+      product_name: 'Exact Product',
+      sku: 'SKU-EXACT',
+      is_active: true,
+      inventory_unit: 'gal',
+      packaging_variant: '2 x 2.5 gal',
+      return_policy: 'returnable',
+      is_full_tote_only: false,
+      product_family: { name: 'Family Alpha' },
+    };
+    const quote = {
+      id: 'quote-123',
+      quote_number: 'Q-2026-0123',
+      customer_id: null,
+      tier: 1,
+      valid_days: 30,
+      header_notes: null,
+      footer_notes: null,
+      status: 'draft',
+      is_planned: false,
+      commission_split: null,
+      created_at: '2026-07-25T00:00:00.000Z',
+    };
+    const section = {
+      id: 'section-1',
+      quote_id: quote.id,
+      section_name: 'Products',
+      sort_order: 1,
+      section_notes: null,
+      section_header_notes: null,
+      needed_by_date: null,
+      field_id: null,
+    };
+    const item = {
+      id: 'item-1',
+      quote_id: quote.id,
+      section_id: section.id,
+      product_id: product.id,
+      sort_order: 1,
+      product,
+      calc_mode: 'units_direct',
+      total_units_needed: 1,
+      price_per_unit: 1000,
+      price_override: null,
+      current_cost: 700,
+      suggested_rate: null,
+      actual_rate: null,
+      rate_unit: null,
+      oz_per_acre: null,
+      price_per_acre: null,
+      acres: null,
+      unit_size: null,
+      profit: 300,
+      total_price: 1000,
+      net_margin: 30,
+      notes: null,
+      price_unit: null,
+    };
+    const quoteItemSelects: unknown[] = [];
+
+    mockFrom.mockImplementation((table: string) => {
+      const data = table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'products'
+              ? [product]
+              : [];
+      return buildChain(
+        { data, error: null },
+        table === 'quote_items' ? (columns) => quoteItemSelects.push(columns) : undefined,
+      );
+    });
+
+    renderQuoteBuilder(quote.id);
+
+    expect(await screen.findByText('Family: Family Alpha')).toBeInTheDocument();
+    expect(quoteItemSelects).toContain('*, product:products(*, product_family:product_families(name))');
   });
 });
