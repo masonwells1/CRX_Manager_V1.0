@@ -2,6 +2,36 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-26 — PR #230/#231 reconciliation: Stage B2 merged, stale PR closed, unique artifacts preserved
+
+Three-way reconciliation (Codex + Claude Opus handoffs, Claude Fable as local reconciliation lead,
+Mason mediating and approving). PR #230 (Supplier Pricing Phase 3 Stage B2, exact SHA `6004536d`)
+was re-reviewed at the exact SHA with a targeted challenge pass — no BLOCKER/HIGH/MED — and merged.
+PR #231 was closed unmerged: its migration was a stale earlier-timestamp precursor of the applied
+`20260723193312_product_families_return_policy_foundation` (live version verified as a semantic
+superset), its `rpcContracts.test.ts` change would fail on main, and its gauntlet ledgers would
+roll main back from Sections 1–8 to 1–4.
+
+This entry's PR preserves the only unique value from PR #231 (lifted from `29486b5e`) and corrects
+two stale ledger rows:
+
+- **Preserved docs:** `docs/audits/2026-07-22-codex-to-claude-supplier-pricing-phase3-handoff.md`,
+  `docs/audits/2026-07-25-codex-to-claude-phase3-stage-b-handoff.md`,
+  `docs/audits/sweeps/sweep-2026-07-26.md`, plus the 2026-07-26 Codex reconciliation handoff.
+  PR #231's Section 04 report was dropped as unreliable (ran from a 28-commits-behind checkout).
+- **Ledger correction:** gauntlet summary ranks 6 (HIGH inventory-location bypass) and 11 (LOW
+  `match_quick_receive_items` anon grant) marked RESOLVED — both were already fixed live by
+  PR #208's InventoryPage field allowlist and migration `20260722122651`, confirmed applied in the
+  live migration ledger 2026-07-26. Per PR-review verification, rank 15 (Section 7
+  commission-recipient HIGH) also marked RESOLVED — closed live 2026-07-22 by
+  `20260722134252_reject_unresolvable_commission_recipients` after Mason's reject-at-creation
+  decision (recorded in `KNOWN_ISSUES.md`). The preserved sweep artifact is explicitly labeled a
+  stale 17-of-18-predicate partial run (Section 9 predicate not executed), not a full baseline.
+- **Migrations touched:** none — docs only.
+- **Flagged for follow-up:** `20260722222742_section9_po_ap_high_remediation.sql` exists on main's
+  tree but does not appear in the live migration ledger; confirm with Codex whether that is an
+  intentional pre-apply state.
+
 ## 2026-07-25 — Codex PR-merge guard bound to GitHub's real base (PR #228)
 
 Closes the P1 Codex raised on PR #227, plus a second P1 Codex raised against the first fix.
