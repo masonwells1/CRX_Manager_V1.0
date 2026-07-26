@@ -113,6 +113,34 @@ describe('BulkOrderImport', () => {
 
     await screen.findByText(/successfully imported:/i);
     expect(screen.getByText(/failed:/i)).toHaveTextContent('Failed: 1');
+    const failures = screen.getByRole('list', { name: /order import failure details/i });
+    expect(failures).toHaveTextContent('Order O-AMB');
+    expect(failures).toHaveTextContent('"Same Name" has an ambiguous Product match');
+    expect(failures).toHaveTextContent('use a unique SKU and retry');
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+  });
+
+  it('shows the missing Product text and retry guidance without calling bulk_import_order', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit',
+      'O-MISSING,North Farm,Unknown Product,2,20',
+    ].join('\n');
+    const file = new File([csv], 'missing.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/missing\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-MISSING/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
+
+    await screen.findByText(/successfully imported:/i);
+    const failures = screen.getByRole('list', { name: /order import failure details/i });
+    expect(failures).toHaveTextContent('Order O-MISSING');
+    expect(failures).toHaveTextContent('"Unknown Product" has no matching Product');
+    expect(failures).toHaveTextContent('use a unique SKU and retry');
     expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
   });
 

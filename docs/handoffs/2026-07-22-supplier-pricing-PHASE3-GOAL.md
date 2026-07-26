@@ -5,7 +5,7 @@
 **Status:** Stage A live and dormant; Stage B1 landed; Stage B2 integrated and in testing/review. Stage C remains parked for Mason's row-by-row classification approval and exact checksum.
 **Orchestrator:** GPT-5.6 Sol, high reasoning
 **Coordination lane:** this contract is persisted on the dedicated `codex/supplier-pricing-phase3` docs branch
-**Current B1 implementation lane:** isolated branch `codex/supplier-pricing-phase3-stage-b1`; never reuse the coordination/docs branch or worktree `7582`
+**Current B2 implementation lane:** isolated branch `codex/supplier-pricing-phase3-stage-b2`; B1 is landed historical work. Never reuse the coordination/docs branch or worktree `7582`
 
 ## Current Runner Instruction — Stage B2
 
@@ -26,7 +26,7 @@ The active B2 deny set remains explicit:
 
 ## Historical Runner Instruction — Stage B1
 
-Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, or create the pre-Stage-A Goal.** Continue only from the active Stage B coordination packet and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The current authorized outcome is a green, review-resolved B1 PR parked before merge; B2 remains locked until B1 is accepted and landed.
+Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, or create the pre-Stage-A Goal.** Continue only from the active Stage B coordination packet and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The then-authorized outcome was a green, review-resolved B1 PR parked before merge; B2 remained locked until B1 was accepted and landed.
 
 The active B1 deny set remains explicit:
 
@@ -117,7 +117,7 @@ The completed Stage A deliverable added a migration compatible with the then-cur
 
 The protected Stage A PR passed the required review and proof sequence before Mason authorized its merge and live migration. Those gates are historical evidence, not instructions to open or apply another Stage A change.
 
-### Stage B — exact-SKU Product-picker UI (B1 in progress)
+### Stage B — exact-SKU Product-picker UI (B2 testing/review; B1 landed)
 
 Only after Stage A is merged and its live migration is explicitly approved and proven, refresh from `main` and rerun the repo-wide Graphify/source Product-selector inventory. Implement the shared Product-option presentation across every included transactional selector in the approved plan.
 

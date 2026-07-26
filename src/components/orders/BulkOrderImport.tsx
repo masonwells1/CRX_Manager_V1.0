@@ -48,6 +48,11 @@ interface ValidationResult {
   invalid: Array<{ row: number; error: string; data: Record<string, string> }>;
 }
 
+interface OrderImportFailure {
+  orderNumber: string;
+  details: string[];
+}
+
 const ORDER_FIELD_MAPPINGS: Record<string, string[]> = {
   order_number: ['order_number', 'order_no', 'order#', 'invoice_number', 'invoice_no', 'invoice#'],
   customer_name: ['customer_name', 'customer', 'farm_name', 'farm', 'buyer'],
@@ -72,7 +77,11 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
-  const [uploadResults, setUploadResults] = useState<{ success: number; failed: number } | null>(null);
+  const [uploadResults, setUploadResults] = useState<{
+    success: number;
+    failed: number;
+    failures: OrderImportFailure[];
+  } | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -312,6 +321,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     setUploading(true);
     let successCount = 0;
     let failedCount = 0;
+    const failures: OrderImportFailure[] = [];
     const productResult = await supabase
       .from('products')
       .select('id, product_name, sku, is_active')
@@ -335,11 +345,19 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         if (custError) {
           Sentry.captureException(new Error(String(custError.message)), { extra: { context: 'Failed to look up customer' } });
           failedCount++;
+          failures.push({
+            orderNumber: order.order_number,
+            details: [`Customer lookup failed for "${order.customer_name}". Correct the customer and retry.`],
+          });
           continue;
         }
 
         if (!customer) {
           failedCount++;
+          failures.push({
+            orderNumber: order.order_number,
+            details: [`Customer "${order.customer_name}" was not found. Correct the customer and retry.`],
+          });
           continue;
         }
 
@@ -368,6 +386,12 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
             },
           });
           failedCount++;
+          failures.push({
+            orderNumber: order.order_number,
+            details: unresolved.map(({ item, resolution }) => (
+              `"${item.product_name}" has ${resolution.status === 'ambiguous' ? 'an ambiguous Product match' : 'no matching Product'}; use a unique SKU and retry.`
+            )),
+          });
           continue;
         }
 
@@ -413,10 +437,14 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing order' } });
         failedCount++;
+        failures.push({
+          orderNumber: order.order_number,
+          details: ['The order could not be imported. Review its values and retry.'],
+        });
       }
     }
 
-    setUploadResults({ success: successCount, failed: failedCount });
+    setUploadResults({ success: successCount, failed: failedCount, failures });
     setUploading(false);
 
     if (successCount > 0) {
@@ -559,7 +587,24 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
                 <div className="text-sm text-secondary space-y-1">
                   <p>Successfully imported: {uploadResults.success}</p>
                   {uploadResults.failed > 0 && (
-                    <p className="text-red-600">Failed: {uploadResults.failed}</p>
+                    <>
+                      <p className="text-red-600">Failed: {uploadResults.failed}</p>
+                      <ul
+                        aria-label="Order import failure details"
+                        className="mt-2 space-y-2 text-red-700"
+                      >
+                        {uploadResults.failures.map((failure) => (
+                          <li key={failure.orderNumber}>
+                            <span className="font-medium">Order {failure.orderNumber}</span>
+                            <ul className="ml-5 list-disc">
+                              {failure.details.map((detail) => (
+                                <li key={detail}>{detail}</li>
+                              ))}
+                            </ul>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
                   )}
                 </div>
               </div>
