@@ -80,21 +80,9 @@ A docs/audits/gauntlet/2026-07-25-section-12-edge-functions-refresh.md
 
 The Supplier B1 worktree (`codex/supplier-pricing-phase3-stage-b1`, `a7ed9c5ee644cbeb2f4277c0cfe9b1e3dad35077`) was clean. Its retained branch is `1` behind and `17` ahead of current `origin/main`; B1 itself is already represented by the current squash-merge base commit above.
 
-The active Supplier B2 worktree (`codex/supplier-pricing-phase3-stage-b2`) is at the current `origin/main` SHA and has uncommitted work in:
+The active Supplier B2 worktree (`codex/supplier-pricing-phase3-stage-b2`) is excluded from any rebase, proof, or commit. Its dirty state is volatile, so this packet does not present a path list as durable/current truth. At the point-in-time observation `2026-07-26T08:19:48.916-05:00`, B2 HEAD and its merge-base with `origin/main` were both `31d8e4d3ed25832d4d63206488fdf4a910222c91`; `git status --porcelain=v1 --untracked-files=all` contained 30 paths. The sorted-path snapshot SHA-256 was `65a769502904675140b06499b6789e145192d02553597a07a62bc4fe3e09d09d`. Representative categories were Product identity resolver work, product-presentation adoption tests, bulk import callers/tests, receiving, purchase-order, job/blend-ticket, Inventory/Rebates pages, and the Supplier Phase 3 goal handoff.
 
-```text
-src/components/blendtickets/ManualTicketCreate.tsx
-src/components/field-app/FieldAppChemicalEntry.tsx
-src/components/receiving/QuickReceivePanel.tsx
-src/pages/BlendTicketDetail.tsx
-src/pages/JobDetail.tsx
-src/pages/NewPurchaseOrder.tsx
-src/pages/PurchaseOrderDetail.tsx
-src/lib/productIdentityResolver.test.ts
-src/lib/productIdentityResolver.ts
-```
-
-For every Section 1/11/12 cumulative file list, the exact-file intersection with B1's base diff was empty, the intersection with B2's committed base diff was empty, and the intersection with the B2 dirty paths above was empty. The B2 dirtiness is still a coordination warning: do not use that worktree for any rebase, proof, or commit.
+At that exact snapshot, the dirty-path intersection was zero files for each Section 1, Section 11, and Section 12 cumulative list. The exact-file intersection with B1's base diff and with B2's committed base diff was also zero for every candidate. These are point-in-time non-collision observations only; any future rebase/proof must recompute them against the then-current B2 status.
 
 ## Section 1 source and Graphify check
 
