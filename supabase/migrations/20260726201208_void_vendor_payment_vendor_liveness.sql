@@ -130,6 +130,13 @@ BEGIN
 END;
 $function$;
 
+-- Restate the ACL so this migration is self-evidently safe. CREATE OR REPLACE
+-- preserves the existing ACL, and the live ACL (verified 2026-07-26) is
+-- exactly postgres/authenticated/service_role EXECUTE with no anon or PUBLIC
+-- grant — these statements change nothing live.
+REVOKE ALL ON FUNCTION public.void_vendor_payment(uuid, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.void_vendor_payment(uuid, text, text) TO authenticated, service_role;
+
 -- ─── Verification ─────────────────────────────────────────────────────────
 
 DO $$
@@ -169,6 +176,13 @@ BEGIN
   END IF;
   IF v_body NOT LIKE '%check_period_open%' THEN
     RAISE EXCEPTION 'vendor-liveness verification: period gate lost — refusing to regress 20260712200000';
+  END IF;
+
+  IF has_function_privilege('anon', 'public.void_vendor_payment(uuid, text, text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'vendor-liveness verification: anon must not be able to execute void_vendor_payment';
+  END IF;
+  IF NOT has_function_privilege('authenticated', 'public.void_vendor_payment(uuid, text, text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'vendor-liveness verification: authenticated lost EXECUTE on void_vendor_payment';
   END IF;
 
   RAISE NOTICE 'vendor-liveness verification passed: void_vendor_payment serializes with delete_vendor.';

@@ -2101,9 +2101,8 @@ function registryMigrationHighWater(): string {
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
-  // void_vendor_payment vendor-liveness gate (Section 9 follow-up MEDIUM-1);
-  // drafted 2026-07-26, awaiting the governed apply gate + Mason's approval.
-  '20260726210000',
+  // (empty — the void_vendor_payment vendor-liveness gate applied live
+  // 2026-07-26 as ledger version 20260726201208.)
 ]);
 
 /**
