@@ -107,16 +107,6 @@ describe('hasRpcCode', () => {
   it('does NOT false-positive on the token mid-message', () => {
     expect(hasRpcCode({ message: 'note: LICENSE_EXPIRED appears here' }, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
   });
-  it('recognizes the return-policy refusal only as its canonical leading token', () => {
-    expect(hasRpcCode(
-      { message: 'RETURN_POLICY_NO_RETURN: This Product is marked no return.' },
-      RpcErrorCodes.RETURN_POLICY_NO_RETURN,
-    )).toBe(true);
-    expect(hasRpcCode(
-      { message: 'note: RETURN_POLICY_NO_RETURN appears here' },
-      RpcErrorCodes.RETURN_POLICY_NO_RETURN,
-    )).toBe(false);
-  });
   it('handles null/undefined/odd values without throwing', () => {
     expect(hasRpcCode(null, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
     expect(hasRpcCode(undefined, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);

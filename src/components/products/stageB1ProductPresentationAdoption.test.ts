@@ -26,7 +26,7 @@ describe('Stage B1 Product presentation adoption', () => {
     const policyHelper = readFileSync(resolve(root, 'src/lib/returnPolicyError.ts'), 'utf8');
     expect(source).toContain("disabled={normalizeReturnPolicy(p.product?.return_policy) === 'no_return'}");
     expect(source.match(/mapReturnPolicyRpcError\(error\)/g)).toHaveLength(6);
-    expect(policyHelper).toContain('hasRpcCode(error, RpcErrorCodes.RETURN_POLICY_NO_RETURN)');
+    expect(policyHelper).toContain("message.startsWith(`${RETURN_POLICY_NO_RETURN_CODE}:`)");
     expect(source).toContain('flex min-w-0 flex-col');
     expect(source).toContain('sm:flex-row');
     expect(source).toContain('sm:flex-wrap');

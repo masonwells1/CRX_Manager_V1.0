@@ -217,6 +217,41 @@ describe('InvoiceDetail', () => {
     expect(screen.getByText('Type at least 2 characters to search')).toBeInTheDocument();
   });
 
+  it('removes completed Product results immediately when a new valid query is typed', async () => {
+    const invoice = {
+      id: 'inv-product-between-searches', invoice_number: 'INV-PRODUCT-BETWEEN-SEARCHES', status: 'draft', type: 'standard',
+      customer_id: 'cust-1', order_id: 'ord-1', subtotal_cents: 0, tax_cents: 0, total_cents: 0,
+      balance_cents: 0, invoice_date: '2026-03-15', due_date: null, notes: '', created_at: '2026-03-15T00:00:00Z',
+    };
+    const latest = buildDeferredChain();
+    let invoiceCalls = 0;
+    let productCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : [], error: null });
+      }
+      if (table === 'products') {
+        productCalls += 1;
+        return productCalls === 1
+          ? buildChain({ data: [{ id: 'product-old-complete-uuid', product_name: 'Completed Old Product', sku: null }], error: null })
+          : latest.chain;
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    renderInvoiceDetail('inv-product-between-searches');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add Product' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Add Product' }));
+    const input = screen.getByPlaceholderText('Search products by name or SKU...');
+    fireEvent.change(input, { target: { value: 'old' } });
+    expect(await screen.findByText('Product ID: product-old-complete-uuid')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: 'new' } });
+    expect(screen.queryByText('Completed Old Product')).not.toBeInTheDocument();
+    expect(screen.getByText('Searching Products...')).toBeInTheDocument();
+  });
+
   it('renders invoice detail when data loads', async () => {
     const invoiceData = {
       id: 'inv-123',

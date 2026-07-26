@@ -1935,10 +1935,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                 const nextQuery = e.target.value;
                 productSearchRequestRef.current += 1;
                 setProductSearch(nextQuery);
-                if (nextQuery.length < 2) {
-                  setProductResults([]);
-                  setProductSearchLoading(false);
-                }
+                setProductResults([]);
+                setProductSearchLoading(nextQuery.length >= 2);
               }}
               // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
               autoFocus
