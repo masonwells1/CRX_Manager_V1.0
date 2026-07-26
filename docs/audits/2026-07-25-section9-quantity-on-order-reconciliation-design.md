@@ -9,11 +9,12 @@ rows are a query-null-semantics false positive, not 77 incorrect cached
 quantities. The current production mismatch count is zero.
 
 **INDEPENDENT P1 APPLY BLOCKER:** **THE CANONICAL SECTION 9 MIGRATION MUST NOT
-APPLY IN ITS CURRENT FORM.** Its replacement `update_vendor_bill` locks only
-the bill row. The live `close_accounting_period` takes no advisory lock, table
-lock, or `FOR UPDATE` lock, so a month can close after the bill RPC's period
-checks but before its update commits. This blocker is independent of, and does
-not reverse, the no-reconciliation verdict.
+APPLY IN ITS CURRENT FORM.** Its replacements for both `create_vendor_bill`
+and `update_vendor_bill` check that an accounting month is open without taking
+a lock shared with `close_accounting_period`. The live close routine takes no
+advisory lock, table lock, or `FOR UPDATE` lock, so a month can close after
+either bill RPC's period check but before its write commits. This blocker is
+independent of, and does not reverse, the no-reconciliation verdict.
 
 ## Owner summary
 
@@ -45,25 +46,37 @@ The canonical pending Section 9 migration already uses the correct rule:
 
 Writing 77 rows would therefore replace correct zeros with the same zeros and
 create needless production-data risk. However, the canonical migration is not
-safe to apply yet: its vendor-bill update can race an accounting-period close.
-The correct next database action is to fix that P1 with a new forward/corrective
+safe to apply yet: both vendor-bill create and update can race an
+accounting-period close, and 29 other live callers require classification. The
+correct next database action is to fix that P1 with a new forward/corrective
 migration, or rigorously refute it, then obtain fresh exact-content review and
-real two-session concurrency proof. If a fresh true quantity mismatch appears
-before any later apply, stop and use the contingency design in this packet; do
-not convert this point-in-time zero result into standing authority to write.
+checked-in two-session concurrency proof. If a fresh true quantity mismatch
+appears before any later apply, stop and use the contingency design in this
+packet; do not convert this point-in-time zero result into standing authority
+to write.
 
 ## Scope boundaries and provenance
 
-This packet:
+This packet's design branch was created from:
 
-- was prepared from exact fresh `origin/main`
+- exact then-current `origin/main`
   `25363345adeabb5b2b08a3772a0de3f0edcb3952`;
-- used Graphify build commit `25363345` from
+- reviewed design correction `098687c5cbe22738de1c8e0f6b3741961a738747`;
+- current `origin/main`
+  `31d8e4d3ed25832d4d63206488fdf4a910222c91`, one mainline commit ahead
+  of the branch base. That intervening Supplier/UI commit does not overlap
+  this report. This report-only correction intentionally does not rebase or
+  rewrite the reviewed design history.
+
+Evidence used:
+
+- refreshed Graphify at build commit `098687c5` from
   `graphify-out/GRAPH_REPORT.md`;
 - used exact Graphify queries:
   - `graphify explain "public._recompute_po_on_order_for_products()"`;
   - `graphify affected "public._recompute_po_on_order_for_products()" --depth 3`;
   - `graphify query "which purchase order and receiving routines change inventory.quantity_on_order and how does migration 20260722222742 replace delta maintenance?" --budget 1600`;
+  - `graphify query "which functions and triggers call public.check_period_open and how do create_vendor_bill update_vendor_bill and close_accounting_period synchronize?" --budget 1400`;
 - verified material behavior in current source and read-only production SQL;
 - inspected the canonical migration, its rollback-only smoke, standing
   invariant, network-isolated concurrency proof, contract tests, migration
@@ -71,9 +84,12 @@ This packet:
 - independently rechecked the live function lock shapes and PR #218's commit
   lineage on 2026-07-26.
 
-No migration was created or edited. No application/shared registry, migration
-history, smoke registry, map, Supplier/Product/Phase 3 file, live row, live
-function, live trigger, grant, or policy was changed.
+No migration or implementation was created or edited. No application/shared
+registry, migration history, smoke registry, Supplier/Product/Phase 3 file,
+live row, live function, live trigger, grant, or policy was changed. The
+cumulative branch diff from `25363345` does include the original report commit's
+mandatory date-only `docs/app-workflow-map.html` regeneration; this correction
+does not claim otherwise and does not add workflow-map content changes.
 
 The active Supplier worktrees and other lanes had no tracked overlap with this
 packet or the Section 9 remediation files at the start of this work.
@@ -499,54 +515,124 @@ fail-closed preflight is the guard against drift in that window: if a legacy
 write reintroduces a true mismatch, canonical apply aborts and nothing from
 that migration commits.
 
-### P1: accounting period can close during `update_vendor_bill`
+### P1: accounting period can close during bill create or update
 
-The canonical replacement `update_vendor_bill` takes `FOR UPDATE` only on its
-`vendor_bills` row, calls `check_period_open` for the old and new bill dates,
-then performs the update. The live `close_accounting_period` checks the month
-and inserts/updates `accounting_periods`, but takes no lock shared with the bill
-RPC. Under PostgreSQL's normal `READ COMMITTED` behavior, the following
-interleaving is therefore possible:
+The canonical replacement `create_vendor_bill` checks
+`check_period_open(p_bill_date)` before its optional Purchase Order row lock
+and eventual insert. Its replacement `update_vendor_bill` takes `FOR UPDATE`
+only on its `vendor_bills` row, checks the old and new bill dates, then updates.
+The live `close_accounting_period` checks the month and inserts/updates
+`accounting_periods`, but takes no lock shared with either bill RPC. Under
+PostgreSQL's normal `READ COMMITTED` behavior, both interleavings are possible:
 
-1. Transaction A locks the bill and passes both period-open checks.
+1. Transaction A passes the create check, or locks the existing bill and
+   passes both update checks.
 2. Transaction B closes that month and commits.
-3. Transaction A updates the bill and commits into the now-closed month.
-
-The bill-row lock serializes competing edits to that bill; it does not reserve
-the accounting month's open state. A plain read in `check_period_open` also
-does not reserve that state.
-
-Minimal deterministic reproduction:
-
-1. In a disposable real-schema database, create an unpaid bill dated in an
-   open month.
-2. Pause transaction A after both `check_period_open` calls.
-3. In transaction B, call `close_accounting_period` for that month and commit.
-4. Resume transaction A. **Current failure marker:** the bill update succeeds.
-
-Required lock protocol for a corrective design:
-
-1. Define one transaction-level advisory-lock namespace/key per accounting
+3. Transaction A inserts or updates a bill and commits into the now-closed
    month.
-2. Make `close_accounting_period` acquire that month key before its period
-   checks and close write.
-3. Make every date/money mutator relying on `check_period_open`, at minimum
-   `update_vendor_bill`, acquire the same key before its period checks and
-   mutation.
-4. For a move between two months, acquire both month keys once in ascending
-   date order to prevent deadlocks.
-5. Recheck period openness while holding the shared month lock. Preserve the
-   existing bill-row lock in a documented, consistent order.
 
-A durable accounting-calendar row locked by both paths could be equivalent
-only if a row is guaranteed to exist for every open month. The current
+The update's bill-row lock serializes competing edits to that bill; it does not
+reserve the accounting month's open state. Create has no bill row to lock
+before insertion. A plain read in `check_period_open` reserves neither case.
+
+Conceptual reproductions (not currently checked-in runnable proofs):
+
+1. **Create versus close:** pause transaction A after create's period check;
+   close and commit the month in transaction B; resume A. Current failure
+   marker: the bill insert succeeds.
+2. **Update versus close:** lock an unpaid bill and pause transaction A after
+   both period checks; close and commit the month in B; resume A. Current
+   failure marker: the bill update succeeds.
+
+The existing checked-in `prove-section9-po-ap-concurrency.mjs` does not run
+either schedule. A future reviewer must not treat this conceptual sequence, or
+that existing proof's pass marker, as executable evidence that the P1 is fixed.
+
+Required canonical lock protocol for a corrective design:
+
+1. Add one internal helper, for example
+   `public._lock_accounting_months(p_dates date[])`, as the only authority for
+   accounting-period serialization. Revoke public/browser execution.
+2. For every non-null input date, derive the month key exactly as
+   `extract(year from date)::integer * 12
+   + extract(month from date)::integer - 1`.
+3. Deduplicate keys, sort them numerically ascending, and acquire
+   `pg_advisory_xact_lock(73492010, month_key)` in that order. `73492010` is
+   the dedicated accounting-period namespace; it is distinct from Section 9's
+   PO lock `73492009`.
+4. Use the same helper in `close_accounting_period`, `create_vendor_bill`,
+   `update_vendor_bill`, and every other confirmed mutating caller after its
+   transaction shape is audited.
+5. Global order is: authenticate/idempotency replay; acquire required
+   business-row locks in each workflow's documented stable order; acquire all
+   affected accounting-month keys through the helper in ascending order;
+   re-read locked business dates and fail closed if the intended date set
+   changed; call `check_period_open` while holding the month locks; mutate;
+   commit. Close has no business row, so it starts at the month-lock step.
+6. Create must move its optional PO row lock before the month lock/check.
+   Update must keep its bill-row lock first, then acquire the deduplicated,
+   sorted old/new month keys before both checks. Any cross-domain caller that
+   cannot obey this global order requires a separately proven design, not a
+   one-off lock inversion.
+
+A durable accounting-calendar row locked by all paths could be equivalent only
+if a row is guaranteed to exist for every open month. The current
 close-on-demand shape does not establish that guarantee. A table lock would be
 broader than necessary and is not the preferred fix.
 
-The fixed two-session proof must demonstrate both orders: when the update gets
-the month lock first, close waits and then observes the completed update; when
-close gets it first, the update waits and then fails the period-open check
-without changing the bill.
+### Live `check_period_open` caller inventory and risk boundary
+
+The 2026-07-26 live read-only inventory found **31 public-schema callers: 29
+routines and 2 trigger functions**:
+
+- AP/vendor: `create_vendor_bill`, `update_vendor_bill`,
+  `record_vendor_payment`, `void_vendor_bill`, `void_vendor_payment`;
+- customer payments/credits: `_batch_apply_prepayments_impl`,
+  `allocate_payment`, `apply_credit_memo_to_invoice`,
+  `apply_prepay_to_invoice`, `apply_remaining_prepayments`,
+  `apply_write_off`, `batch_apply_prepayments`,
+  `reverse_credit_memo_application`, `reverse_write_off`,
+  `unapply_credit_memo`, `void_payment`;
+- invoice/delivery/return: `_issue_return_credit_impl`,
+  `_post_deleted_delivery_recovery_invoice_20260719`,
+  `_post_invoice_group_customer_scope_impl`,
+  `_post_invoice_impl_20260714`, `_save_invoice_scoped_impl`,
+  `_void_invoice_split_provenance_impl_20260719`, `complete_delivery`,
+  `unpost_invoice`;
+- finance/commission: `_generate_finance_charges_idem_impl_20260721`,
+  `create_commission_payment`, `post_commission_payment`,
+  `preview_finance_charges`, `void_commission_payment`;
+- trigger functions: `enforce_delivery_accounting_period`,
+  `enforce_invoice_draft_on_insert`.
+
+This inventory proves caller breadth, not that all 31 are independently
+exploitable races. Create/update are confirmed from their checked-in statement
+order. The other 29 must be classified as read-only preview, wrapper/delegate,
+trigger, or mutator and have their row locks, date sources, delegates, and
+write timing traced before the corrective scope can be called complete.
+Because the shared close routine currently serializes with none of them, every
+mutating caller is conservatively at risk until audited and either adopts the
+canonical helper or is rigorously shown not to need it.
+
+### Required checked-in concurrency proof
+
+The correction must add a deterministic, repository-registered, runnable
+two-session proof against a disposable real-schema database—not only prose.
+It must:
+
+1. provide explicit barriers that pause create and update after their
+   month-lock acquisition/check point;
+2. test create-first/close-second and close-first/create-second;
+3. test update-first/close-second and close-first/update-second, including an
+   old-to-new-month move with reverse input order to prove sorted acquisition;
+4. assert the blocked session actually waits on the expected advisory key;
+5. require: writer-first completes before close; close-first causes the writer
+   to fail closed after waiting; no bill is inserted or changed in a closed
+   month; no partial idempotency or notification side effect remains;
+6. include bounded lock timeouts and fail if a deadlock, unexpected timeout, or
+   unobserved barrier occurs; and
+7. be wired into the owning smoke/test registry and produce an exact,
+   review-bound pass marker.
 
 ### Review provenance mismatch
 
@@ -583,8 +669,8 @@ close-versus-update concurrency proof.
 
 1. Resolve the P1 with a new forward/corrective migration, or rigorously refute
    it; never edit the merged canonical migration.
-2. Run the two-session close-versus-update reproduction and prove both lock
-   acquisition orders fail closed without a write in a closed period.
+2. Run the checked-in two-session create-versus-close and update-versus-close
+   proofs in both acquisition orders, including the multi-month deadlock case.
 3. Fetch current `origin/main` and verify the canonical and corrective exact
    content and live-ledger state.
 4. Rerun the exact canonical mismatch query and bounded summary.
@@ -686,8 +772,10 @@ timestamp order. Never use a bulk push that applies unreviewed pending files.
   `close_accounting_period`; Section 9 remains absent from the live ledger.
   This supports the P1 rather than clearing it.
 - Existing Section 9 concurrency proof covers PO/bill and Product-order races,
-  not the accounting-period close-versus-bill-update interleaving required
-  here.
+  not the required create-versus-close or update-versus-close interleavings.
+- The live 31-caller inventory is a scope warning, not proof that all callers
+  race. The corrective review must classify all 31 and prove coverage of every
+  mutating path before apply.
 - No owner/business evidence is needed for the current 77 because no true
   quantity discrepancy exists. Owner evidence becomes mandatory only if a
   future source-data anomaly makes the PO rows themselves disputable.
