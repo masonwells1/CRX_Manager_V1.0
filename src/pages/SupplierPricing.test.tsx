@@ -162,6 +162,86 @@ describe('SupplierPricing page', () => {
     });
   });
 
+  it('keeps the latest import detail when rapid opens resolve out of order', async () => {
+    const importSummary = (id: string, vendorName: string) => ({
+      id,
+      vendor_id: `vendor-${id}`,
+      vendor_name: vendorName,
+      document_date: '2026-07-18',
+      ingestion_method: 'quote_sheet' as const,
+      status: 'needs_review' as const,
+      row_count: 1,
+      eligible_row_count: 1,
+      approved_observation_count: 0,
+      source_document_name: `${id}.pdf`,
+      created_at: '2026-07-18T12:00:00Z',
+    });
+    const importDetail = (id: string, vendorName: string, productName: string) => ({
+      ...importSummary(id, vendorName),
+      format_version: 'crx-supplier-quote-phase1b-v1',
+      rows: [{
+        id: `row-${id}`,
+        row_number: 1,
+        product_id: `product-${id}`,
+        product_name: productName,
+        product_supplier_link_id: `link-${id}`,
+        supplier_sku: `SKU-${id}`,
+        supplier_product_name: productName,
+        cost_cents: 12_500n,
+        price_unit: 'case',
+        package_quantity: 1,
+        effective_from: '2026-07-18',
+        effective_to: null,
+        price_kind: 'quote',
+        row_status: 'new' as const,
+        validation_errors: [],
+        observation_id: null,
+      }],
+    });
+    const importA = importDetail('import-a', 'Supplier A', 'Product from A');
+    const importB = importDetail('import-b', 'Supplier B', 'Product from B');
+    let resolveA!: (value: typeof importA) => void;
+    let resolveB!: (value: typeof importB) => void;
+    const pendingA = new Promise<typeof importA>((resolve) => { resolveA = resolve; });
+    const pendingB = new Promise<typeof importB>((resolve) => { resolveB = resolve; });
+
+    mockGetWorkspace.mockResolvedValue({
+      vendors: [],
+      products: [],
+      links: [],
+      imports: [
+        importSummary('import-a', 'Supplier A'),
+        importSummary('import-b', 'Supplier B'),
+      ],
+      aliases: [],
+      evidence: [],
+    });
+    mockGetImport.mockImplementation((id: string) => id === 'import-a' ? pendingA : pendingB);
+
+    renderSupplierPricing();
+    const openA = await screen.findByRole('button', { name: /Supplier A/ });
+    const openB = screen.getByRole('button', { name: /Supplier B/ });
+    act(() => {
+      openA.click();
+      openB.click();
+    });
+    expect(mockGetImport).toHaveBeenNthCalledWith(1, 'import-a');
+    expect(mockGetImport).toHaveBeenNthCalledWith(2, 'import-b');
+
+    await act(async () => {
+      resolveB(importB);
+      await pendingB;
+    });
+    expect(await screen.findAllByText('Product from B')).toHaveLength(2);
+
+    await act(async () => {
+      resolveA(importA);
+      await pendingA;
+    });
+    expect(screen.getAllByText('Product from B')).toHaveLength(2);
+    expect(screen.queryAllByText('Product from A')).toHaveLength(0);
+  });
+
   it('clears an already-populated workspace when the current refresh fails', async () => {
     const populated = {
       vendors: [{ id: 'vendor-1', name: 'Current vendor' }],

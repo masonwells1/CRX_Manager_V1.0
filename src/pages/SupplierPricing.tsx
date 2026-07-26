@@ -114,6 +114,7 @@ export default function SupplierPricing() {
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const workspaceRequestRef = useRef(0);
   const workspaceRefreshPendingRef = useRef(false);
+  const importRequestRef = useRef(0);
   const basisWorkspaceRequestRef = useRef(0);
   const selectedVendorIdRef = useRef(selectedVendorId);
   const selectedProductIdRef = useRef(selectedProductId);
@@ -500,14 +501,18 @@ export default function SupplierPricing() {
   };
 
   const openImport = async (importId: string) => {
+    const requestId = ++importRequestRef.current;
     setBusy(true);
     try {
-      setReview(await getSupplierPriceImport(importId));
+      const result = await getSupplierPriceImport(importId);
+      if (importRequestRef.current !== requestId) return;
+      reviewRef.current = result;
+      setReview(result);
       setActiveTab('quotes');
     } catch (error) {
-      toast('error', sanitizeError(error));
+      if (importRequestRef.current === requestId) toast('error', sanitizeError(error));
     } finally {
-      setBusy(false);
+      if (importRequestRef.current === requestId) setBusy(false);
     }
   };
 
@@ -858,7 +863,8 @@ export default function SupplierPricing() {
             <button
               key={item.id}
               type="button"
-              className="flex w-full items-center justify-between rounded-lg border border-gray-200 p-3 text-left hover:bg-gray-50"
+              disabled={busy || loading}
+              className="flex w-full items-center justify-between rounded-lg border border-gray-200 p-3 text-left hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => void openImport(item.id)}
             >
               <span>
