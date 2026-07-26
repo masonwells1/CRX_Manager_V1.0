@@ -14,12 +14,29 @@ WITH target AS (
   WHERE p.oid = 'public.save_field(uuid,jsonb,jsonb,uuid,text)'::regprocedure
 ),
 normalized AS (
-  -- Analyze executable body text only. Strip quoted strings first (including
-  -- doubled-quote escapes), then multiline block comments and line comments.
+  -- Analyze executable body text only. Strip tagged and untagged dollar-quoted
+  -- literals before ordinary quoted strings (including doubled-quote escapes),
+  -- then multiline block comments and line comments.
   -- Every structural check below uses normalized_src, never raw prosrc.
   SELECT regexp_replace(
            regexp_replace(
-             regexp_replace(prosrc, '''([^'']|'''')*''', '', 'g'),
+             regexp_replace(
+               regexp_replace(
+                 regexp_replace(
+                   prosrc,
+                   chr(92) || chr(36) || '([a-z_][a-z0-9_]*)' ||
+                   chr(92) || chr(36) || '(.|\n)*?' ||
+                   chr(92) || chr(36) || chr(92) || '1' ||
+                   chr(92) || chr(36),
+                   '', 'gi'
+                 ),
+                 chr(92) || chr(36) || chr(92) || chr(36) ||
+                 '(.|\n)*?' ||
+                 chr(92) || chr(36) || chr(92) || chr(36),
+                 '', 'g'
+               ),
+               '''([^'']|'''')*''', '', 'g'
+             ),
              chr(47) || chr(92) || chr(42) || '([^' || chr(42) || ']|' ||
              chr(92) || chr(42) || '+[^' || chr(42) || chr(47) || '])*' ||
              chr(92) || chr(42) || '+' || chr(47),

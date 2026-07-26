@@ -58,9 +58,21 @@ BEGIN
       ('next_po_number', ARRAY['admin','sales_rep']::text[], 'purchase_orders', 'po_number', 'PO', 4, true)
     ) AS expected(fn, allowed_roles, source_table, number_column, prefix, width, yearly)
   LOOP
-    v_fn_oid := format('public.%I()', v_target.fn)::regprocedure;
-    IF (SELECT count(*) FROM pg_proc p WHERE p.oid = v_fn_oid) <> 1 THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: % does not have exactly one overload', v_target.fn;
+    SELECT count(*) INTO v_n
+    FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname = v_target.fn;
+    IF v_n <> 1 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: % expected exactly one overload, got %', v_target.fn, v_n;
+    END IF;
+    SELECT p.oid INTO v_fn_oid
+    FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname = v_target.fn
+      AND p.pronargs = 0
+      AND pg_get_function_identity_arguments(p.oid) = '';
+    IF v_fn_oid IS NULL THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: % sole overload is not the expected zero-argument signature', v_target.fn;
     END IF;
     IF NOT EXISTS (
       SELECT 1 FROM pg_proc p

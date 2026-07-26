@@ -40,13 +40,13 @@ CREATE OR REPLACE FUNCTION public.save_field(
   p_billing_defaults jsonb DEFAULT '[]'::jsonb,
   p_performed_by uuid DEFAULT NULL,
   p_idempotency_key text DEFAULT NULL
-) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER AS $$
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER AS $function$
 DECLARE v_field_id uuid := gen_random_uuid(); v_actor uuid;
 BEGIN
 ${body}
   RETURN v_field_id;
 END;
-$$;
+$function$;
 `);
 }
 
@@ -90,6 +90,28 @@ INSERT INTO public.profiles VALUES ('00000000-0000-0000-0000-000000000001', 'adm
   INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
   VALUES ('field_saved', 'dead-string fake guard', v_actor, 'field', v_field_id);`);
   assert.deepEqual(rows(), [VIOLATION], 'full fake bind/guard in a dead string must be unsafe');
+  createSaveField(`
+  PERFORM $dead$
+    v_actor := auth.uid();
+    IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH';
+    END IF;
+    INSERT INTO activity_feed (performed_by) VALUES (v_actor);
+  $dead$;
+  INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
+  VALUES ('field_saved', 'tagged dollar fake guard', v_actor, 'field', v_field_id);`);
+  assert.deepEqual(rows(), [VIOLATION], 'full fake bind/guard in a tagged dollar-quoted literal must be unsafe');
+  createSaveField(`
+  PERFORM $$
+    v_actor := auth.uid();
+    IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH';
+    END IF;
+    INSERT INTO activity_feed (performed_by) VALUES (v_actor);
+  $$;
+  INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
+  VALUES ('field_saved', 'untagged dollar fake guard', v_actor, 'field', v_field_id);`);
+  assert.deepEqual(rows(), [VIOLATION], 'full fake bind/guard in an untagged dollar-quoted literal must be unsafe');
   createSaveField(`
   v_actor := auth.uid();
   INSERT INTO public.activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
