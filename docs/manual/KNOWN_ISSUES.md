@@ -25,8 +25,11 @@ claimed "flag OFF, migration NOT applied, NOT merged", which was wrong on all th
   minutes after the merge. Per `src/lib/splitBillingSetting.ts` that enables the whole per-line split UI, the
   split-aware save path, the $0-suppression email gate, and the InvoiceDetail per-item lock. Note the shipped
   code default is OFF; the live value was deliberately flipped on.
-- **Never exercised.** `split_invoice_provenance`, `split_invoice_creation_claims`, and
-  `split_invoice_mutation_claims` were all empty as of 2026-07-27 — no customer has been billed through it.
+- **Never exercised.** The field-app path (`save_field_app_split_invoice`) writes `field_app_billing_sets`,
+  `field_app_billing_lines`, and `invoice_line_shares` — all three were empty as of 2026-07-27. The separate
+  order-side path (`create_split_invoices_from_order` → `split_invoice_provenance`,
+  `split_invoice_creation_claims`, `split_invoice_mutation_claims`) is also empty. Six tables, zero rows across
+  both paths: no customer has been billed through split billing.
 
 ⚠️ **Do not resurrect the stacked branches.** `codex/per-line-split-billing-phase3-rpc` (closed PR #181) and
 `codex/per-line-split-billing-phase4-ui` (closed PR #182, tip `e2418796`) are a **superseded** variant built
@@ -58,8 +61,9 @@ a saved set READ-ONLY for review + Post (editable reopen deferred — a re-save 
 fields is a future, separately-proven enhancement). **#E** consumes the source job (status→invoiced) so it
 can't be double-billed. Re-proven in live PG: **PROOFOK 29/29** (adds cogs_group_lr_exact, audited_base_is_own,
 reasons_captured, double_bill_second_set_rejected, resave_same_job_allowed). rls-security-reviewer 0/0,
-migration-drift 0 blockers; typecheck + lint clean. Still parked: flag OFF, migrations NOT applied, PR #164
-NOT merged.
+migration-drift 0 blockers; typecheck + lint clean. *(State at the time of this round, since superseded: the
+work was then parked with the flag OFF, migrations NOT applied, and PR #164 NOT merged. See the STATUS block
+above — it shipped on 2026-07-21 and is live with the flag ON.)*
 
 **Codex ROUND 3 RAN 2026-07-18 → 2 P1 + 4 P2, ALL fixed + PROOFOK 32/32.** A third pass (on the job-consumption
 + reopen work round-2 added) found: source job changeable on re-save → two jobs consumed (P1, now frozen);
@@ -70,8 +74,10 @@ uses the verified queued-bridge at true 438). The live proof ALSO caught 2 runti
 `v_job.season` on an unassigned record (55000) and a stale `scheduled_date` (live `jobs` uses `job_date`) —
 both fixed. New harness note: seeding synthetic products now needs `ALTER TABLE products DISABLE TRIGGER USER`
 inside the rolled-back txn (a parallel supplier-pricing project applied live pricing-governance triggers).
-**Remaining before flag-on: a CLEAN full re-run of the Codex gate, then Mason's review + baseline field-app
-billing cycle.**
+*(Round-3 exit criteria, now overtaken by events: "Remaining before flag-on: a CLEAN full re-run of the Codex
+gate, then Mason's review + baseline field-app billing cycle." PR #164 merged 2026-07-21 and the flag was
+turned on seven minutes later — see the STATUS block above. The baseline field-app billing cycle still has
+not happened: the feature is on but has never been used.)*
 Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
 
 **Resolved 2026-07-21 — Supplier Pricing Phase 1a rollout gap.** The governed
