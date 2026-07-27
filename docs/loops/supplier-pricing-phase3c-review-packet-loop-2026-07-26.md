@@ -15,7 +15,7 @@ invalidation condition is recorded. PR #246 is already open and remains
 `PARKED`: its current head must match a recorded exact-reviewed SHA, and any
 later head change invalidates prior head-bound evidence. Before any future
 publication, re-fetch `origin/main` and recheck bootstrap pin
-`0e058804090b84f9a14024a6666021a271bb1f71`; required checks (including Ubuntu
+`07a3d4833cf8517ea53831a6ff0976b4a6c4c67f`; required checks (including Ubuntu
 PR CI), CodeRabbit resolution, and separate external trusted-workflow/ruleset
 activation plus post-activation proof remain mandatory before Mason's
 row-by-row review and explicit approval. No Stage C SQL,
@@ -197,7 +197,7 @@ already regenerated-and-verified 604-row aggregate-only packet. They are
 retained as evidence only and do not authorize a new capture or materialization
 run. The current loop completes only after the PR's current head matches a
 recorded exact-reviewed SHA, a recheck of current base/bootstrap
-`0e058804090b84f9a14024a6666021a271bb1f71` before any future publication,
+`07a3d4833cf8517ea53831a6ff0976b4a6c4c67f` before any future publication,
 required Ubuntu PR CI green with real CodeRabbit findings resolved, external
 trusted-workflow/ruleset activation plus post-activation proof, and a
 protected PR parked without merge for Mason's row-by-row review. Until then it

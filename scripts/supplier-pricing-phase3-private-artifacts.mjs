@@ -453,7 +453,11 @@ export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoR
     return target;
     } finally {
       if (temporaryFd !== undefined) {
-        if (!published && publicationAttempted && temporaryIdentity) scrubOwnedPublicationDescriptor(temporaryFd, temporaryIdentity);
+        // A hard link can be added after the private temp bytes are written
+        // but before rename is attempted. Scrub the held descriptor on every
+        // failed publication so those aliases retain no private bytes; final
+        // pathname rollback remains limited to attempted publication below.
+        if (!published && temporaryIdentity) scrubOwnedPublicationDescriptor(temporaryFd, temporaryIdentity);
         if (!published && publicationAttempted && temporaryIdentity) safeUnlinkPublishedArtifactInHeldParent(expectedBasename, temporaryIdentity, parentFd);
         let removedOpen = false;
         try { if (!published) removedOpen = safeUnlinkOwnedTempInHeldParent(temporaryBasename, temporaryFd, expectedBasename, temporaryIdentity, parentFd); }

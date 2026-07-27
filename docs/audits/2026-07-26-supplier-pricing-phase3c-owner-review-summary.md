@@ -140,13 +140,19 @@ At the historical first reconciliation, the feature branch reconciled `origin/ma
 preserving prior feature commits. That historical main lacked the containment
 checker. A later normal non-rebased merge
 `c6c5ea3ae0e2af5c67f8c55d64d930877e5c6cc1` incorporated current
-`origin/main` `0e058804090b84f9a14024a6666021a271bb1f71` (`#245`) without
-conflicts; exact Git object checks prove that base lacks both the checker and
-trusted target workflow, so the current one-time CI bootstrap pin is exactly
-`0e058804090b84f9a14024a6666021a271bb1f71`. The trusted-workflow/ruleset
+historical #245 base `origin/main` `0e058804090b84f9a14024a6666021a271bb1f71`
+without conflicts. A later normal merge
+`98969765030d8ada43566fad606f4d74057d1e17` incorporated current
+`origin/main` `07a3d4833cf8517ea53831a6ff0976b4a6c4c67f` (`#247`) without
+conflicts; #247 is the active-profile RLS migration and reference-doc update,
+with no Phase 3C containment overlap. Exact Git object checks prove this
+current base lacks both the checker and trusted target workflow, so the current
+one-time CI bootstrap pin is exactly
+`07a3d4833cf8517ea53831a6ff0976b4a6c4c67f`. The trusted-workflow/ruleset
 external enforcement gap remains `PARKED`. The base must be freshly refetched
-and rechecked immediately before any push. This correction still requires final
-exact review on its containing SHA, identified only by Git and PR metadata.
+and rechecked immediately before any future publication. This correction still
+requires final exact review on its containing SHA, identified only by Git and
+PR metadata.
 
 Published `f3b636590a784b2cf9bf4e03bc47da55adbc4e60` arrived concurrently as
 provenance-unattributed publication-parent hardening. It is adopted only after
@@ -166,7 +172,7 @@ The packet has been regenerated and verified, but Mason must not begin the
 row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
 Product classification is approved. The remaining gate is a recorded exact
 review of the PR's current head, a fresh `origin/main` refetch and the current
-`0e058804090b84f9a14024a6666021a271bb1f71` bootstrap-pin recheck before any
+`07a3d4833cf8517ea53831a6ff0976b4a6c4c67f` bootstrap-pin recheck before any
 future publication, and protected-PR acceptance with required checks —
 including Ubuntu PR CI — green, any real CodeRabbit finding resolved, and
 separate external trusted-workflow/ruleset activation plus post-activation
