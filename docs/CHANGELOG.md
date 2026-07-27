@@ -2,6 +2,17 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-27 — Production health and dependency-noise hardening
+
+- Updated the production spot-check workflow to verify the intentional
+  `profile_public_view` SECURITY DEFINER boundary before classifying its
+  Supabase advisor finding as actionable.
+- Prevented Dependabot from opening uncoordinated major-version PRs for the
+  React, ESLint, and TypeScript stacks. Security updates remain eligible.
+- Pinned transitive `brace-expansion` to patched version `5.0.8` or newer.
+  The remaining React Router audit advisory affects only unused unstable RSC
+  APIs and does not apply to CRX's browser-router architecture.
+
 ## 2026-07-26 — Docs archive sweep (second batch) + local branch/worktree cleanup
 
 Docs-only. Ten finished, unreferenced files moved into `docs/archive/2026-summer-closeout/`:

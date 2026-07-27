@@ -38,6 +38,29 @@ Capture:
 - Any NEW findings since the last run (compare to `CLAUDE.md` Current State if there's a recent reference like "Supabase performance advisor: 0 WARN findings")
 - Specifically flag any advisor in the "RLS not enabled" / "SECURITY DEFINER missing search_path" family — these are the B7/B8/B9 class
 
+### Known `profile_public_view` exception
+
+`public.profile_public_view` intentionally uses SECURITY DEFINER view semantics
+to expose only the non-sensitive employee-directory columns `id`, `full_name`,
+`role`, and `is_active` to signed-in users. Supabase reports this as a
+`security_definer_view` ERROR even when the boundary is correct.
+
+Do not count this one finding as actionable or make the overall result YELLOW
+when all of these live read-only checks pass:
+
+- the view definition selects exactly `id`, `full_name`, `role`, and `is_active`
+  from `public.profiles`;
+- `anon` and `PUBLIC` do not have `SELECT`;
+- `authenticated` has `SELECT`; and
+- the underlying `profiles_select` policy remains admin-or-self.
+
+Use Supabase MCP read-only SQL when available. If custom SQL cannot run
+unattended through MCP, use `supabase db query --linked` with SELECT-only SQL.
+Report both the raw advisor count and the actionable count, for example:
+`raw 1 ERROR / actionable 0 ERROR (verified profile_public_view exception)`.
+If any condition cannot be verified or has drifted, treat the finding as
+actionable and report the exact failed or blocked check.
+
 ## Step 3: Vercel — last build status
 
 If the Vercel plugin is enabled (`mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__*`):
