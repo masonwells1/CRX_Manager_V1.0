@@ -84,8 +84,11 @@ both fixed. New harness note: seeding synthetic products now needs `ALTER TABLE 
 inside the rolled-back txn (a parallel supplier-pricing project applied live pricing-governance triggers).
 *(Round-3 exit criteria, now overtaken by events: "Remaining before flag-on: a CLEAN full re-run of the Codex
 gate, then Mason's review + baseline field-app billing cycle." PR #164 merged 2026-07-21 and the flag was
-turned on seven minutes later — see the STATUS block above. The baseline field-app billing cycle still has
-not happened: the feature is on but has never been used.)*
+turned on seven minutes later — see the STATUS block above. **The baseline field-app billing cycle still has
+not happened** — checked directly rather than inferred from the empty split tables, since an ordinary cycle
+would not touch those: live as of 2026-07-27, `field_app_locations` = 0 rows, `field_app_location_shares` = 0,
+and of 4 total `jobs` none is `invoiced` and no `invoices` row carries a `job_id`. So no field-application
+invoice of any kind has been produced yet, split or not.)*
 Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
 
 **Resolved 2026-07-21 — Supplier Pricing Phase 1a rollout gap.** The governed
