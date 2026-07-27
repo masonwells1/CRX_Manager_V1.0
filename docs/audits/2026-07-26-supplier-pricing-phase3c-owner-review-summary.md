@@ -84,25 +84,45 @@ BLOCKER/HIGH finding. Its conditional bootstrap-base drift finding remains
 fail-closed and requires a fresh `origin/main` fetch before publication; no code
 change is warranted while the base remains pinned.
 
+Exact `3c156065680fb2cc3efc6a35c0d78158e84da924` final review supplies the
+review evidence for this correction. Sol returned `CLEAN` with no unresolved
+BLOCKER/HIGH/MEDIUM finding; its retained LOW follow-ups are historical
+imperative plan wording, a fresh bootstrap refetch before publication, and the
+Ubuntu protected-PR CI requirement. Accepted conservative generic-signature
+false-positive and precommit-cost LOWs require no containment-code change. Luna `gpt-5.6-luna`, session
+`019fa399-ea5b-7b93-953d-f27f42eef3d4`, returned `PASS`; Git ownership/temp
+`EPERM` and a missing Graphify Python runtime were environment-only limitations.
+Claude VERIFIED run `2026-07-27T12-49-03-719Z-95010716` reviewed exact
+`3c156065680fb2cc3efc6a35c0d78158e84da924` at `xhigh`: requested `opus`,
+resolved helper `claude-haiku-4-5-20251001` and reviewer `claude-opus-4-8`,
+and returned `SHIP-WITH-FOLLOWUPS` with no BLOCKER/HIGH finding. Its MEDIUM
+documentation finding was that this summary still named `a200`/`d38` where the
+ledger correctly named the `a750`/`a200` correction cycle; this correction
+aligns them.
+
 ## Owner action and hard boundary
 
 The packet has been regenerated and verified, but Mason must not begin the
 row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
-Product classification is approved. The remaining gate is final exact review of
-this documentation correction plus a protected PR that is accepted with its
-required checks green and any real CodeRabbit finding resolved. The PR is not
-open. Only after those external gates are complete may Mason review every
+Product classification is approved. The remaining gate is a fresh `origin/main`
+refetch before publication, final exact review of this documentation correction,
+and a protected PR accepted with its required checks — including Ubuntu PR CI —
+green and any real CodeRabbit finding resolved. The PR is not open. Only after
+those external gates are complete may Mason review every
 decision field and unresolved acknowledgment, then explicitly approve this
 exact packet before a separate Stage C design mission is considered. No Stage C
 SQL, migration, or apply; no live mutation; no flag enablement; and no deploy or
 merge is authorized by this record.
 
-For durable SHA provenance, this correction is authored against reviewed parent
-`a2002c3c35d78be07690ff643d8d4c7dfceee0cb` and its parent
-`d38d41f63e68971f08f7158bf5a104af62d232aa`. The
-commit that contains this correction is identified by Git and PR metadata, not
-guessed inside this text. Any future model alias must likewise record its
-resolved model truthfully; no literal Opus 5 review is claimed.
+For durable SHA provenance, this correction was produced by the review cycle
+anchored to exact reviewed source `a7506a01a9d65849a160ee608cdb36b4d60501ba`
+and its parent `a2002c3c35d78be07690ff643d8d4c7dfceee0cb`. This anchor names
+the review cycle that produced the correction; it is not an assertion that a
+containing correction commit must always have that immediate parent. The
+containing/final SHA is identified by Git and PR metadata, not guessed inside
+this text, and the review-cycle anchor must not be mechanically rolled forward.
+Any future model alias must likewise record its resolved model truthfully; no
+literal Opus 5 review is claimed.
 
 ## Historical invalidated correction record
 
