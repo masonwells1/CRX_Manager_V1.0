@@ -7,16 +7,18 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (three out-of-scope items still open)
+## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (follow-up items 1 and 2 also resolved; item 3 open and BLOCKED)
 
 **Status 2026-07-27: FIXED LIVE** by migration `20260727145843_inline_role_checks_require_active_profile`
 (applied under Mason's conditional approval once the clean-rebuild check passed). Residual inline-role
 gaps went **38 → 0**; 48 policies now require an active profile. Live role simulation, fully rolled
 back: the deactivated `sales_rep` now sees **0** vendors and **0** vendor_bills, while an active admin
-still sees 13 and 4. **The three numbered items at the end of this section remain OPEN** — items 1
-and 2 are security follow-ups, so read them before assuming deactivation is now airtight; it is not.
-Item 3 is an unrelated disaster-recovery defect in the schema baseline, logged here because this
-migration's clean-rebuild check is what surfaced it.
+still sees 13 and 4. **Of the three numbered items at the end of this section, items 1 and 2 were
+themselves RESOLVED and APPLIED LIVE later the same day** (ledger `20260727174657` and
+`20260727174805`) — they are kept below with their proofs rather than deleted, and each carries its
+own residual-risk note. **Item 3 remains OPEN and is BLOCKED** on a credential; it is an unrelated
+disaster-recovery defect in the schema baseline, logged here because this migration's clean-rebuild
+check is what surfaced it.
 
 The original finding, for context:
 
@@ -145,9 +147,9 @@ disaster-recovery rebuilds only, not production.
    dashboard → Project Settings → Database), or running the dump himself. Do **not** work around this
    by hand-rolling the Supabase CLI's post-processing on top of a `crx_backup_ro` `pg_dump`: the
    baseline *is* the disaster-recovery path, and reproducing it through an undocumented pipeline makes
-   DR less trustworthy, not more. Also note the README's own precondition — refresh only **after the
-   migration ledger has settled** — so this should run after the two §0a migrations above are applied,
-   not before.
+   DR less trustworthy, not more. The README's own precondition — refresh only **after the migration
+   ledger has settled** — **is now satisfied:** items 1 and 2 above were applied live on 2026-07-27
+   and the ledger high-water is `20260727174805`. The credential is the only thing still blocking.
 
 ---
 
