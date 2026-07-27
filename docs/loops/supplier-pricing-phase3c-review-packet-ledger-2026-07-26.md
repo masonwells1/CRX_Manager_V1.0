@@ -9,6 +9,8 @@
 - Branch: `codex/phase3c-overnight-20260726`
 - Created from: `origin/main` /
   `052b2171821dc7ffd965b4edb4b6de4ef8fda511`
+- Current publication-reconciliation base and one-time CI bootstrap pin:
+  `48bd1982c9553c2022fe96be771974ad699be12e` (confirmed to lack the checker).
 - Final allowed state: `PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING`
 - Forbidden interpretation: neither this ledger nor an agent verdict approves
   Product classifications or authorizes a Stage C migration/live apply.
@@ -55,11 +57,11 @@ four existing lint warnings.
   `d38d41f` at `xhigh`: requested `opus`, resolved helper
   `claude-haiku-4-5-20251001` and reviewer `claude-opus-4-8`, and returned
   `SHIP-WITH-FOLLOWUPS` with no BLOCKER/HIGH finding. No literal Opus 5 review
-  is claimed. Its conditional MEDIUM bootstrap mismatch requires no CI change:
-  fresh fetch confirmed `origin/main` remains pinned to
-  `052b2171821dc7ffd965b4edb4b6de4ef8fda511`; this branch is 0 behind / 12
-  ahead. The LOW stale-provenance follow-up agrees with Sol; its fetch-depth
-  cost is harmless and not worth changing.
+  is claimed. Its conditional MEDIUM bootstrap mismatch is historical review
+  evidence only: a fresh fetch then confirmed `origin/main` at
+  `052b2171821dc7ffd965b4edb4b6de4ef8fda511`; this branch was 0 behind / 12
+  ahead. The LOW stale-provenance follow-up agreed with Sol; its fetch-depth
+  cost was harmless and did not warrant a change then.
 - Exact `a2002c3c35d78be07690ff643d8d4c7dfceee0cb` review: Sol returned `FIX`
   solely for stale present-tense historical provenance in these public records.
   Luna `gpt-5.6-luna`, session `019fa36b-2f16-7390-b080-9f7808474f82`, returned
@@ -78,9 +80,9 @@ four existing lint warnings.
   at `xhigh`: requested `opus`, resolved helper
   `claude-haiku-4-5-20251001` and reviewer `claude-opus-4-8`, and returned
   `SHIP-WITH-FOLLOWUPS` with no BLOCKER/HIGH finding. The conditional
-  bootstrap-base drift disposition is fail-closed: fetch `origin/main` again
-  before publication. No CI/code change is warranted while the base remains
-  pinned to `052b2171821dc7ffd965b4edb4b6de4ef8fda511`.
+  bootstrap-base drift disposition was fail-closed: fetch `origin/main` again
+  before publication. No CI/code change was warranted while that historical
+  base remained pinned to `052b2171821dc7ffd965b4edb4b6de4ef8fda511`.
 - Exact `3c156065680fb2cc3efc6a35c0d78158e84da924` non-final exact review
   cycle: Sol returned `CLEAN` with no unresolved BLOCKER/HIGH/MEDIUM finding,
   and Luna `gpt-5.6-luna`, session
@@ -112,12 +114,32 @@ four existing lint warnings.
   the 100,000-candidate ceiling/precommit cost and the unreachable current
   `ZERO_SHA` push nit; neither warrants a code change. A final exact review of
   this correction's containing SHA remains pending.
+- Exact `80741157bb6b127f88d26cd1b4c8c0d5d33bd357` is the reviewed source for
+  this publication-reconciliation correction, not a final acceptance claim.
+  Sol returned `FIX` for a HIGH publication blocker: `origin/main` advanced and
+  the loop omitted the validator's exact `## Definition of done` heading. Luna
+  `gpt-5.6-luna`, session `019fa3c4-0937-7fc0-a83c-2bbdb9af113a`, returned
+  `FIX` for the validator issue and external-base drift. Claude VERIFIED run
+  `2026-07-27T13-36-27-572Z-3b602557` reviewed exact `80741157` at `xhigh`:
+  requested `opus`, resolved helper `claude-haiku-4-5-20251001` and reviewer
+  `claude-opus-4-8`, and returned `SHIP-WITH-FOLLOWUPS` with no BLOCKER/HIGH
+  finding. Its operational bootstrap MEDIUM requires the current base to be
+  rechecked immediately before any push; engineering and privacy evidence were
+  otherwise clean.
+- Current branch reconciliation: normal non-rebased merge
+  `a9817b05d35bc39e13bad94d7680181461b6fcb7` incorporated current
+  `origin/main` `48bd1982c9553c2022fe96be771974ad699be12e` without conflicts
+  and preserved feature history. That new main lacks the containment checker,
+  so the one-time CI bootstrap pin is exactly `48bd1982c9553c2022fe96be771974ad699be12e`.
+  Refetch and recheck it immediately before any push; final exact review of
+  this correction's containing SHA remains pending.
 - Owner gate: Mason must not review the private owner sheet yet. All decisions
   remain `PENDING` across all 604 rows; no Product classification is approved. A final exact review
-  of this documentation correction, a fresh `origin/main` refetch and
-  bootstrap-pin recheck immediately before any push, and an accepted protected
-  PR with required checks — including Ubuntu PR CI — green and real CodeRabbit
-  findings resolved remain mandatory. The PR is not open. Only afterward may Mason review every
+  of this documentation correction, a fresh `origin/main` refetch and current
+  `48bd1982c9553c2022fe96be771974ad699be12e` bootstrap-pin recheck immediately
+  before any push, and an accepted protected PR with required checks — including
+  Ubuntu PR CI — green and real CodeRabbit findings resolved remain mandatory.
+  The PR is not open. Only afterward may Mason review every
   decision field and unresolved acknowledgment before a separate Stage C design
   mission is considered. No Stage C SQL/migration/apply, live mutation, flag
   enablement, deploy, or merge is authorized here.
@@ -333,9 +355,9 @@ it.
 | 1 — design adversary | DONE | `9bf567bf` | none | SHIP | n/a | n/a | `opus` → `claude-opus-4-8` | n/a | Cycle 2 accepts both LOW findings. |
 | 2 — final correction 6 | HISTORICAL — invalidated by later FIX reviews | `d01a8f099394e8c7882736ac52fd81c6d2de8c15` reviewed; its then-uncommitted local correction was later superseded | historical `gpt-5.6-terra` recovery writer | earlier full proof PASS; latest bounded correction focused proof PASS | historical `FIX` session `019fa229-bc19-77b2-92bf-7f270e1cddc8` | historical `FIX` on `d01a8f099394e8c7882736ac52fd81c6d2de8c15` | exact-SHA review was then pending and later superseded | n/a | Historical freeze/Graphify/review requirements were superseded by later cycles. |
 | 3 — private materialization | PARKED — packet regenerated/verified; owner gate closed | 604-row aggregate-only packet | orchestrator-supplied evidence | capture/manifest reproducibility/owner write-verify PASS | exact `d38` PASS; `EPERM` fixture limitation disclosed | exact `d38` FIX for docs-only status/provenance | `SHIP-WITH-FOLLOWUPS`, no BLOCKER/HIGH | PR not open | Wait for final exact review and accepted protected PR before Mason reviews rows. |
-| 4 — full review | DONE for reviewed `d38` packet and `a200`/`a750` provenance cycles; `3c156065` was non-final and `a10bad90` is the correction-review source | `d38d41f63e68971f08f7158bf5a104af62d232aa`; later exact `a2002c3c`, `a7506a01`, `3c156065680fb2cc3efc6a35c0d78158e84da924`, and `a10bad90e990e83a2c650ee66a44828f317797a7` | reviewer evidence | `a750` Sol focused/syntax/docs/workflows/containment green; 51,838 paths / 14 commits / 51,912 candidates / 799,476,952 logical bytes | `d38`/`a200` PASS; `a750` FIX session `019fa381-40b5-77e0-964f-d7aafc35b7fd`; `3c156065` PASS session `019fa399-ea5b-7b93-953d-f27f42eef3d4`; `a10bad90` FIX session `019fa3ae-40b6-7ff1-92c1-282bdac567d3` | `d38` docs-gate FIX; `a200` stale-history FIX; `a750` two MED contradictions; `3c156065` CLEAN but non-final due Opus MED; `a10bad90` FIX for one MED durable chain | `opus` resolved helper `claude-haiku-4-5-20251001` + reviewer `claude-opus-4-8`; `3c156065` and `a10bad90` `SHIP-WITH-FOLLOWUPS`, no BLOCKER/HIGH | PR not open | Re-fetch/recheck `origin/main` immediately before push, then obtain final exact review of the containing correction commit. |
+| 4 — full review | DONE for reviewed `d38` packet and `a200`/`a750` provenance cycles; `3c156065` was non-final, `a10bad90` is a correction-review source, and `80741157` is the publication-reconciliation review source | `d38d41f63e68971f08f7158bf5a104af62d232aa`; later exact `a2002c3c`, `a7506a01`, `3c156065680fb2cc3efc6a35c0d78158e84da924`, `a10bad90e990e83a2c650ee66a44828f317797a7`, and `80741157bb6b127f88d26cd1b4c8c0d5d33bd357` | reviewer evidence | `a750` Sol focused/syntax/docs/workflows/containment green; 51,838 paths / 14 commits / 51,912 candidates / 799,476,952 logical bytes | `d38`/`a200` PASS; `a750` FIX session `019fa381-40b5-77e0-964f-d7aafc35b7fd`; `3c156065` PASS session `019fa399-ea5b-7b93-953d-f27f42eef3d4`; `a10bad90` FIX session `019fa3ae-40b6-7ff1-92c1-282bdac567d3`; `80741157` FIX session `019fa3c4-0937-7fc0-a83c-2bbdb9af113a` | `d38` docs-gate FIX; `a200` stale-history FIX; `a750` two MED contradictions; `3c156065` CLEAN but non-final due Opus MED; `a10bad90` FIX for one MED durable chain; `80741157` FIX for HIGH publication blocker | `opus` resolved helper `claude-haiku-4-5-20251001` + reviewer `claude-opus-4-8`; `3c156065`, `a10bad90`, and `80741157` `SHIP-WITH-FOLLOWUPS`, no BLOCKER/HIGH | PR not open | Current base is merged; re-fetch/recheck `origin/main` immediately before push, then obtain final exact review of the containing correction commit. |
 | 5 — protected PR | PENDING external gate | containing commit identified by Git/PR metadata | none | final exact review of this correction pending | pending final correction | pending final correction | any alias must resolve truthfully; no Opus 5 claim | not open; required checks, including Ubuntu PR CI, green and real CodeRabbit findings resolved before acceptance | Open and accept protected PR; no deploy or merge here. |
-| 6 — closeout | PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING | aggregate-only packet values recorded above | Mason after gates | owner action blocked until external gates complete | `d38`/`a200` PASS, `a750` FIX, `3c156065` PASS but non-final, and `a10bad90` FIX evidence recorded | `d38` docs-gate, `a200` stale-history, `a750` contradiction, and `a10bad90` durable-chain findings corrected; final re-review pending | exact `d38`/`a200`/`a750`/`3c156065`/`a10bad90` reviews recorded | PR not open | Re-fetch/recheck bootstrap immediately before push; private-sheet review only after protected PR acceptance. |
+| 6 — closeout | PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING | aggregate-only packet values recorded above | Mason after gates | owner action blocked until external gates complete | `d38`/`a200` PASS, `a750` FIX, `3c156065` PASS but non-final, `a10bad90` FIX, and `80741157` HIGH publication-blocker evidence recorded | `d38` docs-gate, `a200` stale-history, `a750` contradiction, `a10bad90` durable-chain, and `80741157` current-base/validator findings corrected; final re-review pending | exact `d38`/`a200`/`a750`/`3c156065`/`a10bad90`/`80741157` reviews recorded | PR not open | Re-fetch/recheck current `48bd1982` bootstrap immediately before push; private-sheet review only after protected PR acceptance. |
 
 ## Cycle 0 — preflight
 
@@ -368,8 +390,9 @@ Pre-setup aggregate check observed:
 - Live migration high-water: `20260726223520`
 - `supplier_cost_basis_enabled`: `false`
 
-These are preflight observations, not a captured or approved classification
-packet. They must be refreshed inside the loop before materialization.
+These were historical preflight observations, not a captured or approved
+classification packet. They were superseded by the current regenerated-and-
+verified packet and are not an instruction to refresh or materialize again.
 
 ### Agent and harness evidence
 
@@ -472,8 +495,9 @@ recorded elsewhere in this historical ledger.
 
 The packet has been regenerated and verified. Mason must not review any private
 row yet: final exact review of this documentation correction, a fresh
-`origin/main` refetch and bootstrap-pin recheck immediately before any push,
-and acceptance of the protected PR are first required. The PR is not open;
+`origin/main` refetch and current
+`48bd1982c9553c2022fe96be771974ad699be12e` bootstrap-pin recheck immediately
+before any push, and acceptance of the protected PR are first required. The PR is not open;
 required checks, including Ubuntu PR CI, must be green and any real CodeRabbit
 finding resolved before it is accepted. Only
 then must Mason review every row disposition, proposed family, packaging,
@@ -485,8 +509,8 @@ live mutation, flag enablement, deploy, or merge.
 
 ## Closeout
 
-- `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, and exact `d38d41f`/`a2002c3c`/`a7506a01`/`3c156065`/`a10bad90` Sol/Luna/Claude review outcomes are recorded above; `3c156065` was non-final and `a10bad90` is the correction-review source; older packet hashes are invalidated.
-- `NOW:` obtain final exact review of this documentation correction, then re-fetch/recheck `origin/main` and the bootstrap pin immediately before any push, and obtain a protected PR with required checks, including Ubuntu PR CI, green and real CodeRabbit findings resolved. The PR is not open; Mason must not begin private-sheet review.
+- `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, normal merge `a9817b05` of current main `48bd1982`, and exact `d38d41f`/`a2002c3c`/`a7506a01`/`3c156065`/`a10bad90`/`80741157` Sol/Luna/Claude review outcomes are recorded above; `3c156065` was non-final, `a10bad90` is a correction-review source, and `80741157` is the publication-reconciliation source; older packet hashes are invalidated.
+- `NOW:` obtain final exact review of this documentation correction, then re-fetch/recheck `origin/main` and current `48bd1982c9553c2022fe96be771974ad699be12e` bootstrap pin immediately before any push, and obtain a protected PR with required checks, including Ubuntu PR CI, green and real CodeRabbit findings resolved. The PR is not open; Mason must not begin private-sheet review.
 - `REMAINING:` protected PR acceptance, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet. Any future model alias must record its resolved model truthfully; no literal Opus 5 review is claimed.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
 - `NEEDS MASON:` no action until the external gates complete; afterward, row-by-row private-sheet review and explicit packet approval.

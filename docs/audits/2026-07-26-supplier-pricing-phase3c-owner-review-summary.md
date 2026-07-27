@@ -56,11 +56,11 @@ Claude wrapper run `2026-07-27T11-31-40-990Z-ebe70a0a` reviewed exact `d38d41f`
 at `xhigh`: requested `opus`, resolved helper `claude-haiku-4-5-20251001` and
 reviewer `claude-opus-4-8`, and returned `SHIP-WITH-FOLLOWUPS` with no
 BLOCKER/HIGH finding. It does not claim a literal Opus 5 review. Its conditional
-MEDIUM bootstrap mismatch needs no CI change: a fresh fetch confirmed that
-`origin/main` remains the pinned bootstrap
-`052b2171821dc7ffd965b4edb4b6de4ef8fda511`, and this branch is 0 behind / 12
-ahead. The LOW stale-provenance follow-up agrees with Sol; its fetch-depth cost
-is harmless and is not worth changing.
+MEDIUM bootstrap mismatch was historical review evidence only: at that review,
+a fresh fetch confirmed `origin/main` at the then-pinned bootstrap
+`052b2171821dc7ffd965b4edb4b6de4ef8fda511`, and this branch was 0 behind / 12
+ahead. The LOW stale-provenance follow-up agreed with Sol; its fetch-depth cost
+was harmless and did not warrant a change then.
 
 Exact `a2002c3c35d78be07690ff643d8d4c7dfceee0cb` review then found only stale
 present-tense historical provenance in these two public records. Sol returned
@@ -80,9 +80,9 @@ provenance; its focused fixture sandbox limitation was `EPERM` only. Claude
 VERIFIED run `2026-07-27T12-30-09-152Z-663c4f7b` reviewed exact `a7506a01` at
 `xhigh`: requested `opus`, resolved helper `claude-haiku-4-5-20251001` and
 reviewer `claude-opus-4-8`, and returned `SHIP-WITH-FOLLOWUPS` with no
-BLOCKER/HIGH finding. Its conditional bootstrap-base drift finding remains
-fail-closed and requires a fresh `origin/main` fetch before publication; no code
-change is warranted while the base remains pinned.
+BLOCKER/HIGH finding. Its conditional bootstrap-base drift finding was
+fail-closed and required a fresh `origin/main` fetch before publication; no code
+change was warranted while that historical base remained pinned.
 
 Exact `3c156065680fb2cc3efc6a35c0d78158e84da924` was a non-final exact review
 cycle. Sol returned `CLEAN` with no unresolved BLOCKER/HIGH/MEDIUM finding;
@@ -119,13 +119,36 @@ the 100,000-candidate ceiling/precommit cost and the unreachable current
 receive final exact review on its containing SHA, which is identified only by
 Git and PR metadata.
 
+Exact `80741157bb6b127f88d26cd1b4c8c0d5d33bd357` is the reviewed source for
+this publication-reconciliation correction, not a final acceptance claim. Sol
+returned `FIX` for a HIGH publication blocker: `origin/main` advanced and the
+loop omitted the validator's exact `## Definition of done` heading. Luna
+`gpt-5.6-luna`, session `019fa3c4-0937-7fc0-a83c-2bbdb9af113a`, returned `FIX`
+for the validator issue and external-base drift. Claude VERIFIED run
+`2026-07-27T13-36-27-572Z-3b602557` reviewed exact `80741157` at `xhigh`:
+requested `opus`, resolved helper `claude-haiku-4-5-20251001` and reviewer
+`claude-opus-4-8`, and returned `SHIP-WITH-FOLLOWUPS` with no BLOCKER/HIGH
+finding. Its operational bootstrap MEDIUM requires the current base to be
+rechecked immediately before any push. Engineering and privacy evidence were
+otherwise clean.
+
+The feature branch reconciled current `origin/main`
+`48bd1982c9553c2022fe96be771974ad699be12e` through normal merge
+`a9817b05d35bc39e13bad94d7680181461b6fcb7` without rebasing or conflicts,
+preserving prior feature commits. That new main still lacks the containment
+checker, so the current one-time CI bootstrap pin is exactly `48bd1982c9553c2022fe96be771974ad699be12e`.
+It must be freshly refetched and rechecked immediately before any push. This
+correction still requires final exact review on its containing SHA, identified
+only by Git and PR metadata.
+
 ## Owner action and hard boundary
 
 The packet has been regenerated and verified, but Mason must not begin the
 row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
 Product classification is approved. The remaining gate is final exact review of
-this documentation correction, a fresh `origin/main` refetch and bootstrap-pin
-recheck immediately before any push, and a protected PR accepted with its
+this documentation correction, a fresh `origin/main` refetch and the current
+`48bd1982c9553c2022fe96be771974ad699be12e` bootstrap-pin recheck immediately
+before any push, and a protected PR accepted with its
 required checks — including Ubuntu PR CI — green and any real CodeRabbit finding
 resolved. The PR is not open. Only after those external gates are complete may
 Mason review every
