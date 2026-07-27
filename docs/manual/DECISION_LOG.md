@@ -57,8 +57,11 @@ Source: `docs/research/2026-07-25-opus5-harness-review.md` §1.1a. (Two correcti
    live parity; do not bolt an idempotency/exclusivity scheme onto the job-less path for v1.
 
 Context: these were the last two open owner-decisions from the Fable adversarial review of the
-parked per-line split-billing build (PR #164, flag OFF, migrations not applied). Go-live still
-gates on a CLEAN Codex round-6 verdict (~2026-07-24) + Mason's review.
+then-parked per-line split-billing build (PR #164, at the time flag OFF and migrations not applied),
+whose go-live was expected to gate on a CLEAN Codex round-6 verdict (~2026-07-24) + Mason's review.
+**Superseded by events:** PR #164 merged 2026-07-21, its three migrations are applied live, and
+`per_line_split_billing_enabled` was set to `true` the same day. Current status:
+`docs/manual/KNOWN_ISSUES.md` §0.
 
 ## 2026-07-17 — SETTLED: split-billing model = per-line custom splits on the FIELD-APP path; order-side engine retired later
 
@@ -77,8 +80,9 @@ depend on the order-side engine; the full build spec (3 advisor passes — gpt-5
 xhigh plan-review, claude-fable-5 money-math) is `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`.
 Money math is pinned there (half-away-from-zero, one shared numeric preview+post engine,
 `amount_cents` display-authoritative, post-time SUM assertions, group total is reporting-only not a
-5th balance lever). **Not built** — Mason builds it in Codex next week; §6.1 baseline real-billing
-cycle first.
+5th balance lever). *(Status at the time of this decision: **not built**, to be built in Codex the
+following week with the §6.1 baseline real-billing cycle first. It has since been built and shipped —
+PR #164, merged 2026-07-21, live with the flag ON; see `docs/manual/KNOWN_ISSUES.md` §0.)*
 
 ## 2026-07-17 — SETTLED: CodeRabbit is the standing every-PR AI reviewer; FarmRx made public
 
