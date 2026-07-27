@@ -167,34 +167,55 @@ deterministic and reviewable.
    `scripts/build-schema-baseline-platform.mjs` and
    `scripts/build-schema-baseline-history.mjs`.
 4. **Fingerprints** — `psql -At -F'=' -f scripts/schema-baseline-fingerprints.sql`
-   against live into `live_fingerprints.txt`. The manifest binds this file's own
-   SHA-256, so redefining what "matches production" means fails the gate.
+   against the **restored baseline**, into `baseline_fingerprints.txt`. The manifest
+   binds this file's own SHA-256, so redefining what "matches production" means fails
+   the gate. Capture these from the restore rather than from live: the two agree only
+   while no migration has applied since the artifacts were dumped, and the moment one
+   has, a capture taken from live records digests that no object in the published
+   baseline actually has. That is not a hypothetical — it happened during this refresh,
+   when `quote_and_rate_reads_office_only` applied to production between the capture and
+   the proof and moved `relations_and_acl` and `policy_contracts` out from under it.
 
 Then prove it. Restore the artifacts in `restore_order` into a throwaway
 PostgreSQL 17 container (`public.ecr.aws/supabase/postgres`), and require **all
-twelve fingerprints to match live**, not just the counts. Two of them exist because
-the obvious eight missed real drift: `column_acl` covers production's column-level
-grants, which `relations_and_acl` cannot see because it records only table-level
-`relacl`, and `view_definitions` covers each view's query and `reloptions`, without
-which a view could lose `security_invoker` and start running with owner privileges
-while every other digest stayed identical. Five of the twelve also carry fields the
-obvious definition omits, all for one reason — a catalog's rendered text describes what an
-object *is*, not whether it is *in force*:
+thirteen fingerprints to match the manifest**, not just the counts — then replay
+every post-baseline migration onto that restore and require all thirteen to match
+**live**. The second half is the claim disaster recovery actually rests on: baseline
+plus ledger reproduces production. Comparing a bare restore to live is a weaker
+statement that happens to hold only while nothing has applied since the dump, so it
+passes for the wrong reason on a quiet night and fails on a busy one.
+
+Three of the thirteen exist because the obvious eight missed real drift: `column_acl`
+covers production's column-level grants, which `relations_and_acl` cannot see because
+it records only table-level `relacl`; `view_definitions` covers each view's query and
+`reloptions`, without which a view could lose `security_invoker` and start running with
+owner privileges while every other digest stayed identical; and `default_acl` covers
+`pg_default_acl`, which no ACL digest can reach because a default privilege is a
+standing instruction about the *next* object rather than a grant on any existing one.
+That one is not theoretical here — this project's `public` schema carries the stock
+Supabase rule handing `anon` `EXECUTE` on every function `postgres` creates, which is
+the exact mechanism the ACL lockdown exists to contain.
+
+Six of the thirteen also carry fields the obvious definition omits, all for one
+reason — a catalog's rendered text describes what an object *is*, not whether it is
+*in force*:
 
 | Digest | Extra fields | What is otherwise invisible |
 | --- | --- | --- |
 | `columns` | `attidentity`, `attgenerated` | identity/generated semantics live in `pg_attribute`, not in type/not-null/default |
 | `indexes` | `indisvalid` | a failed `CREATE INDEX CONCURRENTLY` renders the same definition and enforces no UNIQUE constraint |
-| `relations_and_acl` | `relforcerowsecurity`, `relpersistence` | RLS enabled without FORCE still lets the owner bypass every policy; an `UNLOGGED` table loses its rows on crash |
+| `relations_and_acl` | `relforcerowsecurity`, `relpersistence`, plus `storage.objects` in scope | RLS enabled without FORCE still lets the owner bypass every policy; an `UNLOGGED` table loses its rows on crash; and PostgreSQL keeps a table's policies whether or not RLS is switched on, so `storage.objects` with RLS off leaves all 27 Storage policies present and `policy_contracts` byte-identical while every read falls through to the table grants |
 | `triggers` | `tgenabled` | a disabled or `REPLICA`-mode trigger describes itself identically and fires for nothing |
-| `function_security` | `pg_get_function_arguments`, `pg_get_function_result`, `prokind`, `proisstrict`, `proleakproof` | the identity form drops argument defaults and never mentions the result type; strictness, `CALL`-vs-`SELECT`, and leakproofness (which lets the planner push a function below an RLS predicate) are all out-of-body behavior |
-| `cron_contracts` | `active`, `username` | a deactivated job, or one running as a different role, has the same schedule and command | Also require the history
+| `function_security` | `pg_get_function_arguments`, `pg_get_function_result`, `prokind`, `proisstrict`, `proleakproof`, `lanname` | the identity form drops argument defaults and never mentions the result type; strictness, `CALL`-vs-`SELECT`, and leakproofness (which lets the planner push a function below an RLS predicate) are all out-of-body behavior; and a function's language is not in its body, so the same `prosrc` accepted as PL/pgSQL instead of SQL moves neither function digest and raises `syntax error at or near "SELECT"` the first time anything calls it |
+| `cron_contracts` | `active`, `username` | a deactivated job, or one running as a different role, has the same schedule and command |
+
+Also require the history
 file's second application to raise `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER`,
 the cron file's second application to raise
 `BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, the platform overlay's second
 application to raise `BASELINE_PLATFORM_RESTORE_REQUIRES_ABSENT_BUCKETS`, the ACL
 lockdown to re-apply cleanly, and any post-baseline migration to replay onto the
-result. Five of the required proofs are **negative** tests, because a positive match
+result. Eight of the required proofs are **negative** tests, because a positive match
 cannot show that a guard would have noticed anything. On the restored database:
 
 1. Swap one captured `anon` `EXECUTE` grant for a different function and confirm
@@ -208,12 +229,23 @@ cannot show that a guard would have noticed anything. On the restored database:
 4. Disable one trigger and confirm `triggers` moves.
 5. Re-create one function with the same body and grants but a different result type, and
    confirm `function_security` moves.
+6. `ALTER TABLE storage.objects DISABLE ROW LEVEL SECURITY` and confirm
+   `relations_and_acl` moves. Check that the policies are still all there while it is
+   off — that is the whole point, and it is why `policy_contracts` alone cannot stand in
+   for this.
+7. Change one `pg_default_acl` entry and confirm `default_acl` moves, and that it is the
+   only one of the thirteen that does.
+8. Re-create one SQL function as `plpgsql` with byte-identical source and grants, and
+   confirm `function_security` moves while `function_canonical_source` does not. Live
+   `prosrc` here is CRLF-wrapped, so re-create it with an `E'...'` literal carrying the
+   original `\r\n`; a naive dollar-quoted body is a different string and moves the source
+   digest for the wrong reason. Creating it needs `SET check_function_bodies = off`.
 
 Each of those leaves the naive form of its check untouched — the count stays at 95, and
-the pre-fix `columns`, `triggers`, and `function_security` definitions returned
-byte-identical digests across the last four — so a refresh that recorded only the positive
-match would have proven nothing. Record each as a `true` flag in
-`disposable_restore_proof`.
+the pre-fix `columns`, `triggers`, `relations_and_acl`, and `function_security`
+definitions returned byte-identical digests across the drifts aimed at them — so a
+refresh that recorded only the positive match would have proven nothing. Record each as a
+`true` flag in `disposable_restore_proof`.
 `verify-schema-baseline.mjs` holds a hard-coded list of the required flags and
 fails if any is missing or not `true` — it does not iterate whatever keys happen to
 be present, because a proof that simply omitted the checks it failed would

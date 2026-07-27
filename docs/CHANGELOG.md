@@ -36,8 +36,8 @@ path only. Closes the last open item in `KNOWN_ISSUES.md` §0a.
   lockdown owns — two of which are `FOR ROLE "supabase_admin"` and abort the restore outright).
 
 **Proof.** The six artifacts restored in `restore_order` into a throwaway PostgreSQL 17.6 container:
-**all twelve catalog fingerprints match live** (`columns`, `constraints`, `enums`, `indexes`,
-`relations_and_acl`, `column_acl`, `view_definitions`, `triggers`, `function_security`,
+**all thirteen catalog fingerprints match** (`columns`, `constraints`, `enums`, `indexes`,
+`relations_and_acl`, `column_acl`, `default_acl`, `view_definitions`, `triggers`, `function_security`,
 `function_canonical_source`, `policy_contracts`, `cron_contracts`); restored ledger reports `914|20260727174805`; re-applying the
 history file raises `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER` and the cron file raises
 `BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`; the ACL lockdown re-applies cleanly; and a
@@ -223,6 +223,61 @@ scratch: all twelve digests match, the three sentinels fire, the lockdown re-app
 warnings and none outside `plpgsql`, the `anon` `EXECUTE` swap still raises both halves at an
 unchanged count of 95, and the post-baseline migration replays to `915|20260727193441`. No
 artifact bytes changed.
+
+**Review round seven.** The same class again in the three places it was still open, plus a
+vocabulary error in the proof itself that a live production apply exposed mid-flight.
+
+The three gaps. **Storage RLS** — PostgreSQL keeps a table's policies whether or not row-level
+security is switched on, and `relations_and_acl` only covered the `public` schema, so
+`storage.objects` restored with RLS *disabled* left all **27** Storage policies present,
+`policy_contracts` byte-identical, and every read on the customer-documents bucket falling
+through to the table grants. Measured: with RLS off the old digest sat at exactly
+`b92bb4af3bff3c5916bda2f48d88b7bd` — the value the round-six manifest published — while the new
+one moved from `f8a31d12…` to `f8129f07…`, and a policy count taken in the same breath still
+reported 27. **Default privileges** — a default privilege is a standing instruction about the
+*next* object, not a grant on any existing one, so no ACL digest can see it, and this project's
+`public` schema carries the stock Supabase rule
+(`anon=X/postgres,authenticated=X/postgres,service_role=X/postgres`) handing `anon` `EXECUTE` on
+every function `postgres` creates. That is the exact mechanism the ACL lockdown exists to contain,
+and it sat outside the fidelity contract entirely; a restore whose rule was quietly widened would
+have matched every digest and re-opened the surface the lockdown closes. The new thirteenth digest
+`default_acl` covers `pg_default_acl`; changing one entry moved it from `15c0e0c3…` to
+`8b2e8fc8…` and moved **none** of the other twelve. **Function language** — a function's language
+is not in its body. `_format_pricing_dollars` re-created as `plpgsql` with byte-identical `prosrc`
+and identical grants left `function_canonical_source` at `eb4600f2…` and the old
+`function_security` at `2c1a79aa…`, both unmoved, while the new definition went to `cb6e8374…`;
+invoking it raised `syntax error at or near "SELECT"`, which is what a rebuilt project would have
+hit the first time anything called it. Two details worth recording: live `prosrc` here is
+CRLF-wrapped (80 bytes, `0d0a` at both ends), so the swap has to re-create the body from an
+`E'...'` literal carrying the original `\r\n` or the source digest moves for the wrong reason; and
+creating it at all needs `SET check_function_bodies = off`.
+
+**The proof was comparing the wrong two things.** Round six recorded
+`all_catalog_fingerprints_match_live` against a *bare restore*. That claim only holds while no
+migration has applied since the artifacts were dumped — and during this round one did: another
+session applied `quote_and_rate_reads_office_only` to production at 23:16:52 as
+`20260727231652`, which revokes `SELECT` on four public tables from `anon` and rewrites eleven
+policies, moving `relations_and_acl` and `policy_contracts` out from under a capture that had
+already been taken. Two digests "mismatched" and nothing was wrong. Baseline ≠ live is the normal
+steady state; the property disaster recovery rests on is *baseline restore + replay of the
+post-baseline migrations == live*, which is strictly stronger. The proof flags now say that:
+`ledger_rows_and_high_water_match_manifest` is asserted against the restore standing at its own
+high-water, and the new `restore_plus_post_baseline_replay_matches_live` carries the live claim.
+Fingerprint capture moved with it — `assemble-schema-baseline.mjs` now reads
+`baseline_fingerprints.txt`, taken from the restored baseline, because dumping live once it has
+moved on would certify a baseline whose recorded digests no object in it actually has. The
+baseline stays at high-water `20260727174805`: the committed tree holds no migration past it, and
+re-basing onto another session's in-flight file would couple this change to work that is not part
+of it.
+
+`disposable_restore_proof` is now nineteen checks, eight of them negative. Re-proved on a
+container rebuilt from scratch: all thirteen digests match the manifest at `914|20260727174805`;
+replaying `20260727231652` and its ledger row brings the container to `915|20260727231652` with
+all thirteen matching live; the three restore sentinels fire; the lockdown re-applies with 24
+warnings, none outside `plpgsql`; the `anon` `EXECUTE` swap still raises both halves at an
+unchanged effective count of 95; and each of the seven drift mutations moved only the digest aimed
+at it, with every mutation reverted and the container ending back at all thirteen baseline values.
+Only the fingerprint definition, three digests, and the proof flag set changed — no artifact bytes.
 
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 

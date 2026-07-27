@@ -78,6 +78,13 @@ FROM (
 ) s
 
 UNION ALL
+-- `storage.objects` is in scope here for the same reason it is in scope for
+-- `policy_contracts`: CRX owns the Storage policies, and PostgreSQL keeps policies on a
+-- table whether or not row-level security is switched on. Fingerprinting the policies while
+-- restricting the relation state to `public` would let a restore land every Storage policy
+-- with RLS disabled — all digests matching, nothing enforced, and authenticated callers
+-- falling through to the table grants.
+--
 -- `relforcerowsecurity` and `relpersistence` are carried alongside `relrowsecurity`.
 -- RLS being enabled is not the whole contract: without FORCE, the table owner bypasses
 -- every policy, so a restore that enabled RLS but dropped FORCE would match a digest
@@ -94,7 +101,8 @@ FROM (
                 ), ','), '')) AS entry
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
+  WHERE (n.nspname = 'public' OR (n.nspname = 'storage' AND c.relname = 'objects'))
+    AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
 ) s
 
 UNION ALL
@@ -114,6 +122,28 @@ FROM (
   JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm')
     AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
+) s
+
+UNION ALL
+-- Default privileges are a standing instruction, not a current grant, so no ACL digest can
+-- see them: every relation and function ACL can match live exactly while `pg_default_acl`
+-- says something different about what the *next* object will be granted. This project has
+-- already been bitten by that mechanism from the other direction — a stock Supabase project
+-- ships `ALTER DEFAULT PRIVILEGES` handing `anon` CRUD and EXECUTE on everything `postgres`
+-- creates, which is why the lockdown exists at all. A baseline certified with a stale or
+-- substituted default-ACL set would silently widen the first post-baseline migration that
+-- creates a table or a function.
+SELECT 'default_acl', md5(COALESCE(string_agg(entry, E'\n' ORDER BY entry), ''))
+FROM (
+  SELECT format('%s|%s|%s|%s',
+                COALESCE(n.nspname, ''),
+                pg_get_userbyid(da.defaclrole),
+                da.defaclobjtype,
+                array_to_string(ARRAY(
+                  SELECT unnest(da.defaclacl)::text ORDER BY 1
+                ), ',')) AS entry
+  FROM pg_default_acl da
+  LEFT JOIN pg_namespace n ON n.oid = da.defaclnamespace
 ) s
 
 UNION ALL
@@ -171,10 +201,13 @@ UNION ALL
 -- flags: a procedure is invoked with `CALL` rather than `SELECT`, a strict function
 -- returns NULL on any NULL argument without running its body at all, and a leakproof one
 -- may be pushed below an RLS predicate by the planner — which is a read-access change, not
--- a performance one.
+-- a performance one. `lanname` is carried because the same `prosrc` means different things
+-- under different languages and neither digest would otherwise notice the swap; whether a
+-- given body is rejected at CREATE time depends on `check_function_bodies`, which a restore
+-- may well have turned off.
 SELECT 'function_security', md5(string_agg(entry, E'\n' ORDER BY entry))
 FROM (
-  SELECT format('%s.%s(%s)|%s|%s|%s|%s|%s|%s|%s|%s|%s',
+  SELECT format('%s.%s(%s)|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s',
                 n.nspname, p.proname,
                 pg_get_function_identity_arguments(p.oid),
                 pg_get_function_arguments(p.oid),
@@ -182,6 +215,7 @@ FROM (
                 p.prokind,
                 p.proisstrict,
                 p.proleakproof,
+                l.lanname,
                 p.prosecdef,
                 COALESCE(array_to_string(p.proconfig, ','), ''),
                 p.provolatile,
@@ -190,6 +224,7 @@ FROM (
                 ), ','), '')) AS entry
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_language l ON l.oid = p.prolang
   LEFT JOIN pg_depend d ON d.objid = p.oid AND d.deptype = 'e'
   WHERE n.nspname = 'public' AND d.objid IS NULL AND p.prokind IN ('f', 'p')
 ) s

@@ -16,7 +16,13 @@
 //   <high-water>_platform_overlay.sql    build-schema-baseline-platform.mjs
 //   <high-water>_storage_buckets.json    live storage.buckets snapshot
 //   <high-water>_migration_history.sql   build-schema-baseline-history.mjs
-//   live_fingerprints.txt                scripts/schema-baseline-fingerprints.sql output
+//   baseline_fingerprints.txt            scripts/schema-baseline-fingerprints.sql output,
+//                                        run against the RESTORED baseline standing at
+//                                        <high-water> — not against live. The two are the
+//                                        same database only while no migration has applied
+//                                        since the capture, and dumping live once it has
+//                                        moved on would certify a baseline whose recorded
+//                                        digests no object in it actually has.
 //   ext_sigs.txt                         public extension function signatures
 //   key_fn_md5.txt                       pinned function body md5s
 //   counts.txt                           live catalog counts
@@ -53,7 +59,7 @@ const pairs = (text) =>
       }),
   );
 
-const fingerprints = pairs(read('live_fingerprints.txt'));
+const fingerprints = pairs(read('baseline_fingerprints.txt'));
 
 // The fingerprints are the fidelity contract, so the capture has to be complete before
 // it is published. A psql run that died partway still leaves a well-formed key=value
@@ -77,14 +83,14 @@ const fingerprints = pairs(read('live_fingerprints.txt'));
   const missing = expected.filter((name) => !/^[0-9a-f]{32}$/.test(fingerprints[name] ?? ''));
   if (missing.length > 0) {
     throw new Error(
-      `live_fingerprints.txt is missing a valid md5 for: ${missing.join(', ')}; ` +
-        're-run the capture against live',
+      `baseline_fingerprints.txt is missing a valid md5 for: ${missing.join(', ')}; ` +
+        're-run the capture against the restored baseline',
     );
   }
   const unexpected = Object.keys(fingerprints).filter((name) => !expected.includes(name));
   if (unexpected.length > 0) {
     throw new Error(
-      `live_fingerprints.txt has fingerprints the recorded SQL does not define: ${unexpected.join(', ')}`,
+      `baseline_fingerprints.txt has fingerprints the recorded SQL does not define: ${unexpected.join(', ')}`,
     );
   }
 }

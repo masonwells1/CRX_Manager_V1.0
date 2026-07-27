@@ -97,9 +97,19 @@ for (const [file, field] of [
 // throwaway database and matched against live. The required list is enumerated
 // rather than inferred from whatever keys happen to be present: iterating the
 // object alone would pass a proof that simply omitted the checks it failed.
+// Two vocabularies on purpose, because the baseline and live are not required to be
+// the same thing. A baseline is a snapshot at its own high-water; live moves on the
+// moment the next migration applies, which is the normal steady state rather than a
+// fault. So `_match_manifest` is asserted against the restore standing at the recorded
+// high-water, and every `_match_live` claim is evaluated only after the post-baseline
+// migrations have been replayed onto that restore to bring it to live's high-water.
+// That is the property disaster recovery actually needs — baseline plus ledger
+// reproduces production — and it is strictly stronger than comparing a restore to a
+// live database that happened to have moved nowhere yet.
 const REQUIRED_RESTORE_PROOFS = [
   'restore_order_applied_clean',
-  'ledger_rows_and_high_water_match_live',
+  'ledger_rows_and_high_water_match_manifest',
+  'restore_plus_post_baseline_replay_matches_live',
   'all_catalog_fingerprints_match_live',
   'relation_and_function_acl_match_live',
   'function_source_matches_live',
@@ -127,6 +137,20 @@ const REQUIRED_RESTORE_PROOFS = [
   // twelve digests under the previous definitions.
   'trigger_fingerprint_rejects_disabled_trigger',
   'function_fingerprint_rejects_return_type_drift',
+  // Three more, closing the same gap in the three places it was still open. Storage is
+  // the sharpest: PostgreSQL keeps a table's policies whether or not row-level security
+  // is switched on, so `storage.objects` restored with RLS disabled left all 27 Storage
+  // policies present, `policy_contracts` byte-identical, and every read falling through
+  // to the table grants. Default privileges are a standing instruction about the *next*
+  // object rather than a grant on any existing one, so no ACL digest can see them —
+  // and this project's `public` schema still carries the stock Supabase rule handing
+  // `anon` EXECUTE on everything `postgres` creates, which is the mechanism the lockdown
+  // exists to contain. And a function's language is not in its body: the same `prosrc`
+  // accepted as PL/pgSQL instead of SQL leaves both function digests unmoved and raises
+  // `syntax error at or near "SELECT"` the first time anything calls it.
+  'relation_fingerprint_rejects_storage_rls_disable',
+  'default_acl_fingerprint_rejects_default_privilege_drift',
+  'function_fingerprint_rejects_language_drift',
   'post_baseline_migration_replays_clean',
 ];
 {

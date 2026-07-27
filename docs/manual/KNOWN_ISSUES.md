@@ -130,12 +130,16 @@ surfaced, affecting disaster-recovery rebuilds only, not production.
    `20260727174805` (914 ledger rows) — no applied migration was edited. Mason supplied the
    `postgres` database password on 2026-07-27, which was the sole blocker.
    **Proven, not assumed.** The six artifacts were restored in `restore_order` into a throwaway
-   PostgreSQL 17.6 container and **all twelve catalog fingerprints match live** (`columns`,
-   `constraints`, `enums`, `indexes`, `relations_and_acl`, `column_acl`, `view_definitions`,
-   `triggers`, `function_security`, `function_canonical_source`, `policy_contracts`,
-   `cron_contracts`). `column_acl` and `view_definitions` were added in review: without them
-   production's 27 column-level grants on `public.products`, and a view's `security_invoker`
-   setting, could change with every digest unchanged. The restored ledger reports
+   PostgreSQL 17.6 container and **all thirteen catalog fingerprints match the manifest**
+   (`columns`, `constraints`, `enums`, `indexes`, `relations_and_acl`, `column_acl`, `default_acl`,
+   `view_definitions`, `triggers`, `function_security`, `function_canonical_source`,
+   `policy_contracts`, `cron_contracts`) — and after the post-baseline migrations are replayed onto
+   that restore, all thirteen match **live**, which is the property disaster recovery actually
+   needs: baseline plus ledger reproduces production. `column_acl`, `view_definitions`, and
+   `default_acl` were added in review: without them production's 27 column-level grants on
+   `public.products`, a view's `security_invoker` setting, and the standing `ALTER DEFAULT
+   PRIVILEGES` rule that hands `anon` `EXECUTE` on every new function could all change with every
+   digest unchanged. The restored ledger reports
    `914|20260727174805`. Re-applying the history file raises
    `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER` and the cron file raises
    `BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, so both stay fail-closed. A post-baseline migration replays
