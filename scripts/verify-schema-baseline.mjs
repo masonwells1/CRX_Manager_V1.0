@@ -74,6 +74,7 @@ const REQUIRED_RESTORE_PROOFS = [
   'function_source_matches_live',
   'history_restore_fail_closed',
   'cron_restore_fail_closed',
+  'platform_restore_fail_closed',
   'acl_lockdown_reapply_is_idempotent',
   'post_baseline_migration_replays_clean',
 ];
@@ -198,6 +199,15 @@ for (const [key, actual] of Object.entries(staticCounts)) {
 if (countMatches(platformOverlay, /^DROP POLICY IF EXISTS /gm) !== expectedCounts.storage_object_policies) {
   fail('platform overlay does not replace every captured Storage policy');
 }
+// The overlay drops only the policy names live holds now, so re-applying it to a
+// database still carrying an older baseline's policies would leave those retired names
+// in force — and policies are OR'ed, so a retired unscoped policy surviving beside its
+// scoped replacement silently widens access. The overlay is a from-zero restore step,
+// and it must refuse a second apply deliberately rather than relying on the bucket
+// INSERT to collide.
+if (!platformOverlay.includes('BASELINE_PLATFORM_RESTORE_REQUIRES_ABSENT_BUCKETS')) {
+  fail('platform restore is not fail-closed');
+}
 const bucketInsertValues = platformOverlay.match(
   /INSERT INTO "storage"\."buckets"[\s\S]*?\nVALUES\n([\s\S]*?);\r?\nCOMMIT;/,
 )?.[1] ?? '';
@@ -265,10 +275,22 @@ if (!cronJobs.includes('BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS')) {
       fail(`ACL lockdown does not reset default privileges for ${objects}`);
     }
   }
-  for (const sentinel of ['BASELINE_ACL_RESTORE_REQUIRES_MANAGED_ROLES', 'BASELINE_ACL_ANON_OVER_GRANTED']) {
+  for (const sentinel of [
+    'BASELINE_ACL_RESTORE_REQUIRES_MANAGED_ROLES',
+    'BASELINE_ACL_ANON_OVER_GRANTED',
+    // Tables are guarded by "anon holds nothing beyond SELECT"; functions cannot be,
+    // because production legitimately grants anon EXECUTE on the PostgREST /rpc/
+    // surface. The routine guard therefore pins an exact count instead.
+    'BASELINE_ACL_ANON_EXECUTE_DRIFTED',
+  ]) {
     if (!aclLockdown.includes(sentinel)) {
       fail(`ACL lockdown is missing the ${sentinel} guard`);
     }
+  }
+  // A table privilege granted to PUBLIC reaches anon by inheritance, so the emitted
+  // guard counts PUBLIC as anon. Assert the widened form is the one that shipped.
+  if (!aclLockdown.includes("AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) = 'anon')")) {
+    fail('ACL lockdown table guard does not treat PUBLIC grants as reaching anon');
   }
   const grants = [...aclLockdown.matchAll(/^GRANT .+ TO .+;$/gm)];
   const defaultGrants = [...aclLockdown.matchAll(/^ALTER DEFAULT PRIVILEGES FOR ROLE .+ GRANT .+ TO .+;$/gm)];

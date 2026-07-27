@@ -51,13 +51,28 @@ does **not** strip a role-specific grant. Restoring the schema alone therefore
 leaves `anon` holding privileges production revoked, and leaves default privileges
 that would re-grant them to every future migration. The lockdown revokes the
 Supabase-managed roles down to nothing, re-applies production's exact grants, and
-restores production's default privileges. It ends with a guard that raises
-`BASELINE_ACL_ANON_OVER_GRANTED` if `anon` still holds anything beyond
-`SELECT`/`MAINTAIN` on a table. It is idempotent and safe to re-run.
+restores production's default privileges. It ends with two guards.
+`BASELINE_ACL_ANON_OVER_GRANTED` fires if `anon` still holds anything beyond
+`SELECT`/`MAINTAIN` on a table — counting privileges granted to `PUBLIC`, because
+`anon` inherits those. `BASELINE_ACL_ANON_EXECUTE_DRIFTED` fires if `anon` holds
+`EXECUTE` on anything other than the exact set of functions captured. Functions
+cannot be guarded the way tables are: production legitimately grants `anon`
+`EXECUTE` on part of the schema — that is the PostgREST `/rpc/` surface — so
+"`anon` holds no `EXECUTE`" would reject live's own state. Restoring the public
+schema alone leaves `anon` holding `EXECUTE` on **all 527** non-extension public
+functions; the lockdown cuts that to the **95** production grants. Extension-owned
+functions are excluded throughout: they belong to `supabase_admin`, the project
+owner cannot revoke them, and the baseline does not manage them. The lockdown is
+idempotent and safe to re-run.
 
 The platform overlay restores the CRX-owned `auth.users` profile trigger, all
 CRX Storage policies, and bucket configuration after the public functions and
-tables they reference exist. The history restore refuses a non-empty
+tables they reference exist. It is **not** re-appliable, and says so: it drops only
+the policy names live holds today, so applying it over an older baseline's policies
+would leave those retired names in force, and policies are OR'ed — a retired
+unscoped policy surviving beside its scoped replacement silently widens access. A
+second apply raises `BASELINE_PLATFORM_RESTORE_REQUIRES_ABSENT_BUCKETS`. The
+history restore refuses a non-empty
 `supabase_migrations.schema_migrations` table; never clear a real ledger merely
 to make it run.
 The cron restore similarly refuses any existing job with one of the eight CRX
@@ -141,11 +156,14 @@ PostgreSQL 17 container (`public.ecr.aws/supabase/postgres`), and require **all
 ten fingerprints to match live**, not just the counts. Also require the history
 file's second application to raise `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER`,
 the cron file's second application to raise
-`BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, the ACL lockdown to re-apply
-cleanly, and any post-baseline migration to replay onto the result. Record each
-of those as a `true` flag in `disposable_restore_proof`; `verify-schema-baseline.mjs`
-fails if any flag is missing or not `true`, so a half-finished refresh cannot be
-published as if it were proven.
+`BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, the platform overlay's second
+application to raise `BASELINE_PLATFORM_RESTORE_REQUIRES_ABSENT_BUCKETS`, the ACL
+lockdown to re-apply cleanly, and any post-baseline migration to replay onto the
+result. Record each of those as a `true` flag in `disposable_restore_proof`.
+`verify-schema-baseline.mjs` holds a hard-coded list of the required flags and
+fails if any is missing or not `true` — it does not iterate whatever keys happen to
+be present, because a proof that simply omitted the checks it failed would
+otherwise pass. A half-finished refresh cannot be published as if it were proven.
 
 Finally run `node scripts/assemble-schema-baseline.mjs <work-dir> <high-water>`,
 delete the superseded artifacts, and run `npm run test:schema-baseline`.

@@ -1637,17 +1637,23 @@ DECLARE
   v_leaked text;
   v_anon_execute integer;
 BEGIN
+  -- Grantee 0 is PUBLIC, and anon inherits everything PUBLIC holds, so a table
+  -- privilege granted to PUBLIC reaches the unauthenticated role just as surely as
+  -- one granted to anon by name. Filtering on the name alone would let a bad capture
+  -- hand PUBLIC write access to a table and still pass. Production grants nothing to
+  -- PUBLIC on tables or sequences (only EXECUTE on functions), so this widening
+  -- rejects drift without rejecting live.
   SELECT string_agg(format('%s on %s', grantee, obj), ', ' ORDER BY obj, grantee)
     INTO v_leaked
   FROM (
-    SELECT pg_get_userbyid(a.grantee) AS grantee,
+    SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee,
            format('%I.%I', n.nspname, c.relname) AS obj
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     CROSS JOIN LATERAL aclexplode(c.relacl) a
     WHERE n.nspname = 'public'
       AND c.relkind IN ('r', 'p', 'v', 'm')
-      AND pg_get_userbyid(a.grantee) = 'anon'
+      AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) = 'anon')
       AND a.privilege_type NOT IN ('SELECT', 'MAINTAIN')
   ) s;
 

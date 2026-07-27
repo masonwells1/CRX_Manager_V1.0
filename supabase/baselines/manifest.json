@@ -1,7 +1,7 @@
 {
   "format_version": 3,
   "project_id": "rhyzpcqhnizqbxphqdkr",
-  "generated_at": "2026-07-27T20:14:42.143Z",
+  "generated_at": "2026-07-27T21:07:02.610Z",
   "migrations_high_water": "20260727174805",
   "migration_ledger_rows": 914,
   "fingerprint_sql_sha256": "3CB77576F5A1FC829524BE1B1BE5C9A9A44BCD2CAADDB8FBCCAA6CFC072FC4D1",
@@ -17,8 +17,8 @@
   ],
   "artifacts": {
     "20260727174805_acl_lockdown.sql": {
-      "bytes": 180972,
-      "sha256": "286BFEB4F7A6067592FB8E7A43C3F533D87C71A894218A4FA3AD26A345B71E5D"
+      "bytes": 181498,
+      "sha256": "8522389313790942F2516D088665C34178023056D3EFC8D70B79AF68385ECE90"
     },
     "20260727174805_cron_jobs.sql": {
       "bytes": 4008,
@@ -33,8 +33,8 @@
       "sha256": "D8B3CC8F7AA422F9EEFBD4DE4CE9B3F8933BF255BF78DB12DCA59840B731C1EC"
     },
     "20260727174805_platform_overlay.sql": {
-      "bytes": 15057,
-      "sha256": "BD8542B3006701D8C0FF8DECE618FDAE8E870AE8650DF662F9A8B289BB6096E8"
+      "bytes": 16332,
+      "sha256": "B3E6348113B00D207450DF768EF3AC640C86990EEF96E09E8610B59A5978C2D0"
     },
     "20260727174805_public_schema.sql.br": {
       "bytes": 340363,
@@ -116,6 +116,7 @@
     "function_source_matches_live": true,
     "history_restore_fail_closed": true,
     "cron_restore_fail_closed": true,
+    "platform_restore_fail_closed": true,
     "acl_lockdown_reapply_is_idempotent": true,
     "post_baseline_migration_replays_clean": true
   }

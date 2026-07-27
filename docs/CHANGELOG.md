@@ -60,8 +60,8 @@ migration filenames have no matching ledger version while 654 ledger versions ha
 pre-existing consequence of applying migrations through the Management API, which assigns its own
 version. The baseline copies live's ledger verbatim so a restore mirrors production exactly.
 
-**Review follow-up (CodeRabbit, PR #251).** Four verification-layer gaps closed after the initial
-push, none of them in the captured state. `verify-schema-baseline.mjs` now checks `restore_order` by
+**Review follow-up (CodeRabbit, PR #251).** Six review findings closed after the initial push, all
+in the verification layer rather than in the captured state. `verify-schema-baseline.mjs` now checks `restore_order` by
 exact name and position rather than by length — a manifest that dropped the ACL lockdown and repeated
 another artifact was still six entries long and would have rebuilt a project with `anon`
 over-granted — and it enumerates the nine required `disposable_restore_proof` checks rather than
@@ -76,8 +76,22 @@ lockdown cuts that to the **95** production actually grants — that is the Post
 so the guard asserts that exact count rather than rejecting `anon` EXECUTE outright, which would
 reject live's own state. Extension-owned functions are excluded to match the capture: they belong to
 `supabase_admin`, the project owner cannot revoke them, and the baseline does not manage them. The
-lockdown artifact was regenerated and the full disposable-restore proof re-run from scratch against
-it — all ten fingerprints still match live, and `anon` EXECUTE lands on exactly 95.
+same table guard now counts privileges granted to `PUBLIC` as reaching `anon`, because `anon`
+inherits them — filtering on the role name alone would let a capture hand `PUBLIC` write access to a
+table and still pass. Production grants nothing to `PUBLIC` on tables or sequences, only the 93
+function `EXECUTE` grants, so the widening rejects drift without rejecting live; the generator now
+refuses at build time if a capture ever contains a relation grant to `PUBLIC`, since such an artifact
+would grant what its own guard rejects. Last, `build-schema-baseline-platform.mjs` makes the platform
+overlay's single-use nature explicit with `BASELINE_PLATFORM_RESTORE_REQUIRES_ABSENT_BUCKETS`. The
+overlay drops only the policy names live holds today, so re-applying it over an older baseline's
+policies would leave the retired names in force, and policies are OR'ed — a retired unscoped policy
+surviving beside its scoped replacement silently widens access. Measured on the container, a second
+apply already failed: the bucket INSERT has no `ON CONFLICT`, so it died on a primary-key collision
+and rolled the whole transaction back, leaving the scoped policies intact. That protection was
+accidental and reported itself as an opaque duplicate-key error; it is now a deliberate, named
+refusal that no longer depends on the INSERT. Both artifacts were regenerated and the full
+disposable-restore proof re-run from scratch against them — all ten fingerprints still match live,
+`anon` EXECUTE lands on exactly 95, and `anon`/`PUBLIC` hold zero table privileges beyond `SELECT`.
 
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 

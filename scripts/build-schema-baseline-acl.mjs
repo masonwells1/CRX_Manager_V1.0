@@ -57,6 +57,20 @@ if (defaultPrivilegeStatements.length === 0) {
   throw new Error('no default-privilege statements were captured; the lockdown would not bind future objects');
 }
 
+// The emitted table guard treats PUBLIC as anon, because anon inherits it. If a
+// capture ever contains a table or sequence grant to PUBLIC, the artifact would grant
+// it and then its own guard would reject it — a file that cannot apply. Catch that
+// here, where the message can say what to do, rather than at restore time.
+const publicRelationGrants = statements.filter((s) =>
+  /^GRANT .+ ON (TABLE|SEQUENCE) .+ TO PUBLIC;$/.test(s),
+);
+if (publicRelationGrants.length > 0) {
+  throw new Error(
+    `capture grants ${publicRelationGrants.length} relation privilege(s) to PUBLIC, which anon inherits; ` +
+      `review production before baselining: ${publicRelationGrants[0]}`,
+  );
+}
+
 // Functions cannot be guarded the way tables are. Production legitimately grants
 // `anon` EXECUTE on part of the schema — that is how the PostgREST `/rpc/` surface
 // works — so "anon holds no EXECUTE" would reject live's own state. What must hold
@@ -119,17 +133,23 @@ const output = [
   '  v_leaked text;',
   '  v_anon_execute integer;',
   'BEGIN',
+  '  -- Grantee 0 is PUBLIC, and anon inherits everything PUBLIC holds, so a table',
+  '  -- privilege granted to PUBLIC reaches the unauthenticated role just as surely as',
+  '  -- one granted to anon by name. Filtering on the name alone would let a bad capture',
+  '  -- hand PUBLIC write access to a table and still pass. Production grants nothing to',
+  '  -- PUBLIC on tables or sequences (only EXECUTE on functions), so this widening',
+  '  -- rejects drift without rejecting live.',
   '  SELECT string_agg(format(\'%s on %s\', grantee, obj), \', \' ORDER BY obj, grantee)',
   '    INTO v_leaked',
   '  FROM (',
-  '    SELECT pg_get_userbyid(a.grantee) AS grantee,',
+  '    SELECT CASE WHEN a.grantee = 0 THEN \'PUBLIC\' ELSE pg_get_userbyid(a.grantee) END AS grantee,',
   '           format(\'%I.%I\', n.nspname, c.relname) AS obj',
   '    FROM pg_class c',
   '    JOIN pg_namespace n ON n.oid = c.relnamespace',
   '    CROSS JOIN LATERAL aclexplode(c.relacl) a',
   "    WHERE n.nspname = 'public'",
   "      AND c.relkind IN ('r', 'p', 'v', 'm')",
-  "      AND pg_get_userbyid(a.grantee) = 'anon'",
+  "      AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) = 'anon')",
   "      AND a.privilege_type NOT IN ('SELECT', 'MAINTAIN')",
   '  ) s;',
   '',
