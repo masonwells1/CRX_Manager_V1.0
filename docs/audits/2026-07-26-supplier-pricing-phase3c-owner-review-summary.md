@@ -142,13 +142,18 @@ checker. A later normal non-rebased merge
 `c6c5ea3ae0e2af5c67f8c55d64d930877e5c6cc1` incorporated current
 historical #245 base `origin/main` `0e058804090b84f9a14024a6666021a271bb1f71`
 without conflicts. A later normal merge
-`98969765030d8ada43566fad606f4d74057d1e17` incorporated current
+`98969765030d8ada43566fad606f4d74057d1e17` incorporated historical
 `origin/main` `07a3d4833cf8517ea53831a6ff0976b4a6c4c67f` (`#247`) without
 conflicts; #247 is the active-profile RLS migration and reference-doc update,
 with no Phase 3C containment overlap. Exact Git object checks prove this
-current base lacks both the checker and trusted target workflow, so the current
-one-time CI bootstrap pin is exactly
-`07a3d4833cf8517ea53831a6ff0976b4a6c4c67f`. The trusted-workflow/ruleset
+historical base lacks both the checker and trusted target workflow, so its
+then-current one-time CI bootstrap pin was
+`07a3d4833cf8517ea53831a6ff0976b4a6c4c67f`. The current #248 docs-only
+reconciliation merged `origin/main` `d3bac970804bf6130b6bf6259eed05fad0367a9c`
+through normal merge `d0ff8e0b5ee59cd56f1c093fea92dba266fd17f3` without
+conflicts. Exact object checks confirm the #248 base likewise lacks both guard
+files, so the active one-time CI bootstrap pin is now
+`d3bac970804bf6130b6bf6259eed05fad0367a9c`. The trusted-workflow/ruleset
 external enforcement gap remains `PARKED`. The base must be freshly refetched
 and rechecked immediately before any future publication. This correction still
 requires final exact review on its containing SHA, identified only by Git and
@@ -172,7 +177,7 @@ The packet has been regenerated and verified, but Mason must not begin the
 row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
 Product classification is approved. The remaining gate is a recorded exact
 review of the PR's current head, a fresh `origin/main` refetch and the current
-`07a3d4833cf8517ea53831a6ff0976b4a6c4c67f` bootstrap-pin recheck before any
+`d3bac970804bf6130b6bf6259eed05fad0367a9c` bootstrap-pin recheck before any
 future publication, and protected-PR acceptance with required checks —
 including Ubuntu PR CI — green, any real CodeRabbit finding resolved, and
 separate external trusted-workflow/ruleset activation plus post-activation
