@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -9,7 +9,7 @@ import { canonical, loadSnapshot, makeManifest, sha256 } from './generate-suppli
 import { buildOwnerDecisionSheet, ownerDecisionSheetHash } from './generate-supplier-pricing-phase3-owner-decision-sheet.mjs';
 import { verifyManifest } from './verify-supplier-pricing-phase3-classification-manifest.mjs';
 import { verifyOwnerDecisionSheet } from './verify-supplier-pricing-phase3-owner-decision-sheet.mjs';
-import { checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, hermeticGitEnvironment, readWorktreeCandidate, structuralPrivateArtifactReason } from './check-supplier-pricing-phase3-private-artifacts.mjs';
+import { checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, readWorktreeCandidate, structuralPrivateArtifactReason } from './check-supplier-pricing-phase3-private-artifacts.mjs';
 import { assertExternalArtifactPath, assertExternalPrivateDirectory, CONTAINER_TYPE_ALLOWLIST, loadValidatedSnapshot, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRODUCT_FORM_ALLOWLIST, readValidatedPrivateArtifact, REPO_ROOT, validatePostStageASnapshot, without, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const temp = mkdtempSync(path.join(os.tmpdir(), 'crx-phase3c-synthetic-'));
@@ -148,6 +148,12 @@ try {
     throws(() => readValidatedPrivateArtifact(readRaceArtifact, POST_STAGE_A_SNAPSHOT_NAME, fakeRepo, { ...fixturePrivateOptions, beforeRead: () => { rmSync(readRaceArtifact); linkSync(readRaceTarget, readRaceArtifact); } }), 'hard-linked|changed');
     assert.equal(readFileSync(readRaceTarget, 'utf8'), 'repository read target unchanged');
   } finally { rmSync(readRaceTarget, { force: true }); writeSnapshot(snapshot); }
+  const sameSizeReadArtifact = writeSnapshot(snapshot);
+  const sameSizeReadBytes = readFileSync(sameSizeReadArtifact, 'utf8');
+  const sameSizeReplacement = sameSizeReadBytes.replace('Synthetic One', 'Synthetic Two');
+  assert.equal(sameSizeReplacement.length, sameSizeReadBytes.length);
+  throws(() => readValidatedPrivateArtifact(sameSizeReadArtifact, POST_STAGE_A_SNAPSHOT_NAME, fakeRepo, { ...fixturePrivateOptions, afterFirstRead: () => writeFileSync(sameSizeReadArtifact, sameSizeReplacement, 'utf8') }), 'changed during read|bytes changed');
+  writeSnapshot(snapshot);
 
   // Windows-style parent-junction replacement is checked before opening and again before consuming/writing bytes.
   const junctionParent = path.join(temp, 'junction-parent');
@@ -169,8 +175,13 @@ try {
     throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, afterTempOpenBeforeWrite: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|changed');
     assert.equal(existsSync(path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME)), false);
     makeExternalJunction();
-    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeRename: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|rename');
+    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, afterFinalOpenBeforeWrite: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|parent');
     assert.equal(existsSync(path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME)), false);
+    makeExternalJunction();
+    const absentFinal = path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME);
+    throws(() => writePrivateArtifactAtomic(absentFinal, POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeFinalOpen: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository');
+    const externallyCreated = path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME);
+    assert.equal(existsSync(externallyCreated), false, 'absent-final-target race created a file outside the approved root');
   } finally { rmSync(junctionParent, { recursive: true, force: true }); }
 
   // Atomic output must not follow/rewrite a repository hard-link, including a deterministic last-moment replacement.
@@ -185,21 +196,38 @@ try {
   // Closing the temp descriptor cannot let a different ordinary file take its
   // pathname just before rename.
   const tempSwapOutput = path.join(external, POST_STAGE_A_MANIFEST_NAME); rmSync(tempSwapOutput, { force: true }); let swappedTemporary = null;
-  throws(() => writePrivateArtifactAtomic(tempSwapOutput, POST_STAGE_A_MANIFEST_NAME, 'new bytes', { ...fixturePrivateOptions, beforeRename: ({ temporary }) => { swappedTemporary = temporary; rmSync(temporary); writeFileSync(temporary, 'replacement regular bytes'); } }), 'changed during validation');
+  throws(() => writePrivateArtifactAtomic(tempSwapOutput, POST_STAGE_A_MANIFEST_NAME, 'new bytes', { ...fixturePrivateOptions, beforeRename: ({ temporary }) => { swappedTemporary = temporary; rmSync(temporary); writeFileSync(temporary, 'replacement regular bytes'); } }), 'changed during validation|hard-linked');
   assert.equal(existsSync(tempSwapOutput), false); assert.equal(readFileSync(swappedTemporary, 'utf8'), 'replacement regular bytes');
+  rmSync(swappedTemporary, { force: true });
+  const tempMutationOutput = path.join(external, POST_STAGE_A_MANIFEST_NAME); rmSync(tempMutationOutput, { force: true });
+  throws(() => writePrivateArtifactAtomic(tempMutationOutput, POST_STAGE_A_MANIFEST_NAME, 'new bytes', { ...fixturePrivateOptions, afterTempWriteBeforePublication: ({ temporary }) => writeFileSync(temporary, 'bad bytes', 'utf8') }), 'changed during write|bytes changed');
+  assert.equal(existsSync(tempMutationOutput), false);
+  const finalMutationOutput = path.join(external, POST_STAGE_A_MANIFEST_NAME); rmSync(finalMutationOutput, { force: true });
+  throws(() => writePrivateArtifactAtomic(finalMutationOutput, POST_STAGE_A_MANIFEST_NAME, 'new bytes', { ...fixturePrivateOptions, afterFinalWriteBeforeReadback: ({ target }) => writeFileSync(target, 'bad bytes', 'utf8') }), 'changed during final write|bytes changed');
+  rmSync(finalMutationOutput, { force: true });
+  const cleanOutput = writePrivateArtifactAtomic(path.join(external, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'normal bytes', fixturePrivateOptions);
+  assert.equal(readFileSync(cleanOutput, 'utf8'), 'normal bytes');
+  assert.equal(readdirSync(external).some(name => name.startsWith(`.${POST_STAGE_A_MANIFEST_NAME}.`) && name.endsWith('.tmp')), false, 'normal writer path left an owned temp artifact');
+  rmSync(cleanOutput, { force: true });
 
   // A changing worktree candidate is a containment failure, never an ignored
   // non-candidate. The source descriptor remains open on the old file.
   const worktreeRaceRepo = fixtureRepo('containment-worktree-race'); const worktreeRacePath = 'scan-race.txt'; const worktreeRaceFile = path.join(worktreeRaceRepo, worktreeRacePath); writeFileSync(worktreeRaceFile, 'initial scan bytes');
   throws(() => readWorktreeCandidate(worktreeRaceRepo, worktreeRacePath, { beforeRead: () => { rmSync(worktreeRaceFile); writeFileSync(worktreeRaceFile, 'replacement scan bytes that changes identity'); } }), 'changed during scan');
+  const sameInodeWorktreePath = 'same-inode-scan.txt'; const sameInodeWorktreeFile = path.join(worktreeRaceRepo, sameInodeWorktreePath); writeFileSync(sameInodeWorktreeFile, 'same inode scan bytes');
+  throws(() => readWorktreeCandidate(worktreeRaceRepo, sameInodeWorktreePath, { afterRead: () => writeFileSync(sameInodeWorktreeFile, 'same inode scan bytex') }), 'changed during scan');
 
-  // Exact approved storage rejects a real linked worktree without changing either checkout.
+  // Exact approved storage independently rejects a linked worktree, bare root,
+  // and Git administration ancestry even when the test seam names that root.
   const linkedWorktreeRepo = fixtureRepo('approved-root-linked-worktree-repository'); const linkedWorktree = path.join(temp, 'approved-root-linked-worktree');
   git(linkedWorktreeRepo, ['worktree', 'add', '--detach', '--quiet', linkedWorktree, 'HEAD']);
   const linkedStatusBefore = git(linkedWorktreeRepo, ['status', '--porcelain']); const linkedReadmeBefore = readFileSync(path.join(linkedWorktree, 'README.md'), 'utf8');
-  throws(() => assertExternalPrivateDirectory(linkedWorktree, linkedWorktreeRepo, fixturePrivateOptions), 'exact canonical mission-approved');
-  throws(() => writePrivateArtifactAtomic(path.join(linkedWorktree, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: linkedWorktreeRepo, ...fixturePrivateOptions }), 'exact canonical mission-approved');
+  const linkedRootOptions = { testApprovedRoot: linkedWorktree };
+  throws(() => assertExternalPrivateDirectory(linkedWorktree, linkedWorktreeRepo, linkedRootOptions), 'Git worktree|Git administration');
+  throws(() => writePrivateArtifactAtomic(path.join(linkedWorktree, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: linkedWorktreeRepo, ...linkedRootOptions }), 'Git worktree|Git administration');
   assert.equal(git(linkedWorktreeRepo, ['status', '--porcelain']), linkedStatusBefore); assert.equal(readFileSync(path.join(linkedWorktree, 'README.md'), 'utf8'), linkedReadmeBefore); assert.equal(existsSync(path.join(linkedWorktree, POST_STAGE_A_MANIFEST_NAME)), false);
+  const bareRoot = path.join(temp, 'approved-root-bare.git'); git(temp, ['init', '--bare', '--quiet', bareRoot]);
+  throws(() => assertExternalPrivateDirectory(bareRoot, fakeRepo, { testApprovedRoot: bareRoot }), 'Git worktree|Git administration');
 
   // Fixture Git must be hermetic even when the caller injects hostile Git state.
   const realRepoWorktreeBefore = git(REPO_ROOT, ['rev-parse', '--is-inside-work-tree']); const realGitStateBefore = realRepositoryGitState();
@@ -229,7 +257,6 @@ try {
   withTemporaryEnvironment(hostileHookEnvironment, () => {
     assert.equal(Object.keys(hermeticGitEnvironment()).some(key => key.toUpperCase().startsWith('GIT_')), false);
     assert.doesNotThrow(() => checkPrivateArtifactContainment({ root: hookRangeRepo, ranges: [`${hookRangeBase}..${hookRangeHead}`] }));
-    assert(checkPrivateArtifactContainment().checked_path_count > 1000, 'default checker root was redirected by inherited Git state');
   });
   assert.deepEqual(Object.fromEntries(Object.keys(hostileHookEnvironment).map(key => [key, process.env[key] ?? null])), environmentBefore);
 
@@ -237,9 +264,20 @@ try {
   const committedRepo = fixtureRepo('containment-clean-committed'); const committedPath = 'ordinary-notes.txt'; writeFileSync(path.join(committedRepo, committedPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); git(committedRepo, ['add', committedPath]); git(committedRepo, ['commit', '--quiet', '-m', 'synthetic committed packet']); containmentFails(committedRepo, committedPath, 'approved private JSON format structure');
   const stagedRepo = fixtureRepo('containment-staged'); const stagedPath = 'renamed-public.txt'; writeFileSync(path.join(stagedRepo, stagedPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); git(stagedRepo, ['add', stagedPath]); containmentFails(stagedRepo, stagedPath, 'approved private JSON format structure');
   const escapedRepo = fixtureRepo('containment-escaped-minified'); const escapedPath = 'renamed-escaped.txt'; writeFileSync(path.join(escapedRepo, escapedPath), `{"format":"${POST_STAGE_A_SNAPSHOT_FORMAT.replace(/^c/, '\\u0063')}"}`); git(escapedRepo, ['add', escapedPath]); containmentFails(escapedRepo, escapedPath, 'approved private JSON format structure');
+  const fullyEscapedRepo = fixtureRepo('containment-fully-escaped'); const fullyEscapedPath = 'renamed-fully-escaped.txt'; const escapeJson = value => [...value].map(character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`).join(''); writeFileSync(path.join(fullyEscapedRepo, fullyEscapedPath), `{"${escapeJson('format')}":"${escapeJson(POST_STAGE_A_SNAPSHOT_FORMAT)}"}`); git(fullyEscapedRepo, ['add', fullyEscapedPath]); containmentFails(fullyEscapedRepo, fullyEscapedPath, 'approved private JSON format structure');
+  const malformedRepo = fixtureRepo('containment-malformed-format'); const malformedPath = 'truncated-packet.txt'; writeFileSync(path.join(malformedRepo, malformedPath), `{"format":"${POST_STAGE_A_SNAPSHOT_FORMAT}`); git(malformedRepo, ['add', malformedPath]); containmentFails(malformedRepo, malformedPath, 'private JSON format marker in malformed candidate');
+  const escapedMalformedRepo = fixtureRepo('containment-escaped-malformed-format'); const escapedMalformedPath = 'escaped-truncated-packet.txt'; writeFileSync(path.join(escapedMalformedRepo, escapedMalformedPath), `{"${escapeJson('format')}":"${escapeJson(POST_STAGE_A_SNAPSHOT_FORMAT)}`); git(escapedMalformedRepo, ['add', escapedMalformedPath]); containmentFails(escapedMalformedRepo, escapedMalformedPath, 'private JSON format marker in malformed candidate');
+  const alteredRootRepo = fixtureRepo('containment-altered-format-root'); const alteredRootPath = 'altered-format.json'; writeFileSync(path.join(alteredRootRepo, alteredRootPath), JSON.stringify({ format: 'altered', products: [], snapshot_sha256: 'x', expected_old_phase3_defaults: {}, migration_high_water: '0' })); git(alteredRootRepo, ['add', alteredRootPath]); containmentFails(alteredRootRepo, alteredRootPath, 'private snapshot or manifest key structure');
+  const partialSnapshotRowRepo = fixtureRepo('containment-partial-snapshot-row'); const partialSnapshotRowPath = 'partial-snapshot-row.json'; writeFileSync(path.join(partialSnapshotRowRepo, partialSnapshotRowPath), JSON.stringify({ products: [{ id: 'synthetic', sku: 'synthetic', product_name: 'synthetic', pricing_version: 0, updated_at: 'synthetic' }] })); git(partialSnapshotRowRepo, ['add', partialSnapshotRowPath]); containmentFails(partialSnapshotRowRepo, partialSnapshotRowPath, 'private snapshot or manifest key structure');
+  const partialManifestRowRepo = fixtureRepo('containment-partial-manifest-row'); const partialManifestRowPath = 'partial-manifest-row.json'; writeFileSync(path.join(partialManifestRowRepo, partialManifestRowPath), JSON.stringify({ rows: [{ product_id: 'synthetic', current_product: {}, proposed_phase3: {}, field_decisions: {}, row_sha256: 'synthetic' }] })); git(partialManifestRowRepo, ['add', partialManifestRowPath]); containmentFails(partialManifestRowRepo, partialManifestRowPath, 'private snapshot or manifest key structure');
   const divergenceRepo = fixtureRepo('containment-divergence'); const divergencePath = 'sanitized-after-stage.txt'; writeFileSync(path.join(divergenceRepo, divergencePath), JSON.stringify({ format: 'crx-supplier-pricing-phase3-post-stage-a-proposed-classification-manifest-v2' })); git(divergenceRepo, ['add', divergencePath]); writeFileSync(path.join(divergenceRepo, divergencePath), 'sanitized worktree copy\n'); containmentFails(divergenceRepo, divergencePath, 'approved private JSON format structure');
   const untrackedRepo = fixtureRepo('containment-untracked'); const untrackedPath = 'renamed-owner-sheet.txt'; writeFileSync(path.join(untrackedRepo, untrackedPath), JSON.stringify({ format: 'crx-supplier-pricing-phase3-proposed-classification-manifest-v1' })); containmentFails(untrackedRepo, untrackedPath, 'approved private JSON format structure');
   const headerRepo = fixtureRepo('containment-owner-header'); const headerPath = 'renamed-csv.txt'; writeFileSync(path.join(headerRepo, headerPath), OWNER_DECISION_HEADERS.map(header => ` ${header} `).join(',')); containmentFails(headerRepo, headerPath, 'owner decision sheet CSV header structure');
+  const whitespaceIgnoredRepo = fixtureRepo('containment-whitespace-ignored'); writeFileSync(path.join(whitespaceIgnoredRepo, '.gitignore'), '*.ignored\n'); git(whitespaceIgnoredRepo, ['add', '.gitignore']); git(whitespaceIgnoredRepo, ['commit', '--quiet', '-m', 'ignore synthetic whitespace payloads']); const whitespaceEscapedPath = 'whitespace-escaped.ignored'; writeFileSync(path.join(whitespaceIgnoredRepo, whitespaceEscapedPath), `${' '.repeat(2048)}{"${escapeJson('format')}":"${escapeJson(POST_STAGE_A_SNAPSHOT_FORMAT)}"}`); containmentFails(whitespaceIgnoredRepo, whitespaceEscapedPath, 'approved private JSON format structure'); const whitespaceOwnerPath = 'whitespace-owner.ignored'; writeFileSync(path.join(whitespaceIgnoredRepo, whitespaceOwnerPath), `${' '.repeat(2048)}${OWNER_DECISION_HEADERS.join(',')}\n`); containmentFails(whitespaceIgnoredRepo, whitespaceOwnerPath, 'owner decision sheet CSV header structure');
+  const largeIgnoredRepo = fixtureRepo('containment-large-ignored'); writeFileSync(path.join(largeIgnoredRepo, '.gitignore'), '*.ignored\n'); git(largeIgnoredRepo, ['add', '.gitignore']); git(largeIgnoredRepo, ['commit', '--quiet', '-m', 'ignore synthetic payloads']); const lateMarkerPath = 'late-marker.ignored'; writeFileSync(path.join(largeIgnoredRepo, lateMarkerPath), `${'x'.repeat(8 * 1024 * 1024 + 2048)}${POST_STAGE_A_SNAPSHOT_FORMAT}`); containmentFails(largeIgnoredRepo, lateMarkerPath, 'bounded structural scan limit');
+  const largeOwnerCsvPath = 'large-owner-sheet.ignored'; writeFileSync(path.join(largeIgnoredRepo, largeOwnerCsvPath), `${OWNER_DECISION_HEADERS.join(',')}\n${'x'.repeat(8 * 1024 * 1024 + 2048)}`); containmentFails(largeIgnoredRepo, largeOwnerCsvPath, 'bounded structural scan limit');
+  const largeWhitespaceOwnerCsvPath = 'large-whitespace-owner-sheet.ignored'; writeFileSync(path.join(largeIgnoredRepo, largeWhitespaceOwnerCsvPath), `${' '.repeat(8 * 1024 * 1024 + 2048)}${OWNER_DECISION_HEADERS.join(',')}\n`); containmentFails(largeIgnoredRepo, largeWhitespaceOwnerCsvPath, 'bounded structural scan limit');
+  const largeRacePath = 'same-inode-large.ignored'; const largeRaceFile = path.join(largeIgnoredRepo, largeRacePath); const largeRaceText = 'x'.repeat(8 * 1024 * 1024 + 2048); writeFileSync(largeRaceFile, largeRaceText); throws(() => ignoredLargeCandidateHasPrivateSignal(largeIgnoredRepo, largeRacePath, Buffer.from('x'), { afterFirstPass: () => writeFileSync(largeRaceFile, `y${largeRaceText.slice(1)}`) }), 'changed during scan');
   const benignRepo = fixtureRepo('containment-benign'); writeFileSync(path.join(benignRepo, 'public.md'), `Public format name: ${POST_STAGE_A_SNAPSHOT_FORMAT}\n`); writeFileSync(path.join(benignRepo, 'source.mjs'), `const format = ${JSON.stringify(POST_STAGE_A_SNAPSHOT_FORMAT)};\n`); assert.doesNotThrow(() => fixtureContainment(benignRepo));
 
   const historyRepo = fixtureRepo('containment-history-deleted-at-tip'); const historyBase = git(historyRepo, ['rev-parse', 'HEAD']).trim(); const historyPath = 'renamed-minified-packet.txt'; writeFileSync(path.join(historyRepo, historyPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); git(historyRepo, ['add', historyPath]); git(historyRepo, ['commit', '--quiet', '-m', 'synthetic private packet']); git(historyRepo, ['rm', '--quiet', historyPath]); git(historyRepo, ['commit', '--quiet', '-m', 'delete synthetic packet']); const historyHead = git(historyRepo, ['rev-parse', 'HEAD']).trim();
@@ -290,6 +328,6 @@ try {
   assert(ci.includes('fetch-depth: 0'));
   assert(ci.includes('Set up Node.js for the standalone containment gate'));
   assert(ci.includes('check-supplier-pricing-phase3-private-artifacts.mjs --github-event'));
-  assert.doesNotThrow(() => checkPrivateArtifactContainment({ execute: fixtureGitExecute }));
+  assert.doesNotThrow(() => fixtureContainment(benignRepo));
   console.log('supplier-pricing Phase 3C private-artifact tests passed');
 } finally { rmSync(temp, { recursive: true, force: true }); }

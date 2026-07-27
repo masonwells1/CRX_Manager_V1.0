@@ -5,19 +5,16 @@
  * and categories only: never a blob, row, Product identifier, or source text.
  */
 import { execFileSync } from 'node:child_process';
-import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPROVED_SERIALIZED_FORMATS, OWNER_DECISION_HEADERS, PRIVATE_ARTIFACT_BASENAMES, REPO_ROOT } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const MAX_STRUCTURAL_SCAN_BYTES = 8 * 1024 * 1024;
+const WORKTREE_PREFIX_BYTES = 1024;
 const PRIVATE_ARTIFACT_BASENAMES_LOWER = new Set([...PRIVATE_ARTIFACT_BASENAMES].map(name => name.toLowerCase()));
-const IGNORED_PRIVATE_ARTIFACT_PATHSPECS = [
-  ...[...PRIVATE_ARTIFACT_BASENAMES].map(name => `:(icase,glob)**/${name}`),
-  ':(icase,glob)**/private-artifacts/**',
-];
 const JSON_FORMATS = new Set(APPROVED_SERIALIZED_FORMATS);
-const CONTENT_NEEDLES = [...JSON_FORMATS, '"format"', 'product_id'];
 const ZERO_SHA = '0000000000000000000000000000000000000000';
 
 /**
@@ -67,28 +64,49 @@ export function forbiddenArtifactReason(repoPath) {
 export function findForbiddenPrivateArtifactPaths(paths) {
   return paths.map(repoPath => ({ repoPath, reason: forbiddenArtifactReason(repoPath) })).filter(item => item.reason);
 }
-function isNodeModulesPath(repoPath) { return repoPath.split(/[\\/]/).includes('node_modules'); }
 function normalizeCsvHeaderCell(value) {
   const trimmed = value.trim();
   return trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1).replaceAll('""', '"') : trimmed;
 }
+function privateJsonRootShape(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const keys = new Set(Object.keys(parsed));
+  const hasSnapshotRoot = ['products', 'snapshot_sha256', 'expected_old_phase3_defaults', 'migration_high_water'].every(key => keys.has(key));
+  const hasManifestRoot = ['rows', 'manifest_sha256', 'generated_from_snapshot_sha256', 'summary', 'approval_state'].every(key => keys.has(key));
+  const firstProduct = Array.isArray(parsed.products) ? parsed.products[0] : null;
+  const firstRow = Array.isArray(parsed.rows) ? parsed.rows[0] : null;
+  const hasProductRow = firstProduct && typeof firstProduct === 'object' && ['id', 'sku', 'product_name', 'pricing_version', 'updated_at'].every(key => Object.hasOwn(firstProduct, key));
+  const hasManifestRow = firstRow && typeof firstRow === 'object' && ['product_id', 'current_product', 'proposed_phase3', 'field_decisions', 'row_sha256'].every(key => Object.hasOwn(firstRow, key));
+  return hasSnapshotRoot || hasManifestRoot || hasProductRow || hasManifestRow;
+}
+function normalizedText(bytes) { return (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).toString('utf8').replace(/^\uFEFF/, ''); }
+function decodeJsonUnicodeEscapes(text) { return text.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex) => String.fromCharCode(Number.parseInt(hex, 16))); }
+function looksLikeJsonPrefix(bytes) {
+  const text = normalizedText(bytes);
+  const trimmed = text.trimStart();
+  return trimmed.length === 0 || trimmed.startsWith('{') || trimmed.startsWith('[')
+    || text.includes('"format"')
+    || text.includes('product_id')
+    || [...JSON_FORMATS].some(format => text.includes(format));
+}
 /** Detect packet structure, not canonical whitespace or a filename. */
 export function structuralPrivateArtifactReason(bytes) {
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-  const prefix = buffer.subarray(0, Math.min(buffer.length, 64 * 1024)).toString('utf8');
-  const looksRelevant = CONTENT_NEEDLES.some(needle => prefix.includes(needle));
-  if (buffer.length > MAX_STRUCTURAL_SCAN_BYTES) return looksRelevant ? 'private artifact candidate exceeds bounded structural scan limit' : null;
+  if (buffer.length > MAX_STRUCTURAL_SCAN_BYTES) return looksLikeJsonPrefix(buffer.subarray(0, WORKTREE_PREFIX_BYTES)) ? 'private artifact candidate exceeds bounded structural scan limit' : null;
   // A UTF-8 BOM is an encoding marker, not packet content. Treat it exactly
   // like leading whitespace for both JSON and owner-sheet structure checks.
-  const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
+  const text = normalizedText(buffer);
   const trimmed = text.trimStart();
-  if (trimmed.startsWith('{')) {
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
       const parsed = JSON.parse(text);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && JSON_FORMATS.has(parsed.format)) return 'approved private JSON format structure';
-    } catch (_error) { /* A malformed public file is not a packet structure. */ }
+      if (privateJsonRootShape(parsed)) return 'private snapshot or manifest key structure';
+    } catch (_error) {
+      if ([...JSON_FORMATS].some(format => decodeJsonUnicodeEscapes(text).includes(format))) return 'private JSON format marker in malformed candidate';
+    }
   }
-  const header = text.split(/\r?\n/, 1)[0];
+  const header = text.trimStart().split(/\r?\n/, 1)[0];
   if (header) {
     const cells = header.split(',').map(normalizeCsvHeaderCell);
     if (cells.length === OWNER_DECISION_HEADERS.length && cells.every((cell, index) => cell === OWNER_DECISION_HEADERS[index])) return 'owner decision sheet CSV header structure';
@@ -96,28 +114,108 @@ export function structuralPrivateArtifactReason(bytes) {
   return null;
 }
 function sameFileIdentity(left, right) { return left.dev === right.dev && left.ino === right.ino; }
-export function readWorktreeCandidate(root, repoPath, { beforeRead, afterRead } = {}) {
-  const file = path.resolve(root, repoPath);
-  const canonicalRoot = path.resolve(root);
+function sameWorktreeStatIdentity(left, right) {
+  return sameFileIdentity(left, right)
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+    && left.nlink === right.nlink
+    && left.mode === right.mode;
+}
+function canonicalWorktreeCandidate(root, repoPath, cache = null) {
+  const requestedRoot = path.resolve(root);
+  let canonicalRoot = cache?.roots.get(requestedRoot);
+  if (!canonicalRoot) {
+    canonicalRoot = realpathSync(requestedRoot);
+    cache?.roots.set(requestedRoot, canonicalRoot);
+  }
+  if (canonicalRoot !== requestedRoot) throw new Error('private Phase 3C worktree root must be canonical');
+  const file = path.resolve(canonicalRoot, repoPath);
   if (!file.startsWith(`${canonicalRoot}${path.sep}`)) return null;
+  const parent = path.dirname(file);
+  const parentEntry = lstatSync(parent);
+  if (!parentEntry.isDirectory() || parentEntry.isSymbolicLink()) throw new Error('private Phase 3C worktree candidate parent is a symlink, junction, or escapes the repository');
+  const cachedParent = cache?.parents.get(parent);
+  let canonicalParent;
+  if (cachedParent && sameFileIdentity(cachedParent, parentEntry)) canonicalParent = parent;
+  else {
+    canonicalParent = realpathSync(parent);
+    cache?.parents.set(parent, parentEntry);
+  }
+  if (canonicalParent !== parent || !canonicalParent.startsWith(canonicalRoot)) throw new Error('private Phase 3C worktree candidate parent is a symlink, junction, or escapes the repository');
+  return { file, canonicalRoot };
+}
+export function readWorktreeCandidate(root, repoPath, { beforeRead, afterRead, maxBytes = MAX_STRUCTURAL_SCAN_BYTES + 1, cache = null } = {}) {
+  const candidate = canonicalWorktreeCandidate(root, repoPath, cache);
+  if (candidate === null) return null;
+  const { file } = candidate;
   const entry = lstatSync(file);
-  if (!entry.isFile() || entry.isSymbolicLink()) return null;
+  if (!entry.isFile()) return null;
+  if (entry.isSymbolicLink()) throw new Error('private Phase 3C worktree candidate is a symlink or junction');
   const followed = statSync(file);
-  if (!followed.isFile() || !sameFileIdentity(entry, followed) || followed.size !== entry.size) throw new Error('private Phase 3C worktree candidate changed during scan');
+  if (!followed.isFile() || !sameWorktreeStatIdentity(entry, followed) || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
   const fd = openSync(file, 'r');
   try {
     const descriptor = fstatSync(fd);
-    if (!descriptor.isFile() || !sameFileIdentity(entry, descriptor) || descriptor.size !== entry.size) throw new Error('private Phase 3C worktree candidate changed during scan');
+    if (!descriptor.isFile() || !sameWorktreeStatIdentity(entry, descriptor)) throw new Error('private Phase 3C worktree candidate changed during scan');
     beforeRead?.({ file, fd });
     const beforeReadEntry = lstatSync(file); const beforeReadFollowed = statSync(file); const beforeReadDescriptor = fstatSync(fd);
-    if (!beforeReadEntry.isFile() || beforeReadEntry.isSymbolicLink() || !sameFileIdentity(entry, beforeReadEntry) || !sameFileIdentity(entry, beforeReadFollowed) || !sameFileIdentity(entry, beforeReadDescriptor) || beforeReadEntry.size !== entry.size || beforeReadFollowed.size !== entry.size || beforeReadDescriptor.size !== entry.size) throw new Error('private Phase 3C worktree candidate changed during scan');
-    const count = Math.min(entry.size, MAX_STRUCTURAL_SCAN_BYTES + 1);
+    if (!beforeReadEntry.isFile() || beforeReadEntry.isSymbolicLink() || !sameWorktreeStatIdentity(entry, beforeReadEntry) || !sameWorktreeStatIdentity(entry, beforeReadFollowed) || !sameWorktreeStatIdentity(entry, beforeReadDescriptor) || canonicalWorktreeCandidate(root, repoPath, cache) === null) throw new Error('private Phase 3C worktree candidate changed during scan');
+    const count = Math.min(entry.size, maxBytes);
     const buffer = Buffer.alloc(count);
     const read = readSync(fd, buffer, 0, count, 0);
     afterRead?.({ file, fd });
     const afterReadEntry = lstatSync(file); const afterReadFollowed = statSync(file); const afterReadDescriptor = fstatSync(fd);
-    if (read !== count || !afterReadEntry.isFile() || afterReadEntry.isSymbolicLink() || !sameFileIdentity(entry, afterReadEntry) || !sameFileIdentity(entry, afterReadFollowed) || !sameFileIdentity(entry, afterReadDescriptor) || afterReadEntry.size !== entry.size || afterReadFollowed.size !== entry.size || afterReadDescriptor.size !== entry.size) throw new Error('private Phase 3C worktree candidate changed during scan');
-    return buffer.subarray(0, read);
+    if (read !== count || !afterReadEntry.isFile() || afterReadEntry.isSymbolicLink() || !sameWorktreeStatIdentity(entry, afterReadEntry) || !sameWorktreeStatIdentity(entry, afterReadFollowed) || !sameWorktreeStatIdentity(entry, afterReadDescriptor) || canonicalWorktreeCandidate(root, repoPath, cache) === null) throw new Error('private Phase 3C worktree candidate changed during scan');
+    const confirmation = Buffer.alloc(count);
+    const confirmed = readSync(fd, confirmation, 0, count, 0);
+    const finalEntry = lstatSync(file); const finalFollowed = statSync(file); const finalDescriptor = fstatSync(fd);
+    if (confirmed !== count || !buffer.equals(confirmation) || !sameWorktreeStatIdentity(entry, finalEntry) || !sameWorktreeStatIdentity(entry, finalFollowed) || !sameWorktreeStatIdentity(entry, finalDescriptor) || canonicalWorktreeCandidate(root, repoPath, cache) === null) throw new Error('private Phase 3C worktree candidate changed during scan');
+    return { bytes: buffer.subarray(0, read), size: entry.size, complete: read === entry.size };
+  } finally { closeSync(fd); }
+}
+export function ignoredLargeCandidateHasPrivateSignal(root, repoPath, _prefix, { afterFirstPass } = {}) {
+  const candidate = canonicalWorktreeCandidate(root, repoPath);
+  if (candidate === null) return false;
+  const { file } = candidate;
+  const entry = lstatSync(file); const followed = statSync(file);
+  if (!entry.isFile() || entry.isSymbolicLink() || !sameWorktreeStatIdentity(entry, followed) || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
+  const fd = openSync(file, 'r');
+  try {
+    const descriptor = fstatSync(fd);
+    if (!sameWorktreeStatIdentity(entry, descriptor)) throw new Error('private Phase 3C worktree candidate changed during scan');
+    const scanOnce = () => {
+      const chunk = Buffer.alloc(WORKTREE_PREFIX_BYTES);
+      const snapshotKeys = ['"products"', '"snapshot_sha256"', '"expected_old_phase3_defaults"', '"migration_high_water"'];
+      const manifestKeys = ['"rows"', '"manifest_sha256"', '"generated_from_snapshot_sha256"', '"summary"', '"approval_state"'];
+      const seen = new Set(); const digest = createHash('sha256');
+      let offset = 0; let tail = '';
+      while (offset < entry.size) {
+        const read = readSync(fd, chunk, 0, Math.min(chunk.length, entry.size - offset), offset);
+        if (read <= 0) throw new Error('private Phase 3C worktree candidate changed during scan');
+        const bytes = chunk.subarray(0, read); digest.update(bytes);
+        const text = tail + bytes.toString('utf8');
+        // Decode JSON's ASCII Unicode escapes solely for signature comparison.
+        // This catches fully escaped format keys/values without treating generic
+        // source-map Unicode escapes as a private-packet signal.
+        const comparable = decodeJsonUnicodeEscapes(text);
+        for (const format of JSON_FORMATS) if (comparable.includes(format)) seen.add('format');
+        for (const key of [...snapshotKeys, ...manifestKeys]) if (comparable.includes(key)) seen.add(key);
+        if (/^product_id\s*,\s*sku\s*,\s*product_name(?:\s*,|$)/.test(text.trimStart())) seen.add('owner-header');
+        tail = text.slice(-512);
+        offset += read;
+      }
+      return { digest: digest.digest('hex'), signal: seen.has('format') || seen.has('owner-header') || snapshotKeys.every(key => seen.has(key)) || manifestKeys.every(key => seen.has(key)) };
+    };
+    const prefixSignal = structuralPrivateArtifactReason(_prefix) !== null;
+    const first = scanOnce();
+    afterFirstPass?.({ file, fd });
+    const middle = fstatSync(fd); const middleEntry = lstatSync(file); const middleFollowed = statSync(file);
+    if (!sameWorktreeStatIdentity(entry, middle) || !sameWorktreeStatIdentity(entry, middleEntry) || !sameWorktreeStatIdentity(entry, middleFollowed) || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
+    const second = scanOnce();
+    const after = fstatSync(fd); const afterEntry = lstatSync(file); const afterFollowed = statSync(file);
+    if (!sameWorktreeStatIdentity(entry, after) || !sameWorktreeStatIdentity(entry, afterEntry) || !sameWorktreeStatIdentity(entry, afterFollowed) || first.digest !== second.digest || first.signal !== second.signal || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
+    return prefixSignal || first.signal;
   } finally { closeSync(fd); }
 }
 function candidateIndexPaths(root, execute) {
@@ -137,7 +235,7 @@ function candidateIndexPaths(root, execute) {
   }
   return candidates;
 }
-function indexContentViolations(root, execute) {
+function currentIndexCandidateViolations(root, execute) {
   const violations = [];
   for (const [repoPath, hasPhase3FormatMarker] of candidateIndexPaths(root, execute)) {
     if (gitBlobSize(`:${repoPath}`, root, execute) > MAX_STRUCTURAL_SCAN_BYTES) {
@@ -149,17 +247,43 @@ function indexContentViolations(root, execute) {
   }
   return violations;
 }
-function worktreeContentViolations(root, execute) {
-  const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMR'], root, execute));
-  const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
+function stagedIndexContentViolations(root, execute) {
   const violations = [];
-  for (const repoPath of new Set([...modified, ...untracked])) {
-    if (isNodeModulesPath(repoPath)) continue;
-    const bytes = readWorktreeCandidate(root, repoPath);
-    const reason = bytes === null ? null : structuralPrivateArtifactReason(bytes);
+  for (const repoPath of gitPaths(['diff', '--cached', '--name-only', '-z', '--diff-filter=AMR'], root, execute)) {
+    if (gitBlobSize(`:${repoPath}`, root, execute) > MAX_STRUCTURAL_SCAN_BYTES) {
+      violations.push({ repoPath, reason: 'private artifact staged blob exceeds bounded structural scan limit' });
+      continue;
+    }
+    const reason = structuralPrivateArtifactReason(gitBuffer(['show', `:${repoPath}`], root, execute));
     if (reason) violations.push({ repoPath, reason });
   }
   return violations;
+}
+function worktreeContentViolations(root, execute) {
+  const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMR'], root, execute));
+  const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
+  const ignored = new Set(gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, execute));
+  const violations = [];
+  const candidates = new Map();
+  for (const repoPath of modified) candidates.set(repoPath, 'modified');
+  for (const repoPath of untracked) candidates.set(repoPath, 'untracked');
+  for (const repoPath of ignored) if (!candidates.has(repoPath)) candidates.set(repoPath, 'ignored');
+  const started = performance.now();
+  const cache = { roots: new Map(), parents: new Map() };
+  for (const [repoPath, source] of candidates) {
+    const prefix = readWorktreeCandidate(root, repoPath, { maxBytes: WORKTREE_PREFIX_BYTES, cache });
+    if (prefix === null) continue;
+    if (prefix.size > MAX_STRUCTURAL_SCAN_BYTES) {
+      if (source !== 'ignored' || ignoredLargeCandidateHasPrivateSignal(root, repoPath, prefix.bytes)) violations.push({ repoPath, reason: 'private artifact worktree candidate exceeds bounded structural scan limit' });
+      continue;
+    }
+    const candidate = prefix.complete || looksLikeJsonPrefix(prefix.bytes)
+      ? (prefix.complete ? prefix : readWorktreeCandidate(root, repoPath, { maxBytes: MAX_STRUCTURAL_SCAN_BYTES + 1, cache }))
+      : null;
+    const reason = candidate === null ? null : structuralPrivateArtifactReason(candidate.bytes);
+    if (reason) violations.push({ repoPath, reason });
+  }
+  return { violations, candidateCount: candidates.size, ignoredCount: ignored.size, durationMs: Math.round(performance.now() - started) };
 }
 
 function commitsForRange(range, root, execute) {
@@ -192,25 +316,28 @@ function historyViolations(commits, root, execute) {
 }
 
 export function checkPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, ranges = [], commits = [] } = {}) {
+  const ignoredVisible = gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, execute);
   const visible = new Set([
     ...gitPaths(['ls-files', '-z'], root, execute),
     ...gitPaths(['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR'], root, execute),
     ...gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute),
-    ...gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', ...IGNORED_PRIVATE_ARTIFACT_PATHSPECS], root, execute),
+    ...ignoredVisible,
   ]);
   const rangeCommits = ranges.flatMap(range => commitsForRange(range, root, execute));
   const checkedCommits = [...new Set([...commits.map(commit => assertCommitSha(commit, 'history')), ...rangeCommits])];
+  const worktree = worktreeContentViolations(root, execute);
   const violations = [
     ...findForbiddenPrivateArtifactPaths([...visible]),
-    ...indexContentViolations(root, execute),
-    ...worktreeContentViolations(root, execute),
+    ...currentIndexCandidateViolations(root, execute),
+    ...stagedIndexContentViolations(root, execute),
+    ...worktree.violations,
     ...historyViolations(checkedCommits, root, execute),
   ];
   if (violations.length) {
     const summary = [...new Map(violations.map(item => [`${item.repoPath}\0${item.reason}`, item])).values()];
     throw new Error(`private Phase 3C artifact containment failure: ${summary.map(item => `${item.repoPath} (${item.reason})`).join(', ')}`);
   }
-  return { checked_path_count: visible.size, checked_commit_count: checkedCommits.length };
+  return { checked_path_count: visible.size, checked_commit_count: checkedCommits.length, checked_ignored_count: worktree.ignoredCount, worktree_scan_duration_ms: worktree.durationMs };
 }
 
 function outgoingCommitsForNewRemoteRef(localSha, remoteName, root, execute) {

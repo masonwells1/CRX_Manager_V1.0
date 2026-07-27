@@ -13,18 +13,28 @@
 - Forbidden interpretation: neither this ledger nor an agent verdict approves
   Product classifications or authorizes a Stage C migration/live apply.
 
-## Resumed post-PARK recovery and final materialization — 2026-07-27
+## Post-review tooling correction and packet invalidation — 2026-07-27
 
-The bounded post-PARK safety recovery resolved the reproduced containment gaps
-before a new packet was materialized. This does **not** amend or conceal the
-mission's six-cycle cap: the earlier candidate cycles remain historical, and
-the current packet is not an approval to classify Products or create/apply a
-Stage C migration.
+The bounded post-PARK safety recovery materialized a new packet, but both fresh
+exact-SHA reviewers then returned `FIX` for the containment tooling. The packet
+is therefore historical only and is not delivery-ready. This does **not** amend
+or conceal the mission's six-cycle cap: the earlier candidate cycles remain
+historical, and no packet approves Product classifications or a Stage C
+migration/live apply.
 
 - Rewritten-provenance candidate before this documentation update:
   `4f4b863b53596088d58162f44e2a6e2e43e58f79`. Every post-setup commit on that
   local candidate is authored `Mason <mason@croprxsolutions.com>`; its tree was
   checked against the local backup and matched. No remote branch exists.
+- Fresh Luna exact-SHA review: session
+  `019fa229-bc19-77b2-92bf-7f270e1cddc8`, verdict `FIX`.
+- Fresh independent Sol exact-SHA review: candidate
+  `d01a8f099394e8c7882736ac52fd81c6d2de8c15`, verdict `FIX`.
+  Both reviews required fail-closed Git-root admission, structural/index/large
+  ignored-file containment, full identity/read stability, and descriptor-safe
+  writer corrections. Their findings are addressed by the new bounded local
+  correction set, but that uncommitted set has not received fresh exact-SHA
+  reviews.
 - Prior Sol `FIX` findings being remediated: arbitrary external directories
   (including a sibling linked worktree) were admitted; tip-only containment
   missed a packet committed then deleted; filename/signature checks missed
@@ -42,26 +52,36 @@ Stage C migration.
   root, producing an invalid fixture range. Checker Git subprocesses now strip
   every `GIT_*` variable and use their supplied working root. The focused packet
   suite and the full correction-guard suite both pass under representative
-  `GIT_DIR`/work-tree/index/common/object redirection variables; no commit was
-  made by this recovery writer.
+   `GIT_DIR`/work-tree/index/common/object redirection variables; no commit was
+   made by this recovery writer.
+- Current pre-freeze local proof for the uncommitted bounded correction: focused
+  packet suite PASS in 29.3 seconds; full correction-guard suite PASS in 38.9
+  seconds; typecheck PASS in 21.1 seconds; production build PASS in 18.2
+  seconds; lint PASS with zero errors and four pre-existing warnings. The full
+  containment range
+  `052b2171821dc7ffd965b4edb4b6de4ef8fda511..d01a8f099394e8c7882736ac52fd81c6d2de8c15`
+  PASSed in 22.4 seconds (`checked_paths=51810`, `checked_commits=6`). This is
+  local tooling evidence only, not a substitute for fresh exact-SHA reviews or
+  packet regeneration. Documentation drift and whitespace validation also PASS
+  on this pre-freeze record.
 - A fresh live read-only capture completed at `2026-07-27T05:53:04.476876Z`:
   604 Products (595 active, 9 inactive), one active-return conflict, all 604
   unresolved, zero family assignments, and zero standalone classifications.
   The Stage A ledger row `20260723193312` is present, migration high-water is
   `20260726223520`, `product_families_count` is 0, and
   `supplier_cost_basis_enabled` is `false`.
-- Fresh capture, external count/hash binding, manifest write/verify/compare,
-  and owner-sheet write/verify all passed. The aggregate-only resulting hashes
-  are recorded below; no private rows or identifiers are recorded in this
-  repository.
-- Full commit-hook proof passed on the rewritten candidate: 302 files checked;
+- The prior capture, external count/hash binding, manifest write/verify/compare,
+  and owner-sheet write/verify passed, but their resulting hashes below are
+  **historical and invalidated** by this tooling correction. No private rows or
+  identifiers are recorded in this repository.
+- Full commit-hook proof passed on the earlier rewritten candidate: 302 files checked;
   3,985 tests passed and 118 skipped; lint had zero errors and four warnings;
   typecheck, build, agent workflows, correction guards, docs, and dependency
   checks passed.
-- This documentation change necessarily creates a later SHA. Graphify refresh,
-  fresh exact-SHA Luna, independent-Sol, and latest-available Opus reviews, and
-  protected-PR/CodeRabbit handling remain pending. Current state:
-  `FINAL PACKET MATERIALIZED — EXACT-SHA REVIEWS/PR PENDING`.
+- Fresh Graphify, Luna, independent-Sol, and latest-available Opus exact-SHA
+  reviews are required after the correction is frozen. The packet must then be
+  regenerated and re-verified before protected-PR/CodeRabbit handling. Current
+  state: `PARKED — TOOLING CORRECTION; PACKET REGENERATION REQUIRED`.
 
 ## Cycle table
 
@@ -69,9 +89,9 @@ Stage C migration.
 |---|---|---|---|---|---|---|---|---|---|
 | 0 — preflight | DONE | `9bf567bf` | none | PASS | n/a | n/a | n/a | n/a | Cycle 2 bounded capture/generator work. |
 | 1 — design adversary | DONE | `9bf567bf` | none | SHIP | n/a | n/a | `opus` → `claude-opus-4-8` | n/a | Cycle 2 accepts both LOW findings. |
-| 2 — final correction 6 | DONE — rewritten candidate proven | `4f4b863b53596088d58162f44e2a6e2e43e58f79` before this docs update | fresh `gpt-5.6-terra` recovery writer | full commit-hook proof PASS (302 files; 3,985 passed / 118 skipped; lint 0 errors / 4 warnings; typecheck, build, workflows, guards, docs, deps PASS) | superseded by final-SHA review gate | superseded by final-SHA review gate | superseded by final-SHA review gate | n/a | Freeze the documentation SHA, refresh Graphify, and obtain exact-SHA reviews. |
-| 3 — private materialization | DONE — regenerated | `4f4b863b53596088d58162f44e2a6e2e43e58f79` before this docs update | Sol orchestrator | capture, external count/hash binding, manifest write/verify/compare, and owner write/verify PASS | pending exact final SHA | pending exact final SHA | pending latest-available Opus exact final SHA | n/a | Preserve current aggregate packet record; no owner approval yet. |
-| 4 — full review | PENDING — exact-SHA reviews | documentation SHA pending freeze | none | final Graphify refresh pending because this docs update changes SHA | pending | pending | pending | pending | Reconcile fresh reviews before PR. |
+| 2 — final correction 6 | HISTORICAL — invalidated by later FIX reviews | `d01a8f099394e8c7882736ac52fd81c6d2de8c15` reviewed; local correction uncommitted | fresh `gpt-5.6-terra` recovery writer | earlier full proof PASS; latest bounded correction focused proof PASS | `FIX` session `019fa229-bc19-77b2-92bf-7f270e1cddc8` | `FIX` on `d01a8f099394e8c7882736ac52fd81c6d2de8c15` | pending fresh exact SHA | n/a | Freeze corrected SHA, refresh Graphify, and obtain fresh reviews. |
+| 3 — private materialization | PARKED — historical hashes invalidated | prior materialization only | Sol orchestrator | historical capture/binding/write/verify evidence only; regeneration required | n/a | n/a | n/a | n/a | Do not use the listed hashes for owner review; regenerate after fresh reviews. |
+| 4 — full review | IN PROGRESS — bounded correction uncommitted | pending corrected freeze | fresh `gpt-5.6-terra` recovery writer | packet suite PASS 29.3s; correction guards PASS 38.9s; typecheck PASS 21.1s; build PASS 18.2s; lint 0 errors/4 pre-existing warnings; exact 6-commit range PASS: 51,810 paths in 22.4s | pending fresh exact SHA | pending fresh exact SHA | pending latest-available Opus exact SHA | pending | Reconcile fresh reviews, then regenerate packet before PR. |
 | 5 — protected PR | PENDING | pending | Terra only if correction needed | pending | pending | pending | pending | pending | Open PR, resolve real findings, park before merge. |
 | 6 — closeout | PENDING | pending | none | pending | pending | pending | pending | pending | Record READY FOR OWNER REVIEW and the exact approval packet. |
 
@@ -153,7 +173,8 @@ packet. They must be refreshed inside the loop before materialization.
   manifest write/verify and deterministic compare, and owner-sheet write/verify
   all passed. Fresh aggregate hashes are recorded below. Exact final-SHA
   Graphify refresh and fresh Luna/independent-Sol/latest-available Opus reviews
-  remain pending because this documentation update changes the candidate SHA.
+  were pending. Both later exact-SHA reviews returned `FIX`, so this
+  materialization is now historical and must be regenerated after correction.
 - Graphify was refreshed after these uncommitted edits: 8,309 nodes / 17,245
   edges. Its report records HEAD `ee9183ee`; because Graphify records committed
   HEAD rather than an uncommitted patch, an exact final-SHA refresh remains
@@ -186,7 +207,7 @@ packet. They must be refreshed inside the loop before materialization.
 | C4-SOL-3 | Sol orchestrator cycle 4 | MEDIUM | Several packet entry points tolerated duplicate, unknown, missing-value, or positional CLI input. | FIX: capture accepts no CLI input; manifest and owner entry points use strict named-path option parsing while preserving the generator's exactly-one-mode parser and v2 environment default. | fresh `gpt-5.6-terra` | uncommitted | Spawned synthetic invalid-input regressions cover every packet CLI without exposing synthetic identifiers. |
 | C4-SELF-1 | Real Husky pre-commit pipeline | HIGH | The staged candidate's real `git commit` ran Husky; all earlier gates passed until `npm run test:correction-guards`. The disposable fixture inherited hook-local Git variables, so fixture `git init` targeted the shared Git directory, set common `core.bare=true`, and fixture `git add README.md` failed: `fatal: this operation must be run in a work tree`. No commit was created. | FIX: sanitize all case-insensitive `GIT_*` variables for every disposable fixture Git command, including injected checker Git calls. Regression injects hostile `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and `GIT_COMMON_DIR`, proves the fixture initializes, adds and commits its README in its own worktree, and proves the real repository remains a worktree with common `core.bare=false` before and after. Shared repository common `core.bare=false` was repaired and reverified. A later fresh materialization establishes the current aggregate hashes below; exact final-SHA reviews remain pending. | fresh `gpt-5.6-terra` | uncommitted | Focused hostile-hook-context regression PASS; later full commit-hook proof PASS. |
 
-## Private artifacts
+## Private artifacts — historical and invalidated
 
 Only paths, sizes, hashes, timestamps, formats, and counts may be recorded here.
 Never paste Product rows.
@@ -206,9 +227,9 @@ Stage C migration mission be designed.
 
 ## Closeout
 
-- `DONE:` recovery tooling was proven, rewritten provenance was checked, and the final aggregate-only packet was regenerated and verified
-- `NOW:` freeze this documentation SHA, refresh Graphify, and run fresh exact-SHA Luna, independent-Sol, and latest-available Opus reviews
-- `REMAINING:` reconcile review findings, open the protected PR, pass required checks, and read/resolve CodeRabbit before any owner-review state
-- `PARKED:` no owner approval, Product classification, Stage C SQL/migration, flag enablement, deployment, or live mutation is authorized by this packet
+- `DONE:` earlier materialization and proof are preserved as historical evidence; Luna and Sol `FIX` findings are remediated in the bounded local correction set
+- `NOW:` freeze the correction, refresh Graphify, and obtain fresh exact-SHA Luna, independent-Sol, and latest-available Opus reviews
+- `REMAINING:` regenerate the private packet with new aggregate evidence, rerun packet proof, reconcile reviews, then open the protected PR and handle CodeRabbit
+- `PARKED:` the prior hashes are invalidated; no owner approval, Product classification, Stage C SQL/migration, flag enablement, deployment, or live mutation is authorized
 - `NEEDS MASON:` nothing during the unattended preparation run
-- `VERDICT:` FINAL PACKET MATERIALIZED — EXACT-SHA REVIEWS/PR PENDING
+- `VERDICT:` PARKED — TOOLING CORRECTION; PACKET REGENERATION REQUIRED
