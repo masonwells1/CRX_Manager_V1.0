@@ -12,6 +12,16 @@ node scripts/check-ledger-update.mjs || {
   exit 1
 }
 
+# --- Phase 3C private-artifact containment (HARD) ---
+# This runs before broad checks and rejects only Git-visible artifact paths; prose
+# may safely describe the approved external directory and review process.
+echo "🔒 Checking Phase 3C private-artifact containment..."
+node scripts/check-supplier-pricing-phase3-private-artifacts.mjs || {
+  echo ""
+  echo "❌ PRIVATE ARTIFACT CONTAINMENT FAILED — move the artifact outside this repository."
+  exit 1
+}
+
 # --- SQL Migration Validation (prevents known anti-patterns) ---
 echo "🛡️ Validating SQL migrations..."
 bash scripts/validate-sql.sh

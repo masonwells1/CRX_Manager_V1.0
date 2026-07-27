@@ -36,10 +36,12 @@ not casually become the implementation writer.
 - A fresh independent GPT-5.6 Sol worker reviews the exact candidate SHA
   read-only after proof passes. The orchestrating Sol is not the independent
   reviewer.
-- Claude Opus 5 performs the final read-only adversarial review on the same
-  exact candidate SHA. The review capture must record a resolved Opus 5 model,
-  every finding, and a categorical verdict. An alias request alone is not
-  proof that Opus 5 ran.
+- Claude's latest available resolved Opus model performs the final read-only
+  adversarial review on the same exact candidate SHA. The review capture must
+  record the requested alias, resolved model, every finding, and a categorical
+  verdict. The requested `opus` alias in Cycle 1 resolved to
+  `claude-opus-4-8`; no Opus 5 review ran or may be claimed. A literal Opus 5
+  rerun remains optional only if that backend later becomes available.
 
 The orchestrator invokes Codex workers through `scripts/codex-build.mjs` with
 the model and effort pinned explicitly. Claude review runs through
@@ -59,7 +61,7 @@ One cycle is one frozen, independently reviewable candidate:
    open PRs, changed-file overlap, root dirt, live aggregate state, migration
    ledger, cost-basis flag, private artifact directory, Graphify build SHA, and
    Claude/Codex health. No implementation edit occurs until this is clean.
-2. **Design-adversary cycle:** Claude Opus 5 reviews this mission and the
+2. **Design-adversary cycle:** Claude's latest available resolved Opus model reviews this mission and the
    controlling Phase 3 contract before the first implementation edit. Sol
    incorporates real findings into the bounded Terra prompt without weakening
    owner or production gates.
@@ -78,7 +80,8 @@ One cycle is one frozen, independently reviewable candidate:
    the independent verifier, secret/private-data scans, `git diff --check`,
    typecheck, lint, full tests, build, workflow tests, and applicable
    read-only database checks. Then obtain Luna, independent exact-SHA Sol, and
-   exact-SHA Opus 5 verdicts.
+   exact-SHA latest-available resolved Opus verdicts; no Opus 5 provenance may
+   be inferred or claimed unless that backend is actually available and run.
 6. **Correction cycle:** any `FIX`, `NEEDS-WORK`, real CodeRabbit issue,
    failing proof, privacy leak, or material review disagreement returns a
    bounded finding list to a fresh Terra writer. Freeze a new SHA and repeat
@@ -177,7 +180,7 @@ The mission is done only when all of these are true on one exact final SHA:
 - focused, full, build, workflow, privacy, and deterministic proof is green;
 - Luna returns `CLEAN`;
 - a fresh independent Sol returns `CLEAN` for the exact SHA;
-- Claude review records a resolved Opus 5 model and returns `SHIP` or
+- Claude review records its exact latest-available resolved Opus model and returns `SHIP` or
   `SHIP-WITH-FOLLOWUPS` with no unresolved BLOCKER/HIGH/MED;
 - any CodeRabbit finding has been read and every real issue fixed, with all
   invalidated proof/reviews rerun;

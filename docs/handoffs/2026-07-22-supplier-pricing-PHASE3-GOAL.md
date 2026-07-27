@@ -2,7 +2,7 @@
 
 **Owner:** Mason Wells
 **Approved:** 2026-07-22
-**Status:** Stage A live and dormant; Stage B1 landed; Stage B2 integrated and in testing/review. Stage C remains parked for Mason's row-by-row classification approval and exact checksum.
+**Status:** Stage A, Stage B1, and Stage B2 are landed. Stage C remains parked on the fresh post-Stage-A packet, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
 **Orchestrator:** GPT-5.6 Sol, high reasoning
 **Coordination lane:** this contract is persisted on the dedicated `codex/supplier-pricing-phase3` docs branch
 **Current B2 implementation lane:** isolated branch `codex/supplier-pricing-phase3-stage-b2`; B1 is landed historical work. Never reuse the coordination/docs branch or worktree `7582`
@@ -117,7 +117,7 @@ The completed Stage A deliverable added a migration compatible with the then-cur
 
 The protected Stage A PR passed the required review and proof sequence before Mason authorized its merge and live migration. Those gates are historical evidence, not instructions to open or apply another Stage A change.
 
-### Stage B — exact-SKU Product-picker UI (B2 testing/review; B1 landed)
+### Stage B — exact-SKU Product-picker UI (landed)
 
 Only after Stage A is merged and its live migration is explicitly approved and proven, refresh from `main` and rerun the repo-wide Graphify/source Product-selector inventory. Implement the shared Product-option presentation across every included transactional selector in the approved plan.
 
@@ -127,7 +127,7 @@ Open a separate protected UI PR and stop before merge.
 
 ### Stage C — owner-approved classification
 
-The proposed manifest must reconcile every Product row as family-assigned, standalone, or unresolved, with policy evidence and expected-old-value guards. No proposed family or non-`unknown` policy becomes approved merely because an agent generated it.
+The proposed manifest must reconcile every Product row as family-assigned, standalone, or unresolved, with policy evidence and expected-old-value guards. No proposed family or non-`unknown` policy becomes approved merely because an agent generated it. The next path is fresh post-Stage-A packet → Mason row/field/checksum approval → separate guarded Stage C migration PR → separate live-apply approval.
 
 The pre-Stage-A packet is a proposal only. After Stage A is live, regenerate it from the actual new schema and live read-only values, producing a fresh count and checksum. Mason must approve or reject every row disposition and every changed field, including explicit acknowledgment of unresolved rows.
 

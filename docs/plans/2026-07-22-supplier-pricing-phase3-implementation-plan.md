@@ -4,6 +4,7 @@
 **Verdict:** SAFE TO BUILD AFTER PR #213 RECONCILIATION
 **Approved scope:** product families, structured policy/packaging metadata, exact-SKU picker clarity, and return/credit enforcement
 **Execution contract:** `docs/handoffs/2026-07-22-supplier-pricing-PHASE3-GOAL.md`
+**Current status:** Stage A/B1/B2 are landed. The remaining Stage C path is a fresh post-Stage-A packet, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
 
 ## Outcome in Plain English
 
