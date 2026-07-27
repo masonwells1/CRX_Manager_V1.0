@@ -2,11 +2,12 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonical, currentProduct, loadSnapshot, makeManifest, phase3Values, sha256, without } from './generate-supplier-pricing-phase3-classification-manifest.mjs';
-import { assert, parseNamedPathOptions, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_MANIFEST_NAME, readValidatedPrivateArtifact, REPO_ROOT } from './supplier-pricing-phase3-private-artifacts.mjs';
+import { assert, parseExpectedV2Binding, parseNamedPathOptions, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_MANIFEST_NAME, readValidatedPrivateArtifact, REPO_ROOT } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 export function verifyManifest(snapshot, committedText) {
   const expected = makeManifest(snapshot);
-  const manifest = JSON.parse(committedText);
+  let manifest;
+  try { manifest = JSON.parse(committedText); } catch (_error) { throw new Error('manifest JSON is invalid'); }
   assert(committedText === canonical(manifest), 'manifest byte drift: canonical LF UTF-8 JSON required');
   assert(manifest.manifest_sha256 === sha256(without(manifest, 'manifest_sha256')), 'manifest SHA-256 drift');
   assert(committedText === canonical(expected), 'manifest content, count, ordering, row hash, expected-old, or policy drift');
@@ -30,7 +31,7 @@ function main() {
   const cli = parseNamedPathOptions(process.argv.slice(2), ['--snapshot', '--manifest']);
   const snapshotPath = cli['--snapshot'] || (process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR ? path.join(process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR, POST_STAGE_A_SNAPSHOT_NAME) : null);
   assert(snapshotPath, 'private snapshot path required: set CRX_PHASE3_PRIVATE_ARTIFACT_DIR or pass --snapshot <path>');
-  const snapshot = loadSnapshot(snapshotPath);
+  const snapshot = loadSnapshot(snapshotPath, path.basename(snapshotPath) === POST_STAGE_A_SNAPSHOT_NAME ? parseExpectedV2Binding() : null);
   const manifestName = snapshot.format.includes('post-stage-a') ? POST_STAGE_A_MANIFEST_NAME : PRE_STAGE_A_MANIFEST_NAME;
   const manifestPath = cli['--manifest'] || (process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR ? path.join(process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR, manifestName) : null);
   const result = verifyManifest(snapshot, readValidatedPrivateArtifact(manifestPath, manifestName, REPO_ROOT).text);

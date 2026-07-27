@@ -35,9 +35,10 @@ export function sha256(value) { return createHash('sha256').update(canonical(val
 export function without(object, key) { const copy = { ...object }; delete copy[key]; return copy; }
 
 function comparisonPath(target) { const resolved = path.resolve(target); return process.platform === 'win32' ? resolved.toLowerCase() : resolved; }
+function canonicalRepoRoot(repoRoot) { return realpathSync(repoRoot); }
 function canonicalExistingDirectory(directory) { assert(existsSync(directory) && statSync(directory).isDirectory(), 'CRX_PHASE3_PRIVATE_ARTIFACT_DIR must be an existing directory'); return realpathSync(directory); }
 export function isPathInside(child, parent) { const relative = path.relative(comparisonPath(parent), comparisonPath(child)); return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)); }
-export function assertExternalPrivateDirectory(directory, repoRoot = REPO_ROOT) { assert(directory, 'CRX_PHASE3_PRIVATE_ARTIFACT_DIR is required'); assert(typeof directory === 'string' && path.isAbsolute(directory), 'CRX_PHASE3_PRIVATE_ARTIFACT_DIR must be an absolute path'); const resolved = canonicalExistingDirectory(directory); assert(!isPathInside(resolved, repoRoot), 'CRX_PHASE3_PRIVATE_ARTIFACT_DIR must resolve outside the repository'); return resolved; }
+export function assertExternalPrivateDirectory(directory, repoRoot = REPO_ROOT) { assert(directory, 'CRX_PHASE3_PRIVATE_ARTIFACT_DIR is required'); assert(typeof directory === 'string' && path.isAbsolute(directory), 'CRX_PHASE3_PRIVATE_ARTIFACT_DIR must be an absolute path'); const resolved = canonicalExistingDirectory(directory); assert(!isPathInside(resolved, canonicalRepoRoot(repoRoot)), 'CRX_PHASE3_PRIVATE_ARTIFACT_DIR must resolve outside the repository'); return resolved; }
 
 function assertRegularSingleLink(file, label) {
   const entry = lstatSync(file);
@@ -53,39 +54,45 @@ export function assertExternalArtifactPath(file, expectedBasename, repoRoot = RE
   assert(file, `private ${expectedBasename} path required`);
   assert(typeof file === 'string' && path.isAbsolute(file), `private ${expectedBasename} path must be absolute`);
   assert(path.basename(file) === expectedBasename, `private artifact filename must be ${expectedBasename}`);
-  const privateParent = assertExternalPrivateDirectory(path.dirname(file), repoRoot);
-  const resolved = path.join(privateParent, expectedBasename);
-  assert(!isPathInside(resolved, repoRoot), 'private artifact path must resolve outside the repository');
-  try { assertRegularSingleLink(resolved, 'private artifact path'); assert(!isPathInside(realpathSync(resolved), repoRoot), 'private artifact path must resolve outside the repository'); }
-  catch (error) { if (error?.code === 'ENOENT' && !mustExist) return resolved; if (error?.code === 'ENOENT') throw new Error('private artifact input must exist'); throw error; }
-  return resolved;
+  const pathname = path.resolve(file);
+  const root = canonicalRepoRoot(repoRoot);
+  assert(!isPathInside(pathname, root), 'private artifact path must resolve outside the repository');
+  assertExternalPrivateDirectory(path.dirname(pathname), root);
+  try { assertRegularSingleLink(pathname, 'private artifact path'); assert(!isPathInside(realpathSync(pathname), root), 'private artifact path must resolve outside the repository'); }
+  catch (error) { if (error?.code === 'ENOENT' && !mustExist) return pathname; if (error?.code === 'ENOENT') throw new Error('private artifact input must exist'); throw error; }
+  return pathname;
 }
 
 export function privateArtifactPath(directory, basename, repoRoot = REPO_ROOT) { const privateDirectory = assertExternalPrivateDirectory(directory, repoRoot); return assertExternalArtifactPath(path.join(privateDirectory, basename), basename, repoRoot); }
 function sameFile(left, right) { return left.dev === right.dev && left.ino === right.ino; }
-function assertOpenedArtifactMatchesPath(fd, resolved, label) {
+function assertOpenedArtifactMatchesPath(fd, resolved, label, repoRoot) {
   const descriptor = fstatSync(fd);
-  const entry = lstatSync(resolved);
-  const followed = statSync(resolved);
+  let entry; let followed;
+  try { entry = lstatSync(resolved); followed = statSync(resolved); }
+  catch (_error) { throw new Error(`${label} changed during validation`); }
   assert(descriptor.isFile() && entry.isFile() && followed.isFile(), `${label} must be a regular file`);
   assert(!entry.isSymbolicLink(), `${label} must not be a symbolic link or reparse point`);
   assert(descriptor.nlink === 1 && entry.nlink === 1 && followed.nlink === 1, `${label} must not be hard-linked`);
   assert(sameFile(descriptor, entry) && sameFile(descriptor, followed), `${label} changed during validation`);
+  const root = canonicalRepoRoot(repoRoot);
+  assert(!isPathInside(realpathSync(path.dirname(resolved)), root) && !isPathInside(realpathSync(resolved), root), `${label} must remain outside the repository`);
   return descriptor;
 }
-export function readValidatedPrivateArtifact(file, expectedBasename, repoRoot = REPO_ROOT, { beforeRead } = {}) {
+export function readValidatedPrivateArtifact(file, expectedBasename, repoRoot = REPO_ROOT, { beforeOpen, beforeRead, afterRead } = {}) {
   const resolved = assertExternalArtifactPath(file, expectedBasename, repoRoot, { mustExist: true });
   const noFollow = process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number' ? 0 : constants.O_NOFOLLOW;
   let fd;
   try {
+    beforeOpen?.({ path: resolved });
     fd = openSync(resolved, constants.O_RDONLY | noFollow);
-    const before = assertOpenedArtifactMatchesPath(fd, resolved, 'private artifact path');
+    const before = assertOpenedArtifactMatchesPath(fd, resolved, 'private artifact path', repoRoot);
     beforeRead?.({ fd, path: resolved });
-    assertOpenedArtifactMatchesPath(fd, resolved, 'private artifact path');
+    assertOpenedArtifactMatchesPath(fd, resolved, 'private artifact path', repoRoot);
     const text = readFileSync(fd, 'utf8');
+    afterRead?.({ fd, path: resolved });
     const after = fstatSync(fd);
     assert(sameFile(before, after) && after.isFile() && after.nlink === 1, 'private artifact descriptor changed during read');
-    assertOpenedArtifactMatchesPath(fd, resolved, 'private artifact path');
+    assertOpenedArtifactMatchesPath(fd, resolved, 'private artifact path', repoRoot);
     return { path: resolved, text };
   } finally {
     if (fd !== undefined) closeSync(fd);
@@ -108,14 +115,16 @@ export function parseNamedPathOptions(argumentsList, optionNames) {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRODUCT_KEYS = ['id', 'sku', 'product_name', 'product_form', 'container_size', 'container_type', 'container_unit', 'unit_size', 'inventory_unit', 'is_active', 'pricing_version', 'updated_at', 'product_family_id', 'return_policy', 'packaging_variant', 'is_full_tote_only', 'active_return_statuses'];
 const V2_KEYS = ['capture_timestamp_utc', 'expected_old_phase3_defaults', 'format', 'migration_high_water', 'product_families_count', 'products', 'snapshot_sha256', 'stage_a_migration_version', 'stage_a_ledger_present', 'supplier_cost_basis_enabled'];
-const CONTAINER_TYPES = new Set(['Jug', 'Drum', 'Pallet', 'Mini-Bulk', 'Shuttle', 'Bag', 'Tote', 'Ea', 'Jar']);
+export const PRODUCT_FORM_ALLOWLIST = Object.freeze(['liquid', 'dry']);
+export const CONTAINER_TYPE_ALLOWLIST = Object.freeze(['Jug', 'Drum', 'Pallet', 'Mini-Bulk', 'Shuttle', 'Bag', 'Tote', 'Ea', 'Jar']);
+const CONTAINER_TYPES = new Set(CONTAINER_TYPE_ALLOWLIST);
 function exactKeys(value, keys, label) { assert(value && typeof value === 'object' && !Array.isArray(value), `${label} is invalid`); assert(Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key)), `${label} key set is invalid`); }
 function safeNullableString(value) { return value === null || typeof value === 'string'; }
 function strictProduct(product, index) {
   exactKeys(product, PRODUCT_KEYS, `Product row ${index + 1}`);
   assert(typeof product.id === 'string' && UUID.test(product.id), `Product row ${index + 1} has invalid UUID`);
   assert(typeof product.product_name === 'string' && safeNullableString(product.sku), `Product row ${index + 1} has invalid text metadata`);
-  assert(product.product_form === null || product.product_form === 'liquid' || product.product_form === 'dry', `Product row ${index + 1} has invalid product form`);
+  assert(product.product_form === null || PRODUCT_FORM_ALLOWLIST.includes(product.product_form), `Product row ${index + 1} has invalid product form`);
   assert(product.container_size === null || (typeof product.container_size === 'number' && Number.isFinite(product.container_size)), `Product row ${index + 1} has invalid container size`);
   assert(product.container_type === null || CONTAINER_TYPES.has(product.container_type), `Product row ${index + 1} has invalid container type`);
   assert(['container_unit', 'unit_size', 'inventory_unit'].every(key => safeNullableString(product[key])), `Product row ${index + 1} has invalid unit metadata`);
@@ -139,31 +148,57 @@ export function validatePostStageASnapshot(snapshot) {
   assert(typeof snapshot.snapshot_sha256 === 'string' && snapshot.snapshot_sha256 === sha256(without(snapshot, 'snapshot_sha256')), 'snapshot SHA-256 drift');
   return snapshot;
 }
-export function loadValidatedSnapshot(file, repoRoot = REPO_ROOT) {
+export function parseExpectedV2Binding(environment = process.env) {
+  const hash = environment.CRX_PHASE3_EXPECTED_SNAPSHOT_SHA256;
+  const count = environment.CRX_PHASE3_EXPECTED_PRODUCT_COUNT;
+  assert(typeof hash === 'string' && /^[0-9a-f]{64}$/i.test(hash), 'post-Stage-A snapshot external hash binding is missing or invalid');
+  assert(typeof count === 'string' && /^[1-9][0-9]*$/.test(count) && Number.isSafeInteger(Number(count)), 'post-Stage-A snapshot external count binding is missing or invalid');
+  return { snapshot_sha256: hash.toLowerCase(), product_count: Number(count) };
+}
+export function assertV2SnapshotBinding(snapshot, binding) {
+  assert(binding && typeof binding === 'object', 'post-Stage-A snapshot external bindings are required');
+  assert(typeof binding.snapshot_sha256 === 'string' && /^[0-9a-f]{64}$/i.test(binding.snapshot_sha256) && Number.isSafeInteger(binding.product_count) && binding.product_count > 0, 'post-Stage-A snapshot external bindings are invalid');
+  assert(snapshot.snapshot_sha256.toLowerCase() === binding.snapshot_sha256.toLowerCase(), 'post-Stage-A snapshot external hash binding mismatch');
+  assert(snapshot.products.length === binding.product_count, 'post-Stage-A snapshot external count binding mismatch');
+}
+export function loadValidatedSnapshot(file, repoRoot = REPO_ROOT, binding = null) {
   assert(file && typeof file === 'string' && path.isAbsolute(file), 'private snapshot path must be absolute');
   const basename = path.basename(file); assert(APPROVED_SNAPSHOT_BASENAMES.has(basename), 'private snapshot filename is not approved');
   const { text } = readValidatedPrivateArtifact(file, basename, repoRoot);
   let snapshot; try { snapshot = JSON.parse(text); } catch { throw new Error('private snapshot JSON is invalid'); }
   const expectedFormat = basename === POST_STAGE_A_SNAPSHOT_NAME ? POST_STAGE_A_SNAPSHOT_FORMAT : PRE_STAGE_A_SNAPSHOT_FORMAT;
   assert(snapshot?.format === expectedFormat, 'private snapshot basename and format do not match');
-  if (basename === POST_STAGE_A_SNAPSHOT_NAME) return validatePostStageASnapshot(snapshot);
+  if (basename === POST_STAGE_A_SNAPSHOT_NAME) { validatePostStageASnapshot(snapshot); assertV2SnapshotBinding(snapshot, binding); return snapshot; }
   assert(Array.isArray(snapshot.products) && snapshot.products.length > 0, 'snapshot has no products');
   const ids = snapshot.products.map(product => product.id); assert(ids.every((id, index) => index === 0 || ids[index - 1] < id) && new Set(ids).size === ids.length, 'snapshot Product UUID order is invalid');
   assert(snapshot.snapshot_sha256 === sha256(without(snapshot, 'snapshot_sha256')), 'snapshot SHA-256 drift');
   return snapshot;
 }
 
-export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoRoot = REPO_ROOT, beforeFinalValidation } = {}) {
+function safeUnlinkOwnedTemp(temporary, fd, repoRoot) {
+  try {
+    const descriptor = fstatSync(fd); const entry = lstatSync(temporary); const followed = statSync(temporary);
+    if (entry.isFile() && !entry.isSymbolicLink() && sameFile(descriptor, entry) && sameFile(descriptor, followed) && !isPathInside(realpathSync(path.dirname(temporary)), canonicalRepoRoot(repoRoot)) && !isPathInside(realpathSync(temporary), canonicalRepoRoot(repoRoot))) unlinkSync(temporary);
+  } catch (_error) { /* A swapped path is deliberately left untouched. */ }
+}
+export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoRoot = REPO_ROOT, beforeTempOpen, afterTempOpenBeforeWrite, beforeFinalValidation } = {}) {
   const target = assertExternalArtifactPath(file, expectedBasename, repoRoot);
   const parent = path.dirname(target); const canonicalParent = assertExternalPrivateDirectory(parent, repoRoot);
-  const temporary = path.join(canonicalParent, `.${expectedBasename}.${randomBytes(16).toString('hex')}.tmp`);
+  const temporary = path.join(parent, `.${expectedBasename}.${randomBytes(16).toString('hex')}.tmp`);
   let fd;
   try {
-    fd = openSync(temporary, 'wx', 0o600); writeFileSync(fd, text, 'utf8'); fsyncSync(fd); closeSync(fd); fd = undefined;
+    beforeTempOpen?.({ target, temporary });
+    assert(assertExternalPrivateDirectory(parent, repoRoot) === canonicalParent, 'private artifact parent changed during write');
+    fd = openSync(temporary, 'wx', 0o600);
+    afterTempOpenBeforeWrite?.({ target, temporary, fd });
+    assertOpenedArtifactMatchesPath(fd, temporary, 'private artifact temporary path', repoRoot);
+    writeFileSync(fd, text, 'utf8'); fsyncSync(fd);
     beforeFinalValidation?.({ target, temporary });
     assert(assertExternalPrivateDirectory(parent, repoRoot) === canonicalParent, 'private artifact parent changed during write');
+    assertOpenedArtifactMatchesPath(fd, temporary, 'private artifact temporary path', repoRoot);
     assertExternalArtifactPath(target, expectedBasename, repoRoot);
+    closeSync(fd); fd = undefined;
     renameSync(temporary, target);
     return target;
-  } catch (error) { if (fd !== undefined) closeSync(fd); try { unlinkSync(temporary); } catch (_error) {} throw error; }
+  } catch (error) { if (fd !== undefined) { safeUnlinkOwnedTemp(temporary, fd, repoRoot); closeSync(fd); } throw error; }
 }

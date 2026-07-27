@@ -75,6 +75,9 @@ jobs:
       - name: Run TypeScript type check
         run: npm run typecheck
 
+      - name: Phase 3C private-artifact containment
+        run: npm run check:phase3-private-artifacts
+
       - name: Guard-hook regression tests (safety net must not regress)
         run: npm run test:correction-guards
 

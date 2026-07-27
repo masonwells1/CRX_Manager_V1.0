@@ -19,9 +19,9 @@
 |---|---|---|---|---|---|---|---|---|---|
 | 0 — preflight | DONE | `9bf567bf` | none | PASS | n/a | n/a | n/a | n/a | Cycle 2 bounded capture/generator work. |
 | 1 — design adversary | DONE | `9bf567bf` | none | SHIP | n/a | n/a | `opus` → `claude-opus-4-8` | n/a | Cycle 2 accepts both LOW findings. |
-| 2 — capture/generator correction 4 | DONE — CANDIDATE READY TO FREEZE | uncommitted | fresh `gpt-5.6-terra` | final local proof PASS; correction cycles 1–4 acknowledged | pending | pending | pending | n/a | Freeze the candidate exact SHA, then obtain the remaining independent reviews. |
-| 3 — private materialization | DONE | current aggregate hashes recorded below | Sol orchestrator | capture PASS; manifest write/verify PASS; owner-sheet write/verify PASS; deterministic compare PASS; containment PASS | n/a | n/a | n/a | n/a | Final engineering review remains required. |
-| 4 — full review | IN PROGRESS | pending freeze | none | full pipeline pending | pending fresh exact-SHA review | pending fresh exact-SHA review | pending latest-available Opus review | n/a | Freeze exact SHA and reconcile the full pipeline and all fresh reviews. |
+| 2 — final correction 6 | DONE — READY TO FREEZE | uncommitted | fresh `gpt-5.6-terra` | focused test, guard suites, typecheck, lint, build, and containment PASS | pending | pending | pending | n/a | Freeze exact SHA and obtain fresh reviews. |
+| 3 — private materialization | DONE | current aggregate hashes recorded below | Sol orchestrator | capture PASS; external hash/count binding PASS; manifest write/verify PASS; owner-sheet write/verify PASS; deterministic compare PASS; containment PASS | n/a | n/a | n/a | n/a | Final engineering review remains required. |
+| 4 — full review | IN PROGRESS | uncommitted correction | none | full test/commit pipeline pending | pending fresh exact-SHA review | pending fresh exact-SHA review | pending latest-available Opus review | n/a | Freeze exact SHA, refresh Graphify, and reconcile all reviews. |
 | 5 — protected PR | PENDING | pending | Terra only if correction needed | pending | pending | pending | pending | pending | Open PR, resolve real findings, park before merge. |
 | 6 — closeout | PENDING | pending | none | pending | pending | pending | pending | pending | Record READY FOR OWNER REVIEW and the exact approval packet. |
 
@@ -76,6 +76,38 @@ packet. They must be refreshed inside the loop before materialization.
 
 ## Findings and correction lessons
 
+### Final correction 6 — current fresh Terra writer
+
+- Exact reviewed candidate: `ee9183eef017affb8170fa8cdb7c4cb84e87c7c1`.
+- Independent Sol: `gpt-5.6-sol`, session `019fa1b9-5cfb-7e33-81fd-23cb72636875`, verdict `FIX`.
+- Luna bookkeeping review: `gpt-5.6-luna`, session
+  `019fa1b9-5cf2-7023-aff1-0d79befd6b1d`, verdict `FIX` only for circular
+  pending-review bookkeeping.
+- Resolved Opus review: run `2026-07-27T04-03-37-498Z-1eab779e`, requested
+  alias `opus` resolved to `claude-opus-4-8`, verdict `SHIP-WITH-FOLLOWUPS`;
+  no Opus 5 review ran or is claimed.
+- Writer: final fresh `gpt-5.6-terra`; fix SHA: `uncommitted`.
+- Sol dispositions: clean-checkout Git-native containment and bounded worktree
+  scan — implemented; pre-push/CI fail-closed wiring — implemented; v2 external
+  hash/count binding for every consumer — implemented; exact Supabase warning
+  envelope — implemented; parent-junction reader/writer safeguards and safe
+  temp cleanup — implemented; malformed-manifest categorical JSON failure —
+  implemented; claimed regression restoration — in focused proof; no finding
+  was weakened or dismissed.
+- Opus follow-ups: runtime enum allowlists/schema-registry equality —
+  implemented; bounded Git/native scan and synthetic fake-repository isolation
+  — implemented; live-hash provenance remains an orchestrator proof item and
+  is not self-certified here.
+- Sol regenerated the private packet at `2026-07-27T04:38:32.716486Z`;
+  capture, external count/hash binding, manifest write/verify, owner-sheet
+  write/verify, deterministic compare, and containment all passed. Fresh
+  aggregate hashes are recorded below. Exact final-SHA Graphify refresh and
+  fresh Luna/independent-Sol/Opus reviews remain pending.
+- Graphify was refreshed after these uncommitted edits: 8,309 nodes / 17,245
+  edges. Its report records HEAD `ee9183ee`; because Graphify records committed
+  HEAD rather than an uncommitted patch, an exact final-SHA refresh remains
+  pending after a later freeze.
+
 | ID | Source | Severity | Exact evidence | Disposition | Owner | Fix SHA | Regression proof |
 |---|---|---:|---|---|---|---|---|
 | C2-LOW-1 | Pre-edit Claude review | LOW | Eliminate private-row stdout modes from the generator. | Accepted and implemented in the uncommitted Cycle 2 candidate; focused synthetic regression passed. Final candidate proof/review remains pending. | Terra | uncommitted | `npm run test:supplier-pricing-phase3c-packet` PASS |
@@ -108,11 +140,11 @@ packet. They must be refreshed inside the loop before materialization.
 Only paths, sizes, hashes, timestamps, formats, and counts may be recorded here.
 Never paste Product rows.
 
-| Artifact | Private path | Format | Rows | SHA-256 | Verified |
-|---|---|---|---:|---|---|
-| Post-Stage-A snapshot | private external path (not recorded) | `crx-supplier-pricing-phase3-post-stage-a-product-snapshot-v2`, 604 rows, 359426 bytes; captured `2026-07-27T03:42:09.074684Z` | byte `f541626b323689bbec2a3c5bffb4cc6def8378ebcccb91f592bf773b0d261d0e` (semantic `4dab31821eeef53d7d3441231b88ee7425e0292c672259718604b423b482c708`) | capture PASS | current final packet for candidate about to be frozen |
-| Proposed manifest | private external path (not recorded) | `crx-supplier-pricing-phase3-post-stage-a-proposed-classification-manifest-v2`, 604 rows, 1580465 bytes | byte `f5378ed8e2c1f8e85adf93e3710a76edcf39bbdbbc2db93dd0f6f024f3dc2ea1` (semantic `a038747ba013e9da85621fd4ab0eb14dc28a3b0fa473ce30e93e1bd2c30de7d9`) | manifest write/verify PASS; deterministic compare PASS | current final packet for candidate about to be frozen |
-| Owner decision sheet | private external path (not recorded) | `crx-supplier-pricing-phase3-owner-decision-sheet-v1`, 604 rows, 123853 bytes | byte `c976bd8b3aa02b49b269b4674906cf0067725aa802c776ac85e57c9f1992b276` (semantic `4eff9c27ee8d61345c328e0130a2fe26926bb809436f1c95d3c46ceb9fe4a3c8`) | owner-sheet write/verify PASS; containment PASS | current final packet for candidate about to be frozen |
+| Artifact | Private path | Format | Rows | Bytes | Byte SHA-256 | Semantic SHA-256 | Verified |
+|---|---|---|---:|---:|---|---|---|
+| Post-Stage-A snapshot | private external path (not recorded) | `crx-supplier-pricing-phase3-post-stage-a-product-snapshot-v2` | 604 | 359426 | `2293328dd9b9463e10ed20cc715550ead530801c4e0e2e72a150c4b962e13d27` | `8daa4aad87bf7c81c8d2297260925a5bc6082b002518c055b111084deb6047d5` | captured `2026-07-27T04:38:32.716486Z`; capture and external binding PASS |
+| Proposed manifest | private external path (not recorded) | `crx-supplier-pricing-phase3-post-stage-a-proposed-classification-manifest-v2` | 604 | 1580465 | `0cfd81aedde82dd261770118ccf472b3760655fd5a8b2cdedb863aa888f98dc4` | `0e944d05c101ebd667decd6ca8594f7038fab7280c15143c8c7c4600bb38ee06` | write/verify and deterministic compare PASS |
+| Owner decision sheet | private external path (not recorded) | `crx-supplier-pricing-phase3-owner-decision-sheet-v1` | 604 | 123853 | `c976bd8b3aa02b49b269b4674906cf0067725aa802c776ac85e57c9f1992b276` | `4eff9c27ee8d61345c328e0130a2fe26926bb809436f1c95d3c46ceb9fe4a3c8` | write/verify and containment PASS |
 
 ## Owner gate after this mission
 
@@ -124,8 +156,8 @@ Stage C migration mission be designed.
 ## Closeout
 
 - `DONE:` pending
-- `NOW:` Cycle 4 final engineering review on the candidate about to be frozen
-- `REMAINING:` full pipeline, fresh exact-SHA Luna review, fresh exact-SHA independent-Sol review, latest-available Opus review, commit, and PR/CodeRabbit are pending; any later packet-tooling code change requires regeneration
+- `NOW:` Freeze Cycle 4 candidate, refresh Graphify, and run final exact-SHA engineering reviews
+- `REMAINING:` full test/commit pipeline, fresh exact-SHA Luna review, fresh exact-SHA independent-Sol review, latest-available Opus review, and PR/CodeRabbit are pending; any later packet-tooling code change requires regeneration
 - `PARKED:` none yet
 - `NEEDS MASON:` nothing during the unattended preparation run
 - `VERDICT:` IN PROGRESS

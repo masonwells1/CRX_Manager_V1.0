@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assert, canonical, loadValidatedSnapshot, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME,
-  PRE_STAGE_A_MANIFEST_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_FORMAT, POST_STAGE_A_SNAPSHOT_FORMAT, REPO_ROOT, sha256, stable, without, writePrivateArtifactAtomic,
+  PRE_STAGE_A_MANIFEST_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_FORMAT, POST_STAGE_A_SNAPSHOT_FORMAT, REPO_ROOT, parseExpectedV2Binding, sha256, stable, without, writePrivateArtifactAtomic,
 } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const PRE_STAGE_A_MANIFEST_FORMAT = 'crx-supplier-pricing-phase3-proposed-classification-manifest-v1';
@@ -14,8 +14,8 @@ const args = process.argv.slice(2);
 
 export { canonical, sha256, stable, without };
 
-export function loadSnapshot(file) {
-  return loadValidatedSnapshot(file, REPO_ROOT);
+export function loadSnapshot(file, binding = null) {
+  return loadValidatedSnapshot(file, REPO_ROOT, binding);
 }
 
 function candidateEvidence(product) {
@@ -161,7 +161,7 @@ function main() {
   let cli; try { cli = parseCli(args); } catch (_error) { usageError(); }
   const snapshotPath = cli['--snapshot'] || (process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR ? path.join(process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR, POST_STAGE_A_SNAPSHOT_NAME) : null);
   assert(snapshotPath, 'private snapshot path required: set CRX_PHASE3_PRIVATE_ARTIFACT_DIR or pass --snapshot <path>');
-  const snapshot = loadSnapshot(snapshotPath);
+  const snapshot = loadSnapshot(snapshotPath, path.basename(snapshotPath) === POST_STAGE_A_SNAPSHOT_NAME ? parseExpectedV2Binding() : null);
   const format = snapshot.format;
   const manifestName = format === POST_STAGE_A_SNAPSHOT_FORMAT ? POST_STAGE_A_MANIFEST_NAME : PRE_STAGE_A_MANIFEST_NAME;
   const manifestPath = cli['--manifest'] || (process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR ? path.join(process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR, manifestName) : null);

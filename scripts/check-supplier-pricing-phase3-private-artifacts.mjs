@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Fail closed if a private Phase 3C artifact is present in any Git-visible path. */
 import { execFileSync } from 'node:child_process';
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, openSync, readSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPROVED_SERIALIZED_FORMATS, OWNER_DECISION_CSV_HEADER, PRIVATE_ARTIFACT_BASENAMES, REPO_ROOT } from './supplier-pricing-phase3-private-artifacts.mjs';
@@ -23,6 +23,13 @@ function gitPaths(args, root = REPO_ROOT, execute = execFileSync) {
   const output = gitOutput(args, root, execute);
   return String(output).split('\0').filter(Boolean);
 }
+function gitPathsAllowNoMatch(args, root = REPO_ROOT, execute = execFileSync) {
+  try { return gitPaths(args, root, execute); }
+  catch (error) {
+    if (error?.status === 1) return [];
+    throw error;
+  }
+}
 
 export function forbiddenArtifactReason(repoPath) {
   const segments = repoPath.split(/[\\/]/).filter(Boolean);
@@ -40,28 +47,31 @@ function privateSignatureReason(text) {
   if (text.includes(OWNER_DECISION_CSV_HEADER)) return 'owner decision sheet CSV header';
   return SERIALIZED_PRIVATE_SIGNATURES.some(signature => text.includes(signature)) ? 'approved private JSON format signature' : null;
 }
-function readWorktreeCandidate(root, repoPath) {
+function readWorktreeCandidatePrefix(root, repoPath) {
   const file = path.resolve(root, repoPath);
   const entry = lstatSync(file);
   if (!entry.isFile() || entry.isSymbolicLink()) return null;
-  return readFileSync(file, 'utf8');
+  const fd = openSync(file, 'r');
+  try {
+    const buffer = Buffer.alloc(16 * 1024);
+    return buffer.subarray(0, readSync(fd, buffer, 0, buffer.length, 0)).toString('utf8');
+  } finally { closeSync(fd); }
 }
-function readIndexCandidate(root, repoPath, execute) {
-  return String(gitOutput(['show', `:${repoPath}`], root, execute));
+function trackedContentViolations(root, execute) {
+  const violations = [];
+  for (const signature of SERIALIZED_PRIVATE_SIGNATURES) {
+    const reason = signature === OWNER_DECISION_CSV_HEADER ? 'owner decision sheet CSV header' : 'approved private JSON format signature';
+    for (const repoPath of gitPathsAllowNoMatch(['grep', '--cached', '-I', '-l', '-z', '-F', '-e', signature], root, execute)) violations.push({ repoPath, reason });
+  }
+  return violations;
 }
 function contentViolations(root, execute) {
-  const staged = new Set(gitPaths(['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR'], root, execute));
   const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMR'], root, execute));
   const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
-  const violations = [];
-  for (const repoPath of staged) {
-    if (isNodeModulesPath(repoPath)) continue;
-    const reason = privateSignatureReason(readIndexCandidate(root, repoPath, execute));
-    if (reason) violations.push({ repoPath, reason });
-  }
+  const violations = trackedContentViolations(root, execute);
   for (const repoPath of new Set([...modified, ...untracked])) {
     if (isNodeModulesPath(repoPath)) continue;
-    const text = readWorktreeCandidate(root, repoPath);
+    const text = readWorktreeCandidatePrefix(root, repoPath);
     const reason = text === null ? null : privateSignatureReason(text);
     if (reason) violations.push({ repoPath, reason });
   }

@@ -5,24 +5,28 @@
 **Status:** Stage A, Stage B1, and Stage B2 are landed. Stage C remains parked on the fresh post-Stage-A packet, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
 **Orchestrator:** GPT-5.6 Sol, high reasoning
 **Coordination lane:** this contract is persisted on the dedicated `codex/supplier-pricing-phase3` docs branch
-**Current B2 implementation lane:** isolated branch `codex/supplier-pricing-phase3-stage-b2`; B1 is landed historical work. Never reuse the coordination/docs branch or worktree `7582`
+**Current lane:** the Supplier Pricing Phase 3C owner-review packet is parked pending regenerated packet proof and Mason's later row/field/checksum approval. B1 and B2 are landed historical work. Never reuse the coordination/docs branch or worktree `7582`.
 
-## Current Runner Instruction — Stage B2
+## Current Runner Instruction — Parked Stage C Review Packet
 
-Stage B1 has landed. Stage B2 is active on the dedicated
-`codex/supplier-pricing-phase3-stage-b2` branch. The first implementation slice
-owns all transactional Product-ID writers and import ambiguity guards.
-InventoryPage's hold and manual-add writers were integrated only after the
-Section 3 collision boundary was released. Stage B2 is now in testing/review;
-it is not accepted until the required authenticated browser proof and fresh
-exact-SHA independent Sol adversarial review pass.
+Stage A, B1, and B2 are landed. The only current Supplier Pricing lane is the
+parked Stage C owner-review packet: regenerate the private post-Stage-A packet,
+prove it, and obtain Mason's later row/field/checksum approval before a separate
+guarded Stage C migration can be designed. This packet is not a classification,
+approval, migration, or live-data action.
 
-The active B2 deny set remains explicit:
+The current Stage C deny set remains explicit:
 
-- do not merge the B2 PR or start Stage C;
+- do not create or apply Stage C SQL, classify Product rows, or treat a packet as approval;
 - do not apply a live migration or mutate live Product, family, policy, return, credit, inventory, or pricing data;
 - do not enable or change `supplier_cost_basis_enabled`;
 - do not touch or reuse worktree `7582`.
+
+## Historical Runner Instruction — Stage B2
+
+Stage B2's dedicated implementation lane, transactional Product-ID writer
+scope, collision release, testing, and review gate are historical context only.
+It landed before this Stage C packet lane and must not be restarted.
 
 ## Historical Runner Instruction — Stage B1
 

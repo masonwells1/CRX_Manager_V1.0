@@ -1,6 +1,16 @@
 #!/usr/bin/env sh
 echo "🛡️ Pre-push safety check..."
 echo ""
+echo "Checking Phase 3C private-artifact containment..."
+npm run check:phase3-private-artifacts 2>&1
+CONTAINMENT_EXIT=$?
+
+if [ $CONTAINMENT_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ PRIVATE ARTIFACT CONTAINMENT FAILED — push blocked."
+  exit 1
+fi
+
 echo "Running TypeScript type check..."
 npm run typecheck 2>&1
 TC_EXIT=$?

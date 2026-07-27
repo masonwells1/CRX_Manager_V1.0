@@ -3,7 +3,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonical, loadSnapshot, makeManifest, sha256 } from './generate-supplier-pricing-phase3-classification-manifest.mjs';
-import { assert, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, parseNamedPathOptions, POST_STAGE_A_SNAPSHOT_NAME, REPO_ROOT, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
+import { assert, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, parseExpectedV2Binding, parseNamedPathOptions, POST_STAGE_A_SNAPSHOT_NAME, REPO_ROOT, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 export const OWNER_DECISION_SHEET_FORMAT = 'crx-supplier-pricing-phase3-owner-decision-sheet-v1';
 export { OWNER_DECISION_HEADERS };
@@ -44,7 +44,7 @@ function main() {
   const snapshotPath = cli['--snapshot'] || (process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR ? path.join(process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR, POST_STAGE_A_SNAPSHOT_NAME) : null);
   assert(snapshotPath, 'private post-Stage-A snapshot path required');
   const outputPath = cli['--sheet'] || (process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR ? path.join(process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR, OWNER_DECISION_SHEET_NAME) : null);
-  const snapshot = loadSnapshot(snapshotPath);
+  const snapshot = loadSnapshot(snapshotPath, parseExpectedV2Binding());
   const manifest = makeManifest(snapshot);
   const sheet = buildOwnerDecisionSheet(manifest);
   const target = writePrivateArtifactAtomic(outputPath, OWNER_DECISION_SHEET_NAME, sheet, { repoRoot: REPO_ROOT });
