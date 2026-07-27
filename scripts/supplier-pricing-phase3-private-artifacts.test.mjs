@@ -241,7 +241,7 @@ try {
     throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, afterTempOpenBeforeWrite: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|changed|EBUSY|EPERM|EACCES');
     assert.equal(existsSync(path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME)), false);
     makeExternalJunction();
-    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeRename: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|parent|EBUSY|EPERM|EACCES');
+    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeRename: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|parent|private artifact temporary path changed during publication|EBUSY|EPERM|EACCES');
     assert.equal(existsSync(path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME)), false);
     makeExternalJunction();
     const absentFinal = path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME);
