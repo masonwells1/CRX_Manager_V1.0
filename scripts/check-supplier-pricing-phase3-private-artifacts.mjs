@@ -49,6 +49,7 @@ const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
 const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
 const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
+const TOOL_OWNED_IGNORED_ROOTS = new Set(['node_modules', 'dist', 'dist-ssr', 'coverage', 'playwright-report', '.playwright-mcp', '.playwright-cli', 'graphify-out']);
 
 /**
  * Husky and Git can export GIT_DIR/GIT_INDEX_FILE/etc. Those variables would
@@ -96,6 +97,9 @@ function bareRepositoryMemberPath(root, member) {
 function isBareRepositoryMember(repoPath, root) {
   const normalized = repoPath.replaceAll('\\', '/');
   return root === '.' || normalized === root || normalized.startsWith(`${root}/`);
+}
+function isToolOwnedIgnoredPath(repoPath) {
+  return TOOL_OWNED_IGNORED_ROOTS.has(repoPath.replaceAll('\\', '/').split('/')[0]);
 }
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
@@ -821,9 +825,12 @@ function worktreeContentViolations(root, execute, budget) {
       if (entryKind === 'bare-repository') { violations.push({ repoPath, reason: 'bare Git repository' }); continue; }
       if (entryKind !== 'regular') continue;
     }
-    // Ignored dependencies and caches are not Git-visible packet candidates;
-    // retain ZIP rejection for tracked, modified, and untracked paths only.
-    const result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives: source !== 'ignored' });
+    // Tool-owned dependency/build roots contain harmless third-party archives.
+    // Other ignored paths remain operator-controlled packet candidates, so an
+    // ignored archive at the repository root or in an ordinary folder fails
+    // closed just like tracked and untracked archives.
+    const checkArchives = source !== 'ignored' || !isToolOwnedIgnoredPath(repoPath);
+    const result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
     if (result?.reason) violations.push({ repoPath, reason: result.reason });
   }
   return { violations, candidateCount: candidates.size, ignoredCount: ignored.size, durationMs: Math.round(performance.now() - started) };
