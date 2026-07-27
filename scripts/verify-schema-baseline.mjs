@@ -112,6 +112,14 @@ const REQUIRED_RESTORE_PROOFS = [
   // The count is unchanged by such a swap, so a refresh that recorded only "95 after
   // restore" would have proven nothing about which 95.
   'anon_execute_guard_rejects_identity_swap',
+  // Two more negative tests, for the same reason: a digest that does not carry a field
+  // cannot notice that field drifting. Flip an identity column from ALWAYS to BY DEFAULT
+  // and change one RPC argument default, and confirm `columns` and `function_security`
+  // move. Under the previous definitions both digests were byte-identical across those
+  // mutations, so the restore matched live while the backup job and every call site
+  // relying on a default were broken.
+  'column_fingerprint_rejects_identity_drift',
+  'function_fingerprint_rejects_argument_default_drift',
   'post_baseline_migration_replays_clean',
 ];
 {

@@ -12,13 +12,21 @@
 -- Every digest is taken over a deterministically ordered text aggregation, so
 -- it is independent of catalog OIDs, row order, and client operating system.
 
+-- `attidentity` and `attgenerated` are carried explicitly. Identity and generated
+-- semantics live in pg_attribute, not in the type/not-null/default fields, so a restore
+-- that dropped `GENERATED ALWAYS AS IDENTITY` would leave this digest untouched.
+-- `backup_runs.id` and `backup_snapshots.id` are identity columns today and their insert
+-- paths omit `id`, so that drift would pass every fingerprint and break the backup job at
+-- runtime.
 SELECT 'columns', md5(string_agg(entry, E'\n' ORDER BY entry))
 FROM (
-  SELECT format('%s.%s.%s|%s|%s|%s',
+  SELECT format('%s.%s.%s|%s|%s|%s|%s|%s',
                 n.nspname, c.relname, a.attname,
                 format_type(a.atttypid, a.atttypmod),
                 a.attnotnull,
-                COALESCE(pg_get_expr(d.adbin, d.adrelid), '')) AS entry
+                COALESCE(pg_get_expr(d.adbin, d.adrelid), ''),
+                a.attidentity,
+                a.attgenerated) AS entry
   FROM pg_attribute a
   JOIN pg_class c ON c.oid = a.attrelid
   JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -122,11 +130,19 @@ FROM (
 ) s
 
 UNION ALL
+-- Two argument renderings on purpose. The identity form is the key — it is what
+-- PostgREST and `GRANT` address — but it omits argument defaults, so a restore that lost
+-- `DEFAULT` on an optional parameter would leave both this digest and the source digest
+-- unchanged while breaking every call site that relies on the default. That is not
+-- hypothetical here: `p_idempotency_key text DEFAULT NULL` is a project-wide contract on
+-- mutating RPCs, and callers such as `PurchaseOrders.handleCancel` omit `p_reason` from
+-- `cancel_purchase_order`. `pg_get_function_arguments` carries the full contract.
 SELECT 'function_security', md5(string_agg(entry, E'\n' ORDER BY entry))
 FROM (
-  SELECT format('%s.%s(%s)|%s|%s|%s|%s',
+  SELECT format('%s.%s(%s)|%s|%s|%s|%s|%s',
                 n.nspname, p.proname,
                 pg_get_function_identity_arguments(p.oid),
+                pg_get_function_arguments(p.oid),
                 p.prosecdef,
                 COALESCE(array_to_string(p.proconfig, ','), ''),
                 p.provolatile,
