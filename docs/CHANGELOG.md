@@ -2,6 +2,133 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
+
+Closes the systemic gap that `20260726223520_vendors_inactive_admin_active_check.sql` explicitly
+deferred ("that systemic gap is tracked separately"). A live `pg_policy` sweep found **38** policies
+— across 17 `public` tables plus `storage.objects` — that gate on `profiles.role` **inline** without
+also requiring `profiles.is_active = true`. Because deactivation is not enforced at the auth layer
+(`auth.users.banned_until` is NULL and sessions are not revoked), RLS is the only gate, so a
+deactivated user holding a still-valid JWT kept access through every one of them. There is one such
+account live today (a deactivated `sales_rep`, 216 session rows), and 7 of the 38 policies include
+`sales_rep`. Policies that call the `is_admin()` / `is_sales_rep()` / `is_driver()` /
+`is_applicator()` helpers were already safe — all four were confirmed live to check `is_active`.
+
+`supabase/migrations/20260727145843_inline_role_checks_require_active_profile.sql` is forward-only:
+38 `ALTER POLICY` statements (never a `DROP` + `CREATE`) so each policy keeps its command, role list,
+permissiveness, `WITH CHECK` shape, and every non-role predicate — soft-delete scoping on `vendors`
+and `vendor_bills`, `bucket_id` scoping and the own-folder branch on the two `storage.objects`
+policies, the `uploaded_by` ownership branch on `team_note_attachments`, and the assigned-driver
+branch on `delivery_photos`. It matches the convention of `20260726223520` and `20260701213000`.
+An inline verification `DO` block re-reads all 38 from `pg_policies` and raises unless each one still
+has the expected command, is still `PERMISSIVE`, has the same USING/WITH CHECK clause shape, retains
+both its role check and the new `is_active` check **per clause** (never concatenated, so a
+half-tightened UPDATE/ALL cannot pass), and keeps its named non-role predicates; it then asserts zero
+residual inline-role policies repo-wide and that all four role helpers still exist and still gate on
+`is_active`.
+
+**Scope limit — this is not full account deactivation.** Tables carrying a separate wide-open
+PERMISSIVE `true` SELECT policy (`application_services`, `application_record_fields`,
+`customer_application_rates`, `quote_pdf_templates`, `quote_templates`, `team_note_attachments`)
+still admit any logged-in user regardless of role, and the own-attachment delete branches are
+deliberately preserved for inactive users. Revoking sessions / blocking re-login remains a separate
+follow-up. Because `ALTER POLICY` holds `ACCESS EXCLUSIVE` until commit, all 18 tables are blocked
+simultaneously for the duration; the migration sets `lock_timeout = '10s'` so a contended apply fails
+fast and atomically rather than stalling production.
+
+Proof: full-file dry run on the live project inside `BEGIN … ROLLBACK` — all 38 `ALTER`s applied, the
+verification block passed, residual inline-role gaps went **38 → 0**, then rolled back; live state
+re-read afterward and confirmed unchanged. The verification block was separately negative-tested
+against the un-tightened database and correctly raised. Earlier behavioral proof under
+`SET LOCAL ROLE authenticated`: the deactivated `sales_rep` saw 11 `vendors` rows before and **0**
+after, an admin deactivated mid-test saw 4 `vendor_bills` before and **0** after, while active users'
+row counts were unchanged. Adversarial cross-model review (Codex `gpt-5.6-sol`, high effort, no DB
+access) returned **SHIP-WITH-FOLLOWUPS** with no blockers; its eight findings on lock-duration
+wording, scope framing, verification strength, per-clause checks, helper-count vacuity, bare
+`auth.uid()`, and duplicate target rows are all addressed in the committed file.
+
+A **second** adversarial pass by the same reviewer against the *revised* file (the first pass had only
+seen the pre-fix version) again returned **SHIP-WITH-FOLLOWUPS**, no blockers and no HIGH findings. It
+independently reconciled all 38 targets — every expected command and USING/WITH CHECK clause shape
+correct, 38 ALTERs against 38 historical definitions, zero mismatches — and confirmed the three
+`UPDATE`-with-null-`WITH CHECK` policies are correctly asserted, since Postgres then applies `USING`
+to the proposed row as well. It cleared semantic equivalence, `NULL` scalar-subquery denial,
+`(SELECT auth.uid())` equivalence, absence of over-tightening, and idempotency. Its three MEDIUM
+findings — that the fragment assertions were satisfied by *inverted* predicates, that the repo-wide
+residual sweep still concatenated `USING` and `WITH CHECK`, and that `lock_timeout` bounds each lock
+acquisition rather than the whole migration — are now fixed: fragments are full deparsed expressions
+matched against the single clause that carries them, the residual sweep is per-clause, and the
+locking comment states the per-acquisition semantics. The helper scan also gained `pronargs = 0`.
+
+The inversion fix was negative-tested on live inside an aborted transaction: with `vendors_select`
+deliberately gutted to `deleted_at IS NOT NULL`, the old bare-`deleted_at` fragment **passed** it
+while the new `deleted_at IS NULL` fragment **caught** it. The full file was then re-run end to end
+inside `BEGIN … ROLLBACK` and reported `verification_passed residual_gaps=0 storage_tightened=4`,
+with live state re-read unchanged afterward (38 gaps, ledger 911 rows at `20260726223520`). Sol's
+completeness query independently confirmed the target list is exactly right: 38 gap policies live,
+25 with a `USING` gap and 18 with a `WITH CHECK` gap, overlapping on the 5 two-clause policies
+(25 + 18 − 5 = 38), matching the migration's 4 `UPDATE/qw` + 1 `ALL/qw`.
+
+**Clean-rebuild replay — the last open follow-up — is now CLOSED (2026-07-27).** A disposable
+PostgreSQL 17.6 stack was built from `supabase/baselines/` in `manifest.json.restore_order` (861
+ledger rows, high-water `20260719092832`), then post-baseline migrations were replayed from **git
+blobs** rather than the worktree. Two deviations from `supabase/baselines/README.md` were forced and
+are recorded here rather than papered over: the CLI `db push` step was replaced by an equivalent
+psql replay that applies each file *and* records its version/name (`--db-url` forces TLS and
+`--local` refuses a restored ledger holding versions with no local files), and the replay reads git
+blobs because `core.autocrlf=true` checks migrations out with CRLF, which breaks the byte-exact
+function-body md5 preconditions several historical migrations assert. Local default privileges also
+had to be revoked from `anon`/`authenticated`/`service_role` for both `postgres` and `supabase_admin`
+**before** the restore, since the baseline dump itself creates the tables the split-claim postflight
+audits; production already holds zero such grants.
+
+The replay stops at 16 of 50 on `PRECONDITION: reviewed public RPC drifted:
+public.create_invoice_from_order(...)`. **Root cause is a pre-existing baseline defect, not this
+migration:** the July 19 baseline's schema is *ahead* of its own recorded ledger high-water — its
+public-schema artifact contains `split_invoice_creation_claims`, a table introduced by
+`20260720213000` — so it carries function bodies later than migration 16 expects. Tracked as a
+separate item; refreshing the baseline is out of scope here.
+
+That stall does not weaken the proof, because the remaining 35 migrations were checked statically and
+**none of them creates, drops, or alters any of the 38 target policies.** The only two hits are
+substring matches on `vendors_select_inactive_admin`, a different policy. The one real difference
+between the rebuild-at-16 and production is that `20260726190515` **drops** `vendors_insert` and
+`vendors_update` outright (vendor writes moved to the `save_vendor` / `delete_vendor` RPCs) — which is
+exactly why the rebuild flagged 40 inline-role gaps where production flags 38.
+
+Result: all 38 policy names were confirmed present on the rebuild (`total 38 | present 38 | missing
+0`). Applying the migration to the rebuild **as-is first** was a useful negative test — it correctly
+refused with `residual inline role check public.vendors.vendors_insert (WITH CHECK clause)` and rolled
+back atomically, proving the repo-wide residual sweep is not merely a restatement of the target list.
+After replaying that migration's verbatim `DROP POLICY` pair to align vendors with production, the
+full file applied cleanly: 38 `ALTER POLICY`, `require_active verification passed: 38 policies now
+require an active profile`, residual inline-role gaps **0**, and 47 policies now gating on
+`is_active`.
+
+**Migration-apply gate.** The first `write-apply-proofs.mjs` run returned **BLOCKERS** and minted no
+proofs: `rls-security-reviewer` CHECK 9 bans *any* reference to the whole-definition catalog helper,
+and the comment explaining why the verification block reads `prosrc` named it literally. Reworded
+(comment-only; the 38 `ALTER`s and the verification block are byte-unchanged), re-proved on the
+rebuild, and the re-run returned **CLEAN from both `rls-security-reviewer` and
+`migration-drift-reviewer`**, minting both halves of the proof (queryHash
+`664a27a814db3eefc44c53947c95d291781abf9c1bb23e15e9050246802116ce`, verified to match the transmitted
+SQL).
+
+**APPLIED LIVE 2026-07-27** under Mason's conditional approval — "run the clean rebuild check first
+and we will ship it all" — once that check passed. Submitted as `20260727123055_…`; Supabase assigned
+ledger version **`20260727145843`** (ledger name `inline_role_checks_require_active_profile`); the disk
+file was B7-renamed to match. Post-apply live proof: ledger 911 → **912 rows**, residual inline-role
+gaps **38 → 0**, **48** policies now require an active profile, `storage_tightened = 4`. Behavioral
+proof by live role simulation inside a self-aborting `DO` block (`SET LOCAL ROLE authenticated` +
+`request.jwt.claims`, nothing mutated): the deactivated `sales_rep` now sees **0** vendors and **0**
+vendor_bills, while an active admin still sees **13** vendors and **4** vendor_bills.
+
+**The scope limit above still holds — this is not full account deactivation.** The six tables with a
+wide-open PERMISSIVE `true` SELECT policy still admit any logged-in user, and deactivation still
+neither revokes sessions nor blocks re-login. Both remain open in `docs/manual/KNOWN_ISSUES.md`.
+A third item is now logged: the July 19 schema baseline is ahead of its own recorded ledger
+high-water, so a from-zero rebuild cannot complete past migration 16 until it is refreshed.
+
 ## 2026-07-27 — Production health and dependency-noise hardening
 
 - Updated the production spot-check workflow to verify the intentional
