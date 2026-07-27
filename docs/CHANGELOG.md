@@ -9,13 +9,17 @@ contain their own `.git` marker. Git reports an embedded checkout as one directo
 enumerating its files, which could allow a private Phase 3C packet inside that checkout to avoid
 content scanning. The regression suite creates both nested-repository cases with a synthetic
 private marker and requires a fail-closed `embedded Git repository` verdict while preserving the
-existing allowance for unrelated ignored symlinks. Benign embedded repositories deliberately
+existing allowance for unrelated ignored symlinks. Bare Git layouts containing `HEAD`, `config`,
+and loose or packed object paths are also rejected in worktree, index, candidate-tree, and history
+scans so zlib-compressed Git objects cannot hide a packet. Benign embedded repositories deliberately
 remain fail-closed containment candidates. ZIP/XLSX, gzip, bzip2, xz, 7z, and RAR candidates fail
 closed even with a harmless prefix when tracked, staged, modified, or non-ignored untracked because
 their compressed members cannot be inspected by the bounded raw-byte scanner; numeric signature
 definitions prevent the checker from rejecting its own source. Ordinary ignored dependency and
 cache files remain out of that archive-only check. Streamed property detection retains a recognized
 quoted key across arbitrary whitespace to its next delimiter without growing the fixed scan window.
+An incomplete JSON Unicode whitespace escape split across chunks is now carried and decoded before
+that delimiter check, matching the bounded direct detector.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 

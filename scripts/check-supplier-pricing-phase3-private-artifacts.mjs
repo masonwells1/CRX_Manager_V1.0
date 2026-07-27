@@ -80,6 +80,31 @@ export function forbiddenArtifactReason(repoPath) {
 export function findForbiddenPrivateArtifactPaths(paths) {
   return paths.map(repoPath => ({ repoPath, reason: forbiddenArtifactReason(repoPath) })).filter(item => item.reason);
 }
+function bareRepositoryObjectRoot(repoPath) {
+  const normalized = repoPath.replaceAll('\\', '/');
+  const match = /^(.*)\/objects\/(?:[0-9a-f]{2}\/[0-9a-f]{38,62}|pack\/pack-[0-9a-f]{40,64}\.(?:pack|idx))$/iu.exec(normalized);
+  return match?.[1] || null;
+}
+function bareRepositoryRoots(paths) {
+  const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
+  const roots = new Set();
+  for (const repoPath of pathSet) {
+    const root = bareRepositoryObjectRoot(repoPath);
+    if (root && pathSet.has(`${root}/HEAD`) && pathSet.has(`${root}/config`)) roots.add(root);
+  }
+  return roots;
+}
+function commitContainsBareRepository(commit, repoPath, root, execute) {
+  const bareRoot = bareRepositoryObjectRoot(repoPath);
+  if (!bareRoot) return null;
+  try {
+    gitOutput(['cat-file', '-e', `${commit}:${bareRoot}/HEAD`], root, execute);
+    gitOutput(['cat-file', '-e', `${commit}:${bareRoot}/config`], root, execute);
+    return bareRoot;
+  } catch {
+    return null;
+  }
+}
 function normalizeCsvHeaderCell(value) {
   const trimmed = value.trim();
   return trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1).replaceAll('""', '"') : trimmed;
@@ -324,6 +349,7 @@ function createOwnerHeaderStreamDetector() {
 }
 function createStructuralTextStreamScanner() {
   let tail = '';
+  let incompleteUnicodeEscape = '';
   let formatPropertySignal = false;
   const formatValueSignals = new Set();
   const propertySignals = new Set();
@@ -334,13 +360,20 @@ function createStructuralTextStreamScanner() {
     if (key === 'format') formatPropertySignal = true;
     else propertySignals.add(key);
   };
+  const decodeChunk = text => {
+    const raw = incompleteUnicodeEscape + text;
+    const incomplete = raw.match(/\\(?:u[0-9a-fA-F]{0,3})?$/)?.[0] ?? '';
+    incompleteUnicodeEscape = incomplete;
+    return decodeJsonUnicodeEscapes(incomplete ? raw.slice(0, -incomplete.length) : raw);
+  };
   return {
     feed(text) {
       ownerHeader.feed(text);
-      const window = tail + text;
-      const comparable = decodeJsonUnicodeEscapes(window);
+      const decoded = decodeChunk(text);
+      const window = tail + decoded;
+      const comparable = window;
       if (pendingProperty) {
-        const next = decodeJsonUnicodeEscapes(text).match(/\S/u)?.[0];
+        const next = decoded.match(/\S/u)?.[0];
         if (next) {
           if (next === ':') signalProperty(pendingProperty);
           pendingProperty = null;
@@ -615,6 +648,9 @@ async function currentIndexCandidateViolations(root, execute, budget) {
   const violations = [];
   const regular = [];
   const entries = currentIndexEntries(root, execute);
+  for (const bareRoot of bareRepositoryRoots(entries.map(entry => entry.repoPath))) {
+    violations.push({ repoPath: bareRoot, reason: 'bare Git repository' });
+  }
   for (const entry of entries) {
     if (!REGULAR_GIT_MODES.has(entry.mode)) { violations.push({ repoPath: entry.repoPath, reason: 'non-regular Git mode' }); continue; }
     regular.push(entry);
@@ -660,6 +696,14 @@ function worktreeEntryKind(root, repoPath) {
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error;
       }
+      try {
+        const head = lstatSync(path.join(current, 'HEAD'));
+        const config = lstatSync(path.join(current, 'config'));
+        const objects = lstatSync(path.join(current, 'objects'));
+        if (head.isFile() && config.isFile() && objects.isDirectory()) return 'bare-repository';
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
       return 'non-regular';
     } else return 'non-regular';
   }
@@ -677,7 +721,11 @@ function worktreeContentViolations(root, execute, budget) {
   for (const repoPath of ignored) if (!candidates.has(repoPath)) candidates.set(repoPath, 'ignored');
   const started = performance.now();
   const cache = { roots: new Map(), parents: new Map() };
+  const bareRoots = bareRepositoryRoots([...candidates.keys()]);
+  for (const bareRoot of bareRoots) violations.push({ repoPath: bareRoot, reason: 'bare Git repository' });
   for (const [repoPath, source] of candidates) {
+    const normalizedRepoPath = repoPath.replaceAll('\\', '/');
+    if ([...bareRoots].some(bareRoot => normalizedRepoPath === bareRoot || normalizedRepoPath.startsWith(`${bareRoot}/`))) continue;
     // `git ls-files --ignored` includes ordinary tool-owned links such as
     // node_modules/.bin. Never follow those entries: an unrelated ignored
     // reparse point cannot make a private packet Git-visible. A Phase 3C
@@ -696,6 +744,7 @@ function worktreeContentViolations(root, execute, budget) {
     if (source === 'ignored' || source === 'untracked') {
       const entryKind = worktreeEntryKind(root, repoPath);
       if (entryKind === 'embedded-repository') { violations.push({ repoPath, reason: 'embedded Git repository' }); continue; }
+      if (entryKind === 'bare-repository') { violations.push({ repoPath, reason: 'bare Git repository' }); continue; }
       if (entryKind !== 'regular') continue;
     }
     // Ignored dependencies and caches are not Git-visible packet candidates;
@@ -742,6 +791,9 @@ async function candidateCommitTreeViolations(commit, root, execute, budget) {
   const entries = commitTreeEntries(commit, root, execute);
   const violations = [];
   const regular = [];
+  for (const bareRoot of bareRepositoryRoots(entries.map(entry => entry.repoPath))) {
+    violations.push({ repoPath: `${commit}:${bareRoot}`, reason: 'bare Git repository' });
+  }
   for (const entry of entries) {
     const directReason = forbiddenArtifactReason(entry.repoPath);
     if (directReason) violations.push({ repoPath: `${commit}:${entry.repoPath}`, reason: directReason });
@@ -767,6 +819,8 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
     for (const repoPath of paths) {
       const directReason = forbiddenArtifactReason(repoPath);
       if (directReason) violations.push({ repoPath: `${commit}:${repoPath}`, reason: directReason });
+      const bareRoot = commitContainsBareRepository(commit, repoPath, root, execute);
+      if (bareRoot) violations.push({ repoPath: `${commit}:${bareRoot}`, reason: 'bare Git repository' });
       const tree = gitTreeEntry(commit, repoPath, root, execute);
       if (!REGULAR_GIT_MODES.has(tree.mode) || tree.type !== 'blob') { violations.push({ repoPath: `${commit}:${repoPath}`, reason: 'non-regular Git mode' }); continue; }
       entries.push({ repoPath: `${commit}:${repoPath}`, spec: tree.object, key: `history:${commit}:${repoPath}` });

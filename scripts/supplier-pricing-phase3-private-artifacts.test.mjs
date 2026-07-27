@@ -118,6 +118,8 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x1f, 0x8b, 0x08, 0x00])), 'compressed archive container cannot be inspected');
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x42, 0x5a, 0x68, 0x39, 0x31, 0x41, 0x59, 0x26, 0x53, 0x59])), 'compressed archive container cannot be inspected');
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from([0x42, 0x5a, 0x68, 0x39]), Buffer.from([0x31, 0x41, 0x59, 0x26, 0x53, 0x59])]), 'compressed archive container cannot be inspected');
+  assert.equal(structuralPrivateArtifactReason(Buffer.concat([Buffer.from('ordinary prefix'), Buffer.from([0x42, 0x5a, 0x68, 0x39, 0x31, 0x41, 0x59, 0x26, 0x53, 0x59])])), 'compressed archive container cannot be inspected');
+  assert.equal(structuralPrivateArtifactStreamReason([Buffer.from('ordinary prefix'), Buffer.from([0x42, 0x5a, 0x68, 0x39, 0x31, 0x41, 0x59, 0x26, 0x53, 0x59])]), 'compressed archive container cannot be inspected');
   assert.equal(structuralPrivateArtifactReason(Buffer.from('const marker = "BZh";')), null);
   assert.equal(structuralPrivateArtifactReason(readFileSync(path.join(REPO_ROOT, 'scripts', 'check-supplier-pricing-phase3-private-artifacts.mjs'))), null);
   const delayedProductPrefix = '{"id":"synthetic","sku":"synthetic","product_name":"synthetic","pricing_version":0,';
@@ -126,6 +128,11 @@ try {
   const delayedProductReason = structuralPrivateArtifactReason(delayedProductBytes);
   assert.equal(delayedProductReason, 'private snapshot or manifest key structure');
   assert.equal(structuralPrivateArtifactStreamReason([delayedProductBytes.subarray(0, streamSplit), delayedProductBytes.subarray(streamSplit)]), delayedProductReason, 'stream scanner must retain a recognized key across arbitrary whitespace before its colon');
+  const escapedWhitespacePadding = ' '.repeat(streamSplit - 5 - Buffer.byteLength(delayedProductPrefix) - Buffer.byteLength(delayedUpdatedAt) - 5_000);
+  const escapedWhitespaceBytes = Buffer.from(`${delayedProductPrefix}${escapedWhitespacePadding}${delayedUpdatedAt}${' '.repeat(5_000)}\\u0020:"synthetic"}`);
+  const escapedWhitespaceReason = structuralPrivateArtifactReason(escapedWhitespaceBytes);
+  assert.equal(escapedWhitespaceReason, 'private snapshot or manifest key structure');
+  assert.equal(structuralPrivateArtifactStreamReason([escapedWhitespaceBytes.subarray(0, streamSplit), escapedWhitespaceBytes.subarray(streamSplit)]), escapedWhitespaceReason, 'stream scanner must carry a split escaped whitespace prefix before resolving a deferred property');
   const delayedFormatBytes = Buffer.from(`${'x'.repeat(streamSplit - 5_000)}"format"${' '.repeat(6_000)}:"${POST_STAGE_A_SNAPSHOT_FORMAT}"`);
   const delayedFormatReason = structuralPrivateArtifactReason(delayedFormatBytes);
   assert.equal(delayedFormatReason, 'private JSON format marker in malformed candidate');
@@ -493,6 +500,10 @@ try {
   await assert.rejects(() => fixtureContainment(embeddedRepo), /nested\/? \(embedded Git repository\)/);
   const untrackedEmbeddedRepo = fixtureRepo('containment-untracked-embedded-repository'); const untrackedNestedRepo = path.join(untrackedEmbeddedRepo, 'nested'); git(untrackedEmbeddedRepo, ['init', '--quiet', untrackedNestedRepo]); writeFileSync(path.join(untrackedNestedRepo, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
   await assert.rejects(() => fixtureContainment(untrackedEmbeddedRepo), /nested\/? \(embedded Git repository\)/);
+  const bareRepoHost = fixtureRepo('containment-bare-repository'); const bareRepoBase = git(bareRepoHost, ['rev-parse', 'HEAD']).trim(); const bareRepoPath = path.join(bareRepoHost, 'catalog.git'); git(bareRepoHost, ['init', '--bare', '--quiet', bareRepoPath]); execFileSync('git', ['--git-dir', bareRepoPath, 'hash-object', '-w', '--stdin'], { input: JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }), encoding: 'utf8', env: sanitizedFixtureGitEnv() });
+  await assert.rejects(() => fixtureContainment(bareRepoHost), /catalog\.git \(bare Git repository\)/);
+  git(bareRepoHost, ['add', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'synthetic bare repository']); const bareRepoHead = git(bareRepoHost, ['rev-parse', 'HEAD']).trim();
+  await assert.rejects(() => checkPrivateArtifactContainment({ root: bareRepoHost, ranges: [`${bareRepoBase}..${bareRepoHead}`] }), /catalog\.git \(bare Git repository\)/);
   const compressedRepo = fixtureRepo('containment-compressed-packet'); const compressedPath = 'catalog.xlsx'; const compressedBytes = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(OWNER_DECISION_HEADERS.join(','))]); writeFileSync(path.join(compressedRepo, compressedPath), compressedBytes); git(compressedRepo, ['add', compressedPath]); await containmentFails(compressedRepo, compressedPath, 'compressed archive container cannot be inspected');
   const gzipPath = 'catalog.json.gz'; writeFileSync(path.join(compressedRepo, gzipPath), Buffer.concat([Buffer.from([0x1f, 0x8b, 0x08]), Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }))])); git(compressedRepo, ['add', gzipPath]); await containmentFails(compressedRepo, gzipPath, 'compressed archive container cannot be inspected');
   const prefixedZipPath = 'catalog-prefixed.bin'; writeFileSync(path.join(compressedRepo, prefixedZipPath), Buffer.concat([Buffer.alloc(64 * 1024 - 2, 0x41), Buffer.from([0x50, 0x4b, 0x03, 0x04])])); git(compressedRepo, ['add', prefixedZipPath]); await containmentFails(compressedRepo, prefixedZipPath, 'compressed archive container cannot be inspected');
