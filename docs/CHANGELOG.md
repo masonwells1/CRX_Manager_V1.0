@@ -11,7 +11,9 @@ content scanning. The regression suite creates both nested-repository cases with
 private marker and requires a fail-closed `embedded Git repository` verdict while preserving the
 existing allowance for unrelated ignored symlinks. Bare Git layouts containing `HEAD`, `config`,
 and loose or packed object paths are also rejected in worktree, index, candidate-tree, and history
-scans so zlib-compressed Git objects cannot hide a packet. Benign embedded repositories deliberately
+scans, including a bare layout rooted directly at a candidate root and an `objects/info/alternates`
+object-store marker. Git administration path segments such as a tracked `.git` pointer are rejected
+before blob scanning. Benign embedded repositories deliberately
 remain fail-closed containment candidates. ZIP/XLSX, gzip, bzip2, xz, 7z, and RAR candidates fail
 closed even with a harmless prefix when tracked, staged, modified, or non-ignored untracked because
 their compressed members cannot be inspected by the bounded raw-byte scanner; numeric signature
@@ -19,7 +21,10 @@ definitions prevent the checker from rejecting its own source. Ordinary ignored 
 cache files remain out of that archive-only check. Streamed property detection retains a recognized
 quoted key across arbitrary whitespace to its next delimiter without growing the fixed scan window.
 An incomplete JSON Unicode whitespace escape split across chunks is now carried and decoded before
-that delimiter check, matching the bounded direct detector.
+that delimiter check, matching the bounded direct detector. Standard and URL-safe Base64-wrapped
+packets are decoded by the same bounded structural scanner, including streaming quartet boundaries
+and unpadded final quanta. Pre-push remote discovery accepts slash-separated names that pass Git's
+own ref validation while rejecting malformed remote names without shell interpolation.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 

@@ -45,6 +45,10 @@ const MANIFEST_ROW_KEYS = ['product_id', 'current_product', 'proposed_phase3', '
 const STRUCTURAL_KEY_GROUPS = [SNAPSHOT_ROOT_KEYS, MANIFEST_ROOT_KEYS, PRODUCT_ROW_KEYS, MANIFEST_ROW_KEYS];
 const STREAM_TAIL_CHARS = Math.max(4096, OWNER_DECISION_HEADERS.join(',').length * 4);
 const OWNER_HEADER_RECORD_DELIMITER_RE = /[\r\n\v\f\u0085\u2028\u2029\u001c-\u001f]/u;
+const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
+const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
+const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
+for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
 
 /**
  * Husky and Git can export GIT_DIR/GIT_INDEX_FILE/etc. Those variables would
@@ -74,6 +78,7 @@ function assertCommitSha(value, label) {
 export function forbiddenArtifactReason(repoPath) {
   const segments = repoPath.split(/[\\/]/).filter(Boolean);
   if (segments.some(segment => segment.toLowerCase() === 'private-artifacts')) return 'private-artifacts directory';
+  if (segments.some(segment => segment.toLowerCase() === '.git')) return 'Git administration path';
   if (segments.some(segment => PRIVATE_ARTIFACT_BASENAMES_LOWER.has(segment.toLowerCase()))) return 'private artifact basename';
   return null;
 }
@@ -82,15 +87,22 @@ export function findForbiddenPrivateArtifactPaths(paths) {
 }
 function bareRepositoryObjectRoot(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
-  const match = /^(.*)\/objects\/(?:[0-9a-f]{2}\/[0-9a-f]{38,62}|pack\/pack-[0-9a-f]{40,64}\.(?:pack|idx))$/iu.exec(normalized);
-  return match?.[1] || null;
+  const match = /^(?:(.*)\/)?objects\/(?:[0-9a-f]{2}\/[0-9a-f]{38,62}|pack\/pack-[0-9a-f]{40,64}\.(?:pack|idx)|info\/alternates)$/iu.exec(normalized);
+  return match ? (match[1] || '.') : null;
+}
+function bareRepositoryMemberPath(root, member) {
+  return root === '.' ? member : `${root}/${member}`;
+}
+function isBareRepositoryMember(repoPath, root) {
+  const normalized = repoPath.replaceAll('\\', '/');
+  return root === '.' || normalized === root || normalized.startsWith(`${root}/`);
 }
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
   const roots = new Set();
   for (const repoPath of pathSet) {
     const root = bareRepositoryObjectRoot(repoPath);
-    if (root && pathSet.has(`${root}/HEAD`) && pathSet.has(`${root}/config`)) roots.add(root);
+    if (root && pathSet.has(bareRepositoryMemberPath(root, 'HEAD')) && pathSet.has(bareRepositoryMemberPath(root, 'config'))) roots.add(root);
   }
   return roots;
 }
@@ -98,8 +110,8 @@ function commitContainsBareRepository(commit, repoPath, root, execute) {
   const bareRoot = bareRepositoryObjectRoot(repoPath);
   if (!bareRoot) return null;
   try {
-    gitOutput(['cat-file', '-e', `${commit}:${bareRoot}/HEAD`], root, execute);
-    gitOutput(['cat-file', '-e', `${commit}:${bareRoot}/config`], root, execute);
+    gitOutput(['cat-file', '-e', `${commit}:${bareRepositoryMemberPath(bareRoot, 'HEAD')}`], root, execute);
+    gitOutput(['cat-file', '-e', `${commit}:${bareRepositoryMemberPath(bareRoot, 'config')}`], root, execute);
     return bareRoot;
   } catch {
     return null;
@@ -253,7 +265,12 @@ export function structuralPrivateArtifactReason(bytes) {
     const textualReason = textualJsonStructureReason(text) ?? ownerDecisionHeaderReason(text);
     if (textualReason) return textualReason;
   }
-  return null;
+  // A whole packet can be transfer-encoded without a filename or textual
+  // marker. Reuse the bounded streaming detector so direct and streamed scans
+  // make the same non-recursive Base64 decision.
+  const base64 = createBase64TransferScanner();
+  base64.feed(buffer);
+  return base64.finish();
 }
 function sameFileIdentity(left, right) { return left.dev === right.dev && left.ino === right.ino; }
 function sameWorktreeStatIdentity(left, right) {
@@ -440,12 +457,62 @@ function createOffsetStreamDecoder(decoder, initialSkip) {
   };
 }
 
-function createStructuralByteStreamScanner({ checkArchives = true } = {}) {
+function createBase64TransferScanner() {
+  let decoded = null;
+  let quartet = ''; let active = true; let saw = false; let terminal = false;
+  const feedDecoded = bytes => {
+    decoded ??= createStructuralByteStreamScanner({ checkBase64: false });
+    decoded.feed(bytes);
+  };
+  const consumeChunk = bytes => {
+    if (!active) return;
+    // Most source/data files are not Base64. A byte table exits at their first
+    // non-transfer byte, avoiding whole-chunk string allocation on hook scans.
+    for (let index = 0; index < bytes.length; index += 1) {
+      if (BASE64_TRANSFER_BYTE_ALLOWED[bytes[index]] === 0) { active = false; return; }
+    }
+    const transfer = bytes.toString('latin1').replace(/[\t\n\r ]/g, '');
+    if (!BASE64_TRANSFER_CHARACTERS_RE.test(transfer) || (terminal && transfer.length > 0)) { active = false; return; }
+    const normalized = transfer.replaceAll('-', '+').replaceAll('_', '/');
+    if (normalized.length === 0) return;
+    saw = true;
+    const input = quartet + normalized;
+    const paddingOffset = input.indexOf('=');
+    const body = paddingOffset === -1 ? input : input.slice(0, paddingOffset);
+    const fullBodyLength = body.length - (body.length % 4);
+    if (fullBodyLength) feedDecoded(Buffer.from(body.slice(0, fullBodyLength), 'base64'));
+    quartet = input.slice(fullBodyLength);
+    if (paddingOffset === -1) return;
+    if (quartet.length < 4) return;
+    if (!/^(?:[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/.test(quartet)) { active = false; return; }
+    feedDecoded(Buffer.from(quartet, 'base64'));
+    terminal = true;
+    quartet = '';
+  };
+  return {
+    feed(bytes) {
+      const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+      for (let offset = 0; active && offset < source.length; offset += BASE64_TRANSFER_CHUNK_BYTES) consumeChunk(source.subarray(offset, offset + BASE64_TRANSFER_CHUNK_BYTES));
+    },
+    finish() {
+      if (!active || !saw) return null;
+      if (quartet.length) {
+        // URL-safe transfer encoding commonly omits terminal padding. Only a
+        // valid 2- or 3-character final quantum is safe to complete here.
+        if (!/^[A-Za-z0-9+/]{2,3}$/.test(quartet)) return null;
+        feedDecoded(Buffer.from(quartet.padEnd(4, '='), 'base64'));
+      }
+      return decoded?.finish() ?? null;
+    },
+  };
+}
+function createStructuralByteStreamScanner({ checkArchives = true, checkBase64 = true } = {}) {
   const utf8Decoder = new StringDecoder('utf8');
   const utf8Scanner = createStructuralTextStreamScanner();
   let utf16Decoders = null;
   let utf16Scanners = null;
   let rawTail = Buffer.alloc(0);
+  const base64 = checkBase64 ? createBase64TransferScanner() : null;
   let archiveTail = Buffer.alloc(0);
   let archiveReason = null;
   const shouldActivateUtf16 = bytes => {
@@ -476,6 +543,7 @@ function createStructuralByteStreamScanner({ checkArchives = true } = {}) {
   };
   return {
     feed(bytes) {
+      base64?.feed(bytes);
       if (checkArchives) {
         const archiveProbe = archiveTail.length === 0 ? bytes : Buffer.concat([archiveTail, bytes]);
         archiveReason ??= compressedArchiveReason(archiveProbe);
@@ -497,7 +565,7 @@ function createStructuralByteStreamScanner({ checkArchives = true } = {}) {
           reason ??= utf16Scanners[index].finish();
         }
       }
-      return archiveReason ?? reason;
+      return archiveReason ?? reason ?? base64?.finish() ?? null;
     },
   };
 }
@@ -648,10 +716,15 @@ async function currentIndexCandidateViolations(root, execute, budget) {
   const violations = [];
   const regular = [];
   const entries = currentIndexEntries(root, execute);
-  for (const bareRoot of bareRepositoryRoots(entries.map(entry => entry.repoPath))) {
+  const bareRoots = bareRepositoryRoots(entries.map(entry => entry.repoPath));
+  const bareRootList = [...bareRoots];
+  for (const bareRoot of bareRoots) {
     violations.push({ repoPath: bareRoot, reason: 'bare Git repository' });
   }
   for (const entry of entries) {
+    const directReason = forbiddenArtifactReason(entry.repoPath);
+    if (directReason) { violations.push({ repoPath: entry.repoPath, reason: directReason }); continue; }
+    if (bareRootList.some(bareRoot => isBareRepositoryMember(entry.repoPath, bareRoot))) continue;
     if (!REGULAR_GIT_MODES.has(entry.mode)) { violations.push({ repoPath: entry.repoPath, reason: 'non-regular Git mode' }); continue; }
     regular.push(entry);
   }
@@ -722,21 +795,22 @@ function worktreeContentViolations(root, execute, budget) {
   const started = performance.now();
   const cache = { roots: new Map(), parents: new Map() };
   const bareRoots = bareRepositoryRoots([...candidates.keys()]);
+  const bareRootList = [...bareRoots];
   for (const bareRoot of bareRoots) violations.push({ repoPath: bareRoot, reason: 'bare Git repository' });
   for (const [repoPath, source] of candidates) {
-    const normalizedRepoPath = repoPath.replaceAll('\\', '/');
-    if ([...bareRoots].some(bareRoot => normalizedRepoPath === bareRoot || normalizedRepoPath.startsWith(`${bareRoot}/`))) continue;
+    // Path-level violations must win before a candidate is dereferenced or
+    // classified by source, including tracked, modified, and untracked paths.
+    const directReason = forbiddenArtifactReason(repoPath);
+    if (directReason) { violations.push({ repoPath, reason: directReason }); continue; }
+    if (bareRootList.some(bareRoot => isBareRepositoryMember(repoPath, bareRoot))) continue;
     // `git ls-files --ignored` includes ordinary tool-owned links such as
     // node_modules/.bin. Never follow those entries: an unrelated ignored
     // reparse point cannot make a private packet Git-visible. A Phase 3C
     // filename/path remains a failure before this skip, so a packet symlink
     // or junction still fails closed without dereferencing its target.
     if (source === 'ignored') {
-      const forbiddenReason = forbiddenArtifactReason(repoPath);
-      // The lexical violation is sufficient: never dereference a forbidden
-      // ignored path before reporting it. This keeps a packet-named link from
-      // changing the diagnostic or reaching an attacker-controlled target.
-      if (forbiddenReason) { violations.push({ repoPath, reason: forbiddenReason }); continue; }
+      // The lexical check above already protects ignored Git-administration
+      // and private-artifact paths without dereferencing their targets.
     }
     // Git collapses both ignored and untracked embedded repositories to one
     // directory candidate. Detect their `.git` marker without walking nested
@@ -791,10 +865,13 @@ async function candidateCommitTreeViolations(commit, root, execute, budget) {
   const entries = commitTreeEntries(commit, root, execute);
   const violations = [];
   const regular = [];
-  for (const bareRoot of bareRepositoryRoots(entries.map(entry => entry.repoPath))) {
+  const bareRoots = bareRepositoryRoots(entries.map(entry => entry.repoPath));
+  const bareRootList = [...bareRoots];
+  for (const bareRoot of bareRoots) {
     violations.push({ repoPath: `${commit}:${bareRoot}`, reason: 'bare Git repository' });
   }
   for (const entry of entries) {
+    if (bareRootList.some(bareRoot => isBareRepositoryMember(entry.repoPath, bareRoot))) continue;
     const directReason = forbiddenArtifactReason(entry.repoPath);
     if (directReason) violations.push({ repoPath: `${commit}:${entry.repoPath}`, reason: directReason });
     if (!REGULAR_GIT_MODES.has(entry.mode) || entry.type !== 'blob') { violations.push({ repoPath: `${commit}:${entry.repoPath}`, reason: 'non-regular Git mode' }); continue; }
@@ -865,7 +942,15 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
 }
 
 function outgoingCommitsForNewRemoteRef(localSha, remoteName, root, execute) {
-  if (typeof remoteName !== 'string' || !/^[A-Za-z0-9._-]+$/.test(remoteName)) throw new Error('private Phase 3C pre-push containment requires a safe remote name');
+  if (typeof remoteName !== 'string' || remoteName.length === 0) throw new Error('private Phase 3C pre-push containment requires a valid remote name');
+  try {
+    // Remote names may legitimately contain slash-separated namespaces. Let
+    // Git validate the synthesized ref instead of maintaining a narrower,
+    // drifting allowlist; every invocation remains an argument-array call.
+    gitOutput(['check-ref-format', `refs/remotes/${remoteName}/phase3c-containment`], root, execute);
+  } catch (_error) {
+    throw new Error('private Phase 3C pre-push containment requires a valid remote name');
+  }
   return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local'), `--not`, `--remotes=${remoteName}`], root, execute);
 }
 export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, remoteName, stdin } = {}) {
