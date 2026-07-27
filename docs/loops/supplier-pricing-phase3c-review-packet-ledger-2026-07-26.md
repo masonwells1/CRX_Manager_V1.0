@@ -60,6 +60,13 @@ four existing lint warnings.
   `052b2171821dc7ffd965b4edb4b6de4ef8fda511`; this branch is 0 behind / 12
   ahead. The LOW stale-provenance follow-up agrees with Sol; its fetch-depth
   cost is harmless and not worth changing.
+- Exact `a2002c3c35d78be07690ff643d8d4c7dfceee0cb` review: Sol returned `FIX`
+  solely for stale present-tense historical provenance in these public records.
+  Luna `gpt-5.6-luna`, session `019fa36b-2f16-7390-b080-9f7808474f82`, returned
+  `PASS`. Claude wrapper run `2026-07-27T11-58-55-371Z-99f2ff2b` reviewed exact
+  `a2002c3c` at `xhigh`: requested `opus`, resolved helper
+  `claude-haiku-4-5-20251001` and reviewer `claude-opus-4-8`, and returned
+  `SHIP-WITH-FOLLOWUPS` with no unresolved BLOCKER/HIGH/MED finding.
 - Owner gate: Mason must not review the private owner sheet yet. All decisions
   remain `PENDING`; no Product classification is approved. A final exact review
   of this documentation correction and an accepted protected PR with required
@@ -69,7 +76,7 @@ four existing lint warnings.
   Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge
   is authorized here.
 - SHA ledger rule: this correction is authored against reviewed commit
-  `d38d41f63e68971f08f7158bf5a104af62d232aa` and parent `07813f69`. Its
+  `a2002c3c35d78be07690ff643d8d4c7dfceee0cb` and parent `d38d41f`. Its
   containing commit must be identified by Git and PR metadata rather than
   guessed in this text. Any future model alias must record its resolved model
   truthfully.
@@ -113,10 +120,12 @@ SHA for the preceding correction, not a passing release.
   unbounded history before rejection, and final parent-path revalidation left
   a publication TOCTOU, and ledger/summary bookkeeping was stale.
 
-`PARKED — TOOLING CORRECTION; HISTORICAL PACKET REGENERATION REQUIRED` remains
-the only status until a frozen successor has fresh exact-SHA proof and reviews.
+At that historical point, this rejected correction was
+`PARKED — TOOLING CORRECTION; HISTORICAL PACKET REGENERATION REQUIRED` pending
+a frozen successor with exact-SHA proof and reviews. That superseded status
+does not override the current parked status at the top of this ledger.
 
-### Exact rejected candidate `2adff51bfa27ea50274230845bb4c89f4037313e` — SAFE PREP correction pending
+### Exact rejected candidate `2adff51bfa27ea50274230845bb4c89f4037313e` — historical SAFE PREP correction
 
 This candidate is rejected. The private packet remains historical and
 invalidated; nothing in this correction approves a Product, creates Stage C
@@ -158,9 +167,11 @@ SQL, changes the flag, accesses private rows, or changes a live system.
   retained as historical context; current-cycle SHA bookkeeping is defined in
   the `3695f42e` section above.
 
+At that historical point, this cycle was
 `PARKED — TOOLING CORRECTION; HISTORICAL PACKET REGENERATION REQUIRED` until
-the focused/full proof, fresh exact-SHA Graphify, Luna, independent-Sol, and
-resolved-Opus reviews complete on a frozen candidate.
+focused/full proof and exact-SHA Graphify, Luna, independent-Sol, and
+resolved-Opus reviews completed on a frozen candidate. That historical gate was
+superseded by later correction cycles.
 
 The bounded post-PARK safety recovery materialized a new packet, but both fresh
 exact-SHA reviewers then returned `FIX` for the containment tooling. The packet
@@ -180,37 +191,38 @@ migration/live apply.
   Both reviews required fail-closed Git-root admission, structural/index/large
   ignored-file containment, full identity/read stability, and descriptor-safe
   writer corrections. Their findings are addressed by the new bounded local
-  correction set, but that uncommitted set has not received fresh exact-SHA
-  reviews.
+  correction set, but that then-uncommitted set had not yet received exact-SHA
+  reviews. Later successor cycles superseded that historical state.
 - Prior Sol `FIX` findings being remediated: arbitrary external directories
   (including a sibling linked worktree) were admitted; tip-only containment
   missed a packet committed then deleted; filename/signature checks missed
   minified renamed packet structures; CI ran containment after other content
   processors; and synthetic Git fixtures did not prove real repository Git
   identity preservation.
-- Follow-on orchestrator audit correction: the uncommitted recovery patch now
-  preserves the opened temporary file identity through the pre-rename boundary,
-  scans merge-resolution blobs with a merge-aware Git diff, and rejects BOM-
-  prefixed packet structures or a worktree candidate whose identity/size changes
-  while it is being scanned. Focused synthetic regressions cover all three;
-  independent review remains required before any freeze or packet regeneration.
-- Blocked-freeze correction: the first commit-hook freeze attempt exposed that
+- Follow-on orchestrator audit correction: a then-uncommitted recovery patch
+  preserved the opened temporary file identity through the pre-rename boundary,
+  scanned merge-resolution blobs with a merge-aware Git diff, and rejected BOM-
+  prefixed packet structures or a worktree candidate whose identity/size changed
+  while it was being scanned. Focused synthetic regressions covered all three;
+  independent review was then required before freeze or packet regeneration.
+- Blocked-freeze correction: the first historical commit-hook freeze attempt exposed that
   inherited Git hook variables could redirect the checker away from its explicit
   root, producing an invalid fixture range. Checker Git subprocesses now strip
   every `GIT_*` variable and use their supplied working root. The focused packet
   suite and the full correction-guard suite both pass under representative
    `GIT_DIR`/work-tree/index/common/object redirection variables; no commit was
-   made by this recovery writer.
-- Current pre-freeze local proof for the uncommitted bounded correction: focused
+  made by that recovery writer.
+- Historical pre-freeze local proof for the then-uncommitted bounded correction:
+  focused
   packet suite PASS in 29.3 seconds; full correction-guard suite PASS in 38.9
   seconds; typecheck PASS in 21.1 seconds; production build PASS in 18.2
   seconds; lint PASS with zero errors and four pre-existing warnings. The full
   containment range
   `052b2171821dc7ffd965b4edb4b6de4ef8fda511..d01a8f099394e8c7882736ac52fd81c6d2de8c15`
   PASSed in 22.4 seconds (`checked_paths=51810`, `checked_commits=6`). This is
-  local tooling evidence only, not a substitute for fresh exact-SHA reviews or
-  packet regeneration. Documentation drift and whitespace validation also PASS
-  on this pre-freeze record.
+  local tooling evidence only, not a substitute for then-required exact-SHA
+  reviews or packet regeneration. Documentation drift and whitespace validation
+  also PASSed on that pre-freeze record.
 - A fresh live read-only capture completed at `2026-07-27T05:53:04.476876Z`:
   604 Products (595 active, 9 inactive), one active-return conflict, all 604
   unresolved, zero family assignments, and zero standalone classifications.
@@ -225,10 +237,11 @@ migration/live apply.
   3,985 tests passed and 118 skipped; lint had zero errors and four warnings;
   typecheck, build, agent workflows, correction guards, docs, and dependency
   checks passed.
-- Fresh Graphify, Luna, independent-Sol, and latest-available Opus exact-SHA
-  reviews are required after the correction is frozen. The packet must then be
-  regenerated and re-verified before protected-PR/CodeRabbit handling. Current
-  state: `PARKED — TOOLING CORRECTION; PACKET REGENERATION REQUIRED`.
+- At that historical point, Graphify, Luna, independent-Sol, and
+  latest-available Opus exact-SHA reviews were required after a correction
+  freeze; the packet then needed regeneration and re-verification before
+  protected-PR/CodeRabbit handling. That historical state was superseded and
+  does not describe the current regenerated-and-verified packet.
 
 ### Position-sensitive containment correction
 
@@ -242,7 +255,7 @@ owner-sheet header after comments or late padding. Luna session
 required the adjacent nested/wrapped, escaped/malformed, beyond-first-1-KiB,
 chunk-boundary, and greater-than-8-MiB ignored-file variants to be closed.
 
-A fresh Terra sole-writer correction is uncommitted. It iteratively inspects
+A then-uncommitted Terra sole-writer correction historically iterated over
 every node in bounded valid JSON, applies decoded position-independent strong
 property signatures to malformed or prefixed content, recognizes the exact
 owner header on any line, and scans every byte of modified, untracked, and
@@ -250,9 +263,9 @@ ignored worktree candidates twice through a descriptor-bound reader with
 complete stat identity and SHA-256 equality checks. The real repository
 containment baseline passed across 51,810 paths in 64.4 seconds; the expanded
 synthetic packet suite passed in 39.1 seconds. These are local correction
-proofs only. The exact rejected SHA remains rejected, the historical packet
-hashes remain invalidated, and fresh freeze/review/regeneration is still
-required.
+proofs only. The exact rejected SHA remains rejected and the historical packet
+hashes remain invalidated. Its then-outstanding freeze/review/regeneration
+requirements were superseded by later correction cycles.
 
 Broader pre-freeze proof also passed: correction guards, typecheck, production
 build, agent-workflow tests, documentation drift, dependency consistency, and
@@ -260,8 +273,9 @@ the five-slot mission-document validator. Lint reported zero errors and the
 same four pre-existing warnings. Exact containment across
 `052b2171821dc7ffd965b4edb4b6de4ef8fda511..2c56085d1ecee3ca223efb3ec0da58fa6ef858db`
 passed after checking 51,810 paths and all 7 commits in 73.3 seconds.
-`git diff --check` also passed. This remains an uncommitted, unreviewed
-correction and is not a final packet proof.
+`git diff --check` also passed. This was a then-uncommitted, unreviewed
+correction and was not a final packet proof; later successor cycles superseded
+it.
 
 ## Cycle table
 
@@ -269,11 +283,11 @@ correction and is not a final packet proof.
 |---|---|---|---|---|---|---|---|---|---|
 | 0 — preflight | DONE | `9bf567bf` | none | PASS | n/a | n/a | n/a | n/a | Cycle 2 bounded capture/generator work. |
 | 1 — design adversary | DONE | `9bf567bf` | none | SHIP | n/a | n/a | `opus` → `claude-opus-4-8` | n/a | Cycle 2 accepts both LOW findings. |
-| 2 — final correction 6 | HISTORICAL — invalidated by later FIX reviews | `d01a8f099394e8c7882736ac52fd81c6d2de8c15` reviewed; local correction uncommitted | fresh `gpt-5.6-terra` recovery writer | earlier full proof PASS; latest bounded correction focused proof PASS | `FIX` session `019fa229-bc19-77b2-92bf-7f270e1cddc8` | `FIX` on `d01a8f099394e8c7882736ac52fd81c6d2de8c15` | pending fresh exact SHA | n/a | Freeze corrected SHA, refresh Graphify, and obtain fresh reviews. |
+| 2 — final correction 6 | HISTORICAL — invalidated by later FIX reviews | `d01a8f099394e8c7882736ac52fd81c6d2de8c15` reviewed; its then-uncommitted local correction was later superseded | historical `gpt-5.6-terra` recovery writer | earlier full proof PASS; latest bounded correction focused proof PASS | historical `FIX` session `019fa229-bc19-77b2-92bf-7f270e1cddc8` | historical `FIX` on `d01a8f099394e8c7882736ac52fd81c6d2de8c15` | exact-SHA review was then pending and later superseded | n/a | Historical freeze/Graphify/review requirements were superseded by later cycles. |
 | 3 — private materialization | PARKED — packet regenerated/verified; owner gate closed | 604-row aggregate-only packet | orchestrator-supplied evidence | capture/manifest reproducibility/owner write-verify PASS | exact `d38` PASS; `EPERM` fixture limitation disclosed | exact `d38` FIX for docs-only status/provenance | `SHIP-WITH-FOLLOWUPS`, no BLOCKER/HIGH | PR not open | Wait for final exact review and accepted protected PR before Mason reviews rows. |
-| 4 — full review | DONE for exact reviewed packet commit | `d38d41f63e68971f08f7158bf5a104af62d232aa` | final reviewer evidence | Sol focused/syntax/docs/diff PASS; containment 51,825 paths / 12 commits / 51,895 candidates / 795,855,426 logical bytes | PASS session `019fa353-0229-74a0-a350-d24e700437b7`; containment 51,827 / 12 / 51,897 / 796,622,451 | FIX for stale documentation gates only; code sound | `opus` resolved helper `claude-haiku-4-5-20251001` + reviewer `claude-opus-4-8`; `SHIP-WITH-FOLLOWUPS` | PR not open | Correct docs, then obtain final exact review of the containing commit. |
+| 4 — full review | DONE for reviewed `d38` packet and `a200` provenance pass | `d38d41f63e68971f08f7158bf5a104af62d232aa`; later exact `a2002c3c` | final reviewer evidence | Sol focused/syntax/docs/diff PASS; containment 51,825 paths / 12 commits / 51,895 candidates / 795,855,426 logical bytes | `d38` PASS plus `a200` PASS session `019fa36b-2f16-7390-b080-9f7808474f82` | `d38` docs-gate FIX; `a200` stale-historical-provenance FIX only | `opus` resolved helper `claude-haiku-4-5-20251001` + reviewer `claude-opus-4-8`; `a200` `SHIP-WITH-FOLLOWUPS`, no unresolved BLOCKER/HIGH/MED | PR not open | Obtain final exact review of the containing correction commit. |
 | 5 — protected PR | PENDING external gate | containing commit identified by Git/PR metadata | none | final exact review of this correction pending | pending final correction | pending final correction | any alias must resolve truthfully; no Opus 5 claim | not open; required checks green and real CodeRabbit findings resolved before acceptance | Open and accept protected PR; no deploy or merge here. |
-| 6 — closeout | PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING | aggregate-only packet values recorded above | Mason after gates | owner action blocked until external gates complete | PASS evidence recorded | docs findings corrected; re-review pending | exact `d38` review recorded | PR not open | Row-by-row private-sheet review only after protected PR acceptance. |
+| 6 — closeout | PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING | aggregate-only packet values recorded above | Mason after gates | owner action blocked until external gates complete | `d38` and `a200` PASS evidence recorded | stale historical wording corrected; re-review pending | exact `d38` and `a200` reviews recorded | PR not open | Row-by-row private-sheet review only after protected PR acceptance. |
 
 ## Cycle 0 — preflight
 
@@ -322,21 +336,22 @@ packet. They must be refreshed inside the loop before materialization.
 
 - `PROOF — Ran:` aggregate preflight, Graphify refresh, and agent-health during mission setup.
 - `PROOF — Saw:` values and provenance recorded above; no private Product rows entered the repository.
-- `Not verified:` Cycle 2 final candidate/review proof and all later cycles.
+- `Not verified at original preflight:` Cycle 2 final candidate/review proof and
+  all later cycles; that historical limitation is superseded by the records above.
 
 ## Findings and correction lessons
 
-### Final correction 6 — current fresh Terra writer
+### Historical correction 6 — superseded Terra writer
 
 - Exact reviewed candidate: `ee9183eef017affb8170fa8cdb7c4cb84e87c7c1`.
 - Independent Sol: `gpt-5.6-sol`, session `019fa1b9-5cfb-7e33-81fd-23cb72636875`, verdict `FIX`.
 - Luna bookkeeping review: `gpt-5.6-luna`, session
   `019fa1b9-5cf2-7023-aff1-0d79befd6b1d`, verdict `FIX` only for circular
-  pending-review bookkeeping.
+  historical pending-review bookkeeping.
 - Resolved Opus review: run `2026-07-27T04-03-37-498Z-1eab779e`, requested
   alias `opus` resolved to `claude-opus-4-8`, verdict `SHIP-WITH-FOLLOWUPS`;
   no Opus 5 review ran or is claimed.
-- Writer: final fresh `gpt-5.6-terra`; fix SHA: `uncommitted`.
+- Historical writer: `gpt-5.6-terra`; its fix patch was then-uncommitted.
 - Sol dispositions: clean-checkout Git-native containment and bounded worktree
   scan — implemented; pre-push/CI fail-closed wiring — implemented; v2 external
   hash/count binding for every consumer — implemented; exact Supabase warning
@@ -348,48 +363,50 @@ packet. They must be refreshed inside the loop before materialization.
   implemented; bounded Git/native scan and synthetic fake-repository isolation
   — implemented; live-hash provenance remains an orchestrator proof item and
   is not self-certified here.
-- Sol regenerated the private packet at `2026-07-27T05:53:04.476876Z` after
-  the rewritten safety-tooling candidate. Capture, external count/hash binding,
-  manifest write/verify and deterministic compare, and owner-sheet write/verify
-  all passed. Fresh aggregate hashes are recorded below. Exact final-SHA
-  Graphify refresh and fresh Luna/independent-Sol/latest-available Opus reviews
-  were pending. Both later exact-SHA reviews returned `FIX`, so this
-  materialization is now historical and must be regenerated after correction.
-- Graphify was refreshed after these uncommitted edits: 8,309 nodes / 17,245
-  edges. Its report records HEAD `ee9183ee`; because Graphify records committed
-  HEAD rather than an uncommitted patch, an exact final-SHA refresh remains
-  pending after a later freeze.
+- Sol regenerated the historical private packet at `2026-07-27T05:53:04.476876Z`
+  after the rewritten safety-tooling candidate. Capture, external count/hash
+  binding, manifest write/verify and deterministic compare, and owner-sheet
+  write/verify all passed. The aggregate hashes below are historical. At that
+  time exact final-SHA Graphify and Luna/independent-Sol/latest-available Opus
+  reviews were pending. Both later exact-SHA reviews returned `FIX`, so this
+  materialization was superseded by the current packet rather than a current
+  regeneration obligation.
+- Graphify had been refreshed after those then-uncommitted edits: 8,309 nodes /
+  17,245 edges. Its report recorded HEAD `ee9183ee`; because Graphify records a
+  committed HEAD rather than an uncommitted patch, an exact final-SHA refresh
+  was then pending after a later freeze. That historical pending state is
+  superseded.
 
 | ID | Source | Severity | Exact evidence | Disposition | Owner | Fix SHA | Regression proof |
 |---|---|---:|---|---|---|---|---|
-| C2-LOW-1 | Pre-edit Claude review | LOW | Eliminate private-row stdout modes from the generator. | Accepted and implemented in the uncommitted Cycle 2 candidate; focused synthetic regression passed. Final candidate proof/review remains pending. | Terra | uncommitted | `npm run test:supplier-pricing-phase3c-packet` PASS |
-| C2-LOW-2 | Pre-edit Claude review | LOW | Add a hard Git containment guard for private artifacts. | Accepted and implemented in the uncommitted Cycle 2 candidate; focused synthetic regression and containment check passed. Final candidate proof/review remains pending. | Terra | uncommitted | `npm run test:supplier-pricing-phase3c-packet` + `npm run check:phase3-private-artifacts` PASS |
-| C2-LUNA-1 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | HIGH | Final output names could follow a link into the repository; private directory validation accepted relative input after resolution. | FIX in correction 1: require an absolute private directory before resolution; canonicalize existing parents; validate final output through the hardened artifact validator; reject final symlinks/reparse points and dangling links. | `gpt-5.6-terra` | uncommitted | `npm run test:supplier-pricing-phase3c-packet` PASS; file-symlink creation is unsupported on this host, while linked/junction-parent containment passed. |
-| C2-LUNA-2 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | HIGH | Git containment comparison was case-sensitive and ignored files were outside the scan. | FIX in correction 1: fold path segments and private basenames to lowercase; add narrow case-insensitive ignored-file Git pathspecs for private basenames and `private-artifacts/**`. | `gpt-5.6-terra` | uncommitted | Focused disposable mixed-case staged and ignored-artifact checker regression PASS. |
-| C2-LUNA-3 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | HIGH | Capture proof did not assert the complete fixed Supabase CLI argv. | FIX in correction 1: assert the complete fixed argv including `CAPTURE_SQL`, with no obsolete `--sql`, no extra flags, and `shell: false`/bounded buffer retained. | `gpt-5.6-terra` | uncommitted | Focused exact-argv regression PASS. |
-| C2-LUNA-4 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | HIGH | Capture checked nonexistent `supabase/config.toml` instead of the linked-project marker. | FIX in correction 1: strictly read and validate `supabase/.temp/project-ref` as exactly `rhyzpcqhnizqbxphqdkr`; absent, malformed, and other-project markers fail closed. | `gpt-5.6-terra` | uncommitted | Synthetic correct, wrong, empty, and multiline marker regressions PASS. |
-| C2-LUNA-5 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | Proposed array envelope did not match installed CLI evidence. | FIX in correction 1: require the observed non-array `{ boundary, rows, warning }` envelope, exactly one row, and that row's `phase3_snapshot`; malformed alternatives fail closed without raw output logging. | `gpt-5.6-terra` | uncommitted | Focused valid and malformed-envelope regressions PASS. |
-| C2-LUNA-6 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | Capture ignored stderr despite known harmless CLI status output. | FIX in correction 1: accept only empty stderr or complete documented status lines; reject all other stderr without retaining raw output. | `gpt-5.6-terra` | uncommitted | Focused stderr allowlist regressions PASS. |
-| C2-LUNA-7 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | Metadata validation accepted coercible family counts and loose UTC timestamps. | FIX in correction 1: require numeric safe-integer `product_families_count === 0` and a six-fractional-digit UTC timestamp, while retaining the existing default/ledger checks. | `gpt-5.6-terra` | uncommitted | Focused invalid-count and invalid-timestamp regressions PASS. |
-| C2-LUNA-8 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | `unresolved_acknowledgment` started blank and the test did not validate every decision cell. | FIX in correction 1: make every decision cell literal `PENDING`, leaving only `owner_note` blank; parse every synthetic CSV row and assert each decision column. | `gpt-5.6-terra` | uncommitted | Focused CSV parser-level regression PASS. |
-| C2-LUNA-9 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | Pre-commit integration lacked static and real-checker execution proof. | FIX in correction 1: statically assert the early hook order and execute the exported checker in disposable benign, staged mixed-case, and ignored-artifact repositories. | `gpt-5.6-terra` | uncommitted | Focused hook/checker regression PASS; `npm run test:agent-workflows` PASS. |
-| C2-SOL-1 | Sol live materialization cycle | HIGH | Read-only capture failed closed before writing an artifact. Aggregate-only follow-up: total Products: 604; malformed generic UUID text shape: 0; UUID version-nibble counts: 601 with nibble `4`, 3 with nibble `0`. | FIX in correction 2: validate the database-guaranteed canonical hexadecimal UUID text shape only; preserve strict sorted-order and duplicate rejection. Private materialization remains PENDING. | fresh `gpt-5.6-terra` | uncommitted | Synthetic version-`0`, malformed-shape/non-hex, sorted-order, and duplicate regressions PASS via `npm run test:supplier-pricing-phase3c-packet`; containment PASS via `npm run check:phase3-private-artifacts`. |
-| C3-LUNA-1 | Luna cycle 2 (`gpt-5.6-luna`, session `019fa190-1cb7-73a0-8ba9-77c2eb3cf50b`) | HIGH | Snapshot format was read before approved absolute external basename/containment validation. | FIX: shared validated snapshot loader admits only the two exact approved basenames, validates containment/link/hard-link state before read, and binds basename to format. | fresh `gpt-5.6-terra` | uncommitted | Synthetic relative, repository, case, symlink, and hard-link regressions. |
-| C3-LUNA-2 | same provenance | HIGH | Rehashed v2 snapshots could evade incomplete saved-snapshot checks. | FIX: one strict saved-v2 validator now enforces exact root/metadata/Product contracts, safety defaults, UUID/order, statuses, and self-hash. | fresh `gpt-5.6-terra` | uncommitted | Rehashed adversarial contract mutations reject through loader and consumer. |
-| C3-LUNA-3 | same provenance | HIGH | Verification errors interpolated Product identifiers. | FIX: all manifest verification row failures use one-based index plus categorical reason only. | fresh `gpt-5.6-terra` | uncommitted | Spawned synthetic malformed-manifest output contains no UUID/name/SKU. |
-| C3-LUNA-4 | same provenance | HIGH | Existing hard links and replacement races could endanger writes. | FIX: shared exclusive same-directory atomic writer rejects links, syncs a restrictive temporary file, revalidates before rename, and cleans only its own temporary file. | fresh `gpt-5.6-terra` | uncommitted | Deterministic repository hard-link and injected replacement-race regressions. |
-| C3-LUNA-5 | same provenance | MEDIUM | CLI envelope row accepted unexpected keys. | FIX: exact singleton `phase3_snapshot` row-key contract. | fresh `gpt-5.6-terra` | uncommitted | Extra-key envelope regression. |
-| C3-LUNA-6 | same provenance | MEDIUM | Generator CLI allowed ambiguous flag combinations. | FIX: strict exactly-one-mode parser with duplicate, unknown, missing-value, and positional-junk rejection; v2 environment default. | fresh `gpt-5.6-terra` | uncommitted | Spawned invalid-combination and synthetic valid-mode regressions. |
-| C3-LUNA-7 | same provenance | MEDIUM | Public materialization disclosure was required. | FIX: aggregate-only owner-review summary added; it states correction-3 invalidation and owner gate. | fresh `gpt-5.6-terra` | uncommitted | Public-document review; no row content included. |
-| C3-LUNA-8 | same provenance | MEDIUM | Ledger needed Correction 3 provenance and invalidation. | FIX: this ledger records all dispositions, supplied aggregate hashes only, fresh Terra writer, and pending final reviews/proof/commit/PR. | fresh `gpt-5.6-terra` | uncommitted | Ledger review pending final proof. |
-| C4-SOL-1 | Sol orchestrator cycle 4 | HIGH | Validated pathname then direct pathname read left a replacement window. | FIX: open read-only with no-follow where supported; compare descriptor and fresh pathname identities, require one regular link before consuming bytes, recheck after reading, and close in `finally`. | fresh `gpt-5.6-terra` | uncommitted | Synthetic injected replacement-race regression proves repository target content is neither returned nor changed. |
-| C4-SOL-2 | Sol orchestrator cycle 4 | HIGH | Approved basenames did not contain a private snapshot, manifest, or owner-sheet payload renamed to a benign path. | FIX: bounded Git-change candidate inspection checks staged index and worktree candidates for exact approved JSON-format or owner-CSV-header signatures without logging content. | fresh `gpt-5.6-terra` | uncommitted | Disposable Git regressions cover renamed staged snapshot/manifest content, staged/worktree divergence, untracked content, and benign public text. |
-| C4-SOL-3 | Sol orchestrator cycle 4 | MEDIUM | Several packet entry points tolerated duplicate, unknown, missing-value, or positional CLI input. | FIX: capture accepts no CLI input; manifest and owner entry points use strict named-path option parsing while preserving the generator's exactly-one-mode parser and v2 environment default. | fresh `gpt-5.6-terra` | uncommitted | Spawned synthetic invalid-input regressions cover every packet CLI without exposing synthetic identifiers. |
-| C4-SELF-1 | Real Husky pre-commit pipeline | HIGH | The staged candidate's real `git commit` ran Husky; all earlier gates passed until `npm run test:correction-guards`. The disposable fixture inherited hook-local Git variables, so fixture `git init` targeted the shared Git directory, set common `core.bare=true`, and fixture `git add README.md` failed: `fatal: this operation must be run in a work tree`. No commit was created. | FIX: sanitize all case-insensitive `GIT_*` variables for every disposable fixture Git command, including injected checker Git calls. Regression injects hostile `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and `GIT_COMMON_DIR`, proves the fixture initializes, adds and commits its README in its own worktree, and proves the real repository remains a worktree with common `core.bare=false` before and after. Shared repository common `core.bare=false` was repaired and reverified. A later fresh materialization establishes the current aggregate hashes below; exact final-SHA reviews remain pending. | fresh `gpt-5.6-terra` | uncommitted | Focused hostile-hook-context regression PASS; later full commit-hook proof PASS. |
-| C5-SOL-1 | Fresh independent Sol review of `2c56085d1ecee3ca223efb3ec0da58fa6ef858db` | BLOCKER | Any non-whitespace/comment prefix before otherwise exact private JSON bypassed staged, history, pre-push, and CI range containment. | FIX in the uncommitted Terra correction: decoded exact format key/value and strong private property signatures are position-independent and do not require JSON at byte zero. | fresh `gpt-5.6-terra` | uncommitted | Staged, deleted-history, real pre-push, pull-request event, push event, untracked, ignored, escaped-malformed, and benign public-source regressions PASS. |
-| C5-SOL-2 | same provenance | HIGH | A benign first row hid a later private Product/manifest row because only the first row/root was inspected. | FIX in the uncommitted Terra correction: an iterative bounded walk inspects every object and array element, including arbitrary wrappers and nesting, with a fail-closed node bound. | fresh `gpt-5.6-terra` | uncommitted | Later Product and manifest row fixtures PASS across staged, ignored, history, pre-push, and CI event layers. |
-| C5-SOL-3 | same provenance | HIGH | A commented/late owner CSV header, including a greater-than-8-MiB ignored file, bypassed containment. | FIX in the uncommitted Terra correction: the normalized exact ordered header is recognized on any line; the streaming detector retains state and signatures across chunks. | fresh `gpt-5.6-terra` | uncommitted | Late/commented staged/history/event fixtures and greater-than-8-MiB whitespace/header chunk-boundary fixtures PASS. |
-| C5-LUNA-1 | Luna (`gpt-5.6-luna`, session `019fa26f-821d-7611-b7d6-82d90ac35fb9`) | HIGH | Luna returned `FIX` and required adjacent arrays/wrappers/nesting, escaped or malformed prefixed JSON, signatures beyond 1 KiB, later incomplete-root rows, and streaming chunk boundaries to fail closed. | FIX in the uncommitted Terra correction without filename or path allowlists; modified/untracked files above the structural bound remain unconditionally rejected and all ignored bytes are streamed. | fresh `gpt-5.6-terra` | uncommitted | Expanded focused suite PASS in 39.1 seconds; real 51,810-path containment baseline PASS in 64.4 seconds. |
+| C2-LOW-1 | Pre-edit Claude review | LOW | Eliminate private-row stdout modes from the generator. | Was accepted and implemented in a then-uncommitted historical Cycle 2 candidate; focused synthetic regression passed. Final candidate proof/review was then pending and was later superseded. | Terra (historical) | then-uncommitted historical patch | `npm run test:supplier-pricing-phase3c-packet` PASS |
+| C2-LOW-2 | Pre-edit Claude review | LOW | Add a hard Git containment guard for private artifacts. | Was accepted and implemented in a then-uncommitted historical Cycle 2 candidate; focused synthetic regression and containment check passed. Final candidate proof/review was then pending and was later superseded. | Terra (historical) | then-uncommitted historical patch | `npm run test:supplier-pricing-phase3c-packet` + `npm run check:phase3-private-artifacts` PASS |
+| C2-LUNA-1 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | HIGH | Final output names could follow a link into the repository; private directory validation accepted relative input after resolution. | FIX in correction 1: require an absolute private directory before resolution; canonicalize existing parents; validate final output through the hardened artifact validator; reject final symlinks/reparse points and dangling links. | historical `gpt-5.6-terra` | then-uncommitted historical patch | `npm run test:supplier-pricing-phase3c-packet` PASS; file-symlink creation is unsupported on this host, while linked/junction-parent containment passed. |
+| C2-LUNA-2 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | HIGH | Git containment comparison was case-sensitive and ignored files were outside the scan. | FIX in correction 1: fold path segments and private basenames to lowercase; add narrow case-insensitive ignored-file Git pathspecs for private basenames and `private-artifacts/**`. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Focused disposable mixed-case staged and ignored-artifact checker regression PASS. |
+| C2-LUNA-3 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | HIGH | Capture proof did not assert the complete fixed Supabase CLI argv. | FIX in correction 1: assert the complete fixed argv including `CAPTURE_SQL`, with no obsolete `--sql`, no extra flags, and `shell: false`/bounded buffer retained. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Focused exact-argv regression PASS. |
+| C2-LUNA-4 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | HIGH | Capture checked nonexistent `supabase/config.toml` instead of the linked-project marker. | FIX in correction 1: strictly read and validate `supabase/.temp/project-ref` as exactly `rhyzpcqhnizqbxphqdkr`; absent, malformed, and other-project markers fail closed. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Synthetic correct, wrong, empty, and multiline marker regressions PASS. |
+| C2-LUNA-5 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | Proposed array envelope did not match installed CLI evidence. | FIX in correction 1: require the observed non-array `{ boundary, rows, warning }` envelope, exactly one row, and that row's `phase3_snapshot`; malformed alternatives fail closed without raw output logging. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Focused valid and malformed-envelope regressions PASS. |
+| C2-LUNA-6 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | Capture ignored stderr despite known harmless CLI status output. | FIX in correction 1: accept only empty stderr or complete documented status lines; reject all other stderr without retaining raw output. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Focused stderr allowlist regressions PASS. |
+| C2-LUNA-7 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | Metadata validation accepted coercible family counts and loose UTC timestamps. | FIX in correction 1: require numeric safe-integer `product_families_count === 0` and a six-fractional-digit UTC timestamp, while retaining the existing default/ledger checks. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Focused invalid-count and invalid-timestamp regressions PASS. |
+| C2-LUNA-8 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | `unresolved_acknowledgment` started blank and the test did not validate every decision cell. | FIX in correction 1: make every decision cell literal `PENDING`, leaving only `owner_note` blank; parse every synthetic CSV row and assert each decision column. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Focused CSV parser-level regression PASS. |
+| C2-LUNA-9 | Luna cycle 1 (`gpt-5.6-luna`, session `019fa178-5410-7273-a0a6-d3b12e064625`) | MEDIUM | Pre-commit integration lacked static and real-checker execution proof. | FIX in correction 1: statically assert the early hook order and execute the exported checker in disposable benign, staged mixed-case, and ignored-artifact repositories. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Focused hook/checker regression PASS; `npm run test:agent-workflows` PASS. |
+| C2-SOL-1 | Sol live materialization cycle | HIGH | Read-only capture failed closed before writing an artifact. Aggregate-only follow-up: total Products: 604; malformed generic UUID text shape: 0; UUID version-nibble counts: 601 with nibble `4`, 3 with nibble `0`. | FIX in correction 2: validate the database-guaranteed canonical hexadecimal UUID text shape only; preserve strict sorted-order and duplicate rejection. Private materialization was then `PENDING` and is historical. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Synthetic version-`0`, malformed-shape/non-hex, sorted-order, and duplicate regressions PASS via `npm run test:supplier-pricing-phase3c-packet`; containment PASS via `npm run check:phase3-private-artifacts`. |
+| C3-LUNA-1 | Luna cycle 2 (`gpt-5.6-luna`, session `019fa190-1cb7-73a0-8ba9-77c2eb3cf50b`) | HIGH | Snapshot format was read before approved absolute external basename/containment validation. | FIX: shared validated snapshot loader admits only the two exact approved basenames, validates containment/link/hard-link state before read, and binds basename to format. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Synthetic relative, repository, case, symlink, and hard-link regressions. |
+| C3-LUNA-2 | same provenance | HIGH | Rehashed v2 snapshots could evade incomplete saved-snapshot checks. | FIX: one strict saved-v2 validator now enforces exact root/metadata/Product contracts, safety defaults, UUID/order, statuses, and self-hash. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Rehashed adversarial contract mutations reject through loader and consumer. |
+| C3-LUNA-3 | same provenance | HIGH | Verification errors interpolated Product identifiers. | FIX: all manifest verification row failures use one-based index plus categorical reason only. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Spawned synthetic malformed-manifest output contains no UUID/name/SKU. |
+| C3-LUNA-4 | same provenance | HIGH | Existing hard links and replacement races could endanger writes. | FIX: shared exclusive same-directory atomic writer rejects links, syncs a restrictive temporary file, revalidates before rename, and cleans only its own temporary file. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Deterministic repository hard-link and injected replacement-race regressions. |
+| C3-LUNA-5 | same provenance | MEDIUM | CLI envelope row accepted unexpected keys. | FIX: exact singleton `phase3_snapshot` row-key contract. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Extra-key envelope regression. |
+| C3-LUNA-6 | same provenance | MEDIUM | Generator CLI allowed ambiguous flag combinations. | FIX: strict exactly-one-mode parser with duplicate, unknown, missing-value, and positional-junk rejection; v2 environment default. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Spawned invalid-combination and synthetic valid-mode regressions. |
+| C3-LUNA-7 | same provenance | MEDIUM | Public materialization disclosure was required. | FIX: aggregate-only owner-review summary added; it states correction-3 invalidation and owner gate. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Public-document review; no row content included. |
+| C3-LUNA-8 | same provenance | MEDIUM | Ledger needed Correction 3 provenance and invalidation. | FIX: the historical ledger then recorded all dispositions, supplied aggregate hashes only, a historical Terra writer, and then-pending final reviews/proof/commit/PR. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Ledger review was then pending final proof. |
+| C4-SOL-1 | Sol orchestrator cycle 4 | HIGH | Validated pathname then direct pathname read left a replacement window. | FIX: open read-only with no-follow where supported; compare descriptor and fresh pathname identities, require one regular link before consuming bytes, recheck after reading, and close in `finally`. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Synthetic injected replacement-race regression proves repository target content is neither returned nor changed. |
+| C4-SOL-2 | Sol orchestrator cycle 4 | HIGH | Approved basenames did not contain a private snapshot, manifest, or owner-sheet payload renamed to a benign path. | FIX: bounded Git-change candidate inspection checks staged index and worktree candidates for exact approved JSON-format or owner-CSV-header signatures without logging content. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Disposable Git regressions cover renamed staged snapshot/manifest content, staged/worktree divergence, untracked content, and benign public text. |
+| C4-SOL-3 | Sol orchestrator cycle 4 | MEDIUM | Several packet entry points tolerated duplicate, unknown, missing-value, or positional CLI input. | FIX: capture accepts no CLI input; manifest and owner entry points use strict named-path option parsing while preserving the generator's exactly-one-mode parser and v2 environment default. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Spawned synthetic invalid-input regressions cover every packet CLI without exposing synthetic identifiers. |
+| C4-SELF-1 | Real Husky pre-commit pipeline | HIGH | The staged candidate's real `git commit` ran Husky; all earlier gates passed until `npm run test:correction-guards`. The disposable fixture inherited hook-local Git variables, so fixture `git init` targeted the shared Git directory, set common `core.bare=true`, and fixture `git add README.md` failed: `fatal: this operation must be run in a work tree`. No commit was created. | FIX: sanitize all case-insensitive `GIT_*` variables for every disposable fixture Git command, including injected checker Git calls. Regression injects hostile `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and `GIT_COMMON_DIR`, proves the fixture initializes, adds and commits its README in its own worktree, and proves the real repository remains a worktree with common `core.bare=false` before and after. Shared repository common `core.bare=false` was repaired and reverified. A later historical materialization established hashes later superseded by the current aggregate hashes; exact final-SHA reviews were then pending. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Focused hostile-hook-context regression PASS; later full commit-hook proof PASS. |
+| C5-SOL-1 | Historical independent Sol review of `2c56085d1ecee3ca223efb3ec0da58fa6ef858db` | BLOCKER | Any non-whitespace/comment prefix before otherwise exact private JSON bypassed staged, history, pre-push, and CI range containment. | FIX in a then-uncommitted historical Terra correction: decoded exact format key/value and strong private property signatures are position-independent and do not require JSON at byte zero. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Staged, deleted-history, real pre-push, pull-request event, push event, untracked, ignored, escaped-malformed, and benign public-source regressions PASS. |
+| C5-SOL-2 | same historical provenance | HIGH | A benign first row hid a later private Product/manifest row because only the first row/root was inspected. | FIX in a then-uncommitted historical Terra correction: an iterative bounded walk inspects every object and array element, including arbitrary wrappers and nesting, with a fail-closed node bound. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Later Product and manifest row fixtures PASS across staged, ignored, history, pre-push, and CI event layers. |
+| C5-SOL-3 | same historical provenance | HIGH | A commented/late owner CSV header, including a greater-than-8-MiB ignored file, bypassed containment. | FIX in a then-uncommitted historical Terra correction: the normalized exact ordered header is recognized on any line; the streaming detector retains state and signatures across chunks. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Late/commented staged/history/event fixtures and greater-than-8-MiB whitespace/header chunk-boundary fixtures PASS. |
+| C5-LUNA-1 | Luna (`gpt-5.6-luna`, session `019fa26f-821d-7611-b7d6-82d90ac35fb9`) | HIGH | Luna returned `FIX` and required adjacent arrays/wrappers/nesting, escaped or malformed prefixed JSON, signatures beyond 1 KiB, later incomplete-root rows, and streaming chunk boundaries to fail closed. | FIX in a then-uncommitted historical Terra correction without filename or path allowlists; modified/untracked files above the structural bound remain unconditionally rejected and all ignored bytes are streamed. | historical `gpt-5.6-terra` | then-uncommitted historical patch | Expanded focused suite PASS in 39.1 seconds; real 51,810-path containment baseline PASS in 64.4 seconds. |
 
 ## Private artifacts — current aggregate-only owner-review packet
 
@@ -418,7 +435,7 @@ live mutation, flag enablement, deploy, or merge.
 
 ## Closeout
 
-- `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, and exact `d38d41f` Sol/Luna/Claude review outcomes are recorded above; older packet hashes are invalidated.
+- `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, and exact `d38d41f`/`a2002c3c` Sol/Luna/Claude review outcomes are recorded above; older packet hashes are invalidated.
 - `NOW:` final exact review of this documentation correction, then a protected PR with required checks green and real CodeRabbit findings resolved. The PR is not open; Mason must not begin private-sheet review.
 - `REMAINING:` protected PR acceptance, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet. Any future model alias must record its resolved model truthfully; no literal Opus 5 review is claimed.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.

@@ -62,6 +62,16 @@ MEDIUM bootstrap mismatch needs no CI change: a fresh fetch confirmed that
 ahead. The LOW stale-provenance follow-up agrees with Sol; its fetch-depth cost
 is harmless and is not worth changing.
 
+Exact `a2002c3c35d78be07690ff643d8d4c7dfceee0cb` review then found only stale
+present-tense historical provenance in these two public records. Sol returned
+`FIX` solely for that documentation issue. Luna `gpt-5.6-luna`, session
+`019fa36b-2f16-7390-b080-9f7808474f82`, returned `PASS`. Claude wrapper run
+`2026-07-27T11-58-55-371Z-99f2ff2b` reviewed exact `a2002c3c` at `xhigh`:
+requested `opus`, resolved helper `claude-haiku-4-5-20251001` and reviewer
+`claude-opus-4-8`, and returned `SHIP-WITH-FOLLOWUPS` with no unresolved
+BLOCKER/HIGH/MED finding. This cleanup is authored against that reviewed parent;
+the commit containing it is identified by Git and PR metadata, not guessed here.
+
 ## Owner action and hard boundary
 
 The packet has been regenerated and verified, but Mason must not begin the
@@ -114,10 +124,11 @@ that a private-shaped Product or manifest row could hide later in a JSON
 wrapper, and that the owner-sheet header could hide after comments or padding.
 Luna session `019fa26f-821d-7611-b7d6-82d90ac35fb9` returned `FIX` and
 required the adjacent nested, escaped/malformed, beyond-first-1-KiB, and large
-streaming variants to be covered. A fresh uncommitted Terra correction now has
-focused synthetic proof and a 51,810-path local containment pass, but it still
-requires a frozen exact SHA and fresh independent reviews. The historical
-packet hashes below remain invalidated throughout.
+streaming variants to be covered. At that historical point, a then-uncommitted
+Terra correction had focused synthetic proof and a 51,810-path local
+containment pass, but still awaited a frozen exact SHA and independent reviews;
+later successor cycles superseded that state. The
+historical packet hashes below remain invalidated throughout.
 
 The prior rejected candidate was
 `2adff51bfa27ea50274230845bb4c89f4037313e` (base
@@ -181,12 +192,13 @@ there were authored `Mason <mason@croprxsolutions.com>`, its tree matched the
 local backup, and no remote branch exists. Fresh Luna review session
 `019fa229-bc19-77b2-92bf-7f270e1cddc8` and fresh independent-Sol review of
 `d01a8f099394e8c7882736ac52fd81c6d2de8c15` both returned `FIX` for packet
-tooling containment. The bounded correction has focused proof but is not yet a
-frozen/reviewed candidate. Fresh Graphify, exact-SHA Luna, independent-Sol, and
-latest-available Opus reviews, packet regeneration/verification, protected PR,
-and CodeRabbit review are all still required.
+tooling containment. The bounded correction had focused proof but had not yet
+become a frozen/reviewed candidate. At that historical point, Graphify, exact-SHA Luna,
+independent-Sol, and latest-available Opus reviews, packet
+regeneration/verification, protected PR, and CodeRabbit handling were still
+outstanding; later successor cycles superseded those requirements.
 
-Current pre-freeze local proof for that uncommitted correction: the focused
+Historical pre-freeze local proof for that then-uncommitted correction: the focused
 packet suite passed in 29.3 seconds; correction guards passed in 38.9 seconds;
 typecheck passed in 21.1 seconds; production build passed in 18.2 seconds; and
 lint passed with zero errors and four pre-existing warnings. The complete
@@ -212,7 +224,8 @@ production build, agent-workflow checks, documentation drift, dependency
 consistency, and mission-document validation. Lint had zero errors and four
 pre-existing warnings. Exact base-to-rejected-head containment passed across
 51,810 paths and 7 commits in 73.3 seconds, and `git diff --check` passed. The
-correction is still uncommitted and has not received fresh exact-SHA review.
+correction was then-uncommitted and had not received exact-SHA review; later
+successor cycles superseded that historical state.
 
 ## Exact owner gate
 
