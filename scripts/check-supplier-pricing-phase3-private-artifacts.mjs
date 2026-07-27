@@ -42,7 +42,8 @@ const UTF32_REPLAY_BYTES = 4096;
 const UTF32_TEXT_CHUNK_CHARS = 4096;
 const CPIO_BINARY_HEADER_BYTES = 26;
 const MAX_CPIO_BINARY_NAME_BYTES = 4096;
-const ARCHIVE_STREAM_TAIL_BYTES = Math.max(511, CPIO_BINARY_HEADER_BYTES + MAX_CPIO_BINARY_NAME_BYTES - 1);
+const MAX_GZIP_OPTIONAL_FIELD_BYTES = 4096;
+const ARCHIVE_STREAM_TAIL_BYTES = Math.max(511, CPIO_BINARY_HEADER_BYTES + MAX_CPIO_BINARY_NAME_BYTES - 1, 10 + (MAX_GZIP_OPTIONAL_FIELD_BYTES * 3));
 const TRANSFER_DECODE_CHUNK_BYTES = 64 * 1024;
 const MAX_JSON_NODES = 1_000_000;
 const REGULAR_GIT_MODES = new Set(['100644', '100755']);
@@ -61,7 +62,7 @@ const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
 const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
 const EMBEDDED_BASE64_CANDIDATE_RE = /[A-Za-z0-9+/_=-]{32}/;
-const EMBEDDED_HEX_CANDIDATE_RE = /[0-9A-Fa-f]{64}/;
+const MAX_EMBEDDED_HEX_WHITESPACE_BYTES = 4096;
 const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
 
 /**
@@ -78,8 +79,49 @@ export function hermeticGitEnvironment(environment = process.env) {
 export function gitOutput(args, root = REPO_ROOT, execute = execFileSync, { encoding = 'utf8', input, maxBuffer = GIT_OUTPUT_MAX_BUFFER } = {}) {
   return execute('git', args, { cwd: root, encoding, input, maxBuffer, env: hermeticGitEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
 }
+function gitNulRecords(args, root = REPO_ROOT, execute = execFileSync, label = 'Git path') {
+  const output = gitOutput(args, root, execute, { encoding: null });
+  if (!Buffer.isBuffer(output)) throw new Error(`private Phase 3C containment requires Buffer output for ${label}`);
+  if (output.length === 0) return [];
+  if (output.at(-1) !== 0) throw new Error(`private Phase 3C containment received unterminated ${label} records`);
+  const records = [];
+  let start = 0;
+  for (let index = 0; index < output.length; index += 1) {
+    if (output[index] !== 0) continue;
+    if (index === start) throw new Error(`private Phase 3C containment received an empty ${label} record`);
+    records.push(output.subarray(start, index));
+    start = index + 1;
+  }
+  if (start !== output.length) throw new Error(`private Phase 3C containment received unterminated ${label} records`);
+  return records;
+}
+function decodeGitPathRecord(bytes, label = 'Git path') {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw new Error(`private Phase 3C containment received an invalid ${label}`);
+  let repoPath;
+  try { repoPath = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch (_error) { throw new Error(`private Phase 3C containment rejected invalid UTF-8 ${label}`); }
+  // Git path comparison is byte-sensitive. Do not accept a replacement
+  // character or a normalization: only the exact original bytes may become a
+  // JavaScript path/key after this point.
+  if (!Buffer.from(repoPath, 'utf8').equals(bytes)) throw new Error(`private Phase 3C containment rejected invalid UTF-8 ${label}`);
+  return repoPath;
+}
+function decodeGitAsciiRecord(bytes, label) {
+  if (!Buffer.isBuffer(bytes) || bytes.some(byte => byte > 0x7f)) throw new Error(`private Phase 3C containment received an invalid ${label}`);
+  return bytes.toString('ascii');
+}
 function gitPaths(args, root = REPO_ROOT, execute = execFileSync) {
-  return String(gitOutput(args, root, execute)).split('\0').filter(Boolean);
+  return gitNulRecords(args, root, execute, 'Git path').map(record => decodeGitPathRecord(record));
+}
+function uniqueValidatedGitPaths(paths) {
+  const unique = new Map();
+  for (const repoPath of paths) {
+    // `decodeGitPathRecord` proved this exact round trip before callers may
+    // deduplicate. UTF-8 has one canonical byte encoding for these strings,
+    // so this preserves Git's byte-level path identity (including combining
+    // characters and newlines) rather than normalizing names.
+    unique.set(Buffer.from(repoPath, 'utf8').toString('hex'), repoPath);
+  }
+  return [...unique.values()];
 }
 function gitLines(args, root = REPO_ROOT, execute = execFileSync) {
   return String(gitOutput(args, root, execute)).trim().split(/\r?\n/).filter(Boolean);
@@ -113,8 +155,10 @@ function isBareRepositoryMember(repoPath, root) {
 }
 function isToolOwnedIgnoredPath(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
-  return normalized.includes('/node_modules/')
-    || [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
+  // Only top-level, named generated roots are tool-owned. A nested
+  // `private/node_modules/` directory is operator-controlled and must retain
+  // archive inspection; broad segment matching would let it hide a packet.
+  return [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
 }
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
@@ -294,6 +338,59 @@ function hasPlausibleCpioHeader(source, offset) {
   const pathname = source.subarray(nameStart, nameEnd);
   return pathname.at(-1) === 0 && pathname.subarray(0, -1).indexOf(0) === -1;
 }
+function hasPlausibleZipLocalHeader(source, offset) {
+  // A local file header has a 30-byte fixed part followed by the name and
+  // extra fields. Do not reject a bare four-byte magic: public binary/text
+  // payloads can contain it incidentally.
+  if (!bytesAt(source, offset, [0x50, 0x4b, 0x03, 0x04]) || offset + 30 > source.length) return false;
+  const version = source.readUInt16LE(offset + 4);
+  const flags = source.readUInt16LE(offset + 6);
+  const method = source.readUInt16LE(offset + 8);
+  const nameLength = source.readUInt16LE(offset + 26);
+  const extraLength = source.readUInt16LE(offset + 28);
+  if (version < 10 || version > 63 || method > 99 || (flags & 0xc000) !== 0 || nameLength === 0 || nameLength > 4096 || extraLength > MAX_GZIP_OPTIONAL_FIELD_BYTES) return false;
+  const headerEnd = offset + 30 + nameLength + extraLength;
+  if (headerEnd > source.length) return false;
+  const name = source.subarray(offset + 30, offset + 30 + nameLength);
+  return name.indexOf(0) === -1;
+}
+function hasPlausibleZipEocd(source, offset) {
+  // EOCD has a 22-byte fixed part plus an optional bounded comment. A data
+  // descriptor (`PK\x07\x08`) is intentionally not an archive proof by itself.
+  if (!bytesAt(source, offset, [0x50, 0x4b, 0x05, 0x06]) || offset + 22 > source.length) return false;
+  const disk = source.readUInt16LE(offset + 4);
+  const centralDisk = source.readUInt16LE(offset + 6);
+  const entriesOnDisk = source.readUInt16LE(offset + 8);
+  const entriesTotal = source.readUInt16LE(offset + 10);
+  const commentLength = source.readUInt16LE(offset + 20);
+  return disk === 0 && centralDisk === 0 && entriesOnDisk === entriesTotal && offset + 22 + commentLength <= source.length;
+}
+function boundedGzipZeroTerminatedFieldEnd(source, offset) {
+  const maximum = Math.min(source.length, offset + MAX_GZIP_OPTIONAL_FIELD_BYTES + 1);
+  const terminator = source.subarray(offset, maximum).indexOf(0);
+  return terminator === -1 ? null : offset + terminator + 1;
+}
+function hasPlausibleGzipHeader(source, offset) {
+  // RFC 1952 fixed header: magic, method 8, FLG with reserved bits clear,
+  // MTIME/XFL/OS. Optional fields are only trusted when fully bounded.
+  if (!bytesAt(source, offset, [0x1f, 0x8b, 0x08]) || offset + 10 > source.length) return false;
+  const flags = source[offset + 3];
+  if ((flags & 0xe0) !== 0) return false;
+  let cursor = offset + 10;
+  if (flags & 0x04) {
+    if (cursor + 2 > source.length) return false;
+    const extraLength = source.readUInt16LE(cursor);
+    if (extraLength > MAX_GZIP_OPTIONAL_FIELD_BYTES || cursor + 2 + extraLength > source.length) return false;
+    cursor += 2 + extraLength;
+  }
+  for (const flag of [0x08, 0x10]) {
+    if (!(flags & flag)) continue;
+    const end = boundedGzipZeroTerminatedFieldEnd(source, cursor);
+    if (end === null) return false;
+    cursor = end;
+  }
+  return !(flags & 0x02) || cursor + 2 <= source.length;
+}
 function hasPlausibleCabHeader(source, offset) {
   if (source[offset] !== 0x4d || offset + 36 > source.length || !bytesAt(source, offset, [0x4d, 0x53, 0x43, 0x46])) return false;
   if (source.readUInt32LE(offset + 4) !== 0) return false;
@@ -332,8 +429,7 @@ function compressedArchiveReason(bytes) {
   // Keep signatures numeric so this checker does not contain a raw archive
   // header and reject its own source while scanning the introducing PR.
   const signatures = [
-    [0x50, 0x4b, 0x03, 0x04], [0x50, 0x4b, 0x05, 0x06], [0x50, 0x4b, 0x07, 0x08],
-    [0x1f, 0x8b, 0x08], [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00],
+    [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00],
     [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c], [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07],
     [0x21, 0x3c, 0x61, 0x72, 0x63, 0x68, 0x3e, 0x0a], [0x21, 0x3c, 0x74, 0x68, 0x69, 0x6e, 0x3e, 0x0a],
   ].map(signature => Buffer.from(signature));
@@ -348,6 +444,9 @@ function compressedArchiveReason(bytes) {
     for (let index = source.indexOf(prefix); index !== -1; index = source.indexOf(prefix, index + 1)) if (validator(index)) return true;
     return false;
   };
+  if (findValidated(Buffer.from([0x50, 0x4b, 0x03, 0x04]), index => hasPlausibleZipLocalHeader(source, index))
+    || findValidated(Buffer.from([0x50, 0x4b, 0x05, 0x06]), index => hasPlausibleZipEocd(source, index))
+    || findValidated(Buffer.from([0x1f, 0x8b, 0x08]), index => hasPlausibleGzipHeader(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x75, 0x73, 0x74, 0x61, 0x72]), index => hasPlausibleTarHeader(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x30, 0x37, 0x30, 0x37, 0x30]), index => hasPlausibleCpioHeader(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x71, 0xc7]), index => hasPlausibleCpioHeader(source, index))
@@ -793,6 +892,7 @@ function hexNibble(byte) {
   if (byte >= 0x61 && byte <= 0x66) return byte - 0x61 + 10;
   return -1;
 }
+function isHexTransferWhitespace(byte) { return byte === 0x09 || byte === 0x0a || byte === 0x0b || byte === 0x0c || byte === 0x0d || byte === 0x20; }
 function createHexTransferScanner({ checkArchives = true, wholeFile = false } = {}) {
   let scanner = null; let high = -1; let length = 0; let active = true; let found = null; let prefix = ''; let decoding = false; let batch = null; let used = 0;
   const addByte = value => {
@@ -806,7 +906,9 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false } = 
     scanner.feed(batch.subarray(0, used)); used = 0;
   };
   const finishToken = () => {
-    if (!active || !decoding || high !== -1) return null;
+    // An odd final nibble cannot form a byte, but it must not erase the
+    // complete-byte prefix already passed to the bounded scanner.
+    if (!active || !decoding) return null;
     feedBatch();
     return scanner?.finish() ?? null;
   };
@@ -828,13 +930,63 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false } = 
       addByte((high << 4) | nibble); high = -1;
       return;
     }
-    if (wholeFile && (byte === 0x09 || byte === 0x0a || byte === 0x0d || byte === 0x20)) return;
+    if (wholeFile && isHexTransferWhitespace(byte)) return;
     if (wholeFile) { active = false; return; }
     flush();
   };
   return {
     feed(bytes) { for (const byte of Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)) receive(byte); },
     finish() { if (wholeFile) return finishToken(); flush(); return found; },
+  };
+}
+function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true } = {}) {
+  let scanner = null; let high = -1; let length = 0; let whitespace = 0; let prefix = ''; let batch = null; let used = 0; let found = null;
+  const feedBatch = () => {
+    if (used === 0) return;
+    scanner ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+    scanner.feed(batch.subarray(0, used)); used = 0;
+  };
+  const addByte = value => {
+    batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
+    batch[used++] = value;
+    if (used === batch.length) feedBatch();
+  };
+  const finishToken = () => {
+    if (length < 64) return null;
+    // As above, discard at most one incomplete nibble while retaining every
+    // decoded complete byte. This scanner never recursively re-enters the
+    // Base64/hex transfer lanes.
+    feedBatch();
+    return scanner?.finish() ?? null;
+  };
+  const reset = () => { scanner = null; high = -1; length = 0; whitespace = 0; prefix = ''; batch = null; used = 0; };
+  const flush = () => { if (length > 0) found ??= finishToken(); reset(); };
+  const receive = byte => {
+    const nibble = hexNibble(byte);
+    if (nibble !== -1) {
+      whitespace = 0;
+      length += 1;
+      if (length <= 64) {
+        prefix += String.fromCharCode(byte);
+        if (length === 64) {
+          for (let index = 0; index < prefix.length; index += 2) addByte((hexNibble(prefix.charCodeAt(index)) << 4) | hexNibble(prefix.charCodeAt(index + 1)));
+          prefix = '';
+        }
+        return;
+      }
+      if (high === -1) { high = nibble; return; }
+      addByte((high << 4) | nibble); high = -1;
+      return;
+    }
+    if (isHexTransferWhitespace(byte) && length > 0) {
+      whitespace += 1;
+      if (whitespace <= MAX_EMBEDDED_HEX_WHITESPACE_BYTES) return;
+    }
+    flush();
+  };
+  return {
+    feed(bytes) { for (const byte of Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)) receive(byte); },
+    finish() { flush(); return found; },
   };
 }
 function createPemBase64Scanner({ checkArchives = true } = {}) {
@@ -892,11 +1044,7 @@ function createAlternateEncodingScanner({ checkArchives = true } = {}) {
   });
   const pemBase64 = createPemBase64Scanner({ checkArchives });
   const wholeHex = createHexTransferScanner({ checkArchives, wholeFile: true });
-  const embeddedHex = createLazyTokenScanner({
-    minimumRun: 64,
-    candidatePattern: EMBEDDED_HEX_CANDIDATE_RE,
-    createScanner: () => createHexTransferScanner({ checkArchives }),
-  });
+  const embeddedHex = createEmbeddedWhitespaceHexTokenScanner({ checkArchives });
   return {
     feed(bytes) {
       const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
@@ -1111,11 +1259,12 @@ async function scanGitObjectEntries(entries, root, budget) {
 }
 function currentIndexEntries(root, execute) {
   const entries = [];
-  for (const record of String(gitOutput(['ls-files', '--stage', '-z'], root, execute)).split('\0').filter(Boolean)) {
-    const separator = record.indexOf('\t');
-    const match = /^([0-7]{6}) ([0-9a-f]{40,64}) ([0-3])$/.exec(separator === -1 ? '' : record.slice(0, separator));
+  for (const record of gitNulRecords(['ls-files', '--stage', '-z'], root, execute, 'Git index entry')) {
+    const separator = record.indexOf(0x09);
+    const header = separator === -1 ? '' : decodeGitAsciiRecord(record.subarray(0, separator), 'Git index header');
+    const match = /^([0-7]{6}) ([0-9a-f]{40,64}) ([0-3])$/.exec(header);
     if (!match) throw new Error('private Phase 3C containment could not parse Git index entry');
-    const repoPath = record.slice(separator + 1);
+    const repoPath = separator === -1 ? '' : decodeGitPathRecord(record.subarray(separator + 1), 'Git index path');
     if (match[3] !== '0') throw new Error('private Phase 3C containment rejected unmerged Git index entry');
     entries.push({ repoPath, mode: match[1], spec: match[2], key: `index:${repoPath}` });
   }
@@ -1255,24 +1404,24 @@ function changedEntriesForCommit(commit, root, execute) {
   // containment. Raw output already includes the destination mode and object,
   // avoiding one ls-tree process per path during a new branch's ancestry scan.
   // Rename detection is disabled so every record is one header/path pair.
-  const records = String(gitOutput(['diff-tree', '--root', '-m', '-r', '--no-commit-id', '--diff-filter=AMT', '--no-renames', '--raw', '-z', commit], root, execute)).split('\0');
-  if (records.at(-1) === '') records.pop();
+  const records = gitNulRecords(['diff-tree', '--root', '-m', '-r', '--no-commit-id', '--diff-filter=AMT', '--no-renames', '--raw', '-z', commit], root, execute, 'raw history');
   if (records.length % 2 !== 0) throw new Error('private Phase 3C containment received malformed raw history entries');
   const entries = new Map();
   for (let index = 0; index < records.length; index += 2) {
-    const match = /^:([0-7]{6}) ([0-7]{6}) [0-9a-f]{40,64} ([0-9a-f]{40,64}) ([AMT])$/.exec(records[index]);
-    const repoPath = records[index + 1];
+    const match = /^:([0-7]{6}) ([0-7]{6}) [0-9a-f]{40,64} ([0-9a-f]{40,64}) ([AMT])$/.exec(decodeGitAsciiRecord(records[index], 'raw history header'));
+    const repoPath = decodeGitPathRecord(records[index + 1], 'raw history path');
     if (!match || !repoPath) throw new Error('private Phase 3C containment could not parse raw history entry');
-    entries.set(repoPath, { repoPath, mode: match[2], type: match[2] === '160000' ? 'commit' : 'blob', object: match[3] });
+    entries.set(Buffer.from(repoPath, 'utf8').toString('hex'), { repoPath, mode: match[2], type: match[2] === '160000' ? 'commit' : 'blob', object: match[3] });
   }
   return [...entries.values()];
 }
 function commitTreeEntries(commit, root, execute) {
   const entries = [];
-  for (const record of String(gitOutput(['ls-tree', '-r', '-z', assertCommitSha(commit, 'candidate')], root, execute)).split('\0').filter(Boolean)) {
-    const separator = record.indexOf('\t');
-    const match = /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40,64})$/.exec(separator === -1 ? '' : record.slice(0, separator));
-    const repoPath = separator === -1 ? '' : record.slice(separator + 1);
+  for (const record of gitNulRecords(['ls-tree', '-r', '-z', assertCommitSha(commit, 'candidate')], root, execute, 'candidate commit tree entry')) {
+    const separator = record.indexOf(0x09);
+    const header = separator === -1 ? '' : decodeGitAsciiRecord(record.subarray(0, separator), 'candidate commit tree header');
+    const match = /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40,64})$/.exec(header);
+    const repoPath = separator === -1 ? '' : decodeGitPathRecord(record.subarray(separator + 1), 'candidate commit tree path');
     if (!match || !repoPath) throw new Error('private Phase 3C containment could not parse candidate commit tree entry');
     entries.push({ repoPath, mode: match[1], type: match[2], object: match[3] });
   }
@@ -1336,12 +1485,12 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
   const ignoredVisible = includeIgnored
     ? gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, execute)
     : [];
-  const visible = new Set([
+  const visible = new Set(uniqueValidatedGitPaths([
     ...gitPaths(['ls-files', '-z'], root, execute),
     ...gitPaths(['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR'], root, execute),
     ...gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute),
     ...ignoredVisible,
-  ]);
+  ]));
   if (visible.size > MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error('private Phase 3C containment candidate-count cap exceeded');
   const rangeCommits = ranges.flatMap(range => commitsForRange(range, root, execute));
   const checkedCommits = [...new Set([...commits.map(commit => assertCommitSha(commit, 'history')), ...rangeCommits])];
@@ -1535,12 +1684,12 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
   throw new Error(`private Phase 3C CI containment does not support GitHub event ${String(name)}`);
 }
 
-function parseCli(args) {
+export function parseCli(args) {
   const result = { ranges: [], prePushRemote: null, preCommit: false, githubEvent: false, root: null, attestGitHubHandoff: false };
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
-    if (token === '--range') { const value = args[++index]; if (!value) throw new Error('disclosure-safe usage: --range requires base..head'); result.ranges.push(value); continue; }
-    if (token === '--pre-push') { if (result.prePushRemote !== null) throw new Error('disclosure-safe usage: duplicate --pre-push'); const value = args[++index]; if (!value) throw new Error('disclosure-safe usage: --pre-push requires remote name'); result.prePushRemote = value; continue; }
+    if (token === '--range') { if (result.ranges.length) throw new Error('disclosure-safe usage: duplicate --range'); const value = args[++index]; if (typeof value !== 'string' || !value || value.startsWith('--')) throw new Error('disclosure-safe usage: --range requires base..head'); result.ranges.push(value); continue; }
+    if (token === '--pre-push') { if (result.prePushRemote !== null) throw new Error('disclosure-safe usage: duplicate --pre-push'); const value = args[++index]; if (typeof value !== 'string' || !value || value.startsWith('--')) throw new Error('disclosure-safe usage: --pre-push requires remote name'); result.prePushRemote = value; continue; }
     if (token === '--pre-commit') { if (result.preCommit) throw new Error('disclosure-safe usage: duplicate --pre-commit'); result.preCommit = true; continue; }
     if (token === '--github-event') { if (result.githubEvent) throw new Error('disclosure-safe usage: duplicate --github-event'); result.githubEvent = true; continue; }
     if (token === GITHUB_EVENT_HANDOFF_FLAG) { if (result.attestGitHubHandoff) throw new Error('disclosure-safe usage: duplicate GitHub handoff attestation'); result.attestGitHubHandoff = true; continue; }
@@ -1548,6 +1697,7 @@ function parseCli(args) {
     throw new Error('disclosure-safe usage: unknown containment option');
   }
   if ((result.prePushRemote !== null ? 1 : 0) + Number(result.preCommit) + Number(result.githubEvent) > 1) throw new Error('disclosure-safe usage: pre-commit, pre-push, and GitHub-event modes are exclusive');
+  if (result.ranges.length && (result.prePushRemote !== null || result.preCommit || result.githubEvent)) throw new Error('disclosure-safe usage: --range is only valid in direct containment mode');
   if (result.root !== null && !result.githubEvent) throw new Error('disclosure-safe usage: --root requires --github-event');
   if (result.attestGitHubHandoff && (!result.githubEvent || result.root === null)) throw new Error('disclosure-safe usage: GitHub handoff attestation requires --github-event and --root');
   return result;

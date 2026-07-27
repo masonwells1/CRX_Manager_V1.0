@@ -4,20 +4,14 @@ echo ""
 echo "Checking Phase 3C private-artifact containment..."
 # Read the real pre-push ref updates from stdin and inspect every outgoing
 # commit, including a packet that was committed and later deleted at tip.
-node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "${1:-}" 2>&1
-CONTAINMENT_EXIT=$?
-
-if [ $CONTAINMENT_EXIT -ne 0 ]; then
+if ! node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "${1:-}" 2>&1; then
   echo ""
   echo "❌ PRIVATE ARTIFACT CONTAINMENT FAILED — push blocked."
   exit 1
 fi
 
 echo "Running TypeScript type check..."
-npm run typecheck 2>&1
-TC_EXIT=$?
-
-if [ $TC_EXIT -ne 0 ]; then
+if ! npm run typecheck 2>&1; then
   echo ""
   echo "❌ TYPE CHECK FAILED — push blocked."
   echo "Fix TypeScript errors before pushing to GitHub."
@@ -26,10 +20,7 @@ fi
 
 echo ""
 echo "Running build check..."
-npm run build 2>&1
-BUILD_EXIT=$?
-
-if [ $BUILD_EXIT -ne 0 ]; then
+if ! npm run build 2>&1; then
   echo ""
   echo "❌ BUILD FAILED — push blocked."
   echo "Fix build errors before pushing to GitHub."
@@ -38,10 +29,7 @@ fi
 
 echo ""
 echo "🗺️ Refreshing local Graphify architecture map when code or database structure changed..."
-node scripts/graphify-refresh.mjs --if-relevant
-GRAPHIFY_EXIT=$?
-
-if [ $GRAPHIFY_EXIT -ne 0 ]; then
+if ! node scripts/graphify-refresh.mjs --if-relevant; then
   echo ""
   echo "⚠️ Graphify refresh skipped or failed — continuing because Graphify is an optional local navigation aid."
   echo "   Run npm run graph:refresh after installing Graphify to restore the local architecture map."

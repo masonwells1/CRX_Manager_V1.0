@@ -30,14 +30,32 @@ hook costs. History traversal now reads each changed path's destination mode
 and object ID from one bounded raw `git diff-tree` stream instead of spawning
 `git ls-tree` once per path. Pre-commit scans tracked, staged, modified, and
 untracked content, while the full ignored dependency/build-output sweep remains
-mandatory at pre-push and in CI. Nested workspace `node_modules` descendants
-retain the archive-only tool exemption without weakening encoded private-packet
-detection, the pre-push hook handles a missing remote argument fail-closed, and
-CI documents that SQL validation depends on an unconditional containment job.
-Measured on the real checkout, pre-commit completed in 4.31 seconds, the full
-ignored-path scan completed in 99.91 seconds, and a zero-SHA first-push
-simulation scanned 2,127 commits, 71,285 candidates, and 1.61 GB of logical
-content in 294.17 seconds without crossing either containment budget.
+mandatory at pre-push and in CI; a forced-added ignored file is Git-visible and
+is still rejected at pre-commit. Only explicit top-level tool-generated roots
+(such as `node_modules/`) retain the archive-only exception: an
+operator-controlled nested `private/node_modules/` path is scanned normally.
+The pre-push hook handles a missing remote argument fail-closed, and CI
+documents that SQL validation depends on an unconditional containment job.
+Measured on the final real checkout, pre-commit completed in 4.37 seconds, the
+full ignored-path scan completed in 110.12 seconds, and a zero-SHA first-push
+simulation scanned 2,128 commits, 71,289 candidates, and 1.61 GB of logical
+content in 255.83 seconds without crossing either containment budget.
+
+Every Git `-z` path reader now requests bytes, splits only on NUL bytes, and
+requires fatal UTF-8 decoding followed by an exact byte-for-byte round trip
+before a path can be deduplicated or used as a key. Invalid UTF-8 names fail
+closed in index, candidate-tree, history, zero-SHA pre-push, and PR-target
+paths; valid emoji, combining characters, spaces, and newlines retain their
+byte identity. Hex transfer scanning keeps the maximal complete-byte prefix
+when a trailing nibble is odd and recognizes bounded whitespace-wrapped tokens
+inside prose without recursively decoding its output. ZIP and gzip rejection
+now requires a complete, plausible fixed header (and bounded gzip optional
+fields), preventing a short magic or standalone ZIP data descriptor from
+becoming an archive false positive while preserving split, Base64, and hex
+container detection. CLI modes reject duplicate or conflicting range/mode
+arguments. The pre-push hook wraps every hard gate and the optional Graphify
+refresh explicitly, so Husky's `sh -e` behavior cannot hide the intended failure
+or warning message.
 
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
