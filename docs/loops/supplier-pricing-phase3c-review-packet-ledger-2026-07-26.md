@@ -59,6 +59,13 @@ that new base lacks both the checker and trusted target workflow, so the
 candidate-controlled bootstrap pin was updated to that exact SHA. The ruleset
 gap above remains unresolved; this reconciliation does not mark the PR ready.
 
+Published `f3b636590a784b2cf9bf4e03bc47da55adbc4e60` arrived concurrently as
+provenance-unattributed publication-parent hardening. It was adopted only after
+this bounded review confirmed its held-directory descriptor/path inode
+revalidation, and the POSIX relocation fixture now requires the exact safe
+`private artifact parent changed before publication` failure. It does not close
+the external trusted-workflow/ruleset gap; PR #246 remains `PARKED`.
+
 ### Reviewed packet commit `d38d41f63e68971f08f7158bf5a104af62d232aa` — PARKED
 
 `d38d41f63e68971f08f7158bf5a104af62d232aa` has immutable parent

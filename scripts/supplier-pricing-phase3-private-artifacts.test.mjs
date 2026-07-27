@@ -9,7 +9,7 @@ import { canonical, loadSnapshot, makeManifest, sha256 } from './generate-suppli
 import { buildOwnerDecisionSheet, ownerDecisionSheetHash } from './generate-supplier-pricing-phase3-owner-decision-sheet.mjs';
 import { verifyManifest } from './verify-supplier-pricing-phase3-classification-manifest.mjs';
 import { verifyOwnerDecisionSheet } from './verify-supplier-pricing-phase3-owner-decision-sheet.mjs';
-import { checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, GITHUB_EVENT_HANDOFF_PROTOCOL, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason } from './check-supplier-pricing-phase3-private-artifacts.mjs';
+import { checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason } from './check-supplier-pricing-phase3-private-artifacts.mjs';
 import { assertExternalArtifactPath, assertExternalPrivateDirectory, CONTAINER_TYPE_ALLOWLIST, loadValidatedSnapshot, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRODUCT_FORM_ALLOWLIST, readValidatedPrivateArtifact, REPO_ROOT, validatePostStageASnapshot, without, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const temp = mkdtempSync(path.join(os.tmpdir(), 'crx-phase3c-synthetic-'));
@@ -138,6 +138,11 @@ try {
   const totalBudget = new ScanBudget(); for (let index = 0; index < MAX_TOTAL_STRUCTURAL_SCAN_BYTES / MAX_STRUCTURAL_SCAN_BYTES; index += 1) totalBudget.admit(MAX_STRUCTURAL_SCAN_BYTES); throws(() => totalBudget.admit(1), 'total-byte');
   const candidateBudget = new ScanBudget(); for (let index = 0; index < MAX_STRUCTURAL_SCAN_CANDIDATES; index += 1) candidateBudget.admit(0); throws(() => candidateBudget.admit(0), 'candidate-count');
   assert.equal(MAX_HISTORY_COMMITS, 4_096);
+  const gitOutputOptions = []; const capturedGitOutput = (_command, _args, options) => { gitOutputOptions.push(options); return 'synthetic git output'; };
+  assert.equal(gitOutput(['status'], fakeRepo, capturedGitOutput), 'synthetic git output');
+  assert.equal(gitOutputOptions[0].maxBuffer, GIT_OUTPUT_MAX_BUFFER, 'repository enumeration must use an explicit bounded Git output buffer');
+  gitOutput(['status'], fakeRepo, capturedGitOutput, { maxBuffer: 1234 });
+  assert.equal(gitOutputOptions[1].maxBuffer, 1234, 'callers must retain an explicit Git output buffer override');
   const boundedHistoryRepo = fixtureRepo('containment-history-traversal-caps'); const boundedHistoryBase = git(boundedHistoryRepo, ['rev-parse', 'HEAD']).trim(); writeFileSync(path.join(boundedHistoryRepo, 'ordinary-history-change.txt'), 'ordinary bounded history change\n'); git(boundedHistoryRepo, ['add', 'ordinary-history-change.txt']); git(boundedHistoryRepo, ['commit', '--quiet', '-m', 'synthetic bounded history change']); const boundedHistoryHead = git(boundedHistoryRepo, ['rev-parse', 'HEAD']).trim();
   const checkedCommitCapCalls = []; const checkedCommitCapExecute = (command, args, options) => { checkedCommitCapCalls.push(args); return fixtureGitExecute(command, args, options); };
   await assert.rejects(() => checkPrivateArtifactContainment({ root: boundedHistoryRepo, execute: checkedCommitCapExecute, ranges: [`${boundedHistoryBase}..${boundedHistoryHead}`], testLimits: { maxCheckedCommits: 0 } }), /checked-commit cap exceeded/);
@@ -174,6 +179,12 @@ try {
   let captureArgs;
   const captured = capturePostStageASnapshot({ root: captureRoot, privateArtifactDir: external, testApprovedRoot: external, run: (_command, args) => { captureArgs = args; return { error: null, status: 0, stderr: 'Connecting to remote database...', stdout: JSON.stringify({ boundary, rows: [{ phase3_snapshot: payload() }], warning }) }; } });
   assert.deepEqual(captureArgs, ['db', 'query', '--linked', '--output-format', 'json', CAPTURE_SQL]); assert.equal(captured.count, 2);
+  for (const value of [undefined, null]) {
+    const unsafePayload = payload();
+    if (value === undefined) delete unsafePayload.metadata.supplier_cost_basis_enabled;
+    else unsafePayload.metadata.supplier_cost_basis_enabled = value;
+    throws(() => buildPostStageASnapshot(unsafePayload), 'supplier_cost_basis_enabled setting must exist and remain false');
+  }
   for (const marker of ['wrong-project\n', 'malformed\n', '']) { writeFileSync(path.join(captureRoot, 'supabase', '.temp', 'project-ref'), marker); throws(() => capturePostStageASnapshot({ root: captureRoot, privateArtifactDir: external, testApprovedRoot: external, run: () => { throw new Error('must not run'); } }), 'project-ref'); }
   rmSync(path.join(captureRoot, 'supabase', '.temp', 'project-ref')); throws(() => capturePostStageASnapshot({ root: captureRoot, privateArtifactDir: external, testApprovedRoot: external, run: () => { throw new Error('must not run'); } }), 'ENOENT');
 
@@ -245,7 +256,7 @@ try {
     assert.equal(existsSync(path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME)), false);
     makeExternalJunction();
     const absentFinal = path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME);
-    throws(() => writePrivateArtifactAtomic(absentFinal, POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeFinalOpen: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|private artifact temporary path changed during publication|EBUSY|EPERM|EACCES');
+    throws(() => writePrivateArtifactAtomic(absentFinal, POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeFinalOpen: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|parent changed before publication|private artifact temporary path changed during publication|EBUSY|EPERM|EACCES');
     const externallyCreated = path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME);
     assert.equal(existsSync(externallyCreated), false, 'absent-final-target race created a file outside the approved root');
   } finally { rmSync(junctionParent, { recursive: true, force: true }); }
@@ -325,10 +336,13 @@ try {
     assert.equal(stableRaceOutcome, 'EBUSY', 'Windows must block parent replacement while the writer holds its CWD lease');
     assert.equal(readFileSync(published, 'utf8'), 'new stable bytes');
   } else {
-    throws(() => writePrivateArtifactAtomic(stableOutput, POST_STAGE_A_MANIFEST_NAME, 'new stable bytes', {
+    // f3b63659 revalidates the original parent inode after this final race
+    // seam. POSIX permits relocation while the directory descriptor remains
+    // open, so the exact fail-closed diagnostic is part of the contract.
+    assert.throws(() => writePrivateArtifactAtomic(stableOutput, POST_STAGE_A_MANIFEST_NAME, 'new stable bytes', {
       repoRoot: fakeRepo, testApprovedRoot: stableParent,
       afterFinalValidationBeforeRename: () => { renameSync(stableParent, movedStableParent); mkdirSync(stableParent); writeFileSync(stableOutput, 'attacker replacement bytes'); stableRaceOutcome = 'MOVED'; },
-    }), 'parent changed before publication');
+    }), { message: 'private artifact parent changed before publication' });
     assert.equal(stableRaceOutcome, 'MOVED');
     assert.equal(readFileSync(stableOutput, 'utf8'), 'attacker replacement bytes', 'POSIX replacement pathname must never receive private publication bytes');
     assert.equal(readFileSync(path.join(movedStableParent, POST_STAGE_A_MANIFEST_NAME), 'utf8'), 'prior stable bytes', 'parent relocation before rename must preserve the prior target');
@@ -423,7 +437,7 @@ try {
     mkdirSync(path.join(ignoredLinkRepo, 'ordinary-bin')); symlinkSync(ignoredLinkTarget, path.join(ignoredLinkRepo, 'ordinary-bin', 'tool'), 'file');
     await fixtureContainment(ignoredLinkRepo);
     symlinkSync(ignoredLinkTarget, path.join(ignoredLinkRepo, 'private-artifacts'), 'junction');
-    await containmentFails(ignoredLinkRepo, 'private-artifacts', 'private-artifacts directory');
+    await assert.rejects(() => fixtureContainment(ignoredLinkRepo), error => error.message === 'private Phase 3C artifact containment failure: private-artifacts (private-artifacts directory)');
   } catch (error) { if (!['EPERM', 'EACCES', 'UNKNOWN'].includes(error?.code)) throw error; }
   const largeIgnoredRepo = fixtureRepo('containment-large-ignored'); writeFileSync(path.join(largeIgnoredRepo, '.gitignore'), '*.ignored\n'); git(largeIgnoredRepo, ['add', '.gitignore']); git(largeIgnoredRepo, ['commit', '--quiet', '-m', 'ignore synthetic payloads']); const splitBoundaryPadding = 8 * 1024 * 1024 + 64 * 1024 - 4; const lateMarkerPath = 'late-marker.ignored'; writeFileSync(path.join(largeIgnoredRepo, lateMarkerPath), `${'x'.repeat(splitBoundaryPadding)}{"format":"${POST_STAGE_A_SNAPSHOT_FORMAT}"}`); await containmentFails(largeIgnoredRepo, lateMarkerPath, 'private JSON format marker in malformed candidate');
   const separatedFormatPath = 'separated-format.ignored'; writeFileSync(path.join(largeIgnoredRepo, separatedFormatPath), `${'x'.repeat(8 * 1024 * 1024 + 2048)}{"format":${' '.repeat(8192)}"${POST_STAGE_A_SNAPSHOT_FORMAT}"}`); await containmentFails(largeIgnoredRepo, separatedFormatPath, 'private JSON format marker in malformed candidate');
@@ -547,6 +561,13 @@ try {
   assert(ci.indexOf('phase3-private-artifact-containment:') < ci.indexOf('sql-validation:'));
   assert(ci.includes('needs: phase3-private-artifact-containment'));
   assert(ci.includes('needs: [phase3-private-artifact-containment, sql-validation]'));
+  assert(ci.includes('permissions:\n  contents: read'));
+  const ciCheckoutBlocks = ci.split('uses: actions/checkout@v7').slice(1);
+  assert.equal(ciCheckoutBlocks.length, 4, 'CI checkout count changed; review least-privilege settings');
+  for (const block of ciCheckoutBlocks) {
+    const checkout = block.slice(0, block.indexOf('\n      - name:'));
+    assert(checkout.includes('persist-credentials: false'), 'every CI checkout must drop the GitHub token');
+  }
   assert(ci.includes('fetch-depth: 0'));
   const containmentJob = ci.slice(ci.indexOf('phase3-private-artifact-containment:'), ci.indexOf('  sql-validation:'));
   assert(containmentJob.includes('node --version'));
@@ -566,6 +587,7 @@ try {
   assert(trustedTargetWorkflow.includes('contents: read'));
   assert(trustedTargetWorkflow.includes('timeout-minutes: 12'));
   assert(trustedTargetWorkflow.includes('ref: ${{ github.event.pull_request.base.sha }}'));
+  assert(trustedTargetWorkflow.includes('fetch-depth: 0'));
   assert(trustedTargetWorkflow.includes('persist-credentials: false'));
   assert(trustedTargetWorkflow.includes('git -c core.hooksPath=/dev/null fetch --no-tags origin "+refs/pull/${phase3_number}/head:refs/phase3c/pull/${phase3_number}"'));
   assert(trustedTargetWorkflow.includes('node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --github-event --root "$GITHUB_WORKSPACE"'));
@@ -592,6 +614,7 @@ try {
   // only as Git data: this fixture resets the worktree to base before the
   // checker inspects the exact candidate tree/range.
   const targetRepo = fixtureRepo('containment-pull-request-target'); const targetBase = git(targetRepo, ['rev-parse', 'HEAD']).trim(); writeFileSync(path.join(targetRepo, 'ordinary-candidate.txt'), 'ordinary candidate content\n'); git(targetRepo, ['add', 'ordinary-candidate.txt']); git(targetRepo, ['commit', '--quiet', '-m', 'ordinary candidate commit']); const targetOrdinaryHead = git(targetRepo, ['rev-parse', 'HEAD']).trim(); git(targetRepo, ['checkout', '--quiet', targetBase]); const targetOrdinaryEvent = path.join(temp, 'pull-request-target-ordinary.json'); writeFileSync(targetOrdinaryEvent, JSON.stringify({ pull_request: { base: { sha: targetBase }, head: { sha: targetOrdinaryHead } } })); await checkGitHubEventPrivateArtifactContainment({ root: targetRepo, environment: { GITHUB_EVENT_NAME: 'pull_request_target', GITHUB_EVENT_PATH: targetOrdinaryEvent } }); const targetCapCalls = []; const targetCapExecute = (command, args, options) => { targetCapCalls.push(args); if (args[0] === 'rev-list') return `${Array.from({ length: MAX_HISTORY_COMMITS + 1 }, () => targetOrdinaryHead).join('\n')}\n`; return fixtureGitExecute(command, args, options); }; await assert.rejects(() => checkGitHubEventPrivateArtifactContainment({ root: targetRepo, execute: targetCapExecute, environment: { GITHUB_EVENT_NAME: 'pull_request_target', GITHUB_EVENT_PATH: targetOrdinaryEvent } }), /pull-request-target history commit cap exceeded/); assert.equal(targetCapCalls.filter(args => args[0] === 'rev-list').length, 1, 'pull_request_target must enumerate bounded history exactly once'); writeFileSync(path.join(targetRepo, 'candidate-private.txt'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); git(targetRepo, ['add', 'candidate-private.txt']); git(targetRepo, ['commit', '--quiet', '-m', 'candidate private blob']); const targetPrivateHead = git(targetRepo, ['rev-parse', 'HEAD']).trim(); git(targetRepo, ['checkout', '--quiet', targetBase]); const targetPrivateEvent = path.join(temp, 'pull-request-target-private.json'); writeFileSync(targetPrivateEvent, JSON.stringify({ pull_request: { base: { sha: targetBase }, head: { sha: targetPrivateHead } } })); await assert.rejects(() => checkGitHubEventPrivateArtifactContainment({ root: targetRepo, environment: { GITHUB_EVENT_NAME: 'pull_request_target', GITHUB_EVENT_PATH: targetPrivateEvent } }), /private JSON format marker in malformed candidate/);
+  const zeroPushRepo = fixtureRepo('containment-zero-before-push'); writeFileSync(path.join(zeroPushRepo, 'historical-private.txt'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); git(zeroPushRepo, ['add', 'historical-private.txt']); git(zeroPushRepo, ['commit', '--quiet', '-m', 'synthetic private history']); git(zeroPushRepo, ['rm', '--quiet', 'historical-private.txt']); git(zeroPushRepo, ['commit', '--quiet', '-m', 'remove synthetic private history']); const zeroPushHead = git(zeroPushRepo, ['rev-parse', 'HEAD']).trim(); const zeroPushEvent = path.join(temp, 'zero-before-push.json'); writeFileSync(zeroPushEvent, JSON.stringify({ before: '0'.repeat(40), after: zeroPushHead })); const zeroPushCalls = []; const zeroPushExecute = (command, args, options) => { zeroPushCalls.push(args); return fixtureGitExecute(command, args, options); }; await assert.rejects(() => checkGitHubEventPrivateArtifactContainment({ root: zeroPushRepo, execute: zeroPushExecute, environment: { GITHUB_EVENT_NAME: 'push', GITHUB_EVENT_PATH: zeroPushEvent } }), /historical-private\.txt .*private JSON format marker in malformed candidate/); assert(!zeroPushCalls.some(args => args.some(value => String(value).includes('0'.repeat(40)))), 'new-ref push containment must not construct a ZERO_SHA range'); assert(zeroPushCalls.some(args => args[0] === 'rev-list' && args.includes(zeroPushHead)), 'new-ref push containment must enumerate bounded candidate ancestry');
   await fixtureContainment(benignRepo);
   console.log('supplier-pricing Phase 3C private-artifact tests passed');
 } finally { rmSync(temp, { recursive: true, force: true }); }

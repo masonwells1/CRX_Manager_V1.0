@@ -27,7 +27,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 1
+          # The trusted checker walks base..head history by immutable objects;
+          # retain complete base history before fetching candidate objects.
+          fetch-depth: 0
           persist-credentials: false
           submodules: false
 

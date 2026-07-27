@@ -35,9 +35,9 @@ WITH product_rows AS (
     ),
     'migration_high_water', (SELECT max(version)::text FROM supabase_migrations.schema_migrations),
     'product_families_count', (SELECT count(*) FROM public.product_families),
-    'supplier_cost_basis_enabled', COALESCE((
+    'supplier_cost_basis_enabled', (
       SELECT setting_value = 'true' FROM public.app_settings WHERE setting_key = 'supplier_cost_basis_enabled'
-    ), NULL),
+    ),
     'capture_timestamp_utc', to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
   ) AS value
 )
@@ -82,11 +82,12 @@ export function assertHarmlessSupabaseStderr(stderr) {
 export function buildPostStageASnapshot(payload) {
   assert(payload && typeof payload === 'object' && !Array.isArray(payload) && Object.keys(payload).length === 3 && ['format', 'metadata', 'products'].every(key => Object.hasOwn(payload, key)) && payload.format === POST_STAGE_A_SNAPSHOT_FORMAT, 'post-Stage-A capture format is invalid');
   const metadata = payload.metadata;
-  assert(metadata && typeof metadata === 'object' && !Array.isArray(metadata) && Object.keys(metadata).length === 5 && ['stage_a_ledger_present', 'migration_high_water', 'product_families_count', 'supplier_cost_basis_enabled', 'capture_timestamp_utc'].every(key => Object.hasOwn(metadata, key)), 'post-Stage-A capture metadata is invalid');
+  assert(metadata && typeof metadata === 'object' && !Array.isArray(metadata), 'post-Stage-A capture metadata is invalid');
+  assert(Object.hasOwn(metadata, 'supplier_cost_basis_enabled') && metadata.supplier_cost_basis_enabled === false, 'supplier_cost_basis_enabled setting must exist and remain false');
+  assert(Object.keys(metadata).length === 5 && ['stage_a_ledger_present', 'migration_high_water', 'product_families_count', 'capture_timestamp_utc'].every(key => Object.hasOwn(metadata, key)), 'post-Stage-A capture metadata is invalid');
   assert(metadata.stage_a_ledger_present === true, 'Stage A migration ledger row is absent');
   assert(typeof metadata.migration_high_water === 'string' && /^\d{14}$/.test(metadata.migration_high_water) && metadata.migration_high_water >= STAGE_A_MIGRATION_VERSION, 'migration high-water is invalid');
   assert(typeof metadata.product_families_count === 'number' && Number.isSafeInteger(metadata.product_families_count) && metadata.product_families_count === 0, 'product-families count must be the safe-prep default of zero');
-  assert(metadata.supplier_cost_basis_enabled === false, 'supplier_cost_basis_enabled must remain false');
   assert(typeof metadata.capture_timestamp_utc === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(metadata.capture_timestamp_utc), 'capture timestamp is invalid');
   assert(Array.isArray(payload.products) && payload.products.length > 0, 'captured Product population is empty');
   const snapshot = {

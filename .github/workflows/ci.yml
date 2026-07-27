@@ -9,6 +9,11 @@ on:
   pull_request:
     branches: [main]
 
+# CI only reads repository content and artifacts. It never needs a writable
+# GitHub token, and checkout must not retain one in the local Git config.
+permissions:
+  contents: read
+
 jobs:
   phase3-private-artifact-containment:
     name: Phase 3C Private Artifact Containment
@@ -22,6 +27,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Reject PR packet blobs with the exact trusted base checker
         if: github.event_name == 'pull_request'
@@ -95,6 +101,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Make scripts executable
         run: chmod +x scripts/validate-sql.sh scripts/validate-sql-migrations.sh
@@ -125,6 +132,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -206,6 +214,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v7

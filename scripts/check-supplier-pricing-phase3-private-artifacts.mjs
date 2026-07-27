@@ -23,6 +23,9 @@ export const MAX_STRUCTURAL_SCAN_CANDIDATES = 100_000;
 // practical headroom without permitting a pathological number of diff-tree
 // subprocesses before the history path budget can engage.
 export const MAX_HISTORY_COMMITS = 4_096;
+// `ls-files -z` and recursive `ls-tree -z` enumerate the full repository.
+// Keep their subprocess output bounded, but well above the current baseline.
+export const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 // The PR workflow behaviorally verifies this protocol from the trusted base
 // checker before it hands that checker the candidate checkout. A source-text
 // marker is not a protocol and is never used as one.
@@ -54,7 +57,7 @@ export function hermeticGitEnvironment(environment = process.env) {
   for (const key of Object.keys(clean)) if (key.toUpperCase().startsWith('GIT_')) delete clean[key];
   return clean;
 }
-function gitOutput(args, root = REPO_ROOT, execute = execFileSync, { encoding = 'utf8', input, maxBuffer } = {}) {
+export function gitOutput(args, root = REPO_ROOT, execute = execFileSync, { encoding = 'utf8', input, maxBuffer = GIT_OUTPUT_MAX_BUFFER } = {}) {
   return execute('git', args, { cwd: root, encoding, input, maxBuffer, env: hermeticGitEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
 }
 function gitPaths(args, root = REPO_ROOT, execute = execFileSync) {
@@ -624,7 +627,12 @@ function worktreeContentViolations(root, execute, budget) {
     // reparse point cannot make a private packet Git-visible. A Phase 3C
     // filename/path remains a failure before this skip, so a packet symlink
     // or junction still fails closed without dereferencing its target.
-    if (source === 'ignored' && !forbiddenArtifactReason(repoPath)) {
+    if (source === 'ignored') {
+      const forbiddenReason = forbiddenArtifactReason(repoPath);
+      // The lexical violation is sufficient: never dereference a forbidden
+      // ignored path before reporting it. This keeps a packet-named link from
+      // changing the diagnostic or reaching an attacker-controlled target.
+      if (forbiddenReason) { violations.push({ repoPath, reason: forbiddenReason }); continue; }
       if (!ignoredWorktreeEntryIsRegular(root, repoPath)) continue;
     }
     const result = scanWorktreeCandidate(root, repoPath, { cache, budget });
@@ -757,6 +765,9 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
   }
   return checkPrivateArtifactContainment({ root, execute, ranges, commits });
 }
+function commitsForNewPush(head, root, execute) {
+  return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(head, 'push head')], root, execute);
+}
 function canonicalContainmentRoot(root, expectedHead, execute) {
   if (typeof root !== 'string' || !path.isAbsolute(root)) throw new Error('private Phase 3C CI containment requires an absolute candidate root');
   const canonical = realpathSync(root);
@@ -826,7 +837,13 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
     const head = assertCommitSha(event?.after, 'push head');
     for (const sha of [base, head]) if (sha !== ZERO_SHA && !eventCommitIsAvailable(sha, root, execute)) throw new Error('private Phase 3C CI containment event commit is unavailable');
     const candidateRoot = canonicalContainmentRoot(root, head, execute);
-    return { ...await checkPrivateArtifactContainment({ root: candidateRoot, execute, ranges: [`${base}..${head}`] }), github_event_head: head };
+    // GitHub uses all zeroes when a ref is created. There is no valid
+    // ZERO_SHA..head range, so enumerate the bounded candidate ancestry
+    // directly and let the ordinary checked-commit cap fail closed.
+    const options = base === ZERO_SHA
+      ? { commits: commitsForNewPush(head, candidateRoot, execute) }
+      : { ranges: [`${base}..${head}`] };
+    return { ...await checkPrivateArtifactContainment({ root: candidateRoot, execute, ...options }), github_event_head: head };
   }
   throw new Error(`private Phase 3C CI containment does not support GitHub event ${String(name)}`);
 }

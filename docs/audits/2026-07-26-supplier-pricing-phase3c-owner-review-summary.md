@@ -146,6 +146,12 @@ external enforcement gap remains `PARKED`. The base must be freshly refetched
 and rechecked immediately before any push. This correction still requires final
 exact review on its containing SHA, identified only by Git and PR metadata.
 
+Published `f3b636590a784b2cf9bf4e03bc47da55adbc4e60` arrived concurrently as
+provenance-unattributed publication-parent hardening. It is adopted only after
+this bounded review confirmed held-directory descriptor/path inode
+revalidation and the POSIX relocation fixture's exact safe failure. It does not
+change the external trusted-workflow/ruleset gap: PR #246 remains `PARKED`.
+
 ## Owner action and hard boundary
 
 The packet has been regenerated and verified, but Mason must not begin the
