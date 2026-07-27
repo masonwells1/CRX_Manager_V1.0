@@ -189,6 +189,41 @@ effective count of 95 — that last one only becomes count-neutral once the gran
 `PUBLIC` as well as from `anon`, which is itself why the guard folds `PUBLIC` in. No artifact bytes
 changed; only the fingerprint definition, two digests, and two proof flags.
 
+**Review round six.** Two more P2s of the same shape — and this time the whole file was swept
+rather than the two lines that were reported, because five separate digests turned out to carry
+the defect. The general form: a catalog's rendered text says what an object *is*, not whether it
+is *in force*. `pg_get_triggerdef()` describes a trigger identically whether or not it fires,
+because activation mode lives in `pg_trigger.tgenabled`; a disabled
+`trg_guard_audit_log_immutable` therefore matched every digest while the audit log stopped being
+immutable. Neither argument rendering in `function_security` mentions the result type, and the
+source digest hashes only `prosrc`, so `get_customer_summary` restored as `text` instead of
+`jsonb` matched everything while handing the frontend a string where it expects a
+`CustomerSummary`. Both measured, not argued: with the trigger disabled the old `triggers` digest
+sat at exactly `8034a4585904327730aaf54492214fd9`, and with the function re-created from the same
+body and the same three grants but returning `text` the old `function_security` digest sat at
+exactly `80de54a23a11d6f29e7f3893634b8717` — both the values the previous manifest published —
+while `function_canonical_source` stayed at `eb4600f2…` throughout, confirming the body really was
+unchanged. The sweep added the rest of the same class: `indisvalid` on `indexes` (a failed
+`CREATE INDEX CONCURRENTLY` renders an identical definition and enforces no UNIQUE constraint),
+`relforcerowsecurity` and `relpersistence` on `relations_and_acl` (RLS without FORCE still lets
+the owner bypass every policy; an `UNLOGGED` restore loses its rows on crash), `prokind`,
+`proisstrict` and `proleakproof` on `function_security` (leakproof lets the planner push a
+function below an RLS predicate — a read-access change, not a performance one), and `active` plus
+`username` on `cron_contracts` (a deactivated job, or one running as a different role, has the
+same schedule and command). Five of the twelve digests moved and the other seven are byte-identical,
+which is the check that nothing else was disturbed. One near-miss worth recording: the
+`function_security` `format()` string was left one placeholder short of its argument list, and
+`format()` discards extra arguments silently — that would have dropped `proacl` out of the digest
+entirely, the same defect one more layer down. The offline cron check in
+`verify-schema-baseline.mjs` now reconstructs `active`/`username` as the literals
+`cron.schedule` implies, so if live ever holds a deactivated job the artifact format is forced to
+grow rather than the check being loosened. `disposable_restore_proof` is now fifteen checks, five
+of them negative. Re-captured from live read-only and re-proved on a container rebuilt from
+scratch: all twelve digests match, the three sentinels fire, the lockdown re-applies with 24
+warnings and none outside `plpgsql`, the `anon` `EXECUTE` swap still raises both halves at an
+unchanged count of 95, and the post-baseline migration replays to `915|20260727193441`. No
+artifact bytes changed.
+
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 
 Closes items 1 and 2 of `docs/manual/KNOWN_ISSUES.md` §0a — the two gaps that `20260727145843`

@@ -1,10 +1,10 @@
 {
   "format_version": 3,
   "project_id": "rhyzpcqhnizqbxphqdkr",
-  "generated_at": "2026-07-27T22:39:40.020Z",
+  "generated_at": "2026-07-27T23:06:34.489Z",
   "migrations_high_water": "20260727174805",
   "migration_ledger_rows": 914,
-  "fingerprint_sql_sha256": "6300ECEF1F81175A995FCDF7AA5C89667F8C0910C73CB5E93053E1A7BCF0E85D",
+  "fingerprint_sql_sha256": "B063F8D66F6978F3407E709172A7D49F0DB654CD7C10D7D038927572FDFBD246",
   "acl_sql_sha256": "432B2394D160782D7604B61D56C3AF8AE94CB038AEF98648FA8C744859B7A840",
   "acl_statements": 1627,
   "restore_order": [
@@ -88,15 +88,15 @@
     "columns": "859ca5e95d066a72147d760c8e4c3868",
     "constraints": "16b946a19f293690c887389d2bde714e",
     "enums": "9df1d2720ee68c51f557f3b2c42960db",
-    "indexes": "be40ff498211b918bf0e120aba144102",
-    "relations_and_acl": "802c4045b0b8f075112d6130fea0bb67",
+    "indexes": "9612b85b3398a002e1c0f4ac79a7ab13",
+    "relations_and_acl": "b92bb4af3bff3c5916bda2f48d88b7bd",
     "column_acl": "90a808eecc2b159048b2e9821e9559f6",
     "view_definitions": "936f0d526cbcf48cf645c674736eb044",
-    "triggers": "8034a4585904327730aaf54492214fd9",
-    "function_security": "80de54a23a11d6f29e7f3893634b8717",
+    "triggers": "452c9c6877da5f8a43d8395a70cedd11",
+    "function_security": "2c1a79aac51dd2b00c2f37d6b10c47e8",
     "function_canonical_source": "eb4600f26f7ecd2635fdad01ae830a10",
     "policy_contracts": "197f5c8d6e3f802a7bf784f9fdb14262",
-    "cron_contracts": "f1c1cd047edac97fd406291089df43fb"
+    "cron_contracts": "01bf31da0dc030f3fcf744d2cb153fd9"
   },
   "key_function_prosrc_md5": {
     "public.cancel_order(uuid,uuid,text)": "501473a43b505df72bc803a7354b0e60",
@@ -123,6 +123,8 @@
     "anon_execute_guard_rejects_identity_swap": true,
     "column_fingerprint_rejects_identity_drift": true,
     "function_fingerprint_rejects_argument_default_drift": true,
+    "trigger_fingerprint_rejects_disabled_trigger": true,
+    "function_fingerprint_rejects_return_type_drift": true,
     "post_baseline_migration_replays_clean": true
   }
 }

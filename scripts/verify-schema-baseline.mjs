@@ -120,6 +120,13 @@ const REQUIRED_RESTORE_PROOFS = [
   // relying on a default were broken.
   'column_fingerprint_rejects_identity_drift',
   'function_fingerprint_rejects_argument_default_drift',
+  // And two more of the same shape, on the two catalogs where "present" and "in force" are
+  // different things. A trigger's activation mode and a function's result type both live
+  // outside the text those catalogs render, so a disabled `trg_guard_audit_log_immutable`
+  // and a `get_customer_summary` restored as `text` instead of `jsonb` each matched all
+  // twelve digests under the previous definitions.
+  'trigger_fingerprint_rejects_disabled_trigger',
+  'function_fingerprint_rejects_return_type_drift',
   'post_baseline_migration_replays_clean',
 ];
 {
@@ -313,8 +320,16 @@ const cronMatches = [...cronJobs.matchAll(
 if (cronMatches.length !== expectedCounts.operational_cron_jobs) {
   fail(`operational_cron_jobs expected ${expectedCounts.operational_cron_jobs}, found ${cronMatches.length}`);
 } else {
+  // `active` and `username` are part of the live fingerprint but are not written into the
+  // artifact: `cron.schedule` has nowhere to put them. It always creates an active job
+  // owned by the role running the restore, so those are the only two values this artifact
+  // can produce, and reconstructing them as literals is what makes the offline check
+  // faithful rather than approximate. That is also the point — if live ever holds a
+  // deactivated job, or one running as a role other than `postgres`, this comparison fails
+  // and the artifact format has to grow an `UPDATE cron.job` to express it. A baseline that
+  // silently restored such a job as active, under the wrong role, would be worse.
   const contract = cronMatches
-    .map(([, name, schedule, command]) => `${name}|${schedule}|${command}`)
+    .map(([, name, schedule, command]) => `${name}|${schedule}|t|postgres|${command}`)
     .sort()
     .join('\n');
   const contractHash = createHash('md5').update(contract).digest('hex');
