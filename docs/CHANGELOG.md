@@ -24,7 +24,9 @@ An incomplete JSON Unicode whitespace escape split across chunks is now carried 
 that delimiter check, matching the bounded direct detector. Standard and URL-safe Base64-wrapped
 packets are decoded by the same bounded structural scanner, including streaming quartet boundaries
 and unpadded final quanta. Pre-push remote discovery accepts slash-separated names that pass Git's
-own ref validation while rejecting malformed remote names without shell interpolation.
+own ref validation while rejecting malformed remote names without shell interpolation. Both
+containment workflows subscribe to pull-request `edited` events and explicitly require `main` as
+the current base, so retargeting an existing PR cannot skip the packet scan.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 

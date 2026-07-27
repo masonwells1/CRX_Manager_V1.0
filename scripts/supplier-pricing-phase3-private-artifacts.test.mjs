@@ -650,6 +650,8 @@ try {
   assert(ci.includes('needs: phase3-private-artifact-containment'));
   assert(ci.includes('needs: [phase3-private-artifact-containment, sql-validation]'));
   assert(ci.includes('permissions:\n  contents: read'));
+  assert(ci.includes('types: [opened, reopened, synchronize, edited]'));
+  assert(ci.includes("if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'"));
   const ciCheckoutBlocks = ci.split('uses: actions/checkout@v7').slice(1);
   assert.equal(ciCheckoutBlocks.length, 4, 'CI checkout count changed; review least-privilege settings');
   for (const block of ciCheckoutBlocks) {
@@ -672,6 +674,8 @@ try {
   assert(containmentJob.indexOf('node --version') < containmentJob.indexOf('git -C "$GITHUB_WORKSPACE" worktree add --detach'));
   assert.equal(GITHUB_EVENT_HANDOFF_PROTOCOL, 'phase3c-github-event-root-v2');
   assert(trustedTargetWorkflow.includes('pull_request_target:'));
+  assert(trustedTargetWorkflow.includes('types: [opened, reopened, synchronize, edited]'));
+  assert(trustedTargetWorkflow.includes("if: github.event.pull_request.base.ref == 'main'"));
   assert(trustedTargetWorkflow.includes('contents: read'));
   assert(trustedTargetWorkflow.includes('timeout-minutes: 12'));
   assert(trustedTargetWorkflow.includes('ref: ${{ github.event.pull_request.base.sha }}'));

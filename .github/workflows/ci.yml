@@ -8,6 +8,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, reopened, synchronize, edited]
 
 # CI only reads repository content and artifacts. It never needs a writable
 # GitHub token, and checkout must not retain one in the local Git config.
@@ -17,6 +18,7 @@ permissions:
 jobs:
   phase3-private-artifact-containment:
     name: Phase 3C Private Artifact Containment
+    if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     # This is intentionally the first content-processing job. It uses only
     # runner-bundled Node and Git: no candidate .nvmrc, package metadata, or
