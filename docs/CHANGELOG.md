@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-07-27 — RLS: inline role checks now require an active profile (DRAFTED, NOT APPLIED)
+## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 
 Closes the systemic gap that `20260726223520_vendors_inactive_admin_active_check.sql` explicitly
 deferred ("that systemic gap is tracked separately"). A live `pg_policy` sweep found **38** policies
@@ -14,7 +14,7 @@ account live today (a deactivated `sales_rep`, 216 session rows), and 7 of the 3
 `sales_rep`. Policies that call the `is_admin()` / `is_sales_rep()` / `is_driver()` /
 `is_applicator()` helpers were already safe — all four were confirmed live to check `is_active`.
 
-`supabase/migrations/20260727123055_inline_role_checks_require_active_profile.sql` is forward-only:
+`supabase/migrations/20260727145843_inline_role_checks_require_active_profile.sql` is forward-only:
 38 `ALTER POLICY` statements (never a `DROP` + `CREATE`) so each policy keeps its command, role list,
 permissiveness, `WITH CHECK` shape, and every non-role predicate — soft-delete scoping on `vendors`
 and `vendor_bills`, `bucket_id` scoping and the own-folder branch on the two `storage.objects`
@@ -110,7 +110,24 @@ proofs: `rls-security-reviewer` CHECK 9 bans *any* reference to the whole-defini
 and the comment explaining why the verification block reads `prosrc` named it literally. Reworded
 (comment-only; the 38 `ALTER`s and the verification block are byte-unchanged), re-proved on the
 rebuild, and the re-run returned **CLEAN from both `rls-security-reviewer` and
-`migration-drift-reviewer`**, minting both halves of the proof.
+`migration-drift-reviewer`**, minting both halves of the proof (queryHash
+`664a27a814db3eefc44c53947c95d291781abf9c1bb23e15e9050246802116ce`, verified to match the transmitted
+SQL).
+
+**APPLIED LIVE 2026-07-27** under Mason's conditional approval — "run the clean rebuild check first
+and we will ship it all" — once that check passed. Submitted as `20260727123055_…`; Supabase assigned
+ledger version **`20260727145843`** (ledger name `inline_role_checks_require_active_profile`); the disk
+file was B7-renamed to match. Post-apply live proof: ledger 911 → **912 rows**, residual inline-role
+gaps **38 → 0**, **48** policies now require an active profile, `storage_tightened = 4`. Behavioral
+proof by live role simulation inside a self-aborting `DO` block (`SET LOCAL ROLE authenticated` +
+`request.jwt.claims`, nothing mutated): the deactivated `sales_rep` now sees **0** vendors and **0**
+vendor_bills, while an active admin still sees **13** vendors and **4** vendor_bills.
+
+**The scope limit above still holds — this is not full account deactivation.** The six tables with a
+wide-open PERMISSIVE `true` SELECT policy still admit any logged-in user, and deactivation still
+neither revokes sessions nor blocks re-login. Both remain open in `docs/manual/KNOWN_ISSUES.md`.
+A third item is now logged: the July 19 schema baseline is ahead of its own recorded ledger
+high-water, so a from-zero rebuild cannot complete past migration 16 until it is refreshed.
 
 ## 2026-07-26 — Docs archive sweep (second batch) + local branch/worktree cleanup
 
