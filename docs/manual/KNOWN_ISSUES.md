@@ -22,9 +22,14 @@ claimed "flag OFF, migration NOT applied, NOT merged", which was wrong on all th
 - **Applied live**: `20260720213000_per_line_split_billing_schema`, `20260720214000_..._calculator`, and
   `20260720233000_..._save_rpc` are all in the live migration ledger.
 - **Flag is ON.** `app_settings.per_line_split_billing_enabled = 'true'`, set 2026-07-21 01:29 UTC — seven
-  minutes after the merge. Per `src/lib/splitBillingSetting.ts` that enables the whole per-line split UI, the
-  split-aware save path, the $0-suppression email gate, and the InvoiceDetail per-item lock. Note the shipped
-  code default is OFF; the live value was deliberately flipped on.
+  minutes after the merge. Note the shipped code default is OFF; the live value was deliberately flipped on.
+  **What the flag actually gates (verified 2026-07-27):** only the two readers of
+  `SPLIT_BILLING_SETTING_KEY` — the Sidebar nav entry (`src/components/layout/Sidebar.tsx`) and the split
+  editor page (`src/pages/FieldAppSplitInvoiceEditor.tsx`). The safeguards are **data-driven and persistent,
+  not flag-driven**: `isInvoiceEmailSuppressed()` checks `send_disposition === 'suppressed_zero_total'`
+  unconditionally, and `InvoiceDetail` locks a line whenever `billing_line_id` is present. So turning the flag
+  back OFF stops new split sets from being created — it does **not** strip protections from split invoices that
+  already exist. (The header comment in `src/lib/splitBillingSetting.ts` overstates the flag's reach.)
 - **Never exercised.** The field-app path (`save_field_app_split_invoice`) writes `field_app_billing_sets`,
   `field_app_billing_lines`, and `invoice_line_shares` — all three were empty as of 2026-07-27. The separate
   order-side path (`create_split_invoices_from_order` → `split_invoice_provenance`,
