@@ -191,7 +191,7 @@ already regenerated-and-verified 604-row aggregate-only packet. They are
 retained as evidence only and do not authorize a new capture or materialization
 run. The current loop completes only after final exact review of the containing
 correction, a recheck of current base/bootstrap
-`48bd1982c9553c2022fe96be771974ad699be12e` immediately before any push,
+`0e058804090b84f9a14024a6666021a271bb1f71` immediately before any push,
 required Ubuntu PR CI green with real CodeRabbit findings resolved, and a
 protected PR parked without merge for Mason's row-by-row review. Until then it
 remains `PARKED` and all 604 decisions remain `PENDING`.

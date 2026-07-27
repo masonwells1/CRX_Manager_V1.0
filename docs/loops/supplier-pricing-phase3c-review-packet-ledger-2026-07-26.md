@@ -10,7 +10,8 @@
 - Created from: `origin/main` /
   `052b2171821dc7ffd965b4edb4b6de4ef8fda511`
 - Current publication-reconciliation base and one-time CI bootstrap pin:
-  `48bd1982c9553c2022fe96be771974ad699be12e` (confirmed to lack the checker).
+  `0e058804090b84f9a14024a6666021a271bb1f71` (confirmed to lack both the
+  checker and trusted target workflow).
 - Final allowed state: `PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING`
 - Forbidden interpretation: neither this ledger nor an agent verdict approves
   Product classifications or authorizes a Stage C migration/live apply.
@@ -29,8 +30,8 @@ no secret use, no candidate checkout, no candidate dependency/config loading,
 and a 12-minute bound. The object fetch disables local Git hooks; candidate
 Git configuration/hooks cannot enter a commit object and are never loaded.
 
-This is intentionally a **future-PR guard**. PR #246's base
-`48bd1982c9553c2022fe96be771974ad699be12e` predates this workflow, so GitHub
+This is intentionally a **future-PR guard**. PR #246's current base
+`0e058804090b84f9a14024a6666021a271bb1f71` predates this workflow, so GitHub
 does not evaluate it for this PR. The existing `pull_request` job remains
 bootstrap/defense-in-depth only and cannot be represented as a trusted-base
 hard gate for PR #246. This record remains `PARKED`; it does not authorize a
@@ -46,6 +47,16 @@ an organization/enterprise required-workflow mechanism or equivalent external
 App/ruleset enforcement, followed by real post-activation proof. This record
 does not represent that external control as configured or PR #246 as protected
 by it.
+
+Current-base reconciliation was repeated normally: merge
+`c6c5ea3ae0e2af5c67f8c55d64d930877e5c6cc1` has parents
+`28425be514a8f30225189533c88b108d807b58bd` and
+`0e058804090b84f9a14024a6666021a271bb1f71` (`#245`), with no conflicts or
+containment-file overlap. `#245` changes only production-health skill guidance,
+Dependabot, changelog, and dependency metadata. Exact Git object checks prove
+that new base lacks both the checker and trusted target workflow, so the
+candidate-controlled bootstrap pin was updated to that exact SHA. The ruleset
+gap above remains unresolved; this reconciliation does not mark the PR ready.
 
 ### Reviewed packet commit `d38d41f63e68971f08f7158bf5a104af62d232aa` — PARKED
 
@@ -163,10 +174,17 @@ four existing lint warnings.
   so the one-time CI bootstrap pin is exactly `48bd1982c9553c2022fe96be771974ad699be12e`.
   Refetch and recheck it immediately before any push; final exact review of
   this correction's containing SHA remains pending.
+- Current branch reconciliation supersedes that active base: normal non-rebased
+  merge `c6c5ea3ae0e2af5c67f8c55d64d930877e5c6cc1` incorporated
+  `origin/main` `0e058804090b84f9a14024a6666021a271bb1f71` without conflicts.
+  That base lacks both containment guard files, so the active one-time
+  bootstrap pin is exactly `0e058804090b84f9a14024a6666021a271bb1f71`.
+  Refetch and recheck it immediately before any push; the external
+  trusted-workflow/ruleset enforcement gap remains `PARKED`.
 - Owner gate: Mason must not review the private owner sheet yet. All decisions
   remain `PENDING` across all 604 rows; no Product classification is approved. A final exact review
   of this documentation correction, a fresh `origin/main` refetch and current
-  `48bd1982c9553c2022fe96be771974ad699be12e` bootstrap-pin recheck immediately
+  `0e058804090b84f9a14024a6666021a271bb1f71` bootstrap-pin recheck immediately
   before any push, and an accepted protected PR with required checks — including
   Ubuntu PR CI — green and real CodeRabbit findings resolved remain mandatory.
   The PR is not open. Only afterward may Mason review every
@@ -526,7 +544,7 @@ recorded elsewhere in this historical ledger.
 The packet has been regenerated and verified. Mason must not review any private
 row yet: final exact review of this documentation correction, a fresh
 `origin/main` refetch and current
-`48bd1982c9553c2022fe96be771974ad699be12e` bootstrap-pin recheck immediately
+`0e058804090b84f9a14024a6666021a271bb1f71` bootstrap-pin recheck immediately
 before any push, and acceptance of the protected PR are first required. The PR is not open;
 required checks, including Ubuntu PR CI, must be green and any real CodeRabbit
 finding resolved before it is accepted. Only
@@ -539,8 +557,8 @@ live mutation, flag enablement, deploy, or merge.
 
 ## Closeout
 
-- `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, normal merge `a9817b05` of current main `48bd1982`, and exact `d38d41f`/`a2002c3c`/`a7506a01`/`3c156065`/`a10bad90`/`80741157` Sol/Luna/Claude review outcomes are recorded above; `3c156065` was non-final, `a10bad90` is a correction-review source, and `80741157` is the publication-reconciliation source; older packet hashes are invalidated.
-- `NOW:` obtain final exact review of this documentation correction, then re-fetch/recheck `origin/main` and current `48bd1982c9553c2022fe96be771974ad699be12e` bootstrap pin immediately before any push, and obtain a protected PR with required checks, including Ubuntu PR CI, green and real CodeRabbit findings resolved. The PR is not open; Mason must not begin private-sheet review.
+- `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, normal merges `a9817b05` of historical main `48bd1982` and `c6c5ea3` of current main `0e058804`, and exact `d38d41f`/`a2002c3c`/`a7506a01`/`3c156065`/`a10bad90`/`80741157` Sol/Luna/Claude review outcomes are recorded above; `3c156065` was non-final, `a10bad90` is a correction-review source, and `80741157` is the publication-reconciliation source; older packet hashes are invalidated.
+- `NOW:` obtain final exact review of this documentation correction, then re-fetch/recheck `origin/main` and current `0e058804090b84f9a14024a6666021a271bb1f71` bootstrap pin immediately before any push, and obtain a protected PR with required checks, including Ubuntu PR CI, green and real CodeRabbit findings resolved. The trusted-workflow/ruleset enforcement gap remains external and `PARKED`; Mason must not begin private-sheet review.
 - `REMAINING:` protected PR acceptance, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet. Any future model alias must record its resolved model truthfully; no literal Opus 5 review is claimed.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
 - `NEEDS MASON:` no action until the external gates complete; afterward, row-by-row private-sheet review and explicit packet approval.

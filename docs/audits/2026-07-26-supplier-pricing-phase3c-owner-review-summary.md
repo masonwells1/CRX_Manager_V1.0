@@ -135,11 +135,16 @@ otherwise clean.
 The feature branch reconciled current `origin/main`
 `48bd1982c9553c2022fe96be771974ad699be12e` through normal merge
 `a9817b05d35bc39e13bad94d7680181461b6fcb7` without rebasing or conflicts,
-preserving prior feature commits. That new main still lacks the containment
-checker, so the current one-time CI bootstrap pin is exactly `48bd1982c9553c2022fe96be771974ad699be12e`.
-It must be freshly refetched and rechecked immediately before any push. This
-correction still requires final exact review on its containing SHA, identified
-only by Git and PR metadata.
+preserving prior feature commits. That historical main lacked the containment
+checker. A later normal non-rebased merge
+`c6c5ea3ae0e2af5c67f8c55d64d930877e5c6cc1` incorporated current
+`origin/main` `0e058804090b84f9a14024a6666021a271bb1f71` (`#245`) without
+conflicts; exact Git object checks prove that base lacks both the checker and
+trusted target workflow, so the current one-time CI bootstrap pin is exactly
+`0e058804090b84f9a14024a6666021a271bb1f71`. The trusted-workflow/ruleset
+external enforcement gap remains `PARKED`. The base must be freshly refetched
+and rechecked immediately before any push. This correction still requires final
+exact review on its containing SHA, identified only by Git and PR metadata.
 
 ## Owner action and hard boundary
 
@@ -147,7 +152,7 @@ The packet has been regenerated and verified, but Mason must not begin the
 row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
 Product classification is approved. The remaining gate is final exact review of
 this documentation correction, a fresh `origin/main` refetch and the current
-`48bd1982c9553c2022fe96be771974ad699be12e` bootstrap-pin recheck immediately
+`0e058804090b84f9a14024a6666021a271bb1f71` bootstrap-pin recheck immediately
 before any push, and a protected PR accepted with its
 required checks — including Ubuntu PR CI — green and any real CodeRabbit finding
 resolved. The PR is not open. Only after those external gates are complete may

@@ -245,7 +245,7 @@ try {
     assert.equal(existsSync(path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME)), false);
     makeExternalJunction();
     const absentFinal = path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME);
-    throws(() => writePrivateArtifactAtomic(absentFinal, POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeFinalOpen: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|EBUSY|EPERM|EACCES');
+    throws(() => writePrivateArtifactAtomic(absentFinal, POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeFinalOpen: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|private artifact temporary path changed during publication|EBUSY|EPERM|EACCES');
     const externallyCreated = path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME);
     assert.equal(existsSync(externallyCreated), false, 'absent-final-target race created a file outside the approved root');
   } finally { rmSync(junctionParent, { recursive: true, force: true }); }
@@ -551,7 +551,7 @@ try {
   const containmentJob = ci.slice(ci.indexOf('phase3-private-artifact-containment:'), ci.indexOf('  sql-validation:'));
   assert(containmentJob.includes('node --version'));
   assert(containmentJob.includes('git -C "$GITHUB_WORKSPACE" worktree add --detach "$phase3_trusted_root" "$phase3_base"'));
-  assert(containmentJob.includes("phase3_bootstrap_base='48bd1982c9553c2022fe96be771974ad699be12e'"));
+  assert(containmentJob.includes("phase3_bootstrap_base='0e058804090b84f9a14024a6666021a271bb1f71'"));
   assert(containmentJob.includes('git -C "$GITHUB_WORKSPACE" cat-file -e "${phase3_base}:${phase3_checker_rel}"'));
   assert(containmentJob.includes('trusted base containment checker failed the candidate-root handoff protocol'));
   assert(containmentJob.includes('trusted base containment checker is missing outside the initial bootstrap; refusing candidate fallback'));
@@ -576,7 +576,7 @@ try {
   if (fixtureBash()) {
     const syntheticHandoffChecker = "import fs from 'node:fs'; if (!process.argv.includes('--github-event') || !process.argv.includes('--attest-github-handoff') || process.argv[process.argv.indexOf('--root') + 1] !== process.cwd()) process.exit(23); const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')); process.stdout.write(`PHASE3_PRIVATE_ARTIFACT_HANDOFF protocol=phase3c-github-event-root-v2 event_head=${event.pull_request.head.sha}`);\n";
     const bootstrapRepo = fixtureRepo('ci-bootstrap-base-without-checker'); const bootstrapBase = git(bootstrapRepo, ['rev-parse', 'HEAD']).trim(); const bootstrapChecker = path.join(bootstrapRepo, 'scripts', 'check-supplier-pricing-phase3-private-artifacts.mjs'); mkdirSync(path.dirname(bootstrapChecker)); writeFileSync(bootstrapChecker, syntheticHandoffChecker); git(bootstrapRepo, ['add', 'scripts/check-supplier-pricing-phase3-private-artifacts.mjs']); git(bootstrapRepo, ['commit', '--quiet', '-m', 'introduce synthetic containment checker']); const bootstrapHead = git(bootstrapRepo, ['rev-parse', 'HEAD']).trim(); const bootstrapEvent = path.join(temp, 'ci-bootstrap-event.json'); writeFileSync(bootstrapEvent, JSON.stringify({ pull_request: { base: { sha: bootstrapBase }, head: { sha: bootstrapHead } } }));
-    const simulatedBootstrapShell = containmentShell.replace("phase3_bootstrap_base='48bd1982c9553c2022fe96be771974ad699be12e'", `phase3_bootstrap_base='${bootstrapBase}'`);
+    const simulatedBootstrapShell = containmentShell.replace("phase3_bootstrap_base='0e058804090b84f9a14024a6666021a271bb1f71'", `phase3_bootstrap_base='${bootstrapBase}'`);
     const bootstrapRun = runPullRequestContainmentShell(bootstrapRepo, bootstrapEvent, simulatedBootstrapShell);
     assert.equal(bootstrapRun.status, 0, `${bootstrapRun.stdout}${bootstrapRun.stderr}`);
     const incompatibleRepo = fixtureRepo('ci-base-checker-incompatible'); const incompatibleChecker = path.join(incompatibleRepo, 'scripts', 'check-supplier-pricing-phase3-private-artifacts.mjs'); mkdirSync(path.dirname(incompatibleChecker)); writeFileSync(incompatibleChecker, "console.log('CI_INCOMPATIBLE_BASE_CHECKER_RAN');\n"); git(incompatibleRepo, ['add', 'scripts/check-supplier-pricing-phase3-private-artifacts.mjs']); git(incompatibleRepo, ['commit', '--quiet', '-m', 'synthetic incompatible base checker']); const incompatibleBase = git(incompatibleRepo, ['rev-parse', 'HEAD']).trim(); writeFileSync(incompatibleChecker, "console.log('CI_CANDIDATE_FALLBACK_MUST_NOT_RUN');\n"); git(incompatibleRepo, ['add', 'scripts/check-supplier-pricing-phase3-private-artifacts.mjs']); git(incompatibleRepo, ['commit', '--quiet', '-m', 'synthetic candidate checker']); const incompatibleHead = git(incompatibleRepo, ['rev-parse', 'HEAD']).trim(); const incompatibleEvent = path.join(temp, 'ci-incompatible-event.json'); writeFileSync(incompatibleEvent, JSON.stringify({ pull_request: { base: { sha: incompatibleBase }, head: { sha: incompatibleHead } } }));
