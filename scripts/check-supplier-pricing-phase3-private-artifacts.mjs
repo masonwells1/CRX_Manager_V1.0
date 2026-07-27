@@ -23,10 +23,11 @@ export const MAX_STRUCTURAL_SCAN_CANDIDATES = 100_000;
 // practical headroom without permitting a pathological number of diff-tree
 // subprocesses before the history path budget can engage.
 export const MAX_HISTORY_COMMITS = 4_096;
-// The PR workflow recognizes this trusted-base capability marker before it
-// hands the candidate checkout to this checker. It is deliberately a stable
-// protocol marker rather than an inferred CLI feature.
-export const GITHUB_EVENT_HANDOFF_PROTOCOL = 'phase3c-github-event-root-v1';
+// The PR workflow behaviorally verifies this protocol from the trusted base
+// checker before it hands that checker the candidate checkout. A source-text
+// marker is not a protocol and is never used as one.
+export const GITHUB_EVENT_HANDOFF_PROTOCOL = 'phase3c-github-event-root-v2';
+export const GITHUB_EVENT_HANDOFF_FLAG = '--attest-github-handoff';
 const WORKTREE_SCAN_CHUNK_BYTES = 64 * 1024;
 const UTF16_REPLAY_BYTES = 4096;
 const MAX_JSON_NODES = 1_000_000;
@@ -40,6 +41,7 @@ const PRODUCT_ROW_KEYS = ['id', 'sku', 'product_name', 'pricing_version', 'updat
 const MANIFEST_ROW_KEYS = ['product_id', 'current_product', 'proposed_phase3', 'field_decisions', 'row_sha256'];
 const STRUCTURAL_KEY_GROUPS = [SNAPSHOT_ROOT_KEYS, MANIFEST_ROOT_KEYS, PRODUCT_ROW_KEYS, MANIFEST_ROW_KEYS];
 const STREAM_TAIL_CHARS = Math.max(4096, OWNER_DECISION_HEADERS.join(',').length * 4);
+const OWNER_HEADER_RECORD_DELIMITER_RE = /[\r\n\v\f\u0085\u2028\u2029\u001c-\u001f]/u;
 
 /**
  * Husky and Git can export GIT_DIR/GIT_INDEX_FILE/etc. Those variables would
@@ -177,7 +179,7 @@ function isOwnerDecisionHeaderLine(line) {
   return cells.length === OWNER_DECISION_HEADERS.length && cells.every((cell, index) => cell === OWNER_DECISION_HEADERS[index]);
 }
 function ownerDecisionHeaderReason(text) {
-  return text.split(/\r?\n/).some(isOwnerDecisionHeaderLine) ? 'owner decision sheet CSV header structure' : null;
+  return text.split(OWNER_HEADER_RECORD_DELIMITER_RE).some(isOwnerDecisionHeaderLine) ? 'owner decision sheet CSV header structure' : null;
 }
 /** Detect packet structure, not canonical whitespace or a filename. */
 export function structuralPrivateArtifactReason(bytes) {
@@ -280,7 +282,7 @@ function createOwnerHeaderStreamDetector() {
   return {
     feed(text) {
       for (const character of text) {
-        if (character === '\n' || character === '\u2028' || character === '\u2029') { finishLine(); continue; }
+        if (OWNER_HEADER_RECORD_DELIMITER_RE.test(character)) { finishLine(); continue; }
         // Header names contain no whitespace or quote characters. Compacting
         // only those legal CSV wrappers keeps arbitrary padding bounded while
         // retaining every meaningful byte in the exact ordered comparison.
@@ -415,6 +417,11 @@ function createStructuralByteStreamScanner() {
       return reason;
     },
   };
+}
+export function structuralPrivateArtifactStreamReason(chunks) {
+  const scanner = createStructuralByteStreamScanner();
+  for (const chunk of chunks) scanner.feed(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return scanner.finish();
 }
 function assertStableWorktreeCandidate(root, repoPath, file, baseline, fd, cache = null) {
   const entry = lstatSync(file);
@@ -600,7 +607,7 @@ function worktreeContentViolations(root, execute, budget) {
 function commitsForRange(range, root, execute) {
   const [base, head, ...extra] = String(range).split('..');
   if (extra.length || !base || !head) throw new Error('private Phase 3C history containment requires an explicit base..head range');
-  return gitLines(['rev-list', '--reverse', `${assertCommitSha(base, 'base')}..${assertCommitSha(head, 'head')}`], root, execute);
+  return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, `${assertCommitSha(base, 'base')}..${assertCommitSha(head, 'head')}`], root, execute);
 }
 function changedPathsForCommit(commit, root, execute) {
   // -m compares a merge result with every parent, so a conflict-resolution
@@ -674,7 +681,7 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
 
 function outgoingCommitsForNewRemoteRef(localSha, remoteName, root, execute) {
   if (typeof remoteName !== 'string' || !/^[A-Za-z0-9._-]+$/.test(remoteName)) throw new Error('private Phase 3C pre-push containment requires a safe remote name');
-  return gitLines(['rev-list', '--reverse', assertCommitSha(localSha, 'local'), `--not`, `--remotes=${remoteName}`], root, execute);
+  return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local'), `--not`, `--remotes=${remoteName}`], root, execute);
 }
 export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, remoteName, stdin } = {}) {
   const updates = String(stdin ?? '').split(/\r?\n/).filter(Boolean);
@@ -705,6 +712,9 @@ function canonicalContainmentRoot(root, expectedHead, execute) {
 function eventCommitIsAvailable(sha, root, execute) {
   try { return String(gitOutput(['cat-file', '-t', sha], root, execute)).trim() === 'commit'; } catch (_error) { return false; }
 }
+export function githubEventHandoffAttestation(eventHead) {
+  return `PHASE3_PRIVATE_ARTIFACT_HANDOFF protocol=${GITHUB_EVENT_HANDOFF_PROTOCOL} event_head=${assertCommitSha(eventHead, 'event')}`;
+}
 export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, environment = process.env, readFile = readFileSync } = {}) {
   const eventPath = environment.GITHUB_EVENT_PATH;
   if (typeof eventPath !== 'string' || !path.isAbsolute(eventPath)) throw new Error('private Phase 3C CI containment requires GITHUB_EVENT_PATH');
@@ -719,30 +729,32 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
     // head, and Git's explicit base..head range remains the requested scope.
     for (const sha of [base, head]) if (!eventCommitIsAvailable(sha, root, execute)) throw new Error('private Phase 3C CI containment event commit is unavailable');
     const candidateRoot = canonicalContainmentRoot(root, head, execute);
-    return checkPrivateArtifactContainment({ root: candidateRoot, execute, ranges: [`${base}..${head}`] });
+    return { ...await checkPrivateArtifactContainment({ root: candidateRoot, execute, ranges: [`${base}..${head}`] }), github_event_head: head };
   }
   if (name === 'push') {
     const base = assertCommitSha(event?.before, 'push base');
     const head = assertCommitSha(event?.after, 'push head');
     for (const sha of [base, head]) if (sha !== ZERO_SHA && !eventCommitIsAvailable(sha, root, execute)) throw new Error('private Phase 3C CI containment event commit is unavailable');
     const candidateRoot = canonicalContainmentRoot(root, head, execute);
-    return checkPrivateArtifactContainment({ root: candidateRoot, execute, ranges: [`${base}..${head}`] });
+    return { ...await checkPrivateArtifactContainment({ root: candidateRoot, execute, ranges: [`${base}..${head}`] }), github_event_head: head };
   }
   throw new Error(`private Phase 3C CI containment does not support GitHub event ${String(name)}`);
 }
 
 function parseCli(args) {
-  const result = { ranges: [], prePushRemote: null, githubEvent: false, root: null };
+  const result = { ranges: [], prePushRemote: null, githubEvent: false, root: null, attestGitHubHandoff: false };
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === '--range') { const value = args[++index]; if (!value) throw new Error('disclosure-safe usage: --range requires base..head'); result.ranges.push(value); continue; }
     if (token === '--pre-push') { if (result.prePushRemote !== null) throw new Error('disclosure-safe usage: duplicate --pre-push'); const value = args[++index]; if (!value) throw new Error('disclosure-safe usage: --pre-push requires remote name'); result.prePushRemote = value; continue; }
     if (token === '--github-event') { if (result.githubEvent) throw new Error('disclosure-safe usage: duplicate --github-event'); result.githubEvent = true; continue; }
+    if (token === GITHUB_EVENT_HANDOFF_FLAG) { if (result.attestGitHubHandoff) throw new Error('disclosure-safe usage: duplicate GitHub handoff attestation'); result.attestGitHubHandoff = true; continue; }
     if (token === '--root') { if (result.root !== null) throw new Error('disclosure-safe usage: duplicate --root'); const value = args[++index]; if (typeof value !== 'string' || !path.isAbsolute(value)) throw new Error('disclosure-safe usage: --root requires an absolute path'); result.root = value; continue; }
     throw new Error('disclosure-safe usage: unknown containment option');
   }
   if ((result.prePushRemote !== null ? 1 : 0) + Number(result.githubEvent) > 1) throw new Error('disclosure-safe usage: pre-push and GitHub-event modes are exclusive');
   if (result.root !== null && !result.githubEvent) throw new Error('disclosure-safe usage: --root requires --github-event');
+  if (result.attestGitHubHandoff && (!result.githubEvent || result.root === null)) throw new Error('disclosure-safe usage: GitHub handoff attestation requires --github-event and --root');
   return result;
 }
 async function main() {
@@ -752,7 +764,8 @@ async function main() {
     : cli.prePushRemote !== null
       ? await checkPrePushPrivateArtifactContainment({ remoteName: cli.prePushRemote, stdin: readFileSync(0, 'utf8') })
       : await checkPrivateArtifactContainment({ ranges: cli.ranges });
-  console.log(`PHASE3_PRIVATE_ARTIFACT_CONTAINMENT_PASS checked_paths=${result.checked_path_count} checked_commits=${result.checked_commit_count} scanned_candidates=${result.scanned_candidate_count} scanned_logical_bytes=${result.scanned_logical_bytes}`);
+  if (cli.attestGitHubHandoff) console.log(githubEventHandoffAttestation(result.github_event_head));
+  else console.log(`PHASE3_PRIVATE_ARTIFACT_CONTAINMENT_PASS checked_paths=${result.checked_path_count} checked_commits=${result.checked_commit_count} scanned_candidates=${result.scanned_candidate_count} scanned_logical_bytes=${result.scanned_logical_bytes}`);
 }
 
 if (process.argv[1] && path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1])) main().catch(error => { console.error(error.message); process.exitCode = 1; });

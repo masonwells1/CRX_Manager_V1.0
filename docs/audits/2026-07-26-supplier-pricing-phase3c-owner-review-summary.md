@@ -18,6 +18,26 @@ data, or approve any owner decision. The mission's earlier six-cycle cap
 remains recorded in the durable ledger; this is a separate post-PARK correction
 pass, not a claim that the cap was changed.
 
+The current rejected implementation is
+`3695f42e3ec6f57dae4d07d534a4a191bfa2a46d`, whose immutable parent is
+`2adff51bfa27ea50274230845bb4c89f4037313e`. Graphify at that exact SHA reports
+8,382 nodes and 17,446 edges. Independent Sol returned `FIX` for the owner CSV
+record-boundary bypass only. Luna `gpt-5.6-luna` session
+`019fa2e4-9bc8-71a3-a64a-a5baef795e78` returned `FIX` for CI trusting text
+rather than behavior, history enumeration not bounded at `rev-list`, and final
+parent validation leaving an atomic-publication race, and stale ledger/summary
+bookkeeping. The bounded replacement uses shared explicit
+record delimiters, behavioral protocol/event-head attestation, a 4,097-result
+`rev-list` request before parsing, and a stable-parent relative-basename
+publication lease. It remains tooling-only and does not access private rows,
+classify Products, create Stage C SQL, change flags, or change live state.
+
+For truthful provenance, `3695f42e` is the rejected `implementation_sha` and
+also the `current_head_at_start` for this mutable correction. The worktree has
+no self-SHA. A future frozen commit must name `3695f42e` as parent; only the
+SHA Git creates may receive fresh graph/proof/review claims. Earlier
+“uncommitted correction” wording below is historical, not current status.
+
 The later exact candidate
 `2c56085d1ecee3ca223efb3ec0da58fa6ef858db` is also rejected. Fresh
 independent Sol found that private JSON could hide behind an ordinary prefix,
@@ -30,7 +50,7 @@ focused synthetic proof and a 51,810-path local containment pass, but it still
 requires a frozen exact SHA and fresh independent reviews. The historical
 packet hashes below remain invalidated throughout.
 
-The current rejected candidate is
+The prior rejected candidate was
 `2adff51bfa27ea50274230845bb4c89f4037313e` (base
 `052b2171821dc7ffd965b4edb4b6de4ef8fda511`). Graphify was refreshed at that
 exact rejected HEAD (8,360 nodes / 17,396 edges). Luna `gpt-5.6-luna` session
@@ -47,15 +67,13 @@ history-path ceiling before per-path tree resolution, and temp-file atomic
 replace. It does not access private artifacts or Product rows, classify a
 Product, create Stage C SQL, enable cost basis, or change live state.
 
-The correction is still uncommitted, so it has no truthful final SHA yet. A
-commit can record the rejected SHA and its parent; only Git can create the new
-SHA, which must then receive fresh exact-SHA proof and review. The new
-workflow also cannot truthfully claim it protected the PR that first
-introduces it. Exact base `052b2171821dc7ffd965b4edb4b6de4ef8fda511` has no
-checker, so this introducing PR uses only its exact-base-SHA-gated, committed
-head-blob/path-verified candidate checker. That bootstrap coverage is
-candidate-controlled. Post-bootstrap PRs use their trusted compatible base
-checker; a missing or incompatible future base fails closed. Status remains
+That prior correction was frozen as rejected `3695f42e`; its old bootstrap
+description is historical only. Exact base
+`052b2171821dc7ffd965b4edb4b6de4ef8fda511` had no checker, so the introducing
+PR used its exact-base-SHA-gated, committed-head-blob/path-verified candidate
+checker. The current behavioral protocol replaces textual compatibility;
+post-bootstrap PRs use their trusted compatible base checker, while a missing
+or incompatible future base fails closed. Status remains
 `PARKED — TOOLING CORRECTION; PACKET REGENERATION REQUIRED`.
 
 ## Unattended v2 binding sequence

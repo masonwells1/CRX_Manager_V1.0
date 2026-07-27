@@ -15,6 +15,47 @@
 
 ## Post-review tooling correction and packet invalidation — 2026-07-27
 
+### Current rejected implementation `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d` — Terra correction cycle active
+
+`3695f42e3ec6f57dae4d07d534a4a191bfa2a46d` is rejected. Its immutable parent
+is `2adff51bfa27ea50274230845bb4c89f4037313e`; `3695f42e` is the implementation
+SHA for the prior correction, not a passing release. Current branch HEAD at
+the start of this correction is also `3695f42e`. The mutable worktree is not
+an implementation SHA and must not be described as one.
+
+- Graphify was refreshed at exact rejected `3695f42e`: 8,382 nodes and 17,446
+  edges. It confirmed the GitHub-event containment entry point, its packet-test
+  caller, and the atomic writer's capture/manifest/owner-sheet consumers;
+  current source remains the authority for these edges.
+- Independent Sol returned `FIX`: owner CSV headers could cross CR/LF/VT/FF,
+  NEL, U+2028/U+2029, and C0 record boundaries that direct and streaming
+  detectors handled differently.
+- Luna `gpt-5.6-luna`, session
+  `019fa2e4-9bc8-71a3-a64a-a5baef795e78`, returned `FIX`: textual CI
+  compatibility could accept a dead marker, `rev-list` materialized an
+  unbounded history before rejection, and final parent-path revalidation left
+  a publication TOCTOU, and ledger/summary bookkeeping was stale. Neither
+  review authorizes a packet,
+  Product classification, Stage C SQL, flag change, private-artifact access,
+  or live action.
+- Accepted correction disposition: one explicit CSV record-delimiter set used
+  by direct and streaming scanners; behavioral GitHub handoff attestation from
+  the trusted checker; `rev-list --max-count=4097` before commit-list parsing;
+  and a nonreentrant stable-parent CWD lease with relative basename-only final
+  publication. Regression coverage includes UTF-8/UTF-16 owner headers across
+  staged, ignored, deleted-history, and chunk-boundary paths; dead/comment-only
+  and root-ignoring CI checkers; bounded range/new-ref argv; and a final-race
+  Windows/POSIX publication fixture.
+- SHA ledger rule: `implementation_sha` names only an immutable Git object.
+  Until the next commit exists, this correction is recorded as
+  `implementation_base_sha=3695f42e...` and `current_head_at_start=3695f42e...`.
+  The next commit must record parent `3695f42e...`; only Git's resulting SHA
+  may be used for exact-SHA graph/proof/review claims. Historical mentions of
+  an “uncommitted correction” below describe their original cycles only.
+
+`PARKED — TOOLING CORRECTION; HISTORICAL PACKET REGENERATION REQUIRED` remains
+the only status until a frozen successor has fresh exact-SHA proof and reviews.
+
 ### Exact rejected candidate `2adff51bfa27ea50274230845bb4c89f4037313e` — SAFE PREP correction pending
 
 This candidate is rejected. The private packet remains historical and
@@ -52,11 +93,10 @@ SQL, changes the flag, accesses private rows, or changes a live system.
   the CI workflow uses the exact trusted-base checker only when it contains
   the declared handoff protocol. A present-but-incompatible checker, or a
   missing checker on any later base, fails closed rather than falling back.
-- SHA bookkeeping truth: this uncommitted correction cannot truthfully name
-  its own final SHA. The next frozen commit may record this rejected SHA and
-  its own parent/base evidence, while the final exact SHA is recorded only
-  after Git creates it and all reviews are rerun. No workflow claim says this
-  not-yet-merged containment workflow protected its own introducing PR.
+- Historical SHA bookkeeping: this earlier correction was later frozen as the
+  rejected implementation `3695f42e`. Its introducing-workflow limitation is
+  retained as historical context; current-cycle SHA bookkeeping is defined in
+  the `3695f42e` section above.
 
 `PARKED — TOOLING CORRECTION; HISTORICAL PACKET REGENERATION REQUIRED` until
 the focused/full proof, fresh exact-SHA Graphify, Luna, independent-Sol, and
