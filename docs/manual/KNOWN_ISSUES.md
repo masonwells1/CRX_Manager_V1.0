@@ -26,9 +26,20 @@ Fix drafted and committed but **deliberately not applied**:
 `claude/rls-inline-role-require-active`, commit `4fcf2c90`, migration-history row 827. Proven by a
 full-file dry run on live inside `BEGIN … ROLLBACK` (all 38 ALTERs applied, verification block
 passed, residual gaps 38 → 0, rolled back, live state re-read unchanged) and adversarially reviewed
-by Codex `gpt-5.6-sol` at high effort — verdict SHIP-WITH-FOLLOWUPS, no blockers. It needs Mason's
-explicit OK plus a `write-apply-proofs.mjs` gate run before apply. **Do not re-discover or re-audit
-this — the enumeration and the migration already exist.**
+by Codex `gpt-5.6-sol` at high effort — verdict SHIP-WITH-FOLLOWUPS, no blockers. **Do not
+re-discover or re-audit this — the enumeration and the migration already exist.**
+
+**2026-07-27 — both remaining preconditions are now met.** The clean-rebuild replay was run on a
+disposable PostgreSQL 17.6 stack built from `supabase/baselines/`: all 38 policy names present
+(38/38, 0 missing), the file applies cleanly, and its verification block reports `38 policies now
+require an active profile` with 0 residual gaps. The replay stalls at 16 of 50 on a **pre-existing
+baseline defect unrelated to this migration** — the July 19 baseline's schema is ahead of its own
+recorded ledger high-water, so it carries function bodies later than migration 16's md5 precondition
+expects. That does not weaken the proof: the remaining 35 migrations were checked statically and none
+creates, drops, or alters any of the 38 targets. **Refreshing the baseline so a from-zero replay
+completes is a separate open item.** The `write-apply-proofs.mjs` gate now returns CLEAN from both
+`rls-security-reviewer` and `migration-drift-reviewer` — its first run correctly blocked on a CHECK 9
+comment reference, since fixed (comment-only).
 
 Two related items are deliberately OUT of that migration's scope and remain open:
 

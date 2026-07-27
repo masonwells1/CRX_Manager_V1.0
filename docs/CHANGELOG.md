@@ -69,11 +69,48 @@ completeness query independently confirmed the target list is exactly right: 38 
 25 with a `USING` gap and 18 with a `WITH CHECK` gap, overlapping on the 5 two-clause policies
 (25 + 18 − 5 = 38), matching the migration's 4 `UPDATE/qw` + 1 `ALL/qw`.
 
-**Not applied to production.** Awaiting Mason's explicit OK and the migration-apply-guard proof. The
-one open follow-up is a disposable local `supabase db reset` replay to prove the 38 policy names all
-exist on a clean rebuild (all 38 were confirmed present in migration history — 36 in the July 19
-baseline's public-schema artifact and both storage policies in its overlay — but the rebuild itself
-has not been run; no read-only production query can prove fresh-environment replay).
+**Clean-rebuild replay — the last open follow-up — is now CLOSED (2026-07-27).** A disposable
+PostgreSQL 17.6 stack was built from `supabase/baselines/` in `manifest.json.restore_order` (861
+ledger rows, high-water `20260719092832`), then post-baseline migrations were replayed from **git
+blobs** rather than the worktree. Two deviations from `supabase/baselines/README.md` were forced and
+are recorded here rather than papered over: the CLI `db push` step was replaced by an equivalent
+psql replay that applies each file *and* records its version/name (`--db-url` forces TLS and
+`--local` refuses a restored ledger holding versions with no local files), and the replay reads git
+blobs because `core.autocrlf=true` checks migrations out with CRLF, which breaks the byte-exact
+function-body md5 preconditions several historical migrations assert. Local default privileges also
+had to be revoked from `anon`/`authenticated`/`service_role` for both `postgres` and `supabase_admin`
+**before** the restore, since the baseline dump itself creates the tables the split-claim postflight
+audits; production already holds zero such grants.
+
+The replay stops at 16 of 50 on `PRECONDITION: reviewed public RPC drifted:
+public.create_invoice_from_order(...)`. **Root cause is a pre-existing baseline defect, not this
+migration:** the July 19 baseline's schema is *ahead* of its own recorded ledger high-water — its
+public-schema artifact contains `split_invoice_creation_claims`, a table introduced by
+`20260720213000` — so it carries function bodies later than migration 16 expects. Tracked as a
+separate item; refreshing the baseline is out of scope here.
+
+That stall does not weaken the proof, because the remaining 35 migrations were checked statically and
+**none of them creates, drops, or alters any of the 38 target policies.** The only two hits are
+substring matches on `vendors_select_inactive_admin`, a different policy. The one real difference
+between the rebuild-at-16 and production is that `20260726190515` **drops** `vendors_insert` and
+`vendors_update` outright (vendor writes moved to the `save_vendor` / `delete_vendor` RPCs) — which is
+exactly why the rebuild flagged 40 inline-role gaps where production flags 38.
+
+Result: all 38 policy names were confirmed present on the rebuild (`total 38 | present 38 | missing
+0`). Applying the migration to the rebuild **as-is first** was a useful negative test — it correctly
+refused with `residual inline role check public.vendors.vendors_insert (WITH CHECK clause)` and rolled
+back atomically, proving the repo-wide residual sweep is not merely a restatement of the target list.
+After replaying that migration's verbatim `DROP POLICY` pair to align vendors with production, the
+full file applied cleanly: 38 `ALTER POLICY`, `require_active verification passed: 38 policies now
+require an active profile`, residual inline-role gaps **0**, and 47 policies now gating on
+`is_active`.
+
+**Migration-apply gate.** The first `write-apply-proofs.mjs` run returned **BLOCKERS** and minted no
+proofs: `rls-security-reviewer` CHECK 9 bans *any* reference to the whole-definition catalog helper,
+and the comment explaining why the verification block reads `prosrc` named it literally. Reworded
+(comment-only; the 38 `ALTER`s and the verification block are byte-unchanged), re-proved on the
+rebuild, and the re-run returned **CLEAN from both `rls-security-reviewer` and
+`migration-drift-reviewer`**, minting both halves of the proof.
 
 ## 2026-07-26 — Docs archive sweep (second batch) + local branch/worktree cleanup
 

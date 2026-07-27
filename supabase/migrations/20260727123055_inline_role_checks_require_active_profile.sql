@@ -639,9 +639,10 @@ BEGIN
   -- Counting first matters: a query that only looks for BAD rows passes
   -- vacuously if a helper has been dropped entirely.
   --
-  -- Read via prosrc, not pg_get_functiondef — the latter is banned by
-  -- scripts/validate-sql-migrations.sh and that guard's exemption list is
-  -- deliberately kept at zero headroom. NOTE this is a textual tripwire, not a
+  -- Read via prosrc, never via the whole-definition catalog helper: that
+  -- helper is banned by scripts/validate-sql-migrations.sh and that guard's
+  -- exemption list is deliberately kept at zero headroom, so it is not named
+  -- here either. NOTE this is a textual tripwire, not a
   -- semantic proof: it would not catch a helper that delegates its active check
   -- to another function. It is here to detect regression, not to certify.
   SELECT count(*) INTO v_helpers
