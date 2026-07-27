@@ -1009,10 +1009,67 @@ function outgoingCommitsForNewRemoteRef(localSha, remoteName, root, execute) {
   }
   return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local'), `--not`, `--remotes=${remoteName}`], root, execute);
 }
+function peeledCommitSha(objectSha, root, execute) {
+  try {
+    return assertCommitSha(String(gitOutput(['rev-parse', '--verify', `${assertCommitSha(objectSha, 'local')}^{commit}`], root, execute)).trim(), 'local');
+  } catch (_error) {
+    return null;
+  }
+}
+async function inspectOutgoingRefObject({ localRef, localSha, root, execute, budget }) {
+  const queue = [{ sha: assertCommitSha(localSha, 'local'), depth: 0 }];
+  const seen = new Set();
+  const violations = [];
+  let commit = null;
+  while (queue.length) {
+    const { sha, depth } = queue.shift();
+    if (seen.has(sha)) continue;
+    seen.add(sha);
+    if (depth > 16) throw new Error('private Phase 3C pre-push containment tag-depth cap exceeded');
+    const type = String(gitOutput(['cat-file', '-t', sha], root, execute)).trim();
+    if (type === 'commit') {
+      commit ??= sha;
+      const bytes = gitOutput(['cat-file', 'commit', sha], root, execute, { encoding: null });
+      budget.admit(bytes.length);
+      const reason = structuralPrivateArtifactReason(bytes);
+      if (reason) violations.push({ repoPath: localRef, reason });
+      continue;
+    }
+    if (type === 'tag') {
+      const bytes = gitOutput(['cat-file', 'tag', sha], root, execute, { encoding: null });
+      budget.admit(bytes.length);
+      const reason = structuralPrivateArtifactReason(bytes);
+      if (reason) violations.push({ repoPath: localRef, reason });
+      const headerEnd = bytes.indexOf(Buffer.from('\n\n'));
+      const headers = bytes.subarray(0, headerEnd === -1 ? bytes.length : headerEnd).toString('ascii');
+      const target = /^object ([0-9a-f]{40})$/m.exec(headers)?.[1];
+      if (!target) throw new Error('private Phase 3C pre-push containment received a malformed tag object');
+      queue.push({ sha: target, depth: depth + 1 });
+      continue;
+    }
+    if (type === 'blob') {
+      const key = `outgoing-ref:${localRef}:${sha}`;
+      const reasons = await scanGitBlobEntries([{ repoPath: localRef, spec: sha, key }], root, budget);
+      const reason = reasons.get(key);
+      if (reason) violations.push({ repoPath: localRef, reason });
+      continue;
+    }
+    if (type === 'tree') {
+      const candidate = await candidateCommitTreeViolations(sha, root, execute, budget);
+      violations.push(...candidate.violations.map(item => ({ ...item, repoPath: `${localRef}:${item.repoPath.slice(item.repoPath.indexOf(':') + 1)}` })));
+      continue;
+    }
+    throw new Error('private Phase 3C pre-push containment received an unsupported Git object');
+  }
+  return { violations, commit };
+}
 export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, remoteName, stdin } = {}) {
   const updates = String(stdin ?? '').split(/\r?\n/).filter(Boolean);
+  if (updates.length > MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error('private Phase 3C containment candidate-count cap exceeded');
   const ranges = [];
   const commits = [];
+  const outgoingBudget = new ScanBudget();
+  const objectViolations = [];
   for (const update of updates) {
     const fields = update.trim().split(/\s+/);
     if (fields.length !== 4) throw new Error('private Phase 3C pre-push containment received malformed ref update');
@@ -1020,8 +1077,19 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     if (!localRef.startsWith('refs/') || !remoteRef.startsWith('refs/')) throw new Error('private Phase 3C pre-push containment received malformed ref update');
     if (localSha === ZERO_SHA) continue; // deletion exports no new blob
     assertCommitSha(localSha, 'local');
-    if (remoteSha === ZERO_SHA) commits.push(...outgoingCommitsForNewRemoteRef(localSha, remoteName, root, execute));
-    else ranges.push(`${assertCommitSha(remoteSha, 'remote')}..${localSha.toLowerCase()}`);
+    const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });
+    objectViolations.push(...inspected.violations);
+    if (inspected.commit === null) continue;
+    if (remoteSha === ZERO_SHA) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, remoteName, root, execute));
+    else {
+      const remoteCommit = peeledCommitSha(assertCommitSha(remoteSha, 'remote'), root, execute);
+      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, remoteName, root, execute));
+      else ranges.push(`${remoteCommit}..${inspected.commit}`);
+    }
+  }
+  if (objectViolations.length) {
+    const summary = [...new Map(objectViolations.map(item => [`${item.repoPath}\0${item.reason}`, item])).values()];
+    throw new Error(`private Phase 3C artifact containment failure: ${summary.map(item => `${item.repoPath} (${item.reason})`).join(', ')}`);
   }
   return checkPrivateArtifactContainment({ root, execute, ranges, commits });
 }

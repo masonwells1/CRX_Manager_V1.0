@@ -31,6 +31,8 @@ operator-controlled paths now fail closed; only explicit tool-owned dependency, 
 browser-report, and Graphify roots retain the archive exception needed for ordinary generated files.
 Base64 packet detection now also inspects bounded encoded tokens inside JSON/data-URI wrappers and
 line-wrapped PEM bodies instead of requiring the entire candidate file to use the transfer alphabet.
+Pre-push containment now type-checks outgoing ref objects, scans annotated-tag messages and direct
+blob targets, peels bounded tag chains, and recursively inspects tree targets before accepting tags.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 
