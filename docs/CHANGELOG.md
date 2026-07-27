@@ -129,6 +129,19 @@ neither revokes sessions nor blocks re-login. Both remain open in `docs/manual/K
 A third item is now logged: the July 19 schema baseline is ahead of its own recorded ledger
 high-water, so a from-zero rebuild cannot complete past migration 16 until it is refreshed.
 
+## 2026-07-27 — Production health and dependency-noise hardening
+
+- Updated the production spot-check workflow to verify the intentional
+  `profile_public_view` SECURITY DEFINER boundary, owner, grants, and complete
+  underlying profile-policy set before classifying its Supabase advisor finding
+  as actionable.
+- Added a 90-day cooldown for routine Dependabot major upgrades and grouped the
+  React runtime and type packages so future React majors arrive together.
+  Dependabot security updates remain exempt from the cooldown.
+- Pinned transitive `brace-expansion` to the tested patched version `5.0.8`.
+  The remaining React Router audit advisory affects only unused unstable RSC
+  APIs and does not apply to CRX's browser-router architecture.
+
 ## 2026-07-26 — Docs archive sweep (second batch) + local branch/worktree cleanup
 
 Docs-only. Ten finished, unreferenced files moved into `docs/archive/2026-summer-closeout/`:

@@ -16,6 +16,20 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      react-major:
+        applies-to: version-updates
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+        update-types:
+          - "major"
+    # Major framework/toolchain upgrades need coordinated migrations. Delay
+    # routine majors while their ecosystems catch up; Dependabot security
+    # updates are exempt from cooldown.
+    cooldown:
+      semver-major-days: 90
 
   # GitHub Actions workflow dependencies — same weekly cadence.
   - package-ecosystem: "github-actions"

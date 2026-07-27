@@ -79,11 +79,6 @@ Two related items are deliberately OUT of that migration's scope and remain open
    `db push` step needs replacing with an equivalent psql replay, and the replay must read git blobs
    because `core.autocrlf=true` breaks byte-exact function-body md5 preconditions on Windows.
 
-One follow-up on the migration itself is unproven: a disposable `supabase db reset` replay to
-confirm all 38 policy names exist on a clean rebuild has not been run (all 38 were confirmed
-present in migration history by source search, and `ALTER POLICY` fails loudly on a missing policy,
-so a rebuild break would be noisy rather than silent).
-
 ---
 
 ## 0. Per-line split-billing — pricing rule SETTLED = Option B (Mason, 2026-07-18)
@@ -91,13 +86,38 @@ so a rebuild break would be noisy rather than silent).
 Resolved. The prior open question (how to price a chemical split line when co-owners are on different tiers)
 is decided: **Option B — each co-owner is billed at their OWN assigned_tier**, mirroring today's non-split
 field-app billing (no customer's price changes). A manual price or field quote applies to everyone (tier-
-independent); only the tier fallback varies per grower. Built, and proven against the live DB **inside a
-rolled-back transaction only** — nothing was persisted and no migration was deployed (the proof: 20/80
-tier1/tier3 field → A@$10/gal, B@$8/gal, each own tier; plus a penny guard so a uniform price totals
-round-once). Committed on branch `codex/per-line-split-billing-phase4-ui` (tip `e2418796`), preserved on
-GitHub by deliberately closed PR #182 — its Phase 3 predecessor is `codex/per-line-split-billing-phase3-rpc`
-/ closed PR #181. The five `20260720_per_line_split_billing_*` migrations live there. Still parked: flag OFF,
-migration NOT applied, NOT merged.
+independent); only the tier fallback varies per grower. Pricing proof: 20/80 tier1/tier3 field →
+A@$10/gal, B@$8/gal, each own tier; plus a penny guard so a uniform price totals round-once.
+
+**STATUS — SHIPPED AND LIVE, NOT PARKED** (re-verified against the live DB 2026-07-27; this entry previously
+claimed "flag OFF, migration NOT applied, NOT merged", which was wrong on all three counts):
+
+- **Merged** via PR #164 on 2026-07-21.
+- **Applied live**: `20260720213000_per_line_split_billing_schema`, `20260720214000_..._calculator`, and
+  `20260720233000_..._save_rpc` are all in the live migration ledger.
+- **Flag is ON.** `app_settings.per_line_split_billing_enabled = 'true'`, set 2026-07-21 01:29 UTC — seven
+  minutes after the merge. Note the shipped code default is OFF; the live value was deliberately flipped on.
+  **What the flag actually gates (verified 2026-07-27):** only the two readers of
+  `SPLIT_BILLING_SETTING_KEY` — the Sidebar nav entry (`src/components/layout/Sidebar.tsx`) and the split
+  editor page (`src/pages/FieldAppSplitInvoiceEditor.tsx`). The safeguards are **data-driven and persistent,
+  not flag-driven**: `isInvoiceEmailSuppressed()` checks `send_disposition === 'suppressed_zero_total'`
+  unconditionally, and `InvoiceDetail` locks a line whenever `billing_line_id` is present. So turning the flag
+  back OFF stops new split sets from being created — it does **not** strip protections from split invoices that
+  already exist. (The header comment in `src/lib/splitBillingSetting.ts` overstates the flag's reach.)
+- **Never exercised.** The field-app path (`save_field_app_split_invoice`) writes `field_app_billing_sets`,
+  `field_app_billing_lines`, and `invoice_line_shares` — all three were empty as of 2026-07-27. The separate
+  order-side path (`create_split_invoices_from_order` → `split_invoice_provenance`,
+  `split_invoice_creation_claims`, `split_invoice_mutation_claims`) is also empty. Six tables, zero rows across
+  both paths — **no recorded split-billing usage as of 2026-07-27.**
+- **Spec + supersession.** Build spec: `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`; direction
+  settled in `DECISION_LOG.md` (2026-07-17). This supersedes the old "four parallel split mechanisms need a
+  decision" flag — decided: the field-app path is the surface, the order-side engine is retired later.
+
+⚠️ **Do not resurrect the stacked branches.** `codex/per-line-split-billing-phase3-rpc` (closed PR #181) and
+`codex/per-line-split-billing-phase4-ui` (closed PR #182, tip `e2418796`) are a **superseded** variant built
+on an incompatible schema/timestamp sequence — five `20260720230000`–`20260720234000` migrations that clash
+with the live chain above. Mason's closing note on #182: they "must not be applied." Nothing is lost: both
+are preserved on GitHub as `refs/pull/181/head` and `refs/pull/182/head`, and both still exist locally.
 
 **Codex gate RAN 2026-07-18 → 8 P1 + 2 P2 findings, ALL FIXED + re-proven (21/21 live-rollback).** The Codex
 money/RLS review blocked the first go-live attempt: service lines priced $0 / not per-customer (#1,#2);
@@ -123,8 +143,9 @@ a saved set READ-ONLY for review + Post (editable reopen deferred — a re-save 
 fields is a future, separately-proven enhancement). **#E** consumes the source job (status→invoiced) so it
 can't be double-billed. Re-proven in live PG: **PROOFOK 29/29** (adds cogs_group_lr_exact, audited_base_is_own,
 reasons_captured, double_bill_second_set_rejected, resave_same_job_allowed). rls-security-reviewer 0/0,
-migration-drift 0 blockers; typecheck + lint clean. Still parked: flag OFF, migrations NOT applied, PR #164
-NOT merged.
+migration-drift 0 blockers; typecheck + lint clean. *(State at the time of this round, since superseded: the
+work was then parked with the flag OFF, migrations NOT applied, and PR #164 NOT merged. See the STATUS block
+above — it shipped on 2026-07-21 and is live with the flag ON.)*
 
 **Codex ROUND 3 RAN 2026-07-18 → 2 P1 + 4 P2, ALL fixed + PROOFOK 32/32.** A third pass (on the job-consumption
 + reopen work round-2 added) found: source job changeable on re-save → two jobs consumed (P1, now frozen);
@@ -135,8 +156,13 @@ uses the verified queued-bridge at true 438). The live proof ALSO caught 2 runti
 `v_job.season` on an unassigned record (55000) and a stale `scheduled_date` (live `jobs` uses `job_date`) —
 both fixed. New harness note: seeding synthetic products now needs `ALTER TABLE products DISABLE TRIGGER USER`
 inside the rolled-back txn (a parallel supplier-pricing project applied live pricing-governance triggers).
-**Remaining before flag-on: a CLEAN full re-run of the Codex gate, then Mason's review + baseline field-app
-billing cycle.**
+*(Round-3 exit criteria, now overtaken by events: "Remaining before flag-on: a CLEAN full re-run of the Codex
+gate, then Mason's review + baseline field-app billing cycle." PR #164 merged 2026-07-21 and the flag was
+turned on seven minutes later — see the STATUS block above. **The baseline field-app billing cycle still has
+not happened** — checked directly rather than inferred from the empty split tables, since an ordinary cycle
+would not touch those: live as of 2026-07-27, `field_app_locations` = 0 rows, `field_app_location_shares` = 0,
+and of 4 total `jobs` none is `invoiced` and no `invoices` row carries a `job_id`. So no field-application
+invoice of any kind has been produced yet, split or not.)*
 Owner-facing detail: `docs/plans/per-line-split-billing-BUILD-HANDOFF-2026-07-18.md`.
 
 **Resolved 2026-07-21 — Supplier Pricing Phase 1a rollout gap.** The governed
@@ -231,13 +257,9 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 
 ## 4. Deferred/parked feature work
 
-- **Per-line-item custom split billing (field-app)** — DESIGN SPEC complete + review-hardened, **not
-  built**; Mason builds it in Codex next week (baseline real-billing cycle first). Default splits from
-  field ownership, override %/price per line, one invoice per customer, unpost stays reversible. Three
-  advisor passes folded in (gpt-5.6-terra design + xhigh plan-review, claude-fable-5 money-math). Spec:
-  `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`; direction settled in `DECISION_LOG.md`
-  (2026-07-17). Supersedes the "four parallel split mechanisms need a decision" flag — decided: field-app
-  path is the surface, order-side engine retired later.
+- ~~**Per-line-item custom split billing (field-app)**~~ — **no longer deferred. SHIPPED 2026-07-21 (PR #164)
+  and live with the flag ON; see §0 for the current status and the one remaining gap (it has never been
+  used).**
 - **EPA label backfill** — ~105 of 204 distinct stored EPA registration numbers point at the wrong product (confirmed, `docs/CHANGELOG.md` 2026-07-10 entry). The in-app `/label-data-quality` tool to fix them shipped 2026-07-10; the actual backfill (doing the data-entry) is still pending — it's a data-entry job, not a code task.
 - **OCR REI/PHI auto-fill** — deliberately deferred as a safety trap (label OCR for re-entry-interval/pre-harvest-interval data needs human verification before it can be trusted for compliance).
 - **Grower portal §7-§10** — deferred, internal-only direction for now. `docs/ROADMAP.md` line ~57 (A2, "Grower portal v1") and line ~112 (G9, portal MVP) both still say TODO/VISION.
