@@ -8,14 +8,22 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { APPROVED_SERIALIZED_FORMATS, OWNER_DECISION_HEADERS, PRIVATE_ARTIFACT_BASENAMES, REPO_ROOT } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const MAX_STRUCTURAL_SCAN_BYTES = 8 * 1024 * 1024;
-const WORKTREE_PREFIX_BYTES = 1024;
+const WORKTREE_SCAN_CHUNK_BYTES = 64 * 1024;
+const MAX_JSON_NODES = 1_000_000;
 const PRIVATE_ARTIFACT_BASENAMES_LOWER = new Set([...PRIVATE_ARTIFACT_BASENAMES].map(name => name.toLowerCase()));
 const JSON_FORMATS = new Set(APPROVED_SERIALIZED_FORMATS);
 const ZERO_SHA = '0000000000000000000000000000000000000000';
+const SNAPSHOT_ROOT_KEYS = ['products', 'snapshot_sha256', 'expected_old_phase3_defaults', 'migration_high_water'];
+const MANIFEST_ROOT_KEYS = ['rows', 'manifest_sha256', 'generated_from_snapshot_sha256', 'summary', 'approval_state'];
+const PRODUCT_ROW_KEYS = ['id', 'sku', 'product_name', 'pricing_version', 'updated_at'];
+const MANIFEST_ROW_KEYS = ['product_id', 'current_product', 'proposed_phase3', 'field_decisions', 'row_sha256'];
+const STRUCTURAL_KEY_GROUPS = [SNAPSHOT_ROOT_KEYS, MANIFEST_ROOT_KEYS, PRODUCT_ROW_KEYS, MANIFEST_ROW_KEYS];
+const STREAM_TAIL_CHARS = Math.max(4096, OWNER_DECISION_HEADERS.join(',').length * 4);
 
 /**
  * Husky and Git can export GIT_DIR/GIT_INDEX_FILE/etc. Those variables would
@@ -68,31 +76,58 @@ function normalizeCsvHeaderCell(value) {
   const trimmed = value.trim();
   return trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1).replaceAll('""', '"') : trimmed;
 }
-function privateJsonRootShape(parsed) {
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-  const keys = new Set(Object.keys(parsed));
-  const hasSnapshotRoot = ['products', 'snapshot_sha256', 'expected_old_phase3_defaults', 'migration_high_water'].every(key => keys.has(key));
-  const hasManifestRoot = ['rows', 'manifest_sha256', 'generated_from_snapshot_sha256', 'summary', 'approval_state'].every(key => keys.has(key));
-  const firstProduct = Array.isArray(parsed.products) ? parsed.products[0] : null;
-  const firstRow = Array.isArray(parsed.rows) ? parsed.rows[0] : null;
-  const hasProductRow = firstProduct && typeof firstProduct === 'object' && ['id', 'sku', 'product_name', 'pricing_version', 'updated_at'].every(key => Object.hasOwn(firstProduct, key));
-  const hasManifestRow = firstRow && typeof firstRow === 'object' && ['product_id', 'current_product', 'proposed_phase3', 'field_decisions', 'row_sha256'].every(key => Object.hasOwn(firstRow, key));
-  return hasSnapshotRoot || hasManifestRoot || hasProductRow || hasManifestRow;
+function privateJsonNodeReason(value) {
+  const pending = [value];
+  const seen = new WeakSet();
+  let visited = 0;
+  while (pending.length) {
+    const node = pending.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (seen.has(node)) continue;
+    seen.add(node);
+    visited += 1;
+    if (visited > MAX_JSON_NODES) return 'private artifact JSON exceeds bounded structural node limit';
+    if (!Array.isArray(node)) {
+      if (JSON_FORMATS.has(node.format)) return 'approved private JSON format structure';
+      const keys = new Set(Object.keys(node));
+      if (STRUCTURAL_KEY_GROUPS.some(group => group.every(key => keys.has(key)))) return 'private snapshot or manifest key structure';
+    }
+    for (const child of Array.isArray(node) ? node : Object.values(node)) {
+      if (child && typeof child === 'object') pending.push(child);
+    }
+  }
+  return null;
 }
 function normalizedText(bytes) { return (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).toString('utf8').replace(/^\uFEFF/, ''); }
 function decodeJsonUnicodeEscapes(text) { return text.replace(/\\u([0-9a-fA-F]{4})/g, (_match, hex) => String.fromCharCode(Number.parseInt(hex, 16))); }
-function looksLikeJsonPrefix(bytes) {
-  const text = normalizedText(bytes);
-  const trimmed = text.trimStart();
-  return trimmed.length === 0 || trimmed.startsWith('{') || trimmed.startsWith('[')
-    || text.includes('"format"')
-    || text.includes('product_id')
-    || [...JSON_FORMATS].some(format => text.includes(format));
+function escapedRegex(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function hasQuotedProperty(text, key) {
+  return new RegExp(`"${escapedRegex(key)}"\\s*:`).test(text);
+}
+function textualJsonStructureReason(text) {
+  const comparable = decodeJsonUnicodeEscapes(text);
+  for (const format of JSON_FORMATS) {
+    const formatPattern = new RegExp(`"format"\\s*:\\s*"${escapedRegex(format)}(?:"|(?=\\s*[,}\\]]|$))`);
+    if (formatPattern.test(comparable)) return 'private JSON format marker in malformed candidate';
+  }
+  if (STRUCTURAL_KEY_GROUPS.some(group => group.every(key => hasQuotedProperty(comparable, key)))) {
+    return 'private snapshot or manifest key structure';
+  }
+  return null;
+}
+function isOwnerDecisionHeaderLine(line) {
+  const normalized = line.replace(/^\uFEFF/, '').trim();
+  if (!normalized) return false;
+  const cells = normalized.split(',').map(normalizeCsvHeaderCell);
+  return cells.length === OWNER_DECISION_HEADERS.length && cells.every((cell, index) => cell === OWNER_DECISION_HEADERS[index]);
+}
+function ownerDecisionHeaderReason(text) {
+  return text.split(/\r?\n/).some(isOwnerDecisionHeaderLine) ? 'owner decision sheet CSV header structure' : null;
 }
 /** Detect packet structure, not canonical whitespace or a filename. */
 export function structuralPrivateArtifactReason(bytes) {
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-  if (buffer.length > MAX_STRUCTURAL_SCAN_BYTES) return looksLikeJsonPrefix(buffer.subarray(0, WORKTREE_PREFIX_BYTES)) ? 'private artifact candidate exceeds bounded structural scan limit' : null;
+  if (buffer.length > MAX_STRUCTURAL_SCAN_BYTES) return 'private artifact candidate exceeds bounded structural scan limit';
   // A UTF-8 BOM is an encoding marker, not packet content. Treat it exactly
   // like leading whitespace for both JSON and owner-sheet structure checks.
   const text = normalizedText(buffer);
@@ -100,18 +135,11 @@ export function structuralPrivateArtifactReason(bytes) {
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
       const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && JSON_FORMATS.has(parsed.format)) return 'approved private JSON format structure';
-      if (privateJsonRootShape(parsed)) return 'private snapshot or manifest key structure';
-    } catch (_error) {
-      if ([...JSON_FORMATS].some(format => decodeJsonUnicodeEscapes(text).includes(format))) return 'private JSON format marker in malformed candidate';
-    }
+      const parsedReason = privateJsonNodeReason(parsed);
+      if (parsedReason) return parsedReason;
+    } catch (_error) { /* position-independent structural checks below fail closed */ }
   }
-  const header = text.trimStart().split(/\r?\n/, 1)[0];
-  if (header) {
-    const cells = header.split(',').map(normalizeCsvHeaderCell);
-    if (cells.length === OWNER_DECISION_HEADERS.length && cells.every((cell, index) => cell === OWNER_DECISION_HEADERS[index])) return 'owner decision sheet CSV header structure';
-  }
-  return null;
+  return textualJsonStructureReason(text) ?? ownerDecisionHeaderReason(text);
 }
 function sameFileIdentity(left, right) { return left.dev === right.dev && left.ino === right.ino; }
 function sameWorktreeStatIdentity(left, right) {
@@ -174,49 +202,120 @@ export function readWorktreeCandidate(root, repoPath, { beforeRead, afterRead, m
     return { bytes: buffer.subarray(0, read), size: entry.size, complete: read === entry.size };
   } finally { closeSync(fd); }
 }
-export function ignoredLargeCandidateHasPrivateSignal(root, repoPath, _prefix, { afterFirstPass } = {}) {
-  const candidate = canonicalWorktreeCandidate(root, repoPath);
-  if (candidate === null) return false;
+function createOwnerHeaderStreamDetector() {
+  const canonicalHeader = OWNER_DECISION_HEADERS.join(',');
+  let line = '';
+  let discarded = false;
+  let found = false;
+  const finishLine = () => {
+    if (!discarded && line === canonicalHeader) found = true;
+    line = '';
+    discarded = false;
+  };
+  return {
+    feed(text) {
+      for (const character of text) {
+        if (character === '\n') { finishLine(); continue; }
+        // Header names contain no whitespace or quote characters. Compacting
+        // only those legal CSV wrappers keeps arbitrary padding bounded while
+        // retaining every meaningful byte in the exact ordered comparison.
+        if (character === ' ' || character === '\t' || character === '\r' || character === '\uFEFF' || character === '"') continue;
+        if (line.length < canonicalHeader.length) line += character;
+        else discarded = true;
+      }
+    },
+    finish() { finishLine(); return found; },
+  };
+}
+function createStructuralStreamScanner() {
+  let tail = '';
+  let formatPropertySignal = false;
+  const formatValueSignals = new Set();
+  const propertySignals = new Set();
+  const ownerHeader = createOwnerHeaderStreamDetector();
+  return {
+    feed(text) {
+      ownerHeader.feed(text);
+      const window = tail + text;
+      const comparable = decodeJsonUnicodeEscapes(window);
+      if (hasQuotedProperty(comparable, 'format')) formatPropertySignal = true;
+      for (const format of JSON_FORMATS) {
+        const valuePattern = new RegExp(`"${escapedRegex(format)}(?:"|(?=\\s*[,}\\]]|$))`);
+        if (valuePattern.test(comparable)) formatValueSignals.add(format);
+      }
+      for (const key of STRUCTURAL_KEY_GROUPS.flat()) {
+        if (hasQuotedProperty(comparable, key)) propertySignals.add(key);
+      }
+      tail = window.slice(-STREAM_TAIL_CHARS);
+    },
+    finish() {
+      const ownerSignal = ownerHeader.finish();
+      const structuralSignal = STRUCTURAL_KEY_GROUPS.some(group => group.every(key => propertySignals.has(key)));
+      return (formatPropertySignal && formatValueSignals.size > 0) || structuralSignal || ownerSignal;
+    },
+  };
+}
+function assertStableWorktreeCandidate(root, repoPath, file, baseline, fd, cache = null) {
+  const entry = lstatSync(file);
+  const followed = statSync(file);
+  const descriptor = fstatSync(fd);
+  if (!entry.isFile() || entry.isSymbolicLink()
+    || !followed.isFile() || !descriptor.isFile()
+    || !sameWorktreeStatIdentity(baseline, entry)
+    || !sameWorktreeStatIdentity(baseline, followed)
+    || !sameWorktreeStatIdentity(baseline, descriptor)
+    || realpathSync(file) !== file
+    || canonicalWorktreeCandidate(root, repoPath, cache) === null) {
+    throw new Error('private Phase 3C worktree candidate changed during scan');
+  }
+}
+function scanWorktreeCandidate(root, repoPath, { afterFirstPass, cache = null } = {}) {
+  const candidate = canonicalWorktreeCandidate(root, repoPath, cache);
+  if (candidate === null) return null;
   const { file } = candidate;
   const entry = lstatSync(file); const followed = statSync(file);
-  if (!entry.isFile() || entry.isSymbolicLink() || !sameWorktreeStatIdentity(entry, followed) || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
+  if (!entry.isFile()) return null;
+  if (entry.isSymbolicLink() || !sameWorktreeStatIdentity(entry, followed) || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
   const fd = openSync(file, 'r');
   try {
-    const descriptor = fstatSync(fd);
-    if (!sameWorktreeStatIdentity(entry, descriptor)) throw new Error('private Phase 3C worktree candidate changed during scan');
-    const scanOnce = () => {
-      const chunk = Buffer.alloc(WORKTREE_PREFIX_BYTES);
-      const snapshotKeys = ['"products"', '"snapshot_sha256"', '"expected_old_phase3_defaults"', '"migration_high_water"'];
-      const manifestKeys = ['"rows"', '"manifest_sha256"', '"generated_from_snapshot_sha256"', '"summary"', '"approval_state"'];
-      const seen = new Set(); const digest = createHash('sha256');
-      let offset = 0; let tail = '';
+    assertStableWorktreeCandidate(root, repoPath, file, entry, fd, cache);
+    const scanOnce = ({ capture }) => {
+      const chunk = Buffer.alloc(WORKTREE_SCAN_CHUNK_BYTES);
+      const digest = createHash('sha256');
+      const scanner = createStructuralStreamScanner();
+      const decoder = new StringDecoder('utf8');
+      const captured = capture ? [] : null;
+      let offset = 0;
       while (offset < entry.size) {
         const read = readSync(fd, chunk, 0, Math.min(chunk.length, entry.size - offset), offset);
         if (read <= 0) throw new Error('private Phase 3C worktree candidate changed during scan');
-        const bytes = chunk.subarray(0, read); digest.update(bytes);
-        const text = tail + bytes.toString('utf8');
-        // Decode JSON's ASCII Unicode escapes solely for signature comparison.
-        // This catches fully escaped format keys/values without treating generic
-        // source-map Unicode escapes as a private-packet signal.
-        const comparable = decodeJsonUnicodeEscapes(text);
-        for (const format of JSON_FORMATS) if (comparable.includes(format)) seen.add('format');
-        for (const key of [...snapshotKeys, ...manifestKeys]) if (comparable.includes(key)) seen.add(key);
-        if (/^product_id\s*,\s*sku\s*,\s*product_name(?:\s*,|$)/.test(text.trimStart())) seen.add('owner-header');
-        tail = text.slice(-512);
+        const bytes = chunk.subarray(0, read);
+        digest.update(bytes);
+        scanner.feed(decoder.write(bytes));
+        if (captured) captured.push(Buffer.from(bytes));
         offset += read;
       }
-      return { digest: digest.digest('hex'), signal: seen.has('format') || seen.has('owner-header') || snapshotKeys.every(key => seen.has(key)) || manifestKeys.every(key => seen.has(key)) };
+      scanner.feed(decoder.end());
+      return {
+        bytes: captured ? Buffer.concat(captured, entry.size) : null,
+        digest: digest.digest('hex'),
+        signal: scanner.finish(),
+      };
     };
-    const prefixSignal = structuralPrivateArtifactReason(_prefix) !== null;
-    const first = scanOnce();
+    const first = scanOnce({ capture: entry.size <= MAX_STRUCTURAL_SCAN_BYTES });
     afterFirstPass?.({ file, fd });
-    const middle = fstatSync(fd); const middleEntry = lstatSync(file); const middleFollowed = statSync(file);
-    if (!sameWorktreeStatIdentity(entry, middle) || !sameWorktreeStatIdentity(entry, middleEntry) || !sameWorktreeStatIdentity(entry, middleFollowed) || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
-    const second = scanOnce();
-    const after = fstatSync(fd); const afterEntry = lstatSync(file); const afterFollowed = statSync(file);
-    if (!sameWorktreeStatIdentity(entry, after) || !sameWorktreeStatIdentity(entry, afterEntry) || !sameWorktreeStatIdentity(entry, afterFollowed) || first.digest !== second.digest || first.signal !== second.signal || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
-    return prefixSignal || first.signal;
+    assertStableWorktreeCandidate(root, repoPath, file, entry, fd, cache);
+    const second = scanOnce({ capture: false });
+    assertStableWorktreeCandidate(root, repoPath, file, entry, fd, cache);
+    if (first.digest !== second.digest || first.signal !== second.signal) throw new Error('private Phase 3C worktree candidate changed during scan');
+    const reason = first.bytes === null
+      ? (first.signal ? 'private artifact worktree candidate exceeds bounded structural scan limit' : null)
+      : structuralPrivateArtifactReason(first.bytes);
+    return { reason, size: entry.size };
   } finally { closeSync(fd); }
+}
+export function ignoredLargeCandidateHasPrivateSignal(root, repoPath, _prefix, { afterFirstPass } = {}) {
+  return Boolean(scanWorktreeCandidate(root, repoPath, { afterFirstPass })?.reason);
 }
 function candidateIndexPaths(root, execute) {
   const candidates = new Map();
@@ -271,17 +370,11 @@ function worktreeContentViolations(root, execute) {
   const started = performance.now();
   const cache = { roots: new Map(), parents: new Map() };
   for (const [repoPath, source] of candidates) {
-    const prefix = readWorktreeCandidate(root, repoPath, { maxBytes: WORKTREE_PREFIX_BYTES, cache });
-    if (prefix === null) continue;
-    if (prefix.size > MAX_STRUCTURAL_SCAN_BYTES) {
-      if (source !== 'ignored' || ignoredLargeCandidateHasPrivateSignal(root, repoPath, prefix.bytes)) violations.push({ repoPath, reason: 'private artifact worktree candidate exceeds bounded structural scan limit' });
-      continue;
+    const result = scanWorktreeCandidate(root, repoPath, { cache });
+    if (result?.reason) violations.push({ repoPath, reason: result.reason });
+    else if (result && result.size > MAX_STRUCTURAL_SCAN_BYTES && source !== 'ignored') {
+      violations.push({ repoPath, reason: 'private artifact worktree candidate exceeds bounded structural scan limit' });
     }
-    const candidate = prefix.complete || looksLikeJsonPrefix(prefix.bytes)
-      ? (prefix.complete ? prefix : readWorktreeCandidate(root, repoPath, { maxBytes: MAX_STRUCTURAL_SCAN_BYTES + 1, cache }))
-      : null;
-    const reason = candidate === null ? null : structuralPrivateArtifactReason(candidate.bytes);
-    if (reason) violations.push({ repoPath, reason });
   }
   return { violations, candidateCount: candidates.size, ignoredCount: ignored.size, durationMs: Math.round(performance.now() - started) };
 }

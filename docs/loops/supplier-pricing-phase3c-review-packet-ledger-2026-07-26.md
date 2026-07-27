@@ -83,6 +83,39 @@ migration/live apply.
   regenerated and re-verified before protected-PR/CodeRabbit handling. Current
   state: `PARKED — TOOLING CORRECTION; PACKET REGENERATION REQUIRED`.
 
+### Position-sensitive containment correction
+
+The next frozen candidate,
+`2c56085d1ecee3ca223efb3ec0da58fa6ef858db`, was also rejected. Fresh
+independent Sol returned `FIX` for three position-sensitive containment
+classes: a non-comment/non-whitespace prefix before private JSON; a private
+Product/manifest row later in a valid JSON wrapper or array; and an authentic
+owner-sheet header after comments or late padding. Luna session
+`019fa26f-821d-7611-b7d6-82d90ac35fb9` independently returned `FIX` and
+required the adjacent nested/wrapped, escaped/malformed, beyond-first-1-KiB,
+chunk-boundary, and greater-than-8-MiB ignored-file variants to be closed.
+
+A fresh Terra sole-writer correction is uncommitted. It iteratively inspects
+every node in bounded valid JSON, applies decoded position-independent strong
+property signatures to malformed or prefixed content, recognizes the exact
+owner header on any line, and scans every byte of modified, untracked, and
+ignored worktree candidates twice through a descriptor-bound reader with
+complete stat identity and SHA-256 equality checks. The real repository
+containment baseline passed across 51,810 paths in 64.4 seconds; the expanded
+synthetic packet suite passed in 39.1 seconds. These are local correction
+proofs only. The exact rejected SHA remains rejected, the historical packet
+hashes remain invalidated, and fresh freeze/review/regeneration is still
+required.
+
+Broader pre-freeze proof also passed: correction guards, typecheck, production
+build, agent-workflow tests, documentation drift, dependency consistency, and
+the five-slot mission-document validator. Lint reported zero errors and the
+same four pre-existing warnings. Exact containment across
+`052b2171821dc7ffd965b4edb4b6de4ef8fda511..2c56085d1ecee3ca223efb3ec0da58fa6ef858db`
+passed after checking 51,810 paths and all 7 commits in 73.3 seconds.
+`git diff --check` also passed. This remains an uncommitted, unreviewed
+correction and is not a final packet proof.
+
 ## Cycle table
 
 | Cycle | Status | Exact SHA | Writer | Proof | Luna | Independent Sol | Resolved Opus review | PR / CodeRabbit | Next |
@@ -206,6 +239,10 @@ packet. They must be refreshed inside the loop before materialization.
 | C4-SOL-2 | Sol orchestrator cycle 4 | HIGH | Approved basenames did not contain a private snapshot, manifest, or owner-sheet payload renamed to a benign path. | FIX: bounded Git-change candidate inspection checks staged index and worktree candidates for exact approved JSON-format or owner-CSV-header signatures without logging content. | fresh `gpt-5.6-terra` | uncommitted | Disposable Git regressions cover renamed staged snapshot/manifest content, staged/worktree divergence, untracked content, and benign public text. |
 | C4-SOL-3 | Sol orchestrator cycle 4 | MEDIUM | Several packet entry points tolerated duplicate, unknown, missing-value, or positional CLI input. | FIX: capture accepts no CLI input; manifest and owner entry points use strict named-path option parsing while preserving the generator's exactly-one-mode parser and v2 environment default. | fresh `gpt-5.6-terra` | uncommitted | Spawned synthetic invalid-input regressions cover every packet CLI without exposing synthetic identifiers. |
 | C4-SELF-1 | Real Husky pre-commit pipeline | HIGH | The staged candidate's real `git commit` ran Husky; all earlier gates passed until `npm run test:correction-guards`. The disposable fixture inherited hook-local Git variables, so fixture `git init` targeted the shared Git directory, set common `core.bare=true`, and fixture `git add README.md` failed: `fatal: this operation must be run in a work tree`. No commit was created. | FIX: sanitize all case-insensitive `GIT_*` variables for every disposable fixture Git command, including injected checker Git calls. Regression injects hostile `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and `GIT_COMMON_DIR`, proves the fixture initializes, adds and commits its README in its own worktree, and proves the real repository remains a worktree with common `core.bare=false` before and after. Shared repository common `core.bare=false` was repaired and reverified. A later fresh materialization establishes the current aggregate hashes below; exact final-SHA reviews remain pending. | fresh `gpt-5.6-terra` | uncommitted | Focused hostile-hook-context regression PASS; later full commit-hook proof PASS. |
+| C5-SOL-1 | Fresh independent Sol review of `2c56085d1ecee3ca223efb3ec0da58fa6ef858db` | BLOCKER | Any non-whitespace/comment prefix before otherwise exact private JSON bypassed staged, history, pre-push, and CI range containment. | FIX in the uncommitted Terra correction: decoded exact format key/value and strong private property signatures are position-independent and do not require JSON at byte zero. | fresh `gpt-5.6-terra` | uncommitted | Staged, deleted-history, real pre-push, pull-request event, push event, untracked, ignored, escaped-malformed, and benign public-source regressions PASS. |
+| C5-SOL-2 | same provenance | HIGH | A benign first row hid a later private Product/manifest row because only the first row/root was inspected. | FIX in the uncommitted Terra correction: an iterative bounded walk inspects every object and array element, including arbitrary wrappers and nesting, with a fail-closed node bound. | fresh `gpt-5.6-terra` | uncommitted | Later Product and manifest row fixtures PASS across staged, ignored, history, pre-push, and CI event layers. |
+| C5-SOL-3 | same provenance | HIGH | A commented/late owner CSV header, including a greater-than-8-MiB ignored file, bypassed containment. | FIX in the uncommitted Terra correction: the normalized exact ordered header is recognized on any line; the streaming detector retains state and signatures across chunks. | fresh `gpt-5.6-terra` | uncommitted | Late/commented staged/history/event fixtures and greater-than-8-MiB whitespace/header chunk-boundary fixtures PASS. |
+| C5-LUNA-1 | Luna (`gpt-5.6-luna`, session `019fa26f-821d-7611-b7d6-82d90ac35fb9`) | HIGH | Luna returned `FIX` and required adjacent arrays/wrappers/nesting, escaped or malformed prefixed JSON, signatures beyond 1 KiB, later incomplete-root rows, and streaming chunk boundaries to fail closed. | FIX in the uncommitted Terra correction without filename or path allowlists; modified/untracked files above the structural bound remain unconditionally rejected and all ignored bytes are streamed. | fresh `gpt-5.6-terra` | uncommitted | Expanded focused suite PASS in 39.1 seconds; real 51,810-path containment baseline PASS in 64.4 seconds. |
 
 ## Private artifacts — historical and invalidated
 

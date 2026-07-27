@@ -18,6 +18,18 @@ data, or approve any owner decision. The mission's earlier six-cycle cap
 remains recorded in the durable ledger; this is a separate post-PARK correction
 pass, not a claim that the cap was changed.
 
+The later exact candidate
+`2c56085d1ecee3ca223efb3ec0da58fa6ef858db` is also rejected. Fresh
+independent Sol found that private JSON could hide behind an ordinary prefix,
+that a private-shaped Product or manifest row could hide later in a JSON
+wrapper, and that the owner-sheet header could hide after comments or padding.
+Luna session `019fa26f-821d-7611-b7d6-82d90ac35fb9` returned `FIX` and
+required the adjacent nested, escaped/malformed, beyond-first-1-KiB, and large
+streaming variants to be covered. A fresh uncommitted Terra correction now has
+focused synthetic proof and a 51,810-path local containment pass, but it still
+requires a frozen exact SHA and fresh independent reviews. The historical
+packet hashes below remain invalidated throughout.
+
 ## Unattended v2 binding sequence
 
 Capture prints only the product count and semantic snapshot SHA-256. The
@@ -69,6 +81,23 @@ passed in 22.4 seconds after checking 51,810 paths across 6 commits. This is
 tooling proof only: it does not revive the historical packet or permit
 classification, Stage C work, a deployment, or live data changes. Documentation
 drift and whitespace validation also passed on this pre-freeze record.
+
+Additional pre-freeze proof for the position-sensitive correction: the expanded
+synthetic packet suite passed in 39.1 seconds across staged, deleted-history,
+real pre-push, pull-request event, push event, modified, untracked, ignored, and
+greater-than-8-MiB streaming cases. The real worktree containment baseline
+passed after scanning 51,810 paths in 64.4 seconds. It uses iterative all-node
+JSON inspection, position-independent decoded structural signatures, any-line
+owner-header matching, and two descriptor-bound full-content passes with
+complete stat identity plus SHA-256 equality. This remains tooling evidence
+only; it does not revive the packet or authorize owner decisions.
+
+The broader pre-freeze gates also passed: correction guards, typecheck,
+production build, agent-workflow checks, documentation drift, dependency
+consistency, and mission-document validation. Lint had zero errors and four
+pre-existing warnings. Exact base-to-rejected-head containment passed across
+51,810 paths and 7 commits in 73.3 seconds, and `git diff --check` passed. The
+correction is still uncommitted and has not received fresh exact-SHA review.
 
 ## Exact owner gate
 
