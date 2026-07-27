@@ -2,6 +2,56 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-27 — RLS: inline role checks now require an active profile (DRAFTED, NOT APPLIED)
+
+Closes the systemic gap that `20260726223520_vendors_inactive_admin_active_check.sql` explicitly
+deferred ("that systemic gap is tracked separately"). A live `pg_policy` sweep found **38** policies
+— across 17 `public` tables plus `storage.objects` — that gate on `profiles.role` **inline** without
+also requiring `profiles.is_active = true`. Because deactivation is not enforced at the auth layer
+(`auth.users.banned_until` is NULL and sessions are not revoked), RLS is the only gate, so a
+deactivated user holding a still-valid JWT kept access through every one of them. There is one such
+account live today (a deactivated `sales_rep`, 216 session rows), and 7 of the 38 policies include
+`sales_rep`. Policies that call the `is_admin()` / `is_sales_rep()` / `is_driver()` /
+`is_applicator()` helpers were already safe — all four were confirmed live to check `is_active`.
+
+`supabase/migrations/20260727123055_inline_role_checks_require_active_profile.sql` is forward-only:
+38 `ALTER POLICY` statements (never a `DROP` + `CREATE`) so each policy keeps its command, role list,
+permissiveness, `WITH CHECK` shape, and every non-role predicate — soft-delete scoping on `vendors`
+and `vendor_bills`, `bucket_id` scoping and the own-folder branch on the two `storage.objects`
+policies, the `uploaded_by` ownership branch on `team_note_attachments`, and the assigned-driver
+branch on `delivery_photos`. It matches the convention of `20260726223520` and `20260701213000`.
+An inline verification `DO` block re-reads all 38 from `pg_policies` and raises unless each one still
+has the expected command, is still `PERMISSIVE`, has the same USING/WITH CHECK clause shape, retains
+both its role check and the new `is_active` check **per clause** (never concatenated, so a
+half-tightened UPDATE/ALL cannot pass), and keeps its named non-role predicates; it then asserts zero
+residual inline-role policies repo-wide and that all four role helpers still exist and still gate on
+`is_active`.
+
+**Scope limit — this is not full account deactivation.** Tables carrying a separate wide-open
+PERMISSIVE `true` SELECT policy (`application_services`, `application_record_fields`,
+`customer_application_rates`, `quote_pdf_templates`, `quote_templates`, `team_note_attachments`)
+still admit any logged-in user regardless of role, and the own-attachment delete branches are
+deliberately preserved for inactive users. Revoking sessions / blocking re-login remains a separate
+follow-up. Because `ALTER POLICY` holds `ACCESS EXCLUSIVE` until commit, all 18 tables are blocked
+simultaneously for the duration; the migration sets `lock_timeout = '10s'` so a contended apply fails
+fast and atomically rather than stalling production.
+
+Proof: full-file dry run on the live project inside `BEGIN … ROLLBACK` — all 38 `ALTER`s applied, the
+verification block passed, residual inline-role gaps went **38 → 0**, then rolled back; live state
+re-read afterward and confirmed unchanged. The verification block was separately negative-tested
+against the un-tightened database and correctly raised. Earlier behavioral proof under
+`SET LOCAL ROLE authenticated`: the deactivated `sales_rep` saw 11 `vendors` rows before and **0**
+after, an admin deactivated mid-test saw 4 `vendor_bills` before and **0** after, while active users'
+row counts were unchanged. Adversarial cross-model review (Codex `gpt-5.6-sol`, high effort, no DB
+access) returned **SHIP-WITH-FOLLOWUPS** with no blockers; its eight findings on lock-duration
+wording, scope framing, verification strength, per-clause checks, helper-count vacuity, bare
+`auth.uid()`, and duplicate target rows are all addressed in the committed file.
+
+**Not applied to production.** Awaiting Mason's explicit OK and the migration-apply-guard proof. The
+one open follow-up is a disposable local `supabase db reset` replay to prove the 38 policy names all
+exist on a clean rebuild (all 38 were confirmed present in migration history, but the rebuild itself
+has not been run).
+
 ## 2026-07-26 — Docs archive sweep (second batch) + local branch/worktree cleanup
 
 Docs-only. Ten finished, unreferenced files moved into `docs/archive/2026-summer-closeout/`:
