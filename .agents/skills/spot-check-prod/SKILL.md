@@ -53,7 +53,9 @@ when all of these live read-only checks pass:
 - `anon` and `PUBLIC` do not have `SELECT`;
 - `authenticated` has `SELECT`; and
 - the view owner still has `BYPASSRLS` (normally owner `postgres`); and
-- the underlying `profiles_select` policy remains admin-or-self.
+- every applicable `SELECT` policy on `public.profiles` has been inspected, and
+  the complete set is exactly one permissive `profiles_select` policy with the
+  admin-or-self predicate.
 
 Use Supabase MCP read-only SQL when available. If custom SQL cannot run
 unattended through MCP, use `supabase db query --linked` with SELECT-only SQL.
