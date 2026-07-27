@@ -1,27 +1,37 @@
 # Branch / worktree cleanup — restore ledger (2026-07-27)
 
-**Every tip below is preserved by a real tag on `origin`, not merely by the SHA written here.**
-A SHA in a Markdown file keeps nothing alive — once the last ref is gone the commit is
-unreferenced, `git gc` may prune it, and a fresh clone never had it. The tags are what make
-this ledger restorable. Do not delete them without deciding the work is gone for good.
+**Every *deleted* tip — the "Branches deleted", "Remote branches deleted", and "Detached
+worktree HEADs" sections below — is preserved by a real tag on `origin`, not merely by the SHA
+written here.** A SHA in a Markdown file keeps nothing alive: once the last ref is gone the
+commit is unreferenced, `git gc` may prune it, and a fresh clone never had it. The tags are what
+make those sections restorable. Do not delete them without deciding the work is gone for good.
 
-```
+The **"Kept"** section at the bottom is the exception — those branches are still live and
+reachable by their own refs, so they are deliberately **not** tagged.
+
+```text
 archive/2026-07-27-cleanup/<branch-name>        # 24 deleted branches
 archive/2026-07-27-cleanup/worktree-<label>     # 5 detached worktree HEADs
 ```
 
 List them: `git ls-remote --tags origin 'refs/tags/archive/2026-07-27-cleanup/*'`
 
-Restore (read-only preflight first — confirm the checkout is clean and the tag resolves):
+Restore (read-only preflight first — confirm the checkout is clean and the tag really exists
+**on `origin`**, since a local tag can be stale or absent from the remote):
 
 ```bash
 git status --short --branch                                  # 1. inspect before any write
-git fetch origin --tags
-git rev-parse --verify archive/2026-07-27-cleanup/<name>^{commit}   # 2. prove the tip exists
+git ls-remote --tags origin \
+  'refs/tags/archive/2026-07-27-cleanup/<name>'              # 2. prove the tip exists on origin
+git fetch origin \
+  'refs/tags/archive/2026-07-27-cleanup/<name>:refs/tags/archive/2026-07-27-cleanup/<name>'
 git branch <name> archive/2026-07-27-cleanup/<name>          # 3. local branch
 git worktree add <path> <name>                               # 3b. or a worktree
 git push --dry-run origin <name>                             # 4. dry-run first
 ```
+
+Compare the SHA from step 2 against the table below before restoring; if they differ, the local
+tag is stale and `origin` is authoritative.
 
 Re-publishing a restored branch to `origin` is an outward-facing write — get Mason's OK before
 dropping `--dry-run`.

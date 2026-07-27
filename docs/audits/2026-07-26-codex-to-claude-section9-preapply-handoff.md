@@ -6,6 +6,22 @@
 **Intended reviewer:** Claude Fable
 **Repo:** `C:/Users/mason/.codex/worktrees/section9-apply-review-20260726/CRX_Manager`
 
+> ## ⚠️ Archived record — not an active work order
+>
+> **This entire document is a historical snapshot from 2026-07-26.** Every
+> instruction, scope statement, repo path, and SHA below described the situation
+> as it stood on that date, and is retained as an audit record only. The worktree
+> it names was removed during the 2026-07-27 cleanup sweep, so the paths no longer
+> resolve.
+>
+> The packet was deliberately left uncommitted at the time; it was committed on
+> 2026-07-27 because it existed nowhere else. Committing it changes nothing about
+> the review it describes, and it remains **excluded from the migration apply
+> set**.
+>
+> Do not action the instructions below as if they were current. If a Section 9
+> pre-apply review is still needed, re-scope it against live state.
+
 ## What I Need Claude To Do
 
 Perform a fresh, independent, adversarial, read-only review of the complete
@@ -52,13 +68,6 @@ Changed files from the base:
 
 This handoff file is outside the reviewed candidate — it is documentation about
 the review, not part of the migration apply set.
-
-> **Archival note (2026-07-27).** Everything below is a *historical snapshot*
-> taken when this packet was written on 2026-07-26. At that time the packet was
-> deliberately left uncommitted. It has since been committed as a documentation
-> record, because it existed only as an untracked file inside a worktree removed
-> during the 2026-07-27 cleanup sweep. Committing it changes nothing about the
-> review it describes, and it remains excluded from the migration apply set.
 
 ## Repo State (historical snapshot, 2026-07-26)
 
