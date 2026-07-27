@@ -10,8 +10,9 @@ enumerating its files, which could allow a private Phase 3C packet inside that c
 content scanning. The regression suite creates both nested-repository cases with a synthetic
 private marker and requires a fail-closed `embedded Git repository` verdict while preserving the
 existing allowance for unrelated ignored symlinks. Benign embedded repositories deliberately
-remain fail-closed containment candidates. ZIP-format candidates, including XLSX workbooks, also
-fail closed because their compressed members cannot be inspected by the bounded raw-byte scanner.
+remain fail-closed containment candidates. Common compressed/archive signatures, including ZIP,
+XLSX, gzip, bzip2, xz, 7z, and RAR, also fail closed at any byte position because their compressed
+members cannot be inspected by the bounded raw-byte scanner.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 

@@ -307,15 +307,60 @@ function createOwnerHeaderStreamDetector() {
     finish() { finishLine(); return found; },
   };
 }
+function createDecodedPropertyStreamDetector(keys) {
+  const tokenToKey = new Map([...new Set(keys)].map(key => [`"${key}"`, key]));
+  const maxTokenLength = Math.max(...tokenToKey.keys(), '').length;
+  const pending = new Set();
+  const signals = new Set();
+  let recent = '';
+  let escape = '';
+  const consume = character => {
+    for (const key of [...pending]) {
+      if (/\s/u.test(character)) continue;
+      if (character === ':') signals.add(key);
+      pending.delete(key);
+    }
+    recent = `${recent}${character}`.slice(-maxTokenLength);
+    for (const [token, key] of tokenToKey) if (recent.endsWith(token)) pending.add(key);
+  };
+  const decode = character => {
+    if (!escape) {
+      if (character === '\\') { escape = '\\'; return; }
+      consume(character);
+      return;
+    }
+    escape += character;
+    if (escape.length === 2 && character !== 'u') {
+      consume('\\');
+      escape = '';
+      decode(character);
+      return;
+    }
+    if (escape.length !== 6) return;
+    if (/^\\u[0-9a-fA-F]{4}$/.test(escape)) consume(String.fromCharCode(Number.parseInt(escape.slice(2), 16)));
+    else for (const rawCharacter of escape) consume(rawCharacter);
+    escape = '';
+  };
+  return {
+    feed(text) { for (const character of text) decode(character); },
+    finish() {
+      for (const character of escape) consume(character);
+      escape = '';
+      return signals;
+    },
+  };
+}
 function createStructuralTextStreamScanner() {
   let tail = '';
   let formatPropertySignal = false;
   const formatValueSignals = new Set();
   const propertySignals = new Set();
   const ownerHeader = createOwnerHeaderStreamDetector();
+  const decodedProperties = createDecodedPropertyStreamDetector(['format', ...STRUCTURAL_KEY_GROUPS.flat()]);
   return {
     feed(text) {
       ownerHeader.feed(text);
+      decodedProperties.feed(text);
       const window = tail + text;
       const comparable = decodeJsonUnicodeEscapes(window);
       if (hasQuotedProperty(comparable, 'format')) formatPropertySignal = true;
@@ -330,6 +375,10 @@ function createStructuralTextStreamScanner() {
     },
     finish() {
       const ownerSignal = ownerHeader.finish();
+      for (const key of decodedProperties.finish()) {
+        if (key === 'format') formatPropertySignal = true;
+        else propertySignals.add(key);
+      }
       const structuralSignal = STRUCTURAL_KEY_GROUPS.some(group => group.every(key => propertySignals.has(key)));
       if (formatPropertySignal && formatValueSignals.size > 0) return 'private JSON format marker in malformed candidate';
       if (structuralSignal) return 'private snapshot or manifest key structure';
@@ -377,7 +426,7 @@ function createOffsetStreamDecoder(decoder, initialSkip) {
   };
 }
 
-function createStructuralByteStreamScanner() {
+function createStructuralByteStreamScanner({ checkArchives = true } = {}) {
   const utf8Decoder = new StringDecoder('utf8');
   const utf8Scanner = createStructuralTextStreamScanner();
   let utf16Decoders = null;
@@ -412,7 +461,7 @@ function createStructuralByteStreamScanner() {
   };
   return {
     feed(bytes) {
-      if (prefix.length < 4) prefix = Buffer.concat([prefix, bytes.subarray(0, 4 - prefix.length)]);
+      if (checkArchives && prefix.length < 4) prefix = Buffer.concat([prefix, bytes.subarray(0, 4 - prefix.length)]);
       utf8Scanner.feed(utf8Decoder.write(bytes));
       if (utf16Decoders) { for (let index = 0; index < utf16Decoders.length; index += 1) utf16Scanners[index].feed(utf16Decoders[index].write(bytes)); return; }
       const replay = rawTail.length === 0 ? bytes : Buffer.concat([rawTail, bytes]);
@@ -429,7 +478,7 @@ function createStructuralByteStreamScanner() {
           reason ??= utf16Scanners[index].finish();
         }
       }
-      return compressedArchiveReason(prefix) ?? reason;
+      return checkArchives ? compressedArchiveReason(prefix) ?? reason : reason;
     },
   };
 }
@@ -452,7 +501,7 @@ function assertStableWorktreeCandidate(root, repoPath, file, baseline, fd, cache
     throw new Error('private Phase 3C worktree candidate changed during scan');
   }
 }
-function scanWorktreeCandidate(root, repoPath, { afterFirstPass, cache = null, budget = new ScanBudget() } = {}) {
+function scanWorktreeCandidate(root, repoPath, { afterFirstPass, cache = null, budget = new ScanBudget(), checkArchives = true } = {}) {
   const candidate = canonicalWorktreeCandidate(root, repoPath, cache);
   if (candidate === null) return null;
   const { file } = candidate;
@@ -468,7 +517,7 @@ function scanWorktreeCandidate(root, repoPath, { afterFirstPass, cache = null, b
     const scanOnce = () => {
       const chunk = Buffer.alloc(WORKTREE_SCAN_CHUNK_BYTES);
       const digest = createHash('sha256');
-      const scanner = createStructuralByteStreamScanner();
+      const scanner = createStructuralByteStreamScanner({ checkArchives });
       let offset = 0;
       while (offset < entry.size) {
         const read = readSync(fd, chunk, 0, Math.min(chunk.length, entry.size - offset), offset);
@@ -663,7 +712,9 @@ function worktreeContentViolations(root, execute, budget) {
       if (entryKind === 'embedded-repository') { violations.push({ repoPath, reason: 'embedded Git repository' }); continue; }
       if (entryKind !== 'regular') continue;
     }
-    const result = scanWorktreeCandidate(root, repoPath, { cache, budget });
+    // Ignored dependencies and caches are not Git-visible packet candidates;
+    // retain ZIP rejection for tracked, modified, and untracked paths only.
+    const result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives: source !== 'ignored' });
     if (result?.reason) violations.push({ repoPath, reason: result.reason });
   }
   return { violations, candidateCount: candidates.size, ignoredCount: ignored.size, durationMs: Math.round(performance.now() - started) };
