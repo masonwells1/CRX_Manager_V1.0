@@ -12,13 +12,27 @@ This file consolidates (does not replace) the source documents it points to. If 
 Resolved. The prior open question (how to price a chemical split line when co-owners are on different tiers)
 is decided: **Option B — each co-owner is billed at their OWN assigned_tier**, mirroring today's non-split
 field-app billing (no customer's price changes). A manual price or field quote applies to everyone (tier-
-independent); only the tier fallback varies per grower. Built, and proven against the live DB **inside a
-rolled-back transaction only** — nothing was persisted and no migration was deployed (the proof: 20/80
-tier1/tier3 field → A@$10/gal, B@$8/gal, each own tier; plus a penny guard so a uniform price totals
-round-once). Committed on branch `codex/per-line-split-billing-phase4-ui` (tip `e2418796`), preserved on
-GitHub by deliberately closed PR #182 — its Phase 3 predecessor is `codex/per-line-split-billing-phase3-rpc`
-/ closed PR #181. The five `20260720_per_line_split_billing_*` migrations live there. Still parked: flag OFF,
-migration NOT applied, NOT merged.
+independent); only the tier fallback varies per grower. Pricing proof: 20/80 tier1/tier3 field →
+A@$10/gal, B@$8/gal, each own tier; plus a penny guard so a uniform price totals round-once.
+
+**STATUS — SHIPPED AND LIVE, NOT PARKED** (re-verified against the live DB 2026-07-27; this entry previously
+claimed "flag OFF, migration NOT applied, NOT merged", which was wrong on all three counts):
+
+- **Merged** via PR #164 on 2026-07-21.
+- **Applied live**: `20260720213000_per_line_split_billing_schema`, `20260720214000_..._calculator`, and
+  `20260720233000_..._save_rpc` are all in the live migration ledger.
+- **Flag is ON.** `app_settings.per_line_split_billing_enabled = 'true'`, set 2026-07-21 01:29 UTC — seven
+  minutes after the merge. Per `src/lib/splitBillingSetting.ts` that enables the whole per-line split UI, the
+  split-aware save path, the $0-suppression email gate, and the InvoiceDetail per-item lock. Note the shipped
+  code default is OFF; the live value was deliberately flipped on.
+- **Never exercised.** `split_invoice_provenance`, `split_invoice_creation_claims`, and
+  `split_invoice_mutation_claims` were all empty as of 2026-07-27 — no customer has been billed through it.
+
+⚠️ **Do not resurrect the stacked branches.** `codex/per-line-split-billing-phase3-rpc` (closed PR #181) and
+`codex/per-line-split-billing-phase4-ui` (closed PR #182, tip `e2418796`) are a **superseded** variant built
+on an incompatible schema/timestamp sequence — five `20260720230000`–`20260720234000` migrations that clash
+with the live chain above. Mason's closing note on #182: they "must not be applied." Nothing is lost: both
+are preserved on GitHub as `refs/pull/181/head` and `refs/pull/182/head`, and both still exist locally.
 
 **Codex gate RAN 2026-07-18 → 8 P1 + 2 P2 findings, ALL FIXED + re-proven (21/21 live-rollback).** The Codex
 money/RLS review blocked the first go-live attempt: service lines priced $0 / not per-customer (#1,#2);
