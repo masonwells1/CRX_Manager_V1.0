@@ -57,6 +57,16 @@ arguments. The pre-push hook wraps every hard gate and the optional Graphify
 refresh explicitly, so Husky's `sh -e` behavior cannot hide the intended failure
 or warning message.
 
+GitHub's Node 24 Linux runner exposed a deterministic glibc heap abort on the
+128 KiB embedded-Base64 boundary case. The bounded streaming detector had
+already found the packet, but diagnostic refinement then decoded the entire
+ASCII wrapper into four unnecessary UTF-16 candidates. Refinement now parses
+UTF-8 first and allocates UTF-16 candidates only when the original bytes contain
+a BOM or NUL signal; embedded Base64 quartets also stream through a bounded
+manual byte decoder. The exact focused suite passes in both Windows and a clean
+`node:24-bookworm` Linux repository, including direct and split 64/128 KiB
+boundary packets.
+
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
 a 4,121-byte stream overlap for bounded binary-CPIO pathnames. Binary CPIO

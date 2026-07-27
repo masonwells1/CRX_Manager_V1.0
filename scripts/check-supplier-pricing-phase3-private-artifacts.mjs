@@ -484,8 +484,19 @@ export function structuralPrivateArtifactReason(bytes) {
   if (reason !== 'private JSON format marker in malformed candidate') return reason;
   // Preserve the more precise direct UTF-8/UTF-16 diagnostic for an actual
   // parsed private JSON object. Alternate decodings are allocated only after
-  // the bounded streaming detector has already found a private marker.
-  return decodedTextCandidateReason(decodedTextCandidates(buffer)) ?? reason;
+  // the bounded streaming detector has already found a private marker. An
+  // ASCII Base64/hex wrapper has no UTF-16 signal and must not allocate four
+  // file-sized diagnostic strings after the streaming detector has succeeded.
+  const utf8Reason = decodedTextCandidateReason([normalizeText(buffer.toString('utf8'))]);
+  if (utf8Reason) return utf8Reason;
+  const hasUtf16Signal = buffer.indexOf(0) !== -1 || buffer.indexOf(UTF16_LE_BOM) !== -1 || buffer.indexOf(UTF16_BE_BOM) !== -1;
+  if (!hasUtf16Signal) return reason;
+  return decodedTextCandidateReason([
+    normalizeText(buffer.toString('utf16le')),
+    normalizeText(buffer.subarray(1).toString('utf16le')),
+    normalizeText(decodeUtf16Be(buffer)),
+    normalizeText(decodeUtf16Be(buffer, 1)),
+  ]) ?? reason;
 }
 function sameFileIdentity(left, right) { return left.dev === right.dev && left.ino === right.ino; }
 function sameWorktreeStatIdentity(left, right) {
@@ -747,7 +758,7 @@ function createUtf16BeStreamDecoder() {
       const evenLength = joined.length - (joined.length % 2);
       dangling = evenLength === joined.length ? null : joined[evenLength];
       if (evenLength === 0) return '';
-      const swapped = Buffer.allocUnsafe(evenLength);
+  const swapped = Buffer.alloc(evenLength);
       for (let index = 0; index < evenLength; index += 2) { swapped[index] = joined[index + 1]; swapped[index + 1] = joined[index]; }
       return decoder.write(swapped);
     },
@@ -837,18 +848,40 @@ function base64AlphabetValue(byte) {
   return null;
 }
 function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
-  let quartet = ''; let decoded = null; let decodedTransfer = ''; let length = 0; let active = true; let terminal = false; let terminalTail = 0; let found = null;
-  const flushDecoded = () => {
-    if (decodedTransfer.length === 0 || length < 32) return;
+  let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = []; let length = 0; let active = true; let terminal = false; let terminalTail = 0; let found = null;
+  const flushDecodedBytes = () => {
+    if (batch.length === 0) return;
     decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
-    decoded.feed(Buffer.from(decodedTransfer, 'base64'));
-    decodedTransfer = '';
+    decoded.feed(Buffer.from(batch));
+    batch = [];
+  };
+  const addDecodedByte = value => {
+    batch.push(value);
+    if (batch.length === TRANSFER_DECODE_CHUNK_BYTES) flushDecodedBytes();
+  };
+  const decodeQuartet = value => {
+    const sextet = character => {
+      const code = character.charCodeAt(0);
+      if (code >= 0x41 && code <= 0x5a) return code - 0x41;
+      if (code >= 0x61 && code <= 0x7a) return code - 0x61 + 26;
+      if (code >= 0x30 && code <= 0x39) return code - 0x30 + 52;
+      return character === '+' ? 62 : 63;
+    };
+    const first = sextet(value[0]); const second = sextet(value[1]);
+    addDecodedByte((first << 2) | (second >> 4));
+    if (value[2] === '=') return;
+    const third = sextet(value[2]);
+    addDecodedByte(((second & 0x0f) << 4) | (third >> 2));
+    if (value[3] === '=') return;
+    addDecodedByte(((third & 0x03) << 6) | sextet(value[3]));
   };
   const feedDecoded = value => {
-    decodedTransfer += value;
-    if (decodedTransfer.length >= BASE64_TRANSFER_CHUNK_BYTES) flushDecoded();
+    pendingQuartets += value;
+    if (length < 32) return;
+    for (let index = 0; index < pendingQuartets.length; index += 4) decodeQuartet(pendingQuartets.slice(index, index + 4));
+    pendingQuartets = '';
   };
-  const finishDecoded = () => { flushDecoded(); return decoded?.finish() ?? null; };
+  const finishDecoded = () => { if (length >= 32 && pendingQuartets) feedDecoded(''); flushDecodedBytes(); return decoded?.finish() ?? null; };
   const finishToken = () => {
     if (!active || length < 32) return null;
     if (terminal) return terminalTail <= 1 ? finishDecoded() : null;
@@ -859,7 +892,7 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
     if (quartet.length === 2 || quartet.length === 3) feedDecoded(quartet.padEnd(4, '='));
     return finishDecoded();
   };
-  const reset = () => { quartet = ''; decoded = null; decodedTransfer = ''; length = 0; active = true; terminal = false; terminalTail = 0; };
+  const reset = () => { quartet = ''; decoded = null; pendingQuartets = ''; batch = []; length = 0; active = true; terminal = false; terminalTail = 0; };
   const flush = () => { found ??= finishToken(); reset(); };
   const receive = byte => {
     const alphabet = base64AlphabetValue(byte);
