@@ -37,6 +37,16 @@ hard gate for PR #246. This record remains `PARKED`; it does not authorize a
 packet review, classification, Stage C action, live mutation, flag enablement,
 deployment, or merge.
 
+External enforcement remains absent even after this local workflow correction.
+Live GitHub `protect-main` ruleset `18904218` does **not** require the new
+trusted containment workflow. Ordinary required status checks are not bound to
+an immutable workflow/event identity, so they do not by themselves provide
+non-spoofable `pull_request_target` enforcement. This remains `PARKED` pending
+an organization/enterprise required-workflow mechanism or equivalent external
+App/ruleset enforcement, followed by real post-activation proof. This record
+does not represent that external control as configured or PR #246 as protected
+by it.
+
 ### Reviewed packet commit `d38d41f63e68971f08f7158bf5a104af62d232aa` — PARKED
 
 `d38d41f63e68971f08f7158bf5a104af62d232aa` has immutable parent

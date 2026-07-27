@@ -799,8 +799,13 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
     const trustedBaseRoot = canonicalContainmentRoot(root, base, execute);
     const budget = new ScanBudget();
     const candidate = await candidateCommitTreeViolations(head, trustedBaseRoot, execute, budget);
+    const targetCommits = commitsForRange(`${base}..${head}`, trustedBaseRoot, execute);
+    // `commitsForRange` deliberately asks Git for one more than the allowed
+    // maximum. Reject that sentinel before any history scan so a long PR
+    // cannot hide a private add/delete in the truncated tail.
+    if (targetCommits.length > MAX_HISTORY_COMMITS) throw new Error('private Phase 3C pull-request-target history commit cap exceeded');
     const historyBudget = new HistoryTraversalBudget(MAX_STRUCTURAL_SCAN_CANDIDATES - budget.candidates);
-    const history = await historyViolations(commitsForRange(`${base}..${head}`, trustedBaseRoot, execute), trustedBaseRoot, execute, budget, historyBudget);
+    const history = await historyViolations(targetCommits, trustedBaseRoot, execute, budget, historyBudget);
     const violations = [...candidate.violations, ...history];
     if (violations.length) {
       const summary = [...new Map(violations.map(item => [`${item.repoPath}\0${item.reason}`, item])).values()];
@@ -808,7 +813,7 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
     }
     return {
       checked_path_count: candidate.entryCount,
-      checked_commit_count: commitsForRange(`${base}..${head}`, trustedBaseRoot, execute).length,
+      checked_commit_count: targetCommits.length,
       checked_ignored_count: 0,
       worktree_scan_duration_ms: 0,
       scanned_candidate_count: budget.candidates,
