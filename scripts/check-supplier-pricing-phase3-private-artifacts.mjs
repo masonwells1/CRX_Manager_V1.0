@@ -186,12 +186,26 @@ function ownerDecisionHeaderReason(text) {
 }
 function compressedArchiveReason(bytes) {
   const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  // Keep signatures numeric so this checker does not contain a raw archive
+  // header and reject its own source while scanning the introducing PR.
   const signatures = [
-    Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from([0x50, 0x4b, 0x05, 0x06]), Buffer.from([0x50, 0x4b, 0x07, 0x08]),
-    Buffer.from([0x1f, 0x8b, 0x08]), Buffer.from('BZh'), Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]),
-    Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]), Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07]),
-  ];
-  return signatures.some(signature => source.indexOf(signature) !== -1) ? 'compressed archive container cannot be inspected' : null;
+    [0x50, 0x4b, 0x03, 0x04], [0x50, 0x4b, 0x05, 0x06], [0x50, 0x4b, 0x07, 0x08],
+    [0x1f, 0x8b, 0x08], [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00],
+    [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c], [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07],
+  ].map(signature => Buffer.from(signature));
+  const bzipPrefix = Buffer.from([0x42, 0x5a, 0x68]);
+  const bzipBlockMagic = Buffer.from([0x31, 0x41, 0x59, 0x26, 0x53, 0x59]);
+  let hasBzipHeader = false;
+  for (let index = source.indexOf(bzipPrefix); index !== -1; index = source.indexOf(bzipPrefix, index + 1)) {
+    const blockSize = source[index + 3];
+    if (blockSize >= 0x31 && blockSize <= 0x39 && source.subarray(index + 4, index + 10).equals(bzipBlockMagic)) {
+      hasBzipHeader = true;
+      break;
+    }
+  }
+  return hasBzipHeader || signatures.some(signature => source.indexOf(signature) !== -1)
+    ? 'compressed archive container cannot be inspected'
+    : null;
 }
 /** Detect packet structure, not canonical whitespace or a filename. */
 export function structuralPrivateArtifactReason(bytes) {
@@ -308,62 +322,30 @@ function createOwnerHeaderStreamDetector() {
     finish() { finishLine(); return found; },
   };
 }
-function createDecodedPropertyStreamDetector(keys) {
-  const tokenToKey = new Map([...new Set(keys)].map(key => [`"${key}"`, key]));
-  const maxTokenLength = Math.max(...[...tokenToKey.keys()].map(token => token.length));
-  const pending = new Set();
-  const signals = new Set();
-  let recent = '';
-  let escape = '';
-  const consume = character => {
-    for (const key of [...pending]) {
-      if (/\s/u.test(character)) continue;
-      if (character === ':') signals.add(key);
-      pending.delete(key);
-    }
-    recent = `${recent}${character}`.slice(-maxTokenLength);
-    if (character === '"') for (const [token, key] of tokenToKey) if (recent.endsWith(token)) pending.add(key);
-  };
-  const decode = character => {
-    if (!escape) {
-      if (character === '\\') { escape = '\\'; return; }
-      consume(character);
-      return;
-    }
-    escape += character;
-    if (escape.length === 2 && character !== 'u') {
-      consume('\\');
-      escape = '';
-      decode(character);
-      return;
-    }
-    if (escape.length !== 6) return;
-    if (/^\\u[0-9a-fA-F]{4}$/.test(escape)) consume(String.fromCharCode(Number.parseInt(escape.slice(2), 16)));
-    else for (const rawCharacter of escape) consume(rawCharacter);
-    escape = '';
-  };
-  return {
-    feed(text) { for (const character of text) decode(character); },
-    finish() {
-      for (const character of escape) consume(character);
-      escape = '';
-      return signals;
-    },
-  };
-}
 function createStructuralTextStreamScanner() {
   let tail = '';
   let formatPropertySignal = false;
   const formatValueSignals = new Set();
   const propertySignals = new Set();
   const ownerHeader = createOwnerHeaderStreamDetector();
-  const decodedProperties = createDecodedPropertyStreamDetector(['format', ...STRUCTURAL_KEY_GROUPS.flat()]);
+  const deferredPropertyPattern = new RegExp(`"(${['format', ...new Set(STRUCTURAL_KEY_GROUPS.flat())].map(escapedRegex).join('|')})"\\s*$`);
+  let pendingProperty = null;
+  const signalProperty = key => {
+    if (key === 'format') formatPropertySignal = true;
+    else propertySignals.add(key);
+  };
   return {
     feed(text) {
       ownerHeader.feed(text);
-      decodedProperties.feed(text);
       const window = tail + text;
       const comparable = decodeJsonUnicodeEscapes(window);
+      if (pendingProperty) {
+        const next = decodeJsonUnicodeEscapes(text).match(/\S/u)?.[0];
+        if (next) {
+          if (next === ':') signalProperty(pendingProperty);
+          pendingProperty = null;
+        }
+      }
       if (hasQuotedProperty(comparable, 'format')) formatPropertySignal = true;
       for (const format of JSON_FORMATS) {
         const valuePattern = new RegExp(`"${escapedRegex(format)}(?:"|(?=\\s*[,}\\]]|$))`);
@@ -372,14 +354,12 @@ function createStructuralTextStreamScanner() {
       for (const key of STRUCTURAL_KEY_GROUPS.flat()) {
         if (hasQuotedProperty(comparable, key)) propertySignals.add(key);
       }
+      const deferred = deferredPropertyPattern.exec(comparable)?.[1];
+      if (deferred) pendingProperty = deferred;
       tail = window.slice(-STREAM_TAIL_CHARS);
     },
     finish() {
       const ownerSignal = ownerHeader.finish();
-      for (const key of decodedProperties.finish()) {
-        if (key === 'format') formatPropertySignal = true;
-        else propertySignals.add(key);
-      }
       const structuralSignal = STRUCTURAL_KEY_GROUPS.some(group => group.every(key => propertySignals.has(key)));
       if (formatPropertySignal && formatValueSignals.size > 0) return 'private JSON format marker in malformed candidate';
       if (structuralSignal) return 'private snapshot or manifest key structure';
@@ -466,7 +446,7 @@ function createStructuralByteStreamScanner({ checkArchives = true } = {}) {
       if (checkArchives) {
         const archiveProbe = archiveTail.length === 0 ? bytes : Buffer.concat([archiveTail, bytes]);
         archiveReason ??= compressedArchiveReason(archiveProbe);
-        archiveTail = Buffer.from(archiveProbe.subarray(-5));
+        archiveTail = Buffer.from(archiveProbe.subarray(-9));
       }
       utf8Scanner.feed(utf8Decoder.write(bytes));
       if (utf16Decoders) { for (let index = 0; index < utf16Decoders.length; index += 1) utf16Scanners[index].feed(utf16Decoders[index].write(bytes)); return; }

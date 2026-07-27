@@ -12,10 +12,10 @@ private marker and requires a fail-closed `embedded Git repository` verdict whil
 existing allowance for unrelated ignored symlinks. Benign embedded repositories deliberately
 remain fail-closed containment candidates. ZIP/XLSX, gzip, bzip2, xz, 7z, and RAR candidates fail
 closed even with a harmless prefix when tracked, staged, modified, or non-ignored untracked because
-their compressed members cannot be inspected by the bounded raw-byte scanner; ordinary ignored
-dependency and cache files remain out of that archive-only check. Streamed decoded-property
-detection now evaluates candidate keys only at a closing quote, preventing partial-token state from
-being treated as a complete JSON property while retaining chunk-boundary detection.
+their compressed members cannot be inspected by the bounded raw-byte scanner; numeric signature
+definitions prevent the checker from rejecting its own source. Ordinary ignored dependency and
+cache files remain out of that archive-only check. Streamed property detection retains a recognized
+quoted key across arbitrary whitespace to its next delimiter without growing the fixed scan window.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 
