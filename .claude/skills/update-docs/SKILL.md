@@ -24,8 +24,8 @@ find supabase/functions -mindepth 1 -maxdepth 1 -type d ! -name _shared | wc -l
 # Unit test file count
 find src -name "*.test.ts" -o -name "*.test.tsx" | wc -l
 
-# E2E test file count
-find e2e -name "*.test.ts" 2>/dev/null | wc -l
+# E2E test file count (this repo uses tests/e2e, not e2e)
+find tests/e2e -name "*.spec.ts" -o -name "*.test.ts" 2>/dev/null | wc -l
 ```
 
 ## Step 2: Check Reference-Doc Counts
@@ -48,9 +48,19 @@ Read `docs/reference/migration-history.md`. Then list all actual migration files
 ls supabase/migrations/
 ```
 
-Compare the lists. If any migration file exists on disk but is NOT in the migration history table, add a new row. Use the filename to figure out the timestamp and description (the part after the timestamp in the filename).
+Compare the lists. If any migration file exists on disk but is NOT in the migration history
+table, add a new row. The filename gives the timestamp and a slug, and that is **all** it gives.
 
-Update the "77+ migrations" count in the title if it changed.
+**Never infer applied/planned/rolled-back status from a filename.** A file on disk proves only
+that the migration was written. To state whether it is live, check the live database read-only
+(Supabase MCP `list_migrations` on project `rhyzpcqhnizqbxphqdkr`) and record what you actually
+observed. If you did not check, write the row with the status left explicitly unknown rather
+than guessing — a fabricated "applied" row is worse than a blank one.
+
+The title count tracks **migration-history entries**, not SQL files on disk; the two legitimately
+differ (a rolled-back or superseded migration can have an entry without a live counterpart, and
+vice versa). Recount whichever metric the title actually claims and update it to the real number
+— do not copy the `ls | wc -l` figure into the title without checking which metric it is.
 
 ## Step 4: Check pages-routes.md
 
@@ -60,10 +70,11 @@ Read `docs/reference/pages-routes.md`. Then extract all lazy-loaded pages from A
 grep "lazy(" src/App.tsx
 ```
 
-Also check the Route definitions to find paths:
+Also check the route definitions to find paths. `App.tsx` uses `createBrowserRouter` **route
+objects**, so the paths are object properties (`path:`), not JSX attributes (`path=`):
 
 ```bash
-grep -E "path=" src/App.tsx
+grep -nE "^\s*\{?\s*path:" src/App.tsx
 ```
 
 If any page exists in App.tsx but is NOT in pages-routes.md, add it with its route path and a short description. Update the page count in the title if it changed.
@@ -72,25 +83,36 @@ If any page exists in App.tsx but is NOT in pages-routes.md, add it with its rou
 
 Read `docs/reference/database-schema.md` (the table listings).
 
-Since we can't query the live database locally, check for NEW tables by scanning recent migrations:
+The live database **is** reachable read-only through the Supabase MCP connector (project
+`rhyzpcqhnizqbxphqdkr`) — prefer it, because it is the only thing that proves what actually
+exists. Use `list_tables`, or `execute_sql` against `information_schema` / `pg_policies`, and
+diff that against `database-schema.md`. Never mutate live state from this skill.
+
+Fall back to scanning migrations only when the connector is unavailable, and say so in the
+summary. Scan **all** table-creating migrations, not just the newest few — an older undocumented
+table stays invisible forever if you only ever look at the tail:
 
 ```bash
-grep -l "CREATE TABLE" supabase/migrations/*.sql | tail -5
+grep -l "CREATE TABLE" supabase/migrations/*.sql
 ```
 
-For each recent migration that creates a table, verify that table appears in database-schema.md. If not, add it under the correct domain section. Also check for new RLS policies in those migrations.
+For each, verify that table appears in database-schema.md. If not, add it under the correct
+domain section. Also check for new RLS policies in those migrations.
 
 ## Step 6: Check rpc-functions.md
 
 Read `docs/reference/rpc-functions.md`.
 
-Check for NEW functions in recent migrations:
+Prefer the live catalog (Supabase MCP `execute_sql`, read-only, against `pg_proc` joined to
+`pg_namespace` where `nspname = 'public'`) — it reflects what is really callable, including
+overloads. Fall back to scanning migrations when the connector is unavailable, and scan all of
+them rather than the tail:
 
 ```bash
-grep -l "CREATE.*FUNCTION" supabase/migrations/*.sql | tail -5
+grep -l "CREATE.*FUNCTION" supabase/migrations/*.sql
 ```
 
-For each recent migration that creates a function, verify it appears in rpc-functions.md. If not, add it under the correct category.
+For each, verify it appears in rpc-functions.md. If not, add it under the correct category.
 
 ## Step 7: Cross-Check Other Docs
 

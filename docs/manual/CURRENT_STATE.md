@@ -108,8 +108,11 @@ The three headline items:
 
 - **Production URL:** `https://croprxsolutions.app`
 - **Supabase project:** `rhyzpcqhnizqbxphqdkr`
-- **Deploy model:** pushing to `main` on GitHub deploys to production on
-  Vercel automatically — there is no separate deploy step.
+- **Deploy model:** a **merge to `main`** deploys production on Vercel
+  automatically — there is no separate deploy step. Since the `protect-main`
+  ruleset landed (2026-07-14) nobody can push to `main` directly, so landing
+  work means: push a branch, open a PR, let the checks pass, read and resolve
+  CodeRabbit's review, then merge. The merge is the deploy.
 - **Supabase plan:** FREE — no point-in-time recovery (PITR). The weekly
   in-database backup plus the off-site weekly GitHub Action dump are the
   only recovery mechanisms.

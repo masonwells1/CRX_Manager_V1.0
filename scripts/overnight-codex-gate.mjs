@@ -12,6 +12,11 @@
  *   Passing the prompt via a FILE avoids argv-escaping landmines.
  * - Resolves the newest codex.exe (version-hashed dir) and falls back to the
  *   `codex` shim on PATH. Runs `codex exec --sandbox read-only -C <repoRoot>`
+ *   with NO `-m`, so the review runs on whatever agent the Codex config names.
+ *   That is deliberate: `gpt-5.6-sol` is the configured default and is the
+ *   review agent of the three 5.6 agents (sol = reviewer, terra = builder,
+ *   luna = low-risk). Pinning `-m` here would silently diverge from the config
+ *   the rest of the harness follows.
  *   with stdin closed (non-TTY stdin otherwise blocks "Reading additional input
  *   from stdin…" → hang). Prints Codex's output to stdout; exits with its code.
  *

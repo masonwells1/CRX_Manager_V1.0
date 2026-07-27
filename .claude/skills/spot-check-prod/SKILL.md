@@ -9,11 +9,20 @@ A 30-second production health check. Pulls live status from each external system
 
 ## Step 1: Sentry — recent errors
 
-If Sentry MCP is available (`mcp__sentry__*`):
+Sentry is a **connector**, so its tools are UUID-prefixed — they are named
+`mcp__<uuid>__search_issues`, `mcp__<uuid>__search_events`, etc., **not** `mcp__sentry__*`.
+Matching on `mcp__sentry__*` never matches anything and silently skips this whole section; that
+was a real defect. Discover the tools by name suffix (`search_issues`, `find_projects`,
+`analyze_issue_with_seer`) rather than by a hard-coded prefix, and never hard-code a UUID —
+reinstalling the connector rebinds it.
+
+If the Sentry tools are available:
 - Query the project for issues created or seen in the last 24 hours
 - Capture: count, top 3 by frequency, any new (first-seen-in-24h) issues
 
-If Sentry MCP is NOT available, tell the user how to check manually (sentry.io dashboard for the CRX Manager project) and skip this section in the report.
+If they are NOT available, say so explicitly, mark this section UNAVAILABLE in the report, and
+tell the user to check the sentry.io dashboard for the CRX Manager project. An unavailable
+section is never a pass.
 
 Notes:
 - Filter out known-noise issues if Mason has flagged any (check `docs/` for any "sentry-ignore" notes).
@@ -35,7 +44,8 @@ mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_advisors
 
 Capture:
 - Total count of ERROR + WARN findings
-- Any NEW findings since the last run (compare to `CLAUDE.md` Current State if there's a recent reference like "Supabase performance advisor: 0 WARN findings")
+- Any NEW findings since the last run. The baseline lives in `docs/manual/CURRENT_STATE.md`
+  (`CLAUDE.md` no longer has a "Current State" section and must not regain one).
 - Specifically flag any advisor in the "RLS not enabled" / "SECURITY DEFINER missing search_path" family — these are the B7/B8/B9 class
 
 ### Known `profile_public_view` exception
@@ -66,12 +76,19 @@ actionable and report the exact failed or blocked check.
 
 ## Step 3: Vercel — last build status
 
-If the Vercel plugin is enabled (`mcp__0fb370f6-ff90-41a7-8c20-6f1490a21d59__*`):
+The Vercel plugin (`vercel@claude-plugins-official`) is **enabled** in `.claude/settings.json`.
+Its tools are connector-scoped and UUID-prefixed, so locate them by name suffix
+(`list_deployments`, `get_deployment`, `get_deployment_build_logs`) rather than by a hard-coded
+prefix — a reinstall rebinds the UUID.
+
 - `list_deployments` for the croprxsolutions.app project
 - Capture: last deploy status (READY / ERROR / BUILDING), commit SHA, time
-- If status = ERROR, capture build log excerpt
+- If status = ERROR, capture the build log excerpt, then check the **production alias** — a
+  failed build usually leaves the previous good deployment still serving production, so a red
+  build is not by itself a production outage.
 
-If Vercel plugin is NOT enabled, suggest user enable it via `.claude/settings.json` (it's already in the config, just set to false).
+If the tools are not reachable, mark this section UNAVAILABLE and say so; do not assume the
+plugin is disabled.
 
 ## Step 4: Edge Functions — deploy state
 
@@ -82,7 +99,9 @@ mcp__50e15046-cf2c-49da-b8df-ceef27768f63__list_edge_functions
   project_id: rhyzpcqhnizqbxphqdkr
 ```
 
-Capture each function name, current live version, last update timestamp. Compare against CLAUDE.md's "Current State" version references (e.g., "send-email v11") — flag any that drifted.
+Capture each function name, current live version, last update timestamp. Compare against the
+version references in `docs/manual/CURRENT_STATE.md` (e.g. "send-email v11") — flag any that
+drifted. Do not look for these in `CLAUDE.md`; that section moved.
 
 ## Step 5: Recent Supabase logs (5min scan)
 
@@ -112,7 +131,7 @@ SENTRY (24h)
     3. <error message> — <count> events
 
 SUPABASE ADVISORS
-  Security raw:        <N error / N warn>  [previous baseline: <from CLAUDE.md>]
+  Security raw:        <N error / N warn>  [baseline: docs/manual/CURRENT_STATE.md]
   Security actionable: <N error / N warn>  [verified exceptions: <none / list>]
   Performance: <N error / N warn>
   New findings:
@@ -127,7 +146,7 @@ EDGE FUNCTIONS
   create-user:                v<N>   (last updated <date>)
   process-blend-ticket:       v<N>   ...
   ...
-  Drift from CLAUDE.md:       <none / list>
+  Drift from CURRENT_STATE.md: <none / list>
 
 LIVE LOGS (5min)
   api errors:        <count> — top: <message>
@@ -136,10 +155,15 @@ LIVE LOGS (5min)
 
 ─── OVERALL ─────────────────────────────────────────
 
-<One-line verdict:
-  "GREEN — prod is healthy"
+<One-line verdict. GREEN requires that EVERY section actually ran:
+  "GREEN — prod is healthy (all N sections checked)"
+  "INCOMPLETE — <N> section(s) unavailable: <list>; nothing actionable in what did run"
   "YELLOW — <N> non-urgent issues, see above"
   "RED — <urgent issue>, recommend immediate action">
+
+Never report GREEN when a section was skipped or its tools were unavailable — a partial check
+that reads as "prod is healthy" is exactly the false green this skill must not produce. List the
+unchecked sections by name in the verdict line.
 
 ─── RECOMMENDED NEXT STEPS ──────────────────────────
 
@@ -151,7 +175,10 @@ LIVE LOGS (5min)
 If any RED issue surfaced, offer:
 - "Want me to investigate the <X> error?" (would invoke `/quick-fix` or just deep-read the Sentry issue)
 - "Want me to dispatch the rls-security-reviewer subagent on the latest migration?" (if Supabase flagged RLS issues)
-- "Want me to roll back the Vercel deploy?" (if build failed mid-deploy)
+- "Want me to roll back the Vercel deploy?" — **only after confirming production is actually
+  serving the bad build.** A failed build normally leaves the previous production deployment
+  live, so check the production alias first; rolling back a healthy production because a
+  candidate build went red makes things worse.
 
 Do NOT take any of these actions automatically. Mason decides.
 
@@ -160,4 +187,6 @@ Do NOT take any of these actions automatically. Mason decides.
 - This is READ-ONLY. Never modify state on Sentry, Supabase, or Vercel from this skill.
 - If an MCP tool fails, say so explicitly — don't silently skip a section.
 - Don't include the dashboard if every section is empty (means MCPs aren't available) — instead report which MCPs need to be set up.
+- Mark every section that could not run as UNAVAILABLE, and downgrade the overall verdict to INCOMPLETE. Partial evidence never yields GREEN.
+- Never hard-code a connector UUID; resolve tools by name suffix so a reinstall doesn't silently disable a section.
 - Keep the output under one screen. If there's too much to display, link/cite and let Mason ask follow-up.

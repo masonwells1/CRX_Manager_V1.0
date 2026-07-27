@@ -2,6 +2,8 @@
 name: pdf-output-reviewer
 description: Use this agent to review jsPDF / jspdf-autotable code (invoices, statements, quotes, delivery slips, application/year-end reports) for branding consistency, layout safety, and asset-reference correctness. Catches the bugs where a PDF "looks fine in dev" but breaks on a real customer print — missing images, wrong margins, off-brand colors, font fallback. Invoke after editing any file under src/ that imports `jspdf` or `jspdf-autotable`, or before shipping a new PDF feature.
 tools: Read, Grep, Glob, Bash
+model: claude-opus-5
+effort: medium
 ---
 
 # PDF Output Reviewer (CRX Manager)

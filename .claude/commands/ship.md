@@ -111,7 +111,7 @@ If the migration touches a CHECK constraint, function with an existing name, or 
 
 Decide if the change is **Codex-worthy**: it touches a migration, RLS/RPC security, a money path, or an Edge Function. (A pure CSS/copy/layout change is NOT worthy — note that and skip to Step 7.)
 
-If worthy, run an **independent Codex (gpt-5.5) review directly via the headless CLI** — invoke `/codex-review` (scope `--base main`). It runs `codex review` non-interactively, captures findings to `.claude/session-state/codex-review-latest.txt`, and returns a verdict (SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK). No paste loop.
+If worthy, run an **independent Codex (gpt-5.6-sol) review directly via the headless CLI** — invoke `/codex-review` (scope `--base origin/main`, after `git fetch origin`, so a stale local `main` can't distort the diff). It runs `codex review` non-interactively, captures findings to `.claude/session-state/codex-review-latest.txt`, and returns a verdict (SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK). No paste loop.
 
 Then act on the result like any other reviewer:
 - **BLOCKER / HIGH** → feed back into the Step 4 auto-fix loop (read the cited line, confirm it's real, fix, re-verify, re-dispatch the scoped subagents), then **re-run `/codex-review` until the verdict is SHIP or SHIP-WITH-FOLLOWUPS**. If Claude genuinely disagrees with a Codex BLOCKER, do NOT silently override — surface both positions to Mason and stop.
