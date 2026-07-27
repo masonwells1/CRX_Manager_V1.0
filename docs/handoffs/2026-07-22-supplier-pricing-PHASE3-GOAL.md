@@ -2,18 +2,21 @@
 
 **Owner:** Mason Wells
 **Approved:** 2026-07-22
-**Status:** Stage A, Stage B1, and Stage B2 are landed. Stage C remains parked on the fresh post-Stage-A packet, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
+**Status:** Stage A, Stage B1, and Stage B2 are landed. Stage C remains parked on the regenerated-and-verified 604-row aggregate-only post-Stage-A packet, fresh exact review, a protected green/CodeRabbit-resolved PR, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
 **Orchestrator:** GPT-5.6 Sol, high reasoning
 **Coordination lane:** this contract is persisted on the dedicated `codex/supplier-pricing-phase3` docs branch
-**Current lane:** the Supplier Pricing Phase 3C owner-review packet is parked pending regenerated packet proof and Mason's later row/field/checksum approval. B1 and B2 are landed historical work. Never reuse the coordination/docs branch or worktree `7582`.
+**Current lane:** the Supplier Pricing Phase 3C owner-review packet is regenerated and verified at 604 aggregate-only rows, but parked pending fresh exact review, protected PR acceptance, and Mason's later row/field/checksum approval. B1 and B2 are landed historical work. Never reuse the coordination/docs branch or worktree `7582`.
 
 ## Current Runner Instruction — Parked Stage C Review Packet
 
 Stage A, B1, and B2 are landed. The only current Supplier Pricing lane is the
-parked Stage C owner-review packet: regenerate the private post-Stage-A packet,
-prove it, and obtain Mason's later row/field/checksum approval before a separate
-guarded Stage C migration can be designed. This packet is not a classification,
-approval, migration, or live-data action.
+parked Stage C owner-review packet: preserve the already regenerated-and-
+verified private post-Stage-A packet (604 aggregate-only rows), obtain fresh
+exact review and protected-PR acceptance, then obtain Mason's row/field/checksum
+approval before a separate guarded Stage C migration can be designed. Do not
+recapture or regenerate the packet unless an explicit invalidation condition
+occurs. This packet is not a classification, approval, migration, or live-data
+action.
 
 The current Stage C deny set remains explicit:
 
@@ -131,11 +134,17 @@ Open a separate protected UI PR and stop before merge.
 
 ### Stage C — owner-approved classification
 
-The proposed manifest must reconcile every Product row as family-assigned, standalone, or unresolved, with policy evidence and expected-old-value guards. No proposed family or non-`unknown` policy becomes approved merely because an agent generated it. The next path is fresh post-Stage-A packet → Mason row/field/checksum approval → separate guarded Stage C migration PR → separate live-apply approval.
+The proposed manifest must reconcile every Product row as family-assigned, standalone, or unresolved, with policy evidence and expected-old-value guards. No proposed family or non-`unknown` policy becomes approved merely because an agent generated it. The current path is verified 604-row aggregate-only packet → fresh exact review and protected PR acceptance → Mason row/field/checksum approval → separate guarded Stage C migration PR → separate live-apply approval.
 
-The pre-Stage-A packet is a proposal only. After Stage A is live, regenerate it from the actual new schema and live read-only values, producing a fresh count and checksum. Mason must approve or reject every row disposition and every changed field, including explicit acknowledgment of unresolved rows.
+The pre-Stage-A packet was a proposal only. It was superseded after Stage A by
+the current regenerated-and-verified 604-row aggregate-only packet. Do not
+recapture or regenerate it unless an explicit invalidation condition occurs.
+Mason must approve or reject every row disposition and every changed field,
+including explicit acknowledgment of unresolved rows.
 
-After Mason explicitly approves the exact regenerated packet, create a separate one-to-one data migration bound to its approval checksum. Stop again for normal migration review and explicit live-apply approval.
+After Mason explicitly approves the exact verified packet, create a separate
+one-to-one data migration bound to its approval checksum. Stop again for normal
+migration review and explicit live-apply approval.
 
 ### Stage D — postflight
 

@@ -72,10 +72,22 @@ requested `opus`, resolved helper `claude-haiku-4-5-20251001` and reviewer
 BLOCKER/HIGH/MED finding. This cleanup is authored against that reviewed parent;
 the commit containing it is identified by Git and PR metadata, not guessed here.
 
+Exact `a7506a01a9d65849a160ee608cdb36b4d60501ba` review found two MEDIUM
+current-document contradictions and accepted LOW follow-ups; Sol returned
+`FIX` solely for those documentation dispositions. Luna `gpt-5.6-luna`, session
+`019fa381-40b5-77e0-964f-d7aafc35b7fd`, returned `FIX` for MEDIUM summary
+provenance; its focused fixture sandbox limitation was `EPERM` only. Claude
+VERIFIED run `2026-07-27T12-30-09-152Z-663c4f7b` reviewed exact `a7506a01` at
+`xhigh`: requested `opus`, resolved helper `claude-haiku-4-5-20251001` and
+reviewer `claude-opus-4-8`, and returned `SHIP-WITH-FOLLOWUPS` with no
+BLOCKER/HIGH finding. Its conditional bootstrap-base drift finding remains
+fail-closed and requires a fresh `origin/main` fetch before publication; no code
+change is warranted while the base remains pinned.
+
 ## Owner action and hard boundary
 
 The packet has been regenerated and verified, but Mason must not begin the
-row-by-row private-sheet review yet. All owner decisions remain `PENDING`; no
+row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
 Product classification is approved. The remaining gate is final exact review of
 this documentation correction plus a protected PR that is accepted with its
 required checks green and any real CodeRabbit finding resolved. The PR is not
@@ -85,8 +97,9 @@ exact packet before a separate Stage C design mission is considered. No Stage C
 SQL, migration, or apply; no live mutation; no flag enablement; and no deploy or
 merge is authorized by this record.
 
-For durable SHA provenance, this correction is authored against reviewed commit
-`d38d41f63e68971f08f7158bf5a104af62d232aa` and its parent `07813f69`. The
+For durable SHA provenance, this correction is authored against reviewed parent
+`a2002c3c35d78be07690ff643d8d4c7dfceee0cb` and its parent
+`d38d41f63e68971f08f7158bf5a104af62d232aa`. The
 commit that contains this correction is identified by Git and PR metadata, not
 guessed inside this text. Any future model alias must likewise record its
 resolved model truthfully; no literal Opus 5 review is claimed.

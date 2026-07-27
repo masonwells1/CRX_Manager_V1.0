@@ -1,10 +1,11 @@
 # Supplier Pricing Phase 3 — Corrected Implementation Plan
 
 **Date:** 2026-07-22
-**Verdict:** SAFE TO BUILD AFTER PR #213 RECONCILIATION
+**Verdict:** PARKED — final exact review, protected PR acceptance, and Mason
+approval are required before any Stage C design.
 **Approved scope:** product families, structured policy/packaging metadata, exact-SKU picker clarity, and return/credit enforcement
 **Execution contract:** `docs/handoffs/2026-07-22-supplier-pricing-PHASE3-GOAL.md`
-**Current status:** Stage A/B1/B2 are landed. The remaining Stage C path is a fresh post-Stage-A packet, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
+**Current status:** Stage A/B1/B2 are landed. The remaining Stage C path is the regenerated-and-verified 604-row aggregate-only post-Stage-A packet, fresh exact review, protected PR acceptance, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
 
 ## Outcome in Plain English
 
@@ -12,7 +13,11 @@ Every existing Product row remains the same sellable and inventory SKU. Phase 3 
 
 The safe default is `unknown`: an unclassified Product behaves as it does today. A row is blocked only after Mason approves an explicit `no_return` classification.
 
-Current discovery observed 604 Product rows (595 active), but those counts must be refreshed after #213. The older estimate of 163 variants is context, not an acceptance count. The classification packet must reconcile every current row.
+The current packet covers 604 Product rows and is regenerated and
+verified. Do not refresh or regenerate it merely because #213 has since landed;
+recapture is allowed only after an explicit invalidation condition. The older
+estimate of 163 variants is context, not an acceptance count. The verified
+classification packet reconciles every current row.
 
 ## Smallest Complete Architecture
 
@@ -57,7 +62,10 @@ No cost-basis selection logic changes. The global cost-basis flag remains false.
 
 ## All-Product Classification Packet
 
-Generate a proposed manifest from a fresh read-only Product snapshot. It must contain one row for every current Product with:
+The following was the construction contract for the post-Stage-A packet. That
+packet has since been regenerated and verified at 604 aggregate-only rows. Only
+an explicitly invalidated replacement packet must be generated from a fresh
+read-only Product snapshot, with one row for every current Product and:
 
 - immutable Product UUID and SKU;
 - current name, form, package/unit fields, active state, and current family/policy fields;
@@ -71,9 +79,17 @@ An agent may propose but may not approve. Uncertain rows remain `unresolved` and
 
 Mason's decision packet must require an approve/reject decision for every row's `family_assigned`, `standalone`, or `unresolved` disposition; every proposed family membership; every proposed packaging/tote-field change; every non-`unknown` policy; and explicit acknowledgment of every unresolved row. Approval is field-specific: an approved family assignment does not silently approve a package or policy change.
 
-The pre-Stage-A packet is provisional. After Stage A is live, regenerate it from the actual schema and a fresh live read-only snapshot, producing a new row count, old-value set, and checksum for owner review.
+The pre-Stage-A packet was provisional. After Stage A became live, it was
+superseded by the current regenerated-and-verified 604-row aggregate-only
+packet. Do not recapture or regenerate it unless an explicit invalidation
+condition occurs.
 
-After Mason approves that exact regenerated packet, generate a separate one-to-one data migration containing only individually approved fields and rows. The migration must bind to the exact owner-approval checksum and verify the manifest checksum, expected old values, and expected affected-row count before changing anything; any mismatch aborts the entire migration. Never merge Product rows or rewrite historical references.
+After Mason approves that exact verified packet, generate a separate one-to-one
+data migration containing only individually approved fields and rows. The
+migration must bind to the exact owner-approval checksum and verify the manifest
+checksum, expected old values, and expected affected-row count before changing
+anything; any mismatch aborts the entire migration. Never merge Product rows or
+rewrite historical references.
 
 ## Product Selector Matrix
 
@@ -150,7 +166,12 @@ Stage C adds only the owner-approved classification migration and its checksum/p
 3. **Explicit live schema gate.** Mason separately authorizes merge and live migration apply. Run migration guard, apply, and verify only in that authorized conversation.
 4. **Stage B1 PR: core UI.** Refresh from the applied schema, rerun the selector inventory, implement the core sales/returns/supplier surfaces, run authenticated desktop/phone proof, Fable, exact-SHA Sol, and the protected PR pipeline; stop before merge.
 5. **Stage B2 PR: operational/procurement UI.** Refresh from the B1 result, implement the remaining persistent Product-ID writers, rerun the same proof/review pipeline, and stop before merge.
-6. **Owner classification gate.** Regenerate the packet after Stage A is live. Mason approves/rejects every row disposition and every changed field, explicitly acknowledges unresolved rows, and approves the exact packet checksum.
+6. **Owner classification gate.** The post-Stage-A packet is already regenerated
+   and verified at 604 aggregate-only rows; do not regenerate it unless an
+   explicit invalidation condition occurs. After fresh exact review and
+   protected-PR acceptance, Mason approves/rejects every row disposition and
+   every changed field, explicitly acknowledges unresolved rows, and approves
+   the exact packet checksum.
 7. **Stage C PR: classification migration.** Generate one-to-one guarded SQL from only the approved fields/rows, prove it in a disposable database, review it, and stop before live apply.
 8. **Postflight.** After separate authorization and applies, verify repo/deploy/live ledger/schema/browser/data/flag state and write closeout evidence.
 
