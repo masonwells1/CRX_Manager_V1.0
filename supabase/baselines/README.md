@@ -68,7 +68,12 @@ The lockdown ends with two guards.
 `EXECUTE` on anything other than the exact set of functions captured. Functions
 cannot be guarded the way tables are: production legitimately grants `anon`
 `EXECUTE` on part of the schema — that is the PostgREST `/rpc/` surface — so
-"`anon` holds no `EXECUTE`" would reject live's own state. Restoring the public
+"`anon` holds no `EXECUTE`" would reject live's own state. The guard therefore
+embeds the captured function identities and compares the **set**, in both
+directions, folding `PUBLIC`-granted `EXECUTE` in because `anon` inherits it. A
+count would not do: a refreshed capture that swapped one RPC for a different,
+more sensitive one leaves the total untouched while moving what an
+unauthenticated caller can reach. Restoring the public
 schema alone leaves `anon` holding `EXECUTE` on **all 527** non-extension public
 functions; the lockdown cuts that to the **95** production grants. Extension-owned
 functions are excluded throughout: they belong to `supabase_admin`, the project
@@ -153,7 +158,11 @@ deterministic and reviewable.
    piped to `scripts/build-schema-baseline-acl.mjs`. That SQL emits one `GRANT`
    per (object, grantee) plus production's `ALTER DEFAULT PRIVILEGES`, in a
    deterministic order, for `anon`, `authenticated`, `service_role`,
-   `metabase_ro`, and `PUBLIC`.
+   `metabase_ro`, and `PUBLIC`. Table, column, routine, and default-privilege
+   grants are each split by `is_grantable` so a `WITH GRANT OPTION` is reproduced
+   rather than flattened into a plain grant. Production holds none today, so this
+   changes no output — which is the point: the capture must not be the reason a
+   future one is lost.
 3. **Platform overlay, bucket snapshot, and compact ledger** — as before, via
    `scripts/build-schema-baseline-platform.mjs` and
    `scripts/build-schema-baseline-history.mjs`.
@@ -174,7 +183,11 @@ the cron file's second application to raise
 `BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, the platform overlay's second
 application to raise `BASELINE_PLATFORM_RESTORE_REQUIRES_ABSENT_BUCKETS`, the ACL
 lockdown to re-apply cleanly, and any post-baseline migration to replay onto the
-result. Record each of those as a `true` flag in `disposable_restore_proof`.
+result. One of the required proofs is a **negative** test: on the restored database,
+swap one captured `anon` `EXECUTE` grant for a different function and confirm
+`BASELINE_ACL_ANON_EXECUTE_DRIFTED` still raises. That swap leaves the count at 95,
+so a refresh that recorded only "95 after restore" would have proven nothing about
+*which* 95. Record each of those as a `true` flag in `disposable_restore_proof`.
 `verify-schema-baseline.mjs` holds a hard-coded list of the required flags and
 fails if any is missing or not `true` — it does not iterate whatever keys happen to
 be present, because a proof that simply omitted the checks it failed would

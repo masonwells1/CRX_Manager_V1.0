@@ -71,7 +71,12 @@ for (const [file, field] of [
     path.join(repoRoot, 'scripts', 'schema-baseline-fingerprints.sql'),
     'utf8',
   );
-  const expected = [...fingerprintSql.matchAll(/^SELECT '([a-z_]+)', md5\(/gm)].map((m) => m[1]);
+  // Tolerant of whitespace on purpose. A stricter pattern silently shrinks the
+  // expected set when the SQL is reformatted, which turns this guard into the very
+  // thing it exists to prevent: a digest quietly dropped from the contract.
+  const expected = [...fingerprintSql.matchAll(/^\s*SELECT\s+'([a-z_]+)'\s*,\s*md5\s*\(/gm)].map(
+    (m) => m[1],
+  );
   const recorded = manifest.catalog_fingerprints ?? {};
   if (expected.length === 0) {
     fail('scripts/schema-baseline-fingerprints.sql declares no fingerprints');
@@ -102,6 +107,11 @@ const REQUIRED_RESTORE_PROOFS = [
   'cron_restore_fail_closed',
   'platform_restore_fail_closed',
   'acl_lockdown_reapply_is_idempotent',
+  // Negative test, not a positive one: on the disposable restore, swap one captured
+  // anon EXECUTE grant for a different function and confirm the guard still raises.
+  // The count is unchanged by such a swap, so a refresh that recorded only "95 after
+  // restore" would have proven nothing about which 95.
+  'anon_execute_guard_rejects_identity_swap',
   'post_baseline_migration_replays_clean',
 ];
 {
@@ -323,6 +333,12 @@ if (!cronJobs.includes('BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS')) {
   if (!aclLockdown.includes("AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) = 'anon')")) {
     fail('ACL lockdown table guard does not treat PUBLIC grants as reaching anon');
   }
+  // The EXECUTE guard must compare identities. A count passes unchanged when a
+  // capture swaps one RPC for a different, more sensitive one, so a regression to
+  // counting would silently drop the exact-set guarantee the README states.
+  if (!aclLockdown.includes('FULL OUTER JOIN actual a ON a.ident = e.ident')) {
+    fail('ACL lockdown anon EXECUTE guard does not compare the captured function identities');
+  }
   const grants = [...aclLockdown.matchAll(/^GRANT .+ TO .+;$/gm)];
   const defaultGrants = [...aclLockdown.matchAll(/^ALTER DEFAULT PRIVILEGES FOR ROLE .+ GRANT .+ TO .+;$/gm)];
   const statements = grants.length + defaultGrants.length;
@@ -336,7 +352,9 @@ if (!cronJobs.includes('BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS')) {
   // unauthenticated role may ever be handed by a published baseline. Sequences are
   // deliberately not covered: production grants anon USAGE/UPDATE on them, which is
   // the stock Supabase posture and only allows drawing a number, not reading rows.
-  const anonWrites = [...aclLockdown.matchAll(/^GRANT (.+) ON TABLE (\S+) TO anon;$/gm)].filter(([, privileges]) =>
+  const anonWrites = [...aclLockdown.matchAll(
+    /^GRANT (.+) ON TABLE (\S+) TO anon(?: WITH GRANT OPTION)?;$/gm,
+  )].filter(([, privileges]) =>
     privileges.split(', ').some((privilege) => !['SELECT', 'MAINTAIN'].includes(privilege)),
   );
   if (anonWrites.length > 0) {

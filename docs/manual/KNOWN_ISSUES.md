@@ -144,7 +144,7 @@ surfaced, affecting disaster-recovery rebuilds only, not production.
    tree there is nothing past the high-water. `npm run test:schema-baseline` passes:
    `SCHEMA_BASELINE_PASS high_water=20260727174805 ledger_rows=914` /
    `POST_BASELINE_MIGRATIONS_PASS pending=0`.
-   **Three real defects were found and fixed while doing it, all DR-only:**
+   **Five real defects were found and fixed while doing it, all DR-only:**
    - *Security.* A schema dump can only `GRANT`. A new Supabase project ships `ALTER DEFAULT
      PRIVILEGES` handing `anon` — the unauthenticated role — full CRUD on every table and `EXECUTE`
      on every function `postgres` creates, and `REVOKE … FROM PUBLIC` does **not** strip a
@@ -154,6 +154,17 @@ surfaced, affecting disaster-recovery rebuilds only, not production.
      nothing, re-applies production's exact 1627 grants, restores production's default privileges,
      and ends with a guard raising `BASELINE_ACL_ANON_OVER_GRANTED` if `anon` still holds anything
      beyond `SELECT`/`MAINTAIN` on a table.
+   - *Weak guard.* Found in review. The lockdown checked that `anon` held `EXECUTE` on 95
+     functions, not on *which* 95, so a refreshed capture that swapped one RPC for a more
+     sensitive one would have passed unchanged — while `README.md` promised an exact-set
+     guarantee. The guard now embeds the captured identities and compares the set both ways,
+     counting `PUBLIC`-granted `EXECUTE` as reaching `anon`. Proving it is now a required
+     *negative* test on the disposable restore: a count-neutral swap must still raise
+     `BASELINE_ACL_ANON_EXECUTE_DRIFTED`, and it does.
+   - *Lossy capture.* Found in review. The ACL capture dropped `is_grantable`, so a
+     `WITH GRANT OPTION` would have been restored as a plain grant. Live was read read-only to
+     size the exposure: zero grantable entries today, and the re-capture after the fix came back
+     byte-identical — no change now, and no silent loss later.
    - *Broken rebuild.* Found in review, by a fingerprint added in review. The lockdown's
      `REVOKE ALL ON ALL TABLES` strips **column-level** privileges along with table ones, and the
      ACL capture only emitted table-level grants — so the restore deleted production's 27

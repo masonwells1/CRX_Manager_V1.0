@@ -1,11 +1,11 @@
 {
   "format_version": 3,
   "project_id": "rhyzpcqhnizqbxphqdkr",
-  "generated_at": "2026-07-27T21:37:28.537Z",
+  "generated_at": "2026-07-27T22:03:34.219Z",
   "migrations_high_water": "20260727174805",
   "migration_ledger_rows": 914,
   "fingerprint_sql_sha256": "CC916B75DFB47C0A4E8DEF9D57924AEEDB6A2D428F3BA13319E8AB56FED1E451",
-  "acl_sql_sha256": "D705E905C11472C574C2D2B2CE87C8E2F3A17409616D5F6000C9F4822CFE1B21",
+  "acl_sql_sha256": "432B2394D160782D7604B61D56C3AF8AE94CB038AEF98648FA8C744859B7A840",
   "acl_statements": 1627,
   "restore_order": [
     "20260727174805_extensions.sql",
@@ -17,8 +17,8 @@
   ],
   "artifacts": {
     "20260727174805_acl_lockdown.sql": {
-      "bytes": 184730,
-      "sha256": "9D2CED9FDDA6B2A2DDBFE20ECBC5635B8A3DCF7F58B220A9ADFFC074A60EAC8D"
+      "bytes": 191081,
+      "sha256": "BEB500908B67DA0E31464DFA03E345A01630F65091EEFD9D0AD86195AEAAE92A"
     },
     "20260727174805_cron_jobs.sql": {
       "bytes": 4008,
@@ -120,6 +120,7 @@
     "cron_restore_fail_closed": true,
     "platform_restore_fail_closed": true,
     "acl_lockdown_reapply_is_idempotent": true,
+    "anon_execute_guard_rejects_identity_swap": true,
     "post_baseline_migration_replays_clean": true
   }
 }

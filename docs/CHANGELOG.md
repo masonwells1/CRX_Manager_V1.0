@@ -67,7 +67,7 @@ initial push. All but one sit in the verification layer rather than in the captu
 exception widened the fidelity contract itself and is described at the end. `verify-schema-baseline.mjs` now checks `restore_order` by
 exact name and position rather than by length — a manifest that dropped the ACL lockdown and repeated
 another artifact was still six entries long and would have rebuilt a project with `anon`
-over-granted — and it enumerates the ten required `disposable_restore_proof` checks rather than
+over-granted — and it enumerates the eleven required `disposable_restore_proof` checks rather than
 iterating whatever keys happen to be present, so a proof that simply omitted the checks it failed no
 longer passes. `assemble-schema-baseline.mjs` now asserts the high-water stamp appears exactly once in
 a restamped artifact before rewriting it, so a coincidental 14-digit run elsewhere in the file — a
@@ -128,6 +128,30 @@ captured-name rule as well as its version rule, so a migration whose ledger vers
 filename timestamp no longer reads as one the selector wrongly withheld. Finally, the proof text
 above is corrected: the post-baseline migration that replayed is an uncommitted file that happens to
 sit in this working checkout, not part of this change.
+
+**Review round three.** Two more holes in the capture, both found by review rather than by the
+proof. The ACL capture aggregated `aclexplode` without `is_grantable`, so any `WITH GRANT OPTION`
+would have been re-emitted as a plain grant and the baseline would have restored weaker ACLs than
+live holds. Live was read read-only to size it: **zero** grantable entries across relations, columns,
+routines and default privileges — so the fix changes no output today, which is exactly why it was
+worth making now rather than after one appeared. All four streams now split grantable from
+non-grantable rows, and the re-capture against live came back **byte-identical** to the previous one,
+which is the proof that preserving the option cost nothing. Separately, the `anon` `EXECUTE` guard
+compared a *count*: 95 before, 95 after. A refreshed capture that swapped one RPC for a different,
+more sensitive one would have passed it unchanged while moving what an unauthenticated caller can
+reach — and `README.md` claimed an exact-set guarantee the guard did not deliver. It now embeds the
+captured function identities and compares the set in both directions, folding `PUBLIC`-granted
+`EXECUTE` in because `anon` inherits it. That is now a **required negative proof**: on the restored
+database, revoking `_require_auth()` from `anon` and granting an equivalent count elsewhere raises
+`BASELINE_ACL_ANON_EXECUTE_DRIFTED: unexpected …, missing public._require_auth()` — observed, not
+assumed. `verify-schema-baseline.mjs` also asserts the guard is still set-based, so it cannot
+regress to counting. Finally the fingerprint-name discovery added in round two is now
+whitespace-tolerant: the strict pattern would have silently shrunk the expected digest set if the SQL
+were ever reformatted, making the completeness guard fail exactly the way it exists to prevent. The
+whole disposable restore was rebuilt from scratch a third time against the regenerated artifacts —
+all twelve digests match live, `anon` effective `EXECUTE` is 95 by identity, `authenticated` holds
+its 54 column privileges on `public.products`, zero grantable entries, all three sentinels fire, the
+lockdown re-applies with no non-extension warnings, and the post-baseline migration replays.
 
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 

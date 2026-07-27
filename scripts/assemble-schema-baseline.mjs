@@ -65,7 +65,12 @@ const fingerprints = pairs(read('live_fingerprints.txt'));
     path.join(repoRoot, 'scripts', 'schema-baseline-fingerprints.sql'),
     'utf8',
   );
-  const expected = [...fingerprintSql.matchAll(/^SELECT '([a-z_]+)', md5\(/gm)].map((m) => m[1]);
+  // Tolerant of whitespace on purpose. A stricter pattern silently shrinks the
+  // expected set when the SQL is reformatted, which turns this guard into the very
+  // thing it exists to prevent: a digest quietly dropped from the contract.
+  const expected = [...fingerprintSql.matchAll(/^\s*SELECT\s+'([a-z_]+)'\s*,\s*md5\s*\(/gm)].map(
+    (m) => m[1],
+  );
   if (expected.length === 0) {
     throw new Error('scripts/schema-baseline-fingerprints.sql declares no fingerprints');
   }

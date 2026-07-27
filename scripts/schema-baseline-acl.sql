@@ -19,6 +19,13 @@
 -- PUBLIC is captured alongside the named roles: a freshly created function grants
 -- EXECUTE to PUBLIC by default, production has kept that on 93 functions, and the
 -- lockdown's blanket REVOKE would otherwise strip it and diverge from live.
+--
+-- Every stream below groups by `is_grantable` as well as grantee, and emits
+-- `WITH GRANT OPTION` for the grantable rows. Production currently holds zero
+-- grantable entries in `public`, so this changes no output today; without it a
+-- future grant option would be re-emitted as a plain grant and the baseline would
+-- quietly restore weaker ACLs than live has. Splitting the rows also keeps the
+-- output deterministic, which is why `sort_grantable` joins the sort key.
 WITH managed(role_name) AS (
   VALUES ('anon'), ('authenticated'), ('service_role'), ('metabase_ro'), ('PUBLIC')
 ),
@@ -29,11 +36,13 @@ relation_grants AS (
     1 AS sort_group,
     format('%s.%s', n.nspname, c.relname) AS sort_object,
     acl.grantee_name AS sort_grantee,
+    acl.is_grantable AS sort_grantable,
     format(
-      'GRANT %s ON %s %I.%I TO %s;',
+      'GRANT %s ON %s %I.%I TO %s%s;',
       acl.privileges,
       CASE WHEN c.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
-      n.nspname, c.relname, acl.grantee_sql
+      n.nspname, c.relname, acl.grantee_sql,
+      CASE WHEN acl.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END
     ) AS statement
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -41,9 +50,10 @@ relation_grants AS (
     SELECT
       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee_name,
       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END AS grantee_sql,
+      a.is_grantable,
       string_agg(a.privilege_type, ', ' ORDER BY a.privilege_type) AS privileges
     FROM aclexplode(c.relacl) a
-    GROUP BY a.grantee
+    GROUP BY a.grantee, a.is_grantable
   ) acl
   WHERE n.nspname = 'public'
     AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
@@ -61,10 +71,12 @@ column_grants AS (
     2 AS sort_group,
     format('%s.%s.%s', n.nspname, c.relname, att.attname) AS sort_object,
     acl.grantee_name AS sort_grantee,
+    acl.is_grantable AS sort_grantable,
     format(
-      'GRANT %s ON TABLE %I.%I TO %s;',
+      'GRANT %s ON TABLE %I.%I TO %s%s;',
       acl.privileges,
-      n.nspname, c.relname, acl.grantee_sql
+      n.nspname, c.relname, acl.grantee_sql,
+      CASE WHEN acl.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END
     ) AS statement
   FROM pg_attribute att
   JOIN pg_class c ON c.oid = att.attrelid
@@ -73,9 +85,10 @@ column_grants AS (
     SELECT
       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee_name,
       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END AS grantee_sql,
+      a.is_grantable,
       string_agg(format('%s(%I)', a.privilege_type, att.attname), ', ' ORDER BY a.privilege_type) AS privileges
     FROM aclexplode(att.attacl) a
-    GROUP BY a.grantee
+    GROUP BY a.grantee, a.is_grantable
   ) acl
   WHERE n.nspname = 'public'
     AND c.relkind IN ('r', 'p', 'v', 'm')
@@ -91,10 +104,12 @@ routine_grants AS (
     3 AS sort_group,
     format('%s.%s(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) AS sort_object,
     acl.grantee_name AS sort_grantee,
+    acl.is_grantable AS sort_grantable,
     format(
-      'GRANT %s ON FUNCTION %I.%I(%s) TO %s;',
+      'GRANT %s ON FUNCTION %I.%I(%s) TO %s%s;',
       acl.privileges,
-      n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), acl.grantee_sql
+      n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), acl.grantee_sql,
+      CASE WHEN acl.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END
     ) AS statement
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -103,9 +118,10 @@ routine_grants AS (
     SELECT
       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee_name,
       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END AS grantee_sql,
+      a.is_grantable,
       string_agg(a.privilege_type, ', ' ORDER BY a.privilege_type) AS privileges
     FROM aclexplode(p.proacl) a
-    GROUP BY a.grantee
+    GROUP BY a.grantee, a.is_grantable
   ) acl
   WHERE n.nspname = 'public'
     AND d.objid IS NULL
@@ -120,8 +136,9 @@ default_privileges AS (
     4 AS sort_group,
     format('%s.%s', n.nspname, d.defaclobjtype::text) AS sort_object,
     acl.grantee_name AS sort_grantee,
+    acl.is_grantable AS sort_grantable,
     format(
-      'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT %s ON %s TO %s;',
+      'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT %s ON %s TO %s%s;',
       pg_get_userbyid(d.defaclrole),
       n.nspname,
       acl.privileges,
@@ -130,7 +147,8 @@ default_privileges AS (
         WHEN 'S' THEN 'SEQUENCES'
         WHEN 'f' THEN 'FUNCTIONS'
       END,
-      acl.grantee_sql
+      acl.grantee_sql,
+      CASE WHEN acl.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END
     ) AS statement
   FROM pg_default_acl d
   JOIN pg_namespace n ON n.oid = d.defaclnamespace
@@ -138,9 +156,10 @@ default_privileges AS (
     SELECT
       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee_name,
       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END AS grantee_sql,
+      a.is_grantable,
       string_agg(a.privilege_type, ', ' ORDER BY a.privilege_type) AS privileges
     FROM aclexplode(d.defaclacl) a
-    GROUP BY a.grantee
+    GROUP BY a.grantee, a.is_grantable
   ) acl
   WHERE n.nspname = 'public'
     AND pg_get_userbyid(d.defaclrole) = 'postgres'
@@ -155,4 +174,4 @@ FROM (
   UNION ALL SELECT * FROM routine_grants
   UNION ALL SELECT * FROM default_privileges
 ) s
-ORDER BY sort_group, sort_object, sort_grantee;
+ORDER BY sort_group, sort_object, sort_grantee, sort_grantable;

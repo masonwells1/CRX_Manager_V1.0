@@ -46,7 +46,12 @@ for (const [index, statement] of statements.entries()) {
   if (!allowed.test(statement)) {
     throw new Error(`ACL statement ${index + 1} is not a recognised GRANT: ${statement}`);
   }
-  const grantee = statement.slice(statement.lastIndexOf(' TO ') + 4, -1);
+  // `WITH GRANT OPTION` sits after the grantee, so strip it before reading the name.
+  // Production holds no grantable ACL entries today; parsing it anyway keeps this
+  // check honest if one ever appears, instead of rejecting `anon WITH GRANT OPTION`
+  // as an unmanaged role.
+  const body = statement.slice(0, -1).replace(/ WITH GRANT OPTION$/, '');
+  const grantee = body.slice(body.lastIndexOf(' TO ') + 4);
   if (!VALID_GRANTEES.has(grantee)) {
     throw new Error(`ACL statement ${index + 1} grants to unmanaged role ${grantee}`);
   }
@@ -62,7 +67,7 @@ if (defaultPrivilegeStatements.length === 0) {
 // it and then its own guard would reject it — a file that cannot apply. Catch that
 // here, where the message can say what to do, rather than at restore time.
 const publicRelationGrants = statements.filter((s) =>
-  /^GRANT .+ ON (TABLE|SEQUENCE) .+ TO PUBLIC;$/.test(s),
+  /^GRANT .+ ON (TABLE|SEQUENCE) .+ TO PUBLIC( WITH GRANT OPTION)?;$/.test(s),
 );
 if (publicRelationGrants.length > 0) {
   throw new Error(
@@ -79,16 +84,39 @@ if (publicRelationGrants.length > 0) {
 // alone leaves anon holding EXECUTE on *every* function, because the target
 // project's default privileges grant it as each one is created. Measured on the
 // disposable restore, that is 527 functions before this artifact runs and the
-// captured count after.
+// captured set after.
+//
+// The guard compares identities, not a total. A count would pass unchanged if a
+// refreshed capture swapped one RPC for a different, more sensitive one — the
+// reachable surface would have moved while the number stood still, which is exactly
+// the drift the README promises this catches. PUBLIC-granted EXECUTE is folded in
+// because anon inherits it; on live those 93 functions are a subset of anon's 95
+// direct grants, so the effective set is 95 either way, but a capture that shifted a
+// grant from `anon` to `PUBLIC` must not read as a revocation.
 //
 // Extension-owned functions are excluded, matching the capture. They belong to
 // `supabase_admin`, the project owner cannot revoke them (the restore logs a
 // `no privileges could be revoked` warning for each), and the baseline does not
-// manage them. Counting them would make the guard assert something this file has
+// manage them. Including them would make the guard assert something this file has
 // no power to enforce.
-const anonExecuteGrants = statements.filter((s) =>
-  /^GRANT EXECUTE ON FUNCTION .+ TO anon;$/.test(s),
-).length;
+const anonExecuteIdentities = [
+  ...new Set(
+    statements
+      .map((s) => /^GRANT EXECUTE ON FUNCTION (.+) TO (?:anon|PUBLIC)( WITH GRANT OPTION)?;$/.exec(s))
+      .filter(Boolean)
+      .map((match) => match[1]),
+  ),
+].sort();
+
+if (anonExecuteIdentities.length === 0) {
+  throw new Error(
+    'no anon/PUBLIC EXECUTE grants were captured; the guard would then assert an empty set and ' +
+      'a restore that handed anon EXECUTE on one function would still fail — but so would live, ' +
+      'so this is a truncated capture rather than a real revocation',
+  );
+}
+
+const sqlLiteral = (value) => `'${value.replace(/'/g, "''")}'`;
 
 const roleList = MANAGED_ROLES.join(', ');
 const output = [
@@ -131,7 +159,7 @@ const output = [
   'DO $baseline_acl_verify$',
   'DECLARE',
   '  v_leaked text;',
-  '  v_anon_execute integer;',
+  '  v_execute_drift text;',
   'BEGIN',
   '  -- Grantee 0 is PUBLIC, and anon inherits everything PUBLIC holds, so a table',
   '  -- privilege granted to PUBLIC reaches the unauthenticated role just as surely as',
@@ -172,19 +200,38 @@ const output = [
   "    RAISE EXCEPTION 'BASELINE_ACL_ANON_OVER_GRANTED: %', v_leaked;",
   '  END IF;',
   '',
-  '  SELECT count(*)',
-  '    INTO v_anon_execute',
-  '  FROM pg_proc p',
-  '  JOIN pg_namespace n ON n.oid = p.pronamespace',
-  '  CROSS JOIN LATERAL aclexplode(p.proacl) a',
-  "  LEFT JOIN pg_depend d ON d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e'",
-  "  WHERE n.nspname = 'public'",
-  "    AND pg_get_userbyid(a.grantee) = 'anon'",
-  "    AND a.privilege_type = 'EXECUTE'",
-  '    AND d.objid IS NULL;',
+  '  -- Exact set, not a count: swapping one captured RPC for another leaves the total',
+  '  -- unchanged while moving what the unauthenticated role can reach. Grantee 0 is',
+  '  -- PUBLIC, which anon inherits, so both are folded into the effective surface.',
+  '  WITH expected(ident) AS (',
+  '    VALUES',
+  ...anonExecuteIdentities.map(
+    (ident, index) =>
+      `      (${sqlLiteral(ident)})${index === anonExecuteIdentities.length - 1 ? '' : ','}`,
+  ),
+  '  ),',
+  '  actual(ident) AS (',
+  "    SELECT DISTINCT format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))",
+  '    FROM pg_proc p',
+  '    JOIN pg_namespace n ON n.oid = p.pronamespace',
+  "    LEFT JOIN pg_depend d ON d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e'",
+  '    CROSS JOIN LATERAL aclexplode(p.proacl) a',
+  "    WHERE n.nspname = 'public'",
+  '      AND d.objid IS NULL',
+  "      AND a.privilege_type = 'EXECUTE'",
+  "      AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) = 'anon')",
+  '  )',
+  '  SELECT string_agg(',
+  "           CASE WHEN e.ident IS NULL THEN 'unexpected ' || a.ident",
+  "                ELSE 'missing ' || e.ident END,",
+  "           ', ' ORDER BY COALESCE(a.ident, e.ident))",
+  '    INTO v_execute_drift',
+  '  FROM expected e',
+  '  FULL OUTER JOIN actual a ON a.ident = e.ident',
+  '  WHERE e.ident IS NULL OR a.ident IS NULL;',
   '',
-  `  IF v_anon_execute <> ${anonExecuteGrants} THEN`,
-  `    RAISE EXCEPTION 'BASELINE_ACL_ANON_EXECUTE_DRIFTED: expected ${anonExecuteGrants}, found %', v_anon_execute;`,
+  '  IF v_execute_drift IS NOT NULL THEN',
+  "    RAISE EXCEPTION 'BASELINE_ACL_ANON_EXECUTE_DRIFTED: %', v_execute_drift;",
   '  END IF;',
   'END;',
   '$baseline_acl_verify$;',
@@ -202,7 +249,8 @@ console.log(
       grant_statements: statements.length,
       default_privilege_statements: defaultPrivilegeStatements.length,
       column_grants: statements.filter((s) => /^GRANT [A-Z]+\(/.test(s)).length,
-      anon_execute_grants: anonExecuteGrants,
+      grantable_statements: statements.filter((s) => / WITH GRANT OPTION;$/.test(s)).length,
+      anon_effective_execute_identities: anonExecuteIdentities.length,
       high_water: highWaterArg,
     },
     null,

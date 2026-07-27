@@ -1662,7 +1662,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT
 DO $baseline_acl_verify$
 DECLARE
   v_leaked text;
-  v_anon_execute integer;
+  v_execute_drift text;
 BEGIN
   -- Grantee 0 is PUBLIC, and anon inherits everything PUBLIC holds, so a table
   -- privilege granted to PUBLIC reaches the unauthenticated role just as surely as
@@ -1703,19 +1703,129 @@ BEGIN
     RAISE EXCEPTION 'BASELINE_ACL_ANON_OVER_GRANTED: %', v_leaked;
   END IF;
 
-  SELECT count(*)
-    INTO v_anon_execute
-  FROM pg_proc p
-  JOIN pg_namespace n ON n.oid = p.pronamespace
-  CROSS JOIN LATERAL aclexplode(p.proacl) a
-  LEFT JOIN pg_depend d ON d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e'
-  WHERE n.nspname = 'public'
-    AND pg_get_userbyid(a.grantee) = 'anon'
-    AND a.privilege_type = 'EXECUTE'
-    AND d.objid IS NULL;
+  -- Exact set, not a count: swapping one captured RPC for another leaves the total
+  -- unchanged while moving what the unauthenticated role can reach. Grantee 0 is
+  -- PUBLIC, which anon inherits, so both are folded into the effective surface.
+  WITH expected(ident) AS (
+    VALUES
+      ('public._enforce_allocation_not_over_payment()'),
+      ('public._enforce_applicator_license()'),
+      ('public._enforce_billed_job_applied_record_immutability()'),
+      ('public._enforce_billed_job_immutability()'),
+      ('public._enforce_delivery_status_transition()'),
+      ('public._enforce_invoice_status_transition()'),
+      ('public._enforce_job_status_transition()'),
+      ('public._enforce_order_status_transition()'),
+      ('public._enforce_po_status_transition()'),
+      ('public._enforce_quote_status_transition()'),
+      ('public._enforce_return_status_transition()'),
+      ('public._fill_audit_actor()'),
+      ('public._guard_credit_memo_application_immutable()'),
+      ('public._guard_delivery_delete()'),
+      ('public._guard_inventory_transactions_immutable()'),
+      ('public._guard_invoice_delete()'),
+      ('public._guard_order_delete()'),
+      ('public._guard_po_delete()'),
+      ('public._guard_prepay_applications_immutable()'),
+      ('public._is_admin_override()'),
+      ('public._prebook_quick_delivery_inventory()'),
+      ('public._receiving_records_before_delete()'),
+      ('public._recompute_prepay_credit_balance()'),
+      ('public._require_auth()'),
+      ('public.admin_update_profile(target_user_id uuid, new_role text, new_full_name text, new_phone text, new_is_active boolean, new_denied_pages text[], p_idempotency_key text)'),
+      ('public.calculate_billing_splits(p_total_cents bigint, p_percentages numeric[])'),
+      ('public.check_period_open(p_date date)'),
+      ('public.compute_season(p_date date)'),
+      ('public.convert_to_gl_lb(p_total_applied numeric, p_rate_unit text, p_product_form text)'),
+      ('public.current_season()'),
+      ('public.enforce_blend_ticket_products_billed_lock()'),
+      ('public.enforce_field_application_type_lock()'),
+      ('public.enforce_invoice_draft_on_insert()'),
+      ('public.enforce_quote_accepted_fully_drawn()'),
+      ('public.field_app_priced_quantity(p_applied_qty numeric, p_rate_unit text, p_inventory_unit text, p_product_form text)'),
+      ('public.financial_dashboard_summary()'),
+      ('public.generate_order_number()'),
+      ('public.generate_quote_number()'),
+      ('public.get_bottom_line_pnl(p_start_date date, p_end_date date)'),
+      ('public.get_chemical_history(p_product_id uuid, p_start_date date, p_end_date date)'),
+      ('public.get_commission_balance_report(p_as_of_date date)'),
+      ('public.get_customer_balance_listing(p_as_of_date date)'),
+      ('public.get_inventory_cost_report()'),
+      ('public.get_logbook_by_applicator(p_applicator_id uuid, p_start_date date, p_end_date date)'),
+      ('public.get_logbook_by_customer(p_customer_id uuid, p_start_date date, p_end_date date)'),
+      ('public.get_logbook_by_field(p_field_id uuid, p_start_date date, p_end_date date)'),
+      ('public.get_logbook_faa(p_start_date date, p_end_date date)'),
+      ('public.get_receiving_log(p_limit integer, p_offset integer, p_vendor text, p_condition text, p_received_by uuid, p_date_from date, p_date_to date)'),
+      ('public.get_receiving_summary()'),
+      ('public.get_sales_detail_report(p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)'),
+      ('public.get_sales_summary_report(p_group_by text, p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)'),
+      ('public.guard_audit_log_immutable()'),
+      ('public.guard_customer_document_update()'),
+      ('public.guard_customer_fact_provenance()'),
+      ('public.guard_interaction_attribution()'),
+      ('public.handle_new_user()'),
+      ('public.is_admin()'),
+      ('public.is_applicator()'),
+      ('public.is_driver()'),
+      ('public.jobs_snapshot_commission_split()'),
+      ('public.log_comment_activity()'),
+      ('public.log_note_activity()'),
+      ('public.next_application_record_number()'),
+      ('public.next_commission_payment_number()'),
+      ('public.next_cycle_count_number()'),
+      ('public.next_delivery_number()'),
+      ('public.next_job_number()'),
+      ('public.next_po_number()'),
+      ('public.normalize_product_category()'),
+      ('public.notify_mentioned_users_in_comment()'),
+      ('public.operational_dashboard_summary()'),
+      ('public.prevent_order_shares_edit_after_post()'),
+      ('public.product_price_per_acre(p_tier_price numeric, p_rate_per_acre numeric, p_rate_unit text, p_inventory_unit text, p_unit_size text)'),
+      ('public.require_admin()'),
+      ('public.require_admin_or_sales_rep()'),
+      ('public.season_end_date(p_season integer)'),
+      ('public.season_start_date(p_season integer)'),
+      ('public.snapshot_field_crop_history()'),
+      ('public.sync_blend_ticket_payment_status()'),
+      ('public.sync_customer_to_primary_contact()'),
+      ('public.sync_primary_contact_to_customer()'),
+      ('public.trg_delivery_status_change()'),
+      ('public.trg_inventory_significant_change()'),
+      ('public.trg_order_status_change()'),
+      ('public.trg_po_status_change()'),
+      ('public.trg_po_submitted_update_on_order()'),
+      ('public.trg_product_label_drafts_updated_at()'),
+      ('public.trg_recalc_order_totals()'),
+      ('public.update_blend_ticket_updated_at()'),
+      ('public.update_fields_updated_at()'),
+      ('public.update_note_comment_timestamp()'),
+      ('public.update_updated_at()'),
+      ('public.validate_commission_split_json(p_split jsonb)'),
+      ('public.validate_product_units()'),
+      ('public.vendor_bills_positive_subtotal_trigger()')
+  ),
+  actual(ident) AS (
+    SELECT DISTINCT format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    LEFT JOIN pg_depend d ON d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e'
+    CROSS JOIN LATERAL aclexplode(p.proacl) a
+    WHERE n.nspname = 'public'
+      AND d.objid IS NULL
+      AND a.privilege_type = 'EXECUTE'
+      AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) = 'anon')
+  )
+  SELECT string_agg(
+           CASE WHEN e.ident IS NULL THEN 'unexpected ' || a.ident
+                ELSE 'missing ' || e.ident END,
+           ', ' ORDER BY COALESCE(a.ident, e.ident))
+    INTO v_execute_drift
+  FROM expected e
+  FULL OUTER JOIN actual a ON a.ident = e.ident
+  WHERE e.ident IS NULL OR a.ident IS NULL;
 
-  IF v_anon_execute <> 95 THEN
-    RAISE EXCEPTION 'BASELINE_ACL_ANON_EXECUTE_DRIFTED: expected 95, found %', v_anon_execute;
+  IF v_execute_drift IS NOT NULL THEN
+    RAISE EXCEPTION 'BASELINE_ACL_ANON_EXECUTE_DRIFTED: %', v_execute_drift;
   END IF;
 END;
 $baseline_acl_verify$;
