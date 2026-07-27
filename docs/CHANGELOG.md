@@ -47,10 +47,33 @@ access) returned **SHIP-WITH-FOLLOWUPS** with no blockers; its eight findings on
 wording, scope framing, verification strength, per-clause checks, helper-count vacuity, bare
 `auth.uid()`, and duplicate target rows are all addressed in the committed file.
 
+A **second** adversarial pass by the same reviewer against the *revised* file (the first pass had only
+seen the pre-fix version) again returned **SHIP-WITH-FOLLOWUPS**, no blockers and no HIGH findings. It
+independently reconciled all 38 targets — every expected command and USING/WITH CHECK clause shape
+correct, 38 ALTERs against 38 historical definitions, zero mismatches — and confirmed the three
+`UPDATE`-with-null-`WITH CHECK` policies are correctly asserted, since Postgres then applies `USING`
+to the proposed row as well. It cleared semantic equivalence, `NULL` scalar-subquery denial,
+`(SELECT auth.uid())` equivalence, absence of over-tightening, and idempotency. Its three MEDIUM
+findings — that the fragment assertions were satisfied by *inverted* predicates, that the repo-wide
+residual sweep still concatenated `USING` and `WITH CHECK`, and that `lock_timeout` bounds each lock
+acquisition rather than the whole migration — are now fixed: fragments are full deparsed expressions
+matched against the single clause that carries them, the residual sweep is per-clause, and the
+locking comment states the per-acquisition semantics. The helper scan also gained `pronargs = 0`.
+
+The inversion fix was negative-tested on live inside an aborted transaction: with `vendors_select`
+deliberately gutted to `deleted_at IS NOT NULL`, the old bare-`deleted_at` fragment **passed** it
+while the new `deleted_at IS NULL` fragment **caught** it. The full file was then re-run end to end
+inside `BEGIN … ROLLBACK` and reported `verification_passed residual_gaps=0 storage_tightened=4`,
+with live state re-read unchanged afterward (38 gaps, ledger 911 rows at `20260726223520`). Sol's
+completeness query independently confirmed the target list is exactly right: 38 gap policies live,
+25 with a `USING` gap and 18 with a `WITH CHECK` gap, overlapping on the 5 two-clause policies
+(25 + 18 − 5 = 38), matching the migration's 4 `UPDATE/qw` + 1 `ALL/qw`.
+
 **Not applied to production.** Awaiting Mason's explicit OK and the migration-apply-guard proof. The
 one open follow-up is a disposable local `supabase db reset` replay to prove the 38 policy names all
-exist on a clean rebuild (all 38 were confirmed present in migration history, but the rebuild itself
-has not been run).
+exist on a clean rebuild (all 38 were confirmed present in migration history — 36 in the July 19
+baseline's public-schema artifact and both storage policies in its overlay — but the rebuild itself
+has not been run; no read-only production query can prove fresh-environment replay).
 
 ## 2026-07-26 — Docs archive sweep (second batch) + local branch/worktree cleanup
 

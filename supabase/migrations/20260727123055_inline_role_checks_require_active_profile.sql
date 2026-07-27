@@ -6,7 +6,10 @@
 -- and check only `profiles.role`, so a DEACTIVATED user (is_active = false)
 -- holding a valid JWT keeps access through them. Nothing in Supabase auth
 -- blocks a deactivated user from signing in (auth.users.banned_until is NULL
--- for the one currently-deactivated profile), so RLS is the only gate.
+-- for the one currently-deactivated profile), so RLS is the only SERVER-SIDE
+-- gate. (src/components/auth/ProtectedRoute.tsx does deny an inactive profile,
+-- but that is client-side routing: it shapes the UI, it does not stop a direct
+-- PostgREST call with the same JWT. Only RLS does.)
 --
 -- This is the systemic gap that migration 20260726223520 explicitly deferred:
 --   "(The older vendors_select policy ... still omit the check — that systemic
@@ -43,6 +46,13 @@
 -- simultaneously until it finishes. It is short, but apply it during genuinely
 -- low traffic. lock_timeout below makes a fast failure preferable to a long
 -- production stall; if it trips, nothing is applied and it can simply be re-run.
+--
+-- Read lock_timeout correctly: Postgres applies it PER LOCK ACQUISITION, not as
+-- a deadline for the whole migration. With 18 distinct tables, a worst case is
+-- 18 separate waits of up to 10s each while the locks already taken stay held,
+-- so 10s bounds any SINGLE wait, NOT the total stall. It reduces the tail risk;
+-- it does not cap it. The transaction is still all-or-nothing -- a timeout
+-- aborts everything, so a partial apply is impossible.
 
 SET LOCAL lock_timeout = '10s';
 
@@ -441,12 +451,23 @@ ALTER POLICY "Users can delete own team note attachments" ON storage.objects
 -- ─── Verification ─────────────────────────────────────────────────────────
 
 -- Each row is: schema, table, policy, expected command, expected clause shape
--- ('q' = USING only, 'w' = WITH CHECK only, 'qw' = both), and a comma-separated
+-- ('q' = USING only, 'w' = WITH CHECK only, 'qw' = both), and a PIPE-separated
 -- list of non-role predicate fragments that MUST survive. Commands, shapes and
 -- permissiveness were read from live pg_policies at authoring time, so a policy
 -- that silently loses its command, its clause shape, its soft-delete scoping,
 -- its bucket scoping or its ownership branch fails here instead of passing on a
 -- bare substring match.
+--
+-- The fragments are FULL deparsed expressions, not bare column names, and each
+-- was copied from the live pg_policies text (the two storage ones from a
+-- rolled-back dry run of the exact ALTER above, since switching to
+-- (SELECT auth.uid()) changes how Postgres prints them). Bare identifiers were
+-- rejected deliberately: a fragment of 'deleted_at' would still be satisfied by
+-- `deleted_at IS NOT NULL`, and 'delivery-photos' by `bucket_id <> 'delivery-
+-- photos'` -- i.e. by an INVERTED predicate that certifies as intact while
+-- granting the opposite access. Matching the whole comparison closes that.
+-- This is still a text assertion and not a semantic proof; it is a regression
+-- tripwire on THIS migration's 38 rewrites, not a general policy verifier.
 
 DO $$
 DECLARE
@@ -458,6 +479,7 @@ DECLARE
   v_key text;
   v_seen text[] := '{}';
   v_frag text;
+  v_clause text;
   v_helpers int;
   v_checked int := 0;
   targets text[][] := ARRAY[
@@ -474,7 +496,7 @@ DECLARE
     ['public','customer_application_rates','car_admin_delete','DELETE','q',''],
     ['public','customer_application_rates','car_admin_insert','INSERT','w',''],
     ['public','customer_application_rates','car_admin_update','UPDATE','qw',''],
-    ['public','delivery_photos','del_photos_insert','INSERT','w','assigned_driver,is_admin,is_sales_rep'],
+    ['public','delivery_photos','del_photos_insert','INSERT','w','is_admin()|is_sales_rep()|d.id = delivery_photos.delivery_id|d.assigned_driver = ( SELECT auth.uid() AS uid)'],
     ['public','email_log','email_log_admin_select','SELECT','q',''],
     ['public','email_log','email_log_admin_insert','INSERT','w',''],
     ['public','failed_notifications','Admins can manage failed notifications','ALL','qw',''],
@@ -488,17 +510,17 @@ DECLARE
     ['public','quote_templates','quote_templates_admin_sales_update','UPDATE','qw',''],
     ['public','rup_sales_records','rup_sales_select','SELECT','q',''],
     ['public','rup_sales_records','rup_sales_insert','INSERT','w',''],
-    ['public','team_note_attachments','Users can delete own attachments or admin can delete any','DELETE','q','uploaded_by'],
-    ['public','vendor_bills','vendor_bills_select','SELECT','q','deleted_at'],
+    ['public','team_note_attachments','Users can delete own attachments or admin can delete any','DELETE','q','uploaded_by = ( SELECT auth.uid() AS uid)'],
+    ['public','vendor_bills','vendor_bills_select','SELECT','q','deleted_at IS NULL'],
     ['public','vendor_bills','vendor_bills_insert','INSERT','w',''],
     ['public','vendor_bills','vendor_bills_update','UPDATE','q',''],
     ['public','vendor_payments','vendor_payments_select','SELECT','q',''],
     ['public','vendor_payments','vendor_payments_insert','INSERT','w',''],
-    ['public','vendors','vendors_select','SELECT','q','deleted_at'],
+    ['public','vendors','vendors_select','SELECT','q','deleted_at IS NULL'],
     ['public','write_offs','write_offs_select_admin','SELECT','q',''],
     ['public','write_offs','write_offs_insert_admin','INSERT','w',''],
-    ['storage','objects','delivery_photos_delete','DELETE','q','delivery-photos'],
-    ['storage','objects','Users can delete own team note attachments','DELETE','q','team-note-attachments,foldername']
+    ['storage','objects','delivery_photos_delete','DELETE','q','bucket_id = ''delivery-photos''::text'],
+    ['storage','objects','Users can delete own team note attachments','DELETE','q','bucket_id = ''team-note-attachments''::text|(storage.foldername(name))[1] = (( SELECT auth.uid() AS uid))::text']
   ];
 BEGIN
   FOR i IN 1 .. array_length(targets, 1) LOOP
@@ -563,10 +585,20 @@ BEGIN
       END IF;
     END IF;
 
-    -- Non-role predicates that must not be dropped.
+    -- Non-role predicates that must not be dropped. Checked against the ONE
+    -- clause that actually carries them -- never against USING and WITH CHECK
+    -- concatenated, which would let a fragment present in one clause vouch for
+    -- the other. All six fragment-bearing targets are single-clause by
+    -- construction; a two-clause target here is an authoring error, so fail
+    -- rather than guess which clause was meant.
     IF targets[i][6] <> '' THEN
-      FOREACH v_frag IN ARRAY string_to_array(targets[i][6], ',') LOOP
-        IF (coalesce(v_qual,'') || ' ' || coalesce(v_check,'')) NOT LIKE '%' || v_frag || '%' THEN
+      IF targets[i][5] = 'qw' THEN
+        RAISE EXCEPTION 'require_active verification: % declares fragments on a two-clause policy; fragments must name their clause',
+          v_key;
+      END IF;
+      v_clause := coalesce(v_qual, v_check);
+      FOREACH v_frag IN ARRAY string_to_array(targets[i][6], '|') LOOP
+        IF v_clause NOT LIKE '%' || v_frag || '%' THEN
           RAISE EXCEPTION 'require_active verification: % lost required predicate "%"',
             v_key, v_frag;
         END IF;
@@ -580,16 +612,27 @@ BEGIN
     RAISE EXCEPTION 'require_active verification: expected 38 policies, checked %', v_checked;
   END IF;
 
-  -- Nothing anywhere may still inline a role check without is_active.
+  -- Nothing anywhere may still inline a role check without is_active. Each
+  -- clause is judged ON ITS OWN: concatenating USING and WITH CHECK would let a
+  -- policy whose USING inlines an unprotected role check slip through just
+  -- because its WITH CHECK happens to mention is_active for an unrelated
+  -- reason. Repo-wide, not limited to the 38 -- this is what makes the sweep a
+  -- completeness claim and not just a restatement of the target list.
   FOR r IN
-    SELECT schemaname, tablename, policyname
+    SELECT schemaname, tablename, policyname,
+           CASE
+             WHEN qual ILIKE '%profiles%' AND qual ILIKE '%role%'
+                  AND qual NOT ILIKE '%is_active%' THEN 'USING'
+             ELSE 'WITH CHECK'
+           END AS clause
     FROM pg_policies
-    WHERE (coalesce(qual,'') || ' ' || coalesce(with_check,'')) ILIKE '%profiles%'
-      AND (coalesce(qual,'') || ' ' || coalesce(with_check,'')) ILIKE '%role%'
-      AND (coalesce(qual,'') || ' ' || coalesce(with_check,'')) NOT ILIKE '%is_active%'
+    WHERE (qual ILIKE '%profiles%' AND qual ILIKE '%role%'
+           AND qual NOT ILIKE '%is_active%')
+       OR (with_check ILIKE '%profiles%' AND with_check ILIKE '%role%'
+           AND with_check NOT ILIKE '%is_active%')
   LOOP
-    RAISE EXCEPTION 'require_active verification: residual inline role check %.%.%',
-      r.schemaname, r.tablename, r.policyname;
+    RAISE EXCEPTION 'require_active verification: residual inline role check %.%.% (% clause)',
+      r.schemaname, r.tablename, r.policyname, r.clause;
   END LOOP;
 
   -- All four role helpers must still exist AND still gate on is_active.
@@ -616,6 +659,7 @@ BEGIN
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public'
       AND p.proname IN ('is_admin','is_sales_rep','is_driver','is_applicator')
+      AND p.pronargs = 0
       AND (p.prosrc NOT ILIKE '%is_active%' OR p.prosrc ILIKE '%is_active = false%')
   LOOP
     RAISE EXCEPTION 'require_active verification: helper %() lost its is_active check', r.proname;
