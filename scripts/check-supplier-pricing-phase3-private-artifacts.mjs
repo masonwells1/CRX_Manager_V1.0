@@ -322,7 +322,7 @@ function createDecodedPropertyStreamDetector(keys) {
       pending.delete(key);
     }
     recent = `${recent}${character}`.slice(-maxTokenLength);
-    for (const [token, key] of tokenToKey) if (recent.endsWith(token)) pending.add(key);
+    if (character === '"') for (const [token, key] of tokenToKey) if (recent.endsWith(token)) pending.add(key);
   };
   const decode = character => {
     if (!escape) {

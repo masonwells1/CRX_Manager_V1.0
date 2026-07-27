@@ -13,7 +13,9 @@ existing allowance for unrelated ignored symlinks. Benign embedded repositories 
 remain fail-closed containment candidates. ZIP/XLSX, gzip, bzip2, xz, 7z, and RAR candidates fail
 closed even with a harmless prefix when tracked, staged, modified, or non-ignored untracked because
 their compressed members cannot be inspected by the bounded raw-byte scanner; ordinary ignored
-dependency and cache files remain out of that archive-only check.
+dependency and cache files remain out of that archive-only check. Streamed decoded-property
+detection now evaluates candidate keys only at a closing quote, preventing partial-token state from
+being treated as a complete JSON property while retaining chunk-boundary detection.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 
