@@ -52,7 +52,7 @@ for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 const EMBEDDED_BASE64_TOKEN_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_-=') EMBEDDED_BASE64_TOKEN_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
 const PEM_TRANSFER_BODY_RE = /-----BEGIN [A-Z0-9 _-]+-----[\t ]*\r?\n([A-Za-z0-9+/_=\t \r\n]+?)\r?\n-----END [A-Z0-9 _-]+-----/g;
-const TOOL_OWNED_IGNORED_ROOTS = new Set(['node_modules', 'dist', 'dist-ssr', 'coverage', 'playwright-report', '.playwright-mcp', '.playwright-cli', 'graphify-out']);
+const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
 
 /**
  * Husky and Git can export GIT_DIR/GIT_INDEX_FILE/etc. Those variables would
@@ -103,7 +103,7 @@ function isBareRepositoryMember(repoPath, root) {
 }
 function isToolOwnedIgnoredPath(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
-  return [...TOOL_OWNED_IGNORED_ROOTS].some(root => normalized.startsWith(`${root}/`));
+  return [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
 }
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));

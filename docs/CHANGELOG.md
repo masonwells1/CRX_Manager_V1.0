@@ -33,6 +33,8 @@ Base64 packet detection now also inspects bounded encoded tokens inside JSON/dat
 line-wrapped PEM bodies instead of requiring the entire candidate file to use the transfer alphabet.
 Pre-push containment now type-checks outgoing ref objects, scans annotated-tag messages and direct
 blob targets, peels bounded tag chains, and recursively inspects tree targets before accepting tags.
+The archive-only ignored-file exception now also covers only the generated descendants used by
+Playwright results and the Phase 1a proof writer; private JSON and CSV signals remain rejected there.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 
