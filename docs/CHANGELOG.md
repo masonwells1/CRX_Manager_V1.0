@@ -29,6 +29,8 @@ containment workflows subscribe to pull-request `edited` events and explicitly r
 the current base, so retargeting an existing PR cannot skip the packet scan. Ignored archives in
 operator-controlled paths now fail closed; only explicit tool-owned dependency, build, coverage,
 browser-report, and Graphify roots retain the archive exception needed for ordinary generated files.
+Base64 packet detection now also inspects bounded encoded tokens inside JSON/data-URI wrappers and
+line-wrapped PEM bodies instead of requiring the entire candidate file to use the transfer alphabet.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 

@@ -49,6 +49,9 @@ const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
 const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
 const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
+const EMBEDDED_BASE64_TOKEN_BYTE_ALLOWED = new Uint8Array(256);
+for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_-=') EMBEDDED_BASE64_TOKEN_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
+const PEM_TRANSFER_BODY_RE = /-----BEGIN [A-Z0-9 _-]+-----[\t ]*\r?\n([A-Za-z0-9+/_=\t \r\n]+?)\r?\n-----END [A-Z0-9 _-]+-----/g;
 const TOOL_OWNED_IGNORED_ROOTS = new Set(['node_modules', 'dist', 'dist-ssr', 'coverage', 'playwright-report', '.playwright-mcp', '.playwright-cli', 'graphify-out']);
 
 /**
@@ -99,7 +102,8 @@ function isBareRepositoryMember(repoPath, root) {
   return root === '.' || normalized === root || normalized.startsWith(`${root}/`);
 }
 function isToolOwnedIgnoredPath(repoPath) {
-  return TOOL_OWNED_IGNORED_ROOTS.has(repoPath.replaceAll('\\', '/').split('/')[0]);
+  const normalized = repoPath.replaceAll('\\', '/');
+  return [...TOOL_OWNED_IGNORED_ROOTS].some(root => normalized.startsWith(`${root}/`));
 }
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
@@ -273,8 +277,10 @@ export function structuralPrivateArtifactReason(bytes) {
   // marker. Reuse the bounded streaming detector so direct and streamed scans
   // make the same non-recursive Base64 decision.
   const base64 = createBase64TransferScanner();
+  const wrappedBase64 = createWrappedBase64TransferScanner();
   base64.feed(buffer);
-  return base64.finish();
+  wrappedBase64.feed(buffer);
+  return base64.finish() ?? wrappedBase64.finish();
 }
 function sameFileIdentity(left, right) { return left.dev === right.dev && left.ino === right.ino; }
 function sameWorktreeStatIdentity(left, right) {
@@ -510,6 +516,47 @@ function createBase64TransferScanner() {
     },
   };
 }
+function decodedBase64StructuralReason(transfer) {
+  const compact = transfer.replace(/[\t\n\r ]/g, '').replaceAll('-', '+').replaceAll('_', '/');
+  if (compact.length < 32 || compact.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) return null;
+  const firstPadding = compact.indexOf('=');
+  if (firstPadding !== -1 && firstPadding < compact.length - 2) return null;
+  const decoded = Buffer.from(compact.padEnd(Math.ceil(compact.length / 4) * 4, '='), 'base64');
+  const scanner = createStructuralByteStreamScanner({ checkBase64: false });
+  scanner.feed(decoded);
+  return scanner.finish();
+}
+function createWrappedBase64TransferScanner() {
+  const chunks = [];
+  return {
+    feed(bytes) {
+      // Candidate reads are already capped at MAX_STRUCTURAL_SCAN_BYTES. Keep
+      // the same bound while retaining wrapper delimiters across read chunks.
+      chunks.push(Buffer.from(bytes));
+    },
+    finish() {
+      const text = Buffer.concat(chunks).toString('latin1');
+      for (const match of text.matchAll(PEM_TRANSFER_BODY_RE)) {
+        const reason = decodedBase64StructuralReason(match[1]);
+        if (reason) return reason;
+      }
+      let tokenStart = -1;
+      for (let index = 0; index <= text.length; index += 1) {
+        const code = index < text.length ? text.charCodeAt(index) : 256;
+        if (code < EMBEDDED_BASE64_TOKEN_BYTE_ALLOWED.length && EMBEDDED_BASE64_TOKEN_BYTE_ALLOWED[code] === 1) {
+          if (tokenStart === -1) tokenStart = index;
+          continue;
+        }
+        if (tokenStart !== -1 && index - tokenStart >= 32) {
+          const reason = decodedBase64StructuralReason(text.slice(tokenStart, index));
+          if (reason) return reason;
+        }
+        tokenStart = -1;
+      }
+      return null;
+    },
+  };
+}
 function createStructuralByteStreamScanner({ checkArchives = true, checkBase64 = true } = {}) {
   const utf8Decoder = new StringDecoder('utf8');
   const utf8Scanner = createStructuralTextStreamScanner();
@@ -517,6 +564,7 @@ function createStructuralByteStreamScanner({ checkArchives = true, checkBase64 =
   let utf16Scanners = null;
   let rawTail = Buffer.alloc(0);
   const base64 = checkBase64 ? createBase64TransferScanner() : null;
+  const wrappedBase64 = checkBase64 ? createWrappedBase64TransferScanner() : null;
   let archiveTail = Buffer.alloc(0);
   let archiveReason = null;
   const shouldActivateUtf16 = bytes => {
@@ -548,6 +596,7 @@ function createStructuralByteStreamScanner({ checkArchives = true, checkBase64 =
   return {
     feed(bytes) {
       base64?.feed(bytes);
+      wrappedBase64?.feed(bytes);
       if (checkArchives) {
         const archiveProbe = archiveTail.length === 0 ? bytes : Buffer.concat([archiveTail, bytes]);
         archiveReason ??= compressedArchiveReason(archiveProbe);
@@ -569,7 +618,7 @@ function createStructuralByteStreamScanner({ checkArchives = true, checkBase64 =
           reason ??= utf16Scanners[index].finish();
         }
       }
-      return archiveReason ?? reason ?? base64?.finish() ?? null;
+      return archiveReason ?? reason ?? base64?.finish() ?? wrappedBase64?.finish() ?? null;
     },
   };
 }
