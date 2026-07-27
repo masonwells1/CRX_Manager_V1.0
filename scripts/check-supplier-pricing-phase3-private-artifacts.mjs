@@ -589,7 +589,7 @@ function stagedIndexContentViolations(root, execute, indexEntries) {
   return violations;
 }
 
-function ignoredWorktreeEntryIsRegular(root, repoPath) {
+function ignoredWorktreeEntryKind(root, repoPath) {
   const lexicalRoot = path.resolve(root);
   const lexicalPath = path.resolve(lexicalRoot, repoPath);
   if (!lexicalPath.startsWith(`${lexicalRoot}${path.sep}`)) throw new Error('private Phase 3C ignored worktree candidate escapes the repository');
@@ -602,12 +602,21 @@ function ignoredWorktreeEntryIsRegular(root, repoPath) {
     // Do not follow a final symlink or a reparse-point parent. Either is an
     // unrelated ignored non-regular entry, unless its lexical repo path was
     // already rejected as a forbidden Phase 3C artifact.
-    if (entry.isSymbolicLink()) return false;
+    if (entry.isSymbolicLink()) return 'non-regular';
     if (index < segments.length - 1) {
-      if (!entry.isDirectory()) return false;
-    } else return entry.isFile();
+      if (!entry.isDirectory()) return 'non-regular';
+    } else if (entry.isFile()) return 'regular';
+    else if (entry.isDirectory()) {
+      try {
+        lstatSync(path.join(current, '.git'));
+        return 'embedded-repository';
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+      return 'non-regular';
+    } else return 'non-regular';
   }
-  return false;
+  return 'non-regular';
 }
 
 function worktreeContentViolations(root, execute, budget) {
@@ -633,7 +642,9 @@ function worktreeContentViolations(root, execute, budget) {
       // ignored path before reporting it. This keeps a packet-named link from
       // changing the diagnostic or reaching an attacker-controlled target.
       if (forbiddenReason) { violations.push({ repoPath, reason: forbiddenReason }); continue; }
-      if (!ignoredWorktreeEntryIsRegular(root, repoPath)) continue;
+      const entryKind = ignoredWorktreeEntryKind(root, repoPath);
+      if (entryKind === 'embedded-repository') { violations.push({ repoPath, reason: 'embedded Git repository' }); continue; }
+      if (entryKind !== 'regular') continue;
     }
     const result = scanWorktreeCandidate(root, repoPath, { cache, budget });
     if (result?.reason) violations.push({ repoPath, reason: result.reason });

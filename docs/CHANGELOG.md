@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-27 — Phase 3C containment rejects embedded repositories
+
+The private-artifact worktree scanner now rejects an ignored directory that contains its own
+`.git` marker. Git reports an embedded checkout as one ignored directory instead of enumerating
+its files, which previously allowed a private Phase 3C packet inside that checkout to avoid
+content scanning. The regression suite creates that exact nested-repository case and requires a
+fail-closed `embedded Git repository` verdict while preserving the existing allowance for
+unrelated ignored symlinks.
+
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 
 Closes the systemic gap that `20260726223520_vendors_inactive_admin_active_check.sql` explicitly
