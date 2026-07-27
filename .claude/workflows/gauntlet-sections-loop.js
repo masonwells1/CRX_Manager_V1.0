@@ -94,8 +94,13 @@ const CITATION_SHAPES = [
   /\b[a-z_][a-z0-9_]{3,}\s*\(/i,                               // an RPC/function call
   /\b(select|insert|update|delete|alter|create|grant|revoke)\b/i, // an actual statement
   /\b(pg_[a-z_]+|information_schema\.[a-z_]+)\b/i,             // a catalog probe
-  /\b[a-z]+_[a-z0-9_]{2,}\b/,                                  // a snake_case table/column/constraint/policy
   /^\s*(git|gh|npm|npx|node|psql|supabase|mcp)\b/i,             // a command a second person can re-run
+  // A snake_case token matched ANYWHERE in a sentence used to count, so "the code
+  // around payment_button" cited nothing openable and still cleared the gate -- and on
+  // the refutation path two REFUTED votes resting on prose like that can retire a
+  // confirmed BLOCKER. An identifier counts when it stands alone or is qualified.
+  /^\s*[a-z_][a-z0-9_]*_[a-z0-9_]+\s*$/i,                      // the whole value IS an identifier
+  /\b[a-z][a-z0-9_]{2,}\.[a-z][a-z0-9_]{2,}\b/,                // qualified: public.invoices, invoices.balance_cents
 ]
 const isCitation = (v) => notPlaceholder(v) && CITATION_SHAPES.some((re) => re.test(v))
 const isSha = (v) => typeof v === 'string' && /^[0-9a-f]{7,40}$/i.test(v.trim())
@@ -410,11 +415,18 @@ async function runSection(num) {
   const superseded = []
   let adjudication = null
   const evidence = evidenceForSection(num)
-  if (!evidence.ok) blocked.push({ section: num, evidencePacket: true, reason: evidence.reason })
+  // Reject BEFORE dispatching anything. This used to record the problem and then run
+  // the finders, the completeness critic, the adversarial verifiers and the adjudicator
+  // anyway -- a dozen sonnet/opus calls spent reaching a conclusion that was already
+  // determined, on a packet the workflow had just declared unusable.
+  if (!evidence.ok) {
+    log(`[S${num}] evidence rejected before any agent ran — ${evidence.reason}`)
+    return blockedSection(num, sec.name, evidence.reason)
+  }
   // Non-fatal evidence-integrity problems (e.g. a dirty tree) let the run proceed but
   // must not let it end in "settled clean".
-  const integrityGaps = evidence.ok ? (evidence.gaps || []) : []
-  const evidenceBlock = untrustedBlock(`EVIDENCE_PACKET_S${num}`, evidence.ok ? evidence.value : { unavailable: evidence.reason })
+  const integrityGaps = evidence.gaps || []
+  const evidenceBlock = untrustedBlock(`EVIDENCE_PACKET_S${num}`, evidence.value)
 
   const MAX_ROUNDS = 2
   // What round 1 established, so round 2 and the critic are not blind re-runs. Without
@@ -504,7 +516,10 @@ async function runSection(num) {
         for (const bucket of [fresh, confirmed, refuted, unverified]) {
           for (let i = bucket.length - 1; i >= 0; i -= 1) {
             if (keyOf(bucket[i]) === key) {
-              superseded.push({ ...bucket[i], reason: `superseded by a ${finding.severity} at the same title+location` })
+              // Remember whether this record had already SURVIVED adversarial
+              // verification: pulling a confirmed finding out on the strength of an
+              // unverified escalation is only safe if the escalation then holds up.
+              superseded.push({ ...bucket[i], wasConfirmed: bucket === confirmed, reason: `superseded by a ${finding.severity} at the same title+location` })
               bucket.splice(i, 1)
             }
           }
@@ -553,6 +568,25 @@ async function runSection(num) {
       else if (r.status === 'REFUTED') refuted.push(r)
       else unverified.push({ ...r, blocksSettlement: true, reason: 'adversarial verdict inconclusive — evidence missing' })
     })
+
+    // An escalation that does not itself survive verification must not erase the finding
+    // it displaced. Two skeptics had already confirmed the original; refuting a re-report
+    // of it at a higher severity is not evidence that the original was wrong. Without
+    // this, a round-2 BLOCKER at a key where round 1 confirmed a HIGH — refuted by both
+    // skeptics — left `confirmed` empty and the section settled CLEAN on a finding that
+    // had been unanimously confirmed.
+    for (let i = superseded.length - 1; i >= 0; i -= 1) {
+      const prior = superseded[i]
+      if (!prior.wasConfirmed) continue
+      if (confirmed.some((f) => keyOf(f) === keyOf(prior))) continue // the escalation stands in its place
+      confirmed.push({
+        ...prior,
+        contested: true,
+        contestedReason: 'an escalation at this title+location was refuted after the original had been confirmed',
+        reason: 'reinstated: the escalation that superseded this finding did not survive verification',
+      })
+      superseded.splice(i, 1)
+    }
 
     if (fresh.length === 0) {
       log(`[S${num}] round ${round}: dry (no fresh findings) — stopping find loop.`)
@@ -604,7 +638,7 @@ async function runSection(num) {
     // disagreement itself is an open question -- it cannot settle the section.
     ...confirmed
       .filter((f) => f.contested === true)
-      .map((f) => `Contested ${f.severity} verdict (skeptics split): ${f.title}`),
+      .map((f) => `Contested ${f.severity} verdict (${f.contestedReason || 'skeptics split'}): ${f.title}`),
   ]
   adjudication = {
     settled: deterministicGaps.length === 0,
@@ -629,6 +663,29 @@ async function runSection(num) {
 // Orchestrate sequentially: no section advances until the deterministic gate settles.
 // ─────────────────────────────────────────────────────────────────────────────
 const DEFAULT_ORDER = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+// A section whose evidence was rejected, in the exact shape a real section returns, so
+// every consumer of `results[]` reads the same fields on this path -- and so `counts`
+// still says one evidence source was unavailable rather than silently reading as clean.
+function blockedSection(num, name, reason) {
+  const blocked = [{ section: num, evidencePacket: true, reason }]
+  return {
+    section: num,
+    name,
+    confirmed: [], refuted: [], unverified: [], verifiedSafe: [], blocked, duplicates: [], superseded: [],
+    counts: {
+      blocker: 0, high: 0, med: 0, low: 0, contested: 0, refuted: 0, unverified: 0,
+      blocked: 1, blockedAttempts: 1, duplicates: 0, superseded: 0,
+    },
+    adjudication: {
+      settled: false,
+      cleanOfBlockerHigh: false,
+      remainingGaps: [`Blocked evidence: ${reason}`],
+      rationale: 'Deterministic gate: the evidence packet for this section was rejected, so no agent was dispatched.',
+      advisory: { remainingGaps: [], rationale: 'No adjudicator ran: the section was rejected before any agent was dispatched.' },
+    },
+  }
+}
 
 function blockedResult(reason, requested) {
   return {

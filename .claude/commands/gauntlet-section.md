@@ -85,7 +85,9 @@ Invoke the `gauntlet-sections-loop` Workflow with:
 }
 ```
 
-`nowMs` is supplied by you because a resumable workflow cannot read the clock. The packet must be **under six hours old** or the workflow returns BLOCKED — collect it in this session, not from a prior one. `originMain` is required only for Section 5.
+`nowMs` is supplied by you because a resumable workflow cannot read the clock. The packet must be **under six hours old** or the section is rejected — collect it in this session, not from a prior one. `originMain` is required only for Section 5.
+
+**A rejected packet costs nothing.** Missing, stale, oversized, wrong-project, bad-checkout, or off-topic evidence is caught *before* the section dispatches a single agent: the section comes back with `counts.blocked: 1`, `settled: false`, and the reason in `adjudication.remainingGaps`, and the sweep halts there. Fix the packet and re-run — you have not spent a finder, a critic, a skeptic, or an adjudicator.
 
 Every observation must name **what you ran** and **what came back**. Prose like `"inventory looks fine"` is an opinion, and the workflow rejects the section rather than letting it settle on it. Words like `"none"`, `"n/a"`, `"unknown"`, `"tbd"`, and empty `{}` / `[]` are also rejected — they are what an agent writes when it has nothing.
 

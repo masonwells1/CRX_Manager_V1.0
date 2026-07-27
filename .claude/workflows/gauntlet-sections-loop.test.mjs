@@ -164,11 +164,19 @@ const cleanAgent = async (_prompt, options) =>
   options.label.endsWith(':adjudicate') ? advice : completeLayer()
 
 {
-  const { result, calls } = await executeWorkflow(cleanAgent, { sections: [2, 3], nowMs: Date.now() })
+  const { result } = await executeWorkflow(cleanAgent, { sections: [2, 3], nowMs: Date.now() })
 
   assert.equal(result.results.length, 1, 'missing live evidence must stop before the next section')
   assert.equal(result.results[0].adjudication.settled, false)
   assert.equal(result.results[0].counts.blocked, 1)
+}
+
+// The capability constraint has to be asserted over a run that actually DISPATCHES
+// agents. Asserted over a run with no evidence packet it passes vacuously -- rejected
+// evidence now dispatches nothing, so `calls` is empty and `.every()` is trivially true.
+{
+  const { calls } = await executeWorkflow(cleanAgent, liveArgs([2, 3]))
+  assert.ok(calls.length > 0, 'this assertion is meaningless unless agents were actually dispatched')
   assert.ok(calls.every(({ options }) => options.agentType === 'Explore'), 'every child must be capability-constrained to Explore')
 }
 
@@ -944,6 +952,119 @@ for (const [label, layer] of [
       `${options.label}: a forged END_ marker inside the payload closed the untrusted block early`
     )
   }
+}
+
+// ── A refuted escalation must not erase the confirmed finding it displaced ────
+// Round 1 confirms a HIGH. Round 2 re-reports the same title+location as a BLOCKER,
+// which supersedes the HIGH -- and both skeptics refute the BLOCKER. The section then
+// held zero confirmed findings and settled CLEAN, discarding a finding two adversarial
+// verifiers had unanimously confirmed.
+{
+  const KEY = { title: 'Escalating lead', location: 'src/example.ts:12' }
+  let round = 1
+  const { result } = await executeWorkflow(async (_prompt, options) => {
+    if (options.label.endsWith(':r2')) round = 2
+    if (options.label.endsWith(':adjudicate')) return advice
+    if (options.label === 'S2:find1:r1') return completeLayer([finding('HIGH', KEY)])
+    if (options.label === 'S2:find1:r2') return completeLayer([finding('BLOCKER', KEY)])
+    if (options.label.startsWith('S2:verify:')) {
+      return round === 1
+        ? { status: 'VERIFIED', reasoning: 'Source confirms the defect.', verifiedAgainst: 'src/example.ts:12' }
+        : { status: 'REFUTED', reasoning: 'Not blocker-grade.', verifiedAgainst: 'src/example.ts:12' }
+    }
+    return completeLayer()
+  }, liveArgs([2]))
+
+  const section = result.results[0]
+  assert.equal(section.counts.high, 1, 'the unanimously confirmed HIGH must survive a refuted escalation')
+  assert.ok(
+    section.confirmed.some((f) => f.title === KEY.title && f.reinstated !== false && f.severity === 'HIGH'),
+    'the original confirmed finding must be reinstated, not left only in `superseded`'
+  )
+  assert.equal(section.adjudication.settled, false, 'confirmed-then-refuted at one key is a contradiction, not a settlement')
+  assert.equal(section.adjudication.cleanOfBlockerHigh, false, 'a section holding a confirmed HIGH is never clean')
+  assert.ok(
+    section.adjudication.remainingGaps.some((g) => /escalation/i.test(g)),
+    'the contradiction must be named in the gaps, not merely counted'
+  )
+}
+
+// ── A snake_case token buried in prose is not an openable citation ────────────
+// The catch-all matched an identifier ANYWHERE in a sentence, so "the code around
+// payment_button" satisfied the citation gate while identifying nothing. On the
+// refutation path that is load-bearing: two REFUTED votes resting on prose could
+// retire a BLOCKER and let the section settle clean.
+{
+  const PROSE = 'the code around payment_button'
+  const { result } = await executeWorkflow(async (_prompt, options) => {
+    if (options.label.endsWith(':adjudicate')) return advice
+    if (options.label === 'S2:find1:r1') return completeLayer([finding('BLOCKER')])
+    if (options.label.startsWith('S2:verify:')) {
+      return { status: 'REFUTED', reasoning: 'I am confident this is fine.', verifiedAgainst: PROSE }
+    }
+    return completeLayer()
+  }, liveArgs([2]))
+
+  const section = result.results[0]
+  assert.equal(section.refuted.length, 0, 'a verdict citing prose must not retire a BLOCKER')
+  assert.ok(
+    section.unverified.some((f) => f.blocksSettlement === true),
+    'an unsupported refutation must land in unverified and block settlement'
+  )
+  assert.equal(section.adjudication.settled, false)
+  assert.equal(section.adjudication.cleanOfBlockerHigh, false)
+}
+
+// ...and the same prose must not let a finder assert a clean section either.
+{
+  const { result } = await executeWorkflow(async (_prompt, options) => {
+    if (options.label.endsWith(':adjudicate')) return advice
+    if (options.label === 'S2:find1:r1') {
+      return { ...completeLayer(), evidenceSummary: 'I reviewed the code around payment_button and it looked fine' }
+    }
+    return completeLayer()
+  }, liveArgs([2]))
+  assert.ok(result.results[0].counts.blocked >= 1, 'a clean assertion resting on prose is an unexamined source')
+  assert.equal(result.results[0].adjudication.settled, false)
+}
+
+// Real citations must still pass, or the tightened shape just breaks the runner.
+for (const good of ['balance_cents', 'public.invoices', 'invoices.balance_cents', 'src/lib/db.ts:88', '20260722184744_commission_guard']) {
+  const { result } = await executeWorkflow(async (_prompt, options) => {
+    if (options.label.endsWith(':adjudicate')) return advice
+    if (options.label === 'S2:find1:r1') return completeLayer([finding('BLOCKER', { location: good })])
+    if (options.label.startsWith('S2:verify:')) {
+      return { status: 'VERIFIED', reasoning: 'Source confirms the defect.', verifiedAgainst: good }
+    }
+    return completeLayer()
+  }, liveArgs([2]))
+  assert.equal(result.results[0].counts.blocker, 1, `"${good}" is an openable citation and must still be accepted`)
+}
+
+// ── Rejected evidence must cost ZERO agent calls ──────────────────────────────
+// The packet was validated, the problem recorded, and then the finders, the
+// completeness critic, the adversarial verifiers and the adjudicator all ran anyway --
+// a dozen model calls spent to reach a conclusion already determined.
+for (const [label, mutate] of [
+  ['missing packet', (a) => { delete a.evidencePacket }],
+  ['stale packet', (a) => { a.evidencePacket.capturedAt = new Date(a.nowMs - 7 * 60 * 60 * 1000).toISOString() }],
+  ['behind origin/main', (a) => { a.evidencePacket.checkout.behindOriginMain = 3 }],
+  ['off-topic observations', (a) => { a.evidencePacket.sections['2'].observations = [{ source: 'select 1', result: 'one' }] }],
+]) {
+  const bad = liveArgs([2])
+  mutate(bad)
+  const { result, calls } = await executeWorkflow(cleanAgent, bad)
+  assert.equal(calls.length, 0, `${label}: no agent may be dispatched against evidence the workflow just rejected`)
+  const section = result.results[0]
+  assert.equal(section.counts.blocked, 1, `${label}: the rejected packet must still count as an unavailable source`)
+  assert.equal(section.adjudication.settled, false, `${label}: a rejected packet can never settle`)
+  assert.equal(section.adjudication.cleanOfBlockerHigh, false, `${label}: a rejected packet can never read as clean`)
+  // The shape must match a real section, or a consumer reading results[] hits undefined
+  // precisely on the path where something went wrong.
+  for (const key of ['confirmed', 'refuted', 'unverified', 'verifiedSafe', 'blocked', 'duplicates', 'superseded']) {
+    assert.ok(Array.isArray(section[key]), `${label}: results[].${key} must still be an array`)
+  }
+  assert.ok(section.adjudication.remainingGaps.length > 0, `${label}: the reason must be reported, not merely flagged`)
 }
 
 // ── The documented invocation must actually work ─────────────────────────────

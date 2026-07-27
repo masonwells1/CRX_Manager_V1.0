@@ -39,8 +39,26 @@ Gate fixes worth naming, because each one had let a section settle on nothing:
 
 **Guards are mutation-tested.** A scratchpad harness breaks each guard on purpose and requires the
 suite to go red; a guard that survives deletion is decoration, not protection. The first run found
-**6 of 45 guards untested** — the same vacuous-guard failure mode round 3 was about. Final run:
-baseline GREEN, **45/45 mutations killed**.
+**6 of 45 guards untested** — the same vacuous-guard failure mode round 3 was about.
+
+**CodeRabbit's review then found three more holes**, all confirmed against source and all fixed:
+
+- A round-2 **escalation that was itself refuted erased the finding it displaced**. A HIGH confirmed
+  unanimously in round 1, re-reported as a BLOCKER in round 2 and refuted by both skeptics, left
+  `confirmed` empty and the section settled **clean** on a finding two adversarial verifiers had
+  agreed was real. The original is now reinstated and marked contested, which blocks settlement.
+- The snake_case citation shape matched an identifier **anywhere in a sentence**, so
+  `"the code around payment_button"` cleared the gate while pointing at nothing. On the refutation
+  path that is load-bearing: two REFUTED votes resting on prose could retire a BLOCKER. An identifier
+  now counts only when it stands alone or is qualified (`public.invoices`, `invoices.balance_cents`).
+- Rejected evidence was recorded and then **audited anyway** — a missing or stale packet still spent
+  the finders, the completeness critic, the skeptics and the adjudicator before returning INCOMPLETE.
+  The section now returns before dispatching a single agent, and the command doc no longer claims a
+  contract the code did not honor.
+
+Mutation-testing the fixes caught a fourth problem the suite could not: the pre-dispatch rejection
+made an existing "every child agent is capability-constrained" assertion **vacuous**, because the run
+it asserted over no longer dispatched anything. Final run: baseline GREEN, **56/56 mutations killed**.
 
 Also in this change: `/codex-gauntlet` and `docs/workflows/CODEX_REVIEW_GAUNTLET.md` document the
 new Section Mode; `map-drift-audit` gains two scoping rules (spend the run on the passes
