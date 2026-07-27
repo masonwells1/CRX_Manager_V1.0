@@ -94,6 +94,8 @@ jobs:
   sql-validation:
     name: SQL Migration Validation
     runs-on: ubuntu-latest
+    # Keep this dependency unconditional: a skipped containment job also skips
+    # SQL validation, so the containment job's event filter must stay tautological.
     needs: phase3-private-artifact-containment
     # Fast (no node_modules); runs on every push and PR. Catches commits that
     # bypassed husky locally (e.g. via --no-verify or a non-husky environment)

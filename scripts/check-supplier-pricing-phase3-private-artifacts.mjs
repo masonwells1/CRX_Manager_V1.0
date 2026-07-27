@@ -113,7 +113,8 @@ function isBareRepositoryMember(repoPath, root) {
 }
 function isToolOwnedIgnoredPath(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
-  return [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
+  return normalized.includes('/node_modules/')
+    || [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
 }
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
@@ -1192,10 +1193,12 @@ function worktreeEntryKind(root, repoPath) {
   return 'non-regular';
 }
 
-function worktreeContentViolations(root, execute, budget) {
+function worktreeContentViolations(root, execute, budget, { includeIgnored = true } = {}) {
   const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMRT'], root, execute));
   const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
-  const ignored = new Set(gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, execute));
+  const ignored = includeIgnored
+    ? new Set(gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, execute))
+    : new Set();
   const violations = [];
   const candidates = new Map();
   for (const repoPath of modified) candidates.set(repoPath, 'modified');
@@ -1246,20 +1249,23 @@ function commitsForRange(range, root, execute) {
   if (extra.length || !base || !head) throw new Error('private Phase 3C history containment requires an explicit base..head range');
   return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, `${assertCommitSha(base, 'base')}..${assertCommitSha(head, 'head')}`], root, execute);
 }
-function changedPathsForCommit(commit, root, execute) {
+function changedEntriesForCommit(commit, root, execute) {
   // -m compares a merge result with every parent, so a conflict-resolution
   // blob that exists only in the merge commit cannot disappear from history
-  // containment. A path can appear once per parent; inspect it once at the
-  // final commit tree after deduplication.
-  return [...new Set(gitPaths(['diff-tree', '--root', '-m', '-r', '--no-commit-id', '--diff-filter=AMRT', '--name-only', '-z', commit], root, execute))];
-}
-function gitTreeEntry(commit, repoPath, root, execute) {
-  const record = String(gitOutput(['ls-tree', '-z', commit, '--', repoPath], root, execute)).split('\0').filter(Boolean);
-  if (record.length !== 1) throw new Error('private Phase 3C containment could not resolve changed Git tree entry');
-  const separator = record[0].indexOf('\t');
-  const match = /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40,64})$/.exec(separator === -1 ? '' : record[0].slice(0, separator));
-  if (!match || record[0].slice(separator + 1) !== repoPath) throw new Error('private Phase 3C containment could not parse changed Git tree entry');
-  return { mode: match[1], type: match[2], object: match[3] };
+  // containment. Raw output already includes the destination mode and object,
+  // avoiding one ls-tree process per path during a new branch's ancestry scan.
+  // Rename detection is disabled so every record is one header/path pair.
+  const records = String(gitOutput(['diff-tree', '--root', '-m', '-r', '--no-commit-id', '--diff-filter=AMT', '--no-renames', '--raw', '-z', commit], root, execute)).split('\0');
+  if (records.at(-1) === '') records.pop();
+  if (records.length % 2 !== 0) throw new Error('private Phase 3C containment received malformed raw history entries');
+  const entries = new Map();
+  for (let index = 0; index < records.length; index += 2) {
+    const match = /^:([0-7]{6}) ([0-7]{6}) [0-9a-f]{40,64} ([0-9a-f]{40,64}) ([AMT])$/.exec(records[index]);
+    const repoPath = records[index + 1];
+    if (!match || !repoPath) throw new Error('private Phase 3C containment could not parse raw history entry');
+    entries.set(repoPath, { repoPath, mode: match[2], type: match[2] === '160000' ? 'commit' : 'blob', object: match[3] });
+  }
+  return [...entries.values()];
 }
 function commitTreeEntries(commit, root, execute) {
   const entries = [];
@@ -1306,17 +1312,14 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
     if (reason) violations.push({ repoPath: entry.repoPath, reason });
   }
   for (const commit of commits) {
-    const paths = changedPathsForCommit(assertCommitSha(commit, 'history'), root, execute);
-    // Reject the whole changed-path batch before resolving any individual
-    // tree entry. This bounds expensive ls-tree subprocesses even for a
-    // deleted-at-tip history whose current tree is small.
-    historyBudget.admit(paths.length);
-    for (const repoPath of paths) {
+    const changedEntries = changedEntriesForCommit(assertCommitSha(commit, 'history'), root, execute);
+    historyBudget.admit(changedEntries.length);
+    for (const tree of changedEntries) {
+      const { repoPath } = tree;
       const directReason = forbiddenArtifactReason(repoPath);
       if (directReason) violations.push({ repoPath: `${commit}:${repoPath}`, reason: directReason });
       const bareRoot = commitContainsBareRepository(commit, repoPath, root, execute);
       if (bareRoot) violations.push({ repoPath: `${commit}:${bareRoot}`, reason: 'bare Git repository' });
-      const tree = gitTreeEntry(commit, repoPath, root, execute);
       if (!REGULAR_GIT_MODES.has(tree.mode) || tree.type !== 'blob') { violations.push({ repoPath: `${commit}:${repoPath}`, reason: 'non-regular Git mode' }); continue; }
       entries.push({ repoPath: `${commit}:${repoPath}`, spec: tree.object, key: `history:${commit}:${repoPath}` });
     }
@@ -1329,8 +1332,10 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
   return violations;
 }
 
-export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, ranges = [], commits = [], testLimits = {} } = {}) {
-  const ignoredVisible = gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, execute);
+export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, ranges = [], commits = [], includeIgnored = true, testLimits = {} } = {}) {
+  const ignoredVisible = includeIgnored
+    ? gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, execute)
+    : [];
   const visible = new Set([
     ...gitPaths(['ls-files', '-z'], root, execute),
     ...gitPaths(['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR'], root, execute),
@@ -1343,7 +1348,7 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
   if (checkedCommits.length > reducedContainmentLimit(testLimits.maxCheckedCommits, MAX_HISTORY_COMMITS)) throw new Error('private Phase 3C containment checked-commit cap exceeded');
   const budget = new ScanBudget();
   const index = await currentIndexCandidateViolations(root, execute, budget);
-  const worktree = worktreeContentViolations(root, execute, budget);
+  const worktree = worktreeContentViolations(root, execute, budget, { includeIgnored });
   const historyBudget = new HistoryTraversalBudget(reducedContainmentLimit(testLimits.maxHistoryPaths, MAX_STRUCTURAL_SCAN_CANDIDATES - budget.candidates));
   const violations = [
     ...findForbiddenPrivateArtifactPaths([...visible]),
@@ -1531,17 +1536,18 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
 }
 
 function parseCli(args) {
-  const result = { ranges: [], prePushRemote: null, githubEvent: false, root: null, attestGitHubHandoff: false };
+  const result = { ranges: [], prePushRemote: null, preCommit: false, githubEvent: false, root: null, attestGitHubHandoff: false };
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === '--range') { const value = args[++index]; if (!value) throw new Error('disclosure-safe usage: --range requires base..head'); result.ranges.push(value); continue; }
     if (token === '--pre-push') { if (result.prePushRemote !== null) throw new Error('disclosure-safe usage: duplicate --pre-push'); const value = args[++index]; if (!value) throw new Error('disclosure-safe usage: --pre-push requires remote name'); result.prePushRemote = value; continue; }
+    if (token === '--pre-commit') { if (result.preCommit) throw new Error('disclosure-safe usage: duplicate --pre-commit'); result.preCommit = true; continue; }
     if (token === '--github-event') { if (result.githubEvent) throw new Error('disclosure-safe usage: duplicate --github-event'); result.githubEvent = true; continue; }
     if (token === GITHUB_EVENT_HANDOFF_FLAG) { if (result.attestGitHubHandoff) throw new Error('disclosure-safe usage: duplicate GitHub handoff attestation'); result.attestGitHubHandoff = true; continue; }
     if (token === '--root') { if (result.root !== null) throw new Error('disclosure-safe usage: duplicate --root'); const value = args[++index]; if (typeof value !== 'string' || !path.isAbsolute(value)) throw new Error('disclosure-safe usage: --root requires an absolute path'); result.root = value; continue; }
     throw new Error('disclosure-safe usage: unknown containment option');
   }
-  if ((result.prePushRemote !== null ? 1 : 0) + Number(result.githubEvent) > 1) throw new Error('disclosure-safe usage: pre-push and GitHub-event modes are exclusive');
+  if ((result.prePushRemote !== null ? 1 : 0) + Number(result.preCommit) + Number(result.githubEvent) > 1) throw new Error('disclosure-safe usage: pre-commit, pre-push, and GitHub-event modes are exclusive');
   if (result.root !== null && !result.githubEvent) throw new Error('disclosure-safe usage: --root requires --github-event');
   if (result.attestGitHubHandoff && (!result.githubEvent || result.root === null)) throw new Error('disclosure-safe usage: GitHub handoff attestation requires --github-event and --root');
   return result;
@@ -1552,7 +1558,7 @@ async function main() {
     ? await checkGitHubEventPrivateArtifactContainment({ root: cli.root ?? REPO_ROOT })
     : cli.prePushRemote !== null
       ? await checkPrePushPrivateArtifactContainment({ remoteName: cli.prePushRemote, stdin: readFileSync(0, 'utf8') })
-      : await checkPrivateArtifactContainment({ ranges: cli.ranges });
+      : await checkPrivateArtifactContainment({ ranges: cli.ranges, includeIgnored: !cli.preCommit });
   if (cli.attestGitHubHandoff) console.log(githubEventHandoffAttestation(result.github_event_head));
   else console.log(`PHASE3_PRIVATE_ARTIFACT_CONTAINMENT_PASS checked_paths=${result.checked_path_count} checked_commits=${result.checked_commit_count} scanned_candidates=${result.scanned_candidate_count} scanned_logical_bytes=${result.scanned_logical_bytes}`);
 }

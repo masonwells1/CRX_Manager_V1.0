@@ -25,6 +25,20 @@ packets, archive near-misses, critical stream splits, encoded packets under
 ignored tool roots, and the tracked PNG assets that exposed the binary CPIO
 false-positive risk.
 
+The exact-SHA Opus 5 release review identified avoidable first-push and local
+hook costs. History traversal now reads each changed path's destination mode
+and object ID from one bounded raw `git diff-tree` stream instead of spawning
+`git ls-tree` once per path. Pre-commit scans tracked, staged, modified, and
+untracked content, while the full ignored dependency/build-output sweep remains
+mandatory at pre-push and in CI. Nested workspace `node_modules` descendants
+retain the archive-only tool exemption without weakening encoded private-packet
+detection, the pre-push hook handles a missing remote argument fail-closed, and
+CI documents that SQL validation depends on an unconditional containment job.
+Measured on the real checkout, pre-commit completed in 4.31 seconds, the full
+ignored-path scan completed in 99.91 seconds, and a zero-SHA first-push
+simulation scanned 2,127 commits, 71,285 candidates, and 1.61 GB of logical
+content in 294.17 seconds without crossing either containment budget.
+
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
 a 4,121-byte stream overlap for bounded binary-CPIO pathnames. Binary CPIO
@@ -78,6 +92,7 @@ Raw commit messages are scanned across every checked commit, zero-SHA pushes ins
 ancestry without trusting tracking refs, URL remotes are accepted, and hex/UTF-32 packets are decoded.
 After main advanced through PRs #249 and #250, the candidate-only bootstrap pin was refreshed to
 the exact `3ca289c5` base; separate base-controlled workflow enforcement remains a parked gate.
+
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 
 Closes items 1 and 2 of `docs/manual/KNOWN_ISSUES.md` §0a — the two gaps that `20260727145843`

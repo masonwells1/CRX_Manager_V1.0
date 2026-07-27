@@ -332,6 +332,8 @@ try {
   const boundedRangeCalls = []; const boundedRangeExecute = (command, args, options) => { boundedRangeCalls.push(args); return fixtureGitExecute(command, args, options); };
   await checkPrivateArtifactContainment({ root: boundedHistoryRepo, execute: boundedRangeExecute, ranges: [`${boundedHistoryBase}..${boundedHistoryHead}`] });
   const boundedRangeArgv = boundedRangeCalls.find(args => args[0] === 'rev-list'); assert.deepEqual(boundedRangeArgv.slice(0, 3), ['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`]);
+  const rawHistoryArgv = boundedRangeCalls.find(args => args[0] === 'diff-tree'); assert(rawHistoryArgv.includes('--raw') && rawHistoryArgv.includes('--no-renames'), 'history traversal must read destination objects from one raw diff');
+  assert(!boundedRangeCalls.some(args => args[0] === 'ls-tree'), 'ordinary changed paths must not spawn one ls-tree process per history entry');
   const boundedPrePushCalls = []; const boundedPrePushExecute = (command, args, options) => { boundedPrePushCalls.push(args); return fixtureGitExecute(command, args, options); };
   await checkPrePushPrivateArtifactContainment({ root: boundedHistoryRepo, execute: boundedPrePushExecute, remoteName: 'origin', stdin: `refs/heads/packet ${boundedHistoryHead} refs/heads/packet ${'0'.repeat(40)}\n` });
   const boundedPrePushArgv = boundedPrePushCalls.find(args => args[0] === 'rev-list'); assert.deepEqual(boundedPrePushArgv.slice(0, 3), ['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`]); assert(!boundedPrePushArgv.includes('--not'), 'new-ref history enumeration must scan full bounded ancestry');
@@ -702,6 +704,11 @@ try {
     await containmentFails(ignoredToolArchiveRepo, encodedPath, reason);
     rmSync(path.join(ignoredToolArchiveRepo, encodedPath));
   }
+  const nestedToolPacketPath = 'packages/worker/node_modules/encoded-private/private-base64.txt';
+  mkdirSync(path.dirname(path.join(ignoredToolArchiveRepo, nestedToolPacketPath)), { recursive: true });
+  writeFileSync(path.join(ignoredToolArchiveRepo, nestedToolPacketPath), Buffer.from(utf16Json).toString('base64'));
+  await containmentFails(ignoredToolArchiveRepo, nestedToolPacketPath, 'private JSON format marker in malformed candidate');
+  rmSync(path.join(ignoredToolArchiveRepo, 'packages'), { recursive: true, force: true });
   for (const endpoint of [...toolOwnedIgnoredRoots, 'test-results', 'output', 'output/playwright', 'output/phase1a-db']) { const ignoredToolRootFileRepo = fixtureRepo(`containment-ignored-tool-root-file-${endpoint.replaceAll('/', '-').replaceAll('.', 'dot')}`); writeFileSync(path.join(ignoredToolRootFileRepo, '.gitignore'), `${endpoint.split('/')[0]}\n`); git(ignoredToolRootFileRepo, ['add', '.gitignore']); git(ignoredToolRootFileRepo, ['commit', '--quiet', '-m', 'ignore tool root name']); mkdirSync(path.dirname(path.join(ignoredToolRootFileRepo, endpoint)), { recursive: true }); writeFileSync(path.join(ignoredToolRootFileRepo, endpoint), Buffer.from([0x1f, 0x8b, 0x08, 0x00])); await containmentFails(ignoredToolRootFileRepo, endpoint, 'compressed archive container cannot be inspected'); }
   const largeIgnoredRepo = fixtureRepo('containment-large-ignored'); writeFileSync(path.join(largeIgnoredRepo, '.gitignore'), '*.ignored\n'); git(largeIgnoredRepo, ['add', '.gitignore']); git(largeIgnoredRepo, ['commit', '--quiet', '-m', 'ignore synthetic payloads']); const splitBoundaryPadding = 8 * 1024 * 1024 + 64 * 1024 - 4; const lateMarkerPath = 'late-marker.ignored'; writeFileSync(path.join(largeIgnoredRepo, lateMarkerPath), `${'x'.repeat(splitBoundaryPadding)}{"format":"${POST_STAGE_A_SNAPSHOT_FORMAT}"}`); await containmentFails(largeIgnoredRepo, lateMarkerPath, 'private JSON format marker in malformed candidate');
   const separatedFormatPath = 'separated-format.ignored'; writeFileSync(path.join(largeIgnoredRepo, separatedFormatPath), `${'x'.repeat(8 * 1024 * 1024 + 2048)}{"format":${' '.repeat(8192)}"${POST_STAGE_A_SNAPSHOT_FORMAT}"}`); await containmentFails(largeIgnoredRepo, separatedFormatPath, 'private JSON format marker in malformed candidate');
@@ -824,8 +831,8 @@ try {
   const v1File = writeSnapshot(v1, PRE_STAGE_A_SNAPSHOT_NAME); assert.equal(makeManifest(loadSnapshot(v1File, null, fixturePrivateOptions)).manifest_sha256, '849757da67a2abdeb5e99683ebfc624822e23b08748987dacc69cc7ba52dd1c8');
   const preCommit = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-commit'), 'utf8'); const prePush = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-push'), 'utf8'); const ci = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
   const trustedTargetWorkflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'phase3-private-artifact-containment.yml'), 'utf8');
-  assert(preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs') < preCommit.indexOf('validate-sql.sh'));
-  assert(prePush.includes('check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "$1"'));
+  assert(preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit') < preCommit.indexOf('validate-sql.sh'));
+  assert(prePush.includes('check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "${1:-}"'));
   assert(ci.indexOf('phase3-private-artifact-containment:') < ci.indexOf('sql-validation:'));
   assert(ci.includes('needs: phase3-private-artifact-containment'));
   assert(ci.includes('needs: [phase3-private-artifact-containment, sql-validation]'));

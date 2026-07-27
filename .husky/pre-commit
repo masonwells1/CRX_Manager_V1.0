@@ -13,10 +13,10 @@ node scripts/check-ledger-update.mjs || {
 }
 
 # --- Phase 3C private-artifact containment (HARD) ---
-# This runs before broad checks and rejects only Git-visible artifact paths; prose
-# may safely describe the approved external directory and review process.
+# Commits scan tracked, staged, modified, and untracked paths. The slower
+# ignored-tool-output sweep remains mandatory at pre-push and in CI.
 echo "🔒 Checking Phase 3C private-artifact containment..."
-node scripts/check-supplier-pricing-phase3-private-artifacts.mjs || {
+node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit || {
   echo ""
   echo "❌ PRIVATE ARTIFACT CONTAINMENT FAILED — move the artifact outside this repository."
   exit 1
