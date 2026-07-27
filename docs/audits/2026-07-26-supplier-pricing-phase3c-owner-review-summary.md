@@ -2,44 +2,71 @@
 
 ## Status
 
-`PARKED — TOOLING CORRECTION; PACKET REGENERATION REQUIRED`
+`READY FOR OWNER REVIEW — ROW-BY-ROW PRIVATE SHEET REVIEW REQUIRED`
 
-This is not completion and not approval. A prior private packet was
-materialized and verified, then fresh exact-SHA Luna and independent-Sol
-reviews returned `FIX` on the containment tooling. The prior packet hashes are
-therefore historical only and cannot identify an owner-review packet. The
-bounded local correction must be frozen, receive fresh exact-SHA reviews, and
-then regenerate and re-verify the packet before a protected PR.
+Engineering candidate `07813f698e4cf12e09fd4378837f5134ed5c3850` (parent
+`c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8`) is the evidence-bearing packet
+candidate. Graphify at that exact SHA reports 8,389 nodes and 17,472 edges.
+Fresh independent Sol returned `PASS` with no BLOCKER/HIGH/MED findings; Luna
+`gpt-5.6-luna` session `019fa33b-c7eb-7c60-b4e4-ee2d4bfc0237` also returned
+`PASS`. Luna's sandbox could not run the temporary-directory fixtures, but its
+in-memory, syntax, and static proof passed. Focused packet proof passed in
+58.9 seconds, and exact containment passed for 51,820 paths, 11 commits,
+51,888 candidates, and 795,308,573 logical bytes. The normal commit hooks were
+green: 302 test files, 3,985 passed, 118 skipped; lint/typecheck/build,
+workflow/guard/docs/dependency checks passed, with four existing lint warnings.
 
-The correction is limited to private-path admission, Git-history containment,
-structural packet detection, CI ordering, and isolated test-fixture safety. It
-does not classify Products, create Stage C SQL, enable cost basis, query live
-data, or approve any owner decision. The mission's earlier six-cycle cap
-remains recorded in the durable ledger; this is a separate post-PARK correction
-pass, not a claim that the cap was changed.
+## Current aggregate-only owner-review packet
 
-The current rejected implementation is
+This public record uses only orchestrator-supplied counts, timestamps, byte
+sizes, and hashes; it contains no Product rows or private artifact content.
+Read-only capture at `2026-07-27T11:14:57.085929Z` produced 604 Products after
+confirming the correct project, Stage A ledger, valid migration high-water,
+`product_families_count=0`, and `supplier_cost_basis_enabled=false`.
+
+| Artifact | Semantic SHA-256 | Byte proof |
+|---|---|---|
+| Snapshot | `b1e61596d3f7b0a1059fb8c57457bca351cffce6374e57d2771ce642ed7a074f` | 359,426 bytes; `1f85d0d3af40b9740bcb0961beaa0d3eb122e8eea021a2209d056b0b24fec934` |
+| Manifest | `4f2977b1ef8058266f3e1c80448ba09506816d94079d4f563d17fbadbfb788b0` | 1,580,465 bytes; `706ec4bc57e5c971e56e71bdff29ab0d7a16a824e84f2dd2946b968871082507` |
+| Owner decision sheet | `4eff9c27ee8d61345c328e0130a2fe26926bb809436f1c95d3c46ceb9fe4a3c8` | 123,853 bytes; `c976bd8b3aa02b49b269b4674906cf0067725aa802c776ac85e57c9f1992b276` |
+
+Manifest verification and reproducibility passed at count 604 with the same
+semantic hash. Owner-sheet write/verify passed at count 604 with the same
+semantic hash. These values replace every older packet hash as the only current
+owner-review packet; all older packet hashes below remain historical and
+invalidated.
+
+## Owner action and hard boundary
+
+Mason's next action is a row-by-row review of the private owner decision sheet,
+including every decision field and every unresolved acknowledgment. All owner
+decisions remain `PENDING`; no Product classification is approved. Only after
+that private-sheet review and explicit approval of this exact packet may a
+separate Stage C design mission be considered. No Stage C SQL, migration, or
+apply; no live mutation; no flag enablement; and no deploy or merge is
+authorized by this record.
+
+For truthful SHA provenance, these documentation edits are uncommitted on
+parent `07813f69` and have no self-SHA. Fresh exact post-documentation Sol,
+Luna, and latest-available-Opus review, then PR/CI/CodeRabbit handling, remain
+external gates; no literal Opus 5 review is claimed and any future alias must
+record its resolved model truthfully.
+
+## Historical invalidated correction record
+
+The preceding rejected implementation was
 `c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8`, whose immutable parent is
 `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d`. Graphify at that exact SHA reports
 8,390 nodes and 17,479 edges. Independent Sol returned `PASS` for `c1b54a5b`,
-but that pass is invalidated by Luna `gpt-5.6-luna` session
+but that pass was invalidated by Luna `gpt-5.6-luna` session
 `019fa313-ee55-7042-9074-08b0be3dd747`, which returned `FIX`: the atomic writer
 created and wrote its private temporary file before holding the stable parent,
 so a POSIX parent relocation could strand intended bytes in the moved original.
-The bounded replacement acquires the identity-bound parent lease before temp
-creation and retains it through relative-basename writing, validation,
-publication/readback, descriptor close, and owned-temp cleanup. It remains
-tooling-only and does not access private rows, classify Products, create Stage C
-SQL, change flags, or change live state.
+The replacement acquired the identity-bound parent lease before temp creation
+and retained it through relative-basename writing, validation,
+publication/readback, descriptor close, and owned-temp cleanup.
 
-For truthful provenance, `c1b54a5b` is the rejected `implementation_sha` and
-also the `implementation_base_sha` and `current_head_at_start` for this mutable
-correction. The worktree has no self-SHA. A future frozen commit must name
-`c1b54a5b` as parent; only the SHA Git creates may receive fresh
-graph/proof/review claims. Earlier “uncommitted correction” wording below is
-historical, not current status.
-
-The preceding rejected implementation was
+The earlier rejected implementation was
 `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d`, whose immutable parent is
 `2adff51bfa27ea50274230845bb4c89f4037313e`. Graphify at that exact SHA reports
 8,382 nodes and 17,446 edges. Independent Sol returned `FIX` for the owner CSV

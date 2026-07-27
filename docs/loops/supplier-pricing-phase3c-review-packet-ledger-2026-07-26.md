@@ -13,41 +13,70 @@
 - Forbidden interpretation: neither this ledger nor an agent verdict approves
   Product classifications or authorizes a Stage C migration/live apply.
 
-## Post-review tooling correction and packet invalidation — 2026-07-27
+## Owner-review packet closeout — 2026-07-27
 
-### Current rejected implementation `c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8` — Terra correction cycle active
+### Current engineering candidate `07813f698e4cf12e09fd4378837f5134ed5c3850` — READY FOR OWNER REVIEW
+
+`07813f698e4cf12e09fd4378837f5134ed5c3850` has immutable parent
+`c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8`. Graphify at the exact candidate
+reports 8,389 nodes and 17,472 edges. Fresh independent Sol returned `PASS`
+with no BLOCKER/HIGH/MED findings. Luna `gpt-5.6-luna`, session
+`019fa33b-c7eb-7c60-b4e4-ee2d4bfc0237`, also returned `PASS`; its sandbox could
+not execute temporary-directory fixtures, while in-memory, syntax, and static
+proof passed.
+
+- Focused packet proof passed in 58.9 seconds. Exact containment passed for
+  51,820 paths, 11 commits, 51,888 candidates, and 795,308,573 logical bytes.
+  Normal `07813f69` commit hooks passed: 302 test files, 3,985 passed, 118
+  skipped; lint/typecheck/build/workflows/guards/docs/dependency integrity were
+  green, with four existing lint warnings.
+- Orchestrator read-only capture recorded count 604 at
+  `2026-07-27T11:14:57.085929Z`. Guard evidence is aggregate-only: correct
+  project, Stage A ledger present, valid migration high-water,
+  `product_families_count=0`, and `supplier_cost_basis_enabled=false`.
+
+| Artifact | Semantic SHA-256 | Byte proof |
+|---|---|---|
+| Snapshot | `b1e61596d3f7b0a1059fb8c57457bca351cffce6374e57d2771ce642ed7a074f` | 359,426 bytes; `1f85d0d3af40b9740bcb0961beaa0d3eb122e8eea021a2209d056b0b24fec934` |
+| Manifest | `4f2977b1ef8058266f3e1c80448ba09506816d94079d4f563d17fbadbfb788b0` | 1,580,465 bytes; `706ec4bc57e5c971e56e71bdff29ab0d7a16a824e84f2dd2946b968871082507` |
+| Owner decision sheet | `4eff9c27ee8d61345c328e0130a2fe26926bb809436f1c95d3c46ceb9fe4a3c8` | 123,853 bytes; `c976bd8b3aa02b49b269b4674906cf0067725aa802c776ac85e57c9f1992b276` |
+
+- Manifest verify and reproducibility passed at count 604 with the same
+  semantic hash. Owner-sheet write/verify passed at count 604 with the same
+  semantic hash. These are the only current owner-review packet values; every
+  older packet hash below is historical and invalidated.
+- Owner gate: Mason must review the private owner decision sheet row by row,
+  including every decision field and unresolved acknowledgment. All decisions
+  remain `PENDING`; no Product classification is approved. Only afterward may a
+  separate Stage C design mission be considered. No Stage C SQL/migration/apply,
+  live mutation, flag enablement, deploy, or merge is authorized here.
+- SHA ledger rule: these documentation edits are uncommitted on parent
+  `07813f69` and have no self-SHA. Fresh exact post-documentation Sol, Luna,
+  and latest-available-Opus review, followed by PR/CI/CodeRabbit handling,
+  remain external gates. No Opus 5 review is claimed; any future alias must
+  record its resolved model truthfully.
+
+### Prior rejected implementation `c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8` — historical correction cycle
 
 `c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8` is rejected. Its immutable parent
-is `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d`; `c1b54a5b` is the implementation
-SHA for the prior correction, not a passing release. Current branch HEAD at
-the start of this correction is also `c1b54a5b`. The mutable worktree is not
-an implementation SHA and must not be described as one.
+is `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d`; `c1b54a5b` was the implementation
+SHA for the preceding correction, not a passing release.
 
 - Graphify was refreshed at exact rejected `c1b54a5b`: 8,390 nodes and 17,479
-  edges. It confirms the atomic writer's direct packet consumers; current
+  edges. It confirmed the atomic writer's direct packet consumers; current
   source remains the authority for those edges.
-- Independent Sol returned `PASS` at `c1b54a5b`, but that pass is invalidated
+- Independent Sol returned `PASS` at `c1b54a5b`, but that pass was invalidated
   by Luna `gpt-5.6-luna`, session
   `019fa313-ee55-7042-9074-08b0be3dd747`, returning `FIX`: the atomic writer
   opened and wrote its temporary artifact before acquiring the stable parent,
   so a POSIX parent relocation could strand intended private temp bytes in the
   moved original directory.
-- Accepted correction disposition: capture the initial parent identity, then
-  acquire the nonreentrant stable-parent CWD lease before creating a temp file
-  and retain it through relative-basename writing, validation, publication,
-  readback, descriptor close, and owned-temp cleanup. The regression rejects a
-  pre-lease parent swap before temp creation and proves the early Windows/POSIX
-  relocation outcomes without private-artifact or live access. Neither review
-  authorizes a packet, Product classification, Stage C SQL, flag change,
-  private-artifact access, or live action.
-- SHA ledger rule: `implementation_sha` names only an immutable Git object.
-  Until the next commit exists, this correction is recorded as
-  `implementation_base_sha=c1b54a5b...` and `current_head_at_start=c1b54a5b...`.
-  The next commit must record parent `c1b54a5b...`; only Git's resulting SHA
-  may be used for exact-SHA graph/proof/review claims. Historical mentions of
-  an “uncommitted correction” below describe their original cycles only.
+- Its accepted correction captured the initial parent identity, acquired the
+  nonreentrant stable-parent CWD lease before creating a temp file, and retained
+  it through relative-basename writing, validation, publication, readback,
+  descriptor close, and owned-temp cleanup.
 
-### Prior rejected implementation `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d` — historical correction cycle
+### Earlier rejected implementation `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d` — historical correction cycle
 
 `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d` is rejected. Its immutable parent
 is `2adff51bfa27ea50274230845bb4c89f4037313e`; `3695f42e` was the implementation
@@ -223,10 +252,10 @@ correction and is not a final packet proof.
 | 0 — preflight | DONE | `9bf567bf` | none | PASS | n/a | n/a | n/a | n/a | Cycle 2 bounded capture/generator work. |
 | 1 — design adversary | DONE | `9bf567bf` | none | SHIP | n/a | n/a | `opus` → `claude-opus-4-8` | n/a | Cycle 2 accepts both LOW findings. |
 | 2 — final correction 6 | HISTORICAL — invalidated by later FIX reviews | `d01a8f099394e8c7882736ac52fd81c6d2de8c15` reviewed; local correction uncommitted | fresh `gpt-5.6-terra` recovery writer | earlier full proof PASS; latest bounded correction focused proof PASS | `FIX` session `019fa229-bc19-77b2-92bf-7f270e1cddc8` | `FIX` on `d01a8f099394e8c7882736ac52fd81c6d2de8c15` | pending fresh exact SHA | n/a | Freeze corrected SHA, refresh Graphify, and obtain fresh reviews. |
-| 3 — private materialization | PARKED — historical hashes invalidated | prior materialization only | Sol orchestrator | historical capture/binding/write/verify evidence only; regeneration required | n/a | n/a | n/a | n/a | Do not use the listed hashes for owner review; regenerate after fresh reviews. |
-| 4 — full review | IN PROGRESS — bounded correction uncommitted | pending corrected freeze | fresh `gpt-5.6-terra` recovery writer | packet suite PASS 29.3s; correction guards PASS 38.9s; typecheck PASS 21.1s; build PASS 18.2s; lint 0 errors/4 pre-existing warnings; exact 6-commit range PASS: 51,810 paths in 22.4s | pending fresh exact SHA | pending fresh exact SHA | pending latest-available Opus exact SHA | pending | Reconcile fresh reviews, then regenerate packet before PR. |
-| 5 — protected PR | PENDING | pending | Terra only if correction needed | pending | pending | pending | pending | pending | Open PR, resolve real findings, park before merge. |
-| 6 — closeout | PENDING | pending | none | pending | pending | pending | pending | pending | Record READY FOR OWNER REVIEW and the exact approval packet. |
+| 3 — private materialization | READY FOR OWNER REVIEW — current aggregate values recorded above | 604-row aggregate-only packet | orchestrator-supplied evidence | capture/manifest reproducibility/owner write-verify PASS | PASS | PASS with sandbox temp-fixture limitation disclosed | post-doc review still pending | PR/CI/CodeRabbit pending | Mason reviews the private sheet row by row; no classification yet. |
+| 4 — full review | DONE for engineering candidate | `07813f698e4cf12e09fd4378837f5134ed5c3850` | `gpt-5.6-terra` | focused PASS 58.9s; exact containment 51,820 paths / 11 commits / 51,888 candidates / 795,308,573 logical bytes; normal hooks green | PASS, no BLOCKER/HIGH/MED | PASS session `019fa33b-c7eb-7c60-b4e4-ee2d4bfc0237` | post-doc latest-available review pending | pending | Preserve exact SHA provenance after doc freeze. |
+| 5 — protected PR | PENDING external gate | current docs uncommitted on `07813f69` | none | post-doc exact proofs pending | pending post-doc | pending post-doc | alias must resolve truthfully; no Opus 5 claim | pending | Open PR only after external gates; no deploy or merge here. |
+| 6 — closeout | READY FOR OWNER REVIEW | aggregate-only packet values recorded above | Mason | owner action pending | PASS evidence recorded | PASS evidence recorded | external post-doc review pending | PR/CI/CodeRabbit pending | Row-by-row private sheet review before any separate Stage C design. |
 
 ## Cycle 0 — preflight
 
@@ -344,29 +373,32 @@ packet. They must be refreshed inside the loop before materialization.
 | C5-SOL-3 | same provenance | HIGH | A commented/late owner CSV header, including a greater-than-8-MiB ignored file, bypassed containment. | FIX in the uncommitted Terra correction: the normalized exact ordered header is recognized on any line; the streaming detector retains state and signatures across chunks. | fresh `gpt-5.6-terra` | uncommitted | Late/commented staged/history/event fixtures and greater-than-8-MiB whitespace/header chunk-boundary fixtures PASS. |
 | C5-LUNA-1 | Luna (`gpt-5.6-luna`, session `019fa26f-821d-7611-b7d6-82d90ac35fb9`) | HIGH | Luna returned `FIX` and required adjacent arrays/wrappers/nesting, escaped or malformed prefixed JSON, signatures beyond 1 KiB, later incomplete-root rows, and streaming chunk boundaries to fail closed. | FIX in the uncommitted Terra correction without filename or path allowlists; modified/untracked files above the structural bound remain unconditionally rejected and all ignored bytes are streamed. | fresh `gpt-5.6-terra` | uncommitted | Expanded focused suite PASS in 39.1 seconds; real 51,810-path containment baseline PASS in 64.4 seconds. |
 
-## Private artifacts — historical and invalidated
+## Private artifacts — current aggregate-only owner-review packet
 
 Only paths, sizes, hashes, timestamps, formats, and counts may be recorded here.
-Never paste Product rows.
+Never paste Product rows. These values supersede the historical packet hashes
+recorded elsewhere in this historical ledger.
 
 | Artifact | Private path | Format | Rows | Bytes | Byte SHA-256 | Semantic SHA-256 | Verified |
 |---|---|---|---:|---:|---|---|---|
-| Post-Stage-A snapshot | private external path (not recorded) | `crx-supplier-pricing-phase3-post-stage-a-product-snapshot-v2` | 604 | 359426 | `b80e000beaff06bc012570986e95b6beec73b1b8f8e51cba51ab32b01ce62933` | `b49566e63c53bcd4355f70c9374a2738b1654faafc5a746472323e4d4175fd5c` | captured `2026-07-27T05:53:04.476876Z`; capture and external binding PASS |
-| Proposed manifest | private external path (not recorded) | `crx-supplier-pricing-phase3-post-stage-a-proposed-classification-manifest-v2` | 604 | 1580465 | `1e439e53cdc2e71ab111a1d8801e61960a03c17c75f5d4225a82fe79412d2382` | `31ba2f61834e53469879f4a4891d93524438bbb2fe3774eab36758261671b172` | write/verify and deterministic compare PASS |
+| Post-Stage-A snapshot | private external path (not recorded) | `crx-supplier-pricing-phase3-post-stage-a-product-snapshot-v2` | 604 | 359426 | `1f85d0d3af40b9740bcb0961beaa0d3eb122e8eea021a2209d056b0b24fec934` | `b1e61596d3f7b0a1059fb8c57457bca351cffce6374e57d2771ce642ed7a074f` | captured `2026-07-27T11:14:57.085929Z`; capture and external binding PASS |
+| Proposed manifest | private external path (not recorded) | `crx-supplier-pricing-phase3-post-stage-a-proposed-classification-manifest-v2` | 604 | 1580465 | `706ec4bc57e5c971e56e71bdff29ab0d7a16a824e84f2dd2946b968871082507` | `4f2977b1ef8058266f3e1c80448ba09506816d94079d4f563d17fbadbfb788b0` | write/verify and reproducibility PASS |
 | Owner decision sheet | private external path (not recorded) | `crx-supplier-pricing-phase3-owner-decision-sheet-v1` | 604 | 123853 | `c976bd8b3aa02b49b269b4674906cf0067725aa802c776ac85e57c9f1992b276` | `4eff9c27ee8d61345c328e0130a2fe26926bb809436f1c95d3c46ceb9fe4a3c8` | write/verify and containment PASS |
 
 ## Owner gate after this mission
 
-Pending final packet. Mason must review every row disposition, every proposed
-family, packaging, tote-only, and policy change, explicitly acknowledge every
-unresolved row, and approve the exact packet checksum. Only then may a separate
-Stage C migration mission be designed.
+Mason must review every row disposition, every proposed family, packaging,
+tote-only, and policy change; explicitly acknowledge every unresolved row; and
+approve the exact current aggregate-bound packet. All decisions remain
+`PENDING` and no classification is approved. Only then may a separate Stage C
+design mission be considered; this record authorizes no Stage C migration/apply,
+live mutation, flag enablement, deploy, or merge.
 
 ## Closeout
 
-- `DONE:` earlier materialization and proof are preserved as historical evidence; Luna and Sol `FIX` findings are remediated in the bounded local correction set
-- `NOW:` freeze the correction, refresh Graphify, and obtain fresh exact-SHA Luna, independent-Sol, and latest-available Opus reviews
-- `REMAINING:` regenerate the private packet with new aggregate evidence, rerun packet proof, reconcile reviews, then open the protected PR and handle CodeRabbit
-- `PARKED:` the prior hashes are invalidated; no owner approval, Product classification, Stage C SQL/migration, flag enablement, deployment, or live mutation is authorized
-- `NEEDS MASON:` nothing during the unattended preparation run
-- `VERDICT:` PARKED — TOOLING CORRECTION; PACKET REGENERATION REQUIRED
+- `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, and owner-sheet verification are recorded above; older packet hashes are invalidated.
+- `NOW:` Mason reviews the private owner decision sheet row by row. Every decision remains `PENDING`; no classification is approved.
+- `REMAINING:` fresh exact post-documentation Sol, Luna, and latest-available-Opus review, then PR/CI/CodeRabbit handling; any future Opus alias must record its resolved model truthfully.
+- `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
+- `NEEDS MASON:` row-by-row private-sheet review and explicit approval of this exact aggregate-bound packet.
+- `VERDICT:` READY FOR OWNER REVIEW — ROW-BY-ROW PRIVATE SHEET REVIEW REQUIRED
