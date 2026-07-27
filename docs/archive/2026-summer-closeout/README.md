@@ -43,3 +43,38 @@ were archived).
 
 Related: the ChemMan-parity walkthrough research (`GAP-ANALYSIS.md` + extracted
 transcripts) moved to `docs/archive/2026-summer/` alongside the rest of that program.
+
+## Second batch — moved 2026-07-26
+
+A follow-up sweep of `docs/build-loops/`, `docs/handoffs/`, and `docs/superpowers/`.
+Only files that are both **finished** and **referenced by nothing else in the repo**
+moved; every candidate was checked for inbound references (docs, scripts, hooks,
+workflows, migrations) and for open owner decisions before being touched.
+
+- **`build-loops/ui-overhaul/`, `build-loops/ui-overhaul-v2/`** (from
+  `docs/build-loops/`) — both loops shipped live 2026-06-23/24 and were merged and
+  deployed. Zero database changes in either.
+  - Note: `ui-overhaul-v2/STATE.md` records one never-closed owner item — Mason's
+    in-app click-test of the three write buttons (Convert / Complete / Receive)
+    against real data. The features have been live since 2026-06-24.
+- **`superpowers/plans/`, `superpowers/specs/`** (from `docs/superpowers/`) — the
+  2026-06-14 design plan and spec for the Codex review gauntlet. The gauntlet was
+  built; its live documentation is `docs/workflows/CODEX_REVIEW_GAUNTLET.md`.
+- **`handoffs/`** — the 2026-07-16 scaffolding-review handoff (review delivered as
+  `docs/audits/2026-07-16-scaffolding-design-review.md`) and the supplier-pricing
+  Phase 1A goal (Phase 1A/1B closed out; Phase 3 Stage B2 shipped 2026-07-26).
+
+Deliberately **kept live** in this sweep, with the reason:
+
+- `docs/audits/nightly-debug/`, `docs/audits/overnight-bug-hunt/`,
+  `docs/audits/codex-driven-bug-hunt/` — these are **live output paths** written by
+  `.claude/workflows/` scripts, not finished artifacts.
+- `docs/build-loops/b1-lot-capture-trace/` — its `HANDOFF.md` is the only record of
+  a deferred `LotsEditorModal` save/close-race follow-up.
+- `docs/build-loops/field-map-ux/` — holds a parked owner decision (the F2 auto-nudge).
+- `docs/build-loops/field-acre-billing*/` — `PHASE0-GROUNDING.md` is cited by two
+  applied migrations, which are immutable and cannot be repointed.
+- `docs/audits/2026-06-19-future-projects-idea-mining/` — `UNIFIED-LONG-TERM-PLAN.md`
+  is still the stated source of truth for future-project direction.
+- `docs/plans/CRX-*label-data*.csv` — the label-data load is still an open owner
+  data-entry job.

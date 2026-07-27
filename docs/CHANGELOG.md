@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-26 — Docs archive sweep (second batch) + local branch/worktree cleanup
+
+Docs-only. Ten finished, unreferenced files moved into `docs/archive/2026-summer-closeout/`:
+the shipped `ui-overhaul` and `ui-overhaul-v2` build loops, the 2026-06-14 Codex-review-gauntlet
+plan/spec (`docs/superpowers/`, now empty and removed), and two closed 2026-07-16 handoffs
+(scaffolding review, supplier-pricing Phase 1A goal). Pure renames — no file content changed.
+
+Every candidate was checked for inbound references across docs, scripts, hooks, workflows, and
+migrations, and for unclosed owner decisions. That check kept far more in place than it moved,
+and the reasons are recorded in the archive README: `docs/audits/nightly-debug/`,
+`overnight-bug-hunt/`, and `codex-driven-bug-hunt/` are **live output paths** written by
+`.claude/workflows/` scripts; `build-loops/b1-lot-capture-trace/` holds the only record of a
+deferred `LotsEditorModal` save/close-race follow-up; `build-loops/field-map-ux/` holds a parked
+owner decision (F2 auto-nudge); `build-loops/field-acre-billing*/PHASE0-GROUNDING.md` is cited by
+two applied (immutable) migrations; the June idea-mining `UNIFIED-LONG-TERM-PLAN.md` is still the
+stated future-direction source of truth; and the `docs/plans/CRX-*label-data*.csv` worksheets back
+an open owner data-entry job. `npm run check:docs` PASS.
+
+Alongside this, a local-repository cleanup (no remote effect): 21 stale nested agent worktrees
+removed and 39 merged branches deleted in CRX Manager, plus 2 worktrees and 7 merged branches in
+FarmRx, whose main checkout was moved back onto `main`. Merged-ness was verified per branch via
+`gh pr list --head <branch> --state all` — squash merges make raw ahead-counts report merged work
+as unmerged. The 12 branches that existed only on this machine were pushed to GitHub as backup
+refs first, so nothing deleted is unrecoverable.
+
 ## 2026-07-26 — Vendor Deactivate/Reactivate (restore path for soft-deleted vendors)
 
 Owner-approved follow-up to the vendor-liveness gate below: vendor "Delete" never destroyed data
