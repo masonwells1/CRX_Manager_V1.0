@@ -38,7 +38,9 @@ const UTF16_REPLAY_BYTES = 4096;
 // lanes, while each lane itself retains no more than one incomplete code point.
 const UTF32_REPLAY_BYTES = 4096;
 const UTF32_TEXT_CHUNK_CHARS = 4096;
-const ARCHIVE_STREAM_TAIL_BYTES = 511;
+const CPIO_BINARY_HEADER_BYTES = 26;
+const MAX_CPIO_BINARY_NAME_BYTES = 4096;
+const ARCHIVE_STREAM_TAIL_BYTES = Math.max(511, CPIO_BINARY_HEADER_BYTES + MAX_CPIO_BINARY_NAME_BYTES - 1);
 const TRANSFER_DECODE_CHUNK_BYTES = 64 * 1024;
 const MAX_JSON_NODES = 1_000_000;
 const REGULAR_GIT_MODES = new Set(['100644', '100755']);
@@ -280,10 +282,15 @@ function hasPlausibleCpioHeader(source, offset) {
     const fields = source.subarray(offset + 6, offset + 76).toString('ascii');
     return /^[0-7 ]{70}$/.test(fields) && /[0-7]/.test(fields);
   }
-  if (offset + 26 > source.length || !bytesAt(source, offset, [0x71, 0xc7]) && !bytesAt(source, offset, [0xc7, 0x71])) return false;
+  if (offset + CPIO_BINARY_HEADER_BYTES > source.length || !bytesAt(source, offset, [0x71, 0xc7]) && !bytesAt(source, offset, [0xc7, 0x71])) return false;
   const littleEndian = source[offset] === 0xc7;
   const nameSize = littleEndian ? source.readUInt16LE(offset + 20) : source.readUInt16BE(offset + 20);
-  return nameSize > 0 && nameSize <= 4096;
+  if (nameSize < 2 || nameSize > MAX_CPIO_BINARY_NAME_BYTES) return false;
+  const nameStart = offset + CPIO_BINARY_HEADER_BYTES;
+  const nameEnd = nameStart + nameSize;
+  if (nameEnd > source.length) return false;
+  const pathname = source.subarray(nameStart, nameEnd);
+  return pathname.at(-1) === 0 && pathname.subarray(0, -1).indexOf(0) === -1;
 }
 function hasPlausibleCabHeader(source, offset) {
   if (source[offset] !== 0x4d || offset + 36 > source.length || !bytesAt(source, offset, [0x4d, 0x53, 0x43, 0x46])) return false;

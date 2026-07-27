@@ -35,6 +35,12 @@ function sanitizedFixtureGitEnv(overrides = {}) {
 function git(root, args, inheritedEnv = {}) { return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: sanitizedFixtureGitEnv(inheritedEnv) }); }
 function gitResult(root, args, inheritedEnv = {}) { return spawnSync('git', args, { cwd: root, encoding: 'utf8', env: sanitizedFixtureGitEnv(inheritedEnv) }); }
 function fixtureGitExecute(command, args, options = {}) { return execFileSync(command, args, { ...options, env: sanitizedFixtureGitEnv(options.env) }); }
+function binaryCpioHeader(byteOrder, pathname) {
+  const name = Buffer.from(pathname, 'binary'); const bytes = Buffer.alloc(26 + name.length);
+  bytes.set(byteOrder === 'le' ? Buffer.from([0xc7, 0x71]) : Buffer.from([0x71, 0xc7]));
+  if (byteOrder === 'le') bytes.writeUInt16LE(name.length, 20); else bytes.writeUInt16BE(name.length, 20);
+  name.copy(bytes, 26); return bytes;
+}
 function pullRequestContainmentRunFromWorkflow(ci) {
   const stepStart = ci.indexOf('      - name: Reject PR packet blobs with the exact trusted base checker');
   const runStart = ci.indexOf('        run: |\n', stepStart);
@@ -154,10 +160,11 @@ try {
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from('ordinary prefix'), Buffer.from([0x42, 0x5a, 0x68, 0x39, 0x31, 0x41, 0x59, 0x26, 0x53, 0x59])]), 'compressed archive container cannot be inspected');
   const tarHeader = Buffer.alloc(512); tarHeader.set(Buffer.from([0x75, 0x73, 0x74, 0x61, 0x72, 0x00]), 257); tarHeader.fill(0x20, 148, 156); let tarChecksum = 0; for (let index = 0; index < 512; index += 1) tarChecksum += tarHeader[index]; tarHeader.write(tarChecksum.toString(8).padStart(6, '0'), 148, 'ascii'); tarHeader[154] = 0; tarHeader[155] = 0x20;
   const cpioHeader = Buffer.alloc(110, 0x30); cpioHeader.write('070701', 0, 'ascii'); cpioHeader.write('00000001', 94, 'ascii');
+  const binaryCpioLeHeader = binaryCpioHeader('le', 'a\0'); const binaryCpioBeHeader = binaryCpioHeader('be', 'b\0');
   const cabHeader = Buffer.alloc(36); cabHeader.set(Buffer.from([0x4d, 0x53, 0x43, 0x46])); cabHeader.writeUInt32LE(36, 8); cabHeader[24] = 3; cabHeader[25] = 1;
   const archiveFixtures = [
     ['tar', tarHeader, 257], ['ar', Buffer.from([0x21, 0x3c, 0x61, 0x72, 0x63, 0x68, 0x3e, 0x0a]), 4], ['thin-ar', Buffer.from([0x21, 0x3c, 0x74, 0x68, 0x69, 0x6e, 0x3e, 0x0a]), 4],
-    ['cpio', cpioHeader, 6], ['cab', cabHeader, 4], ['zstd', Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x00]), 4], ['lz4', Buffer.from([0x04, 0x22, 0x4d, 0x18, 0x60, 0x40, 0x00]), 4],
+    ['cpio', cpioHeader, 6], ['binary-cpio-le', binaryCpioLeHeader, 1], ['binary-cpio-be', binaryCpioBeHeader, 1], ['cab', cabHeader, 4], ['zstd', Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x20, 0x00]), 4], ['lz4', Buffer.from([0x04, 0x22, 0x4d, 0x18, 0x60, 0x40, 0x00]), 4],
     ['lz4-legacy', Buffer.from([0x02, 0x21, 0x4c, 0x18, 0x00, 0x00, 0x00, 0x00]), 4], ['skippable', Buffer.from([0x50, 0x2a, 0x4d, 0x18, 0x00, 0x00, 0x00, 0x00]), 4],
   ];
   for (const [name, bytes, split] of archiveFixtures) {
@@ -168,8 +175,19 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x08, 0x00])), null, 'reserved Zstandard descriptor bits must not match');
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x04, 0x22, 0x4d, 0x18, 0x20, 0x40, 0x00])), null, 'invalid LZ4 frame version must not match');
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x4d, 0x53, 0x43, 0x46, ...Buffer.alloc(32)])), null, 'implausible CAB header must not match');
+  const prefixedBinaryCpio = Buffer.concat([Buffer.from('ordinary prefix'), binaryCpioBeHeader]);
+  assert.equal(structuralPrivateArtifactReason(prefixedBinaryCpio), 'compressed archive container cannot be inspected', 'prefixed binary CPIO must still fail closed');
+  assert.equal(structuralPrivateArtifactStreamReason([prefixedBinaryCpio.subarray(0, -1), prefixedBinaryCpio.subarray(-1)]), 'compressed archive container cannot be inspected', 'prefixed binary CPIO must survive a pathname-end stream split');
+  const longBinaryCpio = binaryCpioHeader('le', `${'n'.repeat(4095)}\0`);
+  assert.equal(structuralPrivateArtifactStreamReason([longBinaryCpio.subarray(0, -1), longBinaryCpio.subarray(-1)]), 'compressed archive container cannot be inspected', '4 KiB binary CPIO names must survive a final-byte stream split');
+  assert.equal(structuralPrivateArtifactReason(binaryCpioHeader('be', 'a\0b\0')), null, 'binary CPIO pathname interior NUL must not match');
   assert.equal(structuralPrivateArtifactReason(Buffer.from('const marker = "BZh";')), null);
   assert.equal(structuralPrivateArtifactReason(readFileSync(path.join(REPO_ROOT, 'scripts', 'check-supplier-pricing-phase3-private-artifacts.mjs'))), null);
+  for (const logo of ['logo_3-01_(3).png', 'logo_3-02_(2).png']) {
+    const bytes = readFileSync(path.join(REPO_ROOT, 'src', 'assets', logo)); const midpoint = Math.floor(bytes.length / 2);
+    assert.equal(structuralPrivateArtifactReason(bytes), null, `${logo} must not be misclassified by incidental binary CPIO bytes`);
+    assert.equal(structuralPrivateArtifactStreamReason([bytes.subarray(0, midpoint), bytes.subarray(midpoint)]), null, `${logo} must remain benign across streaming chunks`);
+  }
   const delayedProductPrefix = '{"id":"synthetic","sku":"synthetic","product_name":"synthetic","pricing_version":0,';
   const delayedUpdatedAt = '"updated_at"'; const streamSplit = 64 * 1024;
   const delayedProductBytes = Buffer.from(`${delayedProductPrefix}${' '.repeat(streamSplit - 5_000 - Buffer.byteLength(delayedProductPrefix))}${delayedUpdatedAt}${' '.repeat(6_000)}:"synthetic"}`);

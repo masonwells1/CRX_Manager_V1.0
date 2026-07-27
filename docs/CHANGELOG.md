@@ -16,7 +16,9 @@ structural scanner instead of materializing a full token or decoded buffer.
 
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
-a 511-byte stream overlap for split headers. Tool-owned ignored dependency
+a 4,121-byte stream overlap for bounded binary-CPIO pathnames. Binary CPIO
+recognition validates a complete single-NUL pathname, so incidental bytes
+inside committed PNG assets do not become false archive containers. Tool-owned ignored dependency
 archives (including fflate fixtures) remain exempt from archive-only rejection,
 while a private JSON/CSV signal inside those paths still fails closed. Raw Git
 commit objects are streamed through `git cat-file --batch` for every checked
