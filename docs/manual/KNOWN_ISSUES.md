@@ -1,13 +1,13 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: **914 ledger rows, max version `20260727174805`** — three migrations applied live this date. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. Section 0a is retained because **one** item remains open under it — a disaster-recovery defect in the schema baseline, blocked on a credential; production is unaffected. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: **914 ledger rows, max version `20260727174805`** — three migrations applied live this date. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. Its third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore in which all ten catalog fingerprints match live. **Section 0a now has nothing open**; it is retained for its proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (follow-up items 1 and 2 also resolved; item 3 open and BLOCKED)
+## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (all three follow-up items also resolved)
 
 **Status 2026-07-27: FIXED LIVE** by migration `20260727145843_inline_role_checks_require_active_profile`
 (applied under Mason's conditional approval once the clean-rebuild check passed). Residual inline-role
@@ -16,7 +16,7 @@ back: the deactivated `sales_rep` now sees **0** vendors and **0** vendor_bills,
 still sees 13 and 4. **Of the three numbered items at the end of this section, items 1 and 2 were
 themselves RESOLVED and APPLIED LIVE later the same day** (ledger `20260727174657` and
 `20260727174805`) — they are kept below with their proofs rather than deleted, and each carries its
-own residual-risk note. **Item 3 remains OPEN and is BLOCKED** on a credential; it is an unrelated
+own residual-risk note. **Item 3 was RESOLVED later the same day too** — an unrelated
 disaster-recovery defect in the schema baseline, logged here because this migration's clean-rebuild
 check is what surfaced it.
 
@@ -49,16 +49,16 @@ require an active profile` with 0 residual gaps. The replay stalls at 16 of 50 o
 baseline defect unrelated to this migration** — the July 19 baseline's schema is ahead of its own
 recorded ledger high-water, so it carries function bodies later than migration 16's md5 precondition
 expects. That does not weaken the proof: the remaining 35 migrations were checked statically and none
-creates, drops, or alters any of the 38 targets. **Refreshing the baseline so a from-zero replay
-completes is a separate open item.** The `write-apply-proofs.mjs` gate now returns CLEAN from both
+creates, drops, or alters any of the 38 targets. **The baseline has since been refreshed and a
+from-zero replay now completes — see item 3.** The `write-apply-proofs.mjs` gate now returns CLEAN from both
 `rls-security-reviewer` and `migration-drift-reviewer` — its first run correctly blocked on a CHECK 9
 comment reference, since fixed (comment-only).
 
 Of the three items listed below, **items 1 and 2 were RESOLVED and APPLIED LIVE on 2026-07-27**
 (ledger versions `20260727174657` and `20260727174805`) under Mason's explicit approval; they are kept
-here with their proofs rather than deleted. **Item 3 remains OPEN and is BLOCKED** on a credential —
-it is an unrelated pre-existing defect that the clean-rebuild check surfaced, and it affects
-disaster-recovery rebuilds only, not production.
+here with their proofs rather than deleted. **Item 3 was RESOLVED the same day** once Mason supplied
+the `postgres` database password — an unrelated pre-existing defect that the clean-rebuild check
+surfaced, affecting disaster-recovery rebuilds only, not production.
 
 1. **RESOLVED — APPLIED LIVE 2026-07-27 (`20260727174657`).** **Wide-open PERMISSIVE read policies —
    the count here was wrong; it is 31, not six.**
@@ -118,38 +118,49 @@ disaster-recovery rebuilds only, not production.
    text and the `LAST_ACTIVE_ADMIN` toast) are not visually confirmed — reaching Settings needs an
    admin login. Residual risk is cosmetic only: the database refuses a last-active-admin deactivation
    whether or not the friendly toast renders.
-3. **NEW 2026-07-27 — the schema baseline is ahead of its own recorded ledger high-water, so a
-   from-zero rebuild cannot complete.** `supabase/baselines/` records high-water `20260719092832`
-   (861 ledger rows), but its public-schema artifact already contains
-   `split_invoice_creation_claims` — a table introduced by `20260720213000`. It therefore also
-   carries function bodies newer than the post-baseline migrations expect, and a replay fails at
-   migration 16 of 50 with `PRECONDITION: reviewed public RPC drifted:
-   public.create_invoice_from_order(...)`. This is a **disaster-recovery** concern, not a production
-   one: live production is unaffected, but the documented "restore a new project" path in
-   `supabase/baselines/README.md` does not currently run to completion. Fix is to refresh the
-   baseline per that README's "Refreshing the baseline" section (regenerate dump + overlay + ledger
-   together, update manifest hashes/counts, prove a disposable restore, re-run
-   `npm run test:schema-baseline`). **Never edit an applied migration to make the rebuild pass** —
-   the README forbids it and the historical files are the audit trail. Two further README
-   deviations that a rebuild currently requires are documented in migration-history row 827: the CLI
-   `db push` step needs replacing with an equivalent psql replay, and the replay must read git blobs
-   because `core.autocrlf=true` breaks byte-exact function-body md5 preconditions on Windows.
-   **BLOCKED 2026-07-27 — proven, not assumed.** The refresh needs a dump in the exact shape of the
-   existing artifacts (`CREATE SCHEMA IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, quote-all-identifiers
-   — i.e. `supabase db dump`, not raw `pg_dump`; the stored artifact's own header confirms pg_dump 17.6
-   via the Supabase CLI). That command was rehearsed read-only against live and **fails**:
-   `pg_dump: error: query failed: ERROR: permission denied to set role "postgres"` — the CLI issues
-   `SET ROLE "postgres"` for full catalog visibility. The only CRX database credential on this machine
-   is the read-only `crx_backup_ro` role used by the nightly `pg_dump` job
-   (`C:\Users\mason\Scripts\crx_database_backup.ps1`, password in `C:\selfhosted\CREDENTIALS.txt`),
-   which cannot assume `postgres`; `CREDENTIALS.txt` holds no `postgres`-role password. **The one
-   concrete unblocking step is Mason supplying the project's `postgres` database password** (Supabase
-   dashboard → Project Settings → Database), or running the dump himself. Do **not** work around this
-   by hand-rolling the Supabase CLI's post-processing on top of a `crx_backup_ro` `pg_dump`: the
-   baseline *is* the disaster-recovery path, and reproducing it through an undocumented pipeline makes
-   DR less trustworthy, not more. The README's own precondition — refresh only **after the migration
-   ledger has settled** — **is now satisfied:** items 1 and 2 above were applied live on 2026-07-27
-   and the ledger high-water is `20260727174805`. The credential is the only thing still blocking.
+3. **RESOLVED 2026-07-27 — the schema baseline was ahead of its own recorded ledger high-water, so a
+   from-zero rebuild could not complete.**
+   **As found:** `supabase/baselines/` recorded high-water `20260719092832` (861 ledger rows), but
+   its public-schema artifact already contained `split_invoice_creation_claims` — a table introduced
+   by `20260720213000`. It therefore also carried function bodies newer than the post-baseline
+   migrations expected, and a replay failed at migration 16 of 50 with `PRECONDITION: reviewed
+   public RPC drifted: public.create_invoice_from_order(...)`. Disaster-recovery only; production
+   was never affected.
+   **Fix:** the baseline was regenerated from a fresh read-only capture of live at high-water
+   `20260727174805` (914 ledger rows) — no applied migration was edited. Mason supplied the
+   `postgres` database password on 2026-07-27, which was the sole blocker.
+   **Proven, not assumed.** The six artifacts were restored in `restore_order` into a throwaway
+   PostgreSQL 17.6 container and **all ten catalog fingerprints match live** (`columns`,
+   `constraints`, `enums`, `indexes`, `relations_and_acl`, `triggers`, `function_security`,
+   `function_canonical_source`, `policy_contracts`, `cron_contracts`). The restored ledger reports
+   `914|20260727174805`. Re-applying the history file raises
+   `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER` and the cron file raises
+   `BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, so both stay fail-closed. The one genuinely
+   post-baseline migration replays onto the restored database cleanly — the exact step that used to
+   stall at 16 of 50. `npm run test:schema-baseline` passes:
+   `SCHEMA_BASELINE_PASS high_water=20260727174805 ledger_rows=914` /
+   `POST_BASELINE_MIGRATIONS_PASS pending=1`.
+   **Two real defects were found and fixed while doing it, both DR-only:**
+   - *Security.* A schema dump can only `GRANT`. A new Supabase project ships `ALTER DEFAULT
+     PRIVILEGES` handing `anon` — the unauthenticated role — full CRUD on every table and `EXECUTE`
+     on every function `postgres` creates, and `REVOKE … FROM PUBLIC` does **not** strip a
+     role-specific grant. Restoring the old baseline therefore left `anon` holding privileges
+     production had revoked, silently undoing the hardening shipped in PR #249. The baseline now
+     carries a sixth artifact, `*_acl_lockdown.sql`: it revokes the Supabase-managed roles to
+     nothing, re-applies production's exact 1600 grants, restores production's default privileges,
+     and ends with a guard raising `BASELINE_ACL_ANON_OVER_GRANTED` if `anon` still holds anything
+     beyond `SELECT`/`MAINTAIN` on a table.
+   - *Fidelity.* `supabase db dump` post-processes the dump and strips `--` comment lines out of
+     function bodies — 3 of 527 functions were affected. The public-schema artifact is now built
+     from raw `pg_dump`, normalized by `scripts/build-schema-baseline-public.mjs`.
+   `supabase/baselines/README.md` now documents the real refresh procedure, and
+   `scripts/verify-schema-baseline.mjs` fails if any `disposable_restore_proof` flag is missing or
+   not `true`, so a half-finished refresh cannot be published as proven.
+   **Flagged, deliberately unchanged:** live grants `anon` `SELECT` on all 155 public tables and
+   `SELECT, UPDATE, USAGE` on sequences (stock Supabase posture; reads are gated by RLS), and 543
+   repo migration filenames have no matching ledger version while 654 ledger versions have no file —
+   a pre-existing consequence of applying migrations through the Management API, which assigns its
+   own version. The baseline copies live's ledger verbatim so a restore mirrors production exactly.
 
 ---
 

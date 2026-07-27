@@ -1,51 +1,59 @@
 {
-  "format_version": 2,
+  "format_version": 3,
   "project_id": "rhyzpcqhnizqbxphqdkr",
-  "generated_at": "2026-07-19T09:45:48.680Z",
-  "migrations_high_water": "20260719092832",
-  "migration_ledger_rows": 861,
+  "generated_at": "2026-07-27T20:14:42.143Z",
+  "migrations_high_water": "20260727174805",
+  "migration_ledger_rows": 914,
+  "fingerprint_sql_sha256": "3CB77576F5A1FC829524BE1B1BE5C9A9A44BCD2CAADDB8FBCCAA6CFC072FC4D1",
+  "acl_sql_sha256": "413614B2889CCC9F46CCEABCF894FE9528A5738CCA63DE22594B37AF44E00BA9",
+  "acl_statements": 1600,
   "restore_order": [
-    "20260719092832_extensions.sql",
-    "20260719092832_public_schema.sql.br",
-    "20260719092832_platform_overlay.sql",
-    "20260719092832_cron_jobs.sql",
-    "20260719092832_migration_history.sql"
+    "20260727174805_extensions.sql",
+    "20260727174805_public_schema.sql.br",
+    "20260727174805_acl_lockdown.sql",
+    "20260727174805_platform_overlay.sql",
+    "20260727174805_cron_jobs.sql",
+    "20260727174805_migration_history.sql"
   ],
   "artifacts": {
-    "20260719092832_cron_jobs.sql": {
+    "20260727174805_acl_lockdown.sql": {
+      "bytes": 180423,
+      "sha256": "C68FEC8DD80C127AD40AC52033178D637270078F921D7022AFFDDD04150BD5F4"
+    },
+    "20260727174805_cron_jobs.sql": {
       "bytes": 4008,
-      "sha256": "ED0CCB581D1D2FE1A53BDCD8B0D23CED9058C7D3921077430B434C4983497A4A"
+      "sha256": "FC7257E2F48CF5F5D312CEC8FE8D4372C08E6F6F69D80F1FC421152C2C5E4852"
     },
-    "20260719092832_extensions.sql": {
+    "20260727174805_extensions.sql": {
       "bytes": 1453,
-      "sha256": "DD7C6DF0B9FCEFAA786523D7C581F1D0E68910B030AA9735CA4E519618C645C9"
+      "sha256": "F3E7C1E6CD85490FF30366DFB11DB873A16D8F688C4E74D43BEB41B6E201AD71"
     },
-    "20260719092832_migration_history.sql": {
-      "bytes": 44910,
-      "sha256": "A8BC1783BDF757D44E27D2346324AD66F330ABA03F53BAFEFD96B5A65C17A565"
+    "20260727174805_migration_history.sql": {
+      "bytes": 48252,
+      "sha256": "D8B3CC8F7AA422F9EEFBD4DE4CE9B3F8933BF255BF78DB12DCA59840B731C1EC"
     },
-    "20260719092832_platform_overlay.sql": {
-      "bytes": 13069,
-      "sha256": "3440E26231934F9F51BA18F361C1151DBE38099530C2FAF27F433402DA2A8235"
+    "20260727174805_platform_overlay.sql": {
+      "bytes": 15057,
+      "sha256": "BD8542B3006701D8C0FF8DECE618FDAE8E870AE8650DF662F9A8B289BB6096E8"
     },
-    "20260719092832_public_schema.sql.br": {
-      "bytes": 295275,
-      "sha256": "094F9C8F5848D6411FB45AACD25937C556CB321AE83F7CA8A5EDF8A040D44C83",
+    "20260727174805_public_schema.sql.br": {
+      "bytes": 340363,
+      "sha256": "9D74942C566CEE999CCB6C64C31810A63FCBA1ED16164510B43FEFD7B0D79D7B",
       "encoding": "brotli",
-      "decoded_bytes": 2746165,
-      "decoded_sha256": "8CAF4139673F8ECA029B950E8E434179D3836439DED7C0653720833AA6752EF4"
+      "decoded_bytes": 3056205,
+      "decoded_sha256": "2BE87149CCF58F5B69D97D2A9FC4DAEF7F0FCB0EC21B92BEC08F83CC6DA91C9F"
     },
-    "20260719092832_storage_buckets.json": {
-      "bytes": 2110,
-      "sha256": "672E63DAF203E401DB45C5F3E2E1A66C3D828484DC5664CCCBB3A5B49F906904"
+    "20260727174805_storage_buckets.json": {
+      "bytes": 2440,
+      "sha256": "096E9BDE14D722D23827E327E717606E4E2DE328EC8488D335977E5F20E60CD1"
     }
   },
   "catalog_counts": {
-    "public_tables": 144,
-    "public_app_functions": 451,
+    "public_tables": 155,
+    "public_app_functions": 527,
     "public_extension_functions": 24,
-    "public_policies": 414,
-    "storage_object_policies": 28,
+    "public_policies": 423,
+    "storage_object_policies": 27,
     "storage_buckets": 9,
     "auth_user_crx_triggers": 1,
     "operational_cron_jobs": 8
@@ -53,10 +61,10 @@
   "public_extension_function_signatures": [
     "__plpgsql_show_dependency_tb(regprocedure,regclass,regtype,regtype,regtype,regtype,regtype)",
     "__plpgsql_show_dependency_tb(text,regclass,regtype,regtype,regtype,regtype,regtype)",
-    "plpgsql_check_function_tb(regprocedure,regclass,boolean,boolean,boolean,boolean,boolean,boolean,name,name,regtype,regtype,regtype,regtype,regtype,boolean,boolean,boolean,boolean,boolean)",
-    "plpgsql_check_function_tb(text,regclass,boolean,boolean,boolean,boolean,boolean,boolean,name,name,regtype,regtype,regtype,regtype,regtype,boolean,boolean,boolean,boolean,boolean)",
     "plpgsql_check_function(regprocedure,regclass,text,boolean,boolean,boolean,boolean,boolean,boolean,name,name,regtype,regtype,regtype,regtype,regtype,boolean,boolean,boolean,boolean,boolean)",
     "plpgsql_check_function(text,regclass,text,boolean,boolean,boolean,boolean,boolean,boolean,name,name,regtype,regtype,regtype,regtype,regtype,boolean,boolean,boolean,boolean,boolean)",
+    "plpgsql_check_function_tb(regprocedure,regclass,boolean,boolean,boolean,boolean,boolean,boolean,name,name,regtype,regtype,regtype,regtype,regtype,boolean,boolean,boolean,boolean,boolean)",
+    "plpgsql_check_function_tb(text,regclass,boolean,boolean,boolean,boolean,boolean,boolean,name,name,regtype,regtype,regtype,regtype,regtype,boolean,boolean,boolean,boolean,boolean)",
     "plpgsql_check_pragma(text[])",
     "plpgsql_check_profiler(boolean)",
     "plpgsql_check_tracer(boolean,text)",
@@ -71,41 +79,44 @@
     "plpgsql_profiler_functions_all()",
     "plpgsql_profiler_install_fake_queryid_hook()",
     "plpgsql_profiler_remove_fake_queryid_hook()",
-    "plpgsql_profiler_reset_all()",
     "plpgsql_profiler_reset(regprocedure)",
+    "plpgsql_profiler_reset_all()",
     "plpgsql_show_dependency_tb(regprocedure,regclass,regtype,regtype,regtype,regtype,regtype)",
     "plpgsql_show_dependency_tb(text,regclass,regtype,regtype,regtype,regtype,regtype)"
   ],
   "catalog_fingerprints": {
-    "columns": "08d005fc0ed95e5dcbd299f21799ad3f",
-    "constraints": "7d7cda6dd5c610d877f4786418854367",
-    "enums": "95a6abc5ed0efdccf8dbf7660e5a78a8",
-    "indexes": "82a70970c78ad014fbbe0377f7f85a1b",
-    "relations_and_acl": "22a607cd93f6efa3ee74853420075a3f",
-    "triggers": "a20c82062354532bd2fcbc43f2dd0413",
-    "function_security": "b89842d49fced35d0793916a5574c85e",
-    "function_canonical_source": "59e03394eef30995fc6f52c682284742",
-    "policy_contracts": "8b96adeab1a4f7d9d2ae56c39d57f1b1",
+    "columns": "f5b56a799a24f65c153fcf326b83c43e",
+    "constraints": "16b946a19f293690c887389d2bde714e",
+    "enums": "9df1d2720ee68c51f557f3b2c42960db",
+    "indexes": "be40ff498211b918bf0e120aba144102",
+    "relations_and_acl": "802c4045b0b8f075112d6130fea0bb67",
+    "triggers": "8034a4585904327730aaf54492214fd9",
+    "function_security": "422343713ca83d432817c53f1ac72f01",
+    "function_canonical_source": "eb4600f26f7ecd2635fdad01ae830a10",
+    "policy_contracts": "197f5c8d6e3f802a7bf784f9fdb14262",
     "cron_contracts": "f1c1cd047edac97fd406291089df43fb"
   },
   "key_function_prosrc_md5": {
-    "public.cancel_order(uuid,uuid,text)": "26c8b52a1f1e1a5bdf460bd89b730111",
-    "public.create_invoice_for_unbilled_delivery(uuid,uuid,text)": "2fc0102fe8702f6c2d63c326a99c15dd",
+    "public.cancel_order(uuid,uuid,text)": "501473a43b505df72bc803a7354b0e60",
+    "public.create_invoice_for_unbilled_delivery(uuid,uuid,text)": "a7f2531bd09ea6c650063f9661871caa",
     "public.create_split_invoices_from_order(uuid,uuid,text,text)": "398030fbb64006b4750e7e89a61b6cb9",
     "public.delete_invoices(uuid[],uuid,text)": "24c271164caa2369c57c3bdc5d88c50a",
     "public.guard_quote_commission_split_valid()": "84c1eeb07885372674092202988fb761",
     "public.revert_quote_status(uuid,text,uuid,text)": "fb0cc5def3766270b13c401810b61f3e",
-    "public.save_invoice(jsonb,jsonb,text)": "6eb68b6248b52328bfc94284e790ef85",
-    "public.validate_commission_split_json(jsonb)": "93262fb0f09b4c94aaada395f55c1519",
-    "public.void_invoice(uuid,text,text)": "9f1656542c5c6a667b1c8a67034c5c3f"
+    "public.save_invoice(jsonb,jsonb,text)": "f7e0fe8f494fe160039df9aef46067df",
+    "public.validate_commission_split_json(jsonb)": "cfb094fd417e3be7646663870a405789",
+    "public.void_invoice(uuid,text,text)": "c7a488d58bd876e92565bca9bd4edc90"
   },
   "disposable_restore_proof": {
     "postgres_major": 17,
-    "catalog_count_match": true,
-    "catalog_fingerprint_match": true,
-    "policy_contract_match": true,
-    "migration_history_fail_closed": true,
-    "cron_contract_live_match": true,
-    "cron_collision_fail_closed": true
+    "restore_order_applied_clean": true,
+    "ledger_rows_and_high_water_match_live": true,
+    "all_catalog_fingerprints_match_live": true,
+    "relation_and_function_acl_match_live": true,
+    "function_source_matches_live": true,
+    "history_restore_fail_closed": true,
+    "cron_restore_fail_closed": true,
+    "acl_lockdown_reapply_is_idempotent": true,
+    "post_baseline_migration_replays_clean": true
   }
 }

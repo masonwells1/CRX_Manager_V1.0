@@ -21,8 +21,46 @@ const sha256 = (buffer) => createHash('sha256').update(buffer).digest('hex').toU
 if (!/^\d{14}$/.test(manifest.migrations_high_water ?? '')) {
   fail('manifest high-water is not a 14-digit version');
 }
-if (!Array.isArray(manifest.restore_order) || manifest.restore_order.length !== 5) {
-  fail('manifest restore_order must contain five ordered SQL artifacts');
+if (!Array.isArray(manifest.restore_order) || manifest.restore_order.length !== 6) {
+  fail('manifest restore_order must contain six ordered SQL artifacts');
+}
+
+// The fingerprints and the ACL capture in this manifest are only meaningful if the
+// queries that produced them are recorded and unchanged. Binding each SQL file's
+// hash makes a silent edit fail the gate instead of quietly redefining what
+// "matches production" means.
+for (const [file, field] of [
+  ['schema-baseline-fingerprints.sql', 'fingerprint_sql_sha256'],
+  ['schema-baseline-acl.sql', 'acl_sql_sha256'],
+]) {
+  const sqlPath = path.join(repoRoot, 'scripts', file);
+  try {
+    const actual = sha256(readFileSync(sqlPath));
+    if (actual !== manifest[field]) {
+      fail(`scripts/${file} sha256 ${actual} does not match manifest ${field} ${manifest[field]}`);
+    }
+  } catch (error) {
+    fail(`scripts/${file} is unreadable: ${error.message}`);
+  }
+}
+
+// A baseline is only trustworthy once it has actually been restored into a
+// throwaway database and matched against live. Requiring every proof flag to be
+// true stops a half-finished refresh from being published as if it were proven.
+{
+  const proof = manifest.disposable_restore_proof;
+  if (!proof || typeof proof !== 'object') {
+    fail('manifest is missing disposable_restore_proof');
+  } else {
+    if (!Number.isInteger(proof.postgres_major)) {
+      fail('disposable_restore_proof.postgres_major must be the integer major version restored into');
+    }
+    for (const [check, value] of Object.entries(proof)) {
+      if (check !== 'postgres_major' && value !== true) {
+        fail(`disposable_restore_proof.${check} is not true`);
+      }
+    }
+  }
 }
 
 const decodedArtifacts = new Map();
@@ -87,6 +125,10 @@ const history = readFileSync(
   path.join(baselineDir, `${manifest.migrations_high_water}_migration_history.sql`),
   'utf8',
 );
+const aclLockdown = readFileSync(
+  path.join(baselineDir, `${manifest.migrations_high_water}_acl_lockdown.sql`),
+  'utf8',
+);
 const buckets = JSON.parse(
   readFileSync(
     path.join(baselineDir, `${manifest.migrations_high_water}_storage_buckets.json`),
@@ -103,7 +145,7 @@ if (!Array.isArray(extensionFunctionSignatures) ||
 }
 const staticCounts = {
   public_tables: countMatches(publicSchema, /^CREATE TABLE /gm),
-  public_app_functions: countMatches(publicSchema, /^CREATE OR REPLACE FUNCTION /gm),
+  public_app_functions: countMatches(publicSchema, /^CREATE (?:OR REPLACE )?FUNCTION /gm),
   public_extension_functions: extensionFunctionSignatures.length,
   public_policies: countMatches(publicSchema, /^CREATE POLICY /gm),
   storage_object_policies: countMatches(platformOverlay, /^CREATE POLICY /gm),
@@ -169,6 +211,49 @@ if (cronMatches.length !== expectedCounts.operational_cron_jobs) {
 }
 if (!cronJobs.includes('BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS')) {
   fail('cron restore is not fail-closed');
+}
+
+// The ACL lockdown is the artifact that stops a restored project from handing the
+// unauthenticated `anon` role the full CRUD that a new Supabase project's default
+// privileges grant. Its shape is checked statically so a truncated or reordered
+// capture cannot be published as a lockdown.
+{
+  const managedRoles = ['anon', 'authenticated', 'service_role', 'metabase_ro'];
+  const roleList = managedRoles.join(', ');
+  for (const objects of ['TABLES', 'SEQUENCES', 'ROUTINES']) {
+    if (!aclLockdown.includes(`REVOKE ALL ON ALL ${objects} IN SCHEMA "public" FROM PUBLIC, ${roleList};`)) {
+      fail(`ACL lockdown does not reset existing ${objects} privileges`);
+    }
+    if (!aclLockdown.includes(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" REVOKE ALL ON ${objects} FROM PUBLIC, ${roleList};`,
+    )) {
+      fail(`ACL lockdown does not reset default privileges for ${objects}`);
+    }
+  }
+  for (const sentinel of ['BASELINE_ACL_RESTORE_REQUIRES_MANAGED_ROLES', 'BASELINE_ACL_ANON_OVER_GRANTED']) {
+    if (!aclLockdown.includes(sentinel)) {
+      fail(`ACL lockdown is missing the ${sentinel} guard`);
+    }
+  }
+  const grants = [...aclLockdown.matchAll(/^GRANT .+ TO .+;$/gm)];
+  const defaultGrants = [...aclLockdown.matchAll(/^ALTER DEFAULT PRIVILEGES FOR ROLE .+ GRANT .+ TO .+;$/gm)];
+  const statements = grants.length + defaultGrants.length;
+  if (statements !== manifest.acl_statements) {
+    fail(`acl_statements expected ${manifest.acl_statements}, found ${statements}`);
+  }
+  if (defaultGrants.length === 0) {
+    fail('ACL lockdown re-grants nothing by default; future migrations would inherit the target project defaults');
+  }
+  // Reading a table is gated by RLS; writing to one is not something the
+  // unauthenticated role may ever be handed by a published baseline. Sequences are
+  // deliberately not covered: production grants anon USAGE/UPDATE on them, which is
+  // the stock Supabase posture and only allows drawing a number, not reading rows.
+  const anonWrites = [...aclLockdown.matchAll(/^GRANT (.+) ON TABLE (\S+) TO anon;$/gm)].filter(([, privileges]) =>
+    privileges.split(', ').some((privilege) => !['SELECT', 'MAINTAIN'].includes(privilege)),
+  );
+  if (anonWrites.length > 0) {
+    fail(`ACL lockdown grants anon write access on ${anonWrites.map(([, , object]) => object).join(', ')}`);
+  }
 }
 
 const historyLines = history.split(/\r?\n/);

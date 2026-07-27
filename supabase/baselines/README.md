@@ -23,9 +23,10 @@ the exact `manifest.json.restore_order` sequence with a fail-fast SQL client:
 
 1. `*_extensions.sql`
 2. `*_public_schema.sql.br`, streamed through the repository decoder
-3. `*_platform_overlay.sql`
-4. `*_cron_jobs.sql`
-5. `*_migration_history.sql`
+3. `*_acl_lockdown.sql`
+4. `*_platform_overlay.sql`
+5. `*_cron_jobs.sql`
+6. `*_migration_history.sql`
 
 For step 2, run the decoder from the repository root and pipe its binary-safe
 stdout directly to the fail-fast SQL client:
@@ -42,6 +43,18 @@ when it is absent, before the decoded schema restores grants to that role. Run
 the restore as the project owner so role creation is permitted. Every artifact
 must use `ON_ERROR_STOP=1`; do not continue from a partially restored project.
 
+Step 3 is the ACL lockdown, and it is a security control, not bookkeeping. A
+schema dump can only `GRANT`. A new Supabase project ships `ALTER DEFAULT
+PRIVILEGES` that hand `anon` — the unauthenticated role — full CRUD on every table
+and `EXECUTE` on every function `postgres` creates, and `REVOKE ... FROM PUBLIC`
+does **not** strip a role-specific grant. Restoring the schema alone therefore
+leaves `anon` holding privileges production revoked, and leaves default privileges
+that would re-grant them to every future migration. The lockdown revokes the
+Supabase-managed roles down to nothing, re-applies production's exact grants, and
+restores production's default privileges. It ends with a guard that raises
+`BASELINE_ACL_ANON_OVER_GRANTED` if `anon` still holds anything beyond
+`SELECT`/`MAINTAIN` on a table. It is idempotent and safe to re-run.
+
 The platform overlay restores the CRX-owned `auth.users` profile trigger, all
 CRX Storage policies, and bucket configuration after the public functions and
 tables they reference exist. The history restore refuses a non-empty
@@ -51,10 +64,10 @@ The cron restore similarly refuses any existing job with one of the eight CRX
 job names, then verifies each schedule and command exactly.
 
 After the restore, do **not** select pending migrations by filename timestamp
-alone. Supabase retained submitted names for several migrations while assigning
-lower live ledger versions, so four files whose filenames sort above the
-high-water are already captured in the restored ledger. Generate the exact
-post-baseline list from both version and captured name:
+alone. Supabase assigns its own ledger version when a migration is applied through
+the Management API, so filename timestamps and ledger versions are not in 1:1
+correspondence across this repository's history. Generate the exact post-baseline
+list from both version and captured name:
 
 ```bash
 node scripts/list-post-baseline-migrations.mjs
@@ -99,9 +112,48 @@ development or preview project.
 ## Refreshing the baseline
 
 Refresh only from reviewed live introspection after the migration ledger has
-settled. Regenerate the public dump, platform overlay, bucket snapshot, and
-compact ledger together; update the manifest hashes/counts; prove a disposable
-PostgreSQL 17 restore; Brotli-compress the exact verified public dump and record
-both stored and decoded hashes; require the history file's second application to
-fail; and run `npm run test:schema-baseline`. Never edit an applied migration to
-make a fresh rebuild pass.
+settled. **Never edit an applied migration to make a fresh rebuild pass.**
+
+All capture is read-only against production. Capture into a scratch work
+directory, then assemble; keeping the two steps apart is what makes the assembly
+deterministic and reviewable.
+
+1. **Public schema** — raw `pg_dump --schema=public --schema-only
+   --quote-all-identifiers --no-owner`, normalized by
+   `scripts/build-schema-baseline-public.mjs` into `public_schema.sql`. Do not use
+   `supabase db dump` here: it post-processes the dump and strips `--` comment
+   lines out of function bodies, which silently changes the source of every
+   function that carries an inline comment.
+2. **ACL lockdown** — `psql -At -f scripts/schema-baseline-acl.sql` against live,
+   piped to `scripts/build-schema-baseline-acl.mjs`. That SQL emits one `GRANT`
+   per (object, grantee) plus production's `ALTER DEFAULT PRIVILEGES`, in a
+   deterministic order, for `anon`, `authenticated`, `service_role`,
+   `metabase_ro`, and `PUBLIC`.
+3. **Platform overlay, bucket snapshot, and compact ledger** — as before, via
+   `scripts/build-schema-baseline-platform.mjs` and
+   `scripts/build-schema-baseline-history.mjs`.
+4. **Fingerprints** — `psql -At -F'=' -f scripts/schema-baseline-fingerprints.sql`
+   against live into `live_fingerprints.txt`. The manifest binds this file's own
+   SHA-256, so redefining what "matches production" means fails the gate.
+
+Then prove it. Restore the artifacts in `restore_order` into a throwaway
+PostgreSQL 17 container (`public.ecr.aws/supabase/postgres`), and require **all
+ten fingerprints to match live**, not just the counts. Also require the history
+file's second application to raise `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER`,
+the cron file's second application to raise
+`BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, the ACL lockdown to re-apply
+cleanly, and any post-baseline migration to replay onto the result. Record each
+of those as a `true` flag in `disposable_restore_proof`; `verify-schema-baseline.mjs`
+fails if any flag is missing or not `true`, so a half-finished refresh cannot be
+published as if it were proven.
+
+Finally run `node scripts/assemble-schema-baseline.mjs <work-dir> <high-water>`,
+delete the superseded artifacts, and run `npm run test:schema-baseline`.
+
+A note on the container: the stock `supabase/postgres` image ships whatever
+GoTrue/storage schema it was cut at, which is not the version live runs. Drop its
+`auth` and `storage` schemas and replace them with live-introspected DDL before
+restoring, or the overlay will fail on columns the image's `auth.users` does not
+have. In that image `postgres` is not a superuser — `supabase_admin` is — so the
+platform prerequisites are applied as `supabase_admin -d postgres` and everything
+else as `postgres`.

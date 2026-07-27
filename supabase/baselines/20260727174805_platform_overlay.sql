@@ -1,4 +1,4 @@
--- CRX Supabase platform overlay at live high-water 20260719092832.
+-- CRX Supabase platform overlay at live high-water 20260727174805.
 -- Apply after the matching public schema baseline on a NEW Supabase project.
 -- This restores only CRX-owned auth/storage objects; Supabase owns the platform schemas.
 BEGIN;
@@ -6,9 +6,7 @@ BEGIN;
 DROP TRIGGER IF EXISTS "on_auth_user_created" ON "auth"."users";
 CREATE OR REPLACE TRIGGER "on_auth_user_created" AFTER INSERT ON "auth"."users" FOR EACH ROW EXECUTE FUNCTION "public"."handle_new_user"();
 
-DROP POLICY IF EXISTS "Authenticated users can read signatures" ON "storage"."objects";
 DROP POLICY IF EXISTS "Authenticated users can upload documents" ON "storage"."objects";
-DROP POLICY IF EXISTS "Authenticated users can upload signatures" ON "storage"."objects";
 DROP POLICY IF EXISTS "Authenticated users can upload team note attachments" ON "storage"."objects";
 DROP POLICY IF EXISTS "Users can delete own document uploads" ON "storage"."objects";
 DROP POLICY IF EXISTS "Users can delete own team note attachments" ON "storage"."objects";
@@ -24,9 +22,10 @@ DROP POLICY IF EXISTS "customer_documents_objects_rep_insert" ON "storage"."obje
 DROP POLICY IF EXISTS "customer_documents_objects_rep_select" ON "storage"."objects";
 DROP POLICY IF EXISTS "delivery_photos_delete" ON "storage"."objects";
 DROP POLICY IF EXISTS "delivery_photos_insert" ON "storage"."objects";
-DROP POLICY IF EXISTS "delivery_signatures_delete" ON "storage"."objects";
-DROP POLICY IF EXISTS "delivery_signatures_insert" ON "storage"."objects";
-DROP POLICY IF EXISTS "delivery_signatures_select" ON "storage"."objects";
+DROP POLICY IF EXISTS "delivery_signatures_scoped_delete" ON "storage"."objects";
+DROP POLICY IF EXISTS "delivery_signatures_scoped_insert" ON "storage"."objects";
+DROP POLICY IF EXISTS "delivery_signatures_scoped_select" ON "storage"."objects";
+DROP POLICY IF EXISTS "delivery_signatures_scoped_update" ON "storage"."objects";
 DROP POLICY IF EXISTS "job_attachments_objects_delete" ON "storage"."objects";
 DROP POLICY IF EXISTS "job_attachments_objects_insert" ON "storage"."objects";
 DROP POLICY IF EXISTS "job_attachments_objects_select" ON "storage"."objects";
@@ -35,14 +34,12 @@ DROP POLICY IF EXISTS "recv_photos_storage_upload" ON "storage"."objects";
 DROP POLICY IF EXISTS "supplier_price_evidence_objects_insert" ON "storage"."objects";
 DROP POLICY IF EXISTS "supplier_price_evidence_objects_select" ON "storage"."objects";
 
-CREATE POLICY "Authenticated users can read signatures" ON "storage"."objects" FOR SELECT TO "authenticated" USING (("bucket_id" = 'delivery-signatures'::"text"));
 CREATE POLICY "Authenticated users can upload documents" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK (("bucket_id" = 'document-uploads'::"text"));
-CREATE POLICY "Authenticated users can upload signatures" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK (("bucket_id" = 'delivery-signatures'::"text"));
 CREATE POLICY "Authenticated users can upload team note attachments" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK (("bucket_id" = 'team-note-attachments'::"text"));
 CREATE POLICY "Users can delete own document uploads" ON "storage"."objects" FOR DELETE TO "authenticated" USING ((("bucket_id" = 'document-uploads'::"text") AND (("storage"."foldername"("name"))[1] = (( SELECT "auth"."uid"() AS "uid"))::"text")));
-CREATE POLICY "Users can delete own team note attachments" ON "storage"."objects" FOR DELETE TO "authenticated" USING ((("bucket_id" = 'team-note-attachments'::"text") AND ((("storage"."foldername"("name"))[1] = ("auth"."uid"())::"text") OR (EXISTS ( SELECT 1
+CREATE POLICY "Users can delete own team note attachments" ON "storage"."objects" FOR DELETE TO "authenticated" USING ((("bucket_id" = 'team-note-attachments'::"text") AND ((("storage"."foldername"("name"))[1] = (( SELECT "auth"."uid"() AS "uid"))::"text") OR (EXISTS ( SELECT 1
    FROM "public"."profiles"
-  WHERE (("profiles"."id" = "auth"."uid"()) AND ("profiles"."role" = 'admin'::"text")))))));
+  WHERE (("profiles"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("profiles"."role" = 'admin'::"text") AND ("profiles"."is_active" = true)))))));
 CREATE POLICY "Users can read own document uploads" ON "storage"."objects" FOR SELECT TO "authenticated" USING ((("bucket_id" = 'document-uploads'::"text") AND (("storage"."foldername"("name"))[1] = (( SELECT "auth"."uid"() AS "uid"))::"text")));
 CREATE POLICY "blend_ticket_images_delete" ON "storage"."objects" FOR DELETE TO "authenticated" USING ((("bucket_id" = 'blend-ticket-images'::"text") AND ("public"."is_admin"() OR ("public"."is_sales_rep"() AND (("owner_id" = (( SELECT "auth"."uid"() AS "uid"))::"text") OR (EXISTS ( SELECT 1
    FROM "public"."blend_tickets" "bt"
@@ -71,13 +68,30 @@ CREATE POLICY "customer_documents_objects_rep_select" ON "storage"."objects" FOR
   WHERE (("cd"."storage_path" = "objects"."name") AND ("cd"."deleted_at" IS NULL)))))));
 CREATE POLICY "delivery_photos_delete" ON "storage"."objects" FOR DELETE TO "authenticated" USING ((("bucket_id" = 'delivery-photos'::"text") AND (EXISTS ( SELECT 1
    FROM "public"."profiles"
-  WHERE (("profiles"."id" = "auth"."uid"()) AND ("profiles"."role" = ANY (ARRAY['admin'::"text", 'sales_rep'::"text"])))))));
+  WHERE (("profiles"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("profiles"."role" = ANY (ARRAY['admin'::"text", 'sales_rep'::"text"])) AND ("profiles"."is_active" = true))))));
 CREATE POLICY "delivery_photos_insert" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK (("bucket_id" = 'delivery-photos'::"text"));
-CREATE POLICY "delivery_signatures_delete" ON "storage"."objects" FOR DELETE TO "authenticated" USING ((("bucket_id" = 'delivery-signatures'::"text") AND (EXISTS ( SELECT 1
-   FROM "public"."profiles"
-  WHERE (("profiles"."id" = "auth"."uid"()) AND ("profiles"."role" = ANY (ARRAY['admin'::"text", 'sales_rep'::"text"])))))));
-CREATE POLICY "delivery_signatures_insert" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK (("bucket_id" = 'delivery-signatures'::"text"));
-CREATE POLICY "delivery_signatures_select" ON "storage"."objects" FOR SELECT TO "authenticated" USING (("bucket_id" = 'delivery-signatures'::"text"));
+CREATE POLICY "delivery_signatures_scoped_delete" ON "storage"."objects" FOR DELETE TO "authenticated" USING ((("bucket_id" = 'delivery-signatures'::"text") AND (EXISTS ( SELECT 1
+   FROM "public"."deliveries" "d"
+  WHERE (("objects"."name" = (('signatures/'::"text" || ("d"."id")::"text") || '.png'::"text")) AND ("public"."is_admin"() OR "public"."is_sales_rep"()))))));
+CREATE POLICY "delivery_signatures_scoped_insert" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK ((("bucket_id" = 'delivery-signatures'::"text") AND (EXISTS ( SELECT 1
+   FROM "public"."deliveries" "d"
+  WHERE (("objects"."name" = (('signatures/'::"text" || ("d"."id")::"text") || '.png'::"text")) AND ("d"."status" = 'completed'::"text") AND ("public"."is_admin"() OR "public"."is_sales_rep"() OR ((EXISTS ( SELECT 1
+           FROM "public"."profiles" "p"
+          WHERE (("p"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("p"."role" = 'driver'::"text") AND ("p"."is_active" = true)))) AND ("d"."assigned_driver" = ( SELECT "auth"."uid"() AS "uid")))))))));
+CREATE POLICY "delivery_signatures_scoped_select" ON "storage"."objects" FOR SELECT TO "authenticated" USING ((("bucket_id" = 'delivery-signatures'::"text") AND (EXISTS ( SELECT 1
+   FROM "public"."deliveries" "d"
+  WHERE (("objects"."name" = (('signatures/'::"text" || ("d"."id")::"text") || '.png'::"text")) AND ("public"."is_admin"() OR "public"."is_sales_rep"() OR ((EXISTS ( SELECT 1
+           FROM "public"."profiles" "p"
+          WHERE (("p"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("p"."role" = 'driver'::"text") AND ("p"."is_active" = true)))) AND ("d"."assigned_driver" = ( SELECT "auth"."uid"() AS "uid")))))))));
+CREATE POLICY "delivery_signatures_scoped_update" ON "storage"."objects" FOR UPDATE TO "authenticated" USING ((("bucket_id" = 'delivery-signatures'::"text") AND (EXISTS ( SELECT 1
+   FROM "public"."deliveries" "d"
+  WHERE (("objects"."name" = (('signatures/'::"text" || ("d"."id")::"text") || '.png'::"text")) AND ("d"."status" = 'completed'::"text") AND ("public"."is_admin"() OR "public"."is_sales_rep"() OR ((EXISTS ( SELECT 1
+           FROM "public"."profiles" "p"
+          WHERE (("p"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("p"."role" = 'driver'::"text") AND ("p"."is_active" = true)))) AND ("d"."assigned_driver" = ( SELECT "auth"."uid"() AS "uid"))))))))) WITH CHECK ((("bucket_id" = 'delivery-signatures'::"text") AND (EXISTS ( SELECT 1
+   FROM "public"."deliveries" "d"
+  WHERE (("objects"."name" = (('signatures/'::"text" || ("d"."id")::"text") || '.png'::"text")) AND ("d"."status" = 'completed'::"text") AND ("public"."is_admin"() OR "public"."is_sales_rep"() OR ((EXISTS ( SELECT 1
+           FROM "public"."profiles" "p"
+          WHERE (("p"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("p"."role" = 'driver'::"text") AND ("p"."is_active" = true)))) AND ("d"."assigned_driver" = ( SELECT "auth"."uid"() AS "uid")))))))));
 CREATE POLICY "job_attachments_objects_delete" ON "storage"."objects" FOR DELETE TO "authenticated" USING ((("bucket_id" = 'job-attachments'::"text") AND ("public"."is_admin"() OR "public"."is_sales_rep"() OR ("public"."is_applicator"() AND (EXISTS ( SELECT 1
    FROM "public"."jobs" "j"
   WHERE ((("j"."id")::"text" = ("storage"."foldername"("objects"."name"))[1]) AND ("j"."applicator_id" = ( SELECT "auth"."uid"() AS "uid"))))))) AND ("public"."is_admin"() OR "public"."is_sales_rep"() OR ("owner_id" = (( SELECT "auth"."uid"() AS "uid"))::"text"))));
@@ -90,7 +104,7 @@ CREATE POLICY "job_attachments_objects_select" ON "storage"."objects" FOR SELECT
 CREATE POLICY "recv_photos_storage_delete" ON "storage"."objects" FOR DELETE TO "authenticated" USING (("bucket_id" = 'receiving-photos'::"text"));
 CREATE POLICY "recv_photos_storage_upload" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK (("bucket_id" = 'receiving-photos'::"text"));
 CREATE POLICY "supplier_price_evidence_objects_insert" ON "storage"."objects" FOR INSERT TO "authenticated" WITH CHECK ((("bucket_id" = 'supplier-price-evidence'::"text") AND "public"."is_admin"() AND (("storage"."foldername"("name"))[1] = (( SELECT "auth"."uid"() AS "uid"))::"text")));
-CREATE POLICY "supplier_price_evidence_objects_select" ON "storage"."objects" FOR SELECT TO "authenticated" USING ((("bucket_id" = 'supplier-price-evidence'::"text") AND ("public"."is_admin"() OR "public"."is_sales_rep"())));
+CREATE POLICY "supplier_price_evidence_objects_select" ON "storage"."objects" FOR SELECT TO "authenticated" USING ((("bucket_id" = 'supplier-price-evidence'::"text") AND "public"."is_admin"()));
 
 INSERT INTO "storage"."buckets"
   ("id", "name", "public", "file_size_limit", "allowed_mime_types")
