@@ -1,20 +1,22 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: **912 ledger rows, max version `20260727145843`** — one migration applied live this date, `inline_role_checks_require_active_profile`, which **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Section 0a is retained as RESOLVED because its two out-of-scope items remain open. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: **912 ledger rows, max version `20260727145843`** — one migration applied live this date, `inline_role_checks_require_active_profile`, which **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Section 0a is retained as RESOLVED because three out-of-scope items remain open under it — two security follow-ups plus a newly logged disaster-recovery defect in the schema baseline. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (two out-of-scope items still open)
+## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (three out-of-scope items still open)
 
 **Status 2026-07-27: FIXED LIVE** by migration `20260727145843_inline_role_checks_require_active_profile`
 (applied under Mason's conditional approval once the clean-rebuild check passed). Residual inline-role
 gaps went **38 → 0**; 48 policies now require an active profile. Live role simulation, fully rolled
 back: the deactivated `sales_rep` now sees **0** vendors and **0** vendor_bills, while an active admin
-still sees 13 and 4. **The two numbered items at the end of this section remain OPEN** — read them
-before assuming deactivation is now airtight; it is not.
+still sees 13 and 4. **The three numbered items at the end of this section remain OPEN** — items 1
+and 2 are security follow-ups, so read them before assuming deactivation is now airtight; it is not.
+Item 3 is an unrelated disaster-recovery defect in the schema baseline, logged here because this
+migration's clean-rebuild check is what surfaced it.
 
 The original finding, for context:
 
@@ -50,7 +52,8 @@ completes is a separate open item.** The `write-apply-proofs.mjs` gate now retur
 `rls-security-reviewer` and `migration-drift-reviewer` — its first run correctly blocked on a CHECK 9
 comment reference, since fixed (comment-only).
 
-Two related items are deliberately OUT of that migration's scope and remain open:
+Three items remain open below. Items 1 and 2 are deliberately OUT of that migration's scope; item 3
+is an unrelated pre-existing defect that the clean-rebuild check surfaced:
 
 1. **Tightening the role policy is partly security theater on six tables.** `application_services`,
    `application_record_fields`, `customer_application_rates`, `quote_pdf_templates`,
