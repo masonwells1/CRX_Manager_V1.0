@@ -195,7 +195,7 @@ This project carries `ALTER DEFAULT PRIVILEGES` for role `postgres` in schema `p
 EXECUTE on **new functions** to `anon`, `authenticated` and `service_role`. So a freshly created
 function does not land with the stock PostgreSQL default — it lands with explicit per-role grants:
 
-```
+```text
 {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
 ```
 

@@ -14,8 +14,7 @@ approval-gated checks: the Playwright E2E suites (`npm run test:e2e`), the live 
 coverage. If a step is skipped or a tool is unavailable, the overall verdict is **INCOMPLETE**,
 never PASS.
 
-Run `node -e "console.log(Object.keys(require('./package.json').scripts).join('
-'))"` first and
+Run `node -e "console.log(Object.keys(require('./package.json').scripts).join('\n'))"` first and
 flag any gate that exists in `package.json` but is not covered below — new gates get added here.
 
 ## Step 1: SQL Migration Validation

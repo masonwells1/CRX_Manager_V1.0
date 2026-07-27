@@ -78,6 +78,20 @@ production is unaffected. Blocked on the project's `postgres` database password,
 assumed (`supabase db dump` as the read-only `crx_backup_ro` role fails with `permission denied to
 set role "postgres"`).
 
+**From CodeRabbit's review of PR #249** (16 findings; 15 landed on the harness commit riding in the
+same PR, none on the two migrations or the frontend companions). Two verifiable defects fixed:
+the `/audit` skill's `node -e` preflight snippet carried a **literal newline inside `.join('...')`**,
+so copying it into a shell handed Node an unterminated string and the audit aborted before Step 1 —
+now `.join('\n')` on one line in `.claude/skills/audit/SKILL.md` with the `.agents` adapter
+regenerated, verified by running it (prints the `package.json` script names one per line, exit 0);
+and the ACL example fence in `docs/reference/gotchas.md` gained its `text` language tag. The
+remaining 14 are prose-tightening suggestions against skill files from the harness commit and were
+left for a separate pass. Two were checked and **rejected as wrong**: CodeRabbit read
+`deploy-check/SKILL.md` as describing a direct push-to-`main` when it already documents the
+branch → PR → checks → merge path, and it flagged `write-codex-push-proof.mjs` for re-reading the
+configured Codex model at persist time — deliberate and already annotated in the source, since no
+`-m` is passed to the CLI and the run therefore uses that same configured default.
+
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 
 Closes the systemic gap that `20260726223520_vendors_inactive_admin_active_check.sql` explicitly
