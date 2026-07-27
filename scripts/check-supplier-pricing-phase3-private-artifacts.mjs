@@ -184,10 +184,20 @@ function isOwnerDecisionHeaderLine(line) {
 function ownerDecisionHeaderReason(text) {
   return text.split(OWNER_HEADER_RECORD_DELIMITER_RE).some(isOwnerDecisionHeaderLine) ? 'owner decision sheet CSV header structure' : null;
 }
+function compressedArchiveReason(bytes) {
+  const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  if (source.length < 4 || source[0] !== 0x50 || source[1] !== 0x4b) return null;
+  const marker = (source[2] << 8) | source[3];
+  return marker === 0x0304 || marker === 0x0506 || marker === 0x0708
+    ? 'compressed archive container cannot be inspected'
+    : null;
+}
 /** Detect packet structure, not canonical whitespace or a filename. */
 export function structuralPrivateArtifactReason(bytes) {
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
   if (buffer.length > MAX_STRUCTURAL_SCAN_BYTES) return 'private artifact candidate exceeds bounded structural scan limit';
+  const archiveReason = compressedArchiveReason(buffer);
+  if (archiveReason) return archiveReason;
   const candidates = decodedTextCandidates(buffer);
   for (const text of candidates) {
     const trimmed = text.trimStart();
@@ -373,6 +383,7 @@ function createStructuralByteStreamScanner() {
   let utf16Decoders = null;
   let utf16Scanners = null;
   let rawTail = Buffer.alloc(0);
+  let prefix = Buffer.alloc(0);
   const shouldActivateUtf16 = bytes => {
     for (let index = 0; index + 1 < bytes.length; index += 1) {
       if ((bytes[index] === 0xff && bytes[index + 1] === 0xfe) || (bytes[index] === 0xfe && bytes[index + 1] === 0xff)) return true;
@@ -401,6 +412,7 @@ function createStructuralByteStreamScanner() {
   };
   return {
     feed(bytes) {
+      if (prefix.length < 4) prefix = Buffer.concat([prefix, bytes.subarray(0, 4 - prefix.length)]);
       utf8Scanner.feed(utf8Decoder.write(bytes));
       if (utf16Decoders) { for (let index = 0; index < utf16Decoders.length; index += 1) utf16Scanners[index].feed(utf16Decoders[index].write(bytes)); return; }
       const replay = rawTail.length === 0 ? bytes : Buffer.concat([rawTail, bytes]);
@@ -417,7 +429,7 @@ function createStructuralByteStreamScanner() {
           reason ??= utf16Scanners[index].finish();
         }
       }
-      return reason;
+      return compressedArchiveReason(prefix) ?? reason;
     },
   };
 }
