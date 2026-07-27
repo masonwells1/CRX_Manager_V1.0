@@ -153,6 +153,18 @@ all twelve digests match live, `anon` effective `EXECUTE` is 95 by identity, `au
 its 54 column privileges on `public.products`, zero grantable entries, all three sentinels fire, the
 lockdown re-applies with no non-extension warnings, and the post-baseline migration replays.
 
+**Review round four.** One P1, and it was reproduced rather than argued: the verifier hashed
+whatever keys `manifest.artifacts` happened to carry. Drop the platform-overlay entry and that
+file's bytes are never checked — while the shape checks further down still read it off disk, and
+`restore_order` still lists it, so an operator restores it. Codex demonstrated the consequence by
+widening `customer_documents_objects_admin_select` from admin-only to bucket-only alongside the
+omission; the verifier printed `SCHEMA_BASELINE_PASS`. The artifact set is now enumerated the same
+way `restore_order` and the restore proofs already were — exactly the six restore files plus the
+bucket snapshot, by name — and the same reproduction now fails closed with
+`manifest artifacts must be exactly …`, confirmed by deleting the entry, running the verifier, and
+restoring the manifest byte-for-byte. This is the third guard in this PR to be fixed for the same
+underlying reason: a check that iterates what is present cannot detect what is absent.
+
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 
 Closes items 1 and 2 of `docs/manual/KNOWN_ISSUES.md` §0a — the two gaps that `20260727145843`

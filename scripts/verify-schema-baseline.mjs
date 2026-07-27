@@ -140,6 +140,25 @@ const REQUIRED_RESTORE_PROOFS = [
   }
 }
 
+// Every artifact the restore touches must be hashed, and the set is enumerated rather
+// than taken from whatever keys the manifest happens to carry. The loop below only
+// verifies bytes it is handed a digest for, and the shape checks further down read the
+// platform, ACL, cron, history, and extension files off disk regardless — so a manifest
+// that simply omitted the platform-overlay entry would leave a security-sensitive file
+// unhashed and still print SCHEMA_BASELINE_PASS while its Storage policies had been
+// widened. `restore_order` does not cover this: it lists six files, and the bucket
+// snapshot is hashed but never restored directly.
+const EXPECTED_ARTIFACT_SUFFIXES = [...EXPECTED_RESTORE_ORDER, 'storage_buckets.json'];
+{
+  const expected = EXPECTED_ARTIFACT_SUFFIXES.map(
+    (suffix) => `${manifest.migrations_high_water}_${suffix}`,
+  ).sort();
+  const actual = Object.keys(manifest.artifacts ?? {}).sort();
+  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
+    fail(`manifest artifacts must be exactly ${expected.join(', ')}`);
+  }
+}
+
 const decodedArtifacts = new Map();
 for (const [name, expected] of Object.entries(manifest.artifacts ?? {})) {
   const artifactPath = path.join(baselineDir, name);
