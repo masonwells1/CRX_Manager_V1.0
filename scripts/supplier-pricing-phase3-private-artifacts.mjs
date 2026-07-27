@@ -289,7 +289,13 @@ function assertHeldPublicationDirectory(parentFd, label) {
   return descriptor;
 }
 function assertStablePublicationParent(parentFd, canonicalParent) {
-  assertHeldPublicationDirectory(parentFd, 'private artifact parent');
+  const descriptor = assertHeldPublicationDirectory(parentFd, 'private artifact parent');
+  let entry; let followed;
+  try { entry = lstatSync(canonicalParent); followed = statSync(canonicalParent); }
+  catch (_error) { throw new Error('private artifact parent changed before publication'); }
+  assert(entry.isDirectory() && !entry.isSymbolicLink() && followed.isDirectory(), 'private artifact parent changed before publication');
+  assert(sameFile(descriptor, entry) && sameFile(descriptor, followed), 'private artifact parent changed before publication');
+  assert(exactPathEqual(realpathSync(canonicalParent), canonicalParent), 'private artifact parent changed before publication');
   assert(exactPathEqual(process.cwd(), canonicalParent), 'private artifact parent changed before publication');
 }
 function capturePublicationParentIdentity(canonicalParent) {
