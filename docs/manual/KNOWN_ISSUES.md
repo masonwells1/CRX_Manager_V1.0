@@ -29,7 +29,10 @@ claimed "flag OFF, migration NOT applied, NOT merged", which was wrong on all th
   `field_app_billing_lines`, and `invoice_line_shares` — all three were empty as of 2026-07-27. The separate
   order-side path (`create_split_invoices_from_order` → `split_invoice_provenance`,
   `split_invoice_creation_claims`, `split_invoice_mutation_claims`) is also empty. Six tables, zero rows across
-  both paths: no customer has been billed through split billing.
+  both paths — **no recorded split-billing usage as of 2026-07-27.**
+- **Spec + supersession.** Build spec: `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`; direction
+  settled in `DECISION_LOG.md` (2026-07-17). This supersedes the old "four parallel split mechanisms need a
+  decision" flag — decided: the field-app path is the surface, the order-side engine is retired later.
 
 ⚠️ **Do not resurrect the stacked branches.** `codex/per-line-split-billing-phase3-rpc` (closed PR #181) and
 `codex/per-line-split-billing-phase4-ui` (closed PR #182, tip `e2418796`) are a **superseded** variant built
@@ -172,13 +175,9 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 
 ## 4. Deferred/parked feature work
 
-- **Per-line-item custom split billing (field-app)** — DESIGN SPEC complete + review-hardened, **not
-  built**; Mason builds it in Codex next week (baseline real-billing cycle first). Default splits from
-  field ownership, override %/price per line, one invoice per customer, unpost stays reversible. Three
-  advisor passes folded in (gpt-5.6-terra design + xhigh plan-review, claude-fable-5 money-math). Spec:
-  `docs/plans/per-line-item-split-billing-spec-2026-07-17.md`; direction settled in `DECISION_LOG.md`
-  (2026-07-17). Supersedes the "four parallel split mechanisms need a decision" flag — decided: field-app
-  path is the surface, order-side engine retired later.
+- ~~**Per-line-item custom split billing (field-app)**~~ — **no longer deferred. SHIPPED 2026-07-21 (PR #164)
+  and live with the flag ON; see §0 for the current status and the one remaining gap (it has never been
+  used).**
 - **EPA label backfill** — ~105 of 204 distinct stored EPA registration numbers point at the wrong product (confirmed, `docs/CHANGELOG.md` 2026-07-10 entry). The in-app `/label-data-quality` tool to fix them shipped 2026-07-10; the actual backfill (doing the data-entry) is still pending — it's a data-entry job, not a code task.
 - **OCR REI/PHI auto-fill** — deliberately deferred as a safety trap (label OCR for re-entry-interval/pre-harvest-interval data needs human verification before it can be trusted for compliance).
 - **Grower portal §7-§10** — deferred, internal-only direction for now. `docs/ROADMAP.md` line ~57 (A2, "Grower portal v1") and line ~112 (G9, portal MVP) both still say TODO/VISION.
