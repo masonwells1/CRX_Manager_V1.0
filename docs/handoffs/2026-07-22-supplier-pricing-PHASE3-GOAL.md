@@ -30,7 +30,7 @@ It landed before this Stage C packet lane and must not be restarted.
 
 ## Historical Runner Instruction — Stage B1
 
-Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, or create the pre-Stage-A Goal.** Continue only from the active Stage B coordination packet and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The then-authorized outcome was a green, review-resolved B1 PR parked before merge; B2 remained locked until B1 was accepted and landed.
+Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, create the pre-Stage-A Goal, or restart either landed Stage B lane.** Current runners must use the parked Stage C review-packet instruction near the top of this document and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The then-authorized outcome was a green, review-resolved B1 PR parked before merge; B2 remained locked until B1 was accepted and landed.
 
 The active B1 deny set remains explicit:
 
@@ -166,7 +166,7 @@ Only one writer may edit a given stage at a time. Fable and the independent Sol 
 
 ## Historical Goal Start Instruction — Already Satisfied; Do Not Execute
 
-The following idempotent Goal-start sequence is retained only to explain how the original Phase 3 Goal was created. Current runners must use the Stage B1 instruction near the top of this document instead.
+The following idempotent Goal-start sequence is retained only to explain how the original Phase 3 Goal was created. Current runners must use the parked Stage C review-packet instruction near the top of this document instead.
 
 Once, and only once, a heartbeat returns `READY`, perform an idempotent start sequence keyed to this contract (`supplier-pricing-phase3-after-pr213`). Do not rely on read-then-create alone. Use the platform's conditional Goal creation/unfinished-Goal uniqueness guard so concurrent or repeated heartbeats can create at most one Goal; after any create rejection, re-read Goal state and accept it only when the active Goal matches this contract key and objective. Verify matching Goal ownership, and only then disable this watcher. If creation fails without a matching active Goal, leave the watcher active and report `FAILED`; never disable first and never create a duplicate.
 
