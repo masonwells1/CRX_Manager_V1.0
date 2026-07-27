@@ -234,18 +234,18 @@ try {
     throws(() => readValidatedPrivateArtifact(junctionArtifact, POST_STAGE_A_SNAPSHOT_NAME, fakeRepo, { testApprovedRoot: junctionParent, beforeRead: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|changed');
     assert.equal(readFileSync(junctionRepoArtifact, 'utf8'), 'repository marker');
     makeExternalJunction();
-    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeTempOpen: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|parent');
+    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeStableParentLease: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|parent');
     assert.equal(readFileSync(junctionRepoArtifact, 'utf8'), 'repository marker');
     assert.equal(existsSync(path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME)), false);
     makeExternalJunction();
-    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, afterTempOpenBeforeWrite: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|changed');
+    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, afterTempOpenBeforeWrite: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|changed|EBUSY|EPERM|EACCES');
     assert.equal(existsSync(path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME)), false);
     makeExternalJunction();
-    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeRename: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|parent');
+    throws(() => writePrivateArtifactAtomic(path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeRename: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|parent|EBUSY|EPERM|EACCES');
     assert.equal(existsSync(path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME)), false);
     makeExternalJunction();
     const absentFinal = path.join(junctionParent, POST_STAGE_A_MANIFEST_NAME);
-    throws(() => writePrivateArtifactAtomic(absentFinal, POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeFinalOpen: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository');
+    throws(() => writePrivateArtifactAtomic(absentFinal, POST_STAGE_A_MANIFEST_NAME, 'synthetic private bytes', { repoRoot: fakeRepo, testApprovedRoot: junctionParent, beforeFinalOpen: () => { rmSync(junctionParent, { recursive: true, force: true }); symlinkSync(fakeRepo, junctionParent, 'junction'); } }), 'approved|repository|EBUSY|EPERM|EACCES');
     const externallyCreated = path.join(fakeRepo, POST_STAGE_A_MANIFEST_NAME);
     assert.equal(existsSync(externallyCreated), false, 'absent-final-target race created a file outside the approved root');
   } finally { rmSync(junctionParent, { recursive: true, force: true }); }
@@ -278,6 +278,41 @@ try {
   const publishedAtomicOutput = writePrivateArtifactAtomic(atomicReplaceOutput, POST_STAGE_A_MANIFEST_NAME, 'new private bytes', fixturePrivateOptions);
   assert.equal(readFileSync(publishedAtomicOutput, 'utf8'), 'new private bytes', 'atomic publication must expose exact new bytes');
   rmSync(atomicReplaceOutput, { force: true });
+  // A path swap between initial validation and lease acquisition must fail
+  // before an owned temporary pathname can exist.
+  const preLeaseParent = path.join(temp, 'pre-lease-publication-parent'); const movedPreLeaseParent = path.join(temp, 'moved-pre-lease-publication-parent'); mkdirSync(preLeaseParent); const preLeaseOutput = path.join(preLeaseParent, POST_STAGE_A_MANIFEST_NAME); writeFileSync(preLeaseOutput, 'prior pre-lease bytes'); let preLeaseRaceOutcome = null;
+  throws(() => writePrivateArtifactAtomic(preLeaseOutput, POST_STAGE_A_MANIFEST_NAME, 'new pre-lease bytes', {
+    repoRoot: fakeRepo, testApprovedRoot: preLeaseParent,
+    beforeStableParentLease: () => { renameSync(preLeaseParent, movedPreLeaseParent); mkdirSync(preLeaseParent); writeFileSync(preLeaseOutput, 'attacker pre-lease bytes'); preLeaseRaceOutcome = 'MOVED'; },
+  }), 'parent changed before temporary creation');
+  assert.equal(preLeaseRaceOutcome, 'MOVED');
+  assert.equal(readFileSync(preLeaseOutput, 'utf8'), 'attacker pre-lease bytes', 'replacement parent must never receive private bytes before lease acquisition');
+  assert.equal(readFileSync(path.join(movedPreLeaseParent, POST_STAGE_A_MANIFEST_NAME), 'utf8'), 'prior pre-lease bytes', 'pre-lease parent relocation must preserve the prior target');
+  assert.equal(readdirSync(movedPreLeaseParent).some(name => name.startsWith(`.${POST_STAGE_A_MANIFEST_NAME}.`) && name.endsWith('.tmp')), false, 'pre-lease path swap must fail before creating an owned temp artifact');
+  // The lease begins before writing private temp bytes. POSIX can relocate the
+  // parent but cleanup stays in the held directory; Windows blocks relocation.
+  const earlyLeaseParent = path.join(temp, 'early-lease-publication-parent'); const movedEarlyLeaseParent = path.join(temp, 'moved-early-lease-publication-parent'); mkdirSync(earlyLeaseParent); const earlyLeaseOutput = path.join(earlyLeaseParent, POST_STAGE_A_MANIFEST_NAME); writeFileSync(earlyLeaseOutput, 'prior early-lease bytes'); let earlyLeaseRaceOutcome = null;
+  if (process.platform === 'win32') {
+    const published = writePrivateArtifactAtomic(earlyLeaseOutput, POST_STAGE_A_MANIFEST_NAME, 'new early-lease bytes', {
+      repoRoot: fakeRepo, testApprovedRoot: earlyLeaseParent,
+      afterTempWriteBeforePublication: () => {
+        const child = spawnSync(process.execPath, ['--input-type=module', '--eval', "import {renameSync} from 'node:fs'; try { renameSync(process.env.CRXTEMP_PARENT, process.env.CRXTEMP_MOVED); process.stdout.write('RENAMED'); } catch (error) { process.stdout.write(error.code || 'ERROR'); }"], { encoding: 'utf8', env: { ...process.env, CRXTEMP_PARENT: earlyLeaseParent, CRXTEMP_MOVED: movedEarlyLeaseParent } });
+        earlyLeaseRaceOutcome = child.stdout.trim();
+      },
+    });
+    assert.equal(earlyLeaseRaceOutcome, 'EBUSY', 'Windows must block early parent relocation while the lease holds the temporary bytes');
+    assert.equal(readFileSync(published, 'utf8'), 'new early-lease bytes', 'Windows blocked relocation must retain the exact normal publication path');
+    assert.equal(readdirSync(earlyLeaseParent).some(name => name.startsWith(`.${POST_STAGE_A_MANIFEST_NAME}.`) && name.endsWith('.tmp')), false, 'Windows normal publication must not leave an owned temp artifact');
+  } else {
+    throws(() => writePrivateArtifactAtomic(earlyLeaseOutput, POST_STAGE_A_MANIFEST_NAME, 'new early-lease bytes', {
+      repoRoot: fakeRepo, testApprovedRoot: earlyLeaseParent,
+      afterTempWriteBeforePublication: () => { renameSync(earlyLeaseParent, movedEarlyLeaseParent); mkdirSync(earlyLeaseParent); writeFileSync(earlyLeaseOutput, 'attacker early-lease bytes'); earlyLeaseRaceOutcome = 'MOVED'; },
+    }), 'parent changed before publication');
+    assert.equal(earlyLeaseRaceOutcome, 'MOVED');
+    assert.equal(readFileSync(earlyLeaseOutput, 'utf8'), 'attacker early-lease bytes', 'POSIX replacement pathname must never receive private temporary or final bytes');
+    assert.equal(readFileSync(path.join(movedEarlyLeaseParent, POST_STAGE_A_MANIFEST_NAME), 'utf8'), 'prior early-lease bytes', 'POSIX early relocation must preserve the prior target');
+    assert.equal(readdirSync(movedEarlyLeaseParent).some(name => name.startsWith(`.${POST_STAGE_A_MANIFEST_NAME}.`) && name.endsWith('.tmp')), false, 'POSIX early relocation must clean owned private temp bytes through the held parent');
+  }
   const stableParent = path.join(temp, 'stable-publication-parent'); const movedStableParent = path.join(temp, 'moved-stable-publication-parent'); mkdirSync(stableParent); const stableOutput = path.join(stableParent, POST_STAGE_A_MANIFEST_NAME); writeFileSync(stableOutput, 'prior stable bytes'); let stableRaceOutcome = null;
   if (process.platform === 'win32') {
     const published = writePrivateArtifactAtomic(stableOutput, POST_STAGE_A_MANIFEST_NAME, 'new stable bytes', {

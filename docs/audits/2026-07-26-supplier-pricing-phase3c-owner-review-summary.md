@@ -19,6 +19,27 @@ remains recorded in the durable ledger; this is a separate post-PARK correction
 pass, not a claim that the cap was changed.
 
 The current rejected implementation is
+`c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8`, whose immutable parent is
+`3695f42e3ec6f57dae4d07d534a4a191bfa2a46d`. Graphify at that exact SHA reports
+8,390 nodes and 17,479 edges. Independent Sol returned `PASS` for `c1b54a5b`,
+but that pass is invalidated by Luna `gpt-5.6-luna` session
+`019fa313-ee55-7042-9074-08b0be3dd747`, which returned `FIX`: the atomic writer
+created and wrote its private temporary file before holding the stable parent,
+so a POSIX parent relocation could strand intended bytes in the moved original.
+The bounded replacement acquires the identity-bound parent lease before temp
+creation and retains it through relative-basename writing, validation,
+publication/readback, descriptor close, and owned-temp cleanup. It remains
+tooling-only and does not access private rows, classify Products, create Stage C
+SQL, change flags, or change live state.
+
+For truthful provenance, `c1b54a5b` is the rejected `implementation_sha` and
+also the `implementation_base_sha` and `current_head_at_start` for this mutable
+correction. The worktree has no self-SHA. A future frozen commit must name
+`c1b54a5b` as parent; only the SHA Git creates may receive fresh
+graph/proof/review claims. Earlier “uncommitted correction” wording below is
+historical, not current status.
+
+The preceding rejected implementation was
 `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d`, whose immutable parent is
 `2adff51bfa27ea50274230845bb4c89f4037313e`. Graphify at that exact SHA reports
 8,382 nodes and 17,446 edges. Independent Sol returned `FIX` for the owner CSV
@@ -26,17 +47,9 @@ record-boundary bypass only. Luna `gpt-5.6-luna` session
 `019fa2e4-9bc8-71a3-a64a-a5baef795e78` returned `FIX` for CI trusting text
 rather than behavior, history enumeration not bounded at `rev-list`, and final
 parent validation leaving an atomic-publication race, and stale ledger/summary
-bookkeeping. The bounded replacement uses shared explicit
-record delimiters, behavioral protocol/event-head attestation, a 4,097-result
-`rev-list` request before parsing, and a stable-parent relative-basename
-publication lease. It remains tooling-only and does not access private rows,
-classify Products, create Stage C SQL, change flags, or change live state.
-
-For truthful provenance, `3695f42e` is the rejected `implementation_sha` and
-also the `current_head_at_start` for this mutable correction. The worktree has
-no self-SHA. A future frozen commit must name `3695f42e` as parent; only the
-SHA Git creates may receive fresh graph/proof/review claims. Earlier
-“uncommitted correction” wording below is historical, not current status.
+bookkeeping. Its bounded replacement used shared explicit record delimiters,
+behavioral protocol/event-head attestation, a 4,097-result `rev-list` request
+before parsing, and a stable-parent relative-basename publication lease.
 
 The later exact candidate
 `2c56085d1ecee3ca223efb3ec0da58fa6ef858db` is also rejected. Fresh

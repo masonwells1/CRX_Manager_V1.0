@@ -282,35 +282,6 @@ export function loadValidatedSnapshot(file, repoRoot = REPO_ROOT, binding = null
   return snapshot;
 }
 
-function safeUnlinkOwnedTemp(temporary, fd, expectedBasename, repoRoot, options, expectedIdentity) {
-  try {
-    assertExternalPrivateDirectory(path.dirname(temporary), repoRoot, options);
-    assert(exactPathEqual(temporary, path.join(path.dirname(temporary), path.basename(temporary))), 'private temporary path changed during cleanup');
-    const descriptor = fstatSync(fd); const entry = lstatSync(temporary); const followed = statSync(temporary);
-    if (entry.isFile() && !entry.isSymbolicLink() && sameFile(descriptor, entry) && sameFile(descriptor, followed) && (!expectedIdentity || sameFile(expectedIdentity, descriptor)) && entry.nlink === 1 && path.basename(temporary).startsWith(`.${expectedBasename}.`)) { unlinkSync(temporary); return true; }
-  } catch (_error) { /* A swapped path is deliberately left untouched. */ }
-  return false;
-}
-function safeUnlinkClosedOwnedTemp(temporary, expectedBasename, repoRoot, options, expectedIdentity) {
-  try {
-    assertExternalPrivateDirectory(path.dirname(temporary), repoRoot, options);
-    const entry = lstatSync(temporary); const followed = statSync(temporary);
-    if (entry.isFile() && !entry.isSymbolicLink() && sameStatIdentity(entry, followed) && sameFile(expectedIdentity, entry) && entry.nlink === 1 && path.basename(temporary).startsWith(`.${expectedBasename}.`)) { unlinkSync(temporary); return true; }
-  } catch (_error) { /* An untrusted swapped path is deliberately left untouched. */ }
-  return false;
-}
-function assertAtomicPublicationTarget(target, expectedBasename, repoRoot, options) {
-  const parent = assertExternalPrivateDirectory(path.dirname(target), repoRoot, options);
-  assert(exactPathEqual(target, path.join(parent, expectedBasename)), 'private artifact path changed before publication');
-  try {
-    const entry = assertRegularSingleLink(target, 'private artifact path');
-    assert(exactPathEqual(realpathSync(target), target), 'private artifact path must not be a symlink or junction alias');
-    return entry;
-  } catch (error) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-}
 function assertHeldPublicationDirectory(parentFd, label) {
   const descriptor = fstatSync(parentFd);
   const current = statSync('.');
@@ -321,7 +292,13 @@ function assertStablePublicationParent(parentFd, canonicalParent) {
   assertHeldPublicationDirectory(parentFd, 'private artifact parent');
   assert(exactPathEqual(process.cwd(), canonicalParent), 'private artifact parent changed before publication');
 }
-function withStablePublicationParent(canonicalParent, operation) {
+function capturePublicationParentIdentity(canonicalParent) {
+  const entry = lstatSync(canonicalParent); const followed = statSync(canonicalParent);
+  assert(entry.isDirectory() && !entry.isSymbolicLink() && followed.isDirectory() && sameFile(entry, followed), 'private artifact parent changed during validation');
+  assert(exactPathEqual(realpathSync(canonicalParent), canonicalParent), 'private artifact parent must not be a symlink or junction alias');
+  return entry;
+}
+function withStablePublicationParent(canonicalParent, expectedParentIdentity, operation) {
   assert(!stablePublicationParentLease, 'private artifact publication cannot nest or run concurrently');
   const originalCwd = process.cwd();
   let parentFd; let entered = false;
@@ -329,7 +306,7 @@ function withStablePublicationParent(canonicalParent, operation) {
   try {
     parentFd = openSync(canonicalParent, constants.O_RDONLY);
     const descriptor = fstatSync(parentFd);
-    assert(descriptor.isDirectory(), 'private artifact parent must be a directory');
+    assert(descriptor.isDirectory() && sameFile(descriptor, expectedParentIdentity), 'private artifact parent changed before temporary creation');
     process.chdir(canonicalParent); entered = true;
     assertStablePublicationParent(parentFd, canonicalParent);
     return operation(parentFd);
@@ -372,6 +349,15 @@ function safeUnlinkOwnedTempInHeldParent(temporaryBasename, fd, expectedBasename
   } catch (_error) { /* A swapped path is deliberately left untouched. */ }
   return false;
 }
+function safeUnlinkClosedOwnedTempInHeldParent(temporaryBasename, expectedBasename, expectedIdentity, parentFd) {
+  try {
+    assert(path.basename(temporaryBasename) === temporaryBasename && temporaryBasename.startsWith(`.${expectedBasename}.`), 'private temporary path changed during cleanup');
+    assertHeldPublicationDirectory(parentFd, 'private artifact parent');
+    const entry = lstatSync(temporaryBasename); const followed = statSync(temporaryBasename);
+    if (entry.isFile() && !entry.isSymbolicLink() && sameStatIdentity(entry, followed) && sameFile(expectedIdentity, entry) && entry.nlink === 1) { unlinkSync(temporaryBasename); return true; }
+  } catch (_error) { /* A swapped path is deliberately left untouched. */ }
+  return false;
+}
 function readPublishedArtifactBytes(expectedBasename, intended, parentFd) {
   const noFollow = process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number' ? 0 : constants.O_NOFOLLOW;
   const fd = openSync(expectedBasename, constants.O_RDONLY | noFollow);
@@ -387,65 +373,63 @@ function readPublishedArtifactBytes(expectedBasename, intended, parentFd) {
  * final pathname from the same validated directory. The old artifact is never
  * opened for write or truncated, so any pre-publication failure preserves it.
  */
-export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoRoot = REPO_ROOT, beforeTempOpen, afterTempOpenBeforeWrite, afterTempWriteBeforePublication, beforeFinalValidation, beforeFinalOpen, beforeRename, afterFinalValidationBeforeRename, afterPublicationBeforeReadback, renameFile = renameSync, testApprovedRoot } = {}) {
+export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoRoot = REPO_ROOT, beforeStableParentLease, beforeTempOpen, afterTempOpenBeforeWrite, afterTempWriteBeforePublication, beforeFinalValidation, beforeFinalOpen, beforeRename, afterFinalValidationBeforeRename, afterPublicationBeforeReadback, renameFile = renameSync, testApprovedRoot } = {}) {
   const options = { testApprovedRoot };
   const target = assertExternalArtifactPath(file, expectedBasename, repoRoot, options);
   const parent = path.dirname(target); const canonicalParent = assertExternalPrivateDirectory(parent, repoRoot, options);
-  const temporary = path.join(parent, `.${expectedBasename}.${randomBytes(16).toString('hex')}.tmp`);
+  const initialParentIdentity = capturePublicationParentIdentity(canonicalParent);
+  const temporaryBasename = `.${expectedBasename}.${randomBytes(16).toString('hex')}.tmp`;
+  const temporary = path.join(canonicalParent, temporaryBasename);
   const intended = Buffer.from(text, 'utf8');
   assert(typeof renameFile === 'function', 'private artifact publication primitive is invalid');
-  let temporaryFd; let temporaryIdentity; let published = false;
-  try {
+  beforeStableParentLease?.({ target, temporary });
+  return withStablePublicationParent(canonicalParent, initialParentIdentity, parentFd => {
+    let temporaryFd; let temporaryIdentity; let published = false;
+    try {
     beforeTempOpen?.({ target, temporary });
-    assert(exactPathEqual(assertExternalPrivateDirectory(parent, repoRoot, options), canonicalParent), 'private artifact parent changed during write');
-    temporaryFd = openSync(temporary, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600);
+    assertStablePublicationParent(parentFd, canonicalParent);
+    temporaryFd = openSync(temporaryBasename, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL, 0o600);
     afterTempOpenBeforeWrite?.({ target, temporary, fd: temporaryFd });
-    assertOpenedArtifactMatchesPath(temporaryFd, temporary, path.basename(temporary), 'private artifact temporary path', repoRoot, options);
+    assertStablePublicationParent(parentFd, canonicalParent);
+    temporaryIdentity = assertOpenedArtifactMatchesHeldParent(temporaryFd, temporaryBasename, 'private artifact temporary path', parentFd);
     writeFileSync(temporaryFd, intended); fsyncSync(temporaryFd);
-    temporaryIdentity = assertOpenedArtifactMatchesPath(temporaryFd, temporary, path.basename(temporary), 'private artifact temporary path', repoRoot, options);
+    temporaryIdentity = assertOpenedArtifactMatchesHeldParent(temporaryFd, temporaryBasename, 'private artifact temporary path', parentFd);
     assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed during write');
     afterTempWriteBeforePublication?.({ target, temporary, fd: temporaryFd });
     beforeFinalValidation?.({ target, temporary });
-    assert(exactPathEqual(assertExternalPrivateDirectory(parent, repoRoot, options), canonicalParent), 'private artifact parent changed during write');
-    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesPath(temporaryFd, temporary, path.basename(temporary), 'private artifact temporary path', repoRoot, options)), 'private artifact temporary path changed during write');
+    assertStablePublicationParent(parentFd, canonicalParent);
+    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesHeldParent(temporaryFd, temporaryBasename, 'private artifact temporary path', parentFd)), 'private artifact temporary path changed during write');
     assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed during write');
     beforeFinalOpen?.({ target, temporary });
-    assert(exactPathEqual(assertExternalPrivateDirectory(parent, repoRoot, options), canonicalParent), 'private artifact parent changed before publication');
-    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesPath(temporaryFd, temporary, path.basename(temporary), 'private artifact temporary path', repoRoot, options)), 'private artifact temporary path changed before publication');
+    assertStablePublicationParent(parentFd, canonicalParent);
+    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesHeldParent(temporaryFd, temporaryBasename, 'private artifact temporary path', parentFd)), 'private artifact temporary path changed before publication');
     assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed before publication');
     beforeRename?.({ target, temporary, fd: temporaryFd });
-    assert(exactPathEqual(assertExternalPrivateDirectory(parent, repoRoot, options), canonicalParent), 'private artifact parent changed before publication');
-    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesPath(temporaryFd, temporary, path.basename(temporary), 'private artifact temporary path', repoRoot, options)), 'private artifact temporary path changed before publication');
+    assertStablePublicationParent(parentFd, canonicalParent);
+    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesHeldParent(temporaryFd, temporaryBasename, 'private artifact temporary path', parentFd)), 'private artifact temporary path changed before publication');
     assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed before publication');
-    assertAtomicPublicationTarget(target, expectedBasename, repoRoot, options);
-    withStablePublicationParent(canonicalParent, parentFd => {
-      const temporaryBasename = path.basename(temporary);
-      try {
-        assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesHeldParent(temporaryFd, temporaryBasename, 'private artifact temporary path', parentFd)), 'private artifact temporary path changed before publication');
-        assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed before publication');
-        assertAtomicPublicationTargetInHeldParent(expectedBasename, parentFd);
-        // This is the final deterministic race seam. All following path
-        // operations are basename-only beneath the held parent directory.
-        afterFinalValidationBeforeRename?.({ target, temporary, fd: temporaryFd });
-        assertStablePublicationParent(parentFd, canonicalParent);
-        assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesHeldParent(temporaryFd, temporaryBasename, 'private artifact temporary path', parentFd)), 'private artifact temporary path changed before publication');
-        assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed before publication');
-        assertAtomicPublicationTargetInHeldParent(expectedBasename, parentFd);
-        renameFile(temporaryBasename, expectedBasename);
-        published = true;
-        afterPublicationBeforeReadback?.({ target, temporary });
-        readPublishedArtifactBytes(expectedBasename, intended, parentFd);
-      } catch (error) {
-        if (!published) safeUnlinkOwnedTempInHeldParent(temporaryBasename, temporaryFd, expectedBasename, temporaryIdentity, parentFd);
-        throw error;
-      }
-    });
+    assertAtomicPublicationTargetInHeldParent(expectedBasename, parentFd);
+    // This is the final deterministic race seam. All following path
+    // operations are basename-only beneath the held parent directory.
+    afterFinalValidationBeforeRename?.({ target, temporary, fd: temporaryFd });
+    assertStablePublicationParent(parentFd, canonicalParent);
+    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesHeldParent(temporaryFd, temporaryBasename, 'private artifact temporary path', parentFd)), 'private artifact temporary path changed before publication');
+    assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed before publication');
+    assertAtomicPublicationTargetInHeldParent(expectedBasename, parentFd);
+    renameFile(temporaryBasename, expectedBasename);
+    published = true;
+    afterPublicationBeforeReadback?.({ target, temporary });
+    readPublishedArtifactBytes(expectedBasename, intended, parentFd);
     return target;
-  } finally {
-    if (temporaryFd !== undefined) {
-      const removedOpen = !published && safeUnlinkOwnedTemp(temporary, temporaryFd, expectedBasename, repoRoot, options, temporaryIdentity);
-      closeSync(temporaryFd);
-      if (!published && !removedOpen && temporaryIdentity) safeUnlinkClosedOwnedTemp(temporary, expectedBasename, repoRoot, options, temporaryIdentity);
+    } finally {
+      if (temporaryFd !== undefined) {
+        let removedOpen = false;
+        try { if (!published) removedOpen = safeUnlinkOwnedTempInHeldParent(temporaryBasename, temporaryFd, expectedBasename, temporaryIdentity, parentFd); }
+        finally {
+          try { closeSync(temporaryFd); }
+          finally { if (!published && !removedOpen && temporaryIdentity) safeUnlinkClosedOwnedTempInHeldParent(temporaryBasename, expectedBasename, temporaryIdentity, parentFd); }
+        }
+      }
     }
-  }
+  });
 }

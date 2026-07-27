@@ -15,13 +15,43 @@
 
 ## Post-review tooling correction and packet invalidation — 2026-07-27
 
-### Current rejected implementation `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d` — Terra correction cycle active
+### Current rejected implementation `c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8` — Terra correction cycle active
+
+`c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8` is rejected. Its immutable parent
+is `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d`; `c1b54a5b` is the implementation
+SHA for the prior correction, not a passing release. Current branch HEAD at
+the start of this correction is also `c1b54a5b`. The mutable worktree is not
+an implementation SHA and must not be described as one.
+
+- Graphify was refreshed at exact rejected `c1b54a5b`: 8,390 nodes and 17,479
+  edges. It confirms the atomic writer's direct packet consumers; current
+  source remains the authority for those edges.
+- Independent Sol returned `PASS` at `c1b54a5b`, but that pass is invalidated
+  by Luna `gpt-5.6-luna`, session
+  `019fa313-ee55-7042-9074-08b0be3dd747`, returning `FIX`: the atomic writer
+  opened and wrote its temporary artifact before acquiring the stable parent,
+  so a POSIX parent relocation could strand intended private temp bytes in the
+  moved original directory.
+- Accepted correction disposition: capture the initial parent identity, then
+  acquire the nonreentrant stable-parent CWD lease before creating a temp file
+  and retain it through relative-basename writing, validation, publication,
+  readback, descriptor close, and owned-temp cleanup. The regression rejects a
+  pre-lease parent swap before temp creation and proves the early Windows/POSIX
+  relocation outcomes without private-artifact or live access. Neither review
+  authorizes a packet, Product classification, Stage C SQL, flag change,
+  private-artifact access, or live action.
+- SHA ledger rule: `implementation_sha` names only an immutable Git object.
+  Until the next commit exists, this correction is recorded as
+  `implementation_base_sha=c1b54a5b...` and `current_head_at_start=c1b54a5b...`.
+  The next commit must record parent `c1b54a5b...`; only Git's resulting SHA
+  may be used for exact-SHA graph/proof/review claims. Historical mentions of
+  an “uncommitted correction” below describe their original cycles only.
+
+### Prior rejected implementation `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d` — historical correction cycle
 
 `3695f42e3ec6f57dae4d07d534a4a191bfa2a46d` is rejected. Its immutable parent
-is `2adff51bfa27ea50274230845bb4c89f4037313e`; `3695f42e` is the implementation
-SHA for the prior correction, not a passing release. Current branch HEAD at
-the start of this correction is also `3695f42e`. The mutable worktree is not
-an implementation SHA and must not be described as one.
+is `2adff51bfa27ea50274230845bb4c89f4037313e`; `3695f42e` was the implementation
+SHA for the preceding correction, not a passing release.
 
 - Graphify was refreshed at exact rejected `3695f42e`: 8,382 nodes and 17,446
   edges. It confirmed the GitHub-event containment entry point, its packet-test
@@ -34,24 +64,7 @@ an implementation SHA and must not be described as one.
   `019fa2e4-9bc8-71a3-a64a-a5baef795e78`, returned `FIX`: textual CI
   compatibility could accept a dead marker, `rev-list` materialized an
   unbounded history before rejection, and final parent-path revalidation left
-  a publication TOCTOU, and ledger/summary bookkeeping was stale. Neither
-  review authorizes a packet,
-  Product classification, Stage C SQL, flag change, private-artifact access,
-  or live action.
-- Accepted correction disposition: one explicit CSV record-delimiter set used
-  by direct and streaming scanners; behavioral GitHub handoff attestation from
-  the trusted checker; `rev-list --max-count=4097` before commit-list parsing;
-  and a nonreentrant stable-parent CWD lease with relative basename-only final
-  publication. Regression coverage includes UTF-8/UTF-16 owner headers across
-  staged, ignored, deleted-history, and chunk-boundary paths; dead/comment-only
-  and root-ignoring CI checkers; bounded range/new-ref argv; and a final-race
-  Windows/POSIX publication fixture.
-- SHA ledger rule: `implementation_sha` names only an immutable Git object.
-  Until the next commit exists, this correction is recorded as
-  `implementation_base_sha=3695f42e...` and `current_head_at_start=3695f42e...`.
-  The next commit must record parent `3695f42e...`; only Git's resulting SHA
-  may be used for exact-SHA graph/proof/review claims. Historical mentions of
-  an “uncommitted correction” below describe their original cycles only.
+  a publication TOCTOU, and ledger/summary bookkeeping was stale.
 
 `PARKED — TOOLING CORRECTION; HISTORICAL PACKET REGENERATION REQUIRED` remains
 the only status until a frozen successor has fresh exact-SHA proof and reviews.
