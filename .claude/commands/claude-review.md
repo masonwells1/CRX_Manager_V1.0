@@ -49,19 +49,19 @@ If the scope is unclear, ask Mason one short question.
 Use the wrapper so the same safety prompt and output location are used every time:
 
 ```powershell
-node scripts/run-claude-review.mjs --scope uncommitted --model opus --effort high --timeout-ms 900000 --reason "<what Claude should review>"
+node scripts/run-claude-review.mjs --scope uncommitted --model claude-opus-5 --effort high --timeout-ms 900000 --reason "<what Claude should review>"
 ```
 
 For a branch review:
 
 ```powershell
-node scripts/run-claude-review.mjs --scope base-main --model opus --effort high --timeout-ms 900000 --reason "<what Claude should review>"
+node scripts/run-claude-review.mjs --scope base-main --model claude-opus-5 --effort high --timeout-ms 900000 --reason "<what Claude should review>"
 ```
 
 For one commit:
 
 ```powershell
-node scripts/run-claude-review.mjs --scope commit --commit <sha> --model opus --effort high --timeout-ms 900000 --reason "<what Claude should review>"
+node scripts/run-claude-review.mjs --scope commit --commit <sha> --model claude-opus-5 --effort high --timeout-ms 900000 --reason "<what Claude should review>"
 ```
 
 The wrapper captures Claude's output at:

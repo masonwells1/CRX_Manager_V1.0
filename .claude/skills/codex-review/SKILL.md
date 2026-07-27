@@ -1,14 +1,16 @@
 ---
 name: codex-review
-description: Run an independent Codex (gpt-5.5) code review DIRECTLY via the headless `codex` CLI — no copy-paste. Use to cross-validate a branch, working-tree changes, or a commit before pushing, getting Codex's findings back into this session automatically so Claude can act on them. This SUPERSEDES the manual paste-doc workflow in codex-cross-review whenever the Codex CLI is available. Use when the user says "have Codex review this", "codex review before I push", "second opinion on this change", "cross-review", or before any prod push of a Codex-worthy change (migration / RLS-RPC security / money / edge fn).
+description: Run an independent Codex (gpt-5.6 sol/terra/luna) code review DIRECTLY via the headless `codex` CLI — no copy-paste. Use to cross-validate a branch, working-tree changes, or a commit before pushing, getting Codex's findings back into this session automatically so Claude can act on them. This SUPERSEDES the manual paste-doc workflow in codex-cross-review whenever the Codex CLI is available. Use when the user says "have Codex review this", "codex review before I push", "second opinion on this change", "cross-review", or before any prod push of a Codex-worthy change (migration / RLS-RPC security / money / edge fn).
 ---
 
 # Codex Review (direct CLI — no paste loop)
 
 Drives the headless `codex` CLI so Claude can hand a diff to Codex, get structured
 findings back into this session, and act on them — replacing the manual prompt-doc +
-copy-paste handoff in `codex-cross-review`. Codex is a different vendor/model (gpt-5.5),
-so it catches failure classes Claude's own reviewers miss.
+copy-paste handoff in `codex-cross-review`. Codex is a different vendor/model (the GPT-5.6
+family — `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`), so it catches failure classes
+Claude's own reviewers miss. **Sol** is the review/analysis agent and the live default;
+**Terra** is the builder; **Luna** takes low-risk work. Use Sol for any review.
 
 ## When to use which tool
 
@@ -36,12 +38,13 @@ Set `SCOPE` to exactly one of these — Step 3 passes it through to `codex revie
 
 | Situation | `SCOPE` |
 |---|---|
-| Feature branch, pre-push (most common) | `--base main` |
+| Feature branch, pre-push (most common) | `--base origin/main` |
 | Uncommitted working-tree changes (staged + unstaged + untracked) | `--uncommitted` |
 | A single commit | `--commit <sha>` |
 
 ```bash
-SCOPE="--base main"      # or: SCOPE="--uncommitted"  /  SCOPE="--commit 12cb424"
+git fetch origin        # reviewing against a stale local main distorts the diff
+SCOPE="--base origin/main"   # or: SCOPE="--uncommitted"  /  SCOPE="--commit 12cb424"
 ```
 
 Replace `<sha>` with a real commit hash before assigning `SCOPE` — `<`/`>` are shell
@@ -49,8 +52,8 @@ redirection operators, so an unsubstituted `SCOPE="--commit <sha>"` redirects st
 file named `sha` instead of reviewing a commit.
 
 Confirm the scope with the user in one line if it's ambiguous (e.g. branch has both
-committed and uncommitted work — usually you want `--base main` for the push gate).
-Do NOT leave `SCOPE` hard-coded to `--base main` when the user asked for `--uncommitted`
+committed and uncommitted work — usually you want `--base origin/main` for the push gate).
+Do NOT leave `SCOPE` hard-coded to `--base origin/main` when the user asked for `--uncommitted`
 or a single commit — that silently reviews the wrong diff.
 
 ## Step 2: Run the live evidence gates FIRST (for DB-touching changes)
@@ -84,9 +87,10 @@ mkdir -p .claude/session-state
 **A scope flag carries NO inline prompt.** `--base` / `--uncommitted` / `--commit` are each
 mutually exclusive with a `[PROMPT]` argument — passing both makes Codex exit 2 with e.g.
 `error: the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`. CRX focus (the failure
-classes below) reaches Codex through the root **`AGENTS.md`** (regenerated from `CLAUDE.md` via
-`node scripts/regenerate-agents-md.mjs`), which already encodes the red lines — so keep
-`AGENTS.md` current rather than inlining a focus prompt. If you must steer Codex with a free-form
+classes below) reaches Codex through the root **`AGENTS.md`**, which already encodes the CRX
+Hard Rules — so keep `AGENTS.md` current rather than inlining a focus prompt. `AGENTS.md` is the
+canonical hand-maintained contract; it is **never** regenerated from `CLAUDE.md`
+(`scripts/regenerate-agents-md.mjs` is a compatibility validator that will not overwrite it). If you must steer Codex with a free-form
 prompt instead of a diff scope, pass the prompt ALONE (omit the scope flag).
 
 The failure classes `AGENTS.md` keeps Codex pointed at:
@@ -97,8 +101,10 @@ The failure classes `AGENTS.md` keeps Codex pointed at:
 - (5) Lifecycle violations per CLAUDE.md (quote/order/delivery/invoice/return state machines).
 
 Notes:
-- The base config already defaults to `model = gpt-5.5` + `reasoning_effort = high`. Override
-  per-run with `-c model="…"` / `-c model_reasoning_effort="…"` only if asked.
+- The base config (`~/.codex/config.toml`) already defaults to `model = "gpt-5.6-sol"` +
+  `model_reasoning_effort = "high"` — Sol at high is the review default, so no `-m` flag is needed.
+  Override per-run with `-c model="gpt-5.6-terra"` / `-c model_reasoning_effort="…"` only if asked.
+  Record which agent produced a verdict when it backs a security/money proof.
 - A trailing `rmcp … DELETE returned HTTP 404` line is harmless MCP-session cleanup — ignore it.
 - This fires the synced `.codex/hooks.json` hooks (SessionStart/Stop) — expected, they're trusted.
 
@@ -117,8 +123,16 @@ Notes:
 
 ## Step 5: Hand back to the push gate
 
-`/codex-review` NEVER pushes or deploys. When the verdict is clean, report it and stop —
-the prod-push approval is Mason's, per the standing gate.
+`/codex-review` NEVER pushes, merges, or deploys — it is a read gate. When the verdict is
+clean, hand back to the landing flow in `AGENTS.md`: **push a branch → open a PR → checks pass
+(Vercel required) → read and resolve CodeRabbit's automated review → merge**. Direct pushes to
+`main` are impossible (the `protect-main` ruleset, 2026-07-14), so there is no "push to main" step.
+
+**CodeRabbit (standing policy, 2026-07-17):** every PR on `CRX_Manager_V1.0` is auto-reviewed by
+CodeRabbit. Once the PR exists, read that review and fix any real issue before merging; nitpicks
+may be dismissed with a one-line reason. CodeRabbit is advisory and does not block; the Codex
+proof below remains the hard gate for risky money/RLS/migration diffs. Both run — neither replaces
+the other. CodeRabbit cannot be consulted before a PR exists, so never wait on it pre-push.
 
 **If the goal is a risky push to `main`** — the diff touches migrations / edge functions /
 RLS-policy files / `src/lib/db.ts` / `src/lib/sentry`, or the diff text matches the money
@@ -134,8 +148,8 @@ whose fixed prompt requires Codex to end with a machine token (`CODEX_PROOF_VERD
 ONLY on a terminal CLEAN token with a stable clean worktree does it write the HEAD-bound proof
 (`.claude/session-state/codex-review-<sha>.json`) for you. The step-3 `tee` capture above is a
 human-readable transcript, not the proof — the transcript alone never satisfies the gate. If the
-wrapper reports BLOCKERS or a dirty/moved tree, fix or commit and re-run; never self-certify. The
-push still needs Mason's go.
+wrapper reports BLOCKERS or a dirty/moved tree, fix or commit and re-run; never self-certify.
+Merging that PR deploys production, so it stays inside the standing push policy in `AGENTS.md`.
 
 ## General task handoff (not just review)
 
@@ -151,7 +165,8 @@ must actually edit files, and surface that to the user first.
 
 ## Hard Rules
 
-- NEVER let `/codex-review` push, deploy, or `git commit` — it is a read gate. Mason pushes.
+- NEVER let `/codex-review` push, merge, deploy, or `git commit` — it is a read gate.
+  Landing is a separate, deliberate step under the `AGENTS.md` push policy.
 - NEVER hard-code the codex.exe version-hash path — always resolve the newest binary.
 - ALWAYS run the live db-sweeps + smoke evidence (Step 2) before reviewing a DB change —
   don't hand Codex a "clean" change over an unchecked live catalog.

@@ -35,6 +35,95 @@ Pre-push containment now type-checks outgoing ref objects, scans annotated-tag m
 blob targets, peels bounded tag chains, and recursively inspects tree targets before accepting tags.
 The archive-only ignored-file exception now also covers only the generated descendants used by
 Playwright results and the Phase 1a proof writer; private JSON and CSV signals remain rejected there.
+## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
+
+Closes items 1 and 2 of `docs/manual/KNOWN_ISSUES.md` §0a — the two gaps that `20260727145843`
+(same day, entry below) deliberately left out of scope. Applied under Mason's explicit in-chat
+approval.
+
+**`20260727174657_broad_reads_require_active_profile.sql`** — a live `pg_policy` re-enumeration found
+**31** PERMISSIVE SELECT policies across 31 tables gating on nothing but "you are logged in": 30 with
+`USING (true)` on role `authenticated`, plus `application_record_fields.arf_select` on PUBLIC with
+`auth.uid() IS NOT NULL`. The "six tables" figure previously recorded in KNOWN_ISSUES was wrong —
+those six were only the *overlap* with the tables `20260727145843` tightened; the other 25
+(`products`, `customer_addresses`, `team_notes`, `quote_items`, `applicator_licenses`, …) expose
+independent business data and were simply missed. PERMISSIVE policies OR together, so on all 31 a
+deactivated user with a still-valid JWT kept full read access regardless of the role tightening
+already applied. The migration adds a role-agnostic `public.is_active_profile()` (`LANGUAGE sql
+STABLE SECURITY DEFINER`, `SET search_path TO 'public','pg_temp'`, modelled on the existing
+`is_admin()`/`is_sales_rep()`/`is_driver()`/`is_applicator()` helpers) and rewrites all 31 predicates
+via `ALTER POLICY` (never `DROP`+`CREATE`), the predicate wrapped in a scalar sub-select so Postgres
+evaluates it once per statement as an InitPlan. `arf_select` uses the inline `EXISTS` form instead,
+matching its three sibling policies, so no EXECUTE grant to `anon` is needed. **Deliberate scope
+limit:** this does not narrow read access by role — every *active* user reads exactly what they read
+before; only deactivated accounts lose read. Deciding which roles *should* see each table is a
+separate, still-open product decision.
+
+**`20260727174805_deactivation_revokes_auth_access.sql`** — `profiles.is_active = false` was a pure
+application-layer flag: the Supabase auth user stayed unbanned and its refresh tokens stayed valid,
+so a deactivated person kept a working login and kept renewing their session indefinitely. Per
+Mason's decision (kick out + block re-login; **new deactivations only**, the one already-deactivated
+account is deliberately not backfilled), an AFTER-UPDATE trigger on `profiles` now sets
+`auth.users.banned_until` to the finite sentinel `9999-12-31 23:59:59+00` — **not** `'infinity'`,
+which GoTrue can fail to decode into a Go `time.Time` and 500 the auth endpoint — and deletes the
+user's `auth.sessions` and `auth.refresh_tokens` rows (`refresh_tokens.user_id` is **varchar**, so
+`NEW.id::text`); reactivation clears the ban. A companion BEFORE-UPDATE trigger,
+`trg_guard_last_active_admin`, refuses to deactivate the last active admin — added beyond the literal
+ask, because deactivation now bans the auth user and that mis-click would otherwise need Supabase
+dashboard recovery. **Residual window, stated plainly:** an access token already issued stays
+cryptographically valid until it expires (~1 hour); deleting the session and refresh tokens means it
+cannot be renewed and `banned_until` blocks both fresh sign-in and refresh-token exchange, so access
+ends within that window at the latest. Instant revocation would require JWT revocation, which GoTrue
+does not offer.
+
+**Frontend companions:** `src/pages/SettingsPage.tsx` — the deactivate confirmation now describes what
+actually happens ("signed out of any open sessions and blocked from signing in again"; the prior copy
+promised a lockout that did not occur), and `executeEditUser` surfaces a plain-English toast on
+`LAST_ACTIVE_ADMIN`. `src/lib/rpcContracts.test.ts` classifies `_sync_auth_access_on_profile_active`
+in `MUTATOR_INVENTORY_EXEMPT` as a trigger-only, convergent auth-state mirror — its fail-closed guard
+caught the new function unprompted.
+
+**Gotcha this surfaced — the first apply attempt was REJECTED and rolled back atomically.** The
+migration's own postflight refused it with `POSTFLIGHT: is_active_profile() must not be executable by
+PUBLIC or anon`, and the assertion was right: this project carries `ALTER DEFAULT PRIVILEGES` for
+role `postgres` in schema `public` granting EXECUTE on new functions to `anon`, `authenticated` and
+`service_role`, so a fresh function lands with an **explicit** `anon` grant that `REVOKE … FROM
+PUBLIC` does not remove. `anon` must be named explicitly. Recorded in `docs/reference/gotchas.md`.
+Note this also means the pre-apply `BEGIN … ROLLBACK` rehearsal that reported this assertion passing
+was not equivalent proof — the governed gate's real apply caught what the rehearsal missed.
+
+**Proof (live, post-apply):** wide-open read policies **31 → 0**; helper acl
+`{postgres=X,authenticated=X,service_role=X}` (byte-identical to `is_sales_rep()`'s) with
+`has_function_privilege('anon', …) = false`; both triggers present on `public.profiles`, both
+SECURITY DEFINER with pinned `search_path`, neither executable by `anon`/`authenticated`.
+**Behavioral, against production, fully rolled back:** an active admin sees `products=604
+team_notes=53` while the deactivated user sees `products=0 team_notes=0`; and for a real account with
+924 sessions — `BEFORE ban=NULL sessions=924 tokens=924` → `DEACTIVATED ban=9999-12-31 23:59:59+00
+sessions=0 tokens=0` → `REACTIVATED ban=NULL` → `LAST-ADMIN LAST_ACTIVE_ADMIN: cannot deactivate the
+only active admin`. Live state re-read afterwards unchanged (0 banned, 2595 sessions, 10 active
+profiles, 4 active admins). **Not verified:** the two `SettingsPage.tsx` strings are not visually
+confirmed — reaching Settings needs an admin login; the risk is cosmetic, since the database refuses
+a last-active-admin deactivation whether or not the toast renders.
+
+**Still open (unchanged by this work):** item 3 of §0a — the schema baseline is ahead of its own
+recorded ledger high-water, so a from-zero rebuild cannot complete. Disaster-recovery only;
+production is unaffected. Blocked on the project's `postgres` database password, proven rather than
+assumed (`supabase db dump` as the read-only `crx_backup_ro` role fails with `permission denied to
+set role "postgres"`).
+
+**From CodeRabbit's review of PR #249** (16 findings; 15 landed on the harness commit riding in the
+same PR, none on the two migrations or the frontend companions). Two verifiable defects fixed:
+the `/audit` skill's `node -e` preflight snippet carried a **literal newline inside `.join('...')`**,
+so copying it into a shell handed Node an unterminated string and the audit aborted before Step 1 —
+now `.join('\n')` on one line in `.claude/skills/audit/SKILL.md` with the `.agents` adapter
+regenerated, verified by running it (prints the `package.json` script names one per line, exit 0);
+and the ACL example fence in `docs/reference/gotchas.md` gained its `text` language tag. The
+remaining 14 are prose-tightening suggestions against skill files from the harness commit and were
+left for a separate pass. Two were checked and **rejected as wrong**: CodeRabbit read
+`deploy-check/SKILL.md` as describing a direct push-to-`main` when it already documents the
+branch → PR → checks → merge path, and it flagged `write-codex-push-proof.mjs` for re-reading the
+configured Codex model at persist time — deliberate and already annotated in the source, since no
+`-m` is passed to the CLI and the run therefore uses that same configured default.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 

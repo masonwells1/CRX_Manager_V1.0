@@ -65,7 +65,8 @@ The exact files / commits / migrations in scope:
 <Background a fresh reviewer wouldn't have: prior incidents, related decisions, what the user already tried, what the existing fix attempts to do.>
 
 Key references:
-- CLAUDE.md "Current State" §<date> — <relevance>
+- `docs/manual/CURRENT_STATE.md` §<section> — <relevance>
+- `docs/manual/DECISION_LOG.md` §<date> — <relevance, if a settled decision applies>
 - `docs/audits/<prior-audit>.md` — <relevance>
 - Memory: `<memory-name>.md` — <relevance>
 
@@ -123,7 +124,9 @@ Prompt doc to share:
 
 ## Step 5: Record the Open Review
 
-Add a one-line entry to the bottom of `CLAUDE.md` "Pending Mason" list if this review blocks a decision:
+If this review blocks a decision, record it where open items actually live —
+`docs/manual/CURRENT_STATE.md` (there is no "Pending Mason" list in `CLAUDE.md`; that section
+was retired when the manual docs became the synthesis layer):
 
 ```
 - Codex cross-review pending on <topic> — see docs/audits/<filename>
@@ -138,7 +141,7 @@ Only add this line if the user confirms they want it tracked. Otherwise skip.
 File:     docs/audits/<YYYY-MM-DD>-codex-<slug>-prompt.md
 Topic:    <topic>
 Scope:    <N> files / <M> commits
-Pending:  <added to CLAUDE.md / not tracked>
+Pending:  <added to docs/manual/CURRENT_STATE.md / not tracked>
 
 Next: run this prompt + the listed files through Codex.
 When Codex responds, paste the response here and I'll
@@ -148,7 +151,7 @@ draft a disposition doc (`docs/audits/<date>-claude-disposition-of-codex-<slug>.
 ## Hard Rules
 
 - NEVER skip the "Claude's current position" section — Codex needs to know what to disagree with.
-- NEVER auto-commit the prompt doc. Mason commits.
+- NEVER auto-commit the prompt doc — the user decides when to commit.
 - The output file is a PROMPT, not findings. Don't include Claude's analysis as if it were facts — frame it as "what I currently believe."
 - If the topic is sensitive (secrets, customer data), warn Mason before writing — he may want to redact before handing to Codex.
 - File name format MUST be `<YYYY-MM-DD>-codex-<slug>-prompt.md` so the existing audit doc pattern is preserved.

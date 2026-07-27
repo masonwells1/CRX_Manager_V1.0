@@ -108,7 +108,7 @@ Do not claim a database or money fix is ready from code inspection alone.
 
 Use `/codex-review` with the selected scope. If the direct Codex CLI fails to resolve, fall back to `/codex-cross-review`.
 
-Codex is the only genuinely independent gate here — a different vendor/model (gpt-5.5). Claude's Step 4 verification reduces Codex false positives; it is NOT a substitute for Codex. The re-review in Step 5 (sub-item 2) must be the same Codex scope, not a Claude-only pass.
+Codex is the only genuinely independent gate here — a different vendor/model (`gpt-5.6-sol`; Terra builds and Luna takes low-risk work, so reviews go to Sol). Claude's Step 4 verification reduces Codex false positives; it is NOT a substitute for Codex. The re-review in Step 5 (sub-item 2) must be the same Codex scope, not a Claude-only pass.
 
 ### Step 4: Verify Findings
 

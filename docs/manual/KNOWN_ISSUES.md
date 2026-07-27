@@ -1,22 +1,24 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: **912 ledger rows, max version `20260727145843`** — one migration applied live this date, `inline_role_checks_require_active_profile`, which **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Section 0a is retained as RESOLVED because three out-of-scope items remain open under it — two security follow-ups plus a newly logged disaster-recovery defect in the schema baseline. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: **914 ledger rows, max version `20260727174805`** — three migrations applied live this date. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. Section 0a is retained because **one** item remains open under it — a disaster-recovery defect in the schema baseline, blocked on a credential; production is unaffected. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (three out-of-scope items still open)
+## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (follow-up items 1 and 2 also resolved; item 3 open and BLOCKED)
 
 **Status 2026-07-27: FIXED LIVE** by migration `20260727145843_inline_role_checks_require_active_profile`
 (applied under Mason's conditional approval once the clean-rebuild check passed). Residual inline-role
 gaps went **38 → 0**; 48 policies now require an active profile. Live role simulation, fully rolled
 back: the deactivated `sales_rep` now sees **0** vendors and **0** vendor_bills, while an active admin
-still sees 13 and 4. **The three numbered items at the end of this section remain OPEN** — items 1
-and 2 are security follow-ups, so read them before assuming deactivation is now airtight; it is not.
-Item 3 is an unrelated disaster-recovery defect in the schema baseline, logged here because this
-migration's clean-rebuild check is what surfaced it.
+still sees 13 and 4. **Of the three numbered items at the end of this section, items 1 and 2 were
+themselves RESOLVED and APPLIED LIVE later the same day** (ledger `20260727174657` and
+`20260727174805`) — they are kept below with their proofs rather than deleted, and each carries its
+own residual-risk note. **Item 3 remains OPEN and is BLOCKED** on a credential; it is an unrelated
+disaster-recovery defect in the schema baseline, logged here because this migration's clean-rebuild
+check is what surfaced it.
 
 The original finding, for context:
 
@@ -52,19 +54,70 @@ completes is a separate open item.** The `write-apply-proofs.mjs` gate now retur
 `rls-security-reviewer` and `migration-drift-reviewer` — its first run correctly blocked on a CHECK 9
 comment reference, since fixed (comment-only).
 
-Three items remain open below. Items 1 and 2 are deliberately OUT of that migration's scope; item 3
-is an unrelated pre-existing defect that the clean-rebuild check surfaced:
+Of the three items listed below, **items 1 and 2 were RESOLVED and APPLIED LIVE on 2026-07-27**
+(ledger versions `20260727174657` and `20260727174805`) under Mason's explicit approval; they are kept
+here with their proofs rather than deleted. **Item 3 remains OPEN and is BLOCKED** on a credential —
+it is an unrelated pre-existing defect that the clean-rebuild check surfaced, and it affects
+disaster-recovery rebuilds only, not production.
 
-1. **Tightening the role policy is partly security theater on six tables.** `application_services`,
-   `application_record_fields`, `customer_application_rates`, `quote_pdf_templates`,
-   `quote_templates`, and `team_note_attachments` each carry a *separate* wide-open PERMISSIVE
-   SELECT policy (`true`, or `uid IS NOT NULL` for `arf_select`). PERMISSIVE policies OR together,
-   so any logged-in user reads those tables regardless of role or active status. Closing that is a
-   separate decision about intended read access, not a bug fix.
-2. **Deactivation does not revoke sessions or block re-login.** `profiles.is_active = false` is a
+1. **RESOLVED — APPLIED LIVE 2026-07-27 (`20260727174657`).** **Wide-open PERMISSIVE read policies —
+   the count here was wrong; it is 31, not six.**
+   **Corrected 2026-07-27** after a live re-enumeration: **31** PERMISSIVE SELECT policies across 31
+   tables gate on nothing but "you are logged in" — 30 with `USING (true)` on role `authenticated`,
+   plus `application_record_fields.arf_select` on PUBLIC with `uid IS NOT NULL`. The six tables named
+   previously (`application_services`, `application_record_fields`, `customer_application_rates`,
+   `quote_pdf_templates`, `quote_templates`, `team_note_attachments`) were only the *overlap* with the
+   tables migration `20260727145843` tightened; the other 25 (`products`, `customer_addresses`,
+   `team_notes`, `quote_items`, `applicator_licenses`, …) expose independent business data and were
+   simply missed. PERMISSIVE policies OR together, so any logged-in user reads all 31 regardless of
+   role or active status. Each of the six named tables has exactly ONE SELECT policy — the wide-open
+   one — so there is no role-based policy to fall back on.
+   **Fix APPLIED LIVE 2026-07-27 (ledger `20260727174657`):**
+   `supabase/migrations/20260727174657_broad_reads_require_active_profile.sql` adds a role-agnostic
+   `public.is_active_profile()` helper and rewrites all 31 predicates to require an active profile.
+   It deliberately does **not** narrow read access by role — every active user reads exactly what
+   they read today; only deactivated accounts lose read. Choosing which roles *should* see each
+   table remains a separate product decision and is **still open**.
+   **Live proof:** wide-open read policies **31 → 0**; 30 helper-based read policies plus `arf_select`
+   on the inline form; helper acl `{postgres=X,authenticated=X,service_role=X}` with
+   `has_function_privilege('anon', …) = false`. Behavioral, rolled back: an active admin sees
+   `products=604 team_notes=53`, the deactivated user sees `products=0 team_notes=0`.
+   **Gotcha worth remembering:** the first apply attempt was **rejected by the migration's own
+   postflight check and rolled back atomically** — this project carries `ALTER DEFAULT PRIVILEGES`
+   granting EXECUTE on every new `public` function to `anon`, so `REVOKE … FROM PUBLIC` is **not**
+   sufficient; `anon` must be named explicitly. Any future SECURITY DEFINER helper here must do the
+   same. See `docs/reference/gotchas.md`.
+2. **RESOLVED — APPLIED LIVE 2026-07-27 (`20260727174805`).** **Deactivation does not revoke sessions
+   or block re-login.** `profiles.is_active = false` is a
    pure application-layer flag; the Supabase auth user remains unbanned and existing refresh tokens
    stay valid. The durable fix is to ban/​sign-out the auth user on deactivate. Until then, every
    deactivation depends on RLS alone.
+   **Owner decision 2026-07-27 (Mason):** deactivating a user must immediately end their sessions and
+   block re-login; reactivating restores access; the rule applies to **new deactivations only** — the
+   one already-deactivated account is deliberately not backfilled.
+   **Fix APPLIED LIVE 2026-07-27 (ledger `20260727174805`):**
+   `supabase/migrations/20260727174805_deactivation_revokes_auth_access.sql` adds an AFTER-UPDATE
+   trigger on `profiles` that, on true→false, sets `auth.users.banned_until` to a finite far-future
+   timestamp (**not** `'infinity'` — GoTrue decodes that column into a Go `time.Time` and an infinity
+   can 500 the auth endpoint) and deletes the user's `auth.sessions` / `auth.refresh_tokens` rows; on
+   false→true it clears the ban. It also adds `trg_guard_last_active_admin`, which refuses to
+   deactivate the last active admin — now that deactivation bans the auth user, that mis-click would
+   need Supabase dashboard recovery.
+   **Residual window, unavoidable:** an access token already issued stays valid until it expires
+   (~1 hour). Deleting the session and refresh tokens means it cannot be renewed, so access ends
+   within that window at the latest. Instant revocation would require JWT revocation, which GoTrue
+   does not offer.
+   **Live proof (behavioral, against production, fully rolled back):** target
+   `e2195c35-9eee-46aa-8b19-2734219e6a8c` — `BEFORE active=t ban=NULL sessions=924 tokens=924` →
+   `DEACTIVATED ban=9999-12-31 23:59:59+00 sessions=0 tokens=0` → `REACTIVATED ban=NULL` →
+   `LAST-ADMIN LAST_ACTIVE_ADMIN: cannot deactivate the only active admin`. Live state re-read after
+   rollback unchanged (0 banned, 2595 sessions, 10 active profiles, 4 active admins). Note the proof
+   must simulate an admin's `request.jwt.claims`: the pre-existing `_guard_profile_role_lock`
+   correctly refuses an `is_active` change from a non-admin caller.
+   **NOT verified:** the two `src/pages/SettingsPage.tsx` strings (the corrected deactivate-confirm
+   text and the `LAST_ACTIVE_ADMIN` toast) are not visually confirmed — reaching Settings needs an
+   admin login. Residual risk is cosmetic only: the database refuses a last-active-admin deactivation
+   whether or not the friendly toast renders.
 3. **NEW 2026-07-27 — the schema baseline is ahead of its own recorded ledger high-water, so a
    from-zero rebuild cannot complete.** `supabase/baselines/` records high-water `20260719092832`
    (861 ledger rows), but its public-schema artifact already contains
@@ -81,6 +134,22 @@ is an unrelated pre-existing defect that the clean-rebuild check surfaced:
    deviations that a rebuild currently requires are documented in migration-history row 827: the CLI
    `db push` step needs replacing with an equivalent psql replay, and the replay must read git blobs
    because `core.autocrlf=true` breaks byte-exact function-body md5 preconditions on Windows.
+   **BLOCKED 2026-07-27 — proven, not assumed.** The refresh needs a dump in the exact shape of the
+   existing artifacts (`CREATE SCHEMA IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, quote-all-identifiers
+   — i.e. `supabase db dump`, not raw `pg_dump`; the stored artifact's own header confirms pg_dump 17.6
+   via the Supabase CLI). That command was rehearsed read-only against live and **fails**:
+   `pg_dump: error: query failed: ERROR: permission denied to set role "postgres"` — the CLI issues
+   `SET ROLE "postgres"` for full catalog visibility. The only CRX database credential on this machine
+   is the read-only `crx_backup_ro` role used by the nightly `pg_dump` job
+   (`C:\Users\mason\Scripts\crx_database_backup.ps1`, password in `C:\selfhosted\CREDENTIALS.txt`),
+   which cannot assume `postgres`; `CREDENTIALS.txt` holds no `postgres`-role password. **The one
+   concrete unblocking step is Mason supplying the project's `postgres` database password** (Supabase
+   dashboard → Project Settings → Database), or running the dump himself. Do **not** work around this
+   by hand-rolling the Supabase CLI's post-processing on top of a `crx_backup_ro` `pg_dump`: the
+   baseline *is* the disaster-recovery path, and reproducing it through an undocumented pipeline makes
+   DR less trustworthy, not more. The README's own precondition — refresh only **after the migration
+   ledger has settled** — **is now satisfied:** items 1 and 2 above were applied live on 2026-07-27
+   and the ledger high-water is `20260727174805`. The credential is the only thing still blocking.
 
 ---
 

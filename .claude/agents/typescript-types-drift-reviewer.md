@@ -2,6 +2,8 @@
 name: typescript-types-drift-reviewer
 description: Use this agent to cross-check `src/types/index.ts` against the live Supabase schema and flag column-name, type, or missing-table drift. Type drift is silent — code compiles and "works" until production hits the missing field. Invoke after writing a migration that adds/changes a column, or proactively as a health check (e.g., once a sprint). Returns a structured drift report with file:line citations and proposed `src/types/index.ts` edits.
 tools: Read, Grep, Glob, Bash
+model: claude-opus-5
+effort: medium
 ---
 
 # TypeScript Types Drift Reviewer (CRX Manager)

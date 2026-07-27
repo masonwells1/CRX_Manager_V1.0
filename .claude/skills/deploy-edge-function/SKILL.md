@@ -7,6 +7,13 @@ description: Deploy a Supabase Edge Function to live via the Supabase MCP with p
 
 Wraps the Supabase MCP `deploy_edge_function` workflow with the safety checks Mason wants before every live deploy.
 
+**Tool names:** the Supabase connector's tools are prefixed with a per-install UUID
+(`mcp__<uuid>__deploy_edge_function`). That UUID is not stable across machines or reinstalls, so
+this skill writes tool names as `mcp__<supabase>__<tool>`. Resolve the real prefix by matching the
+**name suffix** (`deploy_edge_function`, `get_edge_function`, `get_logs`) in the available tool
+list at run time. If no Supabase tool is present, the connector is not connected — STOP and say
+so. Never deploy by another route.
+
 ## Step 0: Identify the Target
 
 Ask the user which function to deploy, or infer from recent Edits. Confirm:
@@ -18,7 +25,7 @@ Ask the user which function to deploy, or infer from recent Edits. Confirm:
 If unsure of the current version, check via Supabase MCP:
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_edge_function
+mcp__<supabase>__get_edge_function
   project_id: rhyzpcqhnizqbxphqdkr
   function_slug: <name>
 ```
@@ -28,11 +35,24 @@ mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_edge_function
 Before deploying, verify ALL of the following. If any fails, STOP and report to user.
 
 ### 1a. CORS hardening present
-Read `supabase/functions/<name>/index.ts`. The file MUST:
-- Import or define CORS headers that read from `ALLOWED_ORIGIN` env var (not `*`)
-- Handle OPTIONS preflight
+Read `supabase/functions/<name>/index.ts`. Every current function gets CORS from the shared
+helper, and that is the shape to require:
 
-If missing: refuse to deploy and tell the user what to add.
+```ts
+import { corsHeaders, preflightResponse } from "../_shared/cors.ts";
+```
+
+`_shared/cors.ts` is the only place that reads `ALLOWED_ORIGIN` — do **not** expect
+`Deno.env.get('ALLOWED_ORIGIN')` inside the function's own `index.ts`; none of the seven have it,
+so a literal grep for it there fails on correct code. Verify instead that:
+
+- the function imports `corsHeaders` / `preflightResponse` from `../_shared/cors.ts` (not a
+  hand-rolled header object, and never a wildcard `Access-Control-Allow-Origin`), and
+- it handles the OPTIONS preflight via `preflightResponse`.
+
+If the function hand-rolls CORS or wildcards the origin: refuse to deploy and say what to change.
+A function with genuinely no browser caller (pure webhook/cron target) may not need CORS at all —
+say that explicitly rather than reporting a false FAIL.
 
 ### 1b. Frontend caller verification (B8 protection)
 Search `src/` for callers of this function. Specifically:
@@ -62,7 +82,13 @@ Read supabase/functions/<name>/<any-helper>.ts (if present)
 Read supabase/functions/_shared/<any-imported-file>.ts (if imported)
 ```
 
-For functions over ~40KB, you may need to use Bash + node to JSON-encode the file content (the technique used for `process-blend-ticket` v17 — see CLAUDE.md 2026-05-16 PM note).
+Every `_shared/*` file the function imports must be included in the deploy payload — the deployed
+bundle has no access to files you did not send. All seven current functions import
+`../_shared/cors.ts`, and most also import `../_shared/sentry.ts`. Missing one produces a function
+that deploys cleanly and then fails at runtime on its first request.
+
+For functions over ~40KB, you may need to use Bash + node to JSON-encode the file content (the
+technique used for `process-blend-ticket` v17).
 
 ## Step 3: Get User Confirmation
 
@@ -97,63 +123,83 @@ ONLY proceed if the user types `deploy` (or yes/y).
 Call:
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function
+mcp__<supabase>__deploy_edge_function
   project_id: rhyzpcqhnizqbxphqdkr
   name: <function name>
-  files: [{ name: "index.ts", content: "<full content>" }, ...]
+  files: [
+    { name: "index.ts", content: "<full content>" },
+    { name: "../_shared/cors.ts", content: "<full content>" },
+    ...every other imported _shared file
+  ]
   entrypoint_path: "index.ts"
 ```
 
-Capture the returned version number.
+Include every imported `_shared` file, using the same relative path the import uses. Capture the
+returned version number.
 
 ## Step 5: Post-Deploy Verification
 
 ### 5a. Confirm new version is ACTIVE
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_edge_function
+mcp__<supabase>__get_edge_function
   project_id: rhyzpcqhnizqbxphqdkr
   function_slug: <name>
 ```
 
 Verify `version` field matches what was deployed and status is `ACTIVE`.
 
-### 5b. Smoke test (caller-dependent)
+### 5b. Smoke test (caller-dependent) — REQUIRED before calling the deploy proven
 
-If the function is HTTP-callable from frontend, suggest the user manually trigger one call in the live app and watch the network tab. You cannot do this — only the user can sign in to the live UI.
+A version bump proves the upload landed. It does **not** prove the new code runs, and it does not
+prove the caller reaches it — that was exactly the B8 failure. Someone has to exercise the real
+caller path:
 
-If the function is a webhook target (e.g., `process-blend-ticket` from Storage trigger), tell the user how to verify (e.g., "drop a test PDF into the blend-tickets bucket and watch `mcp__...__get_logs` for the new invocation").
+- HTTP-callable from the frontend: Mason triggers one call in the live app and watches the
+  network tab. You cannot do this — only he can sign in to the live UI. Ask him, and wait.
+- Webhook/storage target (e.g. `process-blend-ticket` from a Storage trigger): tell him how to
+  trigger it — "drop a test PDF into the blend-tickets bucket" — then confirm the invocation
+  yourself in `mcp__<supabase>__get_logs`.
+
+If the caller path has not been exercised, the deploy is **UNVERIFIED**, not complete. Say which
+proof is missing rather than printing a clean summary.
 
 ### 5c. Recent logs check
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_logs
+mcp__<supabase>__get_logs
   project_id: rhyzpcqhnizqbxphqdkr
   service: edge-function
 ```
 
 Scan for any error events from the new version in the last 5 minutes.
 
-## Step 6: Update CLAUDE.md "Current State"
+## Step 6: Update the Current State doc
 
-Add or update the line in CLAUDE.md's "Current State" section that names the version, e.g.:
+Version numbers are volatile counts, so they do **not** go in `CLAUDE.md` or `AGENTS.md` —
+`npm run check:agent-guidance` fails on that. Update `docs/manual/CURRENT_STATE.md` instead
+(the Edge Functions section), e.g.:
 
 ```
-- **2026-MM-DD:** `<name>` Edge Function deployed to v<N+1> (<one-line change>); verified ACTIVE via MCP.
+- **2026-MM-DD:** `<name>` Edge Function deployed to v<N+1> (<one-line change>); verified ACTIVE
+  via the Supabase connector, caller path exercised.
 ```
 
-Do NOT commit — let Mason commit when he's ready.
+Do NOT commit — the user decides when to commit.
 
 ## Step 7: Print Summary
 
+Print `DEPLOY COMPLETE` only when the caller path was actually exercised. Otherwise print
+`DEPLOY UNVERIFIED` and name what is missing.
+
 ```
-═══ DEPLOY COMPLETE ═══
+═══ DEPLOY COMPLETE / DEPLOY UNVERIFIED ═══
 Function:    <name>
 Version:     v<N> → v<N+1>  (ACTIVE)
 Logs:        <clean / N errors in last 5min>
+Caller path: EXERCISED (<what was triggered, what was observed>) / NOT EXERCISED
 
-CLAUDE.md updated.
-Manual smoke test recommended in live UI.
+docs/manual/CURRENT_STATE.md updated.
 ```
 
 ## Hard Rules
@@ -161,5 +207,7 @@ Manual smoke test recommended in live UI.
 - NEVER deploy without the pre-flight checks passing.
 - NEVER deploy without explicit user confirmation in Step 3.
 - NEVER skip the post-deploy verification — the B7/B8 incidents happened because nobody re-read the live state.
-- NEVER auto-commit. Mason commits.
+- NEVER auto-commit — the user decides when to commit.
+- NEVER print `DEPLOY COMPLETE` on a version bump alone; a bump is not proof the new code runs.
+- NEVER hard-code the Supabase connector's UUID prefix — resolve it by tool-name suffix at run time.
 - If `get_edge_function` shows the version did NOT bump, alert the user loudly — the deploy silently failed.
