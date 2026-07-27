@@ -20,7 +20,8 @@ two applied (immutable) migrations; the June idea-mining `UNIFIED-LONG-TERM-PLAN
 stated future-direction source of truth; and the `docs/plans/CRX-*label-data*.csv` worksheets back
 an open owner data-entry job. `npm run check:docs` PASS.
 
-Alongside this, a local-repository cleanup (no remote effect): 21 stale nested agent worktrees
+Alongside this, a local-repository cleanup whose only remote change was the backup pushes noted
+below (nothing on the remote was deleted or rewritten): 21 stale nested agent worktrees
 removed and 39 merged branches deleted in CRX Manager, plus 2 worktrees and 7 merged branches in
 FarmRx, whose main checkout was moved back onto `main`. Merged-ness was verified per branch via
 `gh pr list --head <branch> --state all` — squash merges make raw ahead-counts report merged work
