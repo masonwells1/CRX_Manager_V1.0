@@ -29,6 +29,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import {
+  codexConfiguredModel,
   codexExecutable,
   codexReviewProofVerdict,
   CODEX_VERDICT_TOKEN,
@@ -183,8 +184,16 @@ for (const name of names) {
   }, null, 2), { encoding: 'utf8' });
   console.log(`wrote ${reviewerFile}`);
   const codexFile = path.join(stateDir, `codex-review-mig-${safe}.json`);
-  writeFileSync(codexFile, JSON.stringify({ queryHash, verdict: 'clean', timestamp: ts }, null, 2), { encoding: 'utf8' });
-  console.log(`wrote ${codexFile} (all reviewer charters returned CLEAN machine verdicts)`);
+  // Record WHICH Codex agent produced the verdict (gpt-5.6-sol/terra/luna). No
+  // `-m` is passed above, so the run uses the configured default; naming it here
+  // makes the security proof auditable after the fact. Audit trail only.
+  const codexModel = codexConfiguredModel();
+  writeFileSync(
+    codexFile,
+    JSON.stringify({ queryHash, verdict: 'clean', model: codexModel, timestamp: ts }, null, 2),
+    { encoding: 'utf8' },
+  );
+  console.log(`wrote ${codexFile} (all reviewer charters returned CLEAN machine verdicts from ${codexModel})`);
 }
 
 process.exit(exitCode);

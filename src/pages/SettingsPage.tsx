@@ -560,7 +560,11 @@ export default function SettingsPage() {
         p_idempotency_key: idemKey,
       });
       if (error) {
-        toast('error', sanitizeError(error));
+        // trg_guard_last_active_admin refuses to deactivate the last active admin,
+        // which would otherwise lock the account out of its own app.
+        toast('error', /LAST_ACTIVE_ADMIN/.test(String((error as { message?: string })?.message ?? ''))
+          ? 'You cannot deactivate the only active admin. Make someone else an active admin first.'
+          : sanitizeError(error));
       } else {
         const updateResult = assertRpcResult<{ error?: string }>(data, 'admin_update_profile');
         if (updateResult?.error) {
@@ -1306,7 +1310,7 @@ export default function SettingsPage() {
         onClose={() => setDeactivateConfirmOpen(false)}
         onConfirm={executeEditUser}
         title="Deactivate User"
-        message={`Deactivate ${editName}? They will be locked out and unable to sign in.`}
+        message={`Deactivate ${editName}? They will be signed out of any open sessions and blocked from signing in again. Reactivating them restores access.`}
         confirmLabel="Deactivate"
         variant="warning"
       />

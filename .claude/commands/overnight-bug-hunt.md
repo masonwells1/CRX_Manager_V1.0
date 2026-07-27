@@ -66,7 +66,7 @@ Every finder must return `executionStatus=VERIFIED` with a concrete non-empty `e
 Before the Codex finding gate, compare every candidate's files, symbols, RPCs, and lifecycle against the mission document's exclusions and current active worktrees. Collision candidates are deferred, never fixed or counted as a dry-cycle finding.
 
 ### Step 2 — CODEX FINDING-GATE (independent confirmation)
-Hand the candidate findings to Codex as an independent second model (gpt-5.5). **Always invoke Codex through the `node scripts/overnight-codex-gate.mjs` wrapper** — it rides the `Bash(node scripts/:*)` permission allow-list, so an UNATTENDED run never pauses for approval (a raw `codex exec` is NOT allow-listed and would stall the loop). The wrapper resolves the binary version-proof, runs `codex exec --sandbox read-only`, and closes stdin. Write the candidate digest to a file first, then:
+Hand the candidate findings to Codex as an independent second model (`gpt-5.6-sol`, the live config default; record the agent that produced the verdict). **Always invoke Codex through the `node scripts/overnight-codex-gate.mjs` wrapper** — it rides the `Bash(node scripts/:*)` permission allow-list, so an UNATTENDED run never pauses for approval (a raw `codex exec` is NOT allow-listed and would stall the loop). The wrapper resolves the binary version-proof, runs `codex exec --sandbox read-only`, and closes stdin. Write the candidate digest to a file first, then:
 ```bash
 # Build the prompt file: per finding — title, file, one-line evidence, impact, severity.
 # Keep it to <=3-4 findings per call (more times out at high reasoning).

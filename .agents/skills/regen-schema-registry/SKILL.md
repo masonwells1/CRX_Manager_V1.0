@@ -50,7 +50,10 @@ If the diff is empty: the registry was already up to date. Tell Mason and skip t
 Read the regenerated `.claude/schema-registry.json` and verify:
 - `_meta.generated_at` matches today
 - All 3 top-level keys present: `generated_columns`, `status_enums`, `tables_without_updated_at`
-- `status_enums` is non-empty (the project has at least 20+ status enums; a near-empty result means the script silently failed)
+- `status_enums` is non-empty, and its entry count is in the same ballpark as the registry you
+  just replaced (compare against `git show HEAD:.claude/schema-registry.json`). A near-empty or
+  sharply smaller result means the script silently failed — do not accept it as "the schema
+  changed" without finding the migration that removed them.
 
 If any of these look wrong, tell Mason and revert via `git checkout -- .claude/schema-registry.json`.
 

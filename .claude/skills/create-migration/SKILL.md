@@ -29,13 +29,46 @@ date -u +"%Y%m%d%H%M%S"
    - Use snake_case (e.g., `add_tote_tracking`, `create_invoice_table`)
 
 3. Write the SQL with these conventions (match existing migrations):
-   - Always use `IF NOT EXISTS` / `IF EXISTS` for safety
    - Always include a comment header explaining the purpose
    - Use `public` schema explicitly
-   - For new tables: include `id uuid DEFAULT gen_random_uuid() PRIMARY KEY`, `created_at timestamptz DEFAULT now()`, `updated_at timestamptz DEFAULT now()`
-   - For new tables: always add `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` and at least a basic RLS policy
+   - Use `IF NOT EXISTS` / `IF EXISTS` to make a migration safely re-runnable — but **not
+     reflexively**. A blanket guard silently swallows schema drift: if an object already exists
+     in a shape you did not expect, `IF NOT EXISTS` leaves the wrong object in place and records
+     the migration as successful. Before adding a guard, check the live catalog read-only
+     (Supabase MCP) for that object. If it already exists, resolve the drift deliberately instead
+     of guarding past it.
+   - For new tables: include `id uuid DEFAULT gen_random_uuid() PRIMARY KEY`,
+     `created_at timestamptz DEFAULT now()`, `updated_at timestamptz DEFAULT now()`
+   - For new tables: **always add the `updated_at` trigger in the same migration** —
+     `DATABASE_CHANGE_CHECKLIST.md` lists omitting it as a known repeat mistake, and the column
+     alone never updates itself:
+
+     ```sql
+     CREATE TRIGGER set_updated_at
+       BEFORE UPDATE ON public.my_new_table
+       FOR EACH ROW EXECUTE FUNCTION moddatetime('updated_at');
+     ```
+
+   - For new tables: always add `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` **and** real policies
+     in the same migration. `USING (true)` is a placeholder, not a policy — role-gate it.
    - For new columns: use `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
-   - For new functions: use `CREATE OR REPLACE FUNCTION`
+   - For new functions: `CREATE OR REPLACE FUNCTION` is the statement form, **not** the security
+     contract. Any function this migration creates must also satisfy the CRX Hard Rules in
+     `AGENTS.md`:
+     - `SECURITY DEFINER` functions set `SET search_path = public, pg_temp` and get **deliberate,
+       narrow** grants — `REVOKE EXECUTE FROM PUBLIC, anon`, then `GRANT` only to the roles that
+       genuinely need it.
+     - A plain read-only function should normally stay **`SECURITY INVOKER`** so RLS still applies.
+       Use `SECURITY DEFINER` only when owner privileges are actually required, and say why in
+       the header comment.
+     - Mutating RPCs accept and **actually enforce** `p_idempotency_key text DEFAULT NULL`, with
+       the lookup scoped to `operation`, not the key alone.
+     - Mutating RPCs validate the actor against `auth.uid()` and check role/active-profile; never
+       trust a caller-supplied `p_performed_by` without an `ACTOR_MISMATCH` gate.
+     - Money is `bigint` cents — never float.
+
+   If the change involves an RPC of any complexity, use `/new-rpc` instead: it carries the full
+   RPC contract and this skill's template is deliberately minimal.
 
 ## Step 3: Update TypeScript Types
 
@@ -47,16 +80,27 @@ Read `src/types/index.ts` and update it to match the schema change:
 
 Follow existing conventions in the file (look at how other interfaces are structured).
 
-## Step 4: Run Type Check
+## Step 4: Verify
+
+TypeScript typecheck proves the app compiles. It proves **nothing** about the SQL — a migration
+can typecheck perfectly and still be invalid, unsafe, or drifted. Run all of these:
 
 ```bash
 npm run typecheck
+bash scripts/validate-sql-migrations.sh
+npm run test:drift
 ```
 
 If there are type errors caused by the new/changed types, fix them:
 - Check components that use the affected interface
 - Update any destructuring or property access that changed
 - Do NOT fix pre-existing type errors unrelated to this migration
+
+For anything touching RLS, `SECURITY DEFINER`, money, or an existing table, the real proof gate
+is `/migration-review` (security + drift reviewer subagents, plus a Codex verdict for SQL/RLS/
+money) and a rolled-back smoke run (`node scripts/smoke/run-smoke.mjs --spec <rpc>` →
+`SMOKE_PASS_ROLLBACK`). Those run before any live apply — do not report the migration as proven
+on a typecheck alone.
 
 ## Step 5: Update Documentation
 
@@ -88,7 +132,9 @@ After everything is done, print:
 
 File: supabase/migrations/<filename>.sql
 Type updates: src/types/index.ts
-Typecheck: PASS / FAIL (with details)
+Typecheck:    PASS / FAIL (with details)
+SQL validate: PASS / FAIL
+Drift test:   PASS / FAIL
 
 Docs updated:
   - docs/reference/migration-history.md
@@ -108,4 +154,7 @@ Docs updated:
 - NEVER modify an existing migration file — only create new ones
 - NEVER apply the migration automatically from this skill — this skill only writes the file. Applying goes through `/migration-review` + migration-apply-guard: interactive session = Mason's in-chat OK; pre-authorized armed hands-free run = full proof + Codex gate (settled 2026-07-13); destructive = never autonomous
 - NEVER commit automatically — the user decides when to commit
+- NEVER report a migration verified on `npm run typecheck` alone — typecheck does not read SQL
+- NEVER create a new table without RLS, real policies, and the `updated_at` trigger in the same file
+- NEVER make a read-only function `SECURITY DEFINER` by default; that silently bypasses RLS
 - If the SQL could be destructive (DROP TABLE, DROP COLUMN), warn the user clearly before writing the file

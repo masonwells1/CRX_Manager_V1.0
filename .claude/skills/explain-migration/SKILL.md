@@ -46,10 +46,17 @@ For each change, answer:
 
 ## Step 4: Spot the Safety Concerns
 
-Cross-reference against CLAUDE.md's "Hard Red Lines" and "Migration Safety Rules". Flag explicitly if you see:
+Cross-reference against the **CRX Hard Rules** in `AGENTS.md` (that section was previously
+called "Hard Red Lines" in `CLAUDE.md`; the policy now lives in `AGENTS.md`) and
+`docs/workflows/DATABASE_CHANGE_CHECKLIST.md`. Flag explicitly if you see:
 
 - ⚠️ **SECURITY DEFINER without `SET search_path`** — search_path attack risk
 - ⚠️ **SECDEF function that does DML, not paired with `REVOKE EXECUTE FROM anon`** — RLS bypass risk (B7/B8/B9 class)
+- ⚠️ **SECDEF function left executable by `PUBLIC` or broadly by `authenticated`** — revoking only `anon` is not enough; grants must be deliberate and narrow
+- ⚠️ **Actor forgery** — a mutating SECDEF function that trusts a caller-supplied `p_performed_by` with no `ACTOR_MISMATCH` gate against `auth.uid()`
+- ⚠️ **Missing role/active-profile enforcement** — the function binds `auth.uid()` but never checks the caller's role or that the profile is active, so a deactivated or wrong-role user still succeeds
+- ⚠️ **A read-only SECDEF function that bypasses RLS** — a plain reader normally should NOT be SECURITY DEFINER; invoker rights preserve RLS
+- ⚠️ **New table without an `updated_at` `moddatetime` trigger** — `updated_at` silently never changes (`DATABASE_CHANGE_CHECKLIST.md`, known-mistakes table)
 - ⚠️ **CHECK constraint that drops existing enum values** — will break existing rows (March 2026 incident class)
 - ⚠️ **New mutating RPC without `p_idempotency_key`** — double-submit risk
 - ⚠️ **New table without RLS enabled + at least one policy** — anyone can read everything
@@ -86,24 +93,28 @@ WHAT COULD GO WRONG
 
 SAFETY CHECK
 ────────────
-<Either: "Looks clean — no patterns from the 'Migration Safety Rules' triggered."
+<Either: "Looks clean — none of the Step 4 safety patterns triggered."
  Or: List each ⚠️ flag with the specific line number, what's wrong, and the fix.>
 
 ROLLBACK
 ────────
 <How would we undo this if it goes wrong on live?
- Examples: "Write a new migration that DROPs the new column" / "Restore from
- Supabase backup — there's no migration-level rollback" / "Re-grant the
- EXECUTE permission we revoked".>
+ Examples: "Write a new migration that DROPs the new column — ONLY once we've confirmed it
+ holds no data anyone needs, and only after a fresh backup; dropping a populated column is
+ not reversible" / "Restore from Supabase backup — there's no migration-level rollback" /
+ "Re-grant the EXECUTE permission we revoked".
+ Say plainly when the honest answer is "there is no clean rollback".>
 
 RECOMMENDED NEXT STEPS
 ──────────────────────
-<Pick one:
- - "Safe to apply via Supabase MCP — say 'apply it' to proceed."
- - "BEFORE applying: run /migration-review (or /codex-review) on this migration." (if uncertain)
- - "DO NOT apply yet. Fix these issues first: <list>"
- - "Dispatch the rls-security-reviewer + migration-drift-reviewer subagents first
-    so we don't repeat the B7/B8/B9 class of bug.">
+<This skill EXPLAINS; it never green-lights an apply. `/migration-review` is required for
+ every live apply — it is the only sanctioned path (`docs/workflows/DATABASE_CHANGE_CHECKLIST.md`),
+ because it dispatches the security/drift reviewers and stamps the apply-guard proof for this
+ exact file content. So pick one:
+ - "Explanation looks clean. NEXT: run /migration-review on this migration — that's the required
+    gate before any live apply. Nothing applies until it passes and you say go."
+ - "DO NOT apply yet. Fix these issues first: <list>, then run /migration-review."
+ Never write "safe to apply — say 'apply it'"; that skips the gate.>
 ```
 
 ## Step 6: Wait for Mason's Decision
@@ -116,6 +127,9 @@ If Mason asks "should I apply this?", give an honest answer based on the safety 
 
 - NEVER skip a statement — if you don't recognize a SQL pattern, say so and ask before guessing.
 - NEVER explain in jargon. If you must use a technical term, define it inline ("RLS policy — a rule about who can read/write rows").
+- NEVER recommend applying directly. `/migration-review` runs on every migration before a live
+  apply — it is not conditional on your uncertainty.
 - NEVER recommend "apply it" if a safety flag was raised. Recommend the fix first.
+- NEVER suggest a DROP as rollback without stating the data-loss precondition (empty/backed up first).
 - NEVER fabricate user-facing impact — if the migration is plumbing only, say so plainly. Don't invent a feature story.
 - If the migration was already applied (check via Supabase MCP `list_migrations` if available), say so clearly and explain that the explanation is retrospective, not pre-apply.

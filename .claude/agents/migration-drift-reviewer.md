@@ -2,6 +2,8 @@
 name: migration-drift-reviewer
 description: Use this agent to cross-check a new migration against existing live schema before applying it. Catches the migration-drift bugs that caused 40+ incidents in March 2026. Verifies CHECK constraint supersets (new enum values include all old), function-overload uniqueness (no accidental dual-overload), column-name accuracy against `src/types/index.ts` and `.claude/schema-registry.json`, and `tables_without_updated_at` violations. Use BEFORE `apply_migration` whenever the migration touches an existing table, CHECK constraint, or function with the same name as an existing one.
 tools: Read, Grep, Glob, Bash
+model: claude-opus-5
+effort: high
 ---
 
 # Migration Drift Reviewer (CRX Manager)

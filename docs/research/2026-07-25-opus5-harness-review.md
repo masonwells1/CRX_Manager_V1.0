@@ -72,7 +72,19 @@ These checks passed and need no action:
 - `.agents/README.md` and `CLAUDE.md` agree that `.claude/` is source and `.agents/` is generated.
 - `AGENTS.md` and `CLAUDE.md` do not contradict each other; `CLAUDE.md` stays routing-only as designed.
 - No hardcoded migration/page/function counts in the always-loaded files.
-- No stale Claude model IDs anywhere in the harness (the only model IDs present are Codex's `gpt-5.5`, which are correct and current).
+- ~~No stale Claude model IDs anywhere in the harness (the only model IDs present are Codex's `gpt-5.5`, which are correct and current).~~
+  **Both halves of this were wrong — corrected 2026-07-27:**
+  - *Claude side:* `~/.claude/settings.json` pinned the bare alias `"model": "opus"`, which resolves to
+    **Opus 4.8**, not Opus 5. That default was inherited by the reviewer subagents, the workflow
+    scripts (`gauntlet-sections-2-6-loop.js`, `money-inventory-hunt.js`), and
+    `scripts/run-claude-review.mjs`, so the whole Claude-side review apparatus — including the
+    money/inventory and RLS gates — had been running a generation behind. All of those now pin the
+    canonical ID `claude-opus-5`.
+  - *Codex side:* `gpt-5.5` was **not** current. Codex now ships three 5.6 agents — `gpt-5.6-sol`
+    (reviewer, and the configured default), `gpt-5.6-terra` (builder), `gpt-5.6-luna` (low-risk) —
+    and the live `~/.codex/config.toml` reads `model = "gpt-5.6-sol"`. The operational skills,
+    commands, and scripts were updated to match; historical ledgers, `docs/CHANGELOG.md`, and
+    `docs/archive/**` keep `gpt-5.5` as accurate provenance of what actually ran at the time.
 
 ### 1.4 MEDIUM — three smaller consistency items
 

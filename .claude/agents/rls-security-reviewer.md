@@ -2,6 +2,8 @@
 name: rls-security-reviewer
 description: Use this agent to audit a new or modified Supabase migration for RLS bypass risks before it ships. Triggers on any migration file change that creates/alters a SECURITY DEFINER function, creates a new table, or grants EXECUTE on a function. Checks for the exact patterns that caused incidents B7/B8/B9 on 2026-05-26 — anon-executable SECDEF DML helpers, missing search_path, missing RLS on new tables, missing idempotency on mutating RPCs, and actor-forgery anti-patterns. Returns a structured findings report with severity (BLOCKER/HIGH/MED) and exact line numbers. Use proactively after writing any migration before suggesting `apply_migration`.
 tools: Read, Grep, Glob, Bash
+model: claude-opus-5
+effort: high
 ---
 
 # RLS Security Reviewer (CRX Manager)

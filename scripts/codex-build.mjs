@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * codex-build.mjs — run a headless, WRITE-ENABLED Codex (gpt-5.5) as the BUILDER
+ * codex-build.mjs — run a headless, WRITE-ENABLED Codex (gpt-5.6 family) as the BUILDER
  * of the CRX Workflow-Waves loop. This is the INVERSE of scripts/codex-hunt.mjs:
  *
  *   codex-hunt.mjs  : Codex read-only  → FINDS bugs  → Claude fixes.
@@ -10,7 +10,7 @@
  *   Claude (Opus 4.8) = orchestrator/advisor: grounds each unit, writes the build
  *     spec, reviews Codex's diff, runs the guard-equivalent checks + review
  *     subagents, and is the ONLY actor that commits / pushes / applies migrations.
- *   Codex (gpt-5.5)   = builder: edits the working tree per the spec, self-checks
+ *   Codex (gpt-5.6-terra) = builder: edits the working tree per the spec, self-checks
  *     with typecheck/build/test. It never reaches the live DB / Vercel / GitHub.
  *
  * Usage:
@@ -38,7 +38,7 @@
  *       Codex can only touch the repo — every consequential live action stays on
  *       the Claude side. (Auth still resolves from CODEX_HOME, so the model works.)
  *       Because the user config is ignored, the model + reasoning effort are pinned
- *       explicitly below (the config normally sets model = "gpt-5.5").
+ *       explicitly below (the config normally sets model = "gpt-5.6-sol").
  *   --sandbox danger-full-access : REQUIRED on Windows. Codex has no OS-level
  *       sandbox on Windows, so `--sandbox workspace-write` silently degrades to
  *       READ-ONLY (Codex refuses to write). Full-access is the only mode that lets

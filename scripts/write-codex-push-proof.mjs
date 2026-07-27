@@ -28,7 +28,7 @@
 // GitHub branch protection remains the external hard wall.
 
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -112,6 +112,39 @@ export function codexExecutable({
   return candidates[0].candidate;
 }
 
+// ── which Codex agent produced the verdict ───────────────────────────────────
+// Codex ships three 5.6 agents (sol = reviewer/default, terra = builder, luna =
+// low-risk). These gates deliberately pass no `-m`, so the run uses whatever
+// `model` the Codex config names — today `gpt-5.6-sol`. That is the right agent
+// for a review, but an unlabelled proof cannot be audited later: "a Codex ran"
+// is weaker evidence than "gpt-5.6-sol ran". Read the configured model and
+// record it ON the proof. Informational only — `proofValid` ignores unknown
+// fields, so a missing/unreadable model never fails the gate open or closed.
+export function codexConfiguredModel({
+  home = homedir(),
+  env = process.env,
+  readFile = readFileSync,
+} = {}) {
+  const configPath = env.CODEX_HOME
+    ? path.join(env.CODEX_HOME, "config.toml")
+    : path.join(home, ".codex", "config.toml");
+  let text = "";
+  try {
+    text = String(readFile(configPath, "utf8"));
+  } catch {
+    return "unknown";
+  }
+  // Top-level `model = "gpt-5.6-sol"`, before any [section] header — a `model`
+  // key inside a [profiles.x] block is not the default this run will use.
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) break;
+    const match = line.match(/^model\s*=\s*["']([^"']+)["']/);
+    if (match) return match[1];
+  }
+  return "unknown";
+}
+
 // ── verdict parsing (deterministic machine verdict) ──────────────────────────
 // `codex review` emits only free-form prose, so any "is this clean?" heuristic
 // over it is guesswork that fails open or over-refuses. Instead we drive `codex
@@ -148,10 +181,13 @@ export function codexReviewProofVerdict({ status, stdout } = {}) {
 // ── proof shape ─────────────────────────────────────────────────────────────
 // Mirrors what codex-push-guard's `proofValid` (in codex-push-lib.mjs) accepts:
 // codex_ran:true, verdict in {clean, blockers-fixed}, exact head_sha, ISO ts.
-export function buildCodexPushProof({ headSha, baseSha, verdict, timestamp = new Date().toISOString() }) {
+export function buildCodexPushProof({ headSha, baseSha, verdict, model, timestamp = new Date().toISOString() }) {
   return {
     codex_ran: true,
     verdict,
+    // Which Codex agent produced this verdict (gpt-5.6-sol/terra/luna). Audit
+    // trail only — never validated, so an older proof without it still passes.
+    ...(model ? { model } : {}),
     head_sha: headSha,
     // The origin/main the review was taken against. The push guard requires this
     // to still equal origin/main at push time, so a base that moved after review
@@ -169,7 +205,8 @@ function writeCodexPushProof({ root, headSha, baseSha, verdict }) {
   const proofPath = codexPushProofPath(root, headSha);
   mkdirSync(path.dirname(proofPath), { recursive: true });
   // Node write → clean UTF-8, no BOM (a BOM breaks the guard's JSON.parse).
-  writeFileSync(proofPath, `${JSON.stringify(buildCodexPushProof({ headSha, baseSha, verdict }), null, 2)}\n`, "utf8");
+  const model = codexConfiguredModel();
+  writeFileSync(proofPath, `${JSON.stringify(buildCodexPushProof({ headSha, baseSha, verdict, model }), null, 2)}\n`, "utf8");
   return proofPath;
 }
 

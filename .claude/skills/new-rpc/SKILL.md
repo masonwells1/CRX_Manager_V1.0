@@ -1,6 +1,6 @@
 ---
 name: new-rpc
-description: Create a new Supabase RPC function with correct idempotency, SECURITY DEFINER, search_path, and documentation. Use when the user wants to add a new database function or stored procedure.
+description: Create a new Supabase RPC function with correct idempotency, security mode, search_path, grants, and documentation. Use when the user wants to add a new database function or stored procedure.
 ---
 
 # Create New RPC Function
@@ -24,8 +24,11 @@ Before writing ANY SQL, run these checks:
 ```sql
 SELECT proname, pg_get_function_identity_arguments(oid)
 FROM pg_proc
-WHERE proname = 'function_name_here';
+WHERE pronamespace = 'public'::regnamespace
+  AND proname = 'function_name_here';
 ```
+Schema-qualify it. Without `pronamespace`, this also matches functions in `pg_catalog`,
+`extensions`, and every other schema, so a common name comes back with false hits.
 If results come back, there's already a function with this name. Either pick a different name or confirm we're replacing it (and that the parameter signature matches).
 
 ### Check for overloads
@@ -117,6 +120,12 @@ GRANT EXECUTE ON FUNCTION public.<function_name>(uuid, text, text) TO authentica
 
 ### SQL Template (for read-only functions)
 
+**Default to `SECURITY INVOKER` for reads.** An invoker-rights function runs as the caller, so
+RLS still applies and the caller sees exactly the rows they are already allowed to see. Marking
+a read `SECURITY DEFINER` makes it run as the owner and **bypasses RLS** — that is how a report
+function ends up returning another customer's rows. Postgres defaults to invoker, so the plain
+template below is already correct; write `SECURITY INVOKER` explicitly to make the choice visible.
+
 ```sql
 -- <function_name>: <one-line description>
 CREATE OR REPLACE FUNCTION public.<function_name>(
@@ -124,7 +133,7 @@ CREATE OR REPLACE FUNCTION public.<function_name>(
 )
 RETURNS TABLE (col1 uuid, col2 text, col3 numeric)
 LANGUAGE plpgsql
-SECURITY DEFINER
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
@@ -135,14 +144,27 @@ BEGIN
 END;
 $$;
 
--- Deliberate grants — required on read-only SECURITY DEFINER functions too
+-- Deliberate grants — required on every RPC, invoker or definer
 REVOKE ALL ON FUNCTION public.<function_name>(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.<function_name>(uuid) TO authenticated;
 ```
 
+Use `SECURITY DEFINER` on a read **only** when owner privileges are genuinely required (it must
+read something the caller's RLS legitimately hides — e.g. a cross-tenant aggregate an admin is
+entitled to). When you do:
+
+- keep `SET search_path = public, pg_temp`,
+- enforce the authorization yourself inside the body (role check against `auth.uid()` and an
+  active profile — RLS is no longer doing it for you),
+- say in the header comment why definer rights are necessary.
+
+That combination is exactly what `rls-security-reviewer` looks for.
+
 ### CRITICAL Patterns (DO NOT deviate)
 
 - `SECURITY DEFINER` + `SET search_path = public, pg_temp` — ALWAYS together
+- Choose the security mode deliberately: reads default to `SECURITY INVOKER` so RLS still applies;
+  `SECURITY DEFINER` bypasses RLS and therefore must enforce role/active-profile checks in its body
 - `p_idempotency_key text DEFAULT NULL` — REQUIRED on all mutating functions
 - idempotency lookup MUST include `AND operation = '<function_name>'` — an unscoped lookup is hard-denied by the idempotency hook
 - idempotency_keys columns: `idempotency_key`, `operation`, `result` — NEVER `key`, `entity_type`, `entity_id`
@@ -171,9 +193,27 @@ live only in `docs/reference/` files that `npm run check:docs` validates.)
 
 ## Step 6: Verify
 
+Typecheck and build prove the TypeScript side compiles. They read **no SQL at all** — a broken,
+unsafe, or drifted function passes both. Run the SQL-aware gates too:
+
 ```bash
 npm run typecheck && npm run build
+bash scripts/validate-sql-migrations.sh
+npm run test:drift
 ```
+
+Then get real proof of the function itself:
+
+- Dispatch `rls-security-reviewer` and `migration-drift-reviewer` (this is a
+  `SECURITY DEFINER` / RLS / money path — that is what `/migration-review` runs).
+- Run the rollback-only smoke for the new RPC —
+  `node scripts/smoke/run-smoke.mjs --spec <function_name>` — and require `SMOKE_PASS_ROLLBACK`.
+  It exercises the function inside a transaction that is rolled back, so it proves the SQL
+  actually executes without touching live data.
+- For money or inventory functions, check the invariant in the smoke output, not by reading
+  the SQL.
+
+Do not report the RPC as verified on typecheck + build alone.
 
 ## Step 7: Print Summary
 
@@ -194,8 +234,12 @@ Docs updated:
   - docs/reference/rpc-functions.md
   - docs/reference/migration-history.md
 
-Build: PASS
-Typecheck: PASS
+Typecheck:    PASS
+Build:        PASS
+SQL validate: PASS
+Drift test:   PASS
+Reviewers:    rls-security-reviewer / migration-drift-reviewer verdicts
+Smoke:        SMOKE_PASS_ROLLBACK (or: not run — say so)
 
 ⚠️  Remember: This migration is LOCAL only. Applying it to the live database goes
     through `/migration-review` → Supabase MCP `apply_migration` (interactive
@@ -211,3 +255,5 @@ Typecheck: PASS
 - NEVER cast idempotency result to `::text` — it's jsonb
 - NEVER skip `SET search_path = public, pg_temp` on SECURITY DEFINER functions
 - NEVER create a function without checking for overloads first
+- NEVER make a read-only function `SECURITY DEFINER` by default — that silently bypasses RLS
+- NEVER report an RPC verified on `npm run typecheck && npm run build` alone; neither reads SQL
