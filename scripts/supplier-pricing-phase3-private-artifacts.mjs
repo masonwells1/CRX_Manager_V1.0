@@ -364,6 +364,18 @@ function safeUnlinkClosedOwnedTempInHeldParent(temporaryBasename, expectedBasena
   } catch (_error) { /* A swapped path is deliberately left untouched. */ }
   return false;
 }
+function safeUnlinkPublishedArtifactInHeldParent(expectedBasename, expectedIdentity, parentFd) {
+  try {
+    assert(path.basename(expectedBasename) === expectedBasename, 'private artifact path changed during rollback');
+    assertHeldPublicationDirectory(parentFd, 'private artifact parent');
+    const entry = lstatSync(expectedBasename); const followed = statSync(expectedBasename);
+    if (entry.isFile() && !entry.isSymbolicLink() && sameStatIdentity(entry, followed) && sameFile(expectedIdentity, entry) && entry.nlink === 1) {
+      unlinkSync(expectedBasename);
+      return true;
+    }
+  } catch (_error) { /* A missing or swapped publication target is deliberately left untouched. */ }
+  return false;
+}
 function readPublishedArtifactBytes(expectedBasename, intended, parentFd) {
   const noFollow = process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number' ? 0 : constants.O_NOFOLLOW;
   const fd = openSync(expectedBasename, constants.O_RDONLY | noFollow);
@@ -390,7 +402,7 @@ export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoR
   assert(typeof renameFile === 'function', 'private artifact publication primitive is invalid');
   beforeStableParentLease?.({ target, temporary });
   return withStablePublicationParent(canonicalParent, initialParentIdentity, parentFd => {
-    let temporaryFd; let temporaryIdentity; let published = false;
+    let temporaryFd; let temporaryIdentity; let publicationAttempted = false; let published = false;
     try {
     beforeTempOpen?.({ target, temporary });
     assertStablePublicationParent(parentFd, canonicalParent);
@@ -422,13 +434,17 @@ export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoR
     assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesHeldParent(temporaryFd, temporaryBasename, 'private artifact temporary path', parentFd)), 'private artifact temporary path changed before publication');
     assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed before publication');
     assertAtomicPublicationTargetInHeldParent(expectedBasename, parentFd);
+    publicationAttempted = true;
     renameFile(temporaryBasename, expectedBasename);
-    published = true;
+    assertStablePublicationParent(parentFd, canonicalParent);
     afterPublicationBeforeReadback?.({ target, temporary });
     readPublishedArtifactBytes(expectedBasename, intended, parentFd);
+    assertStablePublicationParent(parentFd, canonicalParent);
+    published = true;
     return target;
     } finally {
       if (temporaryFd !== undefined) {
+        if (!published && publicationAttempted && temporaryIdentity) safeUnlinkPublishedArtifactInHeldParent(expectedBasename, temporaryIdentity, parentFd);
         let removedOpen = false;
         try { if (!published) removedOpen = safeUnlinkOwnedTempInHeldParent(temporaryBasename, temporaryFd, expectedBasename, temporaryIdentity, parentFd); }
         finally {

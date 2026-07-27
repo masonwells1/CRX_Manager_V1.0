@@ -347,6 +347,20 @@ try {
     assert.equal(readFileSync(stableOutput, 'utf8'), 'attacker replacement bytes', 'POSIX replacement pathname must never receive private publication bytes');
     assert.equal(readFileSync(path.join(movedStableParent, POST_STAGE_A_MANIFEST_NAME), 'utf8'), 'prior stable bytes', 'parent relocation before rename must preserve the prior target');
     assert.equal(readdirSync(movedStableParent).some(name => name.startsWith(`.${POST_STAGE_A_MANIFEST_NAME}.`) && name.endsWith('.tmp')), false, 'POSIX parent relocation must clean only the owned staged temp through the held CWD');
+
+    const finalRenameParent = path.join(temp, 'final-rename-publication-parent'); const movedFinalRenameParent = path.join(fakeRepo, 'private-artifacts'); mkdirSync(finalRenameParent); const finalRenameOutput = path.join(finalRenameParent, POST_STAGE_A_MANIFEST_NAME); writeFileSync(finalRenameOutput, 'prior final-rename bytes');
+    assert.throws(() => writePrivateArtifactAtomic(finalRenameOutput, POST_STAGE_A_MANIFEST_NAME, 'new final-rename bytes', {
+      repoRoot: fakeRepo, testApprovedRoot: finalRenameParent,
+      renameFile: (source, destination) => {
+        renameSync(finalRenameParent, movedFinalRenameParent);
+        mkdirSync(finalRenameParent);
+        writeFileSync(finalRenameOutput, 'attacker final-rename bytes');
+        renameSync(source, destination);
+      },
+    }), { message: 'private artifact parent changed before publication' });
+    assert.equal(readFileSync(finalRenameOutput, 'utf8'), 'attacker final-rename bytes', 'replacement pathname must never receive private publication bytes');
+    assert.equal(existsSync(path.join(movedFinalRenameParent, POST_STAGE_A_MANIFEST_NAME)), false, 'relocated parent must not retain private publication bytes');
+    assert.equal(readdirSync(movedFinalRenameParent).some(name => name.startsWith(`.${POST_STAGE_A_MANIFEST_NAME}.`) && name.endsWith('.tmp')), false, 'relocated parent must not retain an owned private temp artifact');
   }
   const nestedStableOutput = path.join(external, POST_STAGE_A_MANIFEST_NAME); writeFileSync(nestedStableOutput, 'prior nested bytes'); throws(() => writePrivateArtifactAtomic(nestedStableOutput, POST_STAGE_A_MANIFEST_NAME, 'new outer bytes', { ...fixturePrivateOptions, afterFinalValidationBeforeRename: () => writePrivateArtifactAtomic(nestedStableOutput, POST_STAGE_A_MANIFEST_NAME, 'nested bytes', fixturePrivateOptions) }), 'cannot nest or run concurrently'); assert.equal(readFileSync(nestedStableOutput, 'utf8'), 'prior nested bytes'); rmSync(nestedStableOutput, { force: true });
   const cleanOutput = writePrivateArtifactAtomic(path.join(external, POST_STAGE_A_MANIFEST_NAME), POST_STAGE_A_MANIFEST_NAME, 'normal bytes', fixturePrivateOptions);
