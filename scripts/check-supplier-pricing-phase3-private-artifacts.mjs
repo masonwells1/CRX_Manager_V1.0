@@ -33,6 +33,8 @@ export const GITHUB_EVENT_HANDOFF_PROTOCOL = 'phase3c-github-event-root-v2';
 export const GITHUB_EVENT_HANDOFF_FLAG = '--attest-github-handoff';
 const WORKTREE_SCAN_CHUNK_BYTES = 64 * 1024;
 const UTF16_REPLAY_BYTES = 4096;
+const UTF16_LE_BOM = Buffer.from([0xff, 0xfe]);
+const UTF16_BE_BOM = Buffer.from([0xfe, 0xff]);
 // UTF-32 detection never retains a candidate-sized decoded string. The replay
 // lets a BOM/NUL signal that straddles a read boundary activate the bounded
 // lanes, while each lane itself retains no more than one incomplete code point.
@@ -58,6 +60,8 @@ const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
 const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
 const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
+const EMBEDDED_BASE64_CANDIDATE_RE = /[A-Za-z0-9+/_=-]{32}/;
+const EMBEDDED_HEX_CANDIDATE_RE = /[0-9A-Fa-f]{64}/;
 const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
 
 /**
@@ -374,22 +378,14 @@ function createArchiveStreamScanner() {
 export function structuralPrivateArtifactReason(bytes) {
   const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
   if (buffer.length > MAX_STRUCTURAL_SCAN_BYTES) return 'private artifact candidate exceeds bounded structural scan limit';
-  const archiveReason = compressedArchiveReason(buffer);
-  if (archiveReason) return archiveReason;
-  const textReason = decodedTextCandidateReason(decodedTextCandidates(buffer));
-  if (textReason) return textReason;
-  const utf32 = createUtf32StructuralStreamScanner();
-  utf32.feed(buffer);
-  const utf32Reason = utf32.finish();
-  if (utf32Reason) return utf32Reason;
-  // A whole packet can be transfer-encoded without a filename or textual
-  // marker. Reuse the bounded streaming detector so direct and streamed scans
-  // make the same non-recursive Base64 decision.
-  const base64 = createBase64TransferScanner();
-  const wrappedBase64 = createAlternateEncodingScanner();
-  base64.feed(buffer);
-  wrappedBase64.feed(buffer);
-  return base64.finish() ?? wrappedBase64.finish();
+  const scanner = createStructuralByteStreamScanner();
+  scanner.feed(buffer);
+  const reason = scanner.finish();
+  if (reason !== 'private JSON format marker in malformed candidate') return reason;
+  // Preserve the more precise direct UTF-8/UTF-16 diagnostic for an actual
+  // parsed private JSON object. Alternate decodings are allocated only after
+  // the bounded streaming detector has already found a private marker.
+  return decodedTextCandidateReason(decodedTextCandidates(buffer)) ?? reason;
 }
 function sameFileIdentity(left, right) { return left.dev === right.dev && left.ino === right.ino; }
 function sameWorktreeStatIdentity(left, right) {
@@ -489,8 +485,12 @@ function createStructuralTextStreamScanner() {
   let formatPropertySignal = false;
   const formatValueSignals = new Set();
   const propertySignals = new Set();
+  const structuralKeys = ['format', ...new Set(STRUCTURAL_KEY_GROUPS.flat())];
+  const structuralAlternation = structuralKeys.map(escapedRegex).join('|');
+  const propertyPattern = new RegExp(`"(${structuralAlternation})"\\s*:`, 'g');
+  const deferredPropertyPattern = new RegExp(`"(${structuralAlternation})"\\s*$`);
+  const formatValuePattern = new RegExp(`"(${[...JSON_FORMATS].map(escapedRegex).join('|')})(?:"|(?=\\s*[,}\\]]|$))`, 'g');
   const ownerHeader = createOwnerHeaderStreamDetector();
-  const deferredPropertyPattern = new RegExp(`"(${['format', ...new Set(STRUCTURAL_KEY_GROUPS.flat())].map(escapedRegex).join('|')})"\\s*$`);
   let pendingProperty = null;
   const signalProperty = key => {
     if (key === 'format') formatPropertySignal = true;
@@ -504,10 +504,9 @@ function createStructuralTextStreamScanner() {
   };
   return {
     feed(text) {
-      ownerHeader.feed(text);
       const decoded = decodeChunk(text);
       const window = tail + decoded;
-      const comparable = window;
+      ownerHeader.feed(decoded);
       if (pendingProperty) {
         const next = decoded.match(/\S/u)?.[0];
         if (next) {
@@ -515,15 +514,11 @@ function createStructuralTextStreamScanner() {
           pendingProperty = null;
         }
       }
-      if (hasQuotedProperty(comparable, 'format')) formatPropertySignal = true;
-      for (const format of JSON_FORMATS) {
-        const valuePattern = new RegExp(`"${escapedRegex(format)}(?:"|(?=\\s*[,}\\]]|$))`);
-        if (valuePattern.test(comparable)) formatValueSignals.add(format);
-      }
-      for (const key of STRUCTURAL_KEY_GROUPS.flat()) {
-        if (hasQuotedProperty(comparable, key)) propertySignals.add(key);
-      }
-      const deferred = deferredPropertyPattern.exec(comparable)?.[1];
+      propertyPattern.lastIndex = 0;
+      for (let match = propertyPattern.exec(window); match; match = propertyPattern.exec(window)) signalProperty(match[1]);
+      formatValuePattern.lastIndex = 0;
+      for (let match = formatValuePattern.exec(window); match; match = formatValuePattern.exec(window)) formatValueSignals.add(match[1]);
+      const deferred = deferredPropertyPattern.exec(window)?.[1];
       if (deferred) pendingProperty = deferred;
       tail = window.slice(-STREAM_TAIL_CHARS);
     },
@@ -733,35 +728,27 @@ function createBase64TransferScanner({ checkArchives = true } = {}) {
   };
 }
 function base64AlphabetValue(byte) {
-  if (byte >= 0x41 && byte <= 0x5a) return byte - 0x41;
-  if (byte >= 0x61 && byte <= 0x7a) return byte - 0x61 + 26;
-  if (byte >= 0x30 && byte <= 0x39) return byte - 0x30 + 52;
-  if (byte === 0x2b || byte === 0x2d) return 62;
-  if (byte === 0x2f || byte === 0x5f) return 63;
-  return -1;
+  if (byte >= 0x41 && byte <= 0x5a) return String.fromCharCode(byte);
+  if (byte >= 0x61 && byte <= 0x7a) return String.fromCharCode(byte);
+  if (byte >= 0x30 && byte <= 0x39) return String.fromCharCode(byte);
+  if (byte === 0x2b || byte === 0x2f) return String.fromCharCode(byte);
+  if (byte === 0x2d) return '+';
+  if (byte === 0x5f) return '/';
+  return null;
 }
 function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
-  let quartet = []; let decoded = null; let length = 0; let active = true; let terminal = false; let terminalTail = 0; let found = null;
-  let batch = null; let used = 0;
-  const feedBatch = () => {
-    if (used === 0 || length < 32) return;
+  let quartet = ''; let decoded = null; let decodedTransfer = ''; let length = 0; let active = true; let terminal = false; let terminalTail = 0; let found = null;
+  const flushDecoded = () => {
+    if (decodedTransfer.length === 0 || length < 32) return;
     decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
-    decoded.feed(batch.subarray(0, used));
-    used = 0;
+    decoded.feed(Buffer.from(decodedTransfer, 'base64'));
+    decodedTransfer = '';
   };
-  const addByte = value => {
-    batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
-    batch[used++] = value;
-    if (used === batch.length) feedBatch();
+  const feedDecoded = value => {
+    decodedTransfer += value;
+    if (decodedTransfer.length >= BASE64_TRANSFER_CHUNK_BYTES) flushDecoded();
   };
-  const decodeQuartet = () => {
-    const [first, second, third, fourth] = quartet;
-    addByte((first << 2) | (second >> 4));
-    if (third !== -1) addByte(((second & 0x0f) << 4) | (third >> 2));
-    if (fourth !== -1) addByte(((third & 0x03) << 6) | fourth);
-    quartet = [];
-  };
-  const finishDecoded = () => { feedBatch(); return decoded?.finish() ?? null; };
+  const finishDecoded = () => { flushDecoded(); return decoded?.finish() ?? null; };
   const finishToken = () => {
     if (!active || length < 32) return null;
     if (terminal) return terminalTail <= 1 ? finishDecoded() : null;
@@ -769,30 +756,28 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
     // valid prefix. This covers an unpadded packet plus one trailing alphabet
     // character without decoding that unusable byte.
     if (quartet.length === 1) return finishDecoded();
-    if (quartet.length === 2) { quartet.push(-1, -1); decodeQuartet(); }
-    else if (quartet.length === 3) { quartet.push(-1); decodeQuartet(); }
+    if (quartet.length === 2 || quartet.length === 3) feedDecoded(quartet.padEnd(4, '='));
     return finishDecoded();
   };
-  const reset = () => { quartet = []; decoded = null; length = 0; active = true; terminal = false; terminalTail = 0; batch = null; used = 0; };
+  const reset = () => { quartet = ''; decoded = null; decodedTransfer = ''; length = 0; active = true; terminal = false; terminalTail = 0; };
   const flush = () => { found ??= finishToken(); reset(); };
   const receive = byte => {
     const alphabet = base64AlphabetValue(byte);
-    if (alphabet !== -1) {
+    if (alphabet !== null) {
       length += 1;
       if (terminal) { terminalTail += 1; if (terminalTail > 1) active = false; return; }
-      if (!active || quartet.some(value => value === -1)) { active = false; return; }
-      quartet.push(alphabet);
-      if (quartet.length === 4) decodeQuartet();
+      if (!active || quartet.includes('=')) { active = false; return; }
+      quartet += alphabet;
+      if (quartet.length === 4) { feedDecoded(quartet); quartet = ''; }
       return;
     }
     if (byte === 0x3d) {
       length += 1;
       if (!active || terminal || quartet.length < 2) { active = false; return; }
-      quartet.push(-1);
+      quartet += '=';
       if (quartet.length < 4) return;
-      const validPadding = (quartet[2] !== -1 && quartet[3] === -1) || (quartet[2] === -1 && quartet[3] === -1);
-      if (!validPadding) { active = false; return; }
-      decodeQuartet(); terminal = true; return;
+      if (!/^(?:[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/.test(quartet)) { active = false; return; }
+      feedDecoded(quartet); quartet = ''; terminal = true; return;
     }
     flush();
   };
@@ -878,11 +863,39 @@ function createPemBase64Scanner({ checkArchives = true } = {}) {
     finish() { if (line.length || overflow) finishLine(); return found; },
   };
 }
+function createLazyTokenScanner({ minimumRun, candidatePattern, createScanner }) {
+  let scanner = null;
+  let tail = Buffer.alloc(0);
+  return {
+    feed(bytes) {
+      const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+      if (scanner) { scanner.feed(source); return; }
+      const probe = tail.length === 0 ? source : Buffer.concat([tail, source]);
+      const match = probe.toString('latin1').search(candidatePattern);
+      if (match !== -1) {
+        scanner = createScanner();
+        scanner.feed(probe.subarray(match));
+        tail = Buffer.alloc(0);
+        return;
+      }
+      tail = Buffer.from(probe.subarray(-(minimumRun - 1)));
+    },
+    finish() { return scanner?.finish() ?? null; },
+  };
+}
 function createAlternateEncodingScanner({ checkArchives = true } = {}) {
-  const embeddedBase64 = createEmbeddedBase64TokenScanner({ checkArchives });
+  const embeddedBase64 = createLazyTokenScanner({
+    minimumRun: 32,
+    candidatePattern: EMBEDDED_BASE64_CANDIDATE_RE,
+    createScanner: () => createEmbeddedBase64TokenScanner({ checkArchives }),
+  });
   const pemBase64 = createPemBase64Scanner({ checkArchives });
   const wholeHex = createHexTransferScanner({ checkArchives, wholeFile: true });
-  const embeddedHex = createHexTransferScanner({ checkArchives });
+  const embeddedHex = createLazyTokenScanner({
+    minimumRun: 64,
+    candidatePattern: EMBEDDED_HEX_CANDIDATE_RE,
+    createScanner: () => createHexTransferScanner({ checkArchives }),
+  });
   return {
     feed(bytes) {
       const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
@@ -907,6 +920,11 @@ function createStructuralByteStreamScanner({ checkArchives = true, checkBase64 =
   const wrappedBase64 = checkBase64 ? createAlternateEncodingScanner({ checkArchives }) : null;
   const archiveScanner = checkArchives ? createArchiveStreamScanner() : null;
   const shouldActivateUtf16 = bytes => {
+    const hasNull = bytes.indexOf(0) !== -1;
+    if (!hasNull) {
+      if (bytes.indexOf(UTF16_LE_BOM) !== -1 || bytes.indexOf(UTF16_BE_BOM) !== -1) return true;
+      return false;
+    }
     for (let index = 0; index + 1 < bytes.length; index += 1) {
       if ((bytes[index] === 0xff && bytes[index + 1] === 0xfe) || (bytes[index] === 0xfe && bytes[index + 1] === 0xff)) return true;
     }
@@ -990,30 +1008,32 @@ function scanWorktreeCandidate(root, repoPath, { afterFirstPass, cache = null, b
   const fd = openSync(file, 'r');
   try {
     assertStableWorktreeCandidate(root, repoPath, file, entry, fd, cache);
-    const scanOnce = () => {
+    const readPass = scanner => {
       const chunk = Buffer.alloc(WORKTREE_SCAN_CHUNK_BYTES);
       const digest = createHash('sha256');
-      const scanner = createStructuralByteStreamScanner({ checkArchives });
       let offset = 0;
       while (offset < entry.size) {
         const read = readSync(fd, chunk, 0, Math.min(chunk.length, entry.size - offset), offset);
         if (read <= 0) throw new Error('private Phase 3C worktree candidate changed during scan');
         const bytes = chunk.subarray(0, read);
         digest.update(bytes);
-        scanner.feed(bytes);
+        scanner?.feed(bytes);
         offset += read;
       }
       return {
         digest: digest.digest('hex'),
-        reason: scanner.finish(),
+        reason: scanner?.finish() ?? null,
       };
     };
-    const first = scanOnce();
+    const first = readPass(createStructuralByteStreamScanner({ checkArchives }));
     afterFirstPass?.({ file, fd });
     assertStableWorktreeCandidate(root, repoPath, file, entry, fd, cache);
-    const second = scanOnce();
+    // The second pass proves byte identity without repeating every structural
+    // decoder. SHA-256 equality plus the descriptor/path stat checks below
+    // preserves the same race-closure guarantee as comparing two reasons.
+    const second = readPass(null);
     assertStableWorktreeCandidate(root, repoPath, file, entry, fd, cache);
-    if (first.digest !== second.digest || first.reason !== second.reason) throw new Error('private Phase 3C worktree candidate changed during scan');
+    if (first.digest !== second.digest) throw new Error('private Phase 3C worktree candidate changed during scan');
     return { reason: first.reason, size: entry.size };
   } finally { closeSync(fd); }
 }

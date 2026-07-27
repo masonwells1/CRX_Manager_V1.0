@@ -13,22 +13,28 @@ evidence from complete quanta when the final residual is unusable and checks a
 maximal valid prefix for both padded and unpadded `mod 4 = 1` wrappers without
 recursively decoding output. Hex packets now stream into the same non-recursive
 structural scanner instead of materializing a full token or decoded buffer.
-Embedded Base64 now writes numeric quanta into fixed decoded batches; PEM
-wrappers normalize Windows CRLF line endings, all sixteen Zstandard
-skippable-frame magics are reachable, and duplicate UTF-32 scanning has been
-removed. Regression coverage includes boundary batches, CRLF packets, archive
-near-misses, critical stream splits, and the tracked PNG assets that exposed
-the binary CPIO false-positive risk.
+Embedded Base64 now keeps short source-like tokens below decoded-batch
+allocation; PEM wrappers retain strict line anchoring while normalizing Windows
+CRLF line endings, all sixteen Zstandard skippable-frame magics are reachable,
+and duplicate UTF-32 scanning has been removed. Worktree candidates receive one
+structural scan followed by an independent SHA-256 identity pass, preserving
+race detection without running every decoder twice. The real 793 MB
+worktree/ignored-path scan completed in under 100 seconds after previously
+exceeding ten minutes. Regression coverage includes boundary batches, CRLF
+packets, archive near-misses, critical stream splits, encoded packets under
+ignored tool roots, and the tracked PNG assets that exposed the binary CPIO
+false-positive risk.
 
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
 a 4,121-byte stream overlap for bounded binary-CPIO pathnames. Binary CPIO
 recognition validates a complete single-NUL pathname, so incidental bytes
-inside committed PNG assets do not become false archive containers. Tool-owned ignored dependency
-archives (including fflate fixtures) remain exempt from archive-only rejection,
-while a private JSON/CSV signal inside those paths still fails closed. Raw Git
-commit objects are streamed through `git cat-file --batch` for every checked
-history commit, so range, pre-push, push, PR, and PR-target checks do not build
+inside committed PNG assets do not become false archive containers. Tool-owned
+ignored dependency archives (including fflate fixtures) remain exempt from
+archive-only rejection, while private JSON/CSV signals and alternate encodings
+inside those paths still fail closed. Raw Git commit objects are streamed
+through `git cat-file --batch` for every checked history commit, so range,
+pre-push, push, PR, and PR-target checks do not build
 per-commit object buffers. The packet tests cover direct and split inputs,
 benign near-misses, archive propagation through Base64/hex, zero-SHA/full
 ancestry, existing/repointed remotes, opaque URL remotes, and commit-object

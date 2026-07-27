@@ -119,6 +119,13 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`# ordinary comment\n\n${OWNER_DECISION_HEADERS.map(header => ` "${header}" `).join(',')}\n`)), 'owner decision sheet CSV header structure');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`Public format name: ${POST_STAGE_A_SNAPSHOT_FORMAT}\n`)), null);
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`const format = ${JSON.stringify(POST_STAGE_A_SNAPSHOT_FORMAT)};\n`)), null);
+  const canonicalOwnerHeader = OWNER_DECISION_HEADERS.join(',');
+  for (const spacing of [32, 128, 500, 4096]) {
+    const malformedOwnerHeader = `BAD${' '.repeat(spacing)}${canonicalOwnerHeader}`; const split = 3 + spacing + Math.floor(canonicalOwnerHeader.length / 2);
+    assert.equal(structuralPrivateArtifactReason(Buffer.from(malformedOwnerHeader)), null, `BAD plus ${spacing} spaces before an owner header must remain benign`);
+    assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(malformedOwnerHeader.slice(0, split)), Buffer.from(malformedOwnerHeader.slice(split))]), null, `BAD plus ${spacing} spaces must remain benign across an owner-header split`);
+  }
+  for (const split of [1, 3, Math.floor(canonicalOwnerHeader.length / 2), canonicalOwnerHeader.length - 1]) assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(canonicalOwnerHeader.slice(0, split)), Buffer.from(canonicalOwnerHeader.slice(split))]), 'owner decision sheet CSV header structure', 'canonical owner header must survive arbitrary stream splits');
   const base64Snapshot = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })).toString('base64');
   const base64OwnerSheet = Buffer.from(`${OWNER_DECISION_HEADERS.join(',')}\n`).toString('base64');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(base64Snapshot)), 'private JSON format marker in malformed candidate');
@@ -130,9 +137,12 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from(urlSafeBase64Snapshot.replace(/=+$/, ''))), 'private JSON format marker in malformed candidate', 'unpadded URL-safe Base64 must be decoded only as a complete final quantum');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: base64Snapshot }))), 'private JSON format marker in malformed candidate', 'JSON-wrapped Base64 must be decoded');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`data:application/json;base64,${base64Snapshot}`)), 'private JSON format marker in malformed candidate', 'data-URI Base64 must be decoded');
-  assert.equal(structuralPrivateArtifactReason(Buffer.from(`-----BEGIN CRX PACKET-----\n${base64Snapshot.match(/.{1,20}/g).join('\n')}\n-----END CRX PACKET-----`)), 'private JSON format marker in malformed candidate', 'PEM-wrapped Base64 must be decoded across lines');
+  const lfPem = `-----BEGIN CRX PACKET-----\n${base64Snapshot.match(/.{1,20}/g).join('\n')}\n-----END CRX PACKET-----`;
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(lfPem)), 'private JSON format marker in malformed candidate', 'PEM-wrapped Base64 must be decoded across lines');
   const crlfPem = `-----BEGIN CRX PACKET-----\r\n${base64Snapshot.match(/.{1,19}/g).join('\r\n')}\r\n-----END CRX PACKET-----\r\n`;
   assert.equal(structuralPrivateArtifactReason(Buffer.from(crlfPem)), 'private JSON format marker in malformed candidate', 'CRLF PEM-wrapped Base64 must be decoded across short Windows lines');
+  for (const prefix of ['BAD', ' \t '.repeat(32), 'x'.repeat(300)]) assert.equal(structuralPrivateArtifactReason(Buffer.from(`${prefix}${crlfPem}`)), null, 'same-line content before a PEM BEGIN marker must remain benign');
+  const lfSplit = lfPem.indexOf('\n'); assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(lfPem.slice(0, lfSplit)), Buffer.from(lfPem.slice(lfSplit))]), 'private JSON format marker in malformed candidate', 'LF PEM detection must survive a line-boundary split');
   for (let split = crlfPem.indexOf('\r'); split !== -1; split = crlfPem.indexOf('\r', split + 1)) assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(crlfPem.slice(0, split + 1)), Buffer.from(crlfPem.slice(split + 1))]), 'private JSON format marker in malformed candidate', 'CRLF PEM detection must survive a split between CR and LF');
   const wrappedBase64 = JSON.stringify({ payload: urlSafeBase64Snapshot.replace(/=+$/, '') });
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(wrappedBase64.slice(0, 19)), Buffer.from(wrappedBase64.slice(19))]), 'private JSON format marker in malformed candidate', 'wrapped URL-safe Base64 detection must survive a read split');
@@ -146,6 +156,12 @@ try {
   }
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: 'b3JkaW5hcnkgcHVibGljIGNvbnRlbnQ=A' }))), null, 'benign invalid Base64 must not become a containment violation');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(Buffer.from(base64Snapshot).toString('base64'))), null, 'encoded packets must not be recursively decoded');
+  const originalAllocUnsafe = Buffer.allocUnsafe; let shortTokenBatchAllocations = 0;
+  Buffer.allocUnsafe = (size, ...args) => { if (size === 64 * 1024) shortTokenBatchAllocations += 1; return originalAllocUnsafe(size, ...args); };
+  try {
+    assert.equal(structuralPrivateArtifactReason(Buffer.from('AAAA!'.repeat(8_192))), null, 'many short source-like tokens must remain benign');
+  } finally { Buffer.allocUnsafe = originalAllocUnsafe; }
+  assert.equal(shortTokenBatchAllocations, 0, 'short embedded Base64 tokens must not allocate decoded 64 KiB batches before structural eligibility');
   const boundaryMarker = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
   for (const decodedLength of [64 * 1024, 128 * 1024]) {
     const decoded = Buffer.concat([Buffer.alloc(decodedLength - boundaryMarker.length, 0x78), boundaryMarker]); const transfer = decoded.toString('base64'); const wrapped = JSON.stringify({ payload: transfer });
@@ -674,6 +690,18 @@ try {
   const toolOwnedIgnoredPrefixes = [...toolOwnedIgnoredRoots.map(root => `${root}/`), 'test-results/', 'output/playwright/', 'output/phase1a-db/'];
   const ignoredToolArchiveRepo = fixtureRepo('containment-ignored-tool-archives'); writeFileSync(path.join(ignoredToolArchiveRepo, '.gitignore'), `${[...toolOwnedIgnoredRoots, 'test-results', 'output'].join('\n')}\n`); git(ignoredToolArchiveRepo, ['add', '.gitignore']); git(ignoredToolArchiveRepo, ['commit', '--quiet', '-m', 'ignore tool-owned roots']); for (const prefix of toolOwnedIgnoredPrefixes) { const toolArchivePath = `${prefix}third-party.xlsx`; mkdirSync(path.dirname(path.join(ignoredToolArchiveRepo, toolArchivePath)), { recursive: true }); writeFileSync(path.join(ignoredToolArchiveRepo, toolArchivePath), compressedBytes); } await fixtureContainment(ignoredToolArchiveRepo);
   for (const prefix of toolOwnedIgnoredPrefixes) { const privateJsonPath = `${prefix}private.json`; mkdirSync(path.dirname(path.join(ignoredToolArchiveRepo, privateJsonPath)), { recursive: true }); writeFileSync(path.join(ignoredToolArchiveRepo, privateJsonPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); await containmentFails(ignoredToolArchiveRepo, privateJsonPath, 'private JSON format marker in malformed candidate'); rmSync(path.join(ignoredToolArchiveRepo, privateJsonPath)); const privateCsvPath = `${prefix}private.csv`; writeFileSync(path.join(ignoredToolArchiveRepo, privateCsvPath), `${OWNER_DECISION_HEADERS.join(',')}\n`); await containmentFails(ignoredToolArchiveRepo, privateCsvPath, 'owner decision sheet CSV header structure'); rmSync(path.join(ignoredToolArchiveRepo, privateCsvPath)); }
+  for (const [name, bytes, reason] of [
+    ['private-base64.txt', Buffer.from(base64Snapshot), 'private JSON format marker in malformed candidate'],
+    ['private-hex.txt', Buffer.from(hexSnapshot), 'private JSON format marker in malformed candidate'],
+    ['private-utf16.dat', utf16(utf16Owner, 'le', { bom: true }), 'owner decision sheet CSV header structure'],
+    ['private-utf32.dat', utf32(utf16Json, 'be', { bom: true }), 'private JSON format marker in malformed candidate'],
+  ]) {
+    const encodedPath = `node_modules/encoded-private/${name}`;
+    mkdirSync(path.dirname(path.join(ignoredToolArchiveRepo, encodedPath)), { recursive: true });
+    writeFileSync(path.join(ignoredToolArchiveRepo, encodedPath), bytes);
+    await containmentFails(ignoredToolArchiveRepo, encodedPath, reason);
+    rmSync(path.join(ignoredToolArchiveRepo, encodedPath));
+  }
   for (const endpoint of [...toolOwnedIgnoredRoots, 'test-results', 'output', 'output/playwright', 'output/phase1a-db']) { const ignoredToolRootFileRepo = fixtureRepo(`containment-ignored-tool-root-file-${endpoint.replaceAll('/', '-').replaceAll('.', 'dot')}`); writeFileSync(path.join(ignoredToolRootFileRepo, '.gitignore'), `${endpoint.split('/')[0]}\n`); git(ignoredToolRootFileRepo, ['add', '.gitignore']); git(ignoredToolRootFileRepo, ['commit', '--quiet', '-m', 'ignore tool root name']); mkdirSync(path.dirname(path.join(ignoredToolRootFileRepo, endpoint)), { recursive: true }); writeFileSync(path.join(ignoredToolRootFileRepo, endpoint), Buffer.from([0x1f, 0x8b, 0x08, 0x00])); await containmentFails(ignoredToolRootFileRepo, endpoint, 'compressed archive container cannot be inspected'); }
   const largeIgnoredRepo = fixtureRepo('containment-large-ignored'); writeFileSync(path.join(largeIgnoredRepo, '.gitignore'), '*.ignored\n'); git(largeIgnoredRepo, ['add', '.gitignore']); git(largeIgnoredRepo, ['commit', '--quiet', '-m', 'ignore synthetic payloads']); const splitBoundaryPadding = 8 * 1024 * 1024 + 64 * 1024 - 4; const lateMarkerPath = 'late-marker.ignored'; writeFileSync(path.join(largeIgnoredRepo, lateMarkerPath), `${'x'.repeat(splitBoundaryPadding)}{"format":"${POST_STAGE_A_SNAPSHOT_FORMAT}"}`); await containmentFails(largeIgnoredRepo, lateMarkerPath, 'private JSON format marker in malformed candidate');
   const separatedFormatPath = 'separated-format.ignored'; writeFileSync(path.join(largeIgnoredRepo, separatedFormatPath), `${'x'.repeat(8 * 1024 * 1024 + 2048)}{"format":${' '.repeat(8192)}"${POST_STAGE_A_SNAPSHOT_FORMAT}"}`); await containmentFails(largeIgnoredRepo, separatedFormatPath, 'private JSON format marker in malformed candidate');
