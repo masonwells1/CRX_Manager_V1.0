@@ -30,6 +30,34 @@ focused synthetic proof and a 51,810-path local containment pass, but it still
 requires a frozen exact SHA and fresh independent reviews. The historical
 packet hashes below remain invalidated throughout.
 
+The current rejected candidate is
+`2adff51bfa27ea50274230845bb4c89f4037313e` (base
+`052b2171821dc7ffd965b4edb4b6de4ef8fda511`). Graphify was refreshed at that
+exact rejected HEAD (8,360 nodes / 17,396 edges). Luna `gpt-5.6-luna` session
+`019fa291-ede9-7ab0-8491-5c20f605d3d9` returned `FIX` for candidate-controlled
+PR containment, link/reparse ordering, and Unicode-whitespace large-owner
+sheet detection. A fresh independent Sol also returned `FIX` for UTF-16
+coverage, Git type/mode coverage, atomic publication, CI ordering, and
+deterministic scan bounds. The accepted local correction is limited to those
+tooling safeguards: post-bootstrap trusted-base PR execution, validated candidate-root
+handoff, UTF-8/UTF-16 streaming, non-regular Git-mode rejection, 64 MiB per
+candidate / 2 GiB logical bytes / 100,000 candidates, a 4,096 checked-commit
+ceiling (above the current 2,073 commits), a remaining-candidate-budget
+history-path ceiling before per-path tree resolution, and temp-file atomic
+replace. It does not access private artifacts or Product rows, classify a
+Product, create Stage C SQL, enable cost basis, or change live state.
+
+The correction is still uncommitted, so it has no truthful final SHA yet. A
+commit can record the rejected SHA and its parent; only Git can create the new
+SHA, which must then receive fresh exact-SHA proof and review. The new
+workflow also cannot truthfully claim it protected the PR that first
+introduces it. Exact base `052b2171821dc7ffd965b4edb4b6de4ef8fda511` has no
+checker, so this introducing PR uses only its exact-base-SHA-gated, committed
+head-blob/path-verified candidate checker. That bootstrap coverage is
+candidate-controlled. Post-bootstrap PRs use their trusted compatible base
+checker; a missing or incompatible future base fails closed. Status remains
+`PARKED — TOOLING CORRECTION; PACKET REGENERATION REQUIRED`.
+
 ## Unattended v2 binding sequence
 
 Capture prints only the product count and semantic snapshot SHA-256. The

@@ -15,6 +15,53 @@
 
 ## Post-review tooling correction and packet invalidation — 2026-07-27
 
+### Exact rejected candidate `2adff51bfa27ea50274230845bb4c89f4037313e` — SAFE PREP correction pending
+
+This candidate is rejected. The private packet remains historical and
+invalidated; nothing in this correction approves a Product, creates Stage C
+SQL, changes the flag, accesses private rows, or changes a live system.
+
+- Exact base: `052b2171821dc7ffd965b4edb4b6de4ef8fda511`.
+- Graphify was refreshed at the rejected HEAD: `2adff51b` / 8,360 nodes and
+  17,396 edges. It confirmed the containment checker imports the private
+  artifact helper and is reached by the packet test; the atomic writer is used
+  by capture, manifest, and owner-sheet entry points. Current source remains
+  the authority for those edges.
+- Luna `gpt-5.6-luna` session `019fa291-ede9-7ab0-8491-5c20f605d3d9`
+  returned `FIX`: PR containment executed candidate-controlled code; worktree
+  link/reparse rejection happened after the non-file skip; and large ignored
+  owner sheets could bypass the ASCII-only stream matcher with Unicode
+  whitespace.
+- Fresh independent Sol returned `FIX`: UTF-16 (BOM/no-BOM and chunk
+  boundaries), Git type changes/modes, in-place final-target truncation, CI
+  ordering, bounded large Git blobs, and deterministic cap behavior all needed
+  correction. The review also required no diagnostic content disclosure.
+- Accepted local correction scope: post-bootstrap trusted-base checker
+  execution for PR events with a validated candidate-root handoff;
+  runner-bundled Node before any candidate Node configuration;
+  UTF-8/UTF-16LE/UTF-16BE stream scanning at both UTF-16 byte alignments;
+  mode/type rejection; 64 MiB per candidate, 2 GiB logical candidate-byte,
+  and 100,000-candidate fail-closed caps; a 4,096 checked-commit cap
+  (calibrated above this candidate's 2,073 commits) plus a
+  remaining-candidate-budget history-path cap before per-path tree resolution;
+  and fsynced-temp atomic replacement rather than live-target truncation.
+- Bootstrap truth: exact base `052b2171821dc7ffd965b4edb4b6de4ef8fda511`
+  has no containment checker. Therefore this introducing PR uses only its
+  exact-base-SHA-gated, exact committed-head-blob/path-verified candidate
+  checker; that coverage is explicitly candidate-controlled. After bootstrap,
+  the CI workflow uses the exact trusted-base checker only when it contains
+  the declared handoff protocol. A present-but-incompatible checker, or a
+  missing checker on any later base, fails closed rather than falling back.
+- SHA bookkeeping truth: this uncommitted correction cannot truthfully name
+  its own final SHA. The next frozen commit may record this rejected SHA and
+  its own parent/base evidence, while the final exact SHA is recorded only
+  after Git creates it and all reviews are rerun. No workflow claim says this
+  not-yet-merged containment workflow protected its own introducing PR.
+
+`PARKED — TOOLING CORRECTION; HISTORICAL PACKET REGENERATION REQUIRED` until
+the focused/full proof, fresh exact-SHA Graphify, Luna, independent-Sol, and
+resolved-Opus reviews complete on a frozen candidate.
+
 The bounded post-PARK safety recovery materialized a new packet, but both fresh
 exact-SHA reviewers then returned `FIX` for the containment tooling. The packet
 is therefore historical only and is not delivery-ready. This does **not** amend

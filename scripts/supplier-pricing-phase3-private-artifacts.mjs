@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -298,43 +298,41 @@ function safeUnlinkClosedOwnedTemp(temporary, expectedBasename, repoRoot, option
   } catch (_error) { /* An untrusted swapped path is deliberately left untouched. */ }
   return false;
 }
-function safeUnlinkOwnedCreatedTarget(target, fd, expectedBasename, repoRoot, options) {
+function assertAtomicPublicationTarget(target, expectedBasename, repoRoot, options) {
+  const parent = assertExternalPrivateDirectory(path.dirname(target), repoRoot, options);
+  assert(exactPathEqual(target, path.join(parent, expectedBasename)), 'private artifact path changed before publication');
   try {
-    const parent = assertExternalPrivateDirectory(path.dirname(target), repoRoot, options);
-    assert(exactPathEqual(target, path.join(parent, expectedBasename)), 'private artifact path changed during cleanup');
-    const descriptor = fstatSync(fd);
     const entry = assertRegularSingleLink(target, 'private artifact path');
-    if (sameFile(descriptor, entry) && descriptor.isFile() && descriptor.nlink === 1 && entry.nlink === 1 && exactPathEqual(realpathSync(target), target)) unlinkSync(target);
-  } catch (_error) { /* A swapped or out-of-root pathname is deliberately left untouched. */ }
-}
-function openValidatedFinalDescriptor(target, expectedBasename, repoRoot, options) {
-  const noFollow = process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number' ? 0 : constants.O_NOFOLLOW;
-  let fd; let created = false;
-  try { fd = openSync(target, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600); created = true; }
-  catch (error) {
-    if (error?.code !== 'EEXIST') throw error;
-    fd = openSync(target, constants.O_RDWR | noFollow);
-  }
-  try { return { fd, identity: assertOpenedArtifactMatchesPath(fd, target, expectedBasename, 'private artifact path', repoRoot, options), created }; }
-  catch (error) {
-    if (created) safeUnlinkOwnedCreatedTarget(target, fd, expectedBasename, repoRoot, options);
-    closeSync(fd);
+    assert(exactPathEqual(realpathSync(target), target), 'private artifact path must not be a symlink or junction alias');
+    return entry;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
     throw error;
   }
 }
+function readPublishedArtifactBytes(target, expectedBasename, repoRoot, options, intended) {
+  const noFollow = process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number' ? 0 : constants.O_NOFOLLOW;
+  const fd = openSync(target, constants.O_RDONLY | noFollow);
+  try {
+    const descriptor = assertOpenedArtifactMatchesPath(fd, target, expectedBasename, 'private artifact path', repoRoot, options);
+    assert(descriptor.size === intended.length, 'private artifact bytes changed during publication');
+    assert(readExactDescriptor(fd, descriptor.size, 'private artifact descriptor').equals(intended), 'private artifact bytes changed during publication');
+    assertOpenedArtifactMatchesPath(fd, target, expectedBasename, 'private artifact path', repoRoot, options);
+  } finally { closeSync(fd); }
+}
 /**
- * Stages exact bytes in an owned temp file, then writes through a validated final
- * descriptor. Node exposes no portable renameat/dirfd primitive on Windows, so
- * this intentionally trades pathname-rename atomicity for a fail-closed parent
- * replacement boundary: no final pathname is mutated after descriptor checks.
+ * Stages exact bytes in an owned, fsynced temp file and atomically replaces the
+ * final pathname from the same validated directory. The old artifact is never
+ * opened for write or truncated, so any pre-publication failure preserves it.
  */
-export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoRoot = REPO_ROOT, beforeTempOpen, afterTempOpenBeforeWrite, afterTempWriteBeforePublication, beforeFinalValidation, beforeFinalOpen, beforeRename, afterFinalOpenBeforeWrite, afterFinalWriteBeforeReadback, testApprovedRoot } = {}) {
+export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoRoot = REPO_ROOT, beforeTempOpen, afterTempOpenBeforeWrite, afterTempWriteBeforePublication, beforeFinalValidation, beforeFinalOpen, beforeRename, afterPublicationBeforeReadback, renameFile = renameSync, testApprovedRoot } = {}) {
   const options = { testApprovedRoot };
   const target = assertExternalArtifactPath(file, expectedBasename, repoRoot, options);
   const parent = path.dirname(target); const canonicalParent = assertExternalPrivateDirectory(parent, repoRoot, options);
   const temporary = path.join(parent, `.${expectedBasename}.${randomBytes(16).toString('hex')}.tmp`);
   const intended = Buffer.from(text, 'utf8');
-  let temporaryFd; let temporaryIdentity; let finalFd; let finalCreated = false;
+  assert(typeof renameFile === 'function', 'private artifact publication primitive is invalid');
+  let temporaryFd; let temporaryIdentity; let published = false;
   try {
     beforeTempOpen?.({ target, temporary });
     assert(exactPathEqual(assertExternalPrivateDirectory(parent, repoRoot, options), canonicalParent), 'private artifact parent changed during write');
@@ -350,31 +348,25 @@ export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoR
     assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesPath(temporaryFd, temporary, path.basename(temporary), 'private artifact temporary path', repoRoot, options)), 'private artifact temporary path changed during write');
     assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed during write');
     beforeFinalOpen?.({ target, temporary });
-    assert(exactPathEqual(assertExternalPrivateDirectory(parent, repoRoot, options), canonicalParent), 'private artifact parent changed before final open');
-    assertExternalArtifactPath(target, expectedBasename, repoRoot, options);
-    ({ fd: finalFd, created: finalCreated } = openValidatedFinalDescriptor(target, expectedBasename, repoRoot, options));
-    beforeRename?.({ target, temporary, fd: finalFd });
-    afterFinalOpenBeforeWrite?.({ target, temporary, fd: finalFd });
-    assert(exactPathEqual(assertExternalPrivateDirectory(parent, repoRoot, options), canonicalParent), 'private artifact parent changed before final write');
-    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesPath(temporaryFd, temporary, path.basename(temporary), 'private artifact temporary path', repoRoot, options)), 'private artifact temporary path changed before final write');
-    assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed before final write');
-    assertOpenedArtifactMatchesPath(finalFd, target, expectedBasename, 'private artifact path', repoRoot, options);
-    ftruncateSync(finalFd, 0); writeFileSync(finalFd, intended); fsyncSync(finalFd);
-    const finalIdentity = assertOpenedArtifactMatchesPath(finalFd, target, expectedBasename, 'private artifact path', repoRoot, options);
-    afterFinalWriteBeforeReadback?.({ target, temporary, fd: finalFd });
-    assert(sameStatIdentity(finalIdentity, assertOpenedArtifactMatchesPath(finalFd, target, expectedBasename, 'private artifact path', repoRoot, options)), 'private artifact path changed during final write');
-    assert(readExactDescriptor(finalFd, intended.length, 'private artifact descriptor').equals(intended), 'private artifact bytes changed during final write');
-    assert(sameStatIdentity(finalIdentity, assertOpenedArtifactMatchesPath(finalFd, target, expectedBasename, 'private artifact path', repoRoot, options)), 'private artifact path changed during final write');
+    assert(exactPathEqual(assertExternalPrivateDirectory(parent, repoRoot, options), canonicalParent), 'private artifact parent changed before publication');
+    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesPath(temporaryFd, temporary, path.basename(temporary), 'private artifact temporary path', repoRoot, options)), 'private artifact temporary path changed before publication');
+    assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed before publication');
+    assertAtomicPublicationTarget(target, expectedBasename, repoRoot, options);
+    beforeRename?.({ target, temporary, fd: temporaryFd });
+    assert(exactPathEqual(assertExternalPrivateDirectory(parent, repoRoot, options), canonicalParent), 'private artifact parent changed before publication');
+    assert(sameStatIdentity(temporaryIdentity, assertOpenedArtifactMatchesPath(temporaryFd, temporary, path.basename(temporary), 'private artifact temporary path', repoRoot, options)), 'private artifact temporary path changed before publication');
+    assert(readExactDescriptor(temporaryFd, intended.length, 'private artifact temporary descriptor').equals(intended), 'private artifact temporary bytes changed before publication');
+    assertAtomicPublicationTarget(target, expectedBasename, repoRoot, options);
+    renameFile(temporary, target);
+    published = true;
+    afterPublicationBeforeReadback?.({ target, temporary });
+    readPublishedArtifactBytes(target, expectedBasename, repoRoot, options, intended);
     return target;
-  } catch (error) {
-    if (finalFd !== undefined && finalCreated) safeUnlinkOwnedCreatedTarget(target, finalFd, expectedBasename, repoRoot, options);
-    throw error;
   } finally {
-    if (finalFd !== undefined) closeSync(finalFd);
     if (temporaryFd !== undefined) {
-      const removedOpen = safeUnlinkOwnedTemp(temporary, temporaryFd, expectedBasename, repoRoot, options, temporaryIdentity);
+      const removedOpen = !published && safeUnlinkOwnedTemp(temporary, temporaryFd, expectedBasename, repoRoot, options, temporaryIdentity);
       closeSync(temporaryFd);
-      if (!removedOpen && temporaryIdentity) safeUnlinkClosedOwnedTemp(temporary, expectedBasename, repoRoot, options, temporaryIdentity);
+      if (!published && !removedOpen && temporaryIdentity) safeUnlinkClosedOwnedTemp(temporary, expectedBasename, repoRoot, options, temporaryIdentity);
     }
   }
 }

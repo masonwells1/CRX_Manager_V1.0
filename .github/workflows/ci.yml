@@ -13,8 +13,9 @@ jobs:
   phase3-private-artifact-containment:
     name: Phase 3C Private Artifact Containment
     runs-on: ubuntu-latest
-    # This is intentionally the first content-processing job. It needs only
-    # Node built into the runner and full Git history, never dependencies.
+    # This is intentionally the first content-processing job. It uses only
+    # runner-bundled Node and Git: no candidate .nvmrc, package metadata, or
+    # dependencies are processed before containment.
     steps:
       - name: Checkout exact event history
         uses: actions/checkout@v7
@@ -22,13 +23,68 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Set up Node.js for the standalone containment gate
-        uses: actions/setup-node@v7
-        with:
-          node-version-file: '.nvmrc'
+      - name: Reject PR packet blobs with the exact trusted base checker
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          phase3_checker_rel='scripts/check-supplier-pricing-phase3-private-artifacts.mjs'
+          # Only this introducing PR may bootstrap from a base without the
+          # checker. Once merged, every later PR must use (and therefore be
+          # governed by) the exact base revision's checker.
+          phase3_bootstrap_base='052b2171821dc7ffd965b4edb4b6de4ef8fda511'
+          node --version
+          mapfile -t phase3_event_shas < <(node --input-type=commonjs -e '
+            const fs = require("node:fs");
+            const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+            const sha = value => typeof value === "string" && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+            const base = sha(event?.pull_request?.base?.sha);
+            const head = sha(event?.pull_request?.head?.sha);
+            if (!base || !head) process.exit(2);
+            process.stdout.write(`${base}\n${head}\n`);
+          ')
+          test "${#phase3_event_shas[@]}" -eq 2
+          phase3_base="${phase3_event_shas[0]}"
+          phase3_head="${phase3_event_shas[1]}"
+          git -C "$GITHUB_WORKSPACE" cat-file -e "${phase3_base}^{commit}"
+          git -C "$GITHUB_WORKSPACE" cat-file -e "${phase3_head}^{commit}"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" = "$phase3_head"
+          if git -C "$GITHUB_WORKSPACE" cat-file -e "${phase3_base}:${phase3_checker_rel}" 2>/dev/null; then
+            phase3_trusted_root="$RUNNER_TEMP/phase3c-trusted-base-${phase3_base}"
+            git -C "$GITHUB_WORKSPACE" worktree add --detach "$phase3_trusted_root" "$phase3_base"
+            phase3_trusted_checker="$phase3_trusted_root/$phase3_checker_rel"
+            if ! grep -Fq -- "GITHUB_EVENT_HANDOFF_PROTOCOL = 'phase3c-github-event-root-v1';" "$phase3_trusted_checker" \
+              || ! grep -Fq -- '--github-event' "$phase3_trusted_checker" \
+              || ! grep -Fq -- '--root' "$phase3_trusted_checker"; then
+              echo 'trusted base containment checker is incompatible; refusing candidate fallback' >&2
+              exit 1
+            fi
+            node "$phase3_trusted_checker" --github-event --root "$GITHUB_WORKSPACE"
+          else
+            test "$phase3_base" = "$phase3_bootstrap_base" || { echo 'trusted base containment checker is missing outside the initial bootstrap; refusing candidate fallback' >&2; exit 1; }
+            phase3_candidate_entry="$(git -C "$GITHUB_WORKSPACE" ls-tree "$phase3_head" -- "$phase3_checker_rel")"
+            phase3_candidate_oid="$(git -C "$GITHUB_WORKSPACE" rev-parse "${phase3_head}:${phase3_checker_rel}")"
+            case "$phase3_candidate_entry" in
+              "100644 blob ${phase3_candidate_oid}"$'\t'"${phase3_checker_rel}"|"100755 blob ${phase3_candidate_oid}"$'\t'"${phase3_checker_rel}") ;;
+              *) echo 'initial bootstrap containment checker is not an exact regular blob at the required path' >&2; exit 1 ;;
+            esac
+            test -f "$GITHUB_WORKSPACE/$phase3_checker_rel"
+            test "$(git -C "$GITHUB_WORKSPACE" hash-object -- "$phase3_checker_rel")" = "$phase3_candidate_oid"
+            git -C "$GITHUB_WORKSPACE" diff --no-ext-diff --quiet "$phase3_head" -- "$phase3_checker_rel"
+            git -C "$GITHUB_WORKSPACE" diff --cached --no-ext-diff --quiet "$phase3_head" -- "$phase3_checker_rel"
+            # Candidate-controlled coverage exists only to introduce this
+            # guard. The exact committed blob/path checks above make that
+            # bootstrap boundary explicit and auditable.
+            node "$GITHUB_WORKSPACE/$phase3_checker_rel" --github-event --root "$GITHUB_WORKSPACE"
+          fi
 
-      - name: Reject private packet blobs in worktree, index, and event range
-        run: node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --github-event
+      - name: Reject pushed packet blobs with the exact trusted current checker
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --github-event --root "$GITHUB_WORKSPACE"
 
   sql-validation:
     name: SQL Migration Validation
