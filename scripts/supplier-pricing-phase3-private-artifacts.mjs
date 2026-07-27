@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -369,12 +369,21 @@ function safeUnlinkPublishedArtifactInHeldParent(expectedBasename, expectedIdent
     assert(path.basename(expectedBasename) === expectedBasename, 'private artifact path changed during rollback');
     assertHeldPublicationDirectory(parentFd, 'private artifact parent');
     const entry = lstatSync(expectedBasename); const followed = statSync(expectedBasename);
-    if (entry.isFile() && !entry.isSymbolicLink() && sameStatIdentity(entry, followed) && sameFile(expectedIdentity, entry) && entry.nlink === 1) {
+    if (entry.isFile() && !entry.isSymbolicLink() && sameFile(entry, followed) && sameFile(expectedIdentity, entry)) {
       unlinkSync(expectedBasename);
       return true;
     }
   } catch (_error) { /* A missing or swapped publication target is deliberately left untouched. */ }
   return false;
+}
+function scrubOwnedPublicationDescriptor(fd, expectedIdentity) {
+  try {
+    const descriptor = fstatSync(fd);
+    if (!descriptor.isFile() || !sameFile(expectedIdentity, descriptor)) return false;
+    ftruncateSync(fd, 0);
+    fsyncSync(fd);
+    return fstatSync(fd).size === 0;
+  } catch (_error) { return false; }
 }
 function readPublishedArtifactBytes(expectedBasename, intended, parentFd) {
   const noFollow = process.platform === 'win32' || typeof constants.O_NOFOLLOW !== 'number' ? 0 : constants.O_NOFOLLOW;
@@ -444,6 +453,7 @@ export function writePrivateArtifactAtomic(file, expectedBasename, text, { repoR
     return target;
     } finally {
       if (temporaryFd !== undefined) {
+        if (!published && publicationAttempted && temporaryIdentity) scrubOwnedPublicationDescriptor(temporaryFd, temporaryIdentity);
         if (!published && publicationAttempted && temporaryIdentity) safeUnlinkPublishedArtifactInHeldParent(expectedBasename, temporaryIdentity, parentFd);
         let removedOpen = false;
         try { if (!published) removedOpen = safeUnlinkOwnedTempInHeldParent(temporaryBasename, temporaryFd, expectedBasename, temporaryIdentity, parentFd); }

@@ -282,6 +282,14 @@ try {
   const finalMutationOutput = path.join(external, POST_STAGE_A_MANIFEST_NAME); rmSync(finalMutationOutput, { force: true });
   throws(() => writePrivateArtifactAtomic(finalMutationOutput, POST_STAGE_A_MANIFEST_NAME, 'new bytes', { ...fixturePrivateOptions, afterPublicationBeforeReadback: ({ target }) => writeFileSync(target, 'bad bytes', 'utf8') }), 'during publication|bytes changed');
   rmSync(finalMutationOutput, { force: true });
+  const hardLinkLeakOutput = path.join(external, POST_STAGE_A_MANIFEST_NAME); const hardLinkLeakAlias = path.join(fakeRepo, 'phase3c-private-hard-link-leak.synthetic');
+  throws(() => writePrivateArtifactAtomic(hardLinkLeakOutput, POST_STAGE_A_MANIFEST_NAME, 'private bytes must not survive', {
+    ...fixturePrivateOptions,
+    renameFile: (source, destination) => { linkSync(source, hardLinkLeakAlias); renameSync(source, destination); },
+  }), 'hard-linked');
+  assert.equal(existsSync(hardLinkLeakOutput), false, 'failed hard-link publication must remove the final private artifact alias');
+  assert.equal(readFileSync(hardLinkLeakAlias).length, 0, 'failed hard-link publication must scrub private bytes from every inode alias');
+  rmSync(hardLinkLeakAlias);
   const atomicReplaceOutput = path.join(external, POST_STAGE_A_MANIFEST_NAME); writeFileSync(atomicReplaceOutput, 'prior private bytes', 'utf8');
   throws(() => writePrivateArtifactAtomic(atomicReplaceOutput, POST_STAGE_A_MANIFEST_NAME, 'new private bytes', { ...fixturePrivateOptions, renameFile: () => { throw new Error('deterministic publication failure'); } }), 'deterministic publication failure');
   assert.equal(readFileSync(atomicReplaceOutput, 'utf8'), 'prior private bytes', 'atomic publication failure must preserve the previous artifact bytes');
