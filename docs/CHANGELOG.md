@@ -2,6 +2,57 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-27 — Any foundation gauntlet section can now be re-run on demand, behind a deterministic evidence gate
+
+`/gauntlet-section` drives `.claude/workflows/gauntlet-sections-loop.js` (renamed from
+`gauntlet-sections-2-6-loop.js`) over sections **1–9** of the CRX Live Foundation Gauntlet:
+1 Security · 2 Money · 3 Inventory · 4 Lifecycle · 5 DB-drift · 6 Idempotency · 7 Commissions ·
+8 Returns/Credits · 9 PO-AP. Pass the sections you want (`args.sections`). Sections 10–15 remain
+manual and are deliberately not encoded.
+
+**The settlement decision is deterministic workflow code, not an agent opinion.** The opus
+adjudicator is advisory only; JS decides `settled` and `cleanOfBlockerHigh`. Review agents are
+capability-constrained (`agentType: 'Explore'`) — they read repo source but cannot run shell or
+reach Supabase — so every live claim comes from a caller-supplied evidence packet that the
+workflow validates for freshness (6h), per-section coverage, citation shape, and checkout
+integrity **before any agent runs**.
+
+**Hardened over three adversarial Codex (`sol`) rounds**, every one of which returned DO-NOT-SHIP.
+Round 3 raised 24 findings (2 BLOCKER / 9 HIGH / 10 MED / 3 LOW); each was verified against source
+before acceptance and all 24 were real. 19 fixed in code, 4 in the command doc, and 1 recorded as a
+stated limitation rather than pretended away: the checkout block is **self-attested** and cannot be
+verified from inside a workflow that cannot run `git`.
+
+Gate fixes worth naming, because each one had let a section settle on nothing:
+
+- A well-formed packet is not a *relevant* packet. `REQUIRED_EVIDENCE` + `evidenceCoverageGap()`
+  stop `select 1 → one` from settling the drift section.
+- Citations are matched by a **positive shape whitelist** (`CITATION_SHAPES`), not a placeholder
+  blacklist — a blacklist only rejects the placeholders someone thought of, and prose sailed through.
+- Supersede scans the **in-flight** round as well as the settled buckets, so a MED and its BLOCKER
+  escalation arriving in the same round are not double-counted.
+- `counts.blocked` is **distinct unexamined sources**; `counts.blockedAttempts` is tries. One finder
+  dead in both rounds is one unexamined lane, not two.
+- Untrusted content is **contained**, not merely labelled: a forged `END_UNTRUSTED_…` marker inside a
+  payload can no longer close its own quarantine block.
+- A finder reporting "clean" must say what it examined, in a shape a second person can open.
+
+**Guards are mutation-tested.** A scratchpad harness breaks each guard on purpose and requires the
+suite to go red; a guard that survives deletion is decoration, not protection. The first run found
+**6 of 45 guards untested** — the same vacuous-guard failure mode round 3 was about. Final run:
+baseline GREEN, **45/45 mutations killed**.
+
+Also in this change: `/codex-gauntlet` and `docs/workflows/CODEX_REVIEW_GAUNTLET.md` document the
+new Section Mode; `map-drift-audit` gains two scoping rules (spend the run on the passes
+`/review-workflow` does not cover, and treat a prior report as a lead list rather than as evidence);
+`codex-cross-review` points at a real worked example instead of a missing file; and the three
+bounded overnight sweeps carry the settled findings-cap exception explicitly.
+
+Verified: `gauntlet-sections-loop` tests pass, `npm run test:agent-workflows` passes,
+`npm run agent-health` passes, `npm run check:docs` passes — re-run in a clean worktree off
+`origin/main`, not only in the session checkout. Tooling only: no application code, no database
+change, no customer-facing behavior.
+
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 
 Closes items 1 and 2 of `docs/manual/KNOWN_ISSUES.md` §0a — the two gaps that `20260727145843`
