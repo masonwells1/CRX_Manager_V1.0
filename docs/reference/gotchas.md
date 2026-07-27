@@ -189,6 +189,43 @@ All six items originally parked here were fixed and applied live within a day or
 
 ---
 
+## `REVOKE … FROM PUBLIC` does NOT strip `anon` from a new function (2026-07-27)
+
+This project carries `ALTER DEFAULT PRIVILEGES` for role `postgres` in schema `public` granting
+EXECUTE on **new functions** to `anon`, `authenticated` and `service_role`. So a freshly created
+function does not land with the stock PostgreSQL default — it lands with explicit per-role grants:
+
+```
+{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+```
+
+`REVOKE ALL ON FUNCTION … FROM PUBLIC` removes only the leading `=X/postgres` (the PUBLIC entry). The
+**explicit `anon` grant survives**, and `has_function_privilege('anon', …, 'EXECUTE')` stays true. For
+a `SECURITY DEFINER` function that reads `profiles`, that hands anonymous callers a bypass.
+
+**Always name the roles explicitly:**
+
+```sql
+REVOKE ALL ON FUNCTION public.my_helper() FROM PUBLIC, anon;   -- add authenticated for trigger-only fns
+GRANT EXECUTE ON FUNCTION public.my_helper() TO authenticated, service_role;
+```
+
+Proven live in a self-aborting `DO` block: `after_create anon_exec=t` → `after_revoke_public
+anon_exec=t` → `after_revoke_anon anon_exec=f`. This is what rejected the first apply attempt of
+`20260727174657_broad_reads_require_active_profile.sql` (its own postflight check caught it and the
+whole migration rolled back). The target ACL to match is `is_sales_rep()`'s:
+`{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}`.
+
+Two corollaries:
+
+- A postflight assertion should test `has_function_privilege('anon', …)`, not just scan `proacl` for a
+  PUBLIC entry — the PUBLIC entry is the case that *doesn't* apply here.
+- A `BEGIN … ROLLBACK` rehearsal through `execute_sql` is **not** equivalent to the governed apply.
+  The rehearsal of this migration reported the assertion passing; the real apply refused it. Treat the
+  gate's apply as the proof, not the rehearsal.
+
+---
+
 ## Source
 
 This file consolidates lessons from `~/.claude/projects/.../memory/feedback.md` and historical debugging sessions. Add new entries here whenever a non-obvious quirk causes a bug.
