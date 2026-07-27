@@ -2,19 +2,17 @@
 
 ## Status
 
-`READY FOR OWNER REVIEW — ROW-BY-ROW PRIVATE SHEET REVIEW REQUIRED`
+`PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING`
 
-Engineering candidate `07813f698e4cf12e09fd4378837f5134ed5c3850` (parent
-`c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8`) is the evidence-bearing packet
-candidate. Graphify at that exact SHA reports 8,389 nodes and 17,472 edges.
-Fresh independent Sol returned `PASS` with no BLOCKER/HIGH/MED findings; Luna
-`gpt-5.6-luna` session `019fa33b-c7eb-7c60-b4e4-ee2d4bfc0237` also returned
-`PASS`. Luna's sandbox could not run the temporary-directory fixtures, but its
-in-memory, syntax, and static proof passed. Focused packet proof passed in
-58.9 seconds, and exact containment passed for 51,820 paths, 11 commits,
-51,888 candidates, and 795,308,573 logical bytes. The normal commit hooks were
-green: 302 test files, 3,985 passed, 118 skipped; lint/typecheck/build,
-workflow/guard/docs/dependency checks passed, with four existing lint warnings.
+The reviewed packet commit
+`d38d41f63e68971f08f7158bf5a104af62d232aa` has immutable parent
+`07813f698e4cf12e09fd4378837f5134ed5c3850`. The parent remains the
+engineering candidate whose Graphify evidence reports 8,389 nodes and 17,472
+edges. Its focused packet proof passed in 58.9 seconds; exact containment
+passed for 51,820 paths, 11 commits, 51,888 candidates, and 795,308,573 logical
+bytes. Normal parent commit hooks were green: 302 test files, 3,985 passed, 118
+skipped; lint/typecheck/build, workflow/guard/docs/dependency checks passed,
+with four existing lint warnings.
 
 ## Current aggregate-only owner-review packet
 
@@ -36,21 +34,52 @@ semantic hash. These values replace every older packet hash as the only current
 owner-review packet; all older packet hashes below remain historical and
 invalidated.
 
+## Final exact review evidence and disposition
+
+The following final reviews apply to exact commit
+`d38d41f63e68971f08f7158bf5a104af62d232aa` (parent `07813f69`). Independent
+Sol returned `FIX` for documentation-only findings: a HIGH finding that the
+record claimed owner readiness before the mandated exact-review and protected-PR
+gates, and MEDIUM findings for stale uncommitted/no-self-SHA and regeneration
+wording. Sol found the code sound: focused proof, syntax, `check:docs`, and
+`git diff --check` passed; containment passed for 51,825 paths, 12 commits,
+51,895 candidates, and 795,855,426 logical bytes, with no private content
+inspected.
+
+Luna `gpt-5.6-luna`, session `019fa353-0229-74a0-a350-d24e700437b7`, returned
+`PASS` for that exact commit. Its containment proof passed for 51,827 paths, 12
+commits, 51,897 candidates, and 796,622,451 logical bytes. The known sandbox
+`EPERM` temporary-fixture limitation was disclosed; in-memory, syntax, and
+static proof passed.
+
+Claude wrapper run `2026-07-27T11-31-40-990Z-ebe70a0a` reviewed exact `d38d41f`
+at `xhigh`: requested `opus`, resolved helper `claude-haiku-4-5-20251001` and
+reviewer `claude-opus-4-8`, and returned `SHIP-WITH-FOLLOWUPS` with no
+BLOCKER/HIGH finding. It does not claim a literal Opus 5 review. Its conditional
+MEDIUM bootstrap mismatch needs no CI change: a fresh fetch confirmed that
+`origin/main` remains the pinned bootstrap
+`052b2171821dc7ffd965b4edb4b6de4ef8fda511`, and this branch is 0 behind / 12
+ahead. The LOW stale-provenance follow-up agrees with Sol; its fetch-depth cost
+is harmless and is not worth changing.
+
 ## Owner action and hard boundary
 
-Mason's next action is a row-by-row review of the private owner decision sheet,
-including every decision field and every unresolved acknowledgment. All owner
-decisions remain `PENDING`; no Product classification is approved. Only after
-that private-sheet review and explicit approval of this exact packet may a
-separate Stage C design mission be considered. No Stage C SQL, migration, or
-apply; no live mutation; no flag enablement; and no deploy or merge is
-authorized by this record.
+The packet has been regenerated and verified, but Mason must not begin the
+row-by-row private-sheet review yet. All owner decisions remain `PENDING`; no
+Product classification is approved. The remaining gate is final exact review of
+this documentation correction plus a protected PR that is accepted with its
+required checks green and any real CodeRabbit finding resolved. The PR is not
+open. Only after those external gates are complete may Mason review every
+decision field and unresolved acknowledgment, then explicitly approve this
+exact packet before a separate Stage C design mission is considered. No Stage C
+SQL, migration, or apply; no live mutation; no flag enablement; and no deploy or
+merge is authorized by this record.
 
-For truthful SHA provenance, these documentation edits are uncommitted on
-parent `07813f69` and have no self-SHA. Fresh exact post-documentation Sol,
-Luna, and latest-available-Opus review, then PR/CI/CodeRabbit handling, remain
-external gates; no literal Opus 5 review is claimed and any future alias must
-record its resolved model truthfully.
+For durable SHA provenance, this correction is authored against reviewed commit
+`d38d41f63e68971f08f7158bf5a104af62d232aa` and its parent `07813f69`. The
+commit that contains this correction is identified by Git and PR metadata, not
+guessed inside this text. Any future model alias must likewise record its
+resolved model truthfully; no literal Opus 5 review is claimed.
 
 ## Historical invalidated correction record
 
@@ -113,8 +142,8 @@ description is historical only. Exact base
 PR used its exact-base-SHA-gated, committed-head-blob/path-verified candidate
 checker. The current behavioral protocol replaces textual compatibility;
 post-bootstrap PRs use their trusted compatible base checker, while a missing
-or incompatible future base fails closed. Status remains
-`PARKED — TOOLING CORRECTION; PACKET REGENERATION REQUIRED`.
+or incompatible future base fails closed. This historical tooling record does
+not override the current regenerated-and-verified packet status above.
 
 ## Unattended v2 binding sequence
 
@@ -187,7 +216,8 @@ correction is still uncommitted and has not received fresh exact-SHA review.
 
 ## Exact owner gate
 
-After the corrected packet is regenerated, fully proven, and accepted through
-the protected PR, Mason must review every row and decision field, explicitly
-acknowledge unresolved rows, and approve that exact regenerated packet checksum
-before any separate Stage C migration can be designed.
+The packet has been regenerated and verified. After the protected PR for this
+documentation correction is accepted with final exact review, required checks,
+and CodeRabbit handling complete, Mason must review every row and decision
+field, explicitly acknowledge unresolved rows, and approve that exact packet
+checksum before any separate Stage C migration can be designed.

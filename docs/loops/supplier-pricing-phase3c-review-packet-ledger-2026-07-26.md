@@ -9,27 +9,23 @@
 - Branch: `codex/phase3c-overnight-20260726`
 - Created from: `origin/main` /
   `052b2171821dc7ffd965b4edb4b6de4ef8fda511`
-- Final allowed state: `READY FOR OWNER REVIEW`
+- Final allowed state: `PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING`
 - Forbidden interpretation: neither this ledger nor an agent verdict approves
   Product classifications or authorizes a Stage C migration/live apply.
 
 ## Owner-review packet closeout — 2026-07-27
 
-### Current engineering candidate `07813f698e4cf12e09fd4378837f5134ed5c3850` — READY FOR OWNER REVIEW
+### Reviewed packet commit `d38d41f63e68971f08f7158bf5a104af62d232aa` — PARKED
 
-`07813f698e4cf12e09fd4378837f5134ed5c3850` has immutable parent
-`c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8`. Graphify at the exact candidate
-reports 8,389 nodes and 17,472 edges. Fresh independent Sol returned `PASS`
-with no BLOCKER/HIGH/MED findings. Luna `gpt-5.6-luna`, session
-`019fa33b-c7eb-7c60-b4e4-ee2d4bfc0237`, also returned `PASS`; its sandbox could
-not execute temporary-directory fixtures, while in-memory, syntax, and static
-proof passed.
+`d38d41f63e68971f08f7158bf5a104af62d232aa` has immutable parent
+`07813f698e4cf12e09fd4378837f5134ed5c3850`, the engineering candidate whose
+Graphify evidence reports 8,389 nodes and 17,472 edges. The parent focused
+packet proof passed in 58.9 seconds; parent containment passed for 51,820
+paths, 11 commits, 51,888 candidates, and 795,308,573 logical bytes. Normal
+`07813f69` commit hooks passed: 302 test files, 3,985 passed, 118 skipped;
+lint/typecheck/build/workflows/guards/docs/dependency integrity were green, with
+four existing lint warnings.
 
-- Focused packet proof passed in 58.9 seconds. Exact containment passed for
-  51,820 paths, 11 commits, 51,888 candidates, and 795,308,573 logical bytes.
-  Normal `07813f69` commit hooks passed: 302 test files, 3,985 passed, 118
-  skipped; lint/typecheck/build/workflows/guards/docs/dependency integrity were
-  green, with four existing lint warnings.
 - Orchestrator read-only capture recorded count 604 at
   `2026-07-27T11:14:57.085929Z`. Guard evidence is aggregate-only: correct
   project, Stage A ledger present, valid migration high-water,
@@ -44,17 +40,39 @@ proof passed.
 - Manifest verify and reproducibility passed at count 604 with the same
   semantic hash. Owner-sheet write/verify passed at count 604 with the same
   semantic hash. These are the only current owner-review packet values; every
-  older packet hash below is historical and invalidated.
-- Owner gate: Mason must review the private owner decision sheet row by row,
-  including every decision field and unresolved acknowledgment. All decisions
-  remain `PENDING`; no Product classification is approved. Only afterward may a
-  separate Stage C design mission be considered. No Stage C SQL/migration/apply,
-  live mutation, flag enablement, deploy, or merge is authorized here.
-- SHA ledger rule: these documentation edits are uncommitted on parent
-  `07813f69` and have no self-SHA. Fresh exact post-documentation Sol, Luna,
-  and latest-available-Opus review, followed by PR/CI/CodeRabbit handling,
-  remain external gates. No Opus 5 review is claimed; any future alias must
-  record its resolved model truthfully.
+  older packet hash below is historical and invalidated. The packet has been
+  regenerated and verified, but the owner gate is not open.
+- Exact `d38d41f` reviews: independent Sol returned `FIX` for documentation
+  status/provenance findings only (HIGH: premature READY claim; MEDIUM: stale
+  uncommitted/no-self-SHA and regeneration wording). Sol found code sound:
+  focused proof, syntax, `check:docs`, and `git diff --check` passed; containment
+  passed for 51,825 paths, 12 commits, 51,895 candidates, and 795,855,426
+  logical bytes, with no private content inspected. Luna `gpt-5.6-luna`,
+  session `019fa353-0229-74a0-a350-d24e700437b7`, returned `PASS`; containment
+  passed for 51,827 paths, 12 commits, 51,897 candidates, and 796,622,451
+  logical bytes. Its sandbox `EPERM` temporary-fixture limitation was disclosed.
+- Claude wrapper run `2026-07-27T11-31-40-990Z-ebe70a0a` reviewed exact
+  `d38d41f` at `xhigh`: requested `opus`, resolved helper
+  `claude-haiku-4-5-20251001` and reviewer `claude-opus-4-8`, and returned
+  `SHIP-WITH-FOLLOWUPS` with no BLOCKER/HIGH finding. No literal Opus 5 review
+  is claimed. Its conditional MEDIUM bootstrap mismatch requires no CI change:
+  fresh fetch confirmed `origin/main` remains pinned to
+  `052b2171821dc7ffd965b4edb4b6de4ef8fda511`; this branch is 0 behind / 12
+  ahead. The LOW stale-provenance follow-up agrees with Sol; its fetch-depth
+  cost is harmless and not worth changing.
+- Owner gate: Mason must not review the private owner sheet yet. All decisions
+  remain `PENDING`; no Product classification is approved. A final exact review
+  of this documentation correction and an accepted protected PR with required
+  checks green and real CodeRabbit findings resolved remain mandatory. The PR is
+  not open. Only afterward may Mason review every decision field and unresolved
+  acknowledgment before a separate Stage C design mission is considered. No
+  Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge
+  is authorized here.
+- SHA ledger rule: this correction is authored against reviewed commit
+  `d38d41f63e68971f08f7158bf5a104af62d232aa` and parent `07813f69`. Its
+  containing commit must be identified by Git and PR metadata rather than
+  guessed in this text. Any future model alias must record its resolved model
+  truthfully.
 
 ### Prior rejected implementation `c1b54a5b603ee6f5dc5a6edc79979326a40dfdd8` — historical correction cycle
 
@@ -252,10 +270,10 @@ correction and is not a final packet proof.
 | 0 — preflight | DONE | `9bf567bf` | none | PASS | n/a | n/a | n/a | n/a | Cycle 2 bounded capture/generator work. |
 | 1 — design adversary | DONE | `9bf567bf` | none | SHIP | n/a | n/a | `opus` → `claude-opus-4-8` | n/a | Cycle 2 accepts both LOW findings. |
 | 2 — final correction 6 | HISTORICAL — invalidated by later FIX reviews | `d01a8f099394e8c7882736ac52fd81c6d2de8c15` reviewed; local correction uncommitted | fresh `gpt-5.6-terra` recovery writer | earlier full proof PASS; latest bounded correction focused proof PASS | `FIX` session `019fa229-bc19-77b2-92bf-7f270e1cddc8` | `FIX` on `d01a8f099394e8c7882736ac52fd81c6d2de8c15` | pending fresh exact SHA | n/a | Freeze corrected SHA, refresh Graphify, and obtain fresh reviews. |
-| 3 — private materialization | READY FOR OWNER REVIEW — current aggregate values recorded above | 604-row aggregate-only packet | orchestrator-supplied evidence | capture/manifest reproducibility/owner write-verify PASS | PASS | PASS with sandbox temp-fixture limitation disclosed | post-doc review still pending | PR/CI/CodeRabbit pending | Mason reviews the private sheet row by row; no classification yet. |
-| 4 — full review | DONE for engineering candidate | `07813f698e4cf12e09fd4378837f5134ed5c3850` | `gpt-5.6-terra` | focused PASS 58.9s; exact containment 51,820 paths / 11 commits / 51,888 candidates / 795,308,573 logical bytes; normal hooks green | PASS, no BLOCKER/HIGH/MED | PASS session `019fa33b-c7eb-7c60-b4e4-ee2d4bfc0237` | post-doc latest-available review pending | pending | Preserve exact SHA provenance after doc freeze. |
-| 5 — protected PR | PENDING external gate | current docs uncommitted on `07813f69` | none | post-doc exact proofs pending | pending post-doc | pending post-doc | alias must resolve truthfully; no Opus 5 claim | pending | Open PR only after external gates; no deploy or merge here. |
-| 6 — closeout | READY FOR OWNER REVIEW | aggregate-only packet values recorded above | Mason | owner action pending | PASS evidence recorded | PASS evidence recorded | external post-doc review pending | PR/CI/CodeRabbit pending | Row-by-row private sheet review before any separate Stage C design. |
+| 3 — private materialization | PARKED — packet regenerated/verified; owner gate closed | 604-row aggregate-only packet | orchestrator-supplied evidence | capture/manifest reproducibility/owner write-verify PASS | exact `d38` PASS; `EPERM` fixture limitation disclosed | exact `d38` FIX for docs-only status/provenance | `SHIP-WITH-FOLLOWUPS`, no BLOCKER/HIGH | PR not open | Wait for final exact review and accepted protected PR before Mason reviews rows. |
+| 4 — full review | DONE for exact reviewed packet commit | `d38d41f63e68971f08f7158bf5a104af62d232aa` | final reviewer evidence | Sol focused/syntax/docs/diff PASS; containment 51,825 paths / 12 commits / 51,895 candidates / 795,855,426 logical bytes | PASS session `019fa353-0229-74a0-a350-d24e700437b7`; containment 51,827 / 12 / 51,897 / 796,622,451 | FIX for stale documentation gates only; code sound | `opus` resolved helper `claude-haiku-4-5-20251001` + reviewer `claude-opus-4-8`; `SHIP-WITH-FOLLOWUPS` | PR not open | Correct docs, then obtain final exact review of the containing commit. |
+| 5 — protected PR | PENDING external gate | containing commit identified by Git/PR metadata | none | final exact review of this correction pending | pending final correction | pending final correction | any alias must resolve truthfully; no Opus 5 claim | not open; required checks green and real CodeRabbit findings resolved before acceptance | Open and accept protected PR; no deploy or merge here. |
+| 6 — closeout | PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING | aggregate-only packet values recorded above | Mason after gates | owner action blocked until external gates complete | PASS evidence recorded | docs findings corrected; re-review pending | exact `d38` review recorded | PR not open | Row-by-row private-sheet review only after protected PR acceptance. |
 
 ## Cycle 0 — preflight
 
@@ -387,7 +405,11 @@ recorded elsewhere in this historical ledger.
 
 ## Owner gate after this mission
 
-Mason must review every row disposition, every proposed family, packaging,
+The packet has been regenerated and verified. Mason must not review any private
+row yet: final exact review of this documentation correction and acceptance of
+the protected PR are first required. The PR is not open; required checks must
+be green and any real CodeRabbit finding resolved before it is accepted. Only
+then must Mason review every row disposition, proposed family, packaging,
 tote-only, and policy change; explicitly acknowledge every unresolved row; and
 approve the exact current aggregate-bound packet. All decisions remain
 `PENDING` and no classification is approved. Only then may a separate Stage C
@@ -396,9 +418,9 @@ live mutation, flag enablement, deploy, or merge.
 
 ## Closeout
 
-- `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, and owner-sheet verification are recorded above; older packet hashes are invalidated.
-- `NOW:` Mason reviews the private owner decision sheet row by row. Every decision remains `PENDING`; no classification is approved.
-- `REMAINING:` fresh exact post-documentation Sol, Luna, and latest-available-Opus review, then PR/CI/CodeRabbit handling; any future Opus alias must record its resolved model truthfully.
+- `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, and exact `d38d41f` Sol/Luna/Claude review outcomes are recorded above; older packet hashes are invalidated.
+- `NOW:` final exact review of this documentation correction, then a protected PR with required checks green and real CodeRabbit findings resolved. The PR is not open; Mason must not begin private-sheet review.
+- `REMAINING:` protected PR acceptance, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet. Any future model alias must record its resolved model truthfully; no literal Opus 5 review is claimed.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
-- `NEEDS MASON:` row-by-row private-sheet review and explicit approval of this exact aggregate-bound packet.
-- `VERDICT:` READY FOR OWNER REVIEW — ROW-BY-ROW PRIVATE SHEET REVIEW REQUIRED
+- `NEEDS MASON:` no action until the external gates complete; afterward, row-by-row private-sheet review and explicit packet approval.
+- `VERDICT:` PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING
