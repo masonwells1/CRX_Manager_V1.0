@@ -12,7 +12,8 @@ This file consolidates (does not replace) the source documents it points to. If 
 Resolved. The prior open question (how to price a chemical split line when co-owners are on different tiers)
 is decided: **Option B — each co-owner is billed at their OWN assigned_tier**, mirroring today's non-split
 field-app billing (no customer's price changes). A manual price or field quote applies to everyone (tier-
-independent); only the tier fallback varies per grower. Built + proven in the live DB (rollback: 20/80
+independent); only the tier fallback varies per grower. Built, and proven against the live DB **inside a
+rolled-back transaction only** — nothing was persisted and no migration was deployed (the proof: 20/80
 tier1/tier3 field → A@$10/gal, B@$8/gal, each own tier; plus a penny guard so a uniform price totals
 round-once). Committed on branch `codex/per-line-split-billing-phase4-ui` (tip `e2418796`), preserved on
 GitHub by deliberately closed PR #182 — its Phase 3 predecessor is `codex/per-line-split-billing-phase3-rpc`
