@@ -131,6 +131,9 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: base64Snapshot }))), 'private JSON format marker in malformed candidate', 'JSON-wrapped Base64 must be decoded');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`data:application/json;base64,${base64Snapshot}`)), 'private JSON format marker in malformed candidate', 'data-URI Base64 must be decoded');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`-----BEGIN CRX PACKET-----\n${base64Snapshot.match(/.{1,20}/g).join('\n')}\n-----END CRX PACKET-----`)), 'private JSON format marker in malformed candidate', 'PEM-wrapped Base64 must be decoded across lines');
+  const crlfPem = `-----BEGIN CRX PACKET-----\r\n${base64Snapshot.match(/.{1,19}/g).join('\r\n')}\r\n-----END CRX PACKET-----\r\n`;
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(crlfPem)), 'private JSON format marker in malformed candidate', 'CRLF PEM-wrapped Base64 must be decoded across short Windows lines');
+  for (let split = crlfPem.indexOf('\r'); split !== -1; split = crlfPem.indexOf('\r', split + 1)) assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(crlfPem.slice(0, split + 1)), Buffer.from(crlfPem.slice(split + 1))]), 'private JSON format marker in malformed candidate', 'CRLF PEM detection must survive a split between CR and LF');
   const wrappedBase64 = JSON.stringify({ payload: urlSafeBase64Snapshot.replace(/=+$/, '') });
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(wrappedBase64.slice(0, 19)), Buffer.from(wrappedBase64.slice(19))]), 'private JSON format marker in malformed candidate', 'wrapped URL-safe Base64 detection must survive a read split');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: 'b3JkaW5hcnkgcHVibGljIGNvbnRlbnQ=' }))), null, 'benign wrapped Base64 must not become a containment violation');
@@ -143,6 +146,20 @@ try {
   }
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: 'b3JkaW5hcnkgcHVibGljIGNvbnRlbnQ=A' }))), null, 'benign invalid Base64 must not become a containment violation');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(Buffer.from(base64Snapshot).toString('base64'))), null, 'encoded packets must not be recursively decoded');
+  const boundaryMarker = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+  for (const decodedLength of [64 * 1024, 128 * 1024]) {
+    const decoded = Buffer.concat([Buffer.alloc(decodedLength - boundaryMarker.length, 0x78), boundaryMarker]); const transfer = decoded.toString('base64'); const wrapped = JSON.stringify({ payload: transfer });
+    assert.equal(structuralPrivateArtifactReason(Buffer.from(wrapped)), 'private JSON format marker in malformed candidate', `${decodedLength / 1024} KiB embedded Base64 must cross fixed decoded-batch boundaries`);
+    assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(wrapped.slice(0, Math.floor(wrapped.length / 2))), Buffer.from(wrapped.slice(Math.floor(wrapped.length / 2)))]), 'private JSON format marker in malformed candidate', `${decodedLength / 1024} KiB embedded Base64 must survive a token stream split`);
+  }
+  const fuzzMarker = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+  for (let seed = 1; seed <= 8; seed += 1) {
+    let state = seed; const prefix = Buffer.alloc(257);
+    for (let index = 0; index < prefix.length; index += 1) { state = (state * 1664525 + 1013904223) >>> 0; prefix[index] = state >>> 24; }
+    const decoded = Buffer.concat([prefix, fuzzMarker]); const standard = decoded.toString('base64'); const urlSafe = standard.replaceAll('+', '-').replaceAll('/', '_');
+    for (const transfer of [standard, urlSafe]) assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: transfer }))), structuralPrivateArtifactReason(decoded), `embedded Base64 fuzz case ${seed} must match direct decoded structural evidence`);
+  }
+  for (const [transfer, expected] of [[`${base64Snapshot}A`, 'private JSON format marker in malformed candidate'], [`${base64Snapshot}AA`, null], [`${base64Snapshot}===`, null]]) assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: transfer }))), expected, 'malformed embedded Base64 residual must retain only the valid prefix');
   const hexSnapshot = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })).toString('hex');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(hexSnapshot)), 'private JSON format marker in malformed candidate');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: hexSnapshot }))), 'private JSON format marker in malformed candidate', 'wrapped hexadecimal packets must be decoded');
@@ -150,6 +167,9 @@ try {
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(hexSnapshot.slice(0, 63)), Buffer.from(hexSnapshot.slice(63))]), 'private JSON format marker in malformed candidate', 'hexadecimal packets must survive a split nibble');
   assert.equal(structuralPrivateArtifactReason(Buffer.from('a'.repeat(64))), null, 'a SHA-256-sized hexadecimal token is benign');
   assert.equal(structuralPrivateArtifactReason(Buffer.from('ab'.repeat(512 * 1024))), null, 'large benign hexadecimal input stays bounded and benign');
+  const invalidWholeFileHex = Buffer.from(`${'ab'.repeat(256 * 1024)}g${'cd'.repeat(256 * 1024)}`);
+  assert.equal(structuralPrivateArtifactReason(invalidWholeFileHex), null, 'whole-file hexadecimal scanning must stop at an invalid byte without inventing a finding');
+  assert.equal(structuralPrivateArtifactReason(Buffer.alloc(MAX_STRUCTURAL_SCAN_BYTES + 1, 0x61)), 'private artifact candidate exceeds bounded structural scan limit', 'oversized whole-file hexadecimal input must stop at the structural scan bound');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(32)]).toString('hex'))), 'compressed archive container cannot be inspected', 'hex decoding must retain archive checks');
   assert.equal(structuralPrivateArtifactReason(Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(OWNER_DECISION_HEADERS.join(','))])), 'compressed archive container cannot be inspected');
   assert.equal(structuralPrivateArtifactReason(Buffer.concat([Buffer.from('harmless self-extracting prefix'), Buffer.from([0x50, 0x4b, 0x03, 0x04])])), 'compressed archive container cannot be inspected');
@@ -172,6 +192,10 @@ try {
     assert.equal(structuralPrivateArtifactStreamReason([bytes.subarray(0, split), bytes.subarray(split)]), 'compressed archive container cannot be inspected', `${name} header must survive a critical stream split`);
   }
   const tarNearMiss = Buffer.from(tarHeader); tarNearMiss[153] ^= 1; assert.equal(structuralPrivateArtifactReason(tarNearMiss), null, 'invalid TAR checksum must not create an archive false positive');
+  const prefixedTar = Buffer.concat([Buffer.from('ordinary self-extracting prefix'), tarHeader]); const tarCriticalSplit = Buffer.byteLength('ordinary self-extracting prefix') + 260;
+  assert.equal(structuralPrivateArtifactReason(prefixedTar), 'compressed archive container cannot be inspected', 'prefixed TAR must fail closed after checksum validation');
+  assert.equal(structuralPrivateArtifactStreamReason([prefixedTar.subarray(0, tarCriticalSplit), prefixedTar.subarray(tarCriticalSplit)]), 'compressed archive container cannot be inspected', 'prefixed TAR must survive a split through its ustar magic');
+  assert.equal(structuralPrivateArtifactReason(Buffer.concat([Buffer.from('ordinary self-extracting prefix'), tarNearMiss])), null, 'prefixed invalid TAR checksum must remain benign');
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x08, 0x00])), null, 'reserved Zstandard descriptor bits must not match');
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x04, 0x22, 0x4d, 0x18, 0x20, 0x40, 0x00])), null, 'invalid LZ4 frame version must not match');
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x4d, 0x53, 0x43, 0x46, ...Buffer.alloc(32)])), null, 'implausible CAB header must not match');
@@ -180,13 +204,35 @@ try {
   assert.equal(structuralPrivateArtifactStreamReason([prefixedBinaryCpio.subarray(0, -1), prefixedBinaryCpio.subarray(-1)]), 'compressed archive container cannot be inspected', 'prefixed binary CPIO must survive a pathname-end stream split');
   const longBinaryCpio = binaryCpioHeader('le', `${'n'.repeat(4095)}\0`);
   assert.equal(structuralPrivateArtifactStreamReason([longBinaryCpio.subarray(0, -1), longBinaryCpio.subarray(-1)]), 'compressed archive container cannot be inspected', '4 KiB binary CPIO names must survive a final-byte stream split');
+  for (const [name, header] of [['little-endian', binaryCpioLeHeader], ['big-endian', binaryCpioBeHeader]]) {
+    for (let split = 1; split < header.length; split += 1) {
+      assert.equal(structuralPrivateArtifactStreamReason([header.subarray(0, split), header.subarray(split)]), 'compressed archive container cannot be inspected', `${name} binary CPIO must survive a split at byte ${split}`);
+    }
+  }
+  const binaryCpioInvalidNameSize = Buffer.from(binaryCpioBeHeader); binaryCpioInvalidNameSize.writeUInt16BE(1, 20);
+  assert.equal(structuralPrivateArtifactReason(binaryCpioInvalidNameSize), null, 'binary CPIO with an impossible pathname size must remain benign');
+  const binaryCpioIncidentalMagic = Buffer.concat([Buffer.from([0x71, 0xc7]), Buffer.alloc(24, 0x41), Buffer.from([0x00, 0x01, 0x02, 0x03])]);
+  assert.equal(structuralPrivateArtifactReason(binaryCpioIncidentalMagic), null, 'incidental binary CPIO magic without a valid pathname must remain benign');
   assert.equal(structuralPrivateArtifactReason(binaryCpioHeader('be', 'a\0b\0')), null, 'binary CPIO pathname interior NUL must not match');
+  for (let magic = 0x50; magic <= 0x5f; magic += 1) {
+    const skippable = Buffer.from([magic, 0x2a, 0x4d, 0x18, 0x00, 0x00, 0x00, 0x00]);
+    assert.equal(structuralPrivateArtifactReason(skippable), 'compressed archive container cannot be inspected', `Zstandard skippable magic 0x${magic.toString(16)} must fail closed`);
+    for (let split = 1; split < skippable.length; split += 1) {
+      assert.equal(structuralPrivateArtifactStreamReason([skippable.subarray(0, split), skippable.subarray(split)]), 'compressed archive container cannot be inspected', `Zstandard skippable magic 0x${magic.toString(16)} must survive a split at byte ${split}`);
+    }
+  }
+  assert.equal(structuralPrivateArtifactReason(Buffer.from([0x4f, 0x2a, 0x4d, 0x18, 0, 0, 0, 0])), null, 'byte before the skippable magic range must not match');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from([0x60, 0x2a, 0x4d, 0x18, 0, 0, 0, 0])), null, 'byte after the skippable magic range must not match');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from([0x50, 0x2a, 0x4d, 0x19, 0, 0, 0, 0])), null, 'near-miss skippable frame magic must remain benign');
   assert.equal(structuralPrivateArtifactReason(Buffer.from('const marker = "BZh";')), null);
   assert.equal(structuralPrivateArtifactReason(readFileSync(path.join(REPO_ROOT, 'scripts', 'check-supplier-pricing-phase3-private-artifacts.mjs'))), null);
   for (const logo of ['logo_3-01_(3).png', 'logo_3-02_(2).png']) {
     const bytes = readFileSync(path.join(REPO_ROOT, 'src', 'assets', logo)); const midpoint = Math.floor(bytes.length / 2);
     assert.equal(structuralPrivateArtifactReason(bytes), null, `${logo} must not be misclassified by incidental binary CPIO bytes`);
     assert.equal(structuralPrivateArtifactStreamReason([bytes.subarray(0, midpoint), bytes.subarray(midpoint)]), null, `${logo} must remain benign across streaming chunks`);
+    for (const split of [1, 2, 3, 4, 5, 64 * 1024 - 1, 64 * 1024, midpoint, bytes.length - 1].filter(value => value > 0 && value < bytes.length)) {
+      assert.equal(structuralPrivateArtifactStreamReason([bytes.subarray(0, split), bytes.subarray(split)]), null, `${logo} must remain benign across binary boundary split ${split}`);
+    }
   }
   const delayedProductPrefix = '{"id":"synthetic","sku":"synthetic","product_name":"synthetic","pricing_version":0,';
   const delayedUpdatedAt = '"updated_at"'; const streamSplit = 64 * 1024;
@@ -229,6 +275,9 @@ try {
     assert.equal(structuralPrivateArtifactReason(bytes), 'private JSON format marker in malformed candidate');
     for (const split of [1, 3, 7, Math.floor(bytes.length / 2)]) assert.equal(structuralPrivateArtifactStreamReason([bytes.subarray(0, split), bytes.subarray(split)]), 'private JSON format marker in malformed candidate', 'UTF-32 JSON must survive arbitrary chunks');
   }
+  const encodedUtf32 = JSON.stringify({ payload: utf32(utf16Json, 'be', { bom: true }).toString('base64') }); const encodedUtf32Split = Math.floor(encodedUtf32.length / 2);
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(encodedUtf32)), 'private JSON format marker in malformed candidate', 'Base64-decoded UTF-32 must remain visible after alternate-scanner deduplication');
+  assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(encodedUtf32.slice(0, encodedUtf32Split)), Buffer.from(encodedUtf32.slice(encodedUtf32Split))]), 'private JSON format marker in malformed candidate', 'Base64-decoded UTF-32 must survive a stream split after alternate-scanner deduplication');
   for (const bytes of [utf32(utf16Owner, 'le', { bom: true }), utf32(utf16Owner, 'be', { bom: true }), utf32(utf16Owner, 'le'), utf32(utf16Owner, 'be')]) {
     assert.equal(structuralPrivateArtifactReason(bytes), 'owner decision sheet CSV header structure');
     assert.equal(structuralPrivateArtifactStreamReason([bytes.subarray(0, 3), bytes.subarray(3, 19), bytes.subarray(19)]), 'owner decision sheet CSV header structure', 'UTF-32 owner CSV must survive arbitrary chunks');

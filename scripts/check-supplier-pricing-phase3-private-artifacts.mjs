@@ -58,9 +58,6 @@ const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
 const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
 const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
-const EMBEDDED_BASE64_TOKEN_BYTE_ALLOWED = new Uint8Array(256);
-for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_-=') EMBEDDED_BASE64_TOKEN_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
-const PEM_TRANSFER_BODY_RE = /-----BEGIN [A-Z0-9 _-]+-----[\t ]*\r?\n([A-Za-z0-9+/_=\t \r\n]+?)\r?\n-----END [A-Z0-9 _-]+-----/g;
 const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
 
 /**
@@ -315,17 +312,17 @@ function hasPlausibleLz4Frame(source, offset) {
   return (flg & 0xc2) === 0x40 && (bd & 0x8f) === 0 && (bd >> 4) >= 4 && (bd >> 4) <= 7;
 }
 function hasPlausibleLz4LegacyFrame(source, offset) {
-  return bytesAt(source, offset, [0x02, 0x21, 0x4c, 0x18]) && offset + 8 <= source.length
-    && Number.isSafeInteger(source.readUInt32LE(offset + 4));
+  return bytesAt(source, offset, [0x02, 0x21, 0x4c, 0x18]) && offset + 8 <= source.length;
 }
 function hasSkippableFrame(source, offset) {
-  if (offset + 8 > source.length || source[offset] < 0x50 || source[offset] > 0x5f
+  if (offset < 0 || offset + 8 > source.length || source[offset] < 0x50 || source[offset] > 0x5f
     || !bytesAt(source, offset + 1, [0x2a, 0x4d, 0x18])) return false;
-  // Reading the declared little-endian length is deliberate validation. The
-  // payload need not be present: any valid framed container is uninspectable.
-  return Number.isSafeInteger(source.readUInt32LE(offset + 4));
+  // The payload need not be present: a complete skippable-frame header is an
+  // uninspectable container and must fail closed. readUInt32LE adds no useful
+  // validation here because it always returns a valid unsigned 32-bit value.
+  return true;
 }
-function compressedArchiveReason(bytes, baseOffset = 0) {
+function compressedArchiveReason(bytes) {
   const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
   // Keep signatures numeric so this checker does not contain a raw archive
   // header and reject its own source while scanning the introducing PR.
@@ -346,7 +343,7 @@ function compressedArchiveReason(bytes, baseOffset = 0) {
     for (let index = source.indexOf(prefix); index !== -1; index = source.indexOf(prefix, index + 1)) if (validator(index)) return true;
     return false;
   };
-  if (findValidated(Buffer.from([0x75, 0x73, 0x74, 0x61, 0x72]), index => (baseOffset + index) % 512 === 257 && hasPlausibleTarHeader(source, index))) return 'compressed archive container cannot be inspected';
+  if (findValidated(Buffer.from([0x75, 0x73, 0x74, 0x61, 0x72]), index => hasPlausibleTarHeader(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x30, 0x37, 0x30, 0x37, 0x30]), index => hasPlausibleCpioHeader(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x71, 0xc7]), index => hasPlausibleCpioHeader(source, index))
     || findValidated(Buffer.from([0xc7, 0x71]), index => hasPlausibleCpioHeader(source, index))) return 'compressed archive container cannot be inspected';
@@ -354,18 +351,20 @@ function compressedArchiveReason(bytes, baseOffset = 0) {
   if (findValidated(Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), index => hasPlausibleZstdFrame(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x04, 0x22, 0x4d, 0x18]), index => hasPlausibleLz4Frame(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x02, 0x21, 0x4c, 0x18]), index => hasPlausibleLz4LegacyFrame(source, index))) return 'compressed archive container cannot be inspected';
-  if (findValidated(Buffer.from([0x50, 0x2a, 0x4d, 0x18]), index => hasSkippableFrame(source, index))) return 'compressed archive container cannot be inspected';
+  const skippableSuffix = Buffer.from([0x2a, 0x4d, 0x18]);
+  for (let suffix = source.indexOf(skippableSuffix); suffix !== -1; suffix = source.indexOf(skippableSuffix, suffix + 1)) {
+    if (hasSkippableFrame(source, suffix - 1)) return 'compressed archive container cannot be inspected';
+  }
   return null;
 }
 function createArchiveStreamScanner() {
-  let tail = Buffer.alloc(0); let offset = 0; let reason = null;
+  let tail = Buffer.alloc(0); let reason = null;
   return {
     feed(bytes) {
       if (reason) return;
       const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
       const probe = tail.length === 0 ? source : Buffer.concat([tail, source]);
-      reason = compressedArchiveReason(probe, offset - tail.length);
-      offset += source.length;
+      reason = compressedArchiveReason(probe);
       tail = Buffer.from(probe.subarray(-ARCHIVE_STREAM_TAIL_BYTES));
     },
     finish() { return reason; },
@@ -734,27 +733,35 @@ function createBase64TransferScanner({ checkArchives = true } = {}) {
   };
 }
 function base64AlphabetValue(byte) {
-  if (byte >= 0x41 && byte <= 0x5a) return String.fromCharCode(byte);
-  if (byte >= 0x61 && byte <= 0x7a) return String.fromCharCode(byte);
-  if (byte >= 0x30 && byte <= 0x39) return String.fromCharCode(byte);
-  if (byte === 0x2b || byte === 0x2f) return String.fromCharCode(byte);
-  if (byte === 0x2d) return '+';
-  if (byte === 0x5f) return '/';
-  return null;
+  if (byte >= 0x41 && byte <= 0x5a) return byte - 0x41;
+  if (byte >= 0x61 && byte <= 0x7a) return byte - 0x61 + 26;
+  if (byte >= 0x30 && byte <= 0x39) return byte - 0x30 + 52;
+  if (byte === 0x2b || byte === 0x2d) return 62;
+  if (byte === 0x2f || byte === 0x5f) return 63;
+  return -1;
 }
 function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
-  let quartet = ''; let decoded = null; let decodedTransfer = ''; let length = 0; let active = true; let terminal = false; let terminalTail = 0; let found = null;
-  const flushDecoded = () => {
-    if (decodedTransfer.length === 0 || length < 32) return;
+  let quartet = []; let decoded = null; let length = 0; let active = true; let terminal = false; let terminalTail = 0; let found = null;
+  let batch = null; let used = 0;
+  const feedBatch = () => {
+    if (used === 0 || length < 32) return;
     decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
-    decoded.feed(Buffer.from(decodedTransfer, 'base64'));
-    decodedTransfer = '';
+    decoded.feed(batch.subarray(0, used));
+    used = 0;
   };
-  const feedDecoded = value => {
-    decodedTransfer += value;
-    if (decodedTransfer.length >= BASE64_TRANSFER_CHUNK_BYTES) flushDecoded();
+  const addByte = value => {
+    batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
+    batch[used++] = value;
+    if (used === batch.length) feedBatch();
   };
-  const finishDecoded = () => { flushDecoded(); return decoded?.finish() ?? null; };
+  const decodeQuartet = () => {
+    const [first, second, third, fourth] = quartet;
+    addByte((first << 2) | (second >> 4));
+    if (third !== -1) addByte(((second & 0x0f) << 4) | (third >> 2));
+    if (fourth !== -1) addByte(((third & 0x03) << 6) | fourth);
+    quartet = [];
+  };
+  const finishDecoded = () => { feedBatch(); return decoded?.finish() ?? null; };
   const finishToken = () => {
     if (!active || length < 32) return null;
     if (terminal) return terminalTail <= 1 ? finishDecoded() : null;
@@ -762,28 +769,30 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
     // valid prefix. This covers an unpadded packet plus one trailing alphabet
     // character without decoding that unusable byte.
     if (quartet.length === 1) return finishDecoded();
-    if (quartet.length === 2 || quartet.length === 3) feedDecoded(quartet.padEnd(4, '='));
+    if (quartet.length === 2) { quartet.push(-1, -1); decodeQuartet(); }
+    else if (quartet.length === 3) { quartet.push(-1); decodeQuartet(); }
     return finishDecoded();
   };
-  const reset = () => { quartet = ''; decoded = null; decodedTransfer = ''; length = 0; active = true; terminal = false; terminalTail = 0; };
+  const reset = () => { quartet = []; decoded = null; length = 0; active = true; terminal = false; terminalTail = 0; batch = null; used = 0; };
   const flush = () => { found ??= finishToken(); reset(); };
   const receive = byte => {
     const alphabet = base64AlphabetValue(byte);
-    if (alphabet !== null) {
+    if (alphabet !== -1) {
       length += 1;
       if (terminal) { terminalTail += 1; if (terminalTail > 1) active = false; return; }
-      if (!active || quartet.includes('=')) { active = false; return; }
-      quartet += alphabet;
-      if (quartet.length === 4) { feedDecoded(quartet); quartet = ''; }
+      if (!active || quartet.some(value => value === -1)) { active = false; return; }
+      quartet.push(alphabet);
+      if (quartet.length === 4) decodeQuartet();
       return;
     }
     if (byte === 0x3d) {
       length += 1;
       if (!active || terminal || quartet.length < 2) { active = false; return; }
-      quartet += '=';
+      quartet.push(-1);
       if (quartet.length < 4) return;
-      if (!/^(?:[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/.test(quartet)) { active = false; return; }
-      feedDecoded(quartet); quartet = ''; terminal = true; return;
+      const validPadding = (quartet[2] !== -1 && quartet[3] === -1) || (quartet[2] === -1 && quartet[3] === -1);
+      if (!validPadding) { active = false; return; }
+      decodeQuartet(); terminal = true; return;
     }
     flush();
   };
@@ -818,6 +827,7 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false } = 
   const reset = () => { scanner = null; high = -1; length = 0; active = true; prefix = ''; decoding = false; batch = null; used = 0; };
   const flush = () => { if (length === 0) return; found ??= finishToken(); reset(); };
   const receive = byte => {
+    if (wholeFile && !active) return;
     const nibble = hexNibble(byte);
     if (nibble !== -1) {
       length += 1;
@@ -846,11 +856,12 @@ function createPemBase64Scanner({ checkArchives = true } = {}) {
   const isBegin = value => /^-----BEGIN [A-Z0-9 _-]+-----[\t ]*$/.test(value);
   const isEnd = value => /^-----END [A-Z0-9 _-]+-----[\t ]*$/.test(value);
   const finishLine = () => {
+    const normalizedLine = line.endsWith('\r') ? line.slice(0, -1) : line;
     if (body === null) {
-      if (!overflow && isBegin(line)) body = createBase64TransferScanner({ checkArchives });
-    } else if (!overflow && isEnd(line)) {
+      if (!overflow && isBegin(normalizedLine)) body = createBase64TransferScanner({ checkArchives });
+    } else if (!overflow && isEnd(normalizedLine)) {
       found ??= body.finish(); body = null;
-    } else if (!overflow) body.feed(Buffer.from(`${line}\n`, 'latin1'));
+    } else if (!overflow) body.feed(Buffer.from(`${normalizedLine}\n`, 'latin1'));
     line = ''; overflow = false;
   };
   return {
@@ -868,7 +879,6 @@ function createPemBase64Scanner({ checkArchives = true } = {}) {
   };
 }
 function createAlternateEncodingScanner({ checkArchives = true } = {}) {
-  const utf32 = createUtf32StructuralStreamScanner();
   const embeddedBase64 = createEmbeddedBase64TokenScanner({ checkArchives });
   const pemBase64 = createPemBase64Scanner({ checkArchives });
   const wholeHex = createHexTransferScanner({ checkArchives, wholeFile: true });
@@ -876,14 +886,13 @@ function createAlternateEncodingScanner({ checkArchives = true } = {}) {
   return {
     feed(bytes) {
       const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-      utf32.feed(source);
       embeddedBase64.feed(source);
       pemBase64.feed(source);
       wholeHex.feed(source);
       embeddedHex.feed(source);
     },
     finish() {
-      return utf32.finish() ?? pemBase64.finish() ?? embeddedBase64.finish() ?? wholeHex.finish() ?? embeddedHex.finish() ?? null;
+      return pemBase64.finish() ?? embeddedBase64.finish() ?? wholeHex.finish() ?? embeddedHex.finish() ?? null;
     },
   };
 }
@@ -1079,8 +1088,6 @@ async function scanGitObjectEntries(entries, root, budget) {
     throw error;
   }
 }
-async function scanGitBlobEntries(entries, root, budget) { return scanGitObjectEntries(entries, root, budget); }
-
 function currentIndexEntries(root, execute) {
   const entries = [];
   for (const record of String(gitOutput(['ls-files', '--stage', '-z'], root, execute)).split('\0').filter(Boolean)) {
@@ -1110,7 +1117,7 @@ async function currentIndexCandidateViolations(root, execute, budget) {
     if (!REGULAR_GIT_MODES.has(entry.mode)) { violations.push({ repoPath: entry.repoPath, reason: 'non-regular Git mode' }); continue; }
     regular.push(entry);
   }
-  const reasons = await scanGitBlobEntries(regular, root, budget);
+  const reasons = await scanGitObjectEntries(regular, root, budget);
   for (const entry of regular) {
     const reason = reasons.get(entry.key);
     if (reason) violations.push({ repoPath: entry.repoPath, reason });
@@ -1262,7 +1269,7 @@ async function candidateCommitTreeViolations(commit, root, execute, budget) {
     if (!REGULAR_GIT_MODES.has(entry.mode) || entry.type !== 'blob') { violations.push({ repoPath: `${commit}:${entry.repoPath}`, reason: 'non-regular Git mode' }); continue; }
     regular.push({ repoPath: `${commit}:${entry.repoPath}`, spec: entry.object, key: `candidate:${commit}:${entry.repoPath}` });
   }
-  const reasons = await scanGitBlobEntries(regular, root, budget);
+  const reasons = await scanGitObjectEntries(regular, root, budget);
   for (const entry of regular) {
     const reason = reasons.get(entry.key);
     if (reason) violations.push({ repoPath: entry.repoPath, reason });
@@ -1294,7 +1301,7 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
       entries.push({ repoPath: `${commit}:${repoPath}`, spec: tree.object, key: `history:${commit}:${repoPath}` });
     }
   }
-  const reasons = await scanGitBlobEntries(entries, root, budget);
+  const reasons = await scanGitObjectEntries(entries, root, budget);
   for (const entry of entries) {
     const reason = reasons.get(entry.key);
     if (reason) violations.push({ repoPath: entry.repoPath, reason });
@@ -1375,7 +1382,7 @@ async function inspectOutgoingRefObject({ localRef, localSha, root, execute, bud
     }
     if (type === 'blob') {
       const key = `outgoing-ref:${localRef}:${sha}`;
-      const reasons = await scanGitBlobEntries([{ repoPath: localRef, spec: sha, key }], root, budget);
+      const reasons = await scanGitObjectEntries([{ repoPath: localRef, spec: sha, key }], root, budget);
       const reason = reasons.get(key);
       if (reason) violations.push({ repoPath: localRef, reason });
       continue;

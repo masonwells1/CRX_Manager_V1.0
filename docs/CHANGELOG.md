@@ -13,6 +13,12 @@ evidence from complete quanta when the final residual is unusable and checks a
 maximal valid prefix for both padded and unpadded `mod 4 = 1` wrappers without
 recursively decoding output. Hex packets now stream into the same non-recursive
 structural scanner instead of materializing a full token or decoded buffer.
+Embedded Base64 now writes numeric quanta into fixed decoded batches; PEM
+wrappers normalize Windows CRLF line endings, all sixteen Zstandard
+skippable-frame magics are reachable, and duplicate UTF-32 scanning has been
+removed. Regression coverage includes boundary batches, CRLF packets, archive
+near-misses, critical stream splits, and the tracked PNG assets that exposed
+the binary CPIO false-positive risk.
 
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
