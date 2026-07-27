@@ -1,9 +1,52 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-26** (live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: 911 ledger rows, max version `20260726223520` — **nothing applied live since 2026-07-26**, so every dated claim below stands unchanged. New OPEN finding added this date: section 0a, 38 RLS policies inline a role check without requiring an active profile — fix drafted and committed, deliberately not yet applied. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
+
+---
+
+## 0a. OPEN — deactivated users keep access through 38 RLS policies (fix drafted, NOT applied)
+
+**Status 2026-07-27: live and unfixed.** 38 RLS policies — across 17 `public` tables plus
+`storage.objects` — gate on `profiles.role` **inline** without also requiring
+`profiles.is_active = true`. Deactivation is not enforced anywhere else: `auth.users.banned_until`
+is NULL for the deactivated account and sessions are not revoked, so RLS is the only gate. A user
+who has been deactivated but still holds a valid JWT therefore keeps access through every one of
+them. One such account exists live (a deactivated `sales_rep`, 216 session rows, last sign-in
+2026-03-15) and 7 of the 38 policies include `sales_rep`, so it is exploitable today.
+
+Policies that call `is_admin()` / `is_sales_rep()` / `is_driver()` / `is_applicator()` are **not**
+affected — all four helpers were confirmed live to check `is_active`. This is the systemic gap that
+migration `20260726223520` (migration-history row 826) explicitly deferred.
+
+Fix drafted and committed but **deliberately not applied**:
+`supabase/migrations/20260727123055_inline_role_checks_require_active_profile.sql`, branch
+`claude/rls-inline-role-require-active`, commit `4fcf2c90`, migration-history row 827. Proven by a
+full-file dry run on live inside `BEGIN … ROLLBACK` (all 38 ALTERs applied, verification block
+passed, residual gaps 38 → 0, rolled back, live state re-read unchanged) and adversarially reviewed
+by Codex `gpt-5.6-sol` at high effort — verdict SHIP-WITH-FOLLOWUPS, no blockers. It needs Mason's
+explicit OK plus a `write-apply-proofs.mjs` gate run before apply. **Do not re-discover or re-audit
+this — the enumeration and the migration already exist.**
+
+Two related items are deliberately OUT of that migration's scope and remain open:
+
+1. **Tightening the role policy is partly security theater on six tables.** `application_services`,
+   `application_record_fields`, `customer_application_rates`, `quote_pdf_templates`,
+   `quote_templates`, and `team_note_attachments` each carry a *separate* wide-open PERMISSIVE
+   SELECT policy (`true`, or `uid IS NOT NULL` for `arf_select`). PERMISSIVE policies OR together,
+   so any logged-in user reads those tables regardless of role or active status. Closing that is a
+   separate decision about intended read access, not a bug fix.
+2. **Deactivation does not revoke sessions or block re-login.** `profiles.is_active = false` is a
+   pure application-layer flag; the Supabase auth user remains unbanned and existing refresh tokens
+   stay valid. The durable fix is to ban/​sign-out the auth user on deactivate. Until then, every
+   deactivation depends on RLS alone.
+
+One follow-up on the migration itself is unproven: a disposable `supabase db reset` replay to
+confirm all 38 policy names exist on a clean rebuild has not been run (all 38 were confirmed
+present in migration history by source search, and `ALTER POLICY` fails loudly on a missing policy,
+so a rebuild break would be noisy rather than silent).
 
 ---
 
