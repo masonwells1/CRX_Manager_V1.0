@@ -45,10 +45,32 @@ for (const file of files) {
 const allMigrations = readdirSync(path.join(root, 'supabase', 'migrations'))
   .filter((name) => /^\d{14}_.+\.sql$/.test(name))
   .sort();
-const expectedPending = allMigrations.filter((name) => name.slice(0, 14) > highWater);
+
+// The expectation applies both of the selector's rules, not just the version one.
+// Supabase assigns its own ledger version for a Management-API apply, so a file whose
+// filename timestamp sits above the high-water can already be recorded in the captured
+// ledger under a lower version. Filtering on the timestamp alone would then demand a
+// migration the selector correctly withholds, and fail a test that is about wiring.
+// The ledger is parsed here rather than imported so the assertion stays independent of
+// the predicate under test — the synthetic case above is what proves that predicate.
+const historyLines = readFileSync(
+  path.join(root, 'supabase', 'baselines', `${highWater}_migration_history.sql`),
+  'utf8',
+).split(/\r?\n/);
+const copyStart = historyLines.findIndex((line) =>
+  line.startsWith('COPY "supabase_migrations"."schema_migrations"'),
+);
+const copyEnd = historyLines.indexOf('\\.', copyStart + 1);
+assert.equal(copyStart >= 0 && copyEnd > copyStart, true, 'ledger COPY block not found');
+const ledgerNames = new Set(
+  historyLines.slice(copyStart + 1, copyEnd).map((line) => line.split('\t')[1]),
+);
+const expectedPending = allMigrations.filter(
+  (name) => name.slice(0, 14) > highWater && !ledgerNames.has(name.slice(0, -4)),
+);
 assert.deepEqual(
   files.map((file) => path.basename(file)),
   expectedPending,
-  'every migration newer than the baseline high-water must remain pending, and nothing else',
+  'every uncaptured migration newer than the baseline high-water must remain pending, and nothing else',
 );
 console.log(`POST_BASELINE_MIGRATIONS_PASS pending=${files.length}`);

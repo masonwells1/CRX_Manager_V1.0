@@ -50,10 +50,45 @@ relation_grants AS (
     AND acl.grantee_name IN (SELECT role_name FROM managed)
 ),
 
+-- Column-level grants. These are NOT redundant with the relation grants above, and
+-- omitting them silently breaks a rebuilt project: production gives `authenticated`
+-- no table-level INSERT or UPDATE on `public.products`, so 27 column grants are its
+-- only write path. `REVOKE ALL ON ALL TABLES` strips column privileges along with
+-- table ones, so the reset above removes them and only this block puts them back.
+-- Granting the table instead would restore the app and widen access at the same time.
+column_grants AS (
+  SELECT
+    2 AS sort_group,
+    format('%s.%s.%s', n.nspname, c.relname, att.attname) AS sort_object,
+    acl.grantee_name AS sort_grantee,
+    format(
+      'GRANT %s ON TABLE %I.%I TO %s;',
+      acl.privileges,
+      n.nspname, c.relname, acl.grantee_sql
+    ) AS statement
+  FROM pg_attribute att
+  JOIN pg_class c ON c.oid = att.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  CROSS JOIN LATERAL (
+    SELECT
+      CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee_name,
+      CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(a.grantee)) END AS grantee_sql,
+      string_agg(format('%s(%I)', a.privilege_type, att.attname), ', ' ORDER BY a.privilege_type) AS privileges
+    FROM aclexplode(att.attacl) a
+    GROUP BY a.grantee
+  ) acl
+  WHERE n.nspname = 'public'
+    AND c.relkind IN ('r', 'p', 'v', 'm')
+    AND att.attnum > 0
+    AND NOT att.attisdropped
+    AND att.attacl IS NOT NULL
+    AND acl.grantee_name IN (SELECT role_name FROM managed)
+),
+
 -- Existing routines: identity arguments keep overloaded names unambiguous.
 routine_grants AS (
   SELECT
-    2 AS sort_group,
+    3 AS sort_group,
     format('%s.%s(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) AS sort_object,
     acl.grantee_name AS sort_grantee,
     format(
@@ -82,7 +117,7 @@ routine_grants AS (
 -- Only the `postgres` grantor is CRX-owned; the platform manages its own.
 default_privileges AS (
   SELECT
-    3 AS sort_group,
+    4 AS sort_group,
     format('%s.%s', n.nspname, d.defaclobjtype::text) AS sort_object,
     acl.grantee_name AS sort_grantee,
     format(
@@ -116,6 +151,7 @@ default_privileges AS (
 SELECT statement
 FROM (
   SELECT * FROM relation_grants
+  UNION ALL SELECT * FROM column_grants
   UNION ALL SELECT * FROM routine_grants
   UNION ALL SELECT * FROM default_privileges
 ) s

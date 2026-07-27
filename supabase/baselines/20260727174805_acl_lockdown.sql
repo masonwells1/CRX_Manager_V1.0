@@ -605,6 +605,33 @@ GRANT MAINTAIN, SELECT ON TABLE public.write_offs TO anon;
 GRANT DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.write_offs TO authenticated;
 GRANT SELECT ON TABLE public.write_offs TO metabase_ro;
 GRANT DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE ON TABLE public.write_offs TO service_role;
+GRANT INSERT(category), UPDATE(category) ON TABLE public.products TO authenticated;
+GRANT INSERT(container_size), UPDATE(container_size) ON TABLE public.products TO authenticated;
+GRANT INSERT(container_type), UPDATE(container_type) ON TABLE public.products TO authenticated;
+GRANT INSERT(container_unit), UPDATE(container_unit) ON TABLE public.products TO authenticated;
+GRANT INSERT(epa_registration), UPDATE(epa_registration) ON TABLE public.products TO authenticated;
+GRANT INSERT(internal_notes), UPDATE(internal_notes) ON TABLE public.products TO authenticated;
+GRANT INSERT(inventory_unit), UPDATE(inventory_unit) ON TABLE public.products TO authenticated;
+GRANT INSERT(is_active), UPDATE(is_active) ON TABLE public.products TO authenticated;
+GRANT INSERT(is_rup), UPDATE(is_rup) ON TABLE public.products TO authenticated;
+GRANT INSERT(manufacturer), UPDATE(manufacturer) ON TABLE public.products TO authenticated;
+GRANT INSERT(max_label_rate), UPDATE(max_label_rate) ON TABLE public.products TO authenticated;
+GRANT INSERT(max_label_rate_unit), UPDATE(max_label_rate_unit) ON TABLE public.products TO authenticated;
+GRANT INSERT(notes), UPDATE(notes) ON TABLE public.products TO authenticated;
+GRANT INSERT(phi_days), UPDATE(phi_days) ON TABLE public.products TO authenticated;
+GRANT INSERT(product_form), UPDATE(product_form) ON TABLE public.products TO authenticated;
+GRANT INSERT(product_name), UPDATE(product_name) ON TABLE public.products TO authenticated;
+GRANT INSERT(quoting_notes), UPDATE(quoting_notes) ON TABLE public.products TO authenticated;
+GRANT INSERT(rate_per_acre), UPDATE(rate_per_acre) ON TABLE public.products TO authenticated;
+GRANT INSERT(rate_unit), UPDATE(rate_unit) ON TABLE public.products TO authenticated;
+GRANT INSERT(rei_hours), UPDATE(rei_hours) ON TABLE public.products TO authenticated;
+GRANT INSERT(signal_word), UPDATE(signal_word) ON TABLE public.products TO authenticated;
+GRANT INSERT(sku), UPDATE(sku) ON TABLE public.products TO authenticated;
+GRANT INSERT(suggested_rate), UPDATE(suggested_rate) ON TABLE public.products TO authenticated;
+GRANT INSERT(unit_size), UPDATE(unit_size) ON TABLE public.products TO authenticated;
+GRANT INSERT(updated_at), UPDATE(updated_at) ON TABLE public.products TO authenticated;
+GRANT INSERT(use_timing), UPDATE(use_timing) ON TABLE public.products TO authenticated;
+GRANT INSERT(vendor), UPDATE(vendor) ON TABLE public.products TO authenticated;
 GRANT EXECUTE ON FUNCTION public._batch_apply_prepayments_impl(p_allocations jsonb, p_performed_by uuid, p_idempotency_key text) TO service_role;
 GRANT EXECUTE ON FUNCTION public._cancel_order_impl_20260714(p_order_id uuid, p_performed_by uuid, p_idempotency_key text) TO service_role;
 GRANT EXECUTE ON FUNCTION public._check_credit_limit(p_customer_id uuid, p_additional_cents bigint) TO authenticated;
@@ -1642,7 +1669,9 @@ BEGIN
   -- one granted to anon by name. Filtering on the name alone would let a bad capture
   -- hand PUBLIC write access to a table and still pass. Production grants nothing to
   -- PUBLIC on tables or sequences (only EXECUTE on functions), so this widening
-  -- rejects drift without rejecting live.
+  -- rejects drift without rejecting live. Column privileges are scanned too: they
+  -- are not visible in relacl, so a capture that handed anon INSERT on a single
+  -- column would otherwise pass a guard that only looked at whole tables.
   SELECT string_agg(format('%s on %s', grantee, obj), ', ' ORDER BY obj, grantee)
     INTO v_leaked
   FROM (
@@ -1653,6 +1682,19 @@ BEGIN
     CROSS JOIN LATERAL aclexplode(c.relacl) a
     WHERE n.nspname = 'public'
       AND c.relkind IN ('r', 'p', 'v', 'm')
+      AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) = 'anon')
+      AND a.privilege_type NOT IN ('SELECT', 'MAINTAIN')
+    UNION ALL
+    SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee,
+           format('%I.%I.%I', n.nspname, c.relname, att.attname) AS obj
+    FROM pg_attribute att
+    JOIN pg_class c ON c.oid = att.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    CROSS JOIN LATERAL aclexplode(att.attacl) a
+    WHERE n.nspname = 'public'
+      AND c.relkind IN ('r', 'p', 'v', 'm')
+      AND att.attnum > 0
+      AND NOT att.attisdropped
       AND (a.grantee = 0 OR pg_get_userbyid(a.grantee) = 'anon')
       AND a.privilege_type NOT IN ('SELECT', 'MAINTAIN')
   ) s;

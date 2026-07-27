@@ -73,6 +73,44 @@ FROM (
 ) s
 
 UNION ALL
+-- Column-level grants are invisible to `relations_and_acl`, which records only the
+-- table-level `relacl`. Production relies on 27 column-only INSERT/UPDATE grants on
+-- `public.products` for `authenticated`; losing one breaks product edits and adding one
+-- widens write access, in both cases without moving any other digest.
+SELECT 'column_acl', md5(COALESCE(string_agg(entry, E'\n' ORDER BY entry), ''))
+FROM (
+  SELECT format('%s.%s.%s|%s',
+                n.nspname, c.relname, a.attname,
+                array_to_string(ARRAY(
+                  SELECT unnest(a.attacl)::text ORDER BY 1
+                ), ',')) AS entry
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm')
+    AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
+) s
+
+UNION ALL
+-- The `columns` digest records a view's projected columns but not its query, and
+-- `relations_and_acl` records neither the query nor `reloptions`. A view could therefore
+-- lose a predicate, or lose `security_invoker`, with every other digest unchanged.
+-- `public.view_unmigrated_products` carries `security_invoker='true'`; without it the view
+-- would execute with owner privileges and bypass the caller's RLS.
+SELECT 'view_definitions', md5(COALESCE(string_agg(entry, E'\n' ORDER BY entry), ''))
+FROM (
+  SELECT format('%s.%s|%s|%s',
+                n.nspname, c.relname,
+                COALESCE(array_to_string(ARRAY(
+                  SELECT unnest(c.reloptions) ORDER BY 1
+                ), ','), ''),
+                pg_get_viewdef(c.oid, true)) AS entry
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')
+) s
+
+UNION ALL
 SELECT 'triggers', md5(string_agg(entry, E'\n' ORDER BY entry))
 FROM (
   SELECT format('%s.%s|%s|%s',

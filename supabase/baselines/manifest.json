@@ -1,12 +1,12 @@
 {
   "format_version": 3,
   "project_id": "rhyzpcqhnizqbxphqdkr",
-  "generated_at": "2026-07-27T21:07:02.610Z",
+  "generated_at": "2026-07-27T21:37:28.537Z",
   "migrations_high_water": "20260727174805",
   "migration_ledger_rows": 914,
-  "fingerprint_sql_sha256": "3CB77576F5A1FC829524BE1B1BE5C9A9A44BCD2CAADDB8FBCCAA6CFC072FC4D1",
-  "acl_sql_sha256": "413614B2889CCC9F46CCEABCF894FE9528A5738CCA63DE22594B37AF44E00BA9",
-  "acl_statements": 1600,
+  "fingerprint_sql_sha256": "CC916B75DFB47C0A4E8DEF9D57924AEEDB6A2D428F3BA13319E8AB56FED1E451",
+  "acl_sql_sha256": "D705E905C11472C574C2D2B2CE87C8E2F3A17409616D5F6000C9F4822CFE1B21",
+  "acl_statements": 1627,
   "restore_order": [
     "20260727174805_extensions.sql",
     "20260727174805_public_schema.sql.br",
@@ -17,8 +17,8 @@
   ],
   "artifacts": {
     "20260727174805_acl_lockdown.sql": {
-      "bytes": 181498,
-      "sha256": "8522389313790942F2516D088665C34178023056D3EFC8D70B79AF68385ECE90"
+      "bytes": 184730,
+      "sha256": "9D2CED9FDDA6B2A2DDBFE20ECBC5635B8A3DCF7F58B220A9ADFFC074A60EAC8D"
     },
     "20260727174805_cron_jobs.sql": {
       "bytes": 4008,
@@ -90,6 +90,8 @@
     "enums": "9df1d2720ee68c51f557f3b2c42960db",
     "indexes": "be40ff498211b918bf0e120aba144102",
     "relations_and_acl": "802c4045b0b8f075112d6130fea0bb67",
+    "column_acl": "90a808eecc2b159048b2e9821e9559f6",
+    "view_definitions": "936f0d526cbcf48cf645c674736eb044",
     "triggers": "8034a4585904327730aaf54492214fd9",
     "function_security": "422343713ca83d432817c53f1ac72f01",
     "function_canonical_source": "eb4600f26f7ecd2635fdad01ae830a10",

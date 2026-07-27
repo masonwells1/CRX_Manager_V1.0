@@ -51,7 +51,17 @@ does **not** strip a role-specific grant. Restoring the schema alone therefore
 leaves `anon` holding privileges production revoked, and leaves default privileges
 that would re-grant them to every future migration. The lockdown revokes the
 Supabase-managed roles down to nothing, re-applies production's exact grants, and
-restores production's default privileges. It ends with two guards.
+restores production's default privileges.
+
+Those grants include **column-level** ones, and they are not optional. `REVOKE ALL ON
+ALL TABLES` strips column privileges along with table ones, so the reset removes them
+and only the capture puts them back. Production gives `authenticated` no table-level
+`INSERT` or `UPDATE` on `public.products`; 27 column grants are its entire write path,
+and a baseline that omits them restores a project where nobody can edit a Product.
+Granting the table instead would fix the app and widen access in the same stroke — do
+not do that. The `column_acl` fingerprint exists to catch exactly this.
+
+The lockdown ends with two guards.
 `BASELINE_ACL_ANON_OVER_GRANTED` fires if `anon` still holds anything beyond
 `SELECT`/`MAINTAIN` on a table — counting privileges granted to `PUBLIC`, because
 `anon` inherits those. `BASELINE_ACL_ANON_EXECUTE_DRIFTED` fires if `anon` holds
@@ -153,7 +163,12 @@ deterministic and reviewable.
 
 Then prove it. Restore the artifacts in `restore_order` into a throwaway
 PostgreSQL 17 container (`public.ecr.aws/supabase/postgres`), and require **all
-ten fingerprints to match live**, not just the counts. Also require the history
+twelve fingerprints to match live**, not just the counts. Two of them exist because
+the obvious eight missed real drift: `column_acl` covers production's column-level
+grants, which `relations_and_acl` cannot see because it records only table-level
+`relacl`, and `view_definitions` covers each view's query and `reloptions`, without
+which a view could lose `security_invoker` and start running with owner privileges
+while every other digest stayed identical. Also require the history
 file's second application to raise `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER`,
 the cron file's second application to raise
 `BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, the platform overlay's second

@@ -54,6 +54,35 @@ const pairs = (text) =>
   );
 
 const fingerprints = pairs(read('live_fingerprints.txt'));
+
+// The fingerprints are the fidelity contract, so the capture has to be complete before
+// it is published. A psql run that died partway still leaves a well-formed key=value
+// file, and every later comparison would then be made against whatever survived. The
+// expected names are derived from the recorded SQL itself rather than duplicated here,
+// so adding a digest to that file cannot leave this check behind.
+{
+  const fingerprintSql = readFileSync(
+    path.join(repoRoot, 'scripts', 'schema-baseline-fingerprints.sql'),
+    'utf8',
+  );
+  const expected = [...fingerprintSql.matchAll(/^SELECT '([a-z_]+)', md5\(/gm)].map((m) => m[1]);
+  if (expected.length === 0) {
+    throw new Error('scripts/schema-baseline-fingerprints.sql declares no fingerprints');
+  }
+  const missing = expected.filter((name) => !/^[0-9a-f]{32}$/.test(fingerprints[name] ?? ''));
+  if (missing.length > 0) {
+    throw new Error(
+      `live_fingerprints.txt is missing a valid md5 for: ${missing.join(', ')}; ` +
+        're-run the capture against live',
+    );
+  }
+  const unexpected = Object.keys(fingerprints).filter((name) => !expected.includes(name));
+  if (unexpected.length > 0) {
+    throw new Error(
+      `live_fingerprints.txt has fingerprints the recorded SQL does not define: ${unexpected.join(', ')}`,
+    );
+  }
+}
 const keyFunctionMd5 = pairs(read('key_fn_md5.txt'));
 const counts = pairs(read('counts.txt'));
 const extensionSignatures = read('ext_sigs.txt').trim().split(/\r?\n/).filter(Boolean);

@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: **914 ledger rows, max version `20260727174805`** — three migrations applied live this date. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. Its third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore in which all ten catalog fingerprints match live. **Section 0a now has nothing open**; it is retained for its proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: **914 ledger rows, max version `20260727174805`** — three migrations applied live this date. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. Its third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore in which all twelve catalog fingerprints match live. **Section 0a now has nothing open**; it is retained for its proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -130,26 +130,38 @@ surfaced, affecting disaster-recovery rebuilds only, not production.
    `20260727174805` (914 ledger rows) — no applied migration was edited. Mason supplied the
    `postgres` database password on 2026-07-27, which was the sole blocker.
    **Proven, not assumed.** The six artifacts were restored in `restore_order` into a throwaway
-   PostgreSQL 17.6 container and **all ten catalog fingerprints match live** (`columns`,
-   `constraints`, `enums`, `indexes`, `relations_and_acl`, `triggers`, `function_security`,
-   `function_canonical_source`, `policy_contracts`, `cron_contracts`). The restored ledger reports
+   PostgreSQL 17.6 container and **all twelve catalog fingerprints match live** (`columns`,
+   `constraints`, `enums`, `indexes`, `relations_and_acl`, `column_acl`, `view_definitions`,
+   `triggers`, `function_security`, `function_canonical_source`, `policy_contracts`,
+   `cron_contracts`). `column_acl` and `view_definitions` were added in review: without them
+   production's 27 column-level grants on `public.products`, and a view's `security_invoker`
+   setting, could change with every digest unchanged. The restored ledger reports
    `914|20260727174805`. Re-applying the history file raises
    `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER` and the cron file raises
-   `BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, so both stay fail-closed. The one genuinely
-   post-baseline migration replays onto the restored database cleanly — the exact step that used to
-   stall at 16 of 50. `npm run test:schema-baseline` passes:
+   `BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, so both stay fail-closed. A post-baseline migration replays
+   onto the restored database cleanly — the exact step that used to stall at 16 of 50; that file is
+   an uncommitted migration in the working checkout, not part of this change, so from the committed
+   tree there is nothing past the high-water. `npm run test:schema-baseline` passes:
    `SCHEMA_BASELINE_PASS high_water=20260727174805 ledger_rows=914` /
-   `POST_BASELINE_MIGRATIONS_PASS pending=1`.
-   **Two real defects were found and fixed while doing it, both DR-only:**
+   `POST_BASELINE_MIGRATIONS_PASS pending=0`.
+   **Three real defects were found and fixed while doing it, all DR-only:**
    - *Security.* A schema dump can only `GRANT`. A new Supabase project ships `ALTER DEFAULT
      PRIVILEGES` handing `anon` — the unauthenticated role — full CRUD on every table and `EXECUTE`
      on every function `postgres` creates, and `REVOKE … FROM PUBLIC` does **not** strip a
      role-specific grant. Restoring the old baseline therefore left `anon` holding privileges
      production had revoked, silently undoing the hardening shipped in PR #249. The baseline now
      carries a sixth artifact, `*_acl_lockdown.sql`: it revokes the Supabase-managed roles to
-     nothing, re-applies production's exact 1600 grants, restores production's default privileges,
+     nothing, re-applies production's exact 1627 grants, restores production's default privileges,
      and ends with a guard raising `BASELINE_ACL_ANON_OVER_GRANTED` if `anon` still holds anything
      beyond `SELECT`/`MAINTAIN` on a table.
+   - *Broken rebuild.* Found in review, by a fingerprint added in review. The lockdown's
+     `REVOKE ALL ON ALL TABLES` strips **column-level** privileges along with table ones, and the
+     ACL capture only emitted table-level grants — so the restore deleted production's 27
+     column grants on `public.products` and never restored them. `authenticated` has no
+     table-level `INSERT`/`UPDATE` there; those column grants are its whole write path. A project
+     rebuilt from the baseline would have come up unable to edit a Product, and no digest in the
+     contract could see it. The capture now emits column grants (1600 → 1627 statements) and the
+     `anon` guard scans column privileges too.
    - *Fidelity.* `supabase db dump` post-processes the dump and strips `--` comment lines out of
      function bodies — 3 of 527 functions were affected. The public-schema artifact is now built
      from raw `pg_dump`, normalized by `scripts/build-schema-baseline-public.mjs`.

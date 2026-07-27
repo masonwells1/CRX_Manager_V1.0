@@ -36,15 +36,17 @@ path only. Closes the last open item in `KNOWN_ISSUES.md` §0a.
   lockdown owns — two of which are `FOR ROLE "supabase_admin"` and abort the restore outright).
 
 **Proof.** The six artifacts restored in `restore_order` into a throwaway PostgreSQL 17.6 container:
-**all ten catalog fingerprints match live** (`columns`, `constraints`, `enums`, `indexes`,
-`relations_and_acl`, `triggers`, `function_security`, `function_canonical_source`,
-`policy_contracts`, `cron_contracts`); restored ledger reports `914|20260727174805`; re-applying the
+**all twelve catalog fingerprints match live** (`columns`, `constraints`, `enums`, `indexes`,
+`relations_and_acl`, `column_acl`, `view_definitions`, `triggers`, `function_security`,
+`function_canonical_source`, `policy_contracts`, `cron_contracts`); restored ledger reports `914|20260727174805`; re-applying the
 history file raises `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER` and the cron file raises
-`BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`; the ACL lockdown re-applies cleanly; and the one
-genuinely post-baseline migration replays onto the result — the exact step that used to stall at 16
-of 50. `npm run test:schema-baseline` reports
+`BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`; the ACL lockdown re-applies cleanly; and a
+post-baseline migration replays onto the result — the exact step that used to stall at 16 of 50.
+That replayed file is an uncommitted migration sitting in the working checkout, not part of this
+change; from this commit the repository holds no migration past the high-water.
+`npm run test:schema-baseline` reports
 `SCHEMA_BASELINE_PASS high_water=20260727174805 ledger_rows=914` and
-`POST_BASELINE_MIGRATIONS_PASS pending=1`.
+`POST_BASELINE_MIGRATIONS_PASS pending=0`.
 
 **Guards added so this cannot silently regress.** `scripts/verify-schema-baseline.mjs` now binds the
 fingerprint and ACL SQL by SHA-256 (redefining "matches production" fails the gate), requires all six
@@ -60,11 +62,12 @@ migration filenames have no matching ledger version while 654 ledger versions ha
 pre-existing consequence of applying migrations through the Management API, which assigns its own
 version. The baseline copies live's ledger verbatim so a restore mirrors production exactly.
 
-**Review follow-up (CodeRabbit, PR #251).** Six review findings closed after the initial push, all
-in the verification layer rather than in the captured state. `verify-schema-baseline.mjs` now checks `restore_order` by
+**Review follow-up (CodeRabbit, PR #251).** Two review rounds, twelve findings closed after the
+initial push. All but one sit in the verification layer rather than in the captured state; the
+exception widened the fidelity contract itself and is described at the end. `verify-schema-baseline.mjs` now checks `restore_order` by
 exact name and position rather than by length — a manifest that dropped the ACL lockdown and repeated
 another artifact was still six entries long and would have rebuilt a project with `anon`
-over-granted — and it enumerates the nine required `disposable_restore_proof` checks rather than
+over-granted — and it enumerates the ten required `disposable_restore_proof` checks rather than
 iterating whatever keys happen to be present, so a proof that simply omitted the checks it failed no
 longer passes. `assemble-schema-baseline.mjs` now asserts the high-water stamp appears exactly once in
 a restamped artifact before rewriting it, so a coincidental 14-digit run elsewhere in the file — a
@@ -90,8 +93,41 @@ apply already failed: the bucket INSERT has no `ON CONFLICT`, so it died on a pr
 and rolled the whole transaction back, leaving the scoped policies intact. That protection was
 accidental and reported itself as an opaque duplicate-key error; it is now a deliberate, named
 refusal that no longer depends on the INSERT. Both artifacts were regenerated and the full
-disposable-restore proof re-run from scratch against them — all ten fingerprints still match live,
+disposable-restore proof re-run from scratch against them — all fingerprints still match live,
 `anon` EXECUTE lands on exactly 95, and `anon`/`PUBLIC` hold zero table privileges beyond `SELECT`.
+
+**Review round two.** The fidelity contract gained two digests, and it needed them.
+`scripts/schema-baseline-fingerprints.sql` recorded only table-level `relacl`, so production's 27
+column-level `INSERT`/`UPDATE` grants on `public.products` — the ones an authenticated user needs to
+edit a product — sat outside the contract entirely: dropping one would break product editing and
+adding one would widen write access, in both cases with every digest unchanged. It also recorded a
+view's columns but never its query or its `reloptions`, so `public.view_unmigrated_products` could
+lose `security_invoker='true'` — and begin executing with owner privileges instead of the caller's —
+without moving a fingerprint. `column_acl` and `view_definitions` close both — and `column_acl`
+earned its place immediately. Re-captured read-only from live and re-proved against a fresh
+disposable restore, it did **not** match: the restored database held **no column grants at all**.
+`REVOKE ALL ON ALL TABLES` strips column privileges along with table ones, and the ACL capture only
+ever emitted table-level grants, so the lockdown was deleting them and never putting them back.
+Production gives `authenticated` no table-level `INSERT` or `UPDATE` on `public.products` — those 27
+column grants are its entire write path — so a project rebuilt from the previous baseline would have
+come up with Product editing simply broken, and nothing in the old ten-digest contract could see it.
+`scripts/schema-baseline-acl.sql` now captures column grants (1600 statements → 1627), and the
+lockdown's `anon` guard scans column privileges as well as table ones, since a capture handing
+`anon` `INSERT` on a single column would otherwise pass a guard that only looked at whole tables.
+Re-proved end to end on a rebuilt container: all twelve digests match live, `anon` EXECUTE lands on
+95, `anon`/`PUBLIC` hold zero table *or column* privileges beyond `SELECT`, all three restore
+sentinels fire, the lockdown re-applies cleanly, and a post-baseline migration replays. Alongside
+them: `assemble-schema-baseline.mjs` and
+`verify-schema-baseline.mjs` now require a valid MD5 for exactly the digests the recorded SQL
+defines — derived from that SQL rather than duplicated as a second hard-coded list — so a truncated
+capture, or a manifest with a digest quietly dropped, fails instead of comparing against whatever
+survived. The restore proof must record PostgreSQL major **17** specifically, not any integer, since
+a proof taken on 15 or 16 says nothing about the project this rebuilds. And
+`list-post-baseline-migrations.test.mjs` now derives its expectation using the selector's
+captured-name rule as well as its version rule, so a migration whose ledger version differs from its
+filename timestamp no longer reads as one the selector wrongly withheld. Finally, the proof text
+above is corrected: the post-baseline migration that replayed is an uncommitted file that happens to
+sit in this working checkout, not part of this change.
 
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 

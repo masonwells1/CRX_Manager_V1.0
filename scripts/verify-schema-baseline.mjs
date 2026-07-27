@@ -62,6 +62,32 @@ for (const [file, field] of [
   }
 }
 
+// Binding the SQL hash proves the query set is unchanged; this proves the manifest
+// actually carries a digest for every query in it. Without this a manifest could ship
+// with a fingerprint quietly dropped, and the restore proof would still compare — and
+// pass — on whatever remained.
+{
+  const fingerprintSql = readFileSync(
+    path.join(repoRoot, 'scripts', 'schema-baseline-fingerprints.sql'),
+    'utf8',
+  );
+  const expected = [...fingerprintSql.matchAll(/^SELECT '([a-z_]+)', md5\(/gm)].map((m) => m[1]);
+  const recorded = manifest.catalog_fingerprints ?? {};
+  if (expected.length === 0) {
+    fail('scripts/schema-baseline-fingerprints.sql declares no fingerprints');
+  }
+  for (const name of expected) {
+    if (!/^[0-9a-f]{32}$/.test(recorded[name] ?? '')) {
+      fail(`manifest catalog_fingerprints is missing a valid md5 for ${name}`);
+    }
+  }
+  for (const name of Object.keys(recorded)) {
+    if (!expected.includes(name)) {
+      fail(`manifest catalog_fingerprints has ${name}, which the recorded SQL does not define`);
+    }
+  }
+}
+
 // A baseline is only trustworthy once it has actually been restored into a
 // throwaway database and matched against live. The required list is enumerated
 // rather than inferred from whatever keys happen to be present: iterating the
@@ -83,8 +109,13 @@ const REQUIRED_RESTORE_PROOFS = [
   if (!proof || typeof proof !== 'object') {
     fail('manifest is missing disposable_restore_proof');
   } else {
-    if (!Number.isInteger(proof.postgres_major)) {
-      fail('disposable_restore_proof.postgres_major must be the integer major version restored into');
+    // 17 specifically, not any integer. The baseline is only proven against the major
+    // version it was restored into, and the restore instructions target PostgreSQL 17;
+    // a proof recorded on 15 or 16 says nothing about the project this rebuilds.
+    if (proof.postgres_major !== 17) {
+      fail(
+        `disposable_restore_proof.postgres_major must be 17, got ${JSON.stringify(proof.postgres_major)}`,
+      );
     }
     for (const check of REQUIRED_RESTORE_PROOFS) {
       if (!Object.hasOwn(proof, check)) {
