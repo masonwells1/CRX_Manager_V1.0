@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-27 — Phase 3C containment decoding is bounded and fail-closed
+
+The private-artifact containment checker now keeps transfer decoding bounded in
+the hook/CI path. UTF-32 JSON and owner-decision CSV signals are decoded
+incrementally across all byte alignments after a BOM/NUL heuristic, with a
+4 KiB replay suffix, three-byte decoder carries, and fixed text windows rather
+than eight file-sized decoded strings. Embedded Base64 retains structural
+evidence from complete quanta when the final residual is unusable and checks a
+maximal valid prefix for both padded and unpadded `mod 4 = 1` wrappers without
+recursively decoding output. Hex packets now stream into the same non-recursive
+structural scanner instead of materializing a full token or decoded buffer.
+
+Archive rejection now validates bounded TAR/ustar checksum/header structure,
+ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
+a 511-byte stream overlap for split headers. Tool-owned ignored dependency
+archives (including fflate fixtures) remain exempt from archive-only rejection,
+while a private JSON/CSV signal inside those paths still fails closed. Raw Git
+commit objects are streamed through `git cat-file --batch` for every checked
+history commit, so range, pre-push, push, PR, and PR-target checks do not build
+per-commit object buffers. The packet tests cover direct and split inputs,
+benign near-misses, archive propagation through Base64/hex, zero-SHA/full
+ancestry, existing/repointed remotes, opaque URL remotes, and commit-object
+messages. This is checker/test/changelog-only work; it applies no migration and
+makes no live-data or production change.
+
 ## 2026-07-27 — Phase 3C containment rejects embedded repositories and Git-visible archives
 
 The private-artifact worktree scanner now rejects ignored **and untracked** directories that
