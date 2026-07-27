@@ -7,8 +7,9 @@ All significant development milestones, in reverse chronological order.
 - Updated the production spot-check workflow to verify the intentional
   `profile_public_view` SECURITY DEFINER boundary before classifying its
   Supabase advisor finding as actionable.
-- Prevented Dependabot from opening uncoordinated major-version PRs for the
-  React, ESLint, and TypeScript stacks. Security updates remain eligible.
+- Added a 90-day cooldown for routine Dependabot major upgrades and grouped the
+  React runtime and type packages so future React majors arrive together.
+  Dependabot security updates remain exempt from the cooldown.
 - Pinned transitive `brace-expansion` to the tested patched version `5.0.8`.
   The remaining React Router audit advisory affects only unused unstable RSC
   APIs and does not apply to CRX's browser-router architecture.
