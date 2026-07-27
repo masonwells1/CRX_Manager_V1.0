@@ -84,31 +84,51 @@ BLOCKER/HIGH finding. Its conditional bootstrap-base drift finding remains
 fail-closed and requires a fresh `origin/main` fetch before publication; no code
 change is warranted while the base remains pinned.
 
-Exact `3c156065680fb2cc3efc6a35c0d78158e84da924` final review supplies the
-review evidence for this correction. Sol returned `CLEAN` with no unresolved
-BLOCKER/HIGH/MEDIUM finding; its retained LOW follow-ups are historical
+Exact `3c156065680fb2cc3efc6a35c0d78158e84da924` was a non-final exact review
+cycle. Sol returned `CLEAN` with no unresolved BLOCKER/HIGH/MEDIUM finding;
+Luna `gpt-5.6-luna`, session `019fa399-ea5b-7b93-953d-f27f42eef3d4`, returned
+`PASS`. Sol's retained LOW follow-ups are historical
 imperative plan wording, a fresh bootstrap refetch before publication, and the
 Ubuntu protected-PR CI requirement. Accepted conservative generic-signature
-false-positive and precommit-cost LOWs require no containment-code change. Luna `gpt-5.6-luna`, session
-`019fa399-ea5b-7b93-953d-f27f42eef3d4`, returned `PASS`; Git ownership/temp
-`EPERM` and a missing Graphify Python runtime were environment-only limitations.
+false-positive and precommit-cost LOWs require no containment-code change. Git
+ownership/temp `EPERM` and a missing Graphify Python runtime were
+environment-only limitations.
 Claude VERIFIED run `2026-07-27T12-49-03-719Z-95010716` reviewed exact
 `3c156065680fb2cc3efc6a35c0d78158e84da924` at `xhigh`: requested `opus`,
 resolved helper `claude-haiku-4-5-20251001` and reviewer `claude-opus-4-8`,
 and returned `SHIP-WITH-FOLLOWUPS` with no BLOCKER/HIGH finding. Its MEDIUM
 documentation finding was that this summary still named `a200`/`d38` where the
 ledger correctly named the `a750`/`a200` correction cycle; this correction
-aligns them.
+aligns them. Therefore the combined `3c156065` cycle was not final despite
+Sol's `CLEAN` and Luna's `PASS`: the resolved Opus MEDIUM required the
+`a10bad90` correction.
+
+Exact `a10bad90e990e83a2c650ee66a44828f317797a7` is the immediate reviewed
+source for this correction, not a final acceptance claim. Independent Sol
+returned `FIX` for one MEDIUM incomplete `3c156065` durable-review chain. Luna
+`gpt-5.6-luna`, session `019fa3ae-40b6-7ff1-92c1-282bdac567d3`, returned `FIX`
+for one MEDIUM stale active loop charter that still directed SAFE PREP,
+595-active, and capture/materialization work. Claude VERIFIED run
+`2026-07-27T13-11-06-599Z-9df51ac6` reviewed exact `a10bad90` at `xhigh`:
+requested `opus`, resolved helper `claude-haiku-4-5-20251001` and reviewer
+`claude-opus-4-8`, and returned `SHIP-WITH-FOLLOWUPS` with no BLOCKER/HIGH
+finding. Its operational bootstrap-pin MEDIUM was mitigated by the fresh
+refetch but must be rechecked immediately before any push. Accepted LOWs are
+the 100,000-candidate ceiling/precommit cost and the unreachable current
+`ZERO_SHA` push nit; neither warrants a code change. This correction must still
+receive final exact review on its containing SHA, which is identified only by
+Git and PR metadata.
 
 ## Owner action and hard boundary
 
 The packet has been regenerated and verified, but Mason must not begin the
 row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
-Product classification is approved. The remaining gate is a fresh `origin/main`
-refetch before publication, final exact review of this documentation correction,
-and a protected PR accepted with its required checks — including Ubuntu PR CI —
-green and any real CodeRabbit finding resolved. The PR is not open. Only after
-those external gates are complete may Mason review every
+Product classification is approved. The remaining gate is final exact review of
+this documentation correction, a fresh `origin/main` refetch and bootstrap-pin
+recheck immediately before any push, and a protected PR accepted with its
+required checks — including Ubuntu PR CI — green and any real CodeRabbit finding
+resolved. The PR is not open. Only after those external gates are complete may
+Mason review every
 decision field and unresolved acknowledgment, then explicitly approve this
 exact packet before a separate Stage C design mission is considered. No Stage C
 SQL, migration, or apply; no live mutation; no flag enablement; and no deploy or
