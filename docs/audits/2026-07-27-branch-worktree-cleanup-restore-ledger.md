@@ -1,7 +1,30 @@
 # Branch / worktree cleanup — restore ledger (2026-07-27)
 
-Restore a branch:  `git branch <name> <sha>`
-Restore a worktree: `git worktree add <path> <branch-or-sha>`
+**Every tip below is preserved by a real tag on `origin`, not merely by the SHA written here.**
+A SHA in a Markdown file keeps nothing alive — once the last ref is gone the commit is
+unreferenced, `git gc` may prune it, and a fresh clone never had it. The tags are what make
+this ledger restorable. Do not delete them without deciding the work is gone for good.
+
+```
+archive/2026-07-27-cleanup/<branch-name>        # 24 deleted branches
+archive/2026-07-27-cleanup/worktree-<label>     # 5 detached worktree HEADs
+```
+
+List them: `git ls-remote --tags origin 'refs/tags/archive/2026-07-27-cleanup/*'`
+
+Restore (read-only preflight first — confirm the checkout is clean and the tag resolves):
+
+```bash
+git status --short --branch                                  # 1. inspect before any write
+git fetch origin --tags
+git rev-parse --verify archive/2026-07-27-cleanup/<name>^{commit}   # 2. prove the tip exists
+git branch <name> archive/2026-07-27-cleanup/<name>          # 3. local branch
+git worktree add <path> <name>                               # 3b. or a worktree
+git push --dry-run origin <name>                             # 4. dry-run first
+```
+
+Re-publishing a restored branch to `origin` is an outward-facing write — get Mason's OK before
+dropping `--dry-run`.
 
 ## Branches deleted (tip SHA recorded)
 - `dc90cb0935f76b5ea7c9ccb91d4155f89c695a60` — claude/rls-inline-role-require-active
@@ -47,15 +70,38 @@ Restore a remote branch: `git push origin <sha>:refs/heads/<name>`
 - `7212b13279f4da18104ee7feb2488d345c2e5b9d` — docs/phase1b-review-handoff-2026-07
 
 ## Detached worktree HEADs removed
-- `d8a17601` — C:/CRX_CRM (Fix bulk quote import lifecycle path)
-- `408bc63f` — C:/CRX_Layer2 (Update offline known issue status)
-- `b4212da3` — .claude/worktrees/priceless-brahmagupta-b419d5
-- `476f21fa` — .claude/worktrees/stoic-heyrovsky-ebaaf6
-- `29486b5e` — .codex/worktrees/pr231-exact-review
+
+All five were **detached** (no branch attached) — the HEAD commit was the only reference, which
+is why each one is tagged. Full 40-character SHAs:
+
+| Tag suffix | Full SHA | Removed path | HEAD subject |
+|---|---|---|---|
+| `worktree-CRX_CRM` | `d8a17601a25591a90aeaf5b8358a2e8e13ab67ca` | `C:/CRX_CRM` | Fix bulk quote import lifecycle path |
+| `worktree-CRX_Layer2` | `408bc63f8b4a3a0b8351c4a456a9821b4c04187f` | `C:/CRX_Layer2` | Update offline known issue status |
+| `worktree-priceless-brahmagupta-b419d5` | `b4212da38711cba3633b3e8536ca3c82ebf17d0e` | `.claude/worktrees/priceless-brahmagupta-b419d5` | (same tip as the branch of that name) |
+| `worktree-stoic-heyrovsky-ebaaf6` | `476f21fa14081488b237bf9ed794e210e5cc92c8` | `.claude/worktrees/stoic-heyrovsky-ebaaf6` | — |
+| `worktree-pr231-exact-review` | `29486b5e1151d19ab2855ee146ad2aeb04a83a7b` | `.codex/worktrees/pr231-exact-review` | — |
 
 ## Kept (unlanded unique work)
-- `codex/phase3c-overnight-20260726` — open PR #246 (worktree kept)
-- `backup/phase3c-pre-provenance-rewrite-20260727` — backup of PR #246
-- `codex/section1-security-hardening-20260725` — PARKED migration 20260725234503 + smoke scripts, not in main
-- `claude/gauntlet-s3-s4-and-phase3-artifacts-2026-07-26` — section-04 gauntlet refresh doc, not in main
-- `codex/section9-mismatch-design-20260725`, `codex/section10-blend-ocr-refresh-20260725`, `codex/section11-pdf-compliance-refresh-20260725`, `codex/section12-edge-functions-refresh-20260725`, `codex/section14-testing-prevention-refresh-20260725`, `codex/noninterference-queue-ledger-20260725`, `codex/overnight-safe-loop-20260725`, `codex/protected-pr-readiness-20260726` — each carries an audit/ledger doc not in main
+
+Still live branches — reachable by their own refs, so **not** tagged. Tips recorded at
+2026-07-27 for identification; these branches move as work continues.
+
+| Tip SHA | Branch | Why kept |
+|---|---|---|
+| `f665b90ca8ff98a5b7fbe40b450b4d70fbbd76ad` | `codex/phase3c-overnight-20260726` | open PR #246 |
+| `f5030fe19ed7a4df0e3a41300994da8c6c4a0dee` | `backup/phase3c-pre-provenance-rewrite-20260727` | backup of PR #246 (local only) |
+| `53f6177eb6afe628c5de437ac27f4a9cd8fbb7cf` | `codex/section1-security-hardening-20260725` | PARKED migration 20260725234503 + smoke scripts, not in main |
+| `29486b5e1151d19ab2855ee146ad2aeb04a83a7b` | `claude/gauntlet-s3-s4-and-phase3-artifacts-2026-07-26` | section-04 gauntlet refresh doc, not in main |
+| `b536ce0fe1843105277c1a158835d9980cef59ed` | `codex/section9-mismatch-design-20260725` | audit doc not in main |
+| `8622e1c1224acd60c07640226bf2cfcdbba0fccd` | `codex/section10-blend-ocr-refresh-20260725` | audit doc not in main |
+| `b754bf8db85c1ed163dd3d7af17f678ace32e30f` | `codex/section11-pdf-compliance-refresh-20260725` | audit doc not in main |
+| `a94ef7f1e8050667314d9c7bddc1ea36be3a46ba` | `codex/section12-edge-functions-refresh-20260725` | audit doc not in main |
+| `cf5728cb8768f661cc41e5955ff9eb01f43c72a7` | `codex/section14-testing-prevention-refresh-20260725` | audit doc not in main |
+| `c30c50dcd1b180f14c8cb33cca39382f59f8147e` | `codex/noninterference-queue-ledger-20260725` | ledger doc not in main |
+| `9e0282f36c4dc95462430a72a033c7ba8816810f` | `codex/overnight-safe-loop-20260725` | ledger doc not in main |
+| `1741881f061f6ac7d20ff41d645dfff45a44a12f` | `codex/protected-pr-readiness-20260726` | audit doc not in main |
+
+**Worktrees kept:** `C:/CRX_Manager` (branch-attached, the shared checkout) and
+`C:/Users/mason/.codex/worktrees/phase3c-overnight-20260726/CRX_Manager`
+(branch-attached to `codex/phase3c-overnight-20260726`, serving open PR #246).

@@ -50,16 +50,22 @@ Changed files from the base:
 - `src/lib/section9PoApRemediation.test.ts`
 - `supabase/migrations/20260726190000_section9_po_ap_high_remediation.sql`
 
-This handoff file itself is intentionally uncommitted and outside the reviewed
-candidate.
+This handoff file is outside the reviewed candidate — it is documentation about
+the review, not part of the migration apply set.
 
-## Repo State
+> **Archival note (2026-07-27).** Everything below is a *historical snapshot*
+> taken when this packet was written on 2026-07-26. At that time the packet was
+> deliberately left uncommitted. It has since been committed as a documentation
+> record, because it existed only as an untracked file inside a worktree removed
+> during the 2026-07-27 cleanup sweep. Committing it changes nothing about the
+> review it describes, and it remains excluded from the migration apply set.
 
-Before creating this handoff, the worktree was clean with no staged files.
-`origin/main` resolved locally to
-`f0aba859ca3b86e243be5a763f869b8910e173ac`; the branch is four commits ahead
-and zero behind. After this handoff is written, the only expected uncommitted
-file is this packet. Do not commit it as part of the review.
+## Repo State (historical snapshot, 2026-07-26)
+
+At the time this handoff was created, the worktree was clean with no staged
+files. `origin/main` resolved locally to
+`f0aba859ca3b86e243be5a763f869b8910e173ac`; the branch was four commits ahead
+and zero behind.
 
 No migration was applied. No live data, migration-ledger row, permission,
 feature flag, deployment, or Stage C state was changed. Nothing from this
