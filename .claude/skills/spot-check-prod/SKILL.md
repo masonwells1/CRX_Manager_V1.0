@@ -52,6 +52,7 @@ when all of these live read-only checks pass:
   from `public.profiles`;
 - `anon` and `PUBLIC` do not have `SELECT`;
 - `authenticated` has `SELECT`; and
+- the view owner still has `BYPASSRLS` (normally owner `postgres`); and
 - the underlying `profiles_select` policy remains admin-or-self.
 
 Use Supabase MCP read-only SQL when available. If custom SQL cannot run
@@ -109,7 +110,8 @@ SENTRY (24h)
     3. <error message> — <count> events
 
 SUPABASE ADVISORS
-  Security: <N error / N warn>  [previous baseline: <from CLAUDE.md>]
+  Security raw:        <N error / N warn>  [previous baseline: <from CLAUDE.md>]
+  Security actionable: <N error / N warn>  [verified exceptions: <none / list>]
   Performance: <N error / N warn>
   New findings:
     - <advisor name> on <object>: <one-line description>
