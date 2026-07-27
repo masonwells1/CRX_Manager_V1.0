@@ -21,8 +21,26 @@ const sha256 = (buffer) => createHash('sha256').update(buffer).digest('hex').toU
 if (!/^\d{14}$/.test(manifest.migrations_high_water ?? '')) {
   fail('manifest high-water is not a 14-digit version');
 }
-if (!Array.isArray(manifest.restore_order) || manifest.restore_order.length !== 6) {
-  fail('manifest restore_order must contain six ordered SQL artifacts');
+// Checked by exact name and position, not by length: an operator restores whatever
+// restore_order lists, so a manifest that dropped the ACL lockdown and repeated
+// another artifact would still be six entries long and would rebuild a project with
+// `anon` over-granted.
+const EXPECTED_RESTORE_ORDER = [
+  'extensions.sql',
+  'public_schema.sql.br',
+  'acl_lockdown.sql',
+  'platform_overlay.sql',
+  'cron_jobs.sql',
+  'migration_history.sql',
+];
+{
+  const expected = EXPECTED_RESTORE_ORDER.map(
+    (suffix) => `${manifest.migrations_high_water}_${suffix}`,
+  );
+  const actual = Array.isArray(manifest.restore_order) ? manifest.restore_order : [];
+  if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
+    fail(`manifest restore_order must be exactly ${expected.join(', ')}`);
+  }
 }
 
 // The fingerprints and the ACL capture in this manifest are only meaningful if the
@@ -45,8 +63,20 @@ for (const [file, field] of [
 }
 
 // A baseline is only trustworthy once it has actually been restored into a
-// throwaway database and matched against live. Requiring every proof flag to be
-// true stops a half-finished refresh from being published as if it were proven.
+// throwaway database and matched against live. The required list is enumerated
+// rather than inferred from whatever keys happen to be present: iterating the
+// object alone would pass a proof that simply omitted the checks it failed.
+const REQUIRED_RESTORE_PROOFS = [
+  'restore_order_applied_clean',
+  'ledger_rows_and_high_water_match_live',
+  'all_catalog_fingerprints_match_live',
+  'relation_and_function_acl_match_live',
+  'function_source_matches_live',
+  'history_restore_fail_closed',
+  'cron_restore_fail_closed',
+  'acl_lockdown_reapply_is_idempotent',
+  'post_baseline_migration_replays_clean',
+];
 {
   const proof = manifest.disposable_restore_proof;
   if (!proof || typeof proof !== 'object') {
@@ -54,6 +84,11 @@ for (const [file, field] of [
   } else {
     if (!Number.isInteger(proof.postgres_major)) {
       fail('disposable_restore_proof.postgres_major must be the integer major version restored into');
+    }
+    for (const check of REQUIRED_RESTORE_PROOFS) {
+      if (!Object.hasOwn(proof, check)) {
+        fail(`disposable_restore_proof is missing required proof ${check}`);
+      }
     }
     for (const [check, value] of Object.entries(proof)) {
       if (check !== 'postgres_major' && value !== true) {

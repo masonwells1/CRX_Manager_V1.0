@@ -65,6 +65,14 @@ const restoreProof = JSON.parse(read('restore_proof.json'));
 const restamp = (name) => {
   const source = readFileSync(path.join(baselineDir, name), 'utf8');
   const previous = name.slice(0, 14);
+  // The stamp is expected exactly once, in the header comment. Asserting that
+  // before rewriting keeps a coincidental 14-digit run elsewhere in the file — a
+  // cron schedule, a literal, a migration version in a comment — from being
+  // silently rewritten along with it.
+  const occurrences = source.split(previous).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(`${name} contains ${occurrences} occurrences of ${previous}; expected exactly 1`);
+  }
   return source.replaceAll(previous, highWater);
 };
 

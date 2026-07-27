@@ -1635,6 +1635,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT DELETE, INSERT
 DO $baseline_acl_verify$
 DECLARE
   v_leaked text;
+  v_anon_execute integer;
 BEGIN
   SELECT string_agg(format('%s on %s', grantee, obj), ', ' ORDER BY obj, grantee)
     INTO v_leaked
@@ -1652,6 +1653,21 @@ BEGIN
 
   IF v_leaked IS NOT NULL THEN
     RAISE EXCEPTION 'BASELINE_ACL_ANON_OVER_GRANTED: %', v_leaked;
+  END IF;
+
+  SELECT count(*)
+    INTO v_anon_execute
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  CROSS JOIN LATERAL aclexplode(p.proacl) a
+  LEFT JOIN pg_depend d ON d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e'
+  WHERE n.nspname = 'public'
+    AND pg_get_userbyid(a.grantee) = 'anon'
+    AND a.privilege_type = 'EXECUTE'
+    AND d.objid IS NULL;
+
+  IF v_anon_execute <> 95 THEN
+    RAISE EXCEPTION 'BASELINE_ACL_ANON_EXECUTE_DRIFTED: expected 95, found %', v_anon_execute;
   END IF;
 END;
 $baseline_acl_verify$;

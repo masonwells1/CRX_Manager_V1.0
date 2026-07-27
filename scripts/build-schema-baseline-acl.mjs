@@ -57,6 +57,25 @@ if (defaultPrivilegeStatements.length === 0) {
   throw new Error('no default-privilege statements were captured; the lockdown would not bind future objects');
 }
 
+// Functions cannot be guarded the way tables are. Production legitimately grants
+// `anon` EXECUTE on part of the schema — that is how the PostgREST `/rpc/` surface
+// works — so "anon holds no EXECUTE" would reject live's own state. What must hold
+// after a restore is that anon holds EXECUTE on exactly the functions captured here
+// and no others. This is the sharpest check in the file: restoring the public schema
+// alone leaves anon holding EXECUTE on *every* function, because the target
+// project's default privileges grant it as each one is created. Measured on the
+// disposable restore, that is 527 functions before this artifact runs and the
+// captured count after.
+//
+// Extension-owned functions are excluded, matching the capture. They belong to
+// `supabase_admin`, the project owner cannot revoke them (the restore logs a
+// `no privileges could be revoked` warning for each), and the baseline does not
+// manage them. Counting them would make the guard assert something this file has
+// no power to enforce.
+const anonExecuteGrants = statements.filter((s) =>
+  /^GRANT EXECUTE ON FUNCTION .+ TO anon;$/.test(s),
+).length;
+
 const roleList = MANAGED_ROLES.join(', ');
 const output = [
   `-- CRX public-schema ACL lockdown at live high-water ${highWaterArg}.`,
@@ -98,6 +117,7 @@ const output = [
   'DO $baseline_acl_verify$',
   'DECLARE',
   '  v_leaked text;',
+  '  v_anon_execute integer;',
   'BEGIN',
   '  SELECT string_agg(format(\'%s on %s\', grantee, obj), \', \' ORDER BY obj, grantee)',
   '    INTO v_leaked',
@@ -116,6 +136,21 @@ const output = [
   '  IF v_leaked IS NOT NULL THEN',
   "    RAISE EXCEPTION 'BASELINE_ACL_ANON_OVER_GRANTED: %', v_leaked;",
   '  END IF;',
+  '',
+  '  SELECT count(*)',
+  '    INTO v_anon_execute',
+  '  FROM pg_proc p',
+  '  JOIN pg_namespace n ON n.oid = p.pronamespace',
+  '  CROSS JOIN LATERAL aclexplode(p.proacl) a',
+  "  LEFT JOIN pg_depend d ON d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e'",
+  "  WHERE n.nspname = 'public'",
+  "    AND pg_get_userbyid(a.grantee) = 'anon'",
+  "    AND a.privilege_type = 'EXECUTE'",
+  '    AND d.objid IS NULL;',
+  '',
+  `  IF v_anon_execute <> ${anonExecuteGrants} THEN`,
+  `    RAISE EXCEPTION 'BASELINE_ACL_ANON_EXECUTE_DRIFTED: expected ${anonExecuteGrants}, found %', v_anon_execute;`,
+  '  END IF;',
   'END;',
   '$baseline_acl_verify$;',
   '',
@@ -131,6 +166,7 @@ console.log(
       output: outputPath,
       grant_statements: statements.length,
       default_privilege_statements: defaultPrivilegeStatements.length,
+      anon_execute_grants: anonExecuteGrants,
       high_water: highWaterArg,
     },
     null,

@@ -60,6 +60,25 @@ migration filenames have no matching ledger version while 654 ledger versions ha
 pre-existing consequence of applying migrations through the Management API, which assigns its own
 version. The baseline copies live's ledger verbatim so a restore mirrors production exactly.
 
+**Review follow-up (CodeRabbit, PR #251).** Four verification-layer gaps closed after the initial
+push, none of them in the captured state. `verify-schema-baseline.mjs` now checks `restore_order` by
+exact name and position rather than by length — a manifest that dropped the ACL lockdown and repeated
+another artifact was still six entries long and would have rebuilt a project with `anon`
+over-granted — and it enumerates the nine required `disposable_restore_proof` checks rather than
+iterating whatever keys happen to be present, so a proof that simply omitted the checks it failed no
+longer passes. `assemble-schema-baseline.mjs` now asserts the high-water stamp appears exactly once in
+a restamped artifact before rewriting it, so a coincidental 14-digit run elsewhere in the file — a
+cron schedule, a literal, a version in a comment — is not silently rewritten along with it.
+`build-schema-baseline-acl.mjs` gained a routine-level guard, `BASELINE_ACL_ANON_EXECUTE_DRIFTED`:
+restoring the public schema alone leaves `anon` holding EXECUTE on **all 527** non-extension public
+functions, because the target project's default privileges grant it as each one is created. The
+lockdown cuts that to the **95** production actually grants — that is the PostgREST `/rpc/` surface —
+so the guard asserts that exact count rather than rejecting `anon` EXECUTE outright, which would
+reject live's own state. Extension-owned functions are excluded to match the capture: they belong to
+`supabase_admin`, the project owner cannot revoke them, and the baseline does not manage them. The
+lockdown artifact was regenerated and the full disposable-restore proof re-run from scratch against
+it — all ten fingerprints still match live, and `anon` EXECUTE lands on exactly 95.
+
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 
 Closes items 1 and 2 of `docs/manual/KNOWN_ISSUES.md` §0a — the two gaps that `20260727145843`

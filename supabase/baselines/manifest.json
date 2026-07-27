@@ -17,8 +17,8 @@
   ],
   "artifacts": {
     "20260727174805_acl_lockdown.sql": {
-      "bytes": 180423,
-      "sha256": "C68FEC8DD80C127AD40AC52033178D637270078F921D7022AFFDDD04150BD5F4"
+      "bytes": 180972,
+      "sha256": "286BFEB4F7A6067592FB8E7A43C3F533D87C71A894218A4FA3AD26A345B71E5D"
     },
     "20260727174805_cron_jobs.sql": {
       "bytes": 4008,
