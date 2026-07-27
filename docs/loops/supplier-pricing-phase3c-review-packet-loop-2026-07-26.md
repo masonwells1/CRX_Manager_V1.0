@@ -2,8 +2,9 @@
 
 ## Current mission status — packet complete; external gates only
 
-`PARKED — PR #246 IS OPEN; CORRECTED HEAD PUSH, CHECKS, CODERABBIT, AND
-EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PENDING`. The current
+`PARKED — PR #246 IS OPEN; ACCEPTANCE REQUIRES ITS CURRENT HEAD TO MATCH A
+RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND EXTERNAL
+TRUSTED-WORKFLOW/RULESET ACTIVATION PLUS PROOF`. The current
 post-Stage-A owner-review packet has already been regenerated and verified at
 604 aggregate-only rows. All 604 decisions remain `PENDING`; no Product
 classification is approved. There is no current 595-active assertion.
@@ -11,12 +12,13 @@ classification is approved. There is no current 595-active assertion.
 Capture and packet materialization are completed. An unattended agent must not
 recapture, regenerate, or materialize the private packet unless an explicit
 invalidation condition is recorded. PR #246 is already open and remains
-`PARKED`: push the corrected head only after its exact review, re-fetch
-`origin/main` and recheck bootstrap pin
-`0e058804090b84f9a14024a6666021a271bb1f71` immediately before that push, then
-obtain required checks (including Ubuntu PR CI), CodeRabbit resolution, and the
-separate external trusted-workflow/ruleset activation plus post-activation proof
-before Mason's row-by-row review and explicit approval. No Stage C SQL,
+`PARKED`: its current head must match a recorded exact-reviewed SHA, and any
+later head change invalidates prior head-bound evidence. Before any future
+publication, re-fetch `origin/main` and recheck bootstrap pin
+`0e058804090b84f9a14024a6666021a271bb1f71`; required checks (including Ubuntu
+PR CI), CodeRabbit resolution, and separate external trusted-workflow/ruleset
+activation plus post-activation proof remain mandatory before Mason's
+row-by-row review and explicit approval. No Stage C SQL,
 migration, apply, live mutation, flag enablement, deploy, or merge is
 authorized.
 
@@ -104,11 +106,12 @@ and its final review/PR path; they do not reopen capture or materialization.
    failing proof, privacy leak, or material review disagreement returns a
    bounded finding list to a fresh Terra writer. Freeze a new SHA and repeat
    the entire proof/review cycle.
-7. **Applicable delivery cycle:** when all proof and reviewers agree, re-fetch
-   `origin/main` and recheck the bootstrap pin immediately before any push, push this branch,
-   update open PR #246, wait for required checks and Vercel, read
-   CodeRabbit, correct every real issue through the same fresh-review loop,
-   and park the green review-resolved PR without merging it.
+7. **Applicable delivery cycle:** before any future publication, re-fetch
+   `origin/main` and recheck the bootstrap pin. PR #246 may be accepted only
+   when its current head matches a recorded exact-reviewed SHA; a later head
+   change starts a fresh proof/review cycle. Required checks, Vercel,
+   CodeRabbit disposition, and external trusted-workflow/ruleset activation
+   plus post-activation proof remain mandatory; park the PR without merging.
 
 At most six correction cycles may edit the candidate. Three consecutive
 failures with the same root cause, an unavailable required reviewer, or an
@@ -192,10 +195,11 @@ changes, or unrelated cleanup.
 The following historical packet-production criteria are complete for the
 already regenerated-and-verified 604-row aggregate-only packet. They are
 retained as evidence only and do not authorize a new capture or materialization
-run. The current loop completes only after final exact review of the containing
-correction, a recheck of current base/bootstrap
-`0e058804090b84f9a14024a6666021a271bb1f71` immediately before any push,
-required Ubuntu PR CI green with real CodeRabbit findings resolved, and a
+run. The current loop completes only after the PR's current head matches a
+recorded exact-reviewed SHA, a recheck of current base/bootstrap
+`0e058804090b84f9a14024a6666021a271bb1f71` before any future publication,
+required Ubuntu PR CI green with real CodeRabbit findings resolved, external
+trusted-workflow/ruleset activation plus post-activation proof, and a
 protected PR parked without merge for Mason's row-by-row review. Until then it
 remains `PARKED` and all 604 decisions remain `PENDING`.
 
@@ -227,10 +231,11 @@ If a condition cannot be proven, the item is `PARKED` with the exact blocker.
 
 This delivery mechanic does not authorize packet recapture or materialization.
 
-This mission may commit to `codex/phase3c-overnight-20260726` and, after the
-repository's full proof and review guards are green, push the corrected head to
-the already-open non-production PR #246. It must then park until checks,
-CodeRabbit, and external trusted-workflow/ruleset activation are proven.
+This mission may commit to `codex/phase3c-overnight-20260726`. Before any
+future publication, it must re-fetch/recheck the bootstrap pin; PR #246 can be
+accepted only if its current head matches a recorded exact-reviewed SHA and the
+required checks, CodeRabbit resolution, and external trusted-workflow/ruleset
+activation plus proof are complete. It remains `PARKED` otherwise.
 
 This mission must never:
 

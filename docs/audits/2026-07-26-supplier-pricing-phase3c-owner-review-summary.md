@@ -2,7 +2,9 @@
 
 ## Status
 
-`PARKED — PR #246 IS OPEN; CORRECTED HEAD PUSH, CHECKS, CODERABBIT, AND EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PENDING`
+`PARKED — PR #246 IS OPEN; ACCEPTANCE REQUIRES ITS CURRENT HEAD TO MATCH A
+RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND EXTERNAL
+TRUSTED-WORKFLOW/RULESET ACTIVATION PLUS PROOF`
 
 The reviewed packet commit
 `d38d41f63e68971f08f7158bf5a104af62d232aa` has immutable parent
@@ -152,18 +154,24 @@ this bounded review confirmed held-directory descriptor/path inode
 revalidation and the POSIX relocation fixture's exact safe failure. It does not
 change the external trusted-workflow/ruleset gap: PR #246 remains `PARKED`.
 
+The published PR head `bc305778037fe064b272ebae0aca567ed5f2f8e3` received a
+technical Sol `CLEAN` review. That is technical evidence, not acceptance: PR
+#246 remains `PARKED` until its current head matches a recorded exact-reviewed
+SHA. Any later PR-head change invalidates prior head-bound evidence and
+requires a fresh exact proof/review cycle.
+
 ## Owner action and hard boundary
 
 The packet has been regenerated and verified, but Mason must not begin the
 row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
-Product classification is approved. The remaining gate is final exact review of
-this documentation correction, a fresh `origin/main` refetch and the current
-`0e058804090b84f9a14024a6666021a271bb1f71` bootstrap-pin recheck immediately
-before any push, and a protected PR accepted with its
-  required checks — including Ubuntu PR CI — green and any real CodeRabbit finding
-  resolved. PR #246 is open but parked pending push of its corrected head, those
-  checks, CodeRabbit handling, and the separate external trusted-workflow/ruleset
-  activation plus post-activation proof. Only after those external gates are complete may
+Product classification is approved. The remaining gate is a recorded exact
+review of the PR's current head, a fresh `origin/main` refetch and the current
+`0e058804090b84f9a14024a6666021a271bb1f71` bootstrap-pin recheck before any
+future publication, and protected-PR acceptance with required checks —
+including Ubuntu PR CI — green, any real CodeRabbit finding resolved, and
+separate external trusted-workflow/ruleset activation plus post-activation
+proof. Any later PR-head change invalidates the head-bound evidence. Only after
+those external gates are complete may
 Mason review every
 decision field and unresolved acknowledgment, then explicitly approve this
 exact packet before a separate Stage C design mission is considered. No Stage C
