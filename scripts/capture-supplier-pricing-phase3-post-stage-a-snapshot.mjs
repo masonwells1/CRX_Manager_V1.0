@@ -103,8 +103,8 @@ export function buildPostStageASnapshot(payload) {
   return validatePostStageASnapshot({ ...snapshot, snapshot_sha256: sha256(snapshot) });
 }
 
-export function capturePostStageASnapshot({ root = REPO_ROOT, privateArtifactDir = process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR, run = spawnSync } = {}) {
-  const privateDir = assertExternalPrivateDirectory(privateArtifactDir, root);
+export function capturePostStageASnapshot({ root = REPO_ROOT, privateArtifactDir = process.env.CRX_PHASE3_PRIVATE_ARTIFACT_DIR, run = spawnSync, testApprovedRoot } = {}) {
+  const privateDir = assertExternalPrivateDirectory(privateArtifactDir, root, { testApprovedRoot });
   verifyLinkedProjectRef(readFileSync(path.join(root, 'supabase', '.temp', 'project-ref'), 'utf8'));
   const result = run('supabase', ['db', 'query', '--linked', '--output-format', 'json', CAPTURE_SQL], {
     cwd: root, encoding: 'utf8', shell: false, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 50 * 1024 * 1024,
@@ -112,7 +112,7 @@ export function capturePostStageASnapshot({ root = REPO_ROOT, privateArtifactDir
   assert(!result.error && result.status === 0, 'Supabase CLI read-only capture failed; raw output was not retained');
   assertHarmlessSupabaseStderr(result.stderr);
   const snapshot = buildPostStageASnapshot(parseSupabaseJson(result.stdout));
-  const outputPath = writePrivateArtifactAtomic(path.join(privateDir, POST_STAGE_A_SNAPSHOT_NAME), POST_STAGE_A_SNAPSHOT_NAME, canonical(snapshot), { repoRoot: root });
+  const outputPath = writePrivateArtifactAtomic(path.join(privateDir, POST_STAGE_A_SNAPSHOT_NAME), POST_STAGE_A_SNAPSHOT_NAME, canonical(snapshot), { repoRoot: root, testApprovedRoot });
   return { count: snapshot.products.length, hash: snapshot.snapshot_sha256, path: outputPath, timestamp: snapshot.capture_timestamp_utc };
 }
 

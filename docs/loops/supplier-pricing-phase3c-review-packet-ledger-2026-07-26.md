@@ -13,6 +13,46 @@
 - Forbidden interpretation: neither this ledger nor an agent verdict approves
   Product classifications or authorizes a Stage C migration/live apply.
 
+## Resumed post-PARK recovery pass — 2026-07-27
+
+This persistent goal resumed a separate, bounded safety recovery pass after
+the prior final independent-Sol review returned `FIX`. This does **not** amend
+or conceal the mission's six-cycle cap: the earlier candidate cycles remain
+historical, and this pass exists only to resolve the reproduced containment
+gaps before any candidate can be frozen or published.
+
+- Writer provenance: one fresh Terra-role recovery writer in the mission
+  worktree only; no commit, push, history rewrite, packet regeneration, live
+  query, classification, Stage C SQL, flag change, deployment, merge, or data
+  mutation occurred in this pass.
+- Prior Sol `FIX` findings being remediated: arbitrary external directories
+  (including a sibling linked worktree) were admitted; tip-only containment
+  missed a packet committed then deleted; filename/signature checks missed
+  minified renamed packet structures; CI ran containment after other content
+  processors; and synthetic Git fixtures did not prove real repository Git
+  identity preservation.
+- Follow-on orchestrator audit correction: the uncommitted recovery patch now
+  preserves the opened temporary file identity through the pre-rename boundary,
+  scans merge-resolution blobs with a merge-aware Git diff, and rejects BOM-
+  prefixed packet structures or a worktree candidate whose identity/size changes
+  while it is being scanned. Focused synthetic regressions cover all three;
+  independent review remains required before any freeze or packet regeneration.
+- Blocked-freeze correction: the first commit-hook freeze attempt exposed that
+  inherited Git hook variables could redirect the checker away from its explicit
+  root, producing an invalid fixture range. Checker Git subprocesses now strip
+  every `GIT_*` variable and use their supplied working root. The focused packet
+  suite and the full correction-guard suite both pass under representative
+  `GIT_DIR`/work-tree/index/common/object redirection variables; no commit was
+  made by this recovery writer.
+- Current worktree state: intended safety-tooling edits are uncommitted. The
+  next orchestrator gate is independent inspection, then packet regeneration,
+  full proof, fresh exact-SHA Luna/independent-Sol/latest-available Opus
+  reviews, and only then protected-PR/CodeRabbit handling.
+- The prior aggregate packet hashes below are historical materialization
+  evidence only. They are invalidated for delivery by this tooling change and
+  must be regenerated and re-verified before owner review. No private artifact
+  was read, moved, deleted, or recorded here.
+
 ## Cycle table
 
 | Cycle | Status | Exact SHA | Writer | Proof | Luna | Independent Sol | Resolved Opus review | PR / CodeRabbit | Next |
@@ -21,7 +61,7 @@
 | 1 — design adversary | DONE | `9bf567bf` | none | SHIP | n/a | n/a | `opus` → `claude-opus-4-8` | n/a | Cycle 2 accepts both LOW findings. |
 | 2 — final correction 6 | DONE — READY TO FREEZE | uncommitted | fresh `gpt-5.6-terra` | focused test, guard suites, typecheck, lint, build, and containment PASS | pending | pending | pending | n/a | Freeze exact SHA and obtain fresh reviews. |
 | 3 — private materialization | DONE | current aggregate hashes recorded below | Sol orchestrator | capture PASS; external hash/count binding PASS; manifest write/verify PASS; owner-sheet write/verify PASS; deterministic compare PASS; containment PASS | n/a | n/a | n/a | n/a | Final engineering review remains required. |
-| 4 — full review | IN PROGRESS | uncommitted correction | none | full test/commit pipeline pending | pending fresh exact-SHA review | pending fresh exact-SHA review | pending latest-available Opus review | n/a | Freeze exact SHA, refresh Graphify, and reconcile all reviews. |
+| 4 — full review | PARKED — resumed recovery pass | uncommitted recovery | fresh Terra-role recovery writer | focused recovery proof in progress; full test/commit pipeline pending | pending fresh exact-SHA review | pending fresh exact-SHA review | pending latest-available Opus review | n/a | Inspect recovery patch, regenerate packet, freeze exact SHA, and reconcile all reviews. |
 | 5 — protected PR | PENDING | pending | Terra only if correction needed | pending | pending | pending | pending | pending | Open PR, resolve real findings, park before merge. |
 | 6 — closeout | PENDING | pending | none | pending | pending | pending | pending | pending | Record READY FOR OWNER REVIEW and the exact approval packet. |
 
@@ -155,9 +195,9 @@ Stage C migration mission be designed.
 
 ## Closeout
 
-- `DONE:` pending
-- `NOW:` Freeze Cycle 4 candidate, refresh Graphify, and run final exact-SHA engineering reviews
-- `REMAINING:` full test/commit pipeline, fresh exact-SHA Luna review, fresh exact-SHA independent-Sol review, latest-available Opus review, and PR/CodeRabbit are pending; any later packet-tooling code change requires regeneration
-- `PARKED:` none yet
+- `DONE:` earlier six correction cycles remain historical; resumed recovery has not yet frozen a candidate
+- `NOW:` independently inspect the bounded post-PARK containment recovery, then regenerate the invalidated private packet
+- `REMAINING:` full test/commit pipeline, fresh exact-SHA Luna review, fresh exact-SHA independent-Sol review, latest-available Opus review, and PR/CodeRabbit are pending; packet regeneration is mandatory before owner review
+- `PARKED:` delivery remains parked until the recovery patch, regenerated packet, and all fresh reviews are proven
 - `NEEDS MASON:` nothing during the unattended preparation run
-- `VERDICT:` IN PROGRESS
+- `VERDICT:` IN PROGRESS — RESUMED POST-PARK RECOVERY

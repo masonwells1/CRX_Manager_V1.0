@@ -14,8 +14,8 @@ const args = process.argv.slice(2);
 
 export { canonical, sha256, stable, without };
 
-export function loadSnapshot(file, binding = null) {
-  return loadValidatedSnapshot(file, REPO_ROOT, binding);
+export function loadSnapshot(file, binding = null, options = {}) {
+  return loadValidatedSnapshot(file, REPO_ROOT, binding, options);
 }
 
 function candidateEvidence(product) {

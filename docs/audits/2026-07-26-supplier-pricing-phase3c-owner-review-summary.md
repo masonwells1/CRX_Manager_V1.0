@@ -2,12 +2,21 @@
 
 ## Status
 
-`FINAL PACKET MATERIALIZED — EXACT-SHA ENGINEERING REVIEW PENDING`
+`PARKED — RESUMED POST-PARK CONTAINMENT RECOVERY`
 
-This is not completion and not approval. Sol regenerated the packet after the
-final tooling correction. The aggregate hashes below identify the current
-private packet; fresh exact-SHA engineering reviews and the protected PR remain
-required.
+This is not completion and not approval. A final independent-Sol review
+reproduced containment gaps after the earlier materialization record. The
+private packet itself is not being touched in this recovery pass, but the
+aggregate hashes below are historical only and cannot identify a delivery-ready
+packet after packet-tooling changes. Regeneration, deterministic verification,
+fresh exact-SHA engineering reviews, and the protected PR remain required.
+
+The resumed pass is limited to private-path admission, Git-history containment,
+structural packet detection, CI ordering, and isolated test-fixture safety. It
+does not classify Products, create Stage C SQL, enable cost basis, query or
+mutate live data, or approve any owner decision. The mission's earlier
+six-cycle cap remains recorded in the durable ledger; this is a separate
+post-PARK recovery pass, not a claim that the cap was changed.
 
 ## Unattended v2 binding sequence
 
@@ -35,12 +44,12 @@ or verify command. Missing, malformed, or mismatched bindings fail closed.
 | Manifest | `crx-supplier-pricing-phase3-post-stage-a-proposed-classification-manifest-v2` | 604 | `0e944d05c101ebd667decd6ca8594f7038fab7280c15143c8c7c4600bb38ee06` | `0cfd81aedde82dd261770118ccf472b3760655fd5a8b2cdedb863aa888f98dc4` | 1580465 |
 | Owner sheet | `crx-supplier-pricing-phase3-owner-decision-sheet-v1` | 604 | `4eff9c27ee8d61345c328e0130a2fe26926bb809436f1c95d3c46ceb9fe4a3c8` | `c976bd8b3aa02b49b269b4674906cf0067725aa802c776ac85e57c9f1992b276` | 123853 |
 
-Engineering evidence for the current packet: capture PASS, manifest
+Historical engineering evidence for the earlier packet: capture PASS, manifest
 write/verify PASS, owner-sheet write/verify PASS, deterministic compare PASS,
 containment PASS, agent-workflow guards PASS, correction guards PASS,
 typecheck PASS, build PASS, and lint returned zero errors with four pre-existing
-warnings. The full test suite and fresh exact-SHA Luna, independent-Sol, and
-latest-available Opus reviews remain pending.
+warnings. That evidence is superseded for delivery until the resumed recovery
+regenerates the packet and reruns the full proof/review sequence.
 
 ## Exact owner gate
 

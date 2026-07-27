@@ -2,7 +2,9 @@
 echo "🛡️ Pre-push safety check..."
 echo ""
 echo "Checking Phase 3C private-artifact containment..."
-npm run check:phase3-private-artifacts 2>&1
+# Read the real pre-push ref updates from stdin and inspect every outgoing
+# commit, including a packet that was committed and later deleted at tip.
+node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "$1" 2>&1
 CONTAINMENT_EXIT=$?
 
 if [ $CONTAINMENT_EXIT -ne 0 ]; then

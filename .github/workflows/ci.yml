@@ -10,15 +10,38 @@ on:
     branches: [main]
 
 jobs:
+  phase3-private-artifact-containment:
+    name: Phase 3C Private Artifact Containment
+    runs-on: ubuntu-latest
+    # This is intentionally the first content-processing job. It needs only
+    # Node built into the runner and full Git history, never dependencies.
+    steps:
+      - name: Checkout exact event history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js for the standalone containment gate
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Reject private packet blobs in worktree, index, and event range
+        run: node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --github-event
+
   sql-validation:
     name: SQL Migration Validation
     runs-on: ubuntu-latest
+    needs: phase3-private-artifact-containment
     # Fast (no node_modules); runs on every push and PR. Catches commits that
     # bypassed husky locally (e.g. via --no-verify or a non-husky environment)
     # by re-running the full migration audit at the PR/push gate.
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Make scripts executable
         run: chmod +x scripts/validate-sql.sh scripts/validate-sql-migrations.sh
@@ -42,11 +65,13 @@ jobs:
   lint-typecheck-test:
     name: Lint, Type Check, Test, Build
     runs-on: ubuntu-latest
-    needs: sql-validation
+    needs: [phase3-private-artifact-containment, sql-validation]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -74,9 +99,6 @@ jobs:
 
       - name: Run TypeScript type check
         run: npm run typecheck
-
-      - name: Phase 3C private-artifact containment
-        run: npm run check:phase3-private-artifacts
 
       - name: Guard-hook regression tests (safety net must not regress)
         run: npm run test:correction-guards
