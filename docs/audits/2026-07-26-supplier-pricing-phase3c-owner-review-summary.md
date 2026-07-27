@@ -2,7 +2,7 @@
 
 ## Status
 
-`PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING`
+`PARKED — PR #246 IS OPEN; CORRECTED HEAD PUSH, CHECKS, CODERABBIT, AND EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PENDING`
 
 The reviewed packet commit
 `d38d41f63e68971f08f7158bf5a104af62d232aa` has immutable parent
@@ -132,7 +132,7 @@ finding. Its operational bootstrap MEDIUM requires the current base to be
 rechecked immediately before any push. Engineering and privacy evidence were
 otherwise clean.
 
-The feature branch reconciled current `origin/main`
+At the historical first reconciliation, the feature branch reconciled `origin/main`
 `48bd1982c9553c2022fe96be771974ad699be12e` through normal merge
 `a9817b05d35bc39e13bad94d7680181461b6fcb7` without rebasing or conflicts,
 preserving prior feature commits. That historical main lacked the containment
@@ -154,8 +154,10 @@ Product classification is approved. The remaining gate is final exact review of
 this documentation correction, a fresh `origin/main` refetch and the current
 `0e058804090b84f9a14024a6666021a271bb1f71` bootstrap-pin recheck immediately
 before any push, and a protected PR accepted with its
-required checks — including Ubuntu PR CI — green and any real CodeRabbit finding
-resolved. The PR is not open. Only after those external gates are complete may
+  required checks — including Ubuntu PR CI — green and any real CodeRabbit finding
+  resolved. PR #246 is open but parked pending push of its corrected head, those
+  checks, CodeRabbit handling, and the separate external trusted-workflow/ruleset
+  activation plus post-activation proof. Only after those external gates are complete may
 Mason review every
 decision field and unresolved acknowledgment, then explicitly approve this
 exact packet before a separate Stage C design mission is considered. No Stage C

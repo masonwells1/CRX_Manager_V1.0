@@ -2,18 +2,21 @@
 
 ## Current mission status — packet complete; external gates only
 
-`PARKED — FINAL EXACT REVIEW AND PROTECTED PR GATES PENDING`. The current
+`PARKED — PR #246 IS OPEN; CORRECTED HEAD PUSH, CHECKS, CODERABBIT, AND
+EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PENDING`. The current
 post-Stage-A owner-review packet has already been regenerated and verified at
 604 aggregate-only rows. All 604 decisions remain `PENDING`; no Product
 classification is approved. There is no current 595-active assertion.
 
 Capture and packet materialization are completed. An unattended agent must not
 recapture, regenerate, or materialize the private packet unless an explicit
-invalidation condition is recorded. The only current runner lane is: final
-exact review of the containing documentation correction; a fresh `origin/main`
-refetch and bootstrap-pin recheck immediately before any push; protected PR
-checks green (including Ubuntu PR CI) with real CodeRabbit findings resolved;
-then Mason's row-by-row review and explicit approval. No Stage C SQL,
+invalidation condition is recorded. PR #246 is already open and remains
+`PARKED`: push the corrected head only after its exact review, re-fetch
+`origin/main` and recheck bootstrap pin
+`0e058804090b84f9a14024a6666021a271bb1f71` immediately before that push, then
+obtain required checks (including Ubuntu PR CI), CodeRabbit resolution, and the
+separate external trusted-workflow/ruleset activation plus post-activation proof
+before Mason's row-by-row review and explicit approval. No Stage C SQL,
 migration, apply, live mutation, flag enablement, deploy, or merge is
 authorized.
 
@@ -103,7 +106,7 @@ and its final review/PR path; they do not reopen capture or materialization.
    the entire proof/review cycle.
 7. **Applicable delivery cycle:** when all proof and reviewers agree, re-fetch
    `origin/main` and recheck the bootstrap pin immediately before any push, push this branch,
-   open or update one protected PR, wait for required checks and Vercel, read
+   update open PR #246, wait for required checks and Vercel, read
    CodeRabbit, correct every real issue through the same fresh-review loop,
    and park the green review-resolved PR without merging it.
 
@@ -224,10 +227,10 @@ If a condition cannot be proven, the item is `PARKED` with the exact blocker.
 
 This delivery mechanic does not authorize packet recapture or materialization.
 
-This mission may commit to
-`codex/phase3c-overnight-20260726`, push that non-production branch, and
-open/update its protected PR after the repository's full proof and review
-guards are green.
+This mission may commit to `codex/phase3c-overnight-20260726` and, after the
+repository's full proof and review guards are green, push the corrected head to
+the already-open non-production PR #246. It must then park until checks,
+CodeRabbit, and external trusted-workflow/ruleset activation are proven.
 
 This mission must never:
 
