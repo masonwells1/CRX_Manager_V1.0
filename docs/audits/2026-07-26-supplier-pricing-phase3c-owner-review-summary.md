@@ -148,12 +148,13 @@ conflicts; #247 is the active-profile RLS migration and reference-doc update,
 with no Phase 3C containment overlap. Exact Git object checks prove this
 historical base lacks both the checker and trusted target workflow, so its
 then-current one-time CI bootstrap pin was
-`07a3d4833cf8517ea53831a6ff0976b4a6c4c67f`. The current #248 docs-only
+`07a3d4833cf8517ea53831a6ff0976b4a6c4c67f`. Historical #248 docs-only
 reconciliation merged `origin/main` `d3bac970804bf6130b6bf6259eed05fad0367a9c`
 through normal merge `d0ff8e0b5ee59cd56f1c093fea92dba266fd17f3` without
-conflicts. Exact object checks confirm the #248 base likewise lacks both guard
-files, so the active one-time CI bootstrap pin is now
-`d3bac970804bf6130b6bf6259eed05fad0367a9c`. The trusted-workflow/ruleset
+conflicts. Exact object checks confirm the #248 base likewise lacked both guard
+files. Current #250 `origin/main` is `3ca289c5c5b91c800a350ab828a6000bd3d399e6`
+after #249, incorporated through normal merge `35ec8fde0dc1d0ebce956f64d4320dc4d5536820`;
+it also lacks both guard files and is the active one-time CI bootstrap pin. The trusted-workflow/ruleset
 external enforcement gap remains `PARKED`. The base must be freshly refetched
 and rechecked immediately before any future publication. This correction still
 requires final exact review on its containing SHA, identified only by Git and
