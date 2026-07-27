@@ -189,6 +189,39 @@ function decodeUtf16Be(bytes, offset = 0) {
   for (let index = 0; index < evenLength; index += 2) { swapped[index] = source[index + 1]; swapped[index + 1] = source[index]; }
   return swapped.toString('utf16le');
 }
+function decodeUtf32(bytes, byteOrder, offset = 0) {
+  const source = (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).subarray(offset);
+  const chunks = [];
+  let characters = '';
+  for (let index = 0; index + 3 < source.length; index += 4) {
+    const codePoint = byteOrder === 'le' ? source.readUInt32LE(index) : source.readUInt32BE(index);
+    characters += codePoint <= 0x10ffff && !(codePoint >= 0xd800 && codePoint <= 0xdfff) ? String.fromCodePoint(codePoint) : '\uFFFD';
+    if (characters.length >= 4096) { chunks.push(characters); characters = ''; }
+  }
+  if (characters) chunks.push(characters);
+  return chunks.join('');
+}
+function utf32TextCandidates(bytes) {
+  const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  let looksLikeUtf32 = source.subarray(0, 4).equals(Buffer.from([0xff, 0xfe, 0x00, 0x00]))
+    || source.subarray(0, 4).equals(Buffer.from([0x00, 0x00, 0xfe, 0xff]));
+  for (let index = 0; !looksLikeUtf32 && index + 15 < source.length; index += 1) {
+    let littleEndian = true;
+    let bigEndian = true;
+    for (let group = 0; group < 4; group += 1) {
+      const cursor = index + group * 4;
+      littleEndian &&= source[cursor] !== 0 && source[cursor + 1] === 0 && source[cursor + 2] === 0 && source[cursor + 3] === 0;
+      bigEndian &&= source[cursor] === 0 && source[cursor + 1] === 0 && source[cursor + 2] === 0 && source[cursor + 3] !== 0;
+    }
+    looksLikeUtf32 = littleEndian || bigEndian;
+  }
+  if (!looksLikeUtf32) return [];
+  const candidates = [];
+  for (let offset = 0; offset < 4; offset += 1) {
+    candidates.push(normalizeText(decodeUtf32(source, 'le', offset)), normalizeText(decodeUtf32(source, 'be', offset)));
+  }
+  return candidates;
+}
 /**
  * Packet signatures are deliberately checked in all supported text encodings.
  * This makes no-BOM UTF-16 deterministic without trusting a heuristic, while
@@ -229,6 +262,22 @@ function isOwnerDecisionHeaderLine(line) {
 function ownerDecisionHeaderReason(text) {
   return text.split(OWNER_HEADER_RECORD_DELIMITER_RE).some(isOwnerDecisionHeaderLine) ? 'owner decision sheet CSV header structure' : null;
 }
+function decodedTextCandidateReason(candidates) {
+  for (const text of candidates) {
+    const trimmed = text.trimStart();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsedReason = privateJsonNodeReason(JSON.parse(text));
+        if (parsedReason) return parsedReason;
+      } catch (_error) { /* position-independent structural checks below fail closed */ }
+    }
+  }
+  for (const text of candidates) {
+    const textualReason = textualJsonStructureReason(text) ?? ownerDecisionHeaderReason(text);
+    if (textualReason) return textualReason;
+  }
+  return null;
+}
 function compressedArchiveReason(bytes) {
   const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
   // Keep signatures numeric so this checker does not contain a raw archive
@@ -258,26 +307,13 @@ export function structuralPrivateArtifactReason(bytes) {
   if (buffer.length > MAX_STRUCTURAL_SCAN_BYTES) return 'private artifact candidate exceeds bounded structural scan limit';
   const archiveReason = compressedArchiveReason(buffer);
   if (archiveReason) return archiveReason;
-  const candidates = decodedTextCandidates(buffer);
-  for (const text of candidates) {
-    const trimmed = text.trimStart();
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        const parsed = JSON.parse(text);
-        const parsedReason = privateJsonNodeReason(parsed);
-        if (parsedReason) return parsedReason;
-      } catch (_error) { /* position-independent structural checks below fail closed */ }
-    }
-  }
-  for (const text of candidates) {
-    const textualReason = textualJsonStructureReason(text) ?? ownerDecisionHeaderReason(text);
-    if (textualReason) return textualReason;
-  }
+  const textReason = decodedTextCandidateReason([...decodedTextCandidates(buffer), ...utf32TextCandidates(buffer)]);
+  if (textReason) return textReason;
   // A whole packet can be transfer-encoded without a filename or textual
   // marker. Reuse the bounded streaming detector so direct and streamed scans
   // make the same non-recursive Base64 decision.
   const base64 = createBase64TransferScanner();
-  const wrappedBase64 = createWrappedBase64TransferScanner();
+  const wrappedBase64 = createAlternateEncodingScanner();
   base64.feed(buffer);
   wrappedBase64.feed(buffer);
   return base64.finish() ?? wrappedBase64.finish();
@@ -467,11 +503,11 @@ function createOffsetStreamDecoder(decoder, initialSkip) {
   };
 }
 
-function createBase64TransferScanner() {
+function createBase64TransferScanner({ checkArchives = true } = {}) {
   let decoded = null;
   let quartet = ''; let active = true; let saw = false; let terminal = false;
   const feedDecoded = bytes => {
-    decoded ??= createStructuralByteStreamScanner({ checkBase64: false });
+    decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
     decoded.feed(bytes);
   };
   const consumeChunk = bytes => {
@@ -516,17 +552,24 @@ function createBase64TransferScanner() {
     },
   };
 }
-function decodedBase64StructuralReason(transfer) {
+function decodedBase64StructuralReason(transfer, { checkArchives = true } = {}) {
   const compact = transfer.replace(/[\t\n\r ]/g, '').replaceAll('-', '+').replaceAll('_', '/');
   if (compact.length < 32 || compact.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) return null;
   const firstPadding = compact.indexOf('=');
   if (firstPadding !== -1 && firstPadding < compact.length - 2) return null;
   const decoded = Buffer.from(compact.padEnd(Math.ceil(compact.length / 4) * 4, '='), 'base64');
-  const scanner = createStructuralByteStreamScanner({ checkBase64: false });
+  const scanner = createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
   scanner.feed(decoded);
   return scanner.finish();
 }
-function createWrappedBase64TransferScanner() {
+function decodedHexStructuralReason(transfer, { checkArchives = true } = {}) {
+  const compact = transfer.replace(/[\t\n\r ]/g, '');
+  if (compact.length < 64 || compact.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(compact)) return null;
+  const scanner = createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+  scanner.feed(Buffer.from(compact, 'hex'));
+  return scanner.finish();
+}
+function createAlternateEncodingScanner({ checkArchives = true } = {}) {
   const chunks = [];
   return {
     feed(bytes) {
@@ -535,9 +578,12 @@ function createWrappedBase64TransferScanner() {
       chunks.push(Buffer.from(bytes));
     },
     finish() {
-      const text = Buffer.concat(chunks).toString('latin1');
+      const bytes = Buffer.concat(chunks);
+      const utf32Reason = decodedTextCandidateReason(utf32TextCandidates(bytes));
+      if (utf32Reason) return utf32Reason;
+      const text = bytes.toString('latin1');
       for (const match of text.matchAll(PEM_TRANSFER_BODY_RE)) {
-        const reason = decodedBase64StructuralReason(match[1]);
+        const reason = decodedBase64StructuralReason(match[1], { checkArchives });
         if (reason) return reason;
       }
       let tokenStart = -1;
@@ -548,7 +594,23 @@ function createWrappedBase64TransferScanner() {
           continue;
         }
         if (tokenStart !== -1 && index - tokenStart >= 32) {
-          const reason = decodedBase64StructuralReason(text.slice(tokenStart, index));
+          const reason = decodedBase64StructuralReason(text.slice(tokenStart, index), { checkArchives });
+          if (reason) return reason;
+        }
+        tokenStart = -1;
+      }
+      const wholeHexReason = decodedHexStructuralReason(text, { checkArchives });
+      if (wholeHexReason) return wholeHexReason;
+      tokenStart = -1;
+      for (let index = 0; index <= text.length; index += 1) {
+        const code = index < text.length ? text.charCodeAt(index) : -1;
+        const isHex = (code >= 48 && code <= 57) || (code >= 65 && code <= 70) || (code >= 97 && code <= 102);
+        if (isHex) {
+          if (tokenStart === -1) tokenStart = index;
+          continue;
+        }
+        if (tokenStart !== -1 && index - tokenStart >= 64) {
+          const reason = decodedHexStructuralReason(text.slice(tokenStart, index), { checkArchives });
           if (reason) return reason;
         }
         tokenStart = -1;
@@ -563,8 +625,8 @@ function createStructuralByteStreamScanner({ checkArchives = true, checkBase64 =
   let utf16Decoders = null;
   let utf16Scanners = null;
   let rawTail = Buffer.alloc(0);
-  const base64 = checkBase64 ? createBase64TransferScanner() : null;
-  const wrappedBase64 = checkBase64 ? createWrappedBase64TransferScanner() : null;
+  const base64 = checkBase64 ? createBase64TransferScanner({ checkArchives }) : null;
+  const wrappedBase64 = checkBase64 ? createAlternateEncodingScanner({ checkArchives }) : null;
   let archiveTail = Buffer.alloc(0);
   let archiveReason = null;
   const shouldActivateUtf16 = bytes => {
@@ -944,6 +1006,10 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
   const violations = [];
   const entries = [];
   for (const commit of commits) {
+    const commitBytes = gitOutput(['cat-file', 'commit', assertCommitSha(commit, 'history')], root, execute, { encoding: null });
+    budget.admit(commitBytes.length);
+    const commitReason = structuralPrivateArtifactReason(commitBytes);
+    if (commitReason) violations.push({ repoPath: `${commit}:commit-message`, reason: commitReason });
     const paths = changedPathsForCommit(assertCommitSha(commit, 'history'), root, execute);
     // Reject the whole changed-path batch before resolving any individual
     // tree entry. This bounds expensive ls-tree subprocesses even for a
@@ -997,17 +1063,8 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
   return { checked_path_count: visible.size, checked_commit_count: checkedCommits.length, checked_ignored_count: worktree.ignoredCount, worktree_scan_duration_ms: worktree.durationMs, scanned_candidate_count: budget.candidates, scanned_logical_bytes: budget.logicalBytes };
 }
 
-function outgoingCommitsForNewRemoteRef(localSha, remoteName, root, execute) {
-  if (typeof remoteName !== 'string' || remoteName.length === 0) throw new Error('private Phase 3C pre-push containment requires a valid remote name');
-  try {
-    // Remote names may legitimately contain slash-separated namespaces. Let
-    // Git validate the synthesized ref instead of maintaining a narrower,
-    // drifting allowlist; every invocation remains an argument-array call.
-    gitOutput(['check-ref-format', `refs/remotes/${remoteName}/phase3c-containment`], root, execute);
-  } catch (_error) {
-    throw new Error('private Phase 3C pre-push containment requires a valid remote name');
-  }
-  return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local'), `--not`, `--remotes=${remoteName}`], root, execute);
+function outgoingCommitsForNewRemoteRef(localSha, root, execute) {
+  return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local')], root, execute);
 }
 function peeledCommitSha(objectSha, root, execute) {
   try {
@@ -1064,6 +1121,7 @@ async function inspectOutgoingRefObject({ localRef, localSha, root, execute, bud
   return { violations, commit };
 }
 export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, remoteName, stdin } = {}) {
+  if (typeof remoteName !== 'string' || remoteName.length === 0) throw new Error('private Phase 3C pre-push containment requires a remote name or URL');
   const updates = String(stdin ?? '').split(/\r?\n/).filter(Boolean);
   if (updates.length > MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error('private Phase 3C containment candidate-count cap exceeded');
   const ranges = [];
@@ -1080,10 +1138,10 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });
     objectViolations.push(...inspected.violations);
     if (inspected.commit === null) continue;
-    if (remoteSha === ZERO_SHA) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, remoteName, root, execute));
+    if (remoteSha === ZERO_SHA) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
     else {
       const remoteCommit = peeledCommitSha(assertCommitSha(remoteSha, 'remote'), root, execute);
-      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, remoteName, root, execute));
+      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
       else ranges.push(`${remoteCommit}..${inspected.commit}`);
     }
   }
