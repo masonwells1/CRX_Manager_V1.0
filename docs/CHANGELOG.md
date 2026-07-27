@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-07-27 — Phase 3C containment rejects opaque containers
+## 2026-07-27 — Phase 3C containment rejects embedded repositories and Git-visible archives
 
 The private-artifact worktree scanner now rejects ignored **and untracked** directories that
 contain their own `.git` marker. Git reports an embedded checkout as one directory instead of
@@ -10,9 +10,10 @@ enumerating its files, which could allow a private Phase 3C packet inside that c
 content scanning. The regression suite creates both nested-repository cases with a synthetic
 private marker and requires a fail-closed `embedded Git repository` verdict while preserving the
 existing allowance for unrelated ignored symlinks. Benign embedded repositories deliberately
-remain fail-closed containment candidates. Common compressed/archive signatures, including ZIP,
-XLSX, gzip, bzip2, xz, 7z, and RAR, also fail closed at any byte position because their compressed
-members cannot be inspected by the bounded raw-byte scanner.
+remain fail-closed containment candidates. ZIP/XLSX, gzip, bzip2, xz, 7z, and RAR candidates fail
+closed even with a harmless prefix when tracked, staged, modified, or non-ignored untracked because
+their compressed members cannot be inspected by the bounded raw-byte scanner; ordinary ignored
+dependency and cache files remain out of that archive-only check.
 
 ## 2026-07-27 — RLS: inline role checks now require an active profile (APPLIED LIVE `20260727145843`)
 

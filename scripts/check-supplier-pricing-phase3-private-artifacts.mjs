@@ -186,11 +186,12 @@ function ownerDecisionHeaderReason(text) {
 }
 function compressedArchiveReason(bytes) {
   const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-  if (source.length < 4 || source[0] !== 0x50 || source[1] !== 0x4b) return null;
-  const marker = (source[2] << 8) | source[3];
-  return marker === 0x0304 || marker === 0x0506 || marker === 0x0708
-    ? 'compressed archive container cannot be inspected'
-    : null;
+  const signatures = [
+    Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from([0x50, 0x4b, 0x05, 0x06]), Buffer.from([0x50, 0x4b, 0x07, 0x08]),
+    Buffer.from([0x1f, 0x8b, 0x08]), Buffer.from('BZh'), Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]),
+    Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]), Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07]),
+  ];
+  return signatures.some(signature => source.indexOf(signature) !== -1) ? 'compressed archive container cannot be inspected' : null;
 }
 /** Detect packet structure, not canonical whitespace or a filename. */
 export function structuralPrivateArtifactReason(bytes) {
@@ -309,7 +310,7 @@ function createOwnerHeaderStreamDetector() {
 }
 function createDecodedPropertyStreamDetector(keys) {
   const tokenToKey = new Map([...new Set(keys)].map(key => [`"${key}"`, key]));
-  const maxTokenLength = Math.max(...tokenToKey.keys(), '').length;
+  const maxTokenLength = Math.max(...[...tokenToKey.keys()].map(token => token.length));
   const pending = new Set();
   const signals = new Set();
   let recent = '';
@@ -432,7 +433,8 @@ function createStructuralByteStreamScanner({ checkArchives = true } = {}) {
   let utf16Decoders = null;
   let utf16Scanners = null;
   let rawTail = Buffer.alloc(0);
-  let prefix = Buffer.alloc(0);
+  let archiveTail = Buffer.alloc(0);
+  let archiveReason = null;
   const shouldActivateUtf16 = bytes => {
     for (let index = 0; index + 1 < bytes.length; index += 1) {
       if ((bytes[index] === 0xff && bytes[index + 1] === 0xfe) || (bytes[index] === 0xfe && bytes[index + 1] === 0xff)) return true;
@@ -461,7 +463,11 @@ function createStructuralByteStreamScanner({ checkArchives = true } = {}) {
   };
   return {
     feed(bytes) {
-      if (checkArchives && prefix.length < 4) prefix = Buffer.concat([prefix, bytes.subarray(0, 4 - prefix.length)]);
+      if (checkArchives) {
+        const archiveProbe = archiveTail.length === 0 ? bytes : Buffer.concat([archiveTail, bytes]);
+        archiveReason ??= compressedArchiveReason(archiveProbe);
+        archiveTail = Buffer.from(archiveProbe.subarray(-5));
+      }
       utf8Scanner.feed(utf8Decoder.write(bytes));
       if (utf16Decoders) { for (let index = 0; index < utf16Decoders.length; index += 1) utf16Scanners[index].feed(utf16Decoders[index].write(bytes)); return; }
       const replay = rawTail.length === 0 ? bytes : Buffer.concat([rawTail, bytes]);
@@ -478,7 +484,7 @@ function createStructuralByteStreamScanner({ checkArchives = true } = {}) {
           reason ??= utf16Scanners[index].finish();
         }
       }
-      return checkArchives ? compressedArchiveReason(prefix) ?? reason : reason;
+      return archiveReason ?? reason;
     },
   };
 }
