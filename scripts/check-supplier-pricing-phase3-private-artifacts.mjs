@@ -589,19 +589,19 @@ function stagedIndexContentViolations(root, execute, indexEntries) {
   return violations;
 }
 
-function ignoredWorktreeEntryKind(root, repoPath) {
+function worktreeEntryKind(root, repoPath) {
   const lexicalRoot = path.resolve(root);
   const lexicalPath = path.resolve(lexicalRoot, repoPath);
-  if (!lexicalPath.startsWith(`${lexicalRoot}${path.sep}`)) throw new Error('private Phase 3C ignored worktree candidate escapes the repository');
+  if (!lexicalPath.startsWith(`${lexicalRoot}${path.sep}`)) throw new Error('private Phase 3C worktree candidate escapes the repository');
   const segments = path.relative(lexicalRoot, lexicalPath).split(path.sep);
-  if (!segments.length || segments.some(segment => !segment || segment === '..')) throw new Error('private Phase 3C ignored worktree candidate escapes the repository');
+  if (!segments.length || segments.some(segment => !segment || segment === '..')) throw new Error('private Phase 3C worktree candidate escapes the repository');
   let current = lexicalRoot;
   for (let index = 0; index < segments.length; index += 1) {
     current = path.join(current, segments[index]);
     const entry = lstatSync(current);
-    // Do not follow a final symlink or a reparse-point parent. Either is an
-    // unrelated ignored non-regular entry, unless its lexical repo path was
-    // already rejected as a forbidden Phase 3C artifact.
+    // Do not follow a final symlink or a reparse-point parent. Either is a
+    // non-regular entry; ignored tooling links retain their explicit
+    // allowance, while embedded repositories fail closed below.
     if (entry.isSymbolicLink()) return 'non-regular';
     if (index < segments.length - 1) {
       if (!entry.isDirectory()) return 'non-regular';
@@ -642,7 +642,12 @@ function worktreeContentViolations(root, execute, budget) {
       // ignored path before reporting it. This keeps a packet-named link from
       // changing the diagnostic or reaching an attacker-controlled target.
       if (forbiddenReason) { violations.push({ repoPath, reason: forbiddenReason }); continue; }
-      const entryKind = ignoredWorktreeEntryKind(root, repoPath);
+    }
+    // Git collapses both ignored and untracked embedded repositories to one
+    // directory candidate. Detect their `.git` marker without walking nested
+    // content; a benign ignored symlink remains non-regular and is skipped.
+    if (source === 'ignored' || source === 'untracked') {
+      const entryKind = worktreeEntryKind(root, repoPath);
       if (entryKind === 'embedded-repository') { violations.push({ repoPath, reason: 'embedded Git repository' }); continue; }
       if (entryKind !== 'regular') continue;
     }
