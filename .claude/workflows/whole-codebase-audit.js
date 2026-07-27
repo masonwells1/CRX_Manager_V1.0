@@ -126,7 +126,7 @@ const DIMENSIONS = [
   {
     key: 'deps-cve',
     prompt:
-      'Audit DEPENDENCIES. Run `npm audit --json` and `npm audit --omit=dev --json` via Bash and report unfixed vulnerabilities grouped by severity, separating prod from dev. Flag deprecated/abandoned packages and overly-loose version ranges on security-sensitive deps. Note: dompurify / ws / protocol-buffers-schema CVEs were cleared on 2026-05-30 — verify they are still clear. Stay factual; do not propose upgrades you have not validated.',
+      'Audit DEPENDENCIES. Run `npm audit --json` and `npm audit --omit=dev --json` via Bash and report unfixed vulnerabilities grouped by severity, separating prod from dev. Flag deprecated/abandoned packages and overly-loose version ranges on security-sensitive deps. Note: the dompurify CVE was cleared on 2026-05-30 and dompurify is still present as a transitive dep — verify it is still clear. ws and protocol-buffers-schema are no longer in package-lock.json at all (re-verified 2026-07-27), so do not hunt for them. Stay factual; do not propose upgrades you have not validated.',
   },
   {
     key: 'test-coverage-gaps',
