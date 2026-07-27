@@ -235,7 +235,7 @@ This delivery mechanic does not authorize packet recapture or materialization.
 
 This mission may commit to `codex/phase3c-overnight-20260726`. Before any
 future publication, it must re-fetch/recheck the current
-`d3bac970804bf6130b6bf6259eed05fad0367a9c` bootstrap pin; PR #246 can be
+`3ca289c5c5b91c800a350ab828a6000bd3d399e6` bootstrap pin; PR #246 can be
 accepted only if its current head matches a recorded exact-reviewed SHA and the
 required checks, CodeRabbit resolution, and external trusted-workflow/ruleset
 activation plus proof are complete. It remains `PARKED` otherwise.

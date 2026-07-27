@@ -40,7 +40,7 @@ jobs:
           # Only this introducing PR may bootstrap from a base without the
           # checker. Once merged, every later PR must use (and therefore be
           # governed by) the exact base revision's checker.
-          phase3_bootstrap_base='d3bac970804bf6130b6bf6259eed05fad0367a9c'
+          phase3_bootstrap_base='3ca289c5c5b91c800a350ab828a6000bd3d399e6'
           node --version
           mapfile -t phase3_event_shas < <(node --input-type=commonjs -e '
             const fs = require("node:fs");

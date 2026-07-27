@@ -35,6 +35,8 @@ Pre-push containment now type-checks outgoing ref objects, scans annotated-tag m
 blob targets, peels bounded tag chains, and recursively inspects tree targets before accepting tags.
 The archive-only ignored-file exception now also covers only the generated descendants used by
 Playwright results and the Phase 1a proof writer; private JSON and CSV signals remain rejected there.
+After main advanced through PRs #249 and #250, the candidate-only bootstrap pin was refreshed to
+the exact `3ca289c5` base; separate base-controlled workflow enforcement remains a parked gate.
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 
 Closes items 1 and 2 of `docs/manual/KNOWN_ISSUES.md` §0a — the two gaps that `20260727145843`

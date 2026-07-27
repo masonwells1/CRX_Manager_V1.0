@@ -584,7 +584,7 @@ The packet has been regenerated and verified. Mason must not review any private
 row yet: PR #246's current head must match a recorded exact-reviewed SHA, and
 any later head change invalidates prior head-bound evidence. Before any future
 publication, freshly refetch `origin/main` and recheck current
-`d3bac970804bf6130b6bf6259eed05fad0367a9c` bootstrap pin. Required checks,
+`3ca289c5c5b91c800a350ab828a6000bd3d399e6` bootstrap pin. Required checks,
 including Ubuntu PR CI, must be green, any real CodeRabbit finding resolved,
 and external trusted-workflow/ruleset activation plus post-activation proof
 complete before acceptance. Only
@@ -598,7 +598,7 @@ live mutation, flag enablement, deploy, or merge.
 ## Closeout
 
 - `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, normal merges `a9817b05` of historical main `48bd1982`, `c6c5ea3` of historical #245 main `0e058804`, and `98969765` of historical #247 main `07a3d483`, and exact `d38d41f`/`a2002c3c`/`a7506a01`/`3c156065`/`a10bad90`/`80741157` review outcomes are recorded above; technical Sol returned `CLEAN` for published `bc305778`; `3c156065` was non-final, `a10bad90` is a correction-review source, and `80741157` is the publication-reconciliation source; older packet hashes are invalidated.
-- `NOW:` PR #246's current head must match a recorded exact-reviewed SHA. Before any future publication, re-fetch/recheck `origin/main` and current `d3bac970804bf6130b6bf6259eed05fad0367a9c` bootstrap pin. Required checks, including Ubuntu PR CI, CodeRabbit resolution, and external trusted-workflow/ruleset activation plus post-activation proof remain mandatory. Mason must not begin private-sheet review.
+- `NOW:` PR #246's current head must match a recorded exact-reviewed SHA. Before any future publication, re-fetch/recheck `origin/main` and current `3ca289c5c5b91c800a350ab828a6000bd3d399e6` bootstrap pin. Required checks, including Ubuntu PR CI, CodeRabbit resolution, and external trusted-workflow/ruleset activation plus post-activation proof remain mandatory. Mason must not begin private-sheet review.
 - `REMAINING:` protected PR #246 acceptance after all those gates, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet. Any future model alias must record its resolved model truthfully; no literal Opus 5 review is claimed.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
 - `NEEDS MASON:` no action until the external gates complete; afterward, row-by-row private-sheet review and explicit packet approval.

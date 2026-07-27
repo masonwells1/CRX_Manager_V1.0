@@ -177,7 +177,7 @@ The packet has been regenerated and verified, but Mason must not begin the
 row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
 Product classification is approved. The remaining gate is a recorded exact
 review of the PR's current head, a fresh `origin/main` refetch and the current
-`d3bac970804bf6130b6bf6259eed05fad0367a9c` bootstrap-pin recheck before any
+`3ca289c5c5b91c800a350ab828a6000bd3d399e6` bootstrap-pin recheck before any
 future publication, and protected-PR acceptance with required checks —
 including Ubuntu PR CI — green, any real CodeRabbit finding resolved, and
 separate external trusted-workflow/ruleset activation plus post-activation
