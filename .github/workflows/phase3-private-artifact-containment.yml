@@ -1,0 +1,65 @@
+# Phase 3C protected PR containment. This workflow is evaluated from the base
+# branch on pull_request_target. It never checks out or executes PR code.
+name: Phase 3C Private Artifact Containment
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+# No PR writes, statuses, comments, deployments, or secrets are needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: phase3c-private-artifact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  phase3-private-artifact-containment:
+    name: Phase 3C Private Artifact Containment (trusted base)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout only the exact trusted base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Fetch candidate Git objects without checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t phase3_event < <(node --input-type=commonjs -e '
+            const fs = require("node:fs");
+            const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+            const sha = value => typeof value === "string" && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+            const number = event?.pull_request?.number;
+            const base = sha(event?.pull_request?.base?.sha);
+            const head = sha(event?.pull_request?.head?.sha);
+            if (!Number.isSafeInteger(number) || number < 1 || !base || !head) process.exit(2);
+            process.stdout.write(`${number}\n${base}\n${head}\n`);
+          ')
+          test "${#phase3_event[@]}" -eq 3
+          phase3_number="${phase3_event[0]}"
+          phase3_base="${phase3_event[1]}"
+          phase3_head="${phase3_event[2]}"
+          test "$(git rev-parse HEAD)" = "$phase3_base"
+          # This fetch transfers PR commit objects only. It does not create a
+          # candidate worktree and no command loads candidate configuration.
+          git -c core.hooksPath=/dev/null fetch --no-tags origin "+refs/pull/${phase3_number}/head:refs/phase3c/pull/${phase3_number}"
+          test "$(git rev-parse "refs/phase3c/pull/${phase3_number}")" = "$phase3_head"
+          git cat-file -e "${phase3_base}^{commit}"
+          git cat-file -e "${phase3_head}^{commit}"
+
+      - name: Scan exact candidate objects with the trusted base checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --github-event --root "$GITHUB_WORKSPACE"

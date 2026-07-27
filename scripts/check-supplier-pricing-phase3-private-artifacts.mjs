@@ -586,6 +586,27 @@ function stagedIndexContentViolations(root, execute, indexEntries) {
   return violations;
 }
 
+function ignoredWorktreeEntryIsRegular(root, repoPath) {
+  const lexicalRoot = path.resolve(root);
+  const lexicalPath = path.resolve(lexicalRoot, repoPath);
+  if (!lexicalPath.startsWith(`${lexicalRoot}${path.sep}`)) throw new Error('private Phase 3C ignored worktree candidate escapes the repository');
+  const segments = path.relative(lexicalRoot, lexicalPath).split(path.sep);
+  if (!segments.length || segments.some(segment => !segment || segment === '..')) throw new Error('private Phase 3C ignored worktree candidate escapes the repository');
+  let current = lexicalRoot;
+  for (let index = 0; index < segments.length; index += 1) {
+    current = path.join(current, segments[index]);
+    const entry = lstatSync(current);
+    // Do not follow a final symlink or a reparse-point parent. Either is an
+    // unrelated ignored non-regular entry, unless its lexical repo path was
+    // already rejected as a forbidden Phase 3C artifact.
+    if (entry.isSymbolicLink()) return false;
+    if (index < segments.length - 1) {
+      if (!entry.isDirectory()) return false;
+    } else return entry.isFile();
+  }
+  return false;
+}
+
 function worktreeContentViolations(root, execute, budget) {
   const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMRT'], root, execute));
   const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
@@ -598,6 +619,14 @@ function worktreeContentViolations(root, execute, budget) {
   const started = performance.now();
   const cache = { roots: new Map(), parents: new Map() };
   for (const [repoPath, source] of candidates) {
+    // `git ls-files --ignored` includes ordinary tool-owned links such as
+    // node_modules/.bin. Never follow those entries: an unrelated ignored
+    // reparse point cannot make a private packet Git-visible. A Phase 3C
+    // filename/path remains a failure before this skip, so a packet symlink
+    // or junction still fails closed without dereferencing its target.
+    if (source === 'ignored' && !forbiddenArtifactReason(repoPath)) {
+      if (!ignoredWorktreeEntryIsRegular(root, repoPath)) continue;
+    }
     const result = scanWorktreeCandidate(root, repoPath, { cache, budget });
     if (result?.reason) violations.push({ repoPath, reason: result.reason });
   }
@@ -623,6 +652,35 @@ function gitTreeEntry(commit, repoPath, root, execute) {
   const match = /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40,64})$/.exec(separator === -1 ? '' : record[0].slice(0, separator));
   if (!match || record[0].slice(separator + 1) !== repoPath) throw new Error('private Phase 3C containment could not parse changed Git tree entry');
   return { mode: match[1], type: match[2], object: match[3] };
+}
+function commitTreeEntries(commit, root, execute) {
+  const entries = [];
+  for (const record of String(gitOutput(['ls-tree', '-r', '-z', assertCommitSha(commit, 'candidate')], root, execute)).split('\0').filter(Boolean)) {
+    const separator = record.indexOf('\t');
+    const match = /^([0-7]{6}) (blob|tree|commit) ([0-9a-f]{40,64})$/.exec(separator === -1 ? '' : record.slice(0, separator));
+    const repoPath = separator === -1 ? '' : record.slice(separator + 1);
+    if (!match || !repoPath) throw new Error('private Phase 3C containment could not parse candidate commit tree entry');
+    entries.push({ repoPath, mode: match[1], type: match[2], object: match[3] });
+  }
+  if (entries.length > MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error('private Phase 3C containment candidate-count cap exceeded');
+  return entries;
+}
+async function candidateCommitTreeViolations(commit, root, execute, budget) {
+  const entries = commitTreeEntries(commit, root, execute);
+  const violations = [];
+  const regular = [];
+  for (const entry of entries) {
+    const directReason = forbiddenArtifactReason(entry.repoPath);
+    if (directReason) violations.push({ repoPath: `${commit}:${entry.repoPath}`, reason: directReason });
+    if (!REGULAR_GIT_MODES.has(entry.mode) || entry.type !== 'blob') { violations.push({ repoPath: `${commit}:${entry.repoPath}`, reason: 'non-regular Git mode' }); continue; }
+    regular.push({ repoPath: `${commit}:${entry.repoPath}`, spec: entry.object, key: `candidate:${commit}:${entry.repoPath}` });
+  }
+  const reasons = await scanGitBlobEntries(regular, root, budget);
+  for (const entry of regular) {
+    const reason = reasons.get(entry.key);
+    if (reason) violations.push({ repoPath: entry.repoPath, reason });
+  }
+  return { violations, entryCount: entries.length };
 }
 async function historyViolations(commits, root, execute, budget, historyBudget) {
   const violations = [];
@@ -730,6 +788,33 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
     for (const sha of [base, head]) if (!eventCommitIsAvailable(sha, root, execute)) throw new Error('private Phase 3C CI containment event commit is unavailable');
     const candidateRoot = canonicalContainmentRoot(root, head, execute);
     return { ...await checkPrivateArtifactContainment({ root: candidateRoot, execute, ranges: [`${base}..${head}`] }), github_event_head: head };
+  }
+  if (name === 'pull_request_target') {
+    const base = assertCommitSha(event?.pull_request?.base?.sha, 'pull-request base');
+    const head = assertCommitSha(event?.pull_request?.head?.sha, 'pull-request head');
+    // pull_request_target deliberately runs the checker from the base commit.
+    // It never materializes candidate files: the exact candidate tree and
+    // history are scanned through Git objects only.
+    for (const sha of [base, head]) if (!eventCommitIsAvailable(sha, root, execute)) throw new Error('private Phase 3C CI containment event commit is unavailable');
+    const trustedBaseRoot = canonicalContainmentRoot(root, base, execute);
+    const budget = new ScanBudget();
+    const candidate = await candidateCommitTreeViolations(head, trustedBaseRoot, execute, budget);
+    const historyBudget = new HistoryTraversalBudget(MAX_STRUCTURAL_SCAN_CANDIDATES - budget.candidates);
+    const history = await historyViolations(commitsForRange(`${base}..${head}`, trustedBaseRoot, execute), trustedBaseRoot, execute, budget, historyBudget);
+    const violations = [...candidate.violations, ...history];
+    if (violations.length) {
+      const summary = [...new Map(violations.map(item => [`${item.repoPath}\0${item.reason}`, item])).values()];
+      throw new Error(`private Phase 3C artifact containment failure: ${summary.map(item => `${item.repoPath} (${item.reason})`).join(', ')}`);
+    }
+    return {
+      checked_path_count: candidate.entryCount,
+      checked_commit_count: commitsForRange(`${base}..${head}`, trustedBaseRoot, execute).length,
+      checked_ignored_count: 0,
+      worktree_scan_duration_ms: 0,
+      scanned_candidate_count: budget.candidates,
+      scanned_logical_bytes: budget.logicalBytes,
+      github_event_head: head,
+    };
   }
   if (name === 'push') {
     const base = assertCommitSha(event?.before, 'push base');

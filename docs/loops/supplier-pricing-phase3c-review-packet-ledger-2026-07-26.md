@@ -17,6 +17,26 @@
 
 ## Owner-review packet closeout — 2026-07-27
 
+### PR #246 containment correction — still PARKED
+
+Two real PR review findings are under bounded correction: ignored ordinary
+non-regular filesystem entries (including tooling symlinks) must not be
+dereferenced, while forbidden Phase 3C paths remain a fail-closed violation;
+and future PR containment must run from `pull_request_target` using only the
+trusted base workflow/checker while scanning fetched candidate Git objects, not
+candidate files. The new target workflow has read-only `contents` permission,
+no secret use, no candidate checkout, no candidate dependency/config loading,
+and a 12-minute bound. The object fetch disables local Git hooks; candidate
+Git configuration/hooks cannot enter a commit object and are never loaded.
+
+This is intentionally a **future-PR guard**. PR #246's base
+`48bd1982c9553c2022fe96be771974ad699be12e` predates this workflow, so GitHub
+does not evaluate it for this PR. The existing `pull_request` job remains
+bootstrap/defense-in-depth only and cannot be represented as a trusted-base
+hard gate for PR #246. This record remains `PARKED`; it does not authorize a
+packet review, classification, Stage C action, live mutation, flag enablement,
+deployment, or merge.
+
 ### Reviewed packet commit `d38d41f63e68971f08f7158bf5a104af62d232aa` — PARKED
 
 `d38d41f63e68971f08f7158bf5a104af62d232aa` has immutable parent
