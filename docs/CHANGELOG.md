@@ -48,6 +48,9 @@ Fresh hash-bound RLS and drift proofs returned CLEAN immediately before the appr
 Supabase applied it as ledger version `20260728182141`. Read-only postflight catalog checks confirmed
 both functions are single `STABLE SECURITY DEFINER` overloads with `search_path=public, pg_temp`, both
 office-role guards present, no `anon` execution, and the intended authenticated/service-role grants.
+A new read-only `pricing-secdef-role-gate` invariant was then executed against production and returned
+zero violations; six classifier fixtures also proved it flags the old unsafe body while accepting
+the four existing active office-role patterns plus a stricter active-aware admin-only gate.
 
 ## 2026-07-28 — A migration that shipped ten days ago was still counted as "awaiting apply"
 

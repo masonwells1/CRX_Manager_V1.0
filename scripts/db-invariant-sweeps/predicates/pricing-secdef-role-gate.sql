@@ -11,8 +11,8 @@
 --
 -- Contract: EXPECT ZERO rows. Trigger functions are excluded because PostgREST
 -- cannot invoke them as RPCs. The accepted gate shapes cover the live house
--- patterns: both role helpers, require_admin_or_sales_rep(), an active-profile
--- role IN check, or a loaded active role rejected with NOT IN.
+-- patterns: an admin-only helper, both role helpers, require_admin_or_sales_rep(),
+-- an active-profile role IN check, or a loaded active role rejected with NOT IN.
 
 SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
        p.proname
@@ -24,10 +24,7 @@ WHERE p.pronamespace = 'public'::regnamespace
   AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
   AND p.prosrc ~* '(quote_items|quote_versions|customer_application_rates|rebate_programs)'
   AND NOT (
-    (
-      p.prosrc ~* 'is_admin[[:space:]]*\('
-      AND p.prosrc ~* 'is_sales_rep[[:space:]]*\('
-    )
+    p.prosrc ~* 'is_admin[[:space:]]*\('
     OR p.prosrc ~* 'require_admin_or_sales_rep[[:space:]]*\('
     OR (
       p.prosrc ~* 'is_active'

@@ -65,8 +65,8 @@ try {
 }
 
 const toolName = (payload?.tool_name || "").toLowerCase();
-const isPatchTool = toolName === "apply_patch";
-if (!["write", "edit", "multiedit", "apply_patch"].includes(toolName)) allow();
+const isPatchTool = /(^|__)apply_patch$/.test(toolName);
+if (!["write", "edit", "multiedit"].includes(toolName) && !isPatchTool) allow();
 
 const input = payload?.tool_input || {};
 const patchText = isPatchTool
@@ -75,6 +75,15 @@ const patchText = isPatchTool
 const patchPaths = [...patchText.matchAll(
   /^\*{3}\s*(?:Add|Update|Delete|Move(?:\s+to)?)\s+File:\s*(.+?\.sql)\s*$/gim,
 )].map((match) => match[1].trim().replace(/\\/g, "/"));
+const migrationPatchPaths = [
+  ...new Set(patchPaths.filter((candidate) => candidate.includes("supabase/migrations/"))),
+];
+if (isPatchTool && migrationPatchPaths.length > 1) {
+  deny(
+    "GRANT-CHANGE GUARD: one apply_patch payload changes multiple migration SQL files. " +
+      "Split migration edits into one patch per file so caller-analysis markers cannot cross file boundaries."
+  );
+}
 let filePath = (input.file_path || "").replace(/\\/g, "/");
 if (isPatchTool && patchPaths.length > 0) {
   filePath = patchPaths.find((candidate) => candidate.includes("supabase/migrations/")) || "";

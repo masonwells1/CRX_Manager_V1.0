@@ -4,6 +4,8 @@ Audit and remediation COMPLETE. Fixed live 2026-07-28 by migration
 `20260728182141_secdef_pricing_reads_office_only` after Mason's explicit approval.
 Postflight catalog proof confirmed both in-body office-role guards and the intended
 `anon`/`authenticated`/`service_role` execute grants.
+The standing `pricing-secdef-role-gate` predicate returned zero rows against production
+on 2026-07-28; classifier fixtures separately proved the pre-fix body is detected.
 
 ## Verdict
 

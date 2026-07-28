@@ -42,6 +42,13 @@ This runner makes those queries **standing executable gates** that run **before*
 | `plpgsql-check.sql` | (h) 42703/42804/missing-relation static analysis | **ACTIVE** — extension installed 2026-06-10 (`20260610192229`); first scan: **30 errors / 11 live functions** (see `docs/audits/2026-06-10-error-prevention-execution-log.md` §4 — each needs its own /ship fix; treat that list as the baseline until fixed, do NOT allowlist) |
 | `commission-admin-active.sql` | commission payment admin RLS uses the active-aware `is_admin()` helper | **zero** (missing or role-only policies are violations) |
 | `returns-lifecycle-rpc-owned.sql` | return lifecycle fields, creation, and line mutations stay behind canonical RPCs/triggers | **zero** (catches direct `returns` INSERT policy/grant drift and direct `return_items` mutation policy/grant drift) |
+| `fin-allocations-bounded.sql` | payment allocations stay bounded by the payment and cached totals stay exact | **zero** |
+| `fin-ar-statement-balance.sql` | customer statement balance agrees with authoritative AR activity | **zero** |
+| `fin-commission-split-sum.sql` | commission split percentages preserve their required total | **zero** |
+| `fin-invoice-balance-identity.sql` | invoice balance equals total minus payments and credits | **zero** |
+| `fin-prepay-balance.sql` | prepay credit balances agree with immutable application rows | **zero** |
+| `fin-quote-override-survival.sql` | accepted quote overrides survive downstream invoice generation | **zero** |
+| `section9-po-ap-controls.sql` | purchase-order and accounts-payable controls remain intact | **zero** |
 
 ## When it runs
 

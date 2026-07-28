@@ -55,7 +55,7 @@
         ]
       },
       {
-        "matcher": "apply_patch",
+        "matcher": "(^|__)apply_patch$",
         "hooks": [
           {
             "type": "command",

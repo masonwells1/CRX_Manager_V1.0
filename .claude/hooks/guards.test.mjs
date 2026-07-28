@@ -222,25 +222,40 @@ r = runHook("codex-push-guard.mjs", { tool_name: "Bash", tool_input: { command: 
 eq(r.status, 0, "codex-push-guard exits 0 on non-push command");
 eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
 
-// grant-change-guard: Codex apply_patch must not bypass caller analysis.
+// grant-change-guard: Codex patch tools must not bypass caller analysis.
 const grantPatchPath = "supabase/migrations/20990101000000_grant_guard_fixture.sql";
 const grantPatch = (marker = "") => `*** Begin Patch
 *** Add File: ${grantPatchPath}
 +${marker}
 +REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM authenticated, anon, PUBLIC;
 *** End Patch`;
+for (const patchToolName of ["apply_patch", "mcp__codex__apply_patch"]) {
+  r = runHook("grant-change-guard.mjs", {
+    tool_name: patchToolName,
+    tool_input: { input: grantPatch() },
+  });
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `grant-change-guard denies unreviewed REVOKE through ${patchToolName}`);
+  ok(r.stdout.includes("get_program_completion"), `${patchToolName} denial names the caller-bearing function`);
+  r = runHook("grant-change-guard.mjs", {
+    tool_name: patchToolName,
+    tool_input: {
+      input: grantPatch("-- caller-analysis: get_program_completion :: browser callers remain supported by authenticated EXECUTE"),
+    },
+  });
+  ok(r.stdout.includes('"permissionDecision":"allow"'), `grant-change-guard accepts reviewed ${patchToolName} marker`);
+}
+const multiMigrationPatch = `*** Begin Patch
+*** Add File: supabase/migrations/20990101000001_grant_guard_a.sql
++-- caller-analysis: get_program_completion :: reviewed in migration A
++REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM authenticated;
+*** Add File: supabase/migrations/20990101000002_grant_guard_b.sql
++REVOKE EXECUTE ON FUNCTION public.transfer_job_to_invoice(uuid, uuid, text) FROM authenticated;
+*** End Patch`;
 r = runHook("grant-change-guard.mjs", {
-  tool_name: "apply_patch",
-  tool_input: { input: grantPatch() },
+  tool_name: "mcp__codex__apply_patch",
+  tool_input: { input: multiMigrationPatch },
 });
-ok(r.stdout.includes('"permissionDecision":"deny"'), "grant-change-guard denies unreviewed REVOKE through apply_patch");
-ok(r.stdout.includes("get_program_completion"), "apply_patch denial names the caller-bearing function");
-r = runHook("grant-change-guard.mjs", {
-  tool_name: "apply_patch",
-  tool_input: {
-    input: grantPatch("-- caller-analysis: get_program_completion :: browser callers remain supported by authenticated EXECUTE"),
-  },
-});
-ok(r.stdout.includes('"permissionDecision":"allow"'), "grant-change-guard accepts reviewed apply_patch REVOKE marker");
+ok(r.stdout.includes('"permissionDecision":"deny"'), "grant-change-guard rejects multi-migration patch payloads");
+ok(r.stdout.includes("one patch per file"), "multi-migration denial explains the safe split");
 
 console.log(`guards: ${pass} assertions passed`);
