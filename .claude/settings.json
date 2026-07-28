@@ -168,6 +168,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/patch-guard-fanout.mjs\"",
+            "timeout": 30
+          },
+          {
+            "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/grant-change-guard.mjs\"",
             "timeout": 15
           }
@@ -235,6 +240,16 @@
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "(^|__)apply_patch$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/patch-posttool-fanout.mjs\"",
+            "timeout": 45
+          }
+        ]
+      },
       {
         "matcher": "Write|Edit",
         "hooks": [

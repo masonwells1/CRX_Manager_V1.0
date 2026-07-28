@@ -52,6 +52,14 @@ A new read-only `pricing-secdef-role-gate` invariant was then executed against p
 zero violations; six classifier fixtures also proved it flags the old unsafe body while accepting
 the four existing active office-role patterns plus a stricter active-aware admin-only gate.
 
+The closeout review also found that Codex patch payloads bypassed the other seven file-content safety
+guards even after the grant guard was fixed. `patch-guard-fanout.mjs` now splits either patch tool's
+payload by file and runs the existing SQL, money, idempotency, RLS, status, generated-column, and env
+guards against each file independently. Regression fixtures prove one representative denial per guard,
+both patch tool names, reconstructed update postimages, protected env moves, and an unsafe second file
+in a multi-file patch. Patch destinations also fan out through the existing migration reminder and
+per-file ESLint autofix after a successful write.
+
 ## 2026-07-28 — A migration that shipped ten days ago was still counted as "awaiting apply"
 
 `/fleet` reported "2 parked migrations awaiting apply". One of them,

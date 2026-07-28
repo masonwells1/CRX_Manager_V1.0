@@ -33,6 +33,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { extractPatchChanges, isApplyPatchTool } from "./patch-input-lib.mjs";
 
 const STALE_DAYS = 7;
 
@@ -65,28 +66,44 @@ try {
 }
 
 const toolName = (payload?.tool_name || "").toLowerCase();
-const isPatchTool = /(^|__)apply_patch$/.test(toolName);
+const isPatchTool = isApplyPatchTool(toolName);
 if (!["write", "edit", "multiedit"].includes(toolName) && !isPatchTool) allow();
 
 const input = payload?.tool_input || {};
 const patchText = isPatchTool
   ? String(input.patch ?? input.diff ?? input.input ?? input.changes ?? "")
   : "";
-const patchPaths = [...patchText.matchAll(
-  /^\*{3}\s*(?:Add|Update|Delete|Move(?:\s+to)?)\s+File:\s*(.+?\.sql)\s*$/gim,
-)].map((match) => match[1].trim().replace(/\\/g, "/"));
-const migrationPatchPaths = [
-  ...new Set(patchPaths.filter((candidate) => candidate.includes("supabase/migrations/"))),
-];
-if (isPatchTool && migrationPatchPaths.length > 1) {
+const { changes: patchChanges, errors: patchErrors } = isPatchTool
+  ? extractPatchChanges(input, process.env.CLAUDE_PROJECT_DIR || process.cwd())
+  : { changes: [], errors: [] };
+const migrationPatchChanges = patchChanges.filter(
+  ({ filePath }) => filePath.endsWith(".sql") && filePath.includes("/supabase/migrations/")
+);
+const moveOnlyPatch =
+  /^\*{3}\s+Move to:/mi.test(patchText) &&
+  !patchText.split(/\r?\n/).some(
+    (line) =>
+      (line.startsWith("+") && !line.startsWith("+++")) ||
+      (line.startsWith("-") && !line.startsWith("---"))
+  );
+const migrationPatchErrors = patchErrors.filter(
+  ({ filePath }) => filePath.endsWith(".sql") && filePath.includes("/supabase/migrations/")
+);
+if (migrationPatchErrors.length > 0) {
+  deny(
+    "GRANT-CHANGE GUARD: could not reconstruct a migration patch for caller analysis:\n" +
+      migrationPatchErrors.map(({ filePath, reason }) => `${filePath}: ${reason}`).join("\n")
+  );
+}
+if (isPatchTool && migrationPatchChanges.length > 1 && !moveOnlyPatch) {
   deny(
     "GRANT-CHANGE GUARD: one apply_patch payload changes multiple migration SQL files. " +
       "Split migration edits into one patch per file so caller-analysis markers cannot cross file boundaries."
   );
 }
 let filePath = (input.file_path || "").replace(/\\/g, "/");
-if (isPatchTool && patchPaths.length > 0) {
-  filePath = patchPaths.find((candidate) => candidate.includes("supabase/migrations/")) || "";
+if (isPatchTool && migrationPatchChanges.length > 0) {
+  filePath = migrationPatchChanges.find(({ content }) => content)?.filePath || migrationPatchChanges[0].filePath;
 }
 if (!filePath.endsWith(".sql") || !filePath.includes("supabase/migrations/")) allow();
 
@@ -96,18 +113,10 @@ if (typeof input.content === "string") newContent = input.content;
 else if (typeof input.new_string === "string") newContent = input.new_string;
 else if (Array.isArray(input.edits)) newContent = input.edits.map((e) => e?.new_string || "").join("\n");
 else if (isPatchTool) {
-  const changedLines = patchText
-    .split(/\r?\n/)
-    .filter(
-      (line) =>
-        (line.startsWith("+") && !line.startsWith("+++")) ||
-        (line.startsWith("-") && !line.startsWith("---"))
-    )
-    .map((line) => line.slice(1));
   // A B7 move-only patch changes no SQL content and was already reviewed under
   // its original filename. Do not reinterpret the unchanged applied body.
-  if (changedLines.length === 0 && /^\*{3}\s+Move to:/mi.test(patchText)) allow();
-  newContent = changedLines.join("\n");
+  if (moveOnlyPatch) allow();
+  newContent = migrationPatchChanges[0]?.content || "";
 }
 if (!newContent) allow();
 
@@ -124,7 +133,7 @@ if (toolName !== "write" && existsSync(filePath)) {
     };
     if (Array.isArray(input.edits)) input.edits.forEach((e) => applyOne(e?.old_string, e?.new_string));
     else if (!isPatchTool) applyOne(input.old_string, input.new_string);
-    else disk += "\n" + newContent;
+    else disk = newContent;
     newContent = disk;
   } catch {
     /* keep the fragment */

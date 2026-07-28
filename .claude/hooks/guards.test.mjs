@@ -257,5 +257,14 @@ r = runHook("grant-change-guard.mjs", {
 });
 ok(r.stdout.includes('"permissionDecision":"deny"'), "grant-change-guard rejects multi-migration patch payloads");
 ok(r.stdout.includes("one patch per file"), "multi-migration denial explains the safe split");
+const moveOnlyMigrationPatch = `*** Begin Patch
+*** Update File: supabase/migrations/20260728182141_secdef_pricing_reads_office_only.sql
+*** Move to: supabase/migrations/20990101000003_move_only_fixture.sql
+*** End Patch`;
+r = runHook("grant-change-guard.mjs", {
+  tool_name: "mcp__codex__apply_patch",
+  tool_input: { input: moveOnlyMigrationPatch },
+});
+ok(r.stdout.includes('"permissionDecision":"allow"'), "grant-change-guard preserves reviewed B7 move-only patches");
 
 console.log(`guards: ${pass} assertions passed`);
