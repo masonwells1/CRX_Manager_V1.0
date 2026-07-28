@@ -154,7 +154,7 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
     `CODEX PRODUCTION GATE: ${riskDescription}\n\n` +
     `${detail}\n\n` +
     `${fetchFirst}Claude must actually review the exact diff in this session by running ` +
-    `node scripts/run-claude-review.mjs --scope base-main. A successful ` +
+    `node scripts/run-claude-review.mjs --scope base-main. ` +
     `Only an unambiguous terminal FINAL_VERDICT: SHIP with no contradictory verdict or BLOCKER/HIGH/MED/LOW finding writes .claude/session-state/claude-review-push.json. ` +
     `Required JSON: ` +
     `{\"claude_ran\":true,\"verdict\":\"clean\",` +
