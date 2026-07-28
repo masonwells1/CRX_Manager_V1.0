@@ -72,6 +72,16 @@ the durable Phase 3C loop require terminal SHIP without actionable LOW
 findings, and migration apply proofs accept only the producer-emitted clean
 reviewer finding state.
 
+A later fresh Sol `FIX` rejected pre-repair candidate `b2d55f77`: NIT wording
+could still hide explicitly required work, and containment did not cover
+quoted-printable, percent/form, SQLite, Product SQL column-list, one-layer
+nested transfer, valid deletion-record, or noncanonical ignored-backup cases.
+The cleanroom repair adds bounded three-level transfer decoding, canonical-only
+ignored local paths, and regressions for
+every reproduced seam. These repairs are uncommitted proof work, not an
+accepted Phase 3C candidate; PR #246 remains PARKED pending a new exact-SHA
+packet and fresh required reviews.
+
 ## 2026-07-27 — Phase 3C containment decoding is bounded and fail-closed
 
 The exact-SHA Claude review proof parser now fails closed on numbered Markdown,
@@ -339,6 +349,7 @@ At that historical point, after main advanced through PRs #249 and #250, the
 candidate-only bootstrap pin was refreshed to exact base `3ca289c5`; the current
 pin is recorded above, and separate base-controlled workflow enforcement remains
 a parked gate.
+
 ## 2026-07-27 — The PR merge gate could not see a proof minted in a worktree; a refuted gauntlet finding could not be re-contested
 
 Two defects found while shipping PR #252, both fixed here.
@@ -356,7 +367,7 @@ merged it from the PR page.
 The new `proofSearchDirs()` (in `codex-push-lib.mjs`, shared with the Codex side) enumerates
 `git worktree list --porcelain` and scans every sibling checkout's session-state. **Widening the
 search does not widen what counts:** `proofValid()` still demands GitHub's exact head SHA, GitHub's
- exact `baseRefOid`, a clean verdict and an age inside 30 minutes, and
+exact `baseRefOid`, a clean verdict and an age inside 30 minutes, and
 `review-proof-guard.mjs` still blocks hand-writing a proof in any directory. These are sibling
 checkouts of one repository — a proof rejected in the primary checkout is rejected in all of them.
 Enumeration failure falls back to the primary directory alone, which can only make the gate

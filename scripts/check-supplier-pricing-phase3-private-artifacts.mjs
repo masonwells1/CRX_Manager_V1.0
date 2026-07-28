@@ -64,20 +64,31 @@ export const PRODUCT_HEADER_REASON = 'private product CSV/TSV header structure';
 const STREAM_TAIL_CHARS = Math.max(4096, OWNER_DECISION_HEADERS.join(',').length * 4);
 const OWNER_HEADER_RECORD_DELIMITER_RE = /[\r\n\v\f\u0085\u2028\u2029\u001c-\u001f]/u;
 const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
+// Transfer decoding is intentionally shallow. Three layers cover the realistic
+// wrappers reviewers reproduced (for example Base64(hex(packet))) without an
+// unbounded recursive decoder that can amplify attacker-controlled nesting.
+const MAX_TRANSFER_DECODE_DEPTH = 3;
+const TRANSFER_DECODE_DEPTH_REASON = 'nested encoded transfer candidate exceeds bounded decode depth';
 const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
 const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\v\f\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
 const MAX_EMBEDDED_BASE64_WHITESPACE_BYTES = 4096;
 const MAX_EMBEDDED_HEX_WHITESPACE_BYTES = 4096;
-// Exact top-level ignored roots owned by local CRX tools. They are skipped only
-// when Git classifies the candidate as ignored. Staged, tracked, modified, and
-// historical blobs under the same roots retain the ordinary hard scan caps.
-const OPERATOR_OWNED_IGNORED_PREFIXES = new Set(['backups/', '.perf-sweep-data/', '.epa-data-quality/', '.vercel/']);
+// Broad ignored roots are not a containment exemption. Only canonical local
+// backup output and named tool metadata can skip a read while Git still marks
+// them ignored; every other file under those roots remains a packet candidate.
+const OPERATOR_OWNED_IGNORED_ROOTS = new Set(['backups/', '.perf-sweep-data/', '.epa-data-quality/', '.vercel/']);
+const OPERATOR_OWNED_IGNORED_METADATA_PATHS = new Set([
+  'backups/LATEST-OK.json',
+  '.epa-data-quality/manifest.json', '.epa-data-quality/report.md',
+  '.vercel/project.json',
+]);
+const CANONICAL_DATED_BACKUP_PATH_RE = /^backups\/\d{4}-\d{2}-\d{2}\/(?:[a-z][a-z0-9_]*|manifest)\.json$/u;
+const MAX_PRODUCT_SQL_COLUMN_LIST_CHARS = 2048;
 const TOOL_OWNED_IGNORED_PREFIXES = new Set([
   'node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/',
   '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/',
   'output/playwright/', 'output/phase1a-db/',
-  ...OPERATOR_OWNED_IGNORED_PREFIXES,
 ]);
 
 function unsafeStructuralSignatureExemptionPath(repoPath) {
@@ -87,7 +98,7 @@ function unsafeStructuralSignatureExemptionPath(repoPath) {
   const segments = repoPath.split('/');
   if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) return 'path must not contain empty or traversal segments';
   if (segments.some(segment => segment.toLowerCase() === 'private-artifacts' || segment.toLowerCase() === '.git')) return 'path must not be inside a private-artifact or Git administration path';
-  if ([...TOOL_OWNED_IGNORED_PREFIXES, ...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => repoPath.startsWith(prefix))) return 'path must not use a tool-owned or ignored prefix';
+  if ([...TOOL_OWNED_IGNORED_PREFIXES, ...OPERATOR_OWNED_IGNORED_ROOTS].some(prefix => repoPath.startsWith(prefix))) return 'path must not use a tool-owned or ignored prefix';
   return null;
 }
 
@@ -260,7 +271,8 @@ function isToolOwnedIgnoredPath(repoPath) {
 }
 function isOperatorOwnedIgnoredPath(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
-  return [...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
+  return CANONICAL_DATED_BACKUP_PATH_RE.test(normalized)
+    || OPERATOR_OWNED_IGNORED_METADATA_PATHS.has(normalized);
 }
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
@@ -386,6 +398,25 @@ function isOwnerDecisionHeaderLine(line) {
 function ownerDecisionHeaderReason(text) {
   return text.split(OWNER_HEADER_RECORD_DELIMITER_RE).some(isOwnerDecisionHeaderLine) ? 'owner decision sheet CSV header structure' : null;
 }
+function normalizeSqlColumnName(value) {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith('`') && trimmed.endsWith('`'))
+    || (trimmed.startsWith('[') && trimmed.endsWith(']'))) return trimmed.slice(1, -1).toLowerCase();
+  return trimmed.toLowerCase();
+}
+function productSqlColumnListReason(text) {
+  // This is a structure check, not SQL parsing. Bound the candidate column
+  // list and require every private Product row key before rejecting an INSERT
+  // or COPY export that names the products relation.
+  const relation = '(?:(?:public|"public"|\\[public\\])\\s*\\.\\s*)?(?:products|"products"|\\[products\\])';
+  const command = new RegExp(`\\b(?:INSERT\\s+INTO|COPY)\\s+${relation}\\s*\\(([^()\\r\\n]{1,${MAX_PRODUCT_SQL_COLUMN_LIST_CHARS}})\\)`, 'giu');
+  for (let match = command.exec(text); match; match = command.exec(text)) {
+    const columns = new Set(match[1].split(',').map(normalizeSqlColumnName));
+    if (PRODUCT_ROW_KEYS.every(key => columns.has(key))) return 'private product SQL INSERT/COPY column structure';
+  }
+  return null;
+}
 function decodedTextCandidateReason(candidates) {
   for (const text of candidates) {
     const trimmed = text.trimStart();
@@ -397,7 +428,7 @@ function decodedTextCandidateReason(candidates) {
     }
   }
   for (const text of candidates) {
-    const textualReason = textualJsonStructureReason(text) ?? ownerDecisionHeaderReason(text);
+    const textualReason = textualJsonStructureReason(text) ?? ownerDecisionHeaderReason(text) ?? productSqlColumnListReason(text);
     if (textualReason) return textualReason;
   }
   return null;
@@ -532,6 +563,15 @@ function hasPlausibleGitPackHeader(source, offset) {
   const objectCount = source.readUInt32BE(offset + 8);
   return (version === 2 || version === 3) && objectCount <= 100_000_000;
 }
+function hasPlausibleSqliteHeader(source, offset) {
+  if (!bytesAt(source, offset, [0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00])
+    || offset + 24 > source.length) return false;
+  const pageSize = source.readUInt16BE(offset + 16);
+  return (pageSize === 1 || (pageSize >= 512 && pageSize <= 32768 && (pageSize & (pageSize - 1)) === 0))
+    && (source[offset + 18] === 1 || source[offset + 18] === 2)
+    && (source[offset + 19] === 1 || source[offset + 19] === 2)
+    && source[offset + 21] === 64 && source[offset + 22] === 32 && source[offset + 23] === 32;
+}
 function hasSkippableFrame(source, offset) {
   if (offset < 0 || offset + 8 > source.length || source[offset] < 0x50 || source[offset] > 0x5f
     || !bytesAt(source, offset + 1, [0x2a, 0x4d, 0x18])) return false;
@@ -560,6 +600,7 @@ function compressedArchiveReason(bytes) {
     for (let index = source.indexOf(prefix); index !== -1; index = source.indexOf(prefix, index + 1)) if (validator(index)) return true;
     return false;
   };
+  if (findValidated(Buffer.from([0x53, 0x51, 0x4c, 0x69]), index => hasPlausibleSqliteHeader(source, index))) return 'database container cannot be inspected';
   if (findValidated(Buffer.from([0x50, 0x4b, 0x03, 0x04]), index => hasPlausibleZipLocalHeader(source, index))
     || findValidated(Buffer.from([0x50, 0x4b, 0x05, 0x06]), index => hasPlausibleZipEocd(source, index))) return 'compressed archive container cannot be inspected';
   const gzipPrefix = Buffer.from([0x1f, 0x8b, 0x08]);
@@ -945,6 +986,7 @@ function createStructuralTextStreamScanner() {
   const formatValuePattern = new RegExp(`"(${[...JSON_FORMATS].map(escapedRegex).join('|')})(?:"|(?=\\s*[,}\\]]|$))`, 'g');
   const ownerHeader = createOwnerHeaderStreamDetector();
   const productHeader = createProductHeaderStreamDetector();
+  let productSqlSignal = false;
   let pendingProperty = null;
   const signalProperty = key => {
     if (key === 'format') formatPropertySignal = true;
@@ -962,6 +1004,7 @@ function createStructuralTextStreamScanner() {
       const window = tail + decoded;
       ownerHeader.feed(decoded);
       productHeader.feed(decoded);
+      productSqlSignal ||= productSqlColumnListReason(window) !== null;
       if (pendingProperty) {
         const next = decoded.match(/\S/u)?.[0];
         if (next) {
@@ -985,6 +1028,7 @@ function createStructuralTextStreamScanner() {
       if (structuralSignal) return 'private snapshot or manifest key structure';
       if (ownerSignal) return 'owner decision sheet CSV header structure';
       if (productHeaderSignal) return PRODUCT_HEADER_REASON;
+      if (productSqlSignal) return 'private product SQL INSERT/COPY column structure';
       return null;
     },
   };
@@ -1132,11 +1176,12 @@ function createOffsetStreamDecoder(decoder, initialSkip) {
   };
 }
 
-function createBase64TransferScanner({ checkArchives = true } = {}) {
-  let decoded = null;
+function createBase64TransferScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
+  let decoded = null; let depthExceeded = false;
   let quartet = ''; let active = true; let saw = false; let terminal = false; let preserveDecodedPrefix = false;
   const feedDecoded = bytes => {
-    decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+    if (transferDecodeDepth === 0) { depthExceeded = true; return; }
+    decoded ??= createStructuralByteStreamScanner({ checkArchives, transferDecodeDepth: transferDecodeDepth - 1 });
     decoded.feed(bytes);
   };
   const consumeChunk = bytes => {
@@ -1188,17 +1233,17 @@ function createBase64TransferScanner({ checkArchives = true } = {}) {
     },
     finish() {
       if (!saw) return null;
-      if (!active) return preserveDecodedPrefix ? decoded?.finish() ?? null : null;
+      if (!active) return depthExceeded ? TRANSFER_DECODE_DEPTH_REASON : (preserveDecodedPrefix ? decoded?.finish() ?? null : null);
       if (quartet.length) {
         // URL-safe transfer encoding commonly omits terminal padding. Only a
         // valid 2- or 3-character final quantum is safe to complete here.
         // A malformed residual must not erase evidence decoded from complete
         // quanta already seen. This does not relax mid-file transfer parsing:
         // `active === false` still rejects a non-transfer byte immediately.
-        if (!/^[A-Za-z0-9+/]{2,3}$/.test(quartet)) return decoded?.finish() ?? null;
+        if (!/^[A-Za-z0-9+/]{2,3}$/.test(quartet)) return depthExceeded ? TRANSFER_DECODE_DEPTH_REASON : decoded?.finish() ?? null;
         feedDecoded(Buffer.from(quartet.padEnd(4, '='), 'base64'));
       }
-      return decoded?.finish() ?? null;
+      return depthExceeded ? TRANSFER_DECODE_DEPTH_REASON : decoded?.finish() ?? null;
     },
   };
 }
@@ -1211,13 +1256,14 @@ function base64AlphabetValue(byte) {
   if (byte === 0x5f) return '/';
   return null;
 }
-function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharacterSkip = 0 } = {}) {
+function createEmbeddedBase64PhaseScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH, initialCharacterSkip = 0 } = {}) {
   if (!Number.isInteger(initialCharacterSkip) || initialCharacterSkip < 0 || initialCharacterSkip > 3) throw new Error('private Phase 3C Base64 alignment is invalid');
   let characterSkip = initialCharacterSkip;
-  let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = null; let used = 0; let length = 0; let whitespace = 0; let whitespaceOverbound = false; let active = true; let preserveDecodedPrefix = false; let terminal = false; let terminalTail = 0; let found = null;
+  let quartet = ''; let decoded = null; let depthExceeded = false; let pendingQuartets = ''; let batch = null; let used = 0; let length = 0; let whitespace = 0; let whitespaceOverbound = false; let active = true; let preserveDecodedPrefix = false; let terminal = false; let terminalTail = 0; let found = null;
   const flushDecodedBytes = () => {
     if (used === 0) return;
-    decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+    if (transferDecodeDepth === 0) { depthExceeded = true; used = 0; return; }
+    decoded ??= createStructuralByteStreamScanner({ checkArchives, transferDecodeDepth: transferDecodeDepth - 1 });
     decoded.feed(batch.subarray(0, used));
     used = 0;
   };
@@ -1255,7 +1301,7 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
   const finishDecoded = () => {
     if (length >= 32 && pendingQuartets && !feedDecoded('')) return null;
     flushDecodedBytes();
-    return decoded?.finish() ?? null;
+    return depthExceeded ? TRANSFER_DECODE_DEPTH_REASON : decoded?.finish() ?? null;
   };
   const finishToken = () => {
     if (length < 32) return null;
@@ -1268,7 +1314,7 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
     if ((quartet.length === 2 || quartet.length === 3) && !feedDecoded(quartet.padEnd(4, '='))) return null;
     return finishDecoded();
   };
-  const reset = () => { characterSkip = initialCharacterSkip; quartet = ''; decoded = null; pendingQuartets = ''; batch = null; used = 0; length = 0; whitespace = 0; whitespaceOverbound = false; active = true; preserveDecodedPrefix = false; terminal = false; terminalTail = 0; };
+  const reset = () => { characterSkip = initialCharacterSkip; quartet = ''; decoded = null; depthExceeded = false; pendingQuartets = ''; batch = null; used = 0; length = 0; whitespace = 0; whitespaceOverbound = false; active = true; preserveDecodedPrefix = false; terminal = false; terminalTail = 0; };
   const flush = () => { found ??= finishToken(); reset(); };
   const receive = byte => {
     const alphabet = base64AlphabetValue(byte);
@@ -1310,13 +1356,13 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
     finish() { flush(); return found; },
   };
 }
-function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
+function createEmbeddedBase64TokenScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
   // Whitespace-tolerant source tokens can begin with ordinary Base64-alphabet
   // prose (for example `x <encoded packet>`). Four fixed lanes cover every
   // quartet alignment; longer prefixes differ only by complete quartets.
   // Every lane retains the same bounded batch/state and never recursively
   // re-enters transfer decoding.
-  const phases = [0, 1, 2, 3].map(initialCharacterSkip => createEmbeddedBase64PhaseScanner({ checkArchives, initialCharacterSkip }));
+  const phases = [0, 1, 2, 3].map(initialCharacterSkip => createEmbeddedBase64PhaseScanner({ checkArchives, transferDecodeDepth, initialCharacterSkip }));
   return {
     feed(bytes) { for (const phase of phases) phase.feed(bytes); },
     finish() {
@@ -1333,10 +1379,10 @@ function hexNibble(byte) {
   return -1;
 }
 function isHexTransferWhitespace(byte) { return byte === 0x09 || byte === 0x0a || byte === 0x0b || byte === 0x0c || byte === 0x0d || byte === 0x20; }
-function createHexTransferScanner({ checkArchives = true, wholeFile = false, initialNibbleSkip = 0 } = {}) {
+function createHexTransferScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH, wholeFile = false, initialNibbleSkip = 0 } = {}) {
   if (!Number.isInteger(initialNibbleSkip) || initialNibbleSkip < 0 || initialNibbleSkip > 1) throw new Error('private Phase 3C hexadecimal alignment is invalid');
   let nibbleSkip = initialNibbleSkip;
-  let scanner = null; let high = -1; let length = 0; let effectiveLength = 0; let active = true; let found = null; let prefix = ''; let decoding = false; let batch = null; let used = 0;
+  let scanner = null; let depthExceeded = false; let high = -1; let length = 0; let effectiveLength = 0; let active = true; let found = null; let prefix = ''; let decoding = false; let batch = null; let used = 0;
   const addByte = value => {
     batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
     batch[used++] = value;
@@ -1344,7 +1390,8 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false, ini
   };
   const feedBatch = () => {
     if (used === 0) return;
-    scanner ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+    if (transferDecodeDepth === 0) { depthExceeded = true; used = 0; return; }
+    scanner ??= createStructuralByteStreamScanner({ checkArchives, transferDecodeDepth: transferDecodeDepth - 1 });
     scanner.feed(batch.subarray(0, used)); used = 0;
   };
   const finishToken = () => {
@@ -1352,9 +1399,9 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false, ini
     // complete-byte prefix already passed to the bounded scanner.
     if (!active || !decoding) return null;
     feedBatch();
-    return scanner?.finish() ?? null;
+    return depthExceeded ? TRANSFER_DECODE_DEPTH_REASON : scanner?.finish() ?? null;
   };
-  const reset = () => { nibbleSkip = initialNibbleSkip; scanner = null; high = -1; length = 0; effectiveLength = 0; active = true; prefix = ''; decoding = false; batch = null; used = 0; };
+  const reset = () => { nibbleSkip = initialNibbleSkip; scanner = null; depthExceeded = false; high = -1; length = 0; effectiveLength = 0; active = true; prefix = ''; decoding = false; batch = null; used = 0; };
   const flush = () => { if (length === 0) return; found ??= finishToken(); reset(); };
   const receive = byte => {
     if (wholeFile && !active) return;
@@ -1383,13 +1430,14 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false, ini
     finish() { if (wholeFile) return finishToken(); flush(); return found; },
   };
 }
-function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, initialNibbleSkip = 0 } = {}) {
+function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH, initialNibbleSkip = 0 } = {}) {
   if (!Number.isInteger(initialNibbleSkip) || initialNibbleSkip < 0 || initialNibbleSkip > 1) throw new Error('private Phase 3C hexadecimal alignment is invalid');
   let nibbleSkip = initialNibbleSkip;
-  let scanner = null; let high = -1; let length = 0; let effectiveLength = 0; let whitespace = 0; let whitespaceOverbound = false; let prefix = ''; let batch = null; let used = 0; let found = null;
+  let scanner = null; let depthExceeded = false; let high = -1; let length = 0; let effectiveLength = 0; let whitespace = 0; let whitespaceOverbound = false; let prefix = ''; let batch = null; let used = 0; let found = null;
   const feedBatch = () => {
     if (used === 0) return;
-    scanner ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+    if (transferDecodeDepth === 0) { depthExceeded = true; used = 0; return; }
+    scanner ??= createStructuralByteStreamScanner({ checkArchives, transferDecodeDepth: transferDecodeDepth - 1 });
     scanner.feed(batch.subarray(0, used)); used = 0;
   };
   const addByte = value => {
@@ -1403,9 +1451,9 @@ function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, initial
     // decoded complete byte. This scanner never recursively re-enters the
     // Base64/hex transfer lanes.
     feedBatch();
-    return scanner?.finish() ?? null;
+    return depthExceeded ? TRANSFER_DECODE_DEPTH_REASON : scanner?.finish() ?? null;
   };
-  const reset = () => { nibbleSkip = initialNibbleSkip; scanner = null; high = -1; length = 0; effectiveLength = 0; whitespace = 0; whitespaceOverbound = false; prefix = ''; batch = null; used = 0; };
+  const reset = () => { nibbleSkip = initialNibbleSkip; scanner = null; depthExceeded = false; high = -1; length = 0; effectiveLength = 0; whitespace = 0; whitespaceOverbound = false; prefix = ''; batch = null; used = 0; };
   const flush = () => { if (length > 0) found ??= finishToken(); reset(); };
   const receive = byte => {
     const nibble = hexNibble(byte);
@@ -1441,10 +1489,10 @@ function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, initial
     finish() { flush(); return found; },
   };
 }
-function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true } = {}) {
+function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
   // Two fixed lanes cover both nibble phases without retaining an unbounded
   // token or recursively decoding the resulting bytes.
-  const phases = [0, 1].map(initialNibbleSkip => createEmbeddedWhitespaceHexPhaseScanner({ checkArchives, initialNibbleSkip }));
+  const phases = [0, 1].map(initialNibbleSkip => createEmbeddedWhitespaceHexPhaseScanner({ checkArchives, transferDecodeDepth, initialNibbleSkip }));
   return {
     feed(bytes) { for (const phase of phases) phase.feed(bytes); },
     finish() {
@@ -1454,14 +1502,14 @@ function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true } = {}) 
     },
   };
 }
-function createPemBase64Scanner({ checkArchives = true } = {}) {
+function createPemBase64Scanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
   let line = ''; let overflow = false; let body = null; let found = null;
   const isBegin = value => /^-----BEGIN [A-Z0-9 _-]+-----[\t ]*$/.test(value);
   const isEnd = value => /^-----END [A-Z0-9 _-]+-----[\t ]*$/.test(value);
   const finishLine = () => {
     const normalizedLine = line.endsWith('\r') ? line.slice(0, -1) : line;
     if (body === null) {
-      if (!overflow && isBegin(normalizedLine)) body = createBase64TransferScanner({ checkArchives });
+      if (!overflow && isBegin(normalizedLine)) body = createBase64TransferScanner({ checkArchives, transferDecodeDepth });
     } else if (!overflow && isEnd(normalizedLine)) {
       found ??= body.finish(); body = null;
     } else if (!overflow) body.feed(Buffer.from(`${normalizedLine}\n`, 'latin1'));
@@ -1485,14 +1533,164 @@ function createPemBase64Scanner({ checkArchives = true } = {}) {
     },
   };
 }
-function createAlternateEncodingScanner({ checkArchives = true } = {}) {
+function createQuotedPrintableTransferScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
+  let scanner = null; let state = 0; let high = -1; let highByte = 0; let prefix = ''; let prefixOverbound = false; let overflowGap = 0; let overflowEscapes = 0; let batch = null; let used = 0; let found = null;
+  const appendPrefix = byte => {
+    if (prefixOverbound) { overflowGap += 1; if (overflowGap > 128) overflowEscapes = 0; return; }
+    if (prefix.length >= STREAM_TAIL_CHARS) { prefixOverbound = true; prefix = ''; return; }
+    prefix += String.fromCharCode(byte);
+  };
+  const appendPrefixBytes = bytes => {
+    if (prefixOverbound) { overflowGap += bytes.length; if (overflowGap > 128) overflowEscapes = 0; return; }
+    const remaining = STREAM_TAIL_CHARS - prefix.length;
+    const accepted = Math.min(remaining, bytes.length);
+    if (accepted > 0) prefix += bytes.subarray(0, accepted).toString('latin1');
+    if (accepted < bytes.length) { prefixOverbound = true; prefix = ''; overflowGap = bytes.length - accepted; if (overflowGap > 128) overflowEscapes = 0; }
+  };
+  const flush = () => {
+    if (used === 0 || !scanner) return;
+    scanner.feed(batch.subarray(0, used)); used = 0;
+  };
+  const activate = () => {
+    if (scanner || found) return Boolean(scanner);
+    if (prefixOverbound) {
+      overflowEscapes += 1; overflowGap = 0;
+      // A lone `=XX` after a large public prefix is common prose/source. Two
+      // nearby escapes establish a local transfer candidate; the first byte
+      // can be discarded because all private signatures begin with multiple
+      // independent property/header tokens that remain in the bounded stream.
+      if (overflowEscapes < 2) return false;
+      scanner = createStructuralByteStreamScanner({ checkArchives, transferDecodeDepth: transferDecodeDepth - 1 });
+      return true;
+    }
+    if (transferDecodeDepth === 0) { found = TRANSFER_DECODE_DEPTH_REASON; return false; }
+    scanner = createStructuralByteStreamScanner({ checkArchives, transferDecodeDepth: transferDecodeDepth - 1 });
+    if (prefix) scanner.feed(Buffer.from(prefix, 'latin1'));
+    prefix = '';
+    return true;
+  };
+  const emit = byte => {
+    if (!scanner) { appendPrefix(byte); return; }
+    batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
+    batch[used++] = byte;
+    if (used === batch.length) flush();
+  };
+  const receive = byte => {
+    if (found) return;
+    if (state === 0) {
+      if (byte === 0x3d) { state = 1; return; }
+      emit(byte); return;
+    }
+    if (state === 1) {
+      if (byte === 0x0d) { state = 2; return; }
+      if (byte === 0x0a) { activate(); state = 0; return; }
+      const nibble = hexNibble(byte);
+      if (nibble !== -1) { high = nibble; highByte = byte; state = 3; return; }
+      emit(0x3d); state = 0; receive(byte); return;
+    }
+    if (state === 2) {
+      if (byte === 0x0a) { activate(); state = 0; return; }
+      emit(0x3d); emit(0x0d); state = 0; receive(byte); return;
+    }
+    const nibble = hexNibble(byte);
+    if (nibble !== -1) { if (activate()) emit((high << 4) | nibble); state = 0; return; }
+    emit(0x3d); emit(highByte); state = 0; receive(byte);
+  };
+  return {
+    feed(bytes) {
+      const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+      if (state === 0 && !scanner && source.indexOf(0x3d) === -1) { appendPrefixBytes(source); return; }
+      for (const byte of source) receive(byte);
+    },
+    finish() {
+      if (!found && state === 1) emit(0x3d);
+      if (!found && state === 2) { emit(0x3d); emit(0x0d); }
+      if (!found && state === 3) { emit(0x3d); emit(highByte); }
+      flush();
+      return found ?? scanner?.finish() ?? null;
+    },
+  };
+}
+function createPercentFormTransferScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
+  let scanner = null; let state = 0; let high = -1; let highByte = 0; let prefix = ''; let prefixOverbound = false; let overflowGap = 0; let overflowEscapes = 0; let batch = null; let used = 0; let found = null;
+  const appendPrefix = byte => {
+    if (prefixOverbound) { overflowGap += 1; if (overflowGap > 128) overflowEscapes = 0; return; }
+    if (prefix.length >= STREAM_TAIL_CHARS) { prefixOverbound = true; prefix = ''; return; }
+    prefix += String.fromCharCode(byte);
+  };
+  const appendPrefixBytes = bytes => {
+    if (prefixOverbound) { overflowGap += bytes.length; if (overflowGap > 128) overflowEscapes = 0; return; }
+    const remaining = STREAM_TAIL_CHARS - prefix.length;
+    const accepted = Math.min(remaining, bytes.length);
+    if (accepted > 0) prefix += bytes.subarray(0, accepted).toString('latin1');
+    if (accepted < bytes.length) { prefixOverbound = true; prefix = ''; overflowGap = bytes.length - accepted; if (overflowGap > 128) overflowEscapes = 0; }
+  };
+  const flush = () => {
+    if (used === 0 || !scanner) return;
+    scanner.feed(batch.subarray(0, used)); used = 0;
+  };
+  const activate = () => {
+    if (scanner || found) return Boolean(scanner);
+    if (prefixOverbound) {
+      overflowEscapes += 1; overflowGap = 0;
+      // Form payloads commonly begin after a URL/query prefix. Do not turn
+      // incidental late `%HH` prose into a failure; activate only after two
+      // nearby escapes, then inspect the bounded decoded suffix structurally.
+      if (overflowEscapes < 2) return false;
+      scanner = createStructuralByteStreamScanner({ checkArchives, transferDecodeDepth: transferDecodeDepth - 1 });
+      return true;
+    }
+    if (transferDecodeDepth === 0) { found = TRANSFER_DECODE_DEPTH_REASON; return false; }
+    scanner = createStructuralByteStreamScanner({ checkArchives, transferDecodeDepth: transferDecodeDepth - 1 });
+    if (prefix) scanner.feed(Buffer.from(prefix.replaceAll('+', ' '), 'latin1'));
+    prefix = '';
+    return true;
+  };
+  const emit = byte => {
+    if (!scanner) { appendPrefix(byte); return; }
+    batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
+    batch[used++] = byte;
+    if (used === batch.length) flush();
+  };
+  const receive = byte => {
+    if (found) return;
+    if (state === 0) {
+      if (byte === 0x25) { state = 1; return; }
+      emit(scanner && byte === 0x2b ? 0x20 : byte); return;
+    }
+    if (state === 1) {
+      const nibble = hexNibble(byte);
+      if (nibble !== -1) { high = nibble; highByte = byte; state = 2; return; }
+      emit(0x25); state = 0; receive(byte); return;
+    }
+    const nibble = hexNibble(byte);
+    if (nibble !== -1) { if (activate()) emit((high << 4) | nibble); state = 0; return; }
+    emit(0x25); emit(highByte); state = 0; receive(byte);
+  };
+  return {
+    feed(bytes) {
+      const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+      if (state === 0 && !scanner && source.indexOf(0x25) === -1) { appendPrefixBytes(source); return; }
+      for (const byte of source) receive(byte);
+    },
+    finish() {
+      if (!found && state === 1) emit(0x25);
+      if (!found && state === 2) { emit(0x25); emit(highByte); }
+      flush();
+      return found ?? scanner?.finish() ?? null;
+    },
+  };
+}
+function createAlternateEncodingScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
   // Keep this scanner live from byte zero so MIME-style line wrapping can
   // cross the 32-character activation threshold. Before that threshold it
   // retains at most eight quartets and performs no decoded-byte allocation.
-  const embeddedBase64 = createEmbeddedBase64TokenScanner({ checkArchives });
-  const pemBase64 = createPemBase64Scanner({ checkArchives });
-  const wholeHex = [0, 1].map(initialNibbleSkip => createHexTransferScanner({ checkArchives, wholeFile: true, initialNibbleSkip }));
-  const embeddedHex = createEmbeddedWhitespaceHexTokenScanner({ checkArchives });
+  const embeddedBase64 = createEmbeddedBase64TokenScanner({ checkArchives, transferDecodeDepth });
+  const pemBase64 = createPemBase64Scanner({ checkArchives, transferDecodeDepth });
+  const wholeHex = [0, 1].map(initialNibbleSkip => createHexTransferScanner({ checkArchives, transferDecodeDepth, wholeFile: true, initialNibbleSkip }));
+  const embeddedHex = createEmbeddedWhitespaceHexTokenScanner({ checkArchives, transferDecodeDepth });
+  const quotedPrintable = createQuotedPrintableTransferScanner({ checkArchives, transferDecodeDepth });
+  const percentForm = createPercentFormTransferScanner({ checkArchives, transferDecodeDepth });
   return {
     feed(bytes) {
       const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
@@ -1500,23 +1698,26 @@ function createAlternateEncodingScanner({ checkArchives = true } = {}) {
       pemBase64.feed(source);
       for (const phase of wholeHex) phase.feed(source);
       embeddedHex.feed(source);
+      quotedPrintable.feed(source);
+      percentForm.feed(source);
     },
     finish() {
       let wholeHexReason = null;
       for (const phase of wholeHex) wholeHexReason ??= phase.finish();
-      return pemBase64.finish() ?? embeddedBase64.finish() ?? wholeHexReason ?? embeddedHex.finish() ?? null;
+      return pemBase64.finish() ?? embeddedBase64.finish() ?? wholeHexReason ?? embeddedHex.finish() ?? quotedPrintable.finish() ?? percentForm.finish() ?? null;
     },
   };
 }
-function createStructuralByteStreamScanner({ checkArchives = true, checkBase64 = true } = {}) {
+function createStructuralByteStreamScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
+  if (!Number.isInteger(transferDecodeDepth) || transferDecodeDepth < 0 || transferDecodeDepth > MAX_TRANSFER_DECODE_DEPTH) throw new Error('private Phase 3C transfer decode depth is invalid');
   const utf8Decoder = new StringDecoder('utf8');
   const utf8Scanner = createStructuralTextStreamScanner();
   const utf32Scanner = createUtf32StructuralStreamScanner();
   let utf16Decoders = null;
   let utf16Scanners = null;
   let rawTail = Buffer.alloc(0);
-  const base64 = checkBase64 ? createBase64TransferScanner({ checkArchives }) : null;
-  const wrappedBase64 = checkBase64 ? createAlternateEncodingScanner({ checkArchives }) : null;
+  const base64 = transferDecodeDepth > 0 ? createBase64TransferScanner({ checkArchives, transferDecodeDepth }) : null;
+  const wrappedBase64 = transferDecodeDepth > 0 ? createAlternateEncodingScanner({ checkArchives, transferDecodeDepth }) : null;
   const archiveScanner = checkArchives ? createArchiveStreamScanner() : null;
   const shouldActivateUtf16 = bytes => {
     const hasNull = bytes.indexOf(0) !== -1;
@@ -2051,8 +2252,16 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     const fields = update.trim().split(/\s+/);
     if (fields.length !== 4) throw new Error('private Phase 3C pre-push containment received malformed ref update');
     const [localRef, localSha, remoteRef, remoteSha] = fields;
+    // Git represents a deletion with the literal local-ref sentinel. Validate
+    // that special record before ordinary local-ref syntax, otherwise every
+    // valid deletion is rejected as though it were an attacker-controlled ref.
+    if (localRef === '(delete)' && isZeroSha(localSha)) {
+      if (!remoteRef.startsWith('refs/') || isZeroSha(remoteSha)) throw new Error('private Phase 3C pre-push containment received malformed ref update');
+      assertCommitSha(remoteSha, 'remote');
+      continue; // deletion exports no new blob
+    }
     if (!localRef.startsWith('refs/') || !remoteRef.startsWith('refs/')) throw new Error('private Phase 3C pre-push containment received malformed ref update');
-    if (isZeroSha(localSha)) continue; // deletion exports no new blob
+    if (isZeroSha(localSha)) throw new Error('private Phase 3C pre-push containment received malformed ref update');
     assertCommitSha(localSha, 'local');
     const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });
     objectViolations.push(...inspected.violations);

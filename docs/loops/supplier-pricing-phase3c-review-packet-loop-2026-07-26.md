@@ -351,6 +351,31 @@ Each cycle records:
   live mutation, Product decision, migration/apply, flag change, permission
   change, external-trust-setting change, deletion, or force-push.
 
+## Fresh review disposition — rejected `b2d55f77` (2026-07-28)
+
+- `REVIEW — Rejected:` fresh independent Sol returned `FIX`. The shared
+  Claude/Codex proof parser accepted explicit required `FIX` and `FOLLOW-UP`
+  work when it appeared in a NIT lane. The Phase 3C containment checker missed
+  quoted-printable and percent/form wrappers, SQLite containers, Product SQL
+  `INSERT`/`COPY` column lists, and nested Base64/hex/PEM transfer wrappers.
+  Its pre-push parser rejected Git's valid `(delete) <zero-sha> refs/...`
+  record before reaching the deletion handling. Broad ignored-root handling
+  also exempted noncanonical local backup paths from the worktree scan.
+- `DISPOSITION:` `b2d55f77` remains rejected. The bounded cleanroom repair is
+  uncommitted, not exact-SHA review evidence, and does not reopen the packet.
+- `REPAIR BOUNDARY:` reject required-work markers in NIT prose/table cells;
+  decode at most three transfer layers; add bounded
+  quoted-printable/percent detection; reject validated SQLite and Product SQL
+  structures; validate deletion records before ordinary local-ref syntax; and
+  exempt only dated backup output plus exact named tool metadata paths.
+- `PROOF — Ran/Saw:` focused shared-parser tests and the full synthetic
+  containment suite passed for the uncommitted repair. The latter exercised all
+  new chunk seams and completed in about 303 seconds. Exact-SHA full packet and
+  fresh Luna, independent-Sol, and literal Opus 5 reviews remain required.
+- `GUARD:` PR #246 remains `PARKED`; no merge, deploy, live mutation, Product
+  classification, migration/apply, flag change, permission change, deletion,
+  or force-push is authorized.
+
 ## Current cycle status — rejected `523d4412` (2026-07-28)
 
 - `PROOF — Ran/Saw:` exact Windows, simulated pre-push, and network-disabled

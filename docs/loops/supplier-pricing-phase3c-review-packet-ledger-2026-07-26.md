@@ -762,3 +762,29 @@ live mutation, flag enablement, deploy, or merge.
   PR #246 remains `PARKED`; no merge, deploy, live mutation, Product
   classification, migration, flag, permission, or external-trust-setting
   authorization is granted here.
+
+## Rejected exact candidate — `b2d55f77` (2026-07-28)
+
+- `REVIEW — Rejected:` fresh independent Sol returned `FIX` for seven
+  reproducible classes: required-work text in NIT inline/table lanes;
+  quoted-printable and percent/form transfer wrappers; SQLite headers;
+  Product `INSERT`/`COPY` column-list exports; one additional bounded nested
+  transfer layer; valid pre-push deletion records; and broad ignored backup
+  roots. The no-longer-current broad ignored-root behavior was local worktree
+  scope, not an outgoing-Git exemption.
+- `DISPOSITION:` `b2d55f77` remains rejected. The current bounded repair is
+  deliberately uncommitted and therefore cannot be review or acceptance
+  evidence for a later candidate.
+- `PROOF — Ran/Saw:` `node scripts/run-claude-review.test.mjs` and
+  `node scripts/write-codex-push-proof.test.mjs` passed. The full
+  `node scripts/supplier-pricing-phase3-private-artifacts.test.mjs` synthetic
+  suite passed in about 303 seconds, including every new transfer seam,
+  containment shape, deletion fixture, and canonical-path fixture.
+- `NOT VERIFIED:` no exact-SHA Phase 3C packet, fresh Luna, fresh independent
+  Sol, literal `claude-opus-5 --effort high`, PR checks, CodeRabbit resolution,
+  live state, deployment, migration, or private packet data was touched.
+- `NEXT SAFE CYCLE:` stage and commit the bounded repair; bind a new exact SHA;
+  rerun the full packet; then obtain fresh required reviews. PR #246 remains
+  `PARKED`; this ledger grants no merge, deploy, live mutation, Product
+  classification, migration/apply, flag change, permission change, deletion,
+  or force-push.

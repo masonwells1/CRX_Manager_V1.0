@@ -396,9 +396,16 @@ assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Follow-ups:\nNone.\n
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### HIGH\nNone, but one real defect remains\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### HIGH\n### Summary\nClean review.\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Severity | Finding |\n| --- | --- | --- |\n| src/x.ts:12 | HIGH | authorization bypass |\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| Severity | File | Finding |\n| --- | --- | --- |\n| HIGH | src/x.ts:12 | authorization bypass |\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Finding | Severity |\n| --- | --- | --- |\n| src/x.ts:12 | authorization bypass | HIGH |\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| Finding | Severity | Status |\n| --- | --- | --- |\n| authorization bypass | HIGH | N/A |\nFINAL_VERDICT: SHIP" }), null, "a finding before a middle severity cell must not be ignored");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Severity: MED\nFinding: incorrect proof binding\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Severity | Finding |\n| --- | --- | --- |\n| src/x.ts:12 | LOW | incorrect proof binding |\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Severity | Finding |\n| --- | --- | --- |\n| - | LOW | N/A |\nFINAL_VERDICT: SHIP" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| Severity | File | Finding |\n| --- | --- | --- |\n| LOW | - | N/A |\nFINAL_VERDICT: SHIP" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Finding | Severity |\n| --- | --- | --- |\n| - | N/A | LOW |\nFINAL_VERDICT: SHIP" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| Status | Severity | Finding |\n| --- | --- | --- |\n| N/A | LOW | - |\nFINAL_VERDICT: SHIP" }), "clean", "empty or N/A table cells stay clean when severity is in the middle");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| Count | Finding | Severity |\n| --- | --- | --- |\n| 0 | None | LOW (0) |\nFINAL_VERDICT: SHIP" }), "clean", "zero and None cells stay clean when counted severity is last");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Severity: LOW\nFinding: incorrect proof binding\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Severity: LOW\nFinding: None.\nFINAL_VERDICT: SHIP" }), "clean");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "File | Severity | Finding\n--- | --- | ---\nsrc/x.ts:12 | HIGH | authorization bypass\nFINAL_VERDICT: SHIP" }), null, "a common table without outer pipes must not hide a HIGH finding");
@@ -416,6 +423,8 @@ assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "FOLLOW-UPS (1)\nNone
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "HIGH | 0 | None\nLOW | 0 | N/A\nFINAL_VERDICT: SHIP" }), "clean", "true zero/NONE/N/A table rows remain clean without outer pipes");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "HIGH (0)\nNone.\nFINAL_VERDICT: SHIP" }), "clean", "an explicit zero followed by None remains clean");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "NIT | 1 | optional naming polish\nFINAL_VERDICT: SHIP" }), "clean", "NIT table rows remain nonblocking");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "NIT: required FIX for authorization bypass\nFINAL_VERDICT: SHIP" }), null, "an explicit required FIX remains blocking even when labelled NIT");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "NIT | 1 | required FOLLOW-UP for authorization bypass\nFINAL_VERDICT: SHIP" }), null, "an explicit required FOLLOW-UP table cell remains blocking even when severity is NIT");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "FINAL_VERDICT: NEEDS-WORK\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 1, stdout: "FINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "No explicit verdict" }), null);

@@ -246,6 +246,7 @@ export function reviewOutputHasActionableFindings(stdout) {
     const match = /^(?:COUNT\s*[:=]\s*)?(\d+)(?:\s+findings?)?$/i.exec(String(value || "").trim());
     return match ? Number(match[1]) : null;
   };
+  const hasRequiredWorkMarker = value => /\brequired\s+(?:fix(?:es)?|follow-?ups?|repair(?:s)?)\b|\b(?:fix(?:es)?|follow-?ups?|repair(?:s)?)\s+required\b/iu.test(String(value || ""));
   let blockingSection = null;
   let severityContextActive = false;
   for (const { classified: line, machine, invalid } of normalizedLines) {
@@ -262,28 +263,36 @@ export function reviewOutputHasActionableFindings(stdout) {
       })
       : null;
     if (tableNormalizationInvalid) return true;
-    const tableSeverity = tableCells?.map((cell) => new RegExp(`^${severityPattern}${countPattern}$`, "i").exec(cell))
-      .find((match) => match) ?? null;
-    if (tableSeverity) {
-      const tableSeverityIndex = tableCells.findIndex((cell) => new RegExp(`^${severityPattern}${countPattern}$`, "i").test(cell));
+    const tableSeverityEntries = tableCells?.map((cell, index) => ({
+      index,
+      match: new RegExp(`^${severityPattern}${countPattern}$`, "i").exec(cell),
+    })).filter(({ match }) => match) ?? [];
+    if (tableSeverityEntries.length) {
+      const actionableSeverityEntries = tableSeverityEntries.filter(({ match }) => !/^NIT(?:PICK)?$/i.test(match[1]));
+      if (actionableSeverityEntries.length > 1) return true;
+      const tableSeverity = actionableSeverityEntries[0]?.match ?? tableSeverityEntries[0].match;
+      const tableSeverityIndex = actionableSeverityEntries[0]?.index ?? tableSeverityEntries[0].index;
       const isNit = /^NIT(?:PICK)?$/i.test(tableSeverity[1]);
       if (isNit) {
+        if (tableCells.some(hasRequiredWorkMarker)) return true;
         if (blockingSection === "requires-empty") return true;
         blockingSection = null;
         severityContextActive = false;
         continue;
       }
       const inlineCount = tableSeverity[2] === undefined ? null : Number(tableSeverity[2]);
-      let detailStart = tableSeverityIndex + 1;
-      const adjacentCount = parseCount(tableCells[detailStart]);
-      const count = inlineCount ?? adjacentCount;
-      if (adjacentCount !== null) detailStart += 1;
-      if (count !== null && count > 0) return true;
-      const details = tableCells.slice(detailStart).filter((cell) => cell && !/^:?-{3,}:?$/u.test(cell));
+      // A reviewer may put the severity at any table position. Every other
+      // cell must therefore be an explicit empty value; inspecting only the
+      // cells to the right would let a finding before the severity disappear.
+      const nonSeverityCells = tableCells.filter((_, index) => index !== tableSeverityIndex);
+      const tableCounts = nonSeverityCells.map(parseCount).filter((count) => count !== null);
+      if (inlineCount !== null && inlineCount > 0) return true;
+      if (tableCounts.some((count) => count > 0)) return true;
       severityContextActive = true;
-      if (details.length === 0) {
-        blockingSection = count === 0 ? "declared-empty" : "requires-empty";
-      } else if (details.some((detail) => !noFinding(detail))) {
+      if (nonSeverityCells.length === 0) {
+        blockingSection = inlineCount === 0 ? "declared-empty" : "requires-empty";
+      } else if (nonSeverityCells.some((cell) =>
+        !/^(?:-|—)?$/u.test(cell) && !/^:?-{3,}:?$/u.test(cell) && parseCount(cell) !== 0 && !noFinding(cell))) {
         return true;
       } else {
         blockingSection = null;
@@ -296,6 +305,7 @@ export function reviewOutputHasActionableFindings(stdout) {
       const count = severityLabel[2] === undefined ? null : Number(severityLabel[2]);
       const detail = severityLabel[3];
       if (isNit) {
+        if (hasRequiredWorkMarker(detail)) return true;
         if (blockingSection === "requires-empty") return true;
         blockingSection = null;
         severityContextActive = false;
@@ -340,6 +350,7 @@ export function reviewOutputHasActionableFindings(stdout) {
       const count = finding[2] === undefined ? null : Number(finding[2]);
       const detail = finding[3];
       if (/^NIT(?:PICK)?$/i.test(severity)) {
+        if (hasRequiredWorkMarker(detail)) return true;
         if (blockingSection === "requires-empty") return true;
         blockingSection = null;
         severityContextActive = false;

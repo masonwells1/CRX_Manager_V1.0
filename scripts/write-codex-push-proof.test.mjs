@@ -166,6 +166,16 @@ assert.equal(
   "clean",
   "explicit zero/NONE/N/A stays clean and NIT remains nonblocking",
 );
+assert.equal(
+  codexReviewProofVerdict({ status: 0, stdout: `NIT: required FIX for authorization bypass\n${CODEX_VERDICT_TOKEN}: CLEAN` }),
+  null,
+  "an explicit required FIX remains blocking even when labelled NIT",
+);
+assert.equal(
+  codexReviewProofVerdict({ status: 0, stdout: `NIT | 1 | required FOLLOW-UP for authorization bypass\n${CODEX_VERDICT_TOKEN}: CLEAN` }),
+  null,
+  "an explicit required FOLLOW-UP table cell remains blocking even when severity is NIT",
+);
 for (const [label, body, expected] of [
   ["bracketed blocker", "[BLOCKER] authorization bypass", null],
   ["nested markdown high", "> - **[HIGH]** authorization bypass", null],

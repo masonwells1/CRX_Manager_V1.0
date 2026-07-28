@@ -167,6 +167,50 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`# ordinary comment\n\n${OWNER_DECISION_HEADERS.map(header => ` "${header}" `).join(',')}\n`)), 'owner decision sheet CSV header structure');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`Public format name: ${POST_STAGE_A_SNAPSHOT_FORMAT}\n`)), null);
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`const format = ${JSON.stringify(POST_STAGE_A_SNAPSHOT_FORMAT)};\n`)), null);
+  const transferPacket = JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT });
+  const quotedPrintablePacket = Buffer.from(transferPacket).toString('hex').replace(/../g, byte => `=${byte}`);
+  const percentFormPacket = encodeURIComponent(transferPacket);
+  const base64Packet = value => Buffer.from(value).toString('base64');
+  const hexPacket = value => Buffer.from(value).toString('hex');
+  const pemPacket = value => `-----BEGIN PACKET-----\n${base64Packet(value)}\n-----END PACKET-----\n`;
+  const nestedTransferPackets = [
+    ['Base64(Base64)', base64Packet(base64Packet(transferPacket))],
+    ['Base64(hex)', base64Packet(hexPacket(transferPacket))],
+    ['hex(Base64)', hexPacket(base64Packet(transferPacket))],
+    ['PEM(hex)', pemPacket(hexPacket(transferPacket))],
+    ['Base64(PEM)', base64Packet(pemPacket(transferPacket))],
+  ];
+  for (const [name, encoded] of [
+    ['quoted-printable', quotedPrintablePacket],
+    ['percent/form', percentFormPacket],
+    ...nestedTransferPackets,
+  ]) {
+    const bytes = Buffer.from(encoded, 'utf8');
+    assert.equal(structuralPrivateArtifactReason(bytes), 'private JSON format marker in malformed candidate', `${name} transfer packet must be rejected directly`);
+    for (let split = 1; split < bytes.length; split += 1) {
+      assert.equal(
+        structuralPrivateArtifactStreamReason([bytes.subarray(0, split), bytes.subarray(split)]),
+        'private JSON format marker in malformed candidate',
+        `${name} transfer packet must survive chunk seam ${split}/${bytes.length}`,
+      );
+    }
+  }
+  const sqliteHeader = Buffer.from([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00, 0x10, 0x00, 0x01, 0x01, 0x00, 0x40, 0x20, 0x20]);
+  assert.equal(structuralPrivateArtifactReason(sqliteHeader), 'database container cannot be inspected', 'SQLite containers must be rejected directly');
+  for (let split = 1; split < sqliteHeader.length; split += 1) {
+    assert.equal(structuralPrivateArtifactStreamReason([sqliteHeader.subarray(0, split), sqliteHeader.subarray(split)]), 'database container cannot be inspected', `SQLite header must survive chunk seam ${split}/${sqliteHeader.length}`);
+  }
+  const productSqlColumns = 'id,sku,product_name,pricing_version,updated_at';
+  for (const [name, statement] of [
+    ['INSERT', ['INSERT', 'INTO', 'products', `(${productSqlColumns})`, 'VALUES'].join(' ')],
+    ['COPY', ['COPY', 'public.products', `(${productSqlColumns})`, 'FROM', 'STDIN'].join(' ')],
+  ]) {
+    const bytes = Buffer.from(statement, 'utf8');
+    assert.equal(structuralPrivateArtifactReason(bytes), 'private product SQL INSERT/COPY column structure', `${name} Product column list must be rejected directly`);
+    for (let split = 1; split < bytes.length; split += 1) {
+      assert.equal(structuralPrivateArtifactStreamReason([bytes.subarray(0, split), bytes.subarray(split)]), 'private product SQL INSERT/COPY column structure', `${name} Product column list must survive chunk seam ${split}/${bytes.length}`);
+    }
+  }
   const canonicalOwnerHeader = OWNER_DECISION_HEADERS.join(',');
   const canonicalProductHeader = Object.keys(JSON.parse(REVIEWED_STRUCTURAL_SIGNATURE_SOURCE)).join(',');
   const reorderedProductHeader = ['updated_at', 'product_name', 'id', 'pricing_version', 'sku'].join(',');
@@ -312,7 +356,9 @@ try {
     assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(wrapped.slice(0, 17)), Buffer.from(wrapped.slice(17))]), 'private JSON format marker in malformed candidate', 'embedded Base64 prefix detection must survive a chunk split');
   }
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: 'b3JkaW5hcnkgcHVibGljIGNvbnRlbnQ=A' }))), null, 'benign invalid Base64 must not become a containment violation');
-  assert.equal(structuralPrivateArtifactReason(Buffer.from(Buffer.from(base64Snapshot).toString('base64'))), null, 'encoded packets must not be recursively decoded');
+  const twiceEncodedBase64Snapshot = Buffer.from(base64Snapshot).toString('base64');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(twiceEncodedBase64Snapshot)), 'private JSON format marker in malformed candidate', 'the bounded nested-transfer lane must decode one additional wrapper');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(Buffer.from(twiceEncodedBase64Snapshot).toString('base64'))), 'private JSON format marker in malformed candidate', 'the fixed third transfer layer must remain structurally inspected');
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
   const paddingOffset = base64Snapshot.indexOf('=');
   assert.notEqual(paddingOffset, -1, 'synthetic Base64 marker must exercise terminal padding');
@@ -367,7 +413,9 @@ try {
   const invalidWholeFileHex = Buffer.from(`${'ab'.repeat(256 * 1024)}g${'cd'.repeat(256 * 1024)}`);
   assert.equal(structuralPrivateArtifactReason(invalidWholeFileHex), null, 'whole-file hexadecimal scanning must stop at an invalid byte without inventing a finding');
   assert.equal(structuralPrivateArtifactReason(Buffer.alloc(MAX_STRUCTURAL_SCAN_BYTES + 1, 0x61)), 'private artifact candidate exceeds bounded structural scan limit', 'oversized whole-file hexadecimal input must stop at the structural scan bound');
-  assert.equal(structuralPrivateArtifactReason(Buffer.from(Buffer.from(hexSnapshot).toString('hex'))), null, 'decoded hexadecimal bytes must not recursively re-enter transfer decoding');
+  const twiceEncodedHexSnapshot = Buffer.from(hexSnapshot).toString('hex');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(twiceEncodedHexSnapshot)), 'private JSON format marker in malformed candidate', 'the bounded nested-transfer lane must decode a hexadecimal wrapper');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(Buffer.from(twiceEncodedHexSnapshot).toString('hex'))), 'private JSON format marker in malformed candidate', 'the fixed third hexadecimal layer must remain structurally inspected');
   const validZip = zipLocalHeader(); const validGzip = gzipHeader({ extra: Buffer.from([1, 2]), name: 'packet', comment: 'bounded', hcrc: true });
   const exactMaximumGzip = gzipHeader({ extra: Buffer.alloc(4096, 0x45), name: 'n'.repeat(4096), comment: 'c'.repeat(4096), hcrc: true });
   const overboundGzipExtra = gzipHeader({ extra: Buffer.alloc(4097, 0x45) });
@@ -552,6 +600,10 @@ try {
   assert(boundedPrePushMetrics.scanned_candidate_count > ordinaryContainmentMetrics.scanned_candidate_count, 'pre-push metrics must include direct outgoing object scans in the shared budget');
   assert(boundedPrePushMetrics.scanned_logical_bytes > ordinaryContainmentMetrics.scanned_logical_bytes, 'pre-push byte metrics must include direct outgoing object scans in the shared budget');
   const boundedPrePushArgv = boundedPrePushCalls.find(args => args[0] === 'rev-list'); assert.deepEqual(boundedPrePushArgv.slice(0, 3), ['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`]); assert(!boundedPrePushArgv.includes('--not'), 'new-ref history enumeration must scan full bounded ancestry');
+  await checkPrePushPrivateArtifactContainment({ root: boundedHistoryRepo, remoteName: 'origin', stdin: `(delete) ${'0'.repeat(40)} refs/heads/packet ${boundedHistoryHead}\n` });
+  await assert.rejects(() => checkPrePushPrivateArtifactContainment({ root: boundedHistoryRepo, remoteName: 'origin', stdin: `refs/heads/packet ${'0'.repeat(40)} refs/heads/packet ${boundedHistoryHead}\n` }), /malformed ref update/);
+  await assert.rejects(() => checkPrePushPrivateArtifactContainment({ root: boundedHistoryRepo, remoteName: 'origin', stdin: `(delete) ${'0'.repeat(40)} refs/heads/packet ${'0'.repeat(40)}\n` }), /malformed ref update/);
+  await assert.rejects(() => checkPrePushPrivateArtifactContainment({ root: boundedHistoryRepo, remoteName: 'origin', stdin: `(delete) ${boundedHistoryHead} refs/heads/packet ${boundedHistoryHead}\n` }), /malformed ref update/);
   const overCapPrePushExecute = (command, args, options) => args[0] === 'rev-list'
     ? `${Array.from({ length: MAX_HISTORY_COMMITS + 1 }, (_unused, index) => index.toString(16).padStart(40, '0')).join('\n')}\n`
     : fixtureGitExecute(command, args, options);
@@ -1039,16 +1091,30 @@ git() { return 0; }
   writeFileSync(path.join(operatorOwnedIgnoredRepo, '.gitignore'), `${operatorOwnedIgnoredPrefixes.join('\n')}\npackages/backups/\n`);
   git(operatorOwnedIgnoredRepo, ['add', '.gitignore']); git(operatorOwnedIgnoredRepo, ['commit', '--quiet', '-m', 'ignore operator-owned roots']);
   const operatorOwnedBaseline = await checkPrivateArtifactContainment({ root: operatorOwnedIgnoredRepo });
-  for (const prefix of operatorOwnedIgnoredPrefixes) {
-    const archivePath = `${prefix}generated-third-party.xlsx`;
+  const canonicalOperatorIgnoredPaths = [
+    'backups/2026-07-28/products.json', 'backups/2026-07-28/manifest.json',
+    'backups/LATEST-OK.json', '.epa-data-quality/manifest.json',
+    '.epa-data-quality/report.md', '.vercel/project.json',
+  ];
+  for (const archivePath of canonicalOperatorIgnoredPaths) {
     mkdirSync(path.dirname(path.join(operatorOwnedIgnoredRepo, archivePath)), { recursive: true });
     writeFileSync(path.join(operatorOwnedIgnoredRepo, archivePath), compressedBytes);
   }
   const operatorOwnedResult = await checkPrivateArtifactContainment({ root: operatorOwnedIgnoredRepo });
-  assert.equal(operatorOwnedResult.checked_ignored_count, operatorOwnedIgnoredPrefixes.length, 'all exact top-level operator roots remain visible as intentionally skipped ignored candidates');
-  assert.equal(operatorOwnedResult.checked_path_count, operatorOwnedBaseline.checked_path_count + operatorOwnedIgnoredPrefixes.length, 'skipped ignored paths remain represented in checked-path accounting');
+  assert.equal(operatorOwnedResult.checked_ignored_count, canonicalOperatorIgnoredPaths.length, 'only canonical dated backups and exact tool metadata paths remain intentionally skipped ignored candidates');
+  assert.equal(operatorOwnedResult.checked_path_count, operatorOwnedBaseline.checked_path_count + canonicalOperatorIgnoredPaths.length, 'skipped ignored paths remain represented in checked-path accounting');
   assert.equal(operatorOwnedResult.scanned_candidate_count, operatorOwnedBaseline.scanned_candidate_count, 'source-boundary skips must consume neither candidate nor byte scan budget');
   assert.equal(operatorOwnedResult.scanned_logical_bytes, operatorOwnedBaseline.scanned_logical_bytes, 'source-boundary skips must consume no logical-byte budget');
+  const backupCatalogPath = 'backups/catalog.json';
+  writeFileSync(path.join(operatorOwnedIgnoredRepo, backupCatalogPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+  await containmentFails(operatorOwnedIgnoredRepo, backupCatalogPath, 'private JSON format marker in malformed candidate');
+  rmSync(path.join(operatorOwnedIgnoredRepo, backupCatalogPath));
+  for (const archivePath of ['backups/generated-third-party.xlsx', '.perf-sweep-data/generated-third-party.xlsx', '.epa-data-quality/generated-third-party.xlsx', '.vercel/generated-third-party.xlsx']) {
+    mkdirSync(path.dirname(path.join(operatorOwnedIgnoredRepo, archivePath)), { recursive: true });
+    writeFileSync(path.join(operatorOwnedIgnoredRepo, archivePath), compressedBytes);
+    await containmentFails(operatorOwnedIgnoredRepo, archivePath, 'compressed archive container cannot be inspected');
+    rmSync(path.join(operatorOwnedIgnoredRepo, archivePath));
+  }
   const nestedOperatorArchivePath = 'packages/backups/generated-third-party.xlsx';
   mkdirSync(path.dirname(path.join(operatorOwnedIgnoredRepo, nestedOperatorArchivePath)), { recursive: true });
   writeFileSync(path.join(operatorOwnedIgnoredRepo, nestedOperatorArchivePath), compressedBytes);
