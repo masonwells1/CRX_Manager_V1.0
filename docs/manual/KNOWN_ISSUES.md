@@ -148,6 +148,51 @@ recorded for audit accuracy, not as open remediation work.
 
 ---
 
+## 0c. PARKED 2026-07-28 — logged-out visitors can execute 43 database functions
+
+**Status: fix WRITTEN and PARKED in two halves, NEITHER applied live.** Deliberately split so the
+easy half can be approved without the risky half.
+
+- **Half 1 — `20260728193000_revoke_anon_execute_non_policy_functions`** (this section's PR). 40
+  functions that appear in **no** RLS policy, so nothing changes from "returns nothing" to "hard
+  error". 20 are trigger-only (`RETURNS trigger`, no arguments) and PostgREST cannot expose them at
+  all. 12 are SECURITY DEFINER callables that already gate internally. **The other 8 are the actual
+  live exposure**: `calculate_billing_splits(bigint, numeric[])`, `check_period_open(date)` and the
+  six `next_*_number()` document-number allocators have no auth gate of any kind, and a logged-out
+  caller can invoke them today.
+- **Half 2 — `20260728193100_revoke_anon_execute_rls_role_helpers`** — `is_admin()`,
+  `is_applicator()`, `is_driver()`. These are evaluated **inside** RLS policies as the querying
+  role, so removing anon's EXECUTE turns a silent filter into `42501 permission denied for function
+  is_admin`. Blast radius measured live: 30 tables / 70 PUBLIC-audience policies for `is_admin`, 6
+  for `is_applicator`, 1 for `is_driver`. Judged safe because `is_sales_rep()` is already in exactly
+  that state on 24 tables in production today and nothing is broken by it, the login route never
+  reads those tables as anon (`src/App.tsx:185` — `login` is the only route outside
+  `<ProtectedRoute>`), no edge function reads as anon, and the `authenticated` grant is retained and
+  positively asserted. Approve this one separately.
+
+**Why this is not the blanket judgment it looks like.** The overnight Codex draft
+(`20260728185827_revoke_anon_security_definer_execute`) revoked **44** functions with the same
+boilerplate sentence repeated 44 times, and is superseded by these two files. It also included
+`handle_new_user()`, which must **not** be revoked: it is the `auth.users` trigger,
+`supabase_auth_admin` holds no grant of its own, is not a superuser, and is a member of no role — the
+PUBLIC grant is its only route, so revoking it would break signup.
+
+**Mechanics worth keeping.** Every REVOKE names **both** `PUBLIC` and `anon`: Supabase's
+`ALTER DEFAULT PRIVILEGES` hands `anon` its own EXECUTE on each new public function, so revoking
+from `PUBLIC` alone leaves that grant standing, and revoking from `anon` alone leaves the PUBLIC
+grant it inherits. Proof uses `has_function_privilege('anon', <oid>, 'EXECUTE')`, never a `proacl`
+scan.
+
+**Proof.** Schema rebuilt from zero in a throwaway PostgreSQL 17 container from baseline
+`20260727174805`, all six post-baseline migrations replayed in order, then 43/43 target signatures
+(parsed out of the migration files, not retyped) verified: `anon` EXECUTE false, `authenticated`
+EXECUTE true. Both files re-applied cleanly a second time. Independent `rls-security-reviewer` pass
+against live returned no BLOCKER and no HIGH: all 43 signatures match live with no overloads, and no
+cron job, edge function, cross-schema function body, `auth`/`storage` trigger, or PostgREST
+pre-request hook calls any of them.
+
+---
+
 ## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (all three follow-up items also resolved)
 
 **Status 2026-07-27: FIXED LIVE** by migration `20260727145843_inline_role_checks_require_active_profile`
