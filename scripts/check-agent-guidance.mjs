@@ -108,6 +108,16 @@ const allHooks = Object.values(codexHooks.hooks || {})
   .filter((hook) => hook.type === "command");
 record(!/C:\\\\CRX_Manager/i.test(codexHooksText), ".codex/hooks.json has no hard-coded checkout path");
 record(allHooks.length > 0 && allHooks.every((hook) => hook.command && hook.commandWindows), "every Codex command hook has POSIX and Windows commands", `${allHooks.length} hooks`);
+// A `commandWindows` string is itself run through a PowerShell parent, so any
+// `$var` in it is expanded by that parent before the inner PowerShell ever
+// sees it. `$root` therefore arrived empty, `Join-Path $root '<path>'` fell to
+// one argument, and PowerShell consumed the hook's own stdin payload as the
+// missing ChildPath. Every Windows guard failed open that way (2026-07-28) and
+// the presence check above still passed, because the command existed — it just
+// never ran the guard. Keep Windows commands free of shell variables; use an
+// inline `(git rev-parse --show-toplevel)` subexpression instead.
+const windowsVarHooks = allHooks.filter((hook) => /\$[A-Za-z_]/.test(hook.commandWindows || ""));
+record(windowsVarHooks.length === 0, "no Codex Windows hook command interpolates a shell variable", windowsVarHooks.length ? `${windowsVarHooks.length} hook(s) use a $variable` : `${allHooks.length} hooks clean`);
 record(codexHooksText.includes(".claude/hooks/sql-safety.mjs"), "Codex invokes shared Claude hook sources");
 record(codexHooksText.includes("production-action-guard.mjs"), "Codex production action guard is registered");
 record(codexHooksText.includes("review-proof-guard.mjs"), "Codex review proof guard is registered");

@@ -7,49 +7,49 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/sql-safety.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/sql-safety.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/sql-safety.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/money-safety.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/money-safety.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/money-safety.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/idempotency-body-check.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/idempotency-body-check.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/idempotency-body-check.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/rls-on-new-tables.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/rls-on-new-tables.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/rls-on-new-tables.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/status-enum-check.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/status-enum-check.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/status-enum-check.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/generated-column-check.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/generated-column-check.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/generated-column-check.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/env-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/env-guard.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/env-guard.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/grant-change-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/grant-change-guard.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/grant-change-guard.mjs'\"",
             "timeout": 5
           }
         ]
@@ -60,13 +60,13 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/bash-safety.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/bash-safety.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/bash-safety.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/active-area-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/active-area-guard.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/active-area-guard.mjs'\"",
             "timeout": 5
           }
         ]
@@ -77,37 +77,37 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/review-proof-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/review-proof-guard.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/review-proof-guard.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/migration-apply-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/migration-apply-guard.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/migration-apply-guard.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/hold-latch-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/hold-latch-guard.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/hold-latch-guard.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/live-testdata-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/live-testdata-guard.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/live-testdata-guard.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/mcp-tool-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/mcp-tool-guard.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/mcp-tool-guard.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/production-action-guard.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/production-action-guard.mjs')\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/production-action-guard.mjs')\"",
             "timeout": 15
           }
         ]
@@ -120,13 +120,13 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/posttooluse-migration.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/posttooluse-migration.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/posttooluse-migration.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/eslint-autofix.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/eslint-autofix.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/eslint-autofix.mjs'\"",
             "timeout": 20
           }
         ]
@@ -137,7 +137,7 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/registry-freshness.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/registry-freshness.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/registry-freshness.mjs'\"",
             "timeout": 5
           }
         ]
@@ -149,37 +149,37 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/dangerous-phrase-warning.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/dangerous-phrase-warning.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/dangerous-phrase-warning.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/codex-gauntlet-reminder.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/codex-gauntlet-reminder.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/codex-gauntlet-reminder.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/agent-pair-review-reminder.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/agent-pair-review-reminder.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/agent-pair-review-reminder.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/codex-to-claude-handoff-reminder.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/codex-to-claude-handoff-reminder.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/codex-to-claude-handoff-reminder.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/ship-intent-reminder.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/ship-intent-reminder.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/ship-intent-reminder.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/hold-latch-prompt.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/hold-latch-prompt.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/hold-latch-prompt.mjs'\"",
             "timeout": 5
           }
         ]
@@ -191,19 +191,19 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/session-snapshot.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/session-snapshot.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/session-snapshot.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/session-staleness.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/session-staleness.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/session-staleness.mjs'\"",
             "timeout": 10
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/worktree-awareness.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/worktree-awareness.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/worktree-awareness.mjs'\"",
             "timeout": 10
           }
         ]
@@ -216,13 +216,13 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/stop-verify.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/stop-verify.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/stop-verify.mjs'\"",
             "timeout": 5
           },
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/codex-hook-adapter.mjs\" \".claude/hooks/stop-wrap.mjs\"",
-            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/stop-wrap.mjs'\"",
+            "commandWindows": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"node (Join-Path (git rev-parse --show-toplevel) '.codex/hooks/codex-hook-adapter.mjs') '.claude/hooks/stop-wrap.mjs'\"",
             "timeout": 5
           }
         ]
