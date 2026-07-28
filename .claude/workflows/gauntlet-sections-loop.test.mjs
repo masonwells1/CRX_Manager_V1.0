@@ -989,6 +989,144 @@ for (const [label, layer] of [
   )
 }
 
+// ── An equal-severity re-report at a REFUTED key must be RE-CONTESTED ─────────
+// The escalation hole's twin, on the equal-rank path. Round 1 reports a HIGH and both
+// skeptics refute it. Round 2 reports the SAME title+location at the SAME severity --
+// which the rank check treats as a plain duplicate, so it was filed into `duplicates`,
+// where nothing verifies it and nothing blocks settlement. A weak early refutation
+// therefore outlived a later, independently-evidenced report and the section settled
+// CLEAN on a real defect that had been reported twice.
+{
+  const KEY = { title: 'Repeatedly reported lead', location: 'src/example.ts:12' }
+  let round = 1
+  // Which ROUND each skeptic ran in, recorded at call time. A bare count would let
+  // one round-1 call plus one round-2 call masquerade as a single two-skeptic pass.
+  // The verify label carries no round marker (`S2:verify:1#1`), so it must be captured
+  // here rather than parsed back out afterwards.
+  const verifyRounds = []
+  const { result } = await executeWorkflow(async (_prompt, options) => {
+    if (options.label.endsWith(':r2')) round = 2
+    if (options.label.endsWith(':adjudicate')) return advice
+    if (options.label === 'S2:find1:r1' || options.label === 'S2:find1:r2') {
+      return completeLayer([finding('HIGH', KEY)])
+    }
+    if (options.label.startsWith('S2:verify:')) {
+      verifyRounds.push(round)
+      return round === 1
+        ? { status: 'REFUTED', reasoning: 'Round 1 saw no defect.', verifiedAgainst: 'src/example.ts:12' }
+        : { status: 'VERIFIED', reasoning: 'The re-report cites the real writer.', verifiedAgainst: 'src/example.ts:12' }
+    }
+    return completeLayer()
+  }, liveArgs([2]))
+
+  const section = result.results[0]
+  assert.equal(section.counts.high, 1, 'a HIGH re-reported at a refuted key must get a fresh adversarial pass, not be filed as a duplicate')
+  assert.equal(section.refuted.length, 0, 'the superseded refutation must not still stand beside the confirmed finding')
+  assert.equal(section.adjudication.cleanOfBlockerHigh, false, 'a section holding the re-contested HIGH is not clean')
+  assert.equal(
+    section.duplicates.filter((f) => f.title === KEY.title).length,
+    0,
+    'the re-report must not ALSO be recorded as a dropped duplicate',
+  )
+  assert.ok(
+    section.superseded.some((f) => f.title === KEY.title && /re-contested/.test(f.reason || '')),
+    'the displaced refutation must be kept as a trail, not silently deleted',
+  )
+  // A full two-skeptic pass in EACH round: round 1 refuted it, round 2 actually
+  // re-examined it. Asserting the rounds, not just the total, is what rules out a
+  // half-pass in each round adding up to the right-looking number.
+  assert.deepEqual(
+    verifyRounds,
+    [1, 1, 2, 2],
+    'the re-contest must actually spend a second two-skeptic pass — otherwise nothing was re-examined',
+  )
+}
+
+// ...and a refutation that survives the second look STANDS. The displaced record is
+// marked wasConfirmed:false on purpose, so the reinstatement pass (which exists to
+// rescue findings that had already survived verification) must not resurrect it.
+{
+  const KEY = { title: 'Repeatedly reported lead', location: 'src/example.ts:12' }
+  const { result } = await executeWorkflow(async (_prompt, options) => {
+    if (options.label.endsWith(':adjudicate')) return advice
+    if (options.label === 'S2:find1:r1' || options.label === 'S2:find1:r2') {
+      return completeLayer([finding('HIGH', KEY)])
+    }
+    if (options.label.startsWith('S2:verify:')) {
+      return { status: 'REFUTED', reasoning: 'The cited line does the opposite.', verifiedAgainst: 'src/example.ts:12' }
+    }
+    return completeLayer()
+  }, liveArgs([2]))
+
+  const section = result.results[0]
+  assert.equal(section.confirmed.length, 0, 'a re-contest that is refuted again must not be reinstated as confirmed')
+  assert.equal(section.counts.high, 0)
+  assert.equal(section.refuted.length, 1, 'the twice-refuted finding is refuted, exactly once')
+  assert.equal(section.adjudication.settled, true, 'four skeptics agreeing is a terminal state')
+  assert.equal(section.adjudication.cleanOfBlockerHigh, true)
+}
+
+// A MED re-reported at a refuted key is still a plain duplicate: MED/LOW never get the
+// adversarial pass, so re-contesting one would spend skeptics on a severity the
+// workflow deliberately does not verify.
+{
+  const KEY = { title: 'Repeatedly reported lead', location: 'src/example.ts:12' }
+  let round = 1
+  const { result } = await executeWorkflow(async (_prompt, options) => {
+    if (options.label.endsWith(':r2')) round = 2
+    if (options.label.endsWith(':adjudicate')) return advice
+    if (options.label === 'S2:find1:r1') return completeLayer([finding('HIGH', KEY)])
+    if (options.label === 'S2:find1:r2') return completeLayer([finding('MED', KEY)])
+    if (options.label.startsWith('S2:verify:')) {
+      return { status: 'REFUTED', reasoning: 'Round 1 saw no defect.', verifiedAgainst: 'src/example.ts:12' }
+    }
+    return completeLayer()
+  }, liveArgs([2]))
+
+  const section = result.results[0]
+  assert.equal(round, 2, 'the fixture must actually reach round 2')
+  assert.equal(section.duplicates.filter((f) => f.severity === 'MED').length, 1, 'a MED at a refuted key stays a recorded duplicate')
+  assert.equal(section.refuted.length, 1, 'a MED must not displace a HIGH refutation')
+  assert.equal(section.superseded.length, 0)
+}
+
+// ...and neither may a LOWER-severity BLOCKER/HIGH re-report. Matching the refutation
+// on title+location alone let a round-2 HIGH pull a round-1 BLOCKER's refutation out
+// and relabel it as a HIGH outcome, so the trail recorded something weaker than what
+// was actually reported and dismissed. The stronger version of that same claim already
+// lost its adversarial pass; the weaker one is a duplicate.
+{
+  const KEY = { title: 'Repeatedly reported lead', location: 'src/example.ts:12' }
+  let round = 1
+  const verifyRounds = []
+  const { result } = await executeWorkflow(async (_prompt, options) => {
+    if (options.label.endsWith(':r2')) round = 2
+    if (options.label.endsWith(':adjudicate')) return advice
+    if (options.label === 'S2:find1:r1') return completeLayer([finding('BLOCKER', KEY)])
+    if (options.label === 'S2:find1:r2') return completeLayer([finding('HIGH', KEY)])
+    if (options.label.startsWith('S2:verify:')) {
+      verifyRounds.push(round)
+      return { status: 'REFUTED', reasoning: 'Round 1 saw no defect.', verifiedAgainst: 'src/example.ts:12' }
+    }
+    return completeLayer()
+  }, liveArgs([2]))
+
+  const section = result.results[0]
+  assert.equal(round, 2, 'the fixture must actually reach round 2')
+  assert.equal(section.refuted.length, 1, 'the BLOCKER refutation must survive a lower-severity re-report')
+  assert.equal(section.refuted[0].severity, 'BLOCKER', 'the trail must still say a BLOCKER was reported and dismissed')
+  assert.equal(section.superseded.length, 0, 'nothing was re-contested, so nothing may be recorded as displaced')
+  assert.equal(section.duplicates.filter((f) => f.severity === 'HIGH').length, 1, 'the lower-severity re-report is a recorded duplicate')
+  assert.equal(section.counts.high, 0)
+  // Both skeptic calls in round 1 and none in round 2. A bare count of two would also
+  // accept one call per round, which is a different failure wearing the right total.
+  assert.deepEqual(
+    verifyRounds,
+    [1, 1],
+    'a lower-severity re-report must not buy itself a fresh two-skeptic pass',
+  )
+}
+
 // ── A snake_case token buried in prose is not an openable citation ────────────
 // The catch-all matched an identifier ANYWHERE in a sentence, so "the code around
 // payment_button" satisfied the citation gate while identifying nothing. On the

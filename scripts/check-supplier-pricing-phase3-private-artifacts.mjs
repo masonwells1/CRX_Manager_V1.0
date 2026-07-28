@@ -59,6 +59,7 @@ const MANIFEST_ROOT_KEYS = ['rows', 'manifest_sha256', 'generated_from_snapshot_
 const PRODUCT_ROW_KEYS = ['id', 'sku', 'product_name', 'pricing_version', 'updated_at'];
 const MANIFEST_ROW_KEYS = ['product_id', 'current_product', 'proposed_phase3', 'field_decisions', 'row_sha256'];
 const STRUCTURAL_KEY_GROUPS = [SNAPSHOT_ROOT_KEYS, MANIFEST_ROOT_KEYS, PRODUCT_ROW_KEYS, MANIFEST_ROW_KEYS];
+export const STRUCTURAL_SIGNATURE_REASON = 'private snapshot or manifest key structure';
 const STREAM_TAIL_CHARS = Math.max(4096, OWNER_DECISION_HEADERS.join(',').length * 4);
 const OWNER_HEADER_RECORD_DELIMITER_RE = /[\r\n\v\f\u0085\u2028\u2029\u001c-\u001f]/u;
 const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
@@ -68,6 +69,39 @@ for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 const MAX_EMBEDDED_BASE64_WHITESPACE_BYTES = 4096;
 const MAX_EMBEDDED_HEX_WHITESPACE_BYTES = 4096;
 const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
+
+function unsafeStructuralSignatureExemptionPath(repoPath) {
+  if (typeof repoPath !== 'string' || repoPath.length === 0 || repoPath.includes('\\') || repoPath.includes('\0')) return 'path must be a non-empty normalized POSIX path';
+  if (repoPath !== path.posix.normalize(repoPath) || repoPath.startsWith('/') || repoPath.endsWith('/') || repoPath.includes('//')) return 'path must be an exact normalized repo-relative path';
+  if (/[*?\[\]{}:]/u.test(repoPath) || /[\x00-\x1f\x7f]/u.test(repoPath)) return 'path must not contain glob, drive, or control characters';
+  const segments = repoPath.split('/');
+  if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) return 'path must not contain empty or traversal segments';
+  if (segments.some(segment => segment.toLowerCase() === 'private-artifacts' || segment.toLowerCase() === '.git')) return 'path must not be inside a private-artifact or Git administration path';
+  if ([...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => repoPath.startsWith(prefix))) return 'path must not use a tool-owned or ignored prefix';
+  return null;
+}
+
+/**
+ * Explicit reviewed exceptions are exact files, never prefixes. They are only
+ * for test/documentation sources whose benign text necessarily contains the
+ * structural key signature; path-level and container checks remain active.
+ */
+export function validateStructuralSignatureExemptions(exemptions) {
+  if (!exemptions || typeof exemptions !== 'object' || Array.isArray(exemptions)) throw new Error('private Phase 3C structural-signature exemptions must be an object');
+  const validated = {};
+  for (const [repoPath, reason] of Object.entries(exemptions)) {
+    const pathError = unsafeStructuralSignatureExemptionPath(repoPath);
+    if (pathError) throw new Error(`private Phase 3C structural-signature exemption rejected: ${pathError}`);
+    if (typeof reason !== 'string' || reason.trim().length < 25) throw new Error(`private Phase 3C structural-signature exemption for ${repoPath} requires a concrete review reason`);
+    validated[repoPath] = reason.trim();
+  }
+  return Object.freeze(validated);
+}
+
+export const STRUCTURAL_SIGNATURE_EXEMPTIONS = validateStructuralSignatureExemptions({
+  'scripts/supplier-pricing-phase3-private-artifacts.test.mjs': 'Phase 3C adversarial test source intentionally embeds a synthetic product-row signature; it contains no private artifact and remains path-exact.',
+});
+const STRUCTURAL_SIGNATURE_EXEMPTION_PATHS = new Set(Object.keys(STRUCTURAL_SIGNATURE_EXEMPTIONS));
 
 /**
  * Husky and Git can export GIT_DIR/GIT_INDEX_FILE/etc. Those variables would
@@ -144,6 +178,12 @@ export function forbiddenArtifactReason(repoPath) {
 }
 export function findForbiddenPrivateArtifactPaths(paths) {
   return paths.map(repoPath => ({ repoPath, reason: forbiddenArtifactReason(repoPath) })).filter(item => item.reason);
+}
+export function isStructuralSignatureExempt(repoPath, reason) {
+  return reason === STRUCTURAL_SIGNATURE_REASON && STRUCTURAL_SIGNATURE_EXEMPTION_PATHS.has(String(repoPath));
+}
+function acceptedStructuralReason(repoPath, reason) {
+  return reason && !isStructuralSignatureExempt(repoPath, reason) ? reason : null;
 }
 function bareRepositoryObjectRoot(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
@@ -1370,7 +1410,8 @@ async function currentIndexCandidateViolations(root, execute, budget) {
   const reasons = await scanGitObjectEntries(regular, root, budget);
   for (const entry of regular) {
     const reason = reasons.get(entry.key);
-    if (reason) violations.push({ repoPath: entry.repoPath, reason });
+    const acceptedReason = acceptedStructuralReason(entry.repoPath, reason);
+    if (acceptedReason) violations.push({ repoPath: entry.repoPath, reason: acceptedReason });
   }
   return { violations, entries: new Map(entries.map(entry => [entry.repoPath, entry])) };
 }
@@ -1468,7 +1509,8 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // closed just like tracked and untracked archives.
     const checkArchives = source !== 'ignored' || !isToolOwnedIgnoredPath(repoPath);
     const result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
-    if (result?.reason) violations.push({ repoPath, reason: result.reason });
+    const acceptedReason = acceptedStructuralReason(repoPath, result?.reason);
+    if (acceptedReason) violations.push({ repoPath, reason: acceptedReason });
   }
   return { violations, candidateCount: candidates.size, ignoredCount: ignored.size, durationMs: Math.round(performance.now() - started) };
 }
@@ -1522,12 +1564,13 @@ async function candidateCommitTreeViolations(commit, root, execute, budget) {
     const directReason = forbiddenArtifactReason(entry.repoPath);
     if (directReason) violations.push({ repoPath: `${commit}:${entry.repoPath}`, reason: directReason });
     if (!REGULAR_GIT_MODES.has(entry.mode) || entry.type !== 'blob') { violations.push({ repoPath: `${commit}:${entry.repoPath}`, reason: 'non-regular Git mode' }); continue; }
-    regular.push({ repoPath: `${commit}:${entry.repoPath}`, spec: entry.object, key: `candidate:${commit}:${entry.repoPath}` });
+    regular.push({ repoPath: `${commit}:${entry.repoPath}`, exemptionPath: entry.repoPath, spec: entry.object, key: `candidate:${commit}:${entry.repoPath}` });
   }
   const reasons = await scanGitObjectEntries(regular, root, budget);
   for (const entry of regular) {
     const reason = reasons.get(entry.key);
-    if (reason) violations.push({ repoPath: entry.repoPath, reason });
+    const acceptedReason = acceptedStructuralReason(entry.exemptionPath, reason);
+    if (acceptedReason) violations.push({ repoPath: entry.repoPath, reason: acceptedReason });
   }
   return { violations, entryCount: entries.length };
 }
@@ -1550,13 +1593,14 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
       const bareRoot = commitContainsBareRepository(commit, repoPath, root, execute);
       if (bareRoot) violations.push({ repoPath: `${commit}:${bareRoot}`, reason: 'bare Git repository' });
       if (!REGULAR_GIT_MODES.has(tree.mode) || tree.type !== 'blob') { violations.push({ repoPath: `${commit}:${repoPath}`, reason: 'non-regular Git mode' }); continue; }
-      entries.push({ repoPath: `${commit}:${repoPath}`, spec: tree.object, key: `history:${commit}:${repoPath}` });
+      entries.push({ repoPath: `${commit}:${repoPath}`, exemptionPath: repoPath, spec: tree.object, key: `history:${commit}:${repoPath}` });
     }
   }
   const reasons = await scanGitObjectEntries(entries, root, budget);
   for (const entry of entries) {
     const reason = reasons.get(entry.key);
-    if (reason) violations.push({ repoPath: entry.repoPath, reason });
+    const acceptedReason = acceptedStructuralReason(entry.exemptionPath, reason);
+    if (acceptedReason) violations.push({ repoPath: entry.repoPath, reason: acceptedReason });
   }
   return violations;
 }

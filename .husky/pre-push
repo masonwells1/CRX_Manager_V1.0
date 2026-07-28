@@ -10,14 +10,6 @@ if ! node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-push
   exit 1
 fi
 
-echo ""
-echo "Running Phase 3C containment regression suite..."
-if ! npm run test:supplier-pricing-phase3c-packet 2>&1; then
-  echo ""
-  echo "❌ PRIVATE ARTIFACT REGRESSION TESTS FAILED — push blocked."
-  exit 1
-fi
-
 echo "Running TypeScript type check..."
 if ! npm run typecheck 2>&1; then
   echo ""
@@ -44,4 +36,4 @@ if ! node scripts/graphify-refresh.mjs --if-relevant; then
 fi
 
 echo ""
-echo "✅ Phase 3C regression, type check, and build passed — pushing to GitHub."
+echo "✅ Phase 3C containment, type check, and build passed — pushing to GitHub."

@@ -501,6 +501,53 @@ async function runSection(num) {
       // meant a BLOCKER raised where a MED had already been recorded was dropped
       // unverified, and the section could then settle cleanOfBlockerHigh.
       if (seen.has(key) && rank <= seen.get(key)) {
+        // The one equal-severity duplicate that must NOT be filed away: a BLOCKER/HIGH
+        // re-reported at a key the skeptics already REFUTED. That refutation was reached
+        // against the earlier report's evidence; a later round re-raising the same defect
+        // is, by construction, a report the earlier refutation never saw (the carried
+        // PRIOR_ROUNDS block tells finders not to resurrect a refutation WITHOUT new
+        // evidence, so a finding that comes back anyway is claiming new evidence).
+        // Routing it to `duplicates` — which nothing verifies and which never blocks
+        // settlement — let a weak early refutation outlive a stronger later report, and
+        // the section then settled CLEAN on a defect that had been reported twice. This
+        // is the escalation hole (handled below) on the equal-rank path.
+        //
+        // Bounded by MAX_ROUNDS, not by a counter: a key can be re-contested at most once
+        // per round, because the refuted record is removed here and only a fresh
+        // adversarial REFUTED verdict can put it back.
+        //
+        // The refutation displaced must be at the SAME severity. Matching on the key
+        // alone let a round-2 HIGH delete a round-1 BLOCKER's refutation and relabel it
+        // as a HIGH outcome — an audit trail that says something weaker than what was
+        // actually reported and dismissed. A LOWER-severity re-report is correctly a
+        // duplicate: the stronger version of that same claim already lost its
+        // adversarial pass, so the weaker one has no new standing. (A HIGHER-severity
+        // re-report never reaches here at all — it fails `rank <= seen.get(key)` and
+        // takes the escalation path below.) Testing `rank === seen.get(key)` instead
+        // would be wrong: `seen` holds the max rank ever recorded at the key, which a
+        // CONFIRMED finding may have raised, and that has no bearing on which
+        // refutation is being re-contested.
+        //
+        // No separate BLOCKER/HIGH test is needed to keep MED/LOW out: only BLOCKER and
+        // HIGH are ever verified (see `toVerify` below), so `refuted` cannot contain any
+        // other severity and a MED can never match one. The same predicate does the
+        // splice, so the removal never depends on that one-record-per-key invariant.
+        const refutedHere = (f) => keyOf(f) === key && f.severity === finding.severity
+        if (refuted.some(refutedHere)) {
+          for (let i = refuted.length - 1; i >= 0; i -= 1) {
+            if (refutedHere(refuted[i])) {
+              // wasConfirmed:false is deliberate — the reinstatement pass below must not
+              // resurrect this if the re-contest also fails. A refutation that survives a
+              // second, independently-evidenced look stands.
+              superseded.push({ ...refuted[i], wasConfirmed: false, reason: 're-contested: reported again after being refuted' })
+              refuted.splice(i, 1)
+            }
+          }
+          // `seen` is intentionally left at its existing (>=) rank: a re-contest is not an
+          // escalation, and downgrading the recorded rank would reopen the dedup hole.
+          fresh.push({ ...finding, recontested: true })
+          continue
+        }
         // Not re-hunted, but not thrown away either: the duplicate may carry evidence
         // the kept copy lacks, and a silently-dropped report is how a real second
         // defect at the same location disappears.

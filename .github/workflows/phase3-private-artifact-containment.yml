@@ -1,6 +1,6 @@
 # Phase 3C protected PR containment. This workflow is evaluated from the base
 # branch on pull_request_target. It never checks out or executes PR code.
-name: Phase 3C Private Artifact Containment
+name: Phase 3C Trusted Base Containment
 
 on:
   pull_request_target:
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   phase3-private-artifact-containment:
-    name: Phase 3C Private Artifact Containment (trusted base)
+    name: Phase 3C Trusted Base Containment
     if: github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 12

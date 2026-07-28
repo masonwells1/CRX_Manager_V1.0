@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   phase3-private-artifact-containment:
-    name: Phase 3C Private Artifact Containment
+    name: Phase 3C Candidate Containment (CI)
     if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     # This is intentionally the first content-processing job. It uses only
@@ -40,7 +40,7 @@ jobs:
           # Only this introducing PR may bootstrap from a base without the
           # checker. Once merged, every later PR must use (and therefore be
           # governed by) the exact base revision's checker.
-          phase3_bootstrap_base='2a9e9252a62642e51b71c248c8c2f149a9a434d9'
+          phase3_bootstrap_base='d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c'
           node --version
           mapfile -t phase3_event_shas < <(node --input-type=commonjs -e '
             const fs = require("node:fs");

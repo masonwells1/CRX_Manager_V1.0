@@ -27,7 +27,7 @@ invalidation condition is recorded. PR #246 is already open and remains
 `PARKED`: its current head must match a recorded exact-reviewed SHA, and any
 later head change invalidates prior head-bound evidence. Before any future
 publication, re-fetch `origin/main` and recheck bootstrap pin
-`2a9e9252a62642e51b71c248c8c2f149a9a434d9` after #251/#253
+`d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` after #255/#251/#253
 reconciliation; required checks (including Ubuntu
 PR CI), CodeRabbit resolution, and separate external trusted-workflow/ruleset
 activation plus post-activation proof remain mandatory before Mason's
@@ -122,7 +122,7 @@ and its final review/PR path; they do not reopen capture or materialization.
    bounded finding list to a fresh Terra writer. Freeze a new SHA and repeat
    the entire proof/review cycle.
 7. **Applicable delivery cycle:** before any future publication, re-fetch
-   `origin/main` and recheck the current `2a9e9252a62642e51b71c248c8c2f149a9a434d9`
+   `origin/main` and recheck the current `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`
    bootstrap pin. PR #246 may be accepted only
    when its current head matches a recorded exact-reviewed SHA; a later head
    change starts a fresh proof/review cycle. Required checks, Vercel,
@@ -217,7 +217,7 @@ already regenerated-and-verified 604-row aggregate-only packet. They are
 retained as evidence only and do not authorize a new capture or materialization
 run. The current loop completes only after the PR's current head matches a
 recorded exact-reviewed SHA, a recheck of current base/bootstrap
-`2a9e9252a62642e51b71c248c8c2f149a9a434d9` before any future publication,
+`d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` before any future publication,
 required Ubuntu PR CI green with real CodeRabbit findings resolved, external
 trusted-workflow/ruleset activation plus post-activation proof, and a
 protected PR parked without merge for Mason's row-by-row review. Until then it
@@ -253,7 +253,7 @@ This delivery mechanic does not authorize packet recapture or materialization.
 
 This mission may commit to `codex/phase3c-overnight-20260726`. Before any
 future publication, it must re-fetch/recheck the current
-`2a9e9252a62642e51b71c248c8c2f149a9a434d9` bootstrap pin; PR #246 can be
+`d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` bootstrap pin; PR #246 can be
 accepted only if its current head matches a recorded exact-reviewed SHA and the
 required checks, CodeRabbit resolution, and external trusted-workflow/ruleset
 activation plus proof are complete. It remains `PARKED` otherwise.
