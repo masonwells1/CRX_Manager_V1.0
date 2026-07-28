@@ -54,6 +54,7 @@ const REGULAR_GIT_MODES = new Set(['100644', '100755']);
 const PRIVATE_ARTIFACT_BASENAMES_LOWER = new Set([...PRIVATE_ARTIFACT_BASENAMES].map(name => name.toLowerCase()));
 const JSON_FORMATS = new Set(APPROVED_SERIALIZED_FORMATS);
 const ZERO_SHA = '0000000000000000000000000000000000000000';
+const ZERO_SHA_PATTERN = /^(?:0{40}|0{64})$/;
 const SNAPSHOT_ROOT_KEYS = ['products', 'snapshot_sha256', 'expected_old_phase3_defaults', 'migration_high_water'];
 const MANIFEST_ROOT_KEYS = ['rows', 'manifest_sha256', 'generated_from_snapshot_sha256', 'summary', 'approval_state'];
 const PRODUCT_ROW_KEYS = ['id', 'sku', 'product_name', 'pricing_version', 'updated_at'];
@@ -165,9 +166,10 @@ function gitLines(args, root = REPO_ROOT, execute = execFileSync) {
   return String(gitOutput(args, root, execute)).trim().split(/\r?\n/).filter(Boolean);
 }
 function assertCommitSha(value, label) {
-  if (typeof value !== 'string' || !/^[0-9a-f]{40}$/i.test(value)) throw new Error(`private Phase 3C history containment requires a valid ${label} commit SHA`);
+  if (typeof value !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(value)) throw new Error(`private Phase 3C history containment requires a valid ${label} commit SHA`);
   return value.toLowerCase();
 }
+function isZeroSha(value) { return typeof value === 'string' && ZERO_SHA_PATTERN.test(value); }
 
 export function forbiddenArtifactReason(repoPath) {
   const segments = repoPath.split(/[\\/]/).filter(Boolean);
@@ -1722,7 +1724,7 @@ async function inspectOutgoingRefObject({ localRef, localSha, root, execute, bud
       if (reason) violations.push({ repoPath: localRef, reason });
       const headerEnd = bytes.indexOf(Buffer.from('\n\n'));
       const headers = bytes.subarray(0, headerEnd === -1 ? bytes.length : headerEnd).toString('ascii');
-      const target = /^object ([0-9a-f]{40})$/m.exec(headers)?.[1];
+      const target = /^object ([0-9a-f]{40,64})$/m.exec(headers)?.[1];
       if (!target) throw new Error('private Phase 3C pre-push containment received a malformed tag object');
       queue.push({ sha: target, depth: depth + 1 });
       continue;
@@ -1756,12 +1758,12 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     if (fields.length !== 4) throw new Error('private Phase 3C pre-push containment received malformed ref update');
     const [localRef, localSha, remoteRef, remoteSha] = fields;
     if (!localRef.startsWith('refs/') || !remoteRef.startsWith('refs/')) throw new Error('private Phase 3C pre-push containment received malformed ref update');
-    if (localSha === ZERO_SHA) continue; // deletion exports no new blob
+    if (isZeroSha(localSha)) continue; // deletion exports no new blob
     assertCommitSha(localSha, 'local');
     const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });
     objectViolations.push(...inspected.violations);
     if (inspected.commit === null) continue;
-    if (remoteSha === ZERO_SHA) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
+    if (isZeroSha(remoteSha)) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
     else {
       const remoteCommit = peeledCommitSha(assertCommitSha(remoteSha, 'remote'), root, execute);
       if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
@@ -1847,12 +1849,12 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
   if (name === 'push') {
     const base = assertCommitSha(event?.before, 'push base');
     const head = assertCommitSha(event?.after, 'push head');
-    for (const sha of [base, head]) if (sha !== ZERO_SHA && !eventCommitIsAvailable(sha, root, execute)) throw new Error('private Phase 3C CI containment event commit is unavailable');
+    for (const sha of [base, head]) if (!isZeroSha(sha) && !eventCommitIsAvailable(sha, root, execute)) throw new Error('private Phase 3C CI containment event commit is unavailable');
     const candidateRoot = canonicalContainmentRoot(root, head, execute);
     // GitHub uses all zeroes when a ref is created. There is no valid
     // ZERO_SHA..head range, so enumerate the bounded candidate ancestry
     // directly and let the ordinary checked-commit cap fail closed.
-    const options = base === ZERO_SHA
+    const options = isZeroSha(base)
       ? { commits: commitsForNewPush(head, candidateRoot, execute) }
       : { ranges: [`${base}..${head}`] };
     return { ...await checkPrivateArtifactContainment({ root: candidateRoot, execute, ...options }), github_event_head: head };

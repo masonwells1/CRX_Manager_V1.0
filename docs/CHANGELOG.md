@@ -25,9 +25,11 @@ packets, archive near-misses, critical stream splits, encoded packets under
 ignored tool roots, and the tracked PNG assets that exposed the binary CPIO
 false-positive risk.
 
-The later literal Opus 5 exact-SHA review of `b30769b3` ran under wrapper run
-`2026-07-27T23-29-35-252Z-3ef35b3a`; this is distinct from the older review
-cycles documented below where no Opus 5 backend had run. That review identified
+The later literal Opus 5 exact-SHA review of historical rejected `b30769b3`
+ran under wrapper run `2026-07-27T23-29-35-252Z-3ef35b3a`; it is distinct from
+the later exact candidate `c9ace302`, which received a separate literal Opus 5
+review. The older review cycles documented below where no Opus 5 backend had
+run remain historical for those cycles. The `b30769b3` review identified
 avoidable first-push and local hook costs. History traversal now reads each
 changed path's destination mode
 and object ID from one bounded raw `git diff-tree` stream instead of spawning
@@ -104,8 +106,9 @@ no private packet rows. The intermediate `49eb3f01` contains only the
 separately reviewed moving-main CI bootstrap invariants; acceptance belongs
 only to the future exact SHA containing this bounded successor after its fresh
 proof and reviews. Historical `b30769b3` truly received the literal Opus 5 run
-recorded above; the current/final candidate has not yet received a literal Opus
-5 review.
+recorded above; later exact candidate `c9ace302` received a separate literal
+Opus 5 review. Acceptance still requires the current PR head to match a fresh
+exact-SHA wrapper capture.
 
 The introducing PR's bootstrap now uses `d787b7e0` as a fixed trusted ancestry
 floor instead of requiring exact equality with a moving `main` tip. A base that
@@ -132,7 +135,8 @@ are recorded in the consolidated known-issues file.
 Git attributes now pin Husky hooks, GitHub workflows, and shell scripts to LF,
 preventing Windows checkout conversion from breaking Linux/shebang execution.
 
-The final Opus 5 publication review found three additional release-gate issues.
+The literal Opus 5 publication review of exact `c9ace302` found three
+additional release-gate issues.
 The multi-minute packet suite is now CI-only instead of running serially in
 pre-push; local pre-push still hard-gates containment, typecheck, and build.
 The structural product-row signature has a reviewed, exact-path exemption
