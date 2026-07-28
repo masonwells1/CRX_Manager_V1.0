@@ -69,7 +69,16 @@ const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\v\f\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
 const MAX_EMBEDDED_BASE64_WHITESPACE_BYTES = 4096;
 const MAX_EMBEDDED_HEX_WHITESPACE_BYTES = 4096;
-const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
+// Exact top-level ignored roots owned by local CRX tools. They are skipped only
+// when Git classifies the candidate as ignored. Staged, tracked, modified, and
+// historical blobs under the same roots retain the ordinary hard scan caps.
+const OPERATOR_OWNED_IGNORED_PREFIXES = new Set(['backups/', '.perf-sweep-data/', '.epa-data-quality/', '.vercel/']);
+const TOOL_OWNED_IGNORED_PREFIXES = new Set([
+  'node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/',
+  '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/',
+  'output/playwright/', 'output/phase1a-db/',
+  ...OPERATOR_OWNED_IGNORED_PREFIXES,
+]);
 
 function unsafeStructuralSignatureExemptionPath(repoPath) {
   if (typeof repoPath !== 'string' || repoPath.length === 0 || repoPath.includes('\\') || repoPath.includes('\0')) return 'path must be a non-empty normalized POSIX path';
@@ -204,6 +213,10 @@ function isToolOwnedIgnoredPath(repoPath) {
   // `private/node_modules/` directory is operator-controlled and must retain
   // archive inspection; broad segment matching would let it hide a packet.
   return [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
+}
+function isOperatorOwnedIgnoredPath(repoPath) {
+  const normalized = repoPath.replaceAll('\\', '/');
+  return [...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
 }
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
@@ -1579,6 +1592,10 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     const directReason = forbiddenArtifactReason(repoPath);
     if (directReason) { violations.push({ repoPath, reason: directReason }); continue; }
     if (bareRootList.some(bareRoot => isBareRepositoryMember(repoPath, bareRoot))) continue;
+    // This is a source-boundary exemption, not an uncharged scan. Skipping
+    // before stat/open/read keeps the lane bounded; forced-tracked candidates
+    // never have source=ignored and therefore cannot take this branch.
+    if (source === 'ignored' && isOperatorOwnedIgnoredPath(repoPath)) continue;
     // `git ls-files --ignored` includes ordinary tool-owned links such as
     // node_modules/.bin. Never follow those entries: an unrelated ignored
     // reparse point cannot make a private packet Git-visible. A Phase 3C

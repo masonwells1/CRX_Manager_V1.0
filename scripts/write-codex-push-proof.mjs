@@ -180,7 +180,7 @@ export function codexReviewProofVerdict({ status, stdout } = {}) {
 
 // ── proof shape ─────────────────────────────────────────────────────────────
 // Mirrors what codex-push-guard's `proofValid` (in codex-push-lib.mjs) accepts:
-// codex_ran:true, verdict in {clean, blockers-fixed}, exact head_sha, ISO ts.
+// codex_ran:true, verdict clean, exact head_sha, ISO ts.
 export function buildCodexPushProof({ headSha, baseSha, verdict, model, timestamp = new Date().toISOString() }) {
   return {
     codex_ran: true,

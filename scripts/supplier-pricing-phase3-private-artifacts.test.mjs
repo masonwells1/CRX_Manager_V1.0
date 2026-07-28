@@ -918,6 +918,40 @@ git() { return 0; }
   writeFileSync(path.join(ignoredToolArchiveRepo, nestedToolPacketPath), Buffer.from(utf16Json).toString('base64'));
   await containmentFails(ignoredToolArchiveRepo, nestedToolPacketPath, 'private JSON format marker in malformed candidate');
   rmSync(path.join(ignoredToolArchiveRepo, 'packages'), { recursive: true, force: true });
+  const operatorOwnedIgnoredPrefixes = ['backups/', '.perf-sweep-data/', '.epa-data-quality/', '.vercel/'];
+  const operatorOwnedIgnoredRepo = fixtureRepo('containment-ignored-operator-owned-roots');
+  writeFileSync(path.join(operatorOwnedIgnoredRepo, '.gitignore'), `${operatorOwnedIgnoredPrefixes.join('\n')}\npackages/backups/\n`);
+  git(operatorOwnedIgnoredRepo, ['add', '.gitignore']); git(operatorOwnedIgnoredRepo, ['commit', '--quiet', '-m', 'ignore operator-owned roots']);
+  const operatorOwnedBaseline = await checkPrivateArtifactContainment({ root: operatorOwnedIgnoredRepo });
+  for (const prefix of operatorOwnedIgnoredPrefixes) {
+    const archivePath = `${prefix}generated-third-party.xlsx`;
+    mkdirSync(path.dirname(path.join(operatorOwnedIgnoredRepo, archivePath)), { recursive: true });
+    writeFileSync(path.join(operatorOwnedIgnoredRepo, archivePath), compressedBytes);
+  }
+  const operatorOwnedResult = await checkPrivateArtifactContainment({ root: operatorOwnedIgnoredRepo });
+  assert.equal(operatorOwnedResult.checked_ignored_count, operatorOwnedIgnoredPrefixes.length, 'all exact top-level operator roots remain visible as intentionally skipped ignored candidates');
+  assert.equal(operatorOwnedResult.checked_path_count, operatorOwnedBaseline.checked_path_count + operatorOwnedIgnoredPrefixes.length, 'skipped ignored paths remain represented in checked-path accounting');
+  assert.equal(operatorOwnedResult.scanned_candidate_count, operatorOwnedBaseline.scanned_candidate_count, 'source-boundary skips must consume neither candidate nor byte scan budget');
+  assert.equal(operatorOwnedResult.scanned_logical_bytes, operatorOwnedBaseline.scanned_logical_bytes, 'source-boundary skips must consume no logical-byte budget');
+  const nestedOperatorArchivePath = 'packages/backups/generated-third-party.xlsx';
+  mkdirSync(path.dirname(path.join(operatorOwnedIgnoredRepo, nestedOperatorArchivePath)), { recursive: true });
+  writeFileSync(path.join(operatorOwnedIgnoredRepo, nestedOperatorArchivePath), compressedBytes);
+  await containmentFails(operatorOwnedIgnoredRepo, nestedOperatorArchivePath, 'compressed archive container cannot be inspected');
+  rmSync(path.join(operatorOwnedIgnoredRepo, 'packages'), { recursive: true, force: true });
+  for (const prefix of operatorOwnedIgnoredPrefixes) {
+    const forcedPrivatePath = `${prefix}forced-private.json`;
+    writeFileSync(path.join(operatorOwnedIgnoredRepo, forcedPrivatePath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+    git(operatorOwnedIgnoredRepo, ['add', '--force', forcedPrivatePath]);
+    await containmentFails(operatorOwnedIgnoredRepo, forcedPrivatePath, 'private JSON format marker in malformed candidate');
+    git(operatorOwnedIgnoredRepo, ['rm', '--quiet', '--cached', forcedPrivatePath]);
+    rmSync(path.join(operatorOwnedIgnoredRepo, forcedPrivatePath));
+    const forcedArchivePath = `${prefix}forced-archive.xlsx`;
+    writeFileSync(path.join(operatorOwnedIgnoredRepo, forcedArchivePath), compressedBytes);
+    git(operatorOwnedIgnoredRepo, ['add', '--force', forcedArchivePath]);
+    await containmentFails(operatorOwnedIgnoredRepo, forcedArchivePath, 'compressed archive container cannot be inspected');
+    git(operatorOwnedIgnoredRepo, ['rm', '--quiet', '--cached', forcedArchivePath]);
+    rmSync(path.join(operatorOwnedIgnoredRepo, forcedArchivePath));
+  }
   for (const endpoint of [...toolOwnedIgnoredRoots, 'test-results', 'output', 'output/playwright', 'output/phase1a-db']) { const ignoredToolRootFileRepo = fixtureRepo(`containment-ignored-tool-root-file-${endpoint.replaceAll('/', '-').replaceAll('.', 'dot')}`); writeFileSync(path.join(ignoredToolRootFileRepo, '.gitignore'), `${endpoint.split('/')[0]}\n`); git(ignoredToolRootFileRepo, ['add', '.gitignore']); git(ignoredToolRootFileRepo, ['commit', '--quiet', '-m', 'ignore tool root name']); mkdirSync(path.dirname(path.join(ignoredToolRootFileRepo, endpoint)), { recursive: true }); writeFileSync(path.join(ignoredToolRootFileRepo, endpoint), gzipHeader({ name: 'ignored.bin' })); await containmentFails(ignoredToolRootFileRepo, endpoint, 'compressed archive container cannot be inspected'); }
   const largeIgnoredRepo = fixtureRepo('containment-large-ignored'); writeFileSync(path.join(largeIgnoredRepo, '.gitignore'), '*.ignored\n'); git(largeIgnoredRepo, ['add', '.gitignore']); git(largeIgnoredRepo, ['commit', '--quiet', '-m', 'ignore synthetic payloads']); const splitBoundaryPadding = 8 * 1024 * 1024 + 64 * 1024 - 4; const lateMarkerPath = 'late-marker.ignored'; writeFileSync(path.join(largeIgnoredRepo, lateMarkerPath), `${'x'.repeat(splitBoundaryPadding)}{"format":"${POST_STAGE_A_SNAPSHOT_FORMAT}"}`); await containmentFails(largeIgnoredRepo, lateMarkerPath, 'private JSON format marker in malformed candidate');
   const separatedFormatPath = 'separated-format.ignored'; writeFileSync(path.join(largeIgnoredRepo, separatedFormatPath), `${'x'.repeat(8 * 1024 * 1024 + 2048)}{"format":${' '.repeat(8192)}"${POST_STAGE_A_SNAPSHOT_FORMAT}"}`); await containmentFails(largeIgnoredRepo, separatedFormatPath, 'private JSON format marker in malformed candidate');
@@ -1081,6 +1115,10 @@ git() { return 0; }
   const preCommit = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-commit'), 'utf8'); const commitMsg = readFileSync(path.join(REPO_ROOT, '.husky', 'commit-msg'), 'utf8'); const prePush = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-push'), 'utf8'); const ci = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'); const packageScripts = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).scripts;
   const trustedTargetWorkflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'phase3-private-artifact-containment.yml'), 'utf8');
   assert(preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit') < preCommit.indexOf('validate-sql.sh'));
+  const workflowMapStage = preCommit.indexOf('git add docs/app-workflow-map.html');
+  const workflowMapContainment = preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit', workflowMapStage);
+  assert(workflowMapStage >= 0 && workflowMapContainment > workflowMapStage, 'the real pre-commit hook must rerun Phase 3C containment after staging docs/app-workflow-map.html');
+  assert.equal((preCommit.match(/check-supplier-pricing-phase3-private-artifacts\.mjs --pre-commit/g) ?? []).length, 2, 'pre-commit must run containment exactly once before validation and once after staging the generated workflow map');
   assert(commitMsg.includes('check-supplier-pricing-phase3-private-artifacts.mjs --commit-msg "${1:-}"'));
   const benignMessageFile = path.join(temp, 'benign-commit-message.txt'); writeFileSync(benignMessageFile, 'ordinary synthetic commit message\n');
   assert.deepEqual(checkCommitMessagePrivateArtifactContainment(benignMessageFile), { scanned_logical_bytes: 34 });
@@ -1135,6 +1173,8 @@ git() { return 0; }
   for (const args of [['--pre-commit', '--pre-commit'], ['--commit-msg', benignMessageFile, '--commit-msg', benignMessageFile], ['--commit-msg'], ['--pre-push', 'origin', '--pre-push', 'origin'], ['--github-event', '--github-event'], ['--range', 'a..b', '--range', 'c..d'], ['--pre-push'], ['--pre-push', '--range', 'a..b'], ['--range'], ['--pre-commit', '--range', 'a..b'], ['--commit-msg', benignMessageFile, '--range', 'a..b'], ['--pre-push', 'origin', '--range', 'a..b'], ['--github-event', '--range', 'a..b'], ['--pre-commit', '--pre-push', 'origin'], ['--commit-msg', benignMessageFile, '--pre-commit'], ['--github-event', '--pre-commit']]) assert.throws(() => parseCli(args), /disclosure-safe usage/);
   assert(ci.indexOf('phase3-private-artifact-containment:') < ci.indexOf('sql-validation:'));
   assert(ci.includes('name: Phase 3C Candidate Containment (CI)'));
+  const candidateContainmentJob = ci.slice(ci.indexOf('  phase3-private-artifact-containment:'), ci.indexOf('\n  sql-validation:'));
+  assert.match(candidateContainmentJob, /\n    timeout-minutes: 12\r?\n/, 'candidate Phase 3C containment must retain its 12-minute timeout');
   assert(!ci.includes('name: Phase 3C Private Artifact Containment'));
   assert(ci.includes('needs: phase3-private-artifact-containment'));
   assert(ci.includes('needs: [phase3-private-artifact-containment, sql-validation]'));

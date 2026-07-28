@@ -15,6 +15,16 @@ also emits deliberate update guidance when a candidate head predates the
 containment checker instead of exiting with an opaque Git error. The owning
 packet, agent-workflow, parser, and documentation checks pass with these guards.
 
+The follow-up proof pass also rejects actionable LOW findings and structured
+severity labels/tables while preserving explicit NONE/N/A/zero sections and
+nonblocking NITs. Push proof validators now accept only the `clean` verdict that
+their trusted producers can actually mint. Candidate containment has a
+12-minute CI ceiling, and pre-commit reruns containment after staging the
+generated workflow map. Exact top-level ignored local-tool roots (`backups/`,
+`.perf-sweep-data/`, `.epa-data-quality/`, `.vercel/`) skip before file reads;
+forced-tracked, staged, modified, and historical content under those paths
+retains the ordinary capped scanners.
+
 The private-artifact containment checker now keeps transfer decoding bounded in
 the hook/CI path. UTF-32 JSON and owner-decision CSV signals are decoded
 incrementally across all byte alignments after a BOM/NUL heuristic, with a

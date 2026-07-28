@@ -49,7 +49,7 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
     .map(({ machine }) => machine)
     .filter((line) => /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line));
   if (machineVerdicts.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(machineVerdicts[0])) return null;
-  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(value.trim());
+  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(value.trim());
   let blockingSection = null;
   for (const { classified: line, isHeading, machine } of normalizedLines) {
     if (/^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(machine)) {
@@ -57,7 +57,31 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
       blockingSection = null;
       continue;
     }
-    const blockingHeading = /^(?:BLOCKER|HIGH|MED(?:IUM)?)(?:\s*\(\s*(\d+)\s*\))?\s*:?\s*$/i.exec(line);
+    const tableCells = line.startsWith("|") && line.endsWith("|")
+      ? line.slice(1, -1).split("|").map((cell) => cell.trim())
+      : null;
+    const tableSeverityIndex = tableCells?.findIndex((cell) => /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)$/i.test(cell)) ?? -1;
+    if (tableSeverityIndex >= 0) {
+      if (/^NIT(?:PICK)?$/i.test(tableCells[tableSeverityIndex])) continue;
+      const details = tableCells.slice(tableSeverityIndex + 1)
+        .filter((cell) => cell && !/^:?-{3,}:?$/u.test(cell));
+      if (details.length === 0 || details.some((detail) => !noFinding(detail))) return null;
+      blockingSection = null;
+      continue;
+    }
+    const severityLabel = /^SEVERITY\s*(?::|-|—|\|)\s*(BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)(?:\s*(?::|-|—|\|)\s*(.+))?$/i.exec(line);
+    if (severityLabel) {
+      if (/^NIT(?:PICK)?$/i.test(severityLabel[1])) {
+        blockingSection = null;
+      } else if (severityLabel[2]) {
+        if (!noFinding(severityLabel[2])) return null;
+        blockingSection = null;
+      } else {
+        blockingSection = "requires-empty";
+      }
+      continue;
+    }
+    const blockingHeading = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)(?:\s*\(\s*(\d+)\s*\))?\s*:?\s*$/i.exec(line);
     if (blockingHeading) {
       blockingSection = blockingHeading[1] === "0" ? "declared-empty" : "requires-empty";
       continue;
@@ -66,14 +90,15 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
       blockingSection = "requires-empty";
       continue;
     }
-    const finding = /^(?:BLOCKER|HIGH|MED(?:IUM)?|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s*\(\s*\d+\s*\))?(?:\s*(?::|-|—)\s*|\s+)(.+)$/i.exec(line);
+    const finding = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s*\(\s*\d+\s*\))?(?:\s*(?::|-|—)\s*|\s+)(.+)$/i.exec(line);
     if (finding) {
       if (!noFinding(finding[1])) return null;
       blockingSection = null;
       continue;
     }
     if (blockingSection && line) {
-      if (noFinding(line)) {
+      const sectionValue = /^(?:FINDING|DETAILS?)\s*:\s*(.+)$/i.exec(line)?.[1] ?? line;
+      if (noFinding(sectionValue)) {
         blockingSection = null;
         continue;
       }
@@ -83,7 +108,7 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
         return null;
       }
     }
-    if (/^(?:LOW|NIT(?:PICK)?|SUMMARY)\s*:?\s*$/i.test(line)) {
+    if (/^(?:NIT(?:PICK)?|SUMMARY)\s*:?\s*$/i.test(line)) {
       blockingSection = null;
     }
   }
