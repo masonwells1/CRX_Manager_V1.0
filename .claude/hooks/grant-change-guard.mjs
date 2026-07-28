@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // grant-change-guard.mjs — C5 control (docs/audits/2026-06-10-error-prevention-review.md §4)
-// PreToolUse guard for Write/Edit of supabase/migrations/*.sql that touch
+// PreToolUse guard for Write/Edit/apply_patch of supabase/migrations/*.sql that touch
 // GRANT/REVOKE on functions.
 //
 // THE B10 RULE: a REVOKE migration broke production because caller analysis
@@ -65,17 +65,41 @@ try {
 }
 
 const toolName = (payload?.tool_name || "").toLowerCase();
-if (!["write", "edit", "multiedit"].includes(toolName)) allow();
+const isPatchTool = toolName === "apply_patch";
+if (!["write", "edit", "multiedit", "apply_patch"].includes(toolName)) allow();
 
-const filePath = (payload?.tool_input?.file_path || "").replace(/\\/g, "/");
+const input = payload?.tool_input || {};
+const patchText = isPatchTool
+  ? String(input.patch ?? input.diff ?? input.input ?? input.changes ?? "")
+  : "";
+const patchPaths = [...patchText.matchAll(
+  /^\*{3}\s*(?:Add|Update|Delete|Move(?:\s+to)?)\s+File:\s*(.+?\.sql)\s*$/gim,
+)].map((match) => match[1].trim().replace(/\\/g, "/"));
+let filePath = (input.file_path || "").replace(/\\/g, "/");
+if (isPatchTool && patchPaths.length > 0) {
+  filePath = patchPaths.find((candidate) => candidate.includes("supabase/migrations/")) || "";
+}
 if (!filePath.endsWith(".sql") || !filePath.includes("supabase/migrations/")) allow();
 
 // Content being written: Write -> content; Edit -> new_string; MultiEdit -> all new_strings.
-const input = payload?.tool_input || {};
 let newContent = "";
 if (typeof input.content === "string") newContent = input.content;
 else if (typeof input.new_string === "string") newContent = input.new_string;
 else if (Array.isArray(input.edits)) newContent = input.edits.map((e) => e?.new_string || "").join("\n");
+else if (isPatchTool) {
+  const changedLines = patchText
+    .split(/\r?\n/)
+    .filter(
+      (line) =>
+        (line.startsWith("+") && !line.startsWith("+++")) ||
+        (line.startsWith("-") && !line.startsWith("---"))
+    )
+    .map((line) => line.slice(1));
+  // A B7 move-only patch changes no SQL content and was already reviewed under
+  // its original filename. Do not reinterpret the unchanged applied body.
+  if (changedLines.length === 0 && /^\*{3}\s+Move to:/mi.test(patchText)) allow();
+  newContent = changedLines.join("\n");
+}
 if (!newContent) allow();
 
 // For Edit/MultiEdit, new_string is only a FRAGMENT — a role-token-only change
@@ -90,7 +114,8 @@ if (toolName !== "write" && existsSync(filePath)) {
       if (typeof o === "string" && o.length > 0 && typeof n === "string") disk = disk.split(o).join(n);
     };
     if (Array.isArray(input.edits)) input.edits.forEach((e) => applyOne(e?.old_string, e?.new_string));
-    else applyOne(input.old_string, input.new_string);
+    else if (!isPatchTool) applyOne(input.old_string, input.new_string);
+    else disk += "\n" + newContent;
     newContent = disk;
   } catch {
     /* keep the fragment */
@@ -105,7 +130,7 @@ if (!/\b(grant|revoke)\b/i.test(newContent)) allow();
 let markerSource = newContent;
 try {
   if (toolName !== "write" && existsSync(filePath)) {
-    markerSource = readFileSync(filePath, "utf8") + "\n" + newContent;
+    markerSource = readFileSync(filePath, "utf8") + "\n" + newContent + "\n" + patchText;
   }
 } catch {
   /* fall back to new content only */

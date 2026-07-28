@@ -222,4 +222,25 @@ r = runHook("codex-push-guard.mjs", { tool_name: "Bash", tool_input: { command: 
 eq(r.status, 0, "codex-push-guard exits 0 on non-push command");
 eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
 
+// grant-change-guard: Codex apply_patch must not bypass caller analysis.
+const grantPatchPath = "supabase/migrations/20990101000000_grant_guard_fixture.sql";
+const grantPatch = (marker = "") => `*** Begin Patch
+*** Add File: ${grantPatchPath}
++${marker}
++REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM authenticated, anon, PUBLIC;
+*** End Patch`;
+r = runHook("grant-change-guard.mjs", {
+  tool_name: "apply_patch",
+  tool_input: { input: grantPatch() },
+});
+ok(r.stdout.includes('"permissionDecision":"deny"'), "grant-change-guard denies unreviewed REVOKE through apply_patch");
+ok(r.stdout.includes("get_program_completion"), "apply_patch denial names the caller-bearing function");
+r = runHook("grant-change-guard.mjs", {
+  tool_name: "apply_patch",
+  tool_input: {
+    input: grantPatch("-- caller-analysis: get_program_completion :: browser callers remain supported by authenticated EXECUTE"),
+  },
+});
+ok(r.stdout.includes('"permissionDecision":"allow"'), "grant-change-guard accepts reviewed apply_patch REVOKE marker");
+
 console.log(`guards: ${pass} assertions passed`);

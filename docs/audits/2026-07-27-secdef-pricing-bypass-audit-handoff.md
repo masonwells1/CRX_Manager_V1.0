@@ -1,6 +1,9 @@
 # Handoff — SECURITY DEFINER pricing-bypass audit (2026-07-27)
 
-Audit COMPLETE and verified live. Build work APPROVED by Mason but NOT started.
+Audit and remediation COMPLETE. Fixed live 2026-07-28 by migration
+`20260728182141_secdef_pricing_reads_office_only` after Mason's explicit approval.
+Postflight catalog proof confirmed both in-body office-role guards and the intended
+`anon`/`authenticated`/`service_role` execute grants.
 
 ## Verdict
 
@@ -24,7 +27,7 @@ The premise that "20 SECDEF functions bypass the office-only restriction" is **w
   RPC. It is the only one in the set with EXECUTE granted to `anon` — untidy and inconsistent with
   `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`, but not exploitable. Optional cleanup.
 
-## The 2 real leaks
+## The 2 closed leaks (as found)
 
 ### 1. `compute_application_service_fee(p_service_id, p_customer_id, p_acres, p_season)` — HIGH, PROVEN
 - **No role check of any kind.**
@@ -57,7 +60,7 @@ The premise that "20 SECDEF functions bypass the office-only restriction" is **w
 - Active roles: admin 4, driver 2, applicator 1, **entity_recipient 2**, sales_rep 1 (+1 inactive).
   `entity_recipient` is customer-facing — exposure is 5 active non-office accounts, not just field staff.
 
-## Approved fix (Mason said yes: draft → Codex → PR; he merges)
+## Applied fix
 
 One migration, both functions:
 
@@ -68,10 +71,11 @@ One migration, both functions:
    Nothing in the UI calls it, so this costs nothing and kills the direct-API route even if the grant
    is re-added later. Precedent: `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`.
 
-**Regression risk checked and cleared:** the only server-side callers of
-`compute_application_service_fee` are `save_job` and `transfer_job_to_invoice` — BOTH already require
-admin/sales_rep themselves, so the guard cannot break a driver saving a job in the field. Both are
-SECDEF owned by `postgres`, so they keep working after the REVOKE.
+**Regression risk checked and cleared:** the only real server-side caller of
+`compute_application_service_fee` is `transfer_job_to_invoice`, which already requires
+admin/sales_rep itself. It is SECURITY DEFINER owned by `postgres`, so it keeps working after the
+REVOKE. The applied migration's frozen comment also names `save_job`, but that is a historical
+comment-only reference, not a callsite; the applied SQL remains immutable.
 `get_program_completion` has **no** server-side callers.
 
 Current ACL on both: `postgres=X | authenticated=X | service_role=X`. Owner `postgres`. Both `STABLE`.
@@ -79,11 +83,10 @@ Current ACL on both: `postgres=X | authenticated=X | service_role=X`. Owner `pos
 Use `CREATE OR REPLACE` reproducing the existing body EXACTLY from `pg_get_functiondef`, inserting only
 the guard — do not retype the body from memory.
 
-## Hard constraints
+## Historical pre-apply constraints (satisfied)
 
-- **DO NOT apply this migration to the live database.** Mason asked for a PR only; he merges.
-  Merging deploys the frontend via Vercel; it does NOT apply the migration. A live apply is a separate,
-  explicitly-gated step.
+- The original handoff allowed a PR only. Mason later explicitly approved the separate live apply;
+  the governed reviewer and proof gates passed before migration `20260728182141` was applied.
 - Migration version must sort AFTER `20260727231652`.
 
 ## Branch hygiene (important)

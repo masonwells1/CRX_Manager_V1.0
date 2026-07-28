@@ -48,10 +48,11 @@ customer-facing), not just field staff.
 `INSUFFICIENT_ROLE` unless `is_admin() OR is_sales_rep()`, both with ERRCODE
 `insufficient_privilege`. Both helpers were re-confirmed live to require `profiles.is_active = true`,
 so this matches the other 18 exactly. `compute_application_service_fee` additionally has its EXECUTE
-grant revoked from `authenticated`: its only callers, `save_job` and `transfer_job_to_invoice`, were
+grant revoked from `authenticated`: its only real SQL caller, `transfer_job_to_invoice`, was
 re-confirmed live as `prosecdef = true`, owned by `postgres`, and already requiring an active
-admin/sales_rep profile — so nothing in the field breaks. `get_program_completion` keeps its grant
-because the two office pages call it.
+admin/sales_rep profile — so nothing in the field breaks. The applied migration's frozen comment
+also names `save_job`, but that is a historical comment-only reference rather than a callsite.
+`get_program_completion` keeps its grant because the two office pages call it.
 
 **Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
 `customer_application_rates` policies are untouched. Sales reps keep their access.

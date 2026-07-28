@@ -35,6 +35,7 @@ This runner makes those queries **standing executable gates** that run **before*
 | `actor-forgery.sql` | (c) actor-param role-check/COALESCE without ACTOR_MISMATCH | over-broad by design; allowlist semantic-safe |
 | `actor-forgery-fin-audit.sql` | (i) actor param referenced inside a `financial_audit_log` INSERT without ACTOR_MISMATCH (blind-spot closer for (c)) | over-broad by design; allowlist verified attribution-only |
 | `auth-bound-role-ungated.sql` | (d) auth.uid()-bound mutator with no role check (the `create_direct_order` W1 variant) | **zero** |
+| `pricing-secdef-role-gate.sql` | authenticated SECDEF readers of office-only pricing tables without an active admin/sales-rep gate | **zero** |
 | `secdef-searchpath.sql` | (e) SECDEF missing `search_path` | **zero** (no allowlist case) |
 | `overloads.sql` | (f) public proname with >1 signature | **zero** (no allowlist case) |
 | `status-literals.sql` | (g) function writes a literal outside a column's CHECK set | **zero** (regex approximation — see file header for FP/FN modes) |
