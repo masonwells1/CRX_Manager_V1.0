@@ -2,6 +2,117 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-27 — Quote pricing, per-customer rates and rebate terms become office-only (APPLIED `20260727231652`)
+
+**Status: APPLIED to live 2026-07-27.** Authored as `20260727193441`; the server assigned ledger
+version `20260727231652` on apply and the disk file was renamed to match.
+
+**Post-apply proof.** All eight in-transaction postflight assertions passed, and `pg_policies` was
+re-read independently afterwards: all four SELECT policies are
+`(( SELECT is_admin()) OR ( SELECT is_sales_rep()))` granted to `{authenticated}` only, and the three
+`rebate_programs` write policies hold their admin-only shape. `anon` holds no SELECT grant on any of
+the four; `authenticated` and `service_role` still do. Per-role impersonation on live —
+admin **20 / 3**, sales_rep **20 / 3**, driver **0 / 0**, applicator **0 / 0** for
+`quote_items` / `quote_versions`. Driver and applicator read 20 / 3 before this migration, so that
+is the exposure it closed. `customer_application_rates` and `rebate_programs` are empty tables, so
+their half of the matrix is vacuous — it proves only that no role errors. `quote_sections` still
+reads 4 for an applicator, confirming the deliberate exception held.
+
+`run-sweeps.mjs` was **not** run and did not need to be: all 18 of its predicates target
+`SECURITY DEFINER` function bodies and financial data invariants, and this migration alters no
+`pg_proc` row and mutates no data. Two targeted checks were run instead — no view or materialized
+view references any of the four tables, and all 20 `authenticated`-executable functions that do are
+`SECURITY DEFINER` and therefore bypass RLS, so no office read path could regress. That last fact is
+also the standing caveat, and it is wider than the two functions named below: those 20 SECDEF
+functions remain a route to pricing figures for field roles that table-level RLS does not close.
+
+The role-scoping follow-up that the entry below deliberately left open.
+
+**Owner decision (Mason, in chat, 2026-07-27):** sales reps **should** see rebate programs and
+per-customer application rates. Both reviewers and the Codex pass had independently suggested
+narrowing those two tables further to admin-only, and that suggestion is **rejected** — sales reps
+need rebate terms and negotiated rates to do their job. The migration as written already grants
+`is_admin() OR is_sales_rep()` on all four tables, so this decision required no code change; it
+confirms the shape that was reviewed. Drivers and applicators remain excluded, which was never the
+contested half.
+
+An earlier revision of this entry asserted a "Mason's decision (2026-07-27)" *before* any decision
+existed. That fabricated claim was retracted, and this paragraph replaces it with the real one — the
+answer differs from what the retracted version claimed on the two tables above, which is exactly why
+inventing an owner decision is never harmless.
+
+**`20260727231652_quote_and_rate_reads_office_only.sql`** narrows four SELECT policies from "any
+active user" to "admin or sales_rep" — `quote_items`, `quote_versions`,
+`customer_application_rates`, `rebate_programs` — and revokes `anon`'s table-level SELECT grant on
+all four as defence in depth. `is_admin()`/`is_sales_rep()` already require an active profile
+(established by `20260714185631_harden_is_admin_search_path.sql` and
+`20260720235246_qualify_sales_rep_authorization_helper.sql`, the migrations that actually
+`CREATE OR REPLACE` the two helper bodies — an earlier revision of this entry cited `20260727145843`,
+which re-emits no helper body and only *asserts* the property), so this strictly narrows the existing
+predicate and no active office user loses access. It also fixes a real inconsistency:
+`public.quotes` was already office-only, so until now a
+driver could read every quote's line items and pricing snapshots while being unable to read the
+parent quote header.
+
+**Only four of the eight pricing tables.** `products`, `application_services`,
+`field_billing_defaults` and `blend_recipe_items` are read by pages drivers and applicators
+legitimately open, so restricting them would break the app rather than secure it. Hiding just the
+cost/margin *columns* is not expressible in RLS — every signed-in user shares the single
+`authenticated` grantee — so it needs a restricted view plus frontend work, tracked separately.
+
+**Two known gaps this does not close.** `compute_application_service_fee` and
+`get_program_completion` are `SECURITY DEFINER`, granted to `authenticated`, and carry no role gate
+in their bodies, so a driver or applicator can still obtain rates and quote-derived figures through
+a direct PostgREST `/rpc/` call. What ships here is "no direct table read", not "no path to the
+numbers".
+
+**Three REJECTs that were right.** The adversarial cross-model review rejected this migration three
+times, and each finding held up.
+
+*Reject 1 — replay-breaking grantee mismatch.* `rebate_programs_select` was created in
+`20260213200000` with no `TO` clause (grantee PUBLIC), no later migration ever changed the grantee,
+and live shows `{authenticated}` only through an out-of-band change that never landed on disk. The
+migration's own postflight asserts the grantee is exactly `{authenticated}`, so it would have passed
+on live and failed on a from-scratch replay. Fixed by stating `TO authenticated` explicitly on all
+four statements. (An earlier revision of this entry said the mismatch would have "aborted any
+from-scratch replay, which is precisely what the disaster-recovery restore and the schema-baseline
+verification do." Both halves were wrong: `scripts/verify-schema-baseline.mjs` never opens a database
+connection, and the DR restore loads a `pg_dump` baseline and then replays only migrations *past*
+high-water `20260727174805` — so a full from-zero replay is not on any current operational path.)
+
+*Reject 2 — a postflight that could go false green.* Check 1 originally listed the widening
+predicates to reject (`is_driver`, `is_applicator`, `auth.uid()`, `auth.role()`, bare `true`). A
+blacklist cannot be exhaustive, and this one was not: Codex constructed
+`is_admin() OR is_sales_rep() OR current_user = 'authenticated'`, which passes every assertion while
+restoring the exact broad exposure the migration exists to close. Replaced with a **whitelist** —
+erase every token the intended predicate is allowed to contain, and require the remainder to be
+empty. Anything the migration did not put there survives the erasure and turns the check red, so it
+fails closed by construction. Negative-tested against eight predicates on live, including all three
+Codex built.
+
+*Reject 3 — a self-fulfilling assertion.* Check 2 asserted only the *grantee* of the three
+`rebate_programs` write policies — which is exactly what the migration's own `ALTER POLICY`
+statements had just written, so it could never fail. Worse, `ALTER POLICY … TO role` preserves every
+clause it does not name, so a predicate that had already drifted to `WITH CHECK (true)` would have
+been carried forward untouched and reported green. Check 2 now pins the full shape: command,
+permissiveness, which clause carries the predicate, that the other clause is `NULL`, and that the
+predicate is exactly `is_admin()`.
+
+**Proof.** Rehearsed against live four times, each from a *simulated replay state*
+(`rebate_programs_select` first set back `TO public`) inside a transaction forced to roll back —
+starting from live would pass for the wrong reason. Final run: grantee `{public}` → `{authenticated}`,
+all **seven** postflight checks passing, row visibility under real role impersonation showing
+`quote_items` admin=20 sales_rep=20 driver=0, and a deliberate negative test in which
+`rebate_programs_insert` was drifted to `WITH CHECK (true)` mid-transaction — check 2 caught it by
+name, proving it is a real tripwire and not a rubber stamp. Live confirmed unchanged after every
+rollback. `customer_application_rates` and `rebate_programs` are both currently EMPTY, so their
+positive row-count proof is vacuous and is not claimed as evidence.
+
+`src/lib/rlsContracts.test.ts` gains matrix entries for the two tables that had none, and three
+header claims Codex flagged as inaccurate are corrected — most importantly, the file no longer claims
+these tests fail when a migration drops or replaces a policy. They are internal-consistency checks
+that never read the migrations or the database; the live gate is each migration's postflight block
+plus the RLS review agents.
 ## 2026-07-27 — Any foundation gauntlet section can now be re-run on demand, behind a deterministic evidence gate
 
 `/gauntlet-section` drives `.claude/workflows/gauntlet-sections-loop.js` (renamed from
