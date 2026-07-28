@@ -17,7 +17,7 @@ import { APPROVED_SERIALIZED_FORMATS, OWNER_DECISION_HEADERS, PRIVATE_ARTIFACT_B
 // candidate is charged once even when an identity-safe worktree read confirms
 // its bytes a second time.
 export const MAX_STRUCTURAL_SCAN_BYTES = 64 * 1024 * 1024;
-export const MAX_TOTAL_STRUCTURAL_SCAN_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAX_TOTAL_STRUCTURAL_SCAN_BYTES = 3 * 1024 * 1024 * 1024;
 export const MAX_STRUCTURAL_SCAN_CANDIDATES = 100_000;
 // This checkout has 2,073 commits at the correction baseline. 4,096 leaves
 // practical headroom without permitting a pathological number of diff-tree

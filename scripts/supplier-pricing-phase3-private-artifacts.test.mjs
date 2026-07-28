@@ -406,6 +406,7 @@ try {
     }
   }
   const perFileBudget = new ScanBudget(); perFileBudget.admit(MAX_STRUCTURAL_SCAN_BYTES); throws(() => new ScanBudget().admit(MAX_STRUCTURAL_SCAN_BYTES + 1), 'per-file');
+  assert.equal(MAX_TOTAL_STRUCTURAL_SCAN_BYTES, 3 * 1024 * 1024 * 1024, 'total scan budget must retain measured first-push headroom');
   const totalBudget = new ScanBudget(); for (let index = 0; index < MAX_TOTAL_STRUCTURAL_SCAN_BYTES / MAX_STRUCTURAL_SCAN_BYTES; index += 1) totalBudget.admit(MAX_STRUCTURAL_SCAN_BYTES); throws(() => totalBudget.admit(1), 'total-byte');
   const candidateBudget = new ScanBudget(); for (let index = 0; index < MAX_STRUCTURAL_SCAN_CANDIDATES; index += 1) candidateBudget.admit(0); throws(() => candidateBudget.admit(0), 'candidate-count');
   assert.equal(MAX_HISTORY_COMMITS, 4_096);

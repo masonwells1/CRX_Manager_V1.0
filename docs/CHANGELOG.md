@@ -140,7 +140,12 @@ pre-push, and PR-event fixtures prove those shifted packets remain blocked.
 Semantic private-artifact reads now reject descriptors larger than 64 MiB
 before allocating, with a sparse-file regression proving the bound. All five
 private packet basenames are also ignored locally while remaining forbidden by
-the containment checker.
+the containment checker. The measured 1.61 GiB first-push scan had already
+crossed 80% of the original 2 GiB total logical-byte cap, so the bounded cap is
+now 3 GiB (about 53.7% used) with an exact regression assertion. A live,
+read-only `supabase db query --linked --output-format json "select 1 ..."`
+probe returned the exact bounded `{boundary, rows, warning}` envelope expected
+by the capture parser; no Product rows were queried and no artifact was written.
 
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
