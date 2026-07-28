@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-28 — A migration that shipped ten days ago was still counted as "awaiting apply"
+
+`/fleet` reported "2 parked migrations awaiting apply". One of them,
+`scripts/.staging-migrations/20260717121000_supplier_pricing_phase1a_cutover.sql`, had in fact
+shipped on 2026-07-18 by a different route — promoted, renumbered, and applied live as
+`supabase/migrations/20260718190000_supplier_pricing_phase1a_cutover.sql`. `KNOWN_ISSUES.md` already
+said RESOLVED. Only the counter disagreed, because `isParkedMigrationFile`
+(`.claude/hooks/worktree-awareness-lib.mjs`) treats every `.sql` in that folder as pending unless its
+name starts with `SUPERSEDED-`. Renamed to that convention, with the header rewritten from "PARKED:
+do not copy or apply until…" to a SUPERSEDED banner. No database change of any kind.
+
+Verified live before renaming, rather than trusting the doc: `trigger_y_require_governed_product_pricing`
+is present on `public.products`; `authenticated` holds no table-level INSERT/UPDATE on `public.products`
+(replaced by 54 column-level grants, exactly as this file intended); policy `cost_history_insert` is gone.
+
+Worth recording is *why* leaving it in place was not merely untidy. The file could no longer run — its
+own fail-closed preflight pins the md5 of three pricing RPCs as of 2026-07-17, and two have since moved
+(`create_pricing_workbook_export` `cd26cf7d`→`27de84e2`, `apply_product_pricing_change_set`
+`82416909`→`ed143e0d`), so it raises `PHASE1A_CORRECTION_RPC_BASELINE_MISMATCH`. That guard is the only
+thing standing between the file and real damage: its `CREATE OR REPLACE` bodies for
+`_calculate_product_pricing`, `guard_and_version_product_pricing` and `require_governed_product_pricing`
+would otherwise overwrite the live functions with 2026-07-17 versions, silently reverting the hardening
+applied 2026-07-18 through 2026-07-22. A standing "apply the parked migrations" instruction pointed at a
+file whose sole protection is a checksum someone could be tempted to refresh.
+
 ## 2026-07-28 — A Codex review that was merely slow reported as a review that could not be run
 
 `scripts/write-codex-push-proof.mjs` capped the review at 540s. A real review of the PR #255 guard
