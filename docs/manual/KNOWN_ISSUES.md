@@ -7,6 +7,57 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## 0. PARKED 2026-07-28 — two SECURITY DEFINER functions still leak pricing past the office-only reads
+
+**Status: fix WRITTEN and PARKED — migration `20260728123224_secdef_pricing_reads_office_only`
+is NOT applied live.** Mason approved draft → Codex → PR only; he merges, and the live apply is a
+separate explicitly-gated step. Merging the PR deploys the frontend via Vercel; it does **not**
+apply the migration.
+
+**Finding (audited and proven live 2026-07-27; full evidence in
+`docs/audits/2026-07-27-secdef-pricing-bypass-audit-handoff.md` — do not re-run the audit).**
+Migration `20260727231652_quote_and_rate_reads_office_only` restricted SELECT on `quote_items`,
+`quote_versions`, `customer_application_rates` and `rebate_programs` to `is_admin() OR is_sales_rep()`.
+SECURITY DEFINER bypasses RLS by design, so that policy cannot reach SECDEF readers. Exactly **20**
+SECDEF functions read those tables with EXECUTE to `authenticated`; **18 are already gated** in-body.
+Two were not:
+
+1. **`compute_application_service_fee(uuid, uuid, numeric, integer)` — HIGH, proven live.** No role
+   check of any kind. Impersonating a real active `driver` returned `rate_per_acre_cents: 800`,
+   `total_fee_cents: 80000`, plus `cost_per_acre_cents` and `total_cost_cents` — customer price and
+   internal cost in one response, so margin is one subtraction away. Control: the same impersonation
+   against `get_booking_settlement` raised `INSUFFICIENT_ROLE`, so the leak is real, not a test
+   artifact. It has **no frontend caller at all**, so the React route guard was never in the path;
+   the PostgREST endpoint was reachable with the field user's own JWT.
+2. **`get_program_completion(integer)` — MEDIUM, latent.** No role check. Returns per customer: farm
+   name, quote numbers, planned vs completed acres, and `invoiced_amount_cents`. It returns 0 rows
+   today **only** because the single planned quote has `season = NULL` — a data accident, not a
+   control. Called from `src/pages/OfficeCockpit.tsx` and `src/pages/ProgramTracker.tsx`, whose
+   routes are gated `allowedRoles={['admin','sales_rep']}`.
+
+Exposure is 5 active non-office accounts (2 driver, 1 applicator, 2 `entity_recipient` — the last is
+customer-facing), not just field staff.
+
+**Fix as written.** Both functions get the house in-body gate copied from the PARKED-007 block in
+`preview_field_app_invoice_split` — `AUTH_REQUIRED` when `auth.uid() IS NULL`, then
+`INSUFFICIENT_ROLE` unless `is_admin() OR is_sales_rep()`, both with ERRCODE
+`insufficient_privilege`. Both helpers were re-confirmed live to require `profiles.is_active = true`,
+so this matches the other 18 exactly. `compute_application_service_fee` additionally has its EXECUTE
+grant revoked from `authenticated`: its only callers, `save_job` and `transfer_job_to_invoice`, were
+re-confirmed live as `prosecdef = true`, owned by `postgres`, and already requiring an active
+admin/sales_rep profile — so nothing in the field breaks. `get_program_completion` keeps its grant
+because the two office pages call it.
+
+**Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
+`customer_application_rates` policies are untouched. Sales reps keep their access.
+
+**Known cosmetic leftover, not exploitable:** `enforce_quote_accepted_fully_drawn` is a trigger
+function (returns `trigger`, not RPC-callable) and is the only one in the set with EXECUTE to `anon`
+— inconsistent with `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`. Optional
+cleanup, deliberately not bundled here.
+
+---
+
 ## 0a. RESOLVED 2026-07-27 — deactivated users kept access through 38 RLS policies (all three follow-up items also resolved)
 
 **Status 2026-07-27: FIXED LIVE** by migration `20260727145843_inline_role_checks_require_active_profile`
