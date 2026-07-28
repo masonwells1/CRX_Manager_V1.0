@@ -11,6 +11,7 @@
 .agents/**          text eol=lf
 .claude/skills/**   text eol=lf
 .claude/commands/** text eol=lf
+.husky/**           text eol=lf
 
 # These migrations are already applied live and contain content-bound
 # function-body hashes. Preserve each artifact's reviewed bytes in Git so a
