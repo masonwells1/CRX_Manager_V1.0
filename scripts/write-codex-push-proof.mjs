@@ -299,10 +299,31 @@ function captureReviewOutput(root, result) {
 }
 
 // ── arg parsing ────────────────────────────────────────────────────────────
+export const DEFAULT_TIMEOUT_SEC = 1200;
+
+// A timeout is NOT a verdict and NOT evidence that Codex is unavailable — the
+// only honest reading is "we stopped watching". Say so where the operator sees
+// it, so a slow review is retried rather than mistaken for a broken tool and
+// escalated (or worse, worked around).
+export function timeoutMessage(timeoutSec) {
+  return (
+    `Codex review timed out after ${timeoutSec}s — no proof written. This is NOT a verdict and NOT proof that ` +
+    `Codex is unavailable: a large diff can simply take longer than the cap. Re-run with a larger budget, e.g. ` +
+    `--timeout ${Math.max(timeoutSec * 2, DEFAULT_TIMEOUT_SEC * 2)}, before concluding the tool is broken or parking the change.`
+  );
+}
+
 export function parseArgs(argv) {
   // Deliberately NO --base flag: the review base is pinned to GUARDED_BASE so a
   // narrower/empty diff cannot be substituted to mint an unearned proof.
-  const parsed = { dryRun: false, help: false, timeoutSec: 540 };
+  // 540s was too tight and failed in the worst possible way: a real review of a
+  // multi-file guard diff (PR #255, 2026-07-27) ran ~8.5 min and was killed
+  // mid-scan at 9:00, printing "no proof written" — which reads as "Codex is
+  // unavailable, PARK the change" when Codex was simply still working. A run that
+  // dies on the clock is indistinguishable from a run that had nothing to say, so
+  // the cap must sit well clear of a normal review, not just above the last one.
+  // 1200s is ~2.3x the measured worst case and still leaves a hung run bounded.
+  const parsed = { dryRun: false, help: false, timeoutSec: DEFAULT_TIMEOUT_SEC };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--timeout") {
@@ -328,7 +349,8 @@ function usage() {
     "proof that .claude/hooks/codex-push-guard.mjs requires for risky pushes to main.",
     "The base is fixed (not overridable) so a narrower diff cannot mint an unearned proof.",
     "",
-    "  --timeout <sec>  Max seconds for the Codex review (default 540).",
+    `  --timeout <sec>  Max seconds for the Codex review (default ${DEFAULT_TIMEOUT_SEC}). A timeout writes no`,
+    "                   proof; it means the review was cut off, not that it found problems.",
     "  --dry-run        Resolve the binary and print the command; do not run Codex.",
   ].join("\n");
 }
@@ -394,7 +416,7 @@ export function run(argv = process.argv.slice(2)) {
 
   if (result.error) {
     if (result.error.code === "ETIMEDOUT") {
-      process.stderr.write(`Codex review timed out after ${options.timeoutSec}s — no proof written.\n`);
+      process.stderr.write(`${timeoutMessage(options.timeoutSec)}\n`);
     } else {
       process.stderr.write(`Failed to launch Codex (${codexBin}): ${result.error.message}\n`);
     }
