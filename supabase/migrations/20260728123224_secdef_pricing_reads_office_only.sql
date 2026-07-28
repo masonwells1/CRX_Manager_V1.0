@@ -127,15 +127,14 @@ $function$;
 -- active admin/sales_rep profile. Dropping the direct grant costs the field
 -- nothing and kills the direct-API route even if the in-body guard is ever
 -- weakened. Precedent: 20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql.
-REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer) FROM authenticated;
 -- anon/PUBLIC are already absent from this function's ACL on live (verified
 -- 2026-07-28: proacl = {postgres=X/postgres,authenticated=X/postgres,
 -- service_role=X/postgres}, has_function_privilege('anon', ...) = false), and
--- CREATE OR REPLACE preserves the existing ACL, so these are no-ops today. They
--- are stated anyway so the grant set is explicit in the migration rather than
--- inherited, and so a future default-PUBLIC grant cannot silently re-open it.
-REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer) FROM anon;
-REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer) FROM PUBLIC;
+-- CREATE OR REPLACE preserves the existing ACL, so those two are no-ops today.
+-- They are named anyway so the grant set is explicit in the migration rather
+-- than inherited. Only the `authenticated` revoke changes live state.
+REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer)
+  FROM PUBLIC, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 2. get_program_completion — in-body office-only gate
@@ -211,12 +210,12 @@ $function$;
 -- here (OfficeCockpit.tsx and ProgramTracker.tsx call this RPC); revoking from
 -- anon/PUBLIC does not touch that separate, explicit grant. Verified 2026-07-28
 -- on live: proacl = {postgres=X/postgres,authenticated=X/postgres,
--- service_role=X/postgres}, has_function_privilege('anon', ...) = false, so both
--- statements are no-ops today.
+-- service_role=X/postgres}, has_function_privilege('anon', ...) = false, so the
+-- revoke is a no-op today and the GRANT restates what is already in place.
 -- caller-analysis: get_program_completion :: two live browser callers, src/pages/OfficeCockpit.tsx:599 and src/pages/ProgramTracker.tsx:53, both calling as a signed-in `authenticated` user. `authenticated` KEEPS its EXECUTE grant here (deliberately NOT revoked), and revoking anon/PUBLIC does not touch that separate explicit grant, so neither callsite changes. The in-body admin/sales_rep gate added above is the real control, and both pages are already routed allowedRoles={['admin','sales_rep']}, so every legitimate caller passes it. Postflight assertion 5 below fails the migration if `authenticated` ever loses EXECUTE on this function.
 -- caller-analysis: compute_application_service_fee :: zero browser callers (no `.rpc('compute_application_service_fee')` anywhere in src/ or supabase/functions/). Its sole caller is transfer_job_to_invoice, a SECURITY DEFINER function owned by postgres that already requires an active admin/sales_rep, so the nested EXECUTE check runs as postgres and is unaffected by the `authenticated` revoke. NOTE: the header comment at the top of this file also names save_job as a caller — that is WRONG, inherited from the audit handoff; a live scan of every function body in pg_proc.prosrc found transfer_job_to_invoice only.
-REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM anon;
-REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_program_completion(integer) TO authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- Postflight verification
