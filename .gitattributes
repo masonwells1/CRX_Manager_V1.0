@@ -28,3 +28,11 @@ supabase/baselines/*.json text eol=lf
 # it. Treat that mixed-byte snapshot as an immutable artifact, not normal text.
 supabase/baselines/*_public_schema.sql -text -diff whitespace=-trailing-space,cr-at-eol
 supabase/baselines/*_public_schema.sql.br -text -diff
+
+# The manifest binds these two capture scripts by SHA-256 of their working-tree
+# bytes, so that redefining "matches production" fails the gate. On a Windows
+# checkout `core.autocrlf=true` rewrote them to CRLF and the hash could never
+# match: `npm run test:schema-baseline` failed on a fresh clone while passing in
+# Linux CI. Pin them to LF so the binding means the same thing on every platform.
+scripts/schema-baseline-fingerprints.sql text eol=lf
+scripts/schema-baseline-acl.sql text eol=lf
