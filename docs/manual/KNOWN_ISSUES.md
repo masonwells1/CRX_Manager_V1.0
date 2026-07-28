@@ -107,25 +107,26 @@ assertion 2 (having passed 1 and 3), and assertion 4 also failed then
 (`has_function_privilege('authenticated', ...)` was still `true`). After the apply the same set passes.
 Red before, green after — not green either way.
 
-**Residual item — CLOSED by `20260728210030_application_service_cost_admin_only`.**
-`application_services.cost_per_acre_cents` was readable by any active profile through the
+**Still open, reported separately.** `application_services.default_rate_per_acre_cents` and
+`cost_per_acre_cents` remain readable by any active profile through the
 `application_services_select` policy (`USING (is_active_profile())`) — the two SECDEF functions were
-only one route to it. Live count of services with `cost_per_acre_cents > 0` was **0** of 4, so nothing
-had leaked; the fix landed before the column was populated.
+only one route to those columns. Live count of services with `cost_per_acre_cents > 0` is currently
+**0** of 4, so nothing is leaking today, but the policy is the residual hole. Mason approved the fix
+on 2026-07-28; it lands separately as `20260728210030_application_service_cost_admin_only`.
 
-**No consumer justified it (verified live 2026-07-28).** An earlier note in `src/lib/rlsContracts.test.ts`
+**No consumer justifies it (verified live 2026-07-28).** An earlier note in `src/lib/rlsContracts.test.ts`
 claimed the column stayed driver-readable "because Jobs/JobDetail need it". They do not. Every
 driver-facing read is column-narrow — `ApplicationServicePicker` takes `id, name,
 default_rate_per_acre_cents, is_active`; `Jobs.tsx`, `BlendTicketDetail.tsx` and
 `FieldAppSplitInvoiceEditor.tsx` take `id, name` (plus `vehicle_id`); `JobDetail.tsx` never references
-the table. The only readers of `cost_per_acre_cents` were `ApplicationServices.tsx` and
+the table. The only readers of `cost_per_acre_cents` are `ApplicationServices.tsx` and
 `ApplicationServiceDetail.tsx`, both mounted behind `<ProtectedRoute allowedRoles={['admin']}>` — the
 same shape as the leak just closed, a React route guard that is not in the data path.
 
-**How it was fixed, and a correction to what this section previously said.** An earlier revision
+**How it will be fixed, and a correction to what this section previously said.** An earlier revision
 concluded that "a column GRANT cannot discriminate by app role, so the fix is to move the column to an
 office-gated companion table". The premise is right — Postgres has no column-level RLS and every app
-user shares the `authenticated` role — but the conclusion was wrong, and no table move was needed. A
+user shares the `authenticated` role — but the conclusion is wrong, and no table move is needed. A
 `SECURITY DEFINER` function owned by `postgres` reads columns **as postgres**, so revoking the column
 from `authenticated` does not affect it. The migration therefore revokes `SELECT, INSERT, UPDATE,
 REFERENCES` on the table from `authenticated`, re-grants on the explicit nine-column list that omits
@@ -135,11 +136,6 @@ shape is required: a table-level grant implies every column and `REVOKE … (col
 it. All five functions that touch `application_services` were verified live to be SECDEF owned by
 `postgres`, so the money engine is untouched — including `preview_field_app_invoice_split`, which reads
 the table with `SELECT *` and never names the cost column at all.
-
-**Two traps this class of change sets, worth remembering.** (1) PostgREST `.select()` with no argument
-means `select=*`, so `DELETE … RETURNING *` on a table with a revoked column now fails; name the columns.
-(2) In PL/pgSQL, `bool_and()` assigned into an `integer` variable is not an implicit cast — it falls back
-to I/O conversion and dies with `22P02 invalid input syntax for type integer: "t"`.
 
 **Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
 `customer_application_rates` policies are untouched. Sales reps keep their access.
