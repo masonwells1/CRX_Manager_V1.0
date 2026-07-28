@@ -41,7 +41,15 @@ assert.ok(
 const timedOut = timeoutMessage(600);
 assert.match(timedOut, /timed out after 600s/, "states what actually happened");
 assert.match(timedOut, /NOT a verdict/i, "says a timeout is not a review outcome");
-assert.match(timedOut, /--timeout \d+/, "names the concrete flag and a bigger number to retry with");
+// Not just "some number appears": the whole point of the retry hint is that the new
+// budget is BIGGER than the one that just died. Suggesting the same cap (or a smaller
+// one) sends the operator round the identical failure and back to "Codex is broken".
+const suggested = timedOut.match(/--timeout (\d+)/);
+assert.ok(suggested, "names the concrete flag to retry with");
+assert.ok(
+  Number(suggested[1]) > 600,
+  `retry hint must suggest a LARGER budget than the ${600}s that just timed out, got --timeout ${suggested?.[1]}`,
+);
 assert.ok(
   /\bre-?run\b/i.test(timedOut),
   "tells the operator to retry rather than escalate or park",

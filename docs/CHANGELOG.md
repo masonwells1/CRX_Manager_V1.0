@@ -27,6 +27,13 @@ new assertions, then reverted to green. Proof *validity* is untouched: `codex_ra
 mints nothing. `scripts/overnight-codex-gate.mjs` keeps its own 540s cap deliberately — bounded
 overnight fan-out is a cost control, and its message already tells the operator to split the batch.
 
+CodeRabbit caught a real hole in the new tests on review: the retry-hint assertion matched
+`--timeout <any digits>`, so a message telling the operator to retry with the *same* budget that had
+just timed out — or a smaller one — would have passed. The assertion now extracts the suggested
+number and requires it to exceed the cap that failed. Verified the hole was real (the old regex
+passes a `--timeout 600` hint after a 600s timeout) and that the replacement bites: three further
+mutations — suggest the same budget, suggest half of it, drop the number entirely — were all caught.
+
 ## 2026-07-27 — The PR merge gate could not see a proof minted in a worktree; a refuted gauntlet finding could not be re-contested
 
 Two defects found while shipping PR #252, both fixed here.
