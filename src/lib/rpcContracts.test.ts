@@ -2102,10 +2102,11 @@ function registryMigrationHighWater(): string {
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
-  // 2026-07-28 anon-EXECUTE revoke, part 1 of 2 (PR #262, merged as bf0cbced).
-  '20260728193000',
-  // 2026-07-28 anon-EXECUTE revoke, part 2 of 2 — the RLS role helpers (PR #263).
-  '20260728193100',
+  // 2026-07-28 anon-EXECUTE revoke, part 2 of 2 — the RLS role helpers (PR #263,
+  // merged as d64c6926). Authored as 20260728193100; renamed to sort above the
+  // 20260728231350 high-water that part 1 established when it applied.
+  // Part 1 is applied and has been removed from this set.
+  '20260728232500',
 ]);
 
 /**
