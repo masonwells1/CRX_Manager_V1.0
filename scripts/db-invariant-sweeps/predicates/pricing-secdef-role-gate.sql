@@ -3,6 +3,8 @@
 -- that reads an office-only pricing table must enforce an active admin/sales-rep
 -- gate in its own body. SECURITY DEFINER bypasses table RLS, so table policies
 -- alone cannot protect these reads.
+-- compute_application_service_fee is included explicitly after its authenticated
+-- EXECUTE grant was removed, so restoring its pre-fix body is still detectable.
 --
 -- Historical finding: the 2026-07-27 SECDEF pricing-bypass audit found
 -- compute_application_service_fee and get_program_completion missing this gate.
@@ -23,7 +25,10 @@ WITH candidates AS (
     AND p.prosecdef
     AND p.prokind = 'f'
     AND p.prorettype <> 'pg_catalog.trigger'::regtype
-    AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+    AND (
+      has_function_privilege('authenticated', p.oid, 'EXECUTE')
+      OR p.proname = 'compute_application_service_fee'
+    )
     AND p.prosrc ~* '(quote_items|quote_versions|customer_application_rates|rebate_programs)'
 )
 SELECT c.proname || '(' || pg_get_function_identity_arguments(c.oid) || ')' AS violation_key,

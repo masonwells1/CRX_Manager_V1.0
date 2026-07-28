@@ -100,6 +100,18 @@ const multiFile = run(multiFilePayload);
 ok(multiFile.stdout.includes('"permissionDecision":"deny"'), "unsafe second file in a multi-file patch is denied");
 ok(multiFile.stdout.includes(".env.local"), "multi-file denial preserves the unsafe file path");
 
+const malformedAdd = run({
+  tool_name: "apply_patch",
+  tool_input: {
+    input: `*** Begin Patch
+*** Add File: supabase/migrations/20990101000015_malformed.sql
+CREATE TABLE public.unseen_line (id uuid);
+*** End Patch`,
+  },
+});
+ok(malformedAdd.stdout.includes('"permissionDecision":"deny"'), "unprefixed Add File content fails closed");
+ok(malformedAdd.stdout.includes("could not reconstruct"), "malformed Add denial identifies reconstruction failure");
+
 const testFileSecret = run(patchFor("src/lib/supabase.test.ts", "const role = 'service_role';"));
 ok(testFileSecret.stdout.includes('"permissionDecision":"deny"'), "env guard covers frontend test files");
 ok(testFileSecret.stdout.includes("ENV GUARD"), "frontend test denial reaches the owning guard");
@@ -189,6 +201,9 @@ for (const manifestPath of [".claude/settings.json", ".codex/hooks.json"]) {
   const manifest = JSON.parse(readFileSync(path.join(path.resolve(here, "..", ".."), manifestPath), "utf8"));
   const prePatch = manifest.hooks.PreToolUse.find(({ matcher }) => matcher === "(^|__)apply_patch$");
   const postPatch = manifest.hooks.PostToolUse.find(({ matcher }) => matcher === "(^|__)apply_patch$");
+  const grantGuard = prePatch?.hooks?.find(({ command, commandWindows }) =>
+    `${command || ""} ${commandWindows || ""}`.includes("grant-change-guard.mjs")
+  );
   ok(
     prePatch?.hooks?.some(({ command, commandWindows }) =>
       `${command || ""} ${commandWindows || ""}`.includes("patch-guard-fanout.mjs")
@@ -201,6 +216,7 @@ for (const manifestPath of [".claude/settings.json", ".codex/hooks.json"]) {
     ),
     `${manifestPath}: post-patch fanout is wired`
   );
+  ok(grantGuard?.timeout >= 15, `${manifestPath}: patch grant guard has at least 15 seconds`);
 }
 
 console.log(`patch-guard-fanout: ${pass} assertions passed`);

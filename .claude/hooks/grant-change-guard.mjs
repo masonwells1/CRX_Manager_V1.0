@@ -142,7 +142,7 @@ if (!/\b(grant|revoke)\b/i.test(newContent)) allow();
 // (or be added in the same edit) — scan markers across on-disk content + new content.
 let markerSource = newContent;
 try {
-  if (toolName !== "write" && existsSync(filePath)) {
+  if (!isPatchTool && toolName !== "write" && existsSync(filePath)) {
     markerSource = readFileSync(filePath, "utf8") + "\n" + newContent;
   }
 } catch {

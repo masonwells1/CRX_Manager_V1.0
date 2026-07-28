@@ -4,7 +4,7 @@ Migration: `supabase/migrations/20260728182141_secdef_pricing_reads_office_only.
 
 Git blob: `416478d0410946c94a83706bd5e69d87a25afbc8`
 
-SHA-256: `127ccff3b9d7a0f754dd7bcc904be6a80f108e133bc8aea6568c0675ad807e30`
+SHA-256: `36efb3eacd4c5ffe5196e340428539877b4516aa1a3948276451e0e0fe5006fe`
 
 Live ledger version: `20260728182141`
 

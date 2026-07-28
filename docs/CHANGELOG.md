@@ -66,6 +66,10 @@ The fanout also mirrors the environment guard for frontend test files and enforc
 internal deadline beneath the 60-second host hook timeout.
 The pricing role-gate sweep now strips SQL line comments and recognizes only executable guard
 shapes, and the immutable applied migration has a hash-bound caller-analysis sidecar.
+Malformed Add File patches now fail closed, patch marker checks use only the reconstructed
+postimage, the internal fee helper remains explicitly swept after its direct grant removal,
+the caller-analysis sidecar hash is executable proof, and both patch grant guards receive
+the same 15-second timeout.
 
 ## 2026-07-28 — A migration that shipped ten days ago was still counted as "awaiting apply"
 

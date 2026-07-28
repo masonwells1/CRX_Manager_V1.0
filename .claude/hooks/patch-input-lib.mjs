@@ -115,6 +115,7 @@ export function extractPatchChanges(toolInput = {}, root = process.cwd()) {
         filePath: header[2].trim(),
         moveTo: "",
         hunks: [],
+        invalidLines: [],
       };
       continue;
     }
@@ -135,10 +136,13 @@ export function extractPatchChanges(toolInput = {}, root = process.cwd()) {
       hunk = { context: hunkHeader[1] || "", lines: [] };
       continue;
     }
+    if (/^\*{3}\s+End of File\s*$/i.test(line)) continue;
     if (/^[ +\-]/.test(line)) {
       if (!hunk) hunk = { context: "", lines: [] };
       hunk.lines.push({ prefix: line[0], text: line.slice(1) });
+      continue;
     }
+    current.invalidLines.push(line);
   }
   finish();
 
@@ -150,6 +154,9 @@ export function extractPatchChanges(toolInput = {}, root = process.cwd()) {
       ? path.resolve(root, section.moveTo).replace(/\\/g, "/")
       : sourcePath;
     try {
+      if (section.invalidLines.length > 0) {
+        throw new Error(`unprefixed patch content: ${section.invalidLines[0] || "<blank line>"}`);
+      }
       let content = "";
       if (section.operation === "add") {
         content = section.hunks

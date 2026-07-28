@@ -289,5 +289,17 @@ r = runHook("grant-change-guard.mjs", {
 });
 ok(r.stdout.includes('"permissionDecision":"deny"'), "caller-analysis marker cannot cross from a non-migration file");
 ok(r.stdout.includes("get_program_completion"), "cross-file marker denial names the unreviewed function");
+const markerDeletionPatch = `*** Begin Patch
+*** Update File: supabase/migrations/20260611001954_blend_invoice_column_fix.sql
+@@
+--- caller-analysis: create_invoice_from_blend_ticket :: grants restated unchanged -- sole UI caller src/pages/BlendTicketDetail.tsx:608 runs as authenticated, which KEEPS EXECUTE; the REVOKE touches only PUBLIC/anon, neither of which holds EXECUTE in the live proacl
+ --
+*** End Patch`;
+r = runHook("grant-change-guard.mjs", {
+  tool_name: "mcp__codex__apply_patch",
+  tool_input: { input: markerDeletionPatch },
+});
+ok(r.stdout.includes('"permissionDecision":"deny"'), "patch cannot delete a required caller-analysis marker");
+ok(r.stdout.includes("create_invoice_from_blend_ticket"), "marker deletion denial names the caller-bearing function");
 
 console.log(`guards: ${pass} assertions passed`);
