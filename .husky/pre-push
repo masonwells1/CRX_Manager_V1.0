@@ -44,4 +44,4 @@ if ! node scripts/graphify-refresh.mjs --if-relevant; then
 fi
 
 echo ""
-echo "✅ Type check and build passed — pushing to GitHub."
+echo "✅ Phase 3C regression, type check, and build passed — pushing to GitHub."

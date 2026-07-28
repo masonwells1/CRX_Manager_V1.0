@@ -44,9 +44,11 @@ completed in 4.37 seconds, the full ignored-path scan completed in 110.12
 seconds, and a zero-SHA first-push simulation scanned 2,128 commits, 71,289
 candidates, and 1.61 GB of logical content in 255.83 seconds without crossing
 either containment budget. The full pre-commit hook also runs the correction
-guard suite; after the one-byte gzip boundary proof was added, the focused
-Windows packet suite alone took 278.7 seconds, so 4.37 seconds is not the total
-commit-hook runtime.
+guard suite, but the multi-minute Phase 3C packet suite now runs at pre-push and
+in CI instead of on every commit. After the one-byte gzip boundary proof was
+added, the focused Windows packet suite alone took 278.7 seconds; moving it
+preserves the mandatory release gates without risking the 600-second commit
+command cap.
 
 Every Git `-z` path reader now requests bytes, splits only on NUL bytes, and
 requires fatal UTF-8 decoding followed by an exact byte-for-byte round trip
@@ -105,6 +107,9 @@ assertion binds CI's pull-request trigger to `main`, preventing a future trigger
 expansion from silently skipping containment and its dependent jobs. The
 remaining post-merge ruleset step and the public-repository fetch dependency are
 recorded in the consolidated known-issues file.
+
+Git attributes now pin Husky hooks, GitHub workflows, and shell scripts to LF,
+preventing Windows checkout conversion from breaking Linux/shebang execution.
 
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
