@@ -180,9 +180,12 @@ through merge `8de484afe9eb4f4e2c50ce9611538535caf533d8`. Historical #251
 baseline-refresh `origin/main` was `2a9e9252a62642e51b71c248c8c2f149a9a434d9`
 after #253. Current #255 `origin/main` is
 `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`; it also lacks both guard
-files and is the active one-time CI bootstrap pin. The trusted-workflow/ruleset
-external enforcement gap remains `PARKED`. The base must be freshly refetched
-and rechecked immediately before any future publication. This correction still
+files and is the fixed trusted CI bootstrap ancestry floor. Later protected
+`main` descendants remain eligible without repinning; unrelated ancestry fails
+closed. The trusted-workflow/ruleset external enforcement gap remains `PARKED`
+until this introducing PR lands and that base-controlled check can be activated.
+The base must be freshly refetched and its ancestry rechecked immediately before
+publication. This correction still
 requires final exact review on its containing SHA, identified only by Git and
 PR metadata.
 

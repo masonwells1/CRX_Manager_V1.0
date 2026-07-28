@@ -107,12 +107,18 @@ proof and reviews. Historical `b30769b3` truly received the literal Opus 5 run
 recorded above; the current/final candidate has not yet received a literal Opus
 5 review.
 
-The introducing PR's bootstrap pin now follows the current `main` commit after
-PR #253 advanced the base without introducing the trusted checker. A regression
-assertion binds CI's pull-request trigger to `main`, preventing a future trigger
-expansion from silently skipping containment and its dependent jobs. The
-remaining post-merge ruleset step and the public-repository fetch dependency are
-recorded in the consolidated known-issues file.
+The introducing PR's bootstrap now uses `d787b7e0` as a fixed trusted ancestry
+floor instead of requiring exact equality with a moving `main` tip. A base that
+lacks the checker may use the candidate fallback only when Git proves it
+descends from that protected base-repository commit; unrelated history fails
+closed. After this PR lands, bases contain the checker and use that trusted
+copy. The `pull_request_target` workflow also executes its checker from the
+current trusted workflow SHA, so older open PR bases that predate the checker
+do not fail with module-not-found. Regression assertions bind CI's
+pull-request trigger and tautological job condition to `main`, preventing a
+future trigger change from silently skipping containment and dependent jobs.
+The remaining post-merge ruleset step and public-repository fetch dependency
+are recorded in the consolidated known-issues file.
 
 Git attributes now pin Husky hooks, GitHub workflows, and shell scripts to LF,
 preventing Windows checkout conversion from breaking Linux/shebang execution.

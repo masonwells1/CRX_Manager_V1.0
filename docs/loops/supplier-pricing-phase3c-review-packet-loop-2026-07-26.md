@@ -28,11 +28,11 @@ recapture, regenerate, or materialize the private packet unless an explicit
 invalidation condition is recorded. PR #246 is already open and remains
 `PARKED`: its current head must match a recorded exact-reviewed SHA, and any
 later head change invalidates prior head-bound evidence. Before any future
-publication, re-fetch `origin/main` and recheck bootstrap pin
-`d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` after #255/#251/#253
-reconciliation; required checks (including Ubuntu
-PR CI), CodeRabbit resolution, and separate external trusted-workflow/ruleset
-activation plus post-activation proof remain mandatory before Mason's
+publication, re-fetch `origin/main` and verify it descends from bootstrap floor
+`d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`; required checks (including Ubuntu
+PR CI) and CodeRabbit resolution remain pre-merge gates. The separate trusted
+workflow/ruleset activation plus post-activation proof are immediate post-merge
+gates before Mason's
 row-by-row review and explicit approval. No Stage C SQL,
 migration, apply, live mutation, flag enablement, deploy, or merge is
 authorized.
@@ -124,15 +124,15 @@ and its final review/PR path; they do not reopen capture or materialization.
    bounded finding list to a fresh Terra writer. Freeze a new SHA and repeat
    the entire proof/review cycle.
 7. **Applicable delivery cycle:** before any future publication, re-fetch
-   `origin/main` and recheck the current `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`
-   bootstrap pin. PR #246 may be accepted only
+   `origin/main` and verify it descends from the fixed
+   `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` bootstrap floor. PR #246 may be accepted only
    when its current head matches a recorded exact-reviewed SHA; a later head
    change starts a fresh proof/review cycle. Required checks, Vercel,
-   CodeRabbit disposition, and external trusted-workflow/ruleset activation
-   plus post-activation proof remain mandatory; park the PR without merging.
-   If containment and every dependent required check suddenly block unrelated
-   PRs, compare the PR event base SHA with
-   `.github/workflows/ci.yml`'s `phase3_bootstrap_base` before changing any
+   and CodeRabbit disposition are green. Merge is the prerequisite for the
+   base-controlled workflow to exist on `main`; activate its exact required
+   check and prove it immediately after merge, before later PR or owner review.
+   If containment blocks unexpectedly, verify the event base descends from
+   `.github/workflows/ci.yml`'s `phase3_bootstrap_ancestor` before changing any
    dependency or weakening the fail-closed gate.
 
 At most six correction cycles may edit the candidate. Three consecutive

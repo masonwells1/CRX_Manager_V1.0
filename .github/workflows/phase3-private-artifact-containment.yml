@@ -24,12 +24,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout only the exact trusted base
+      - name: Checkout the exact current trusted workflow commit
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          # The trusted checker walks base..head history by immutable objects;
-          # retain complete base history before fetching candidate objects.
+          ref: ${{ github.sha }}
+          # The workflow and checker both come from current trusted main. The
+          # checker walks the event base..head history by immutable objects.
           fetch-depth: 0
           persist-credentials: false
           submodules: false
@@ -52,7 +52,7 @@ jobs:
           phase3_number="${phase3_event[0]}"
           phase3_base="${phase3_event[1]}"
           phase3_head="${phase3_event[2]}"
-          test "$(git rev-parse HEAD)" = "$phase3_base"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           # This fetch transfers PR commit objects only. It does not create a
           # candidate worktree and no command loads candidate configuration.
           git -c core.hooksPath=/dev/null fetch --no-tags origin "+refs/pull/${phase3_number}/head:refs/phase3c/pull/${phase3_number}"

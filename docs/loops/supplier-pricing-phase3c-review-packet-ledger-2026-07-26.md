@@ -9,10 +9,11 @@
 - Branch: `codex/phase3c-overnight-20260726`
 - Created from: `origin/main` /
   `052b2171821dc7ffd965b4edb4b6de4ef8fda511`
-- Current publication-reconciliation base and one-time CI bootstrap pin:
+- Fixed trusted CI bootstrap ancestry floor:
   `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` (#255 after #251/#253;
   confirmed to lack both the
-  checker and trusted target workflow).
+  checker and trusted target workflow; protected `main` descendants remain
+  eligible without repinning).
 - Final allowed state: `PARKED — PR #246 OPEN; ACCEPTANCE REQUIRES ITS CURRENT
   HEAD TO MATCH A RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND
   EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PLUS PROOF`
@@ -118,7 +119,7 @@ followed #249 and was incorporated through normal merge
 `8de484afe9eb4f4e2c50ce9611538535caf533d8`. Historical #251
 baseline-refresh base `2a9e9252a62642e51b71c248c8c2f149a9a434d9` followed
 #253. Current #255 base `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`
-also lacks both guard files and is the active one-time CI bootstrap pin.
+also lacks both guard files and is the fixed trusted bootstrap ancestry floor.
 
 Published `f3b636590a784b2cf9bf4e03bc47da55adbc4e60` arrived concurrently as
 provenance-unattributed publication-parent hardening. It was adopted only after
@@ -268,16 +269,16 @@ four existing lint warnings.
   and active pin were `dd33f162365913867ff3aefd0b7e540a531d102f`,
   incorporated through merge `8de484afe9eb4f4e2c50ce9611538535caf533d8`.
   Historical #251 baseline-refresh base and pin were
-  `2a9e9252a62642e51b71c248c8c2f149a9a434d9`. Current #255 base and active
-  pin are `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`.
-  Refetch and recheck the current pin before any future publication; the external
+  `2a9e9252a62642e51b71c248c8c2f149a9a434d9`. Current #255 base is the fixed
+  trusted ancestry floor `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`.
+  Refetch and verify current `main` descends from that floor before publication; the external
   trusted-workflow/ruleset enforcement gap remains `PARKED`.
 - Owner gate: Mason must not review the private owner sheet yet. All decisions
   remain `PENDING` across all 604 rows; no Product classification is approved.
   Acceptance requires PR #246's current head to match a recorded exact-reviewed
   SHA; any later head change invalidates that evidence. Before any future
-  publication, freshly refetch `origin/main` and recheck current
-  `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` bootstrap pin. Required checks —
+  publication, freshly refetch `origin/main` and verify it descends from
+  bootstrap floor `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`. Required checks —
   including Ubuntu PR CI — real CodeRabbit findings resolved, and external
   trusted-workflow/ruleset activation plus post-activation proof remain
   mandatory. Only afterward may Mason review every
@@ -637,8 +638,8 @@ recorded elsewhere in this historical ledger.
 The packet has been regenerated and verified. Mason must not review any private
 row yet: PR #246's current head must match a recorded exact-reviewed SHA, and
 any later head change invalidates prior head-bound evidence. Before any future
-publication, freshly refetch `origin/main` and recheck current
-`d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` bootstrap pin. Required checks,
+publication, freshly refetch `origin/main` and verify it descends from
+bootstrap floor `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`. Required checks,
 including Ubuntu PR CI, must be green, any real CodeRabbit finding resolved,
 and external trusted-workflow/ruleset activation plus post-activation proof
 complete before acceptance. Only
@@ -652,7 +653,7 @@ live mutation, flag enablement, deploy, or merge.
 ## Closeout
 
 - `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, normal merges `a9817b05` of historical main `48bd1982`, `c6c5ea3` of historical #245 main `0e058804`, and `98969765` of historical #247 main `07a3d483`, and exact `d38d41f`/`a2002c3c`/`a7506a01`/`3c156065`/`a10bad90`/`80741157` review outcomes are recorded above; technical Sol returned `CLEAN` for published `bc305778`; `3c156065` was non-final, `a10bad90` is a correction-review source, and `80741157` is the publication-reconciliation source; older packet hashes are invalidated.
-- `NOW:` PR #246's current head must match a recorded exact-reviewed SHA. Before any future publication, re-fetch/recheck `origin/main` and current `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` bootstrap pin. Required checks, including Ubuntu PR CI, CodeRabbit resolution, and external trusted-workflow/ruleset activation plus post-activation proof remain mandatory. Mason must not begin private-sheet review.
+- `NOW:` PR #246's current head must match a recorded exact-reviewed SHA. Before publication, re-fetch `origin/main` and verify it descends from bootstrap floor `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`. Required PR checks and CodeRabbit resolution are pre-merge gates. Trusted-workflow/ruleset activation and post-activation proof are immediate post-merge gates before any later PR or private-sheet review. Mason must not begin private-sheet review.
 - `REMAINING:` protected PR #246 acceptance after all those gates, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet. Any future model alias must record its resolved model truthfully; the accepted review must remain bound to the current PR head.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
 - `NEEDS MASON:` no action until the external gates complete; afterward, row-by-row private-sheet review and explicit packet approval.
