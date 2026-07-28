@@ -128,6 +128,14 @@ $function$;
 -- nothing and kills the direct-API route even if the in-body guard is ever
 -- weakened. Precedent: 20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql.
 REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer) FROM authenticated;
+-- anon/PUBLIC are already absent from this function's ACL on live (verified
+-- 2026-07-28: proacl = {postgres=X/postgres,authenticated=X/postgres,
+-- service_role=X/postgres}, has_function_privilege('anon', ...) = false), and
+-- CREATE OR REPLACE preserves the existing ACL, so these are no-ops today. They
+-- are stated anyway so the grant set is explicit in the migration rather than
+-- inherited, and so a future default-PUBLIC grant cannot silently re-open it.
+REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer) FROM PUBLIC;
 
 -- ---------------------------------------------------------------------------
 -- 2. get_program_completion — in-body office-only gate
@@ -198,3 +206,12 @@ BEGIN
   RETURN v_result;
 END;
 $function$;
+
+-- Same explicit-grant-set treatment as above. `authenticated` KEEPS its EXECUTE
+-- here (OfficeCockpit.tsx and ProgramTracker.tsx call this RPC); revoking from
+-- anon/PUBLIC does not touch that separate, explicit grant. Verified 2026-07-28
+-- on live: proacl = {postgres=X/postgres,authenticated=X/postgres,
+-- service_role=X/postgres}, has_function_privilege('anon', ...) = false, so both
+-- statements are no-ops today.
+REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM anon;
+REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM PUBLIC;

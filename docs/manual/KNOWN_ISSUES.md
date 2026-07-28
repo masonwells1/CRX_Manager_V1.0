@@ -43,10 +43,25 @@ customer-facing), not just field staff.
 `INSUFFICIENT_ROLE` unless `is_admin() OR is_sales_rep()`, both with ERRCODE
 `insufficient_privilege`. Both helpers were re-confirmed live to require `profiles.is_active = true`,
 so this matches the other 18 exactly. `compute_application_service_fee` additionally has its EXECUTE
-grant revoked from `authenticated`: its only callers, `save_job` and `transfer_job_to_invoice`, were
-re-confirmed live as `prosecdef = true`, owned by `postgres`, and already requiring an active
-admin/sales_rep profile — so nothing in the field breaks. `get_program_completion` keeps its grant
+grant revoked from `authenticated`.
+
+**Correction to the caller claim (2026-07-28, verified live — the migration's own header comment and
+the PR #257 description both get this wrong and cannot be edited now that the file is merged).** The
+handoff said the callers were `save_job` **and** `transfer_job_to_invoice`. A live `pg_get_functiondef`
+scan of every function body found **exactly one** caller: `transfer_job_to_invoice`. `save_job` does
+**not** call it. Two independent reviewers flagged the discrepancy and a direct catalog query
+confirmed it. The revoke conclusion is unaffected — the single real caller is `prosecdef = true`,
+owned by `postgres`, and already requires an active admin/sales_rep profile, so nothing in the field
+breaks — but do not carry the two-caller claim forward. `get_program_completion` keeps its grant
 because the two office pages call it.
+
+**Added 2026-07-28 after an apply-gate reviewer round:** both functions also get
+`REVOKE EXECUTE ... FROM anon` and `FROM PUBLIC`. These are **no-ops against current live state** —
+`proacl` for both is `{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}` and
+`has_function_privilege('anon', ...)` is `false` — and `CREATE OR REPLACE` preserves the existing
+ACL. They are stated so the grant set is explicit in the migration rather than inherited. The
+reviewer finding that prompted them was a false positive against live, but the fix is free and is
+the pattern `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql` already set.
 
 **Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
 `customer_application_rates` policies are untouched. Sales reps keep their access.
