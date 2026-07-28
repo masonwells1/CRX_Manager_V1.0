@@ -83,6 +83,278 @@ number and requires it to exceed the cap that failed. Verified the hole was real
 passes a `--timeout 600` hint after a 600s timeout) and that the replacement bites: three further
 mutations — suggest the same budget, suggest half of it, drop the number entirely — were all caught.
 
+## 2026-07-27 — Phase 3C containment decoding is bounded and fail-closed
+
+The exact-SHA Claude review proof parser now fails closed on numbered Markdown,
+colon-only and zero-count severity headings, underscore or split emphasis,
+grouped `FIX`/`FOLLOW-UPS` findings, and finding text that starts with
+`Low-level`. Regression coverage preserves legitimate empty severity sections
+while rejecting each reproduced proof-minting bypass, including a terminal
+zero-count section immediately before the unchanged machine verdict. The Phase
+3C CI bootstrap also emits deliberate update guidance when a candidate head predates the
+containment checker instead of exiting with an opaque Git error. The owning
+packet, agent-workflow, parser, and documentation checks pass with these guards.
+
+The follow-up exact-SHA Opus 5 review identified additional operability and
+proof-contract gaps. Root-only ignored output under `backups/`,
+`.perf-sweep-data/`, `.epa-data-quality/`, and `.vercel/` now skips archive
+rejection and byte-budget charging at the ignored-source boundary; force-added
+files and nested lookalike paths remain fully guarded. Scan-cap errors identify
+the offending repository path. The review-proof parser now rejects actionable
+LOW findings and table or `Severity:` formats, the proof consumer accepts only
+the trusted minter's `clean` verdict, the generated workflow map is rescanned
+after staging, and the candidate containment job has a 12-minute timeout.
+Focused regressions cover each behavior.
+
+The next exact-SHA Opus 5 review found that the default Claude review prompt
+still advertised `SHIP-WITH-FOLLOWUPS` and combined severity headings even
+though the hardened proof parser rejects both forms. The generated prompt now
+requires separate BLOCKER, HIGH, MED, LOW, and NIT sections, explicit empty
+sections, and exactly one terminal `FINAL_VERDICT: SHIP` or
+`FINAL_VERDICT: NEEDS-WORK`. A completed review that cannot mint proof now
+prints the exact withholding reason instead of reporting only `VERIFIED`.
+Timeout help and the remaining Codex push-proof comments now match the
+implemented 15-minute default and clean-only verdict contract.
+
+The first Linux PR run then proved the current scanner was detecting literal
+synthetic snapshot-key fixtures in six immutable historical revisions of its
+own test file. Exact `commit:path` exemptions now cover only those reviewed
+synthetic revisions and only the structural-key reason. Path/container checks
+and every current, staged, worktree, renamed-path, archive, and non-exempt
+history scan remain active; validation and regression tests reject broader
+paths, reasons, commits, and unsafe containers.
+
+The private-artifact containment checker now keeps transfer decoding bounded in
+the hook/CI path. UTF-32 JSON and owner-decision CSV signals are decoded
+incrementally across all byte alignments after a BOM/NUL heuristic, with a
+4 KiB replay suffix, three-byte decoder carries, and fixed text windows rather
+than eight file-sized decoded strings. Embedded Base64 retains structural
+evidence from complete quanta when the final residual is unusable and checks a
+maximal valid prefix for both padded and unpadded `mod 4 = 1` wrappers without
+recursively decoding output. Hex packets now stream into the same non-recursive
+structural scanner instead of materializing a full token or decoded buffer.
+Embedded Base64 now keeps short source-like tokens below decoded-batch
+allocation; PEM wrappers retain strict line anchoring while normalizing Windows
+CRLF line endings, all sixteen Zstandard skippable-frame magics are reachable,
+and duplicate UTF-32 scanning has been removed. Worktree candidates receive one
+structural scan followed by an independent SHA-256 identity pass, preserving
+race detection without running every decoder twice. The real 793 MB
+worktree/ignored-path scan completed in under 100 seconds after previously
+exceeding ten minutes. Regression coverage includes boundary batches, CRLF
+packets, archive near-misses, critical stream splits, encoded packets under
+ignored tool roots, and the tracked PNG assets that exposed the binary CPIO
+false-positive risk.
+
+The later literal Opus 5 exact-SHA review of historical rejected `b30769b3`
+ran under wrapper run `2026-07-27T23-29-35-252Z-3ef35b3a`; it is distinct from
+the later exact candidate `c9ace302`, which received a separate literal Opus 5
+review. The older review cycles documented below where no Opus 5 backend had
+run remain historical for those cycles. The `b30769b3` review identified
+avoidable first-push and local hook costs. History traversal now reads each
+changed path's destination mode
+and object ID from one bounded raw `git diff-tree` stream instead of spawning
+`git ls-tree` once per path. Pre-commit scans tracked, staged, modified, and
+untracked content, while the full ignored dependency/build-output sweep remains
+mandatory at pre-push and in CI; a forced-added ignored file is Git-visible and
+is still rejected at pre-commit. Only explicit top-level tool-generated roots
+(such as `node_modules/`) retain the archive-only exception: an
+operator-controlled nested `private/node_modules/` path is scanned normally.
+The pre-push hook handles a missing remote argument fail-closed, and CI
+documents that SQL validation depends on an unconditional containment job.
+Measured on the final real checkout, the containment-only pre-commit scan
+completed in 4.37 seconds, the full ignored-path scan completed in 110.12
+seconds, and a zero-SHA first-push simulation scanned 2,128 commits, 71,289
+candidates, and 1.61 GB of logical content in 255.83 seconds without crossing
+either containment budget. The full pre-commit hook also runs the correction
+guard suite, but the multi-minute Phase 3C packet suite now runs explicitly in
+CI instead of on every local commit or push. After the one-byte gzip boundary
+proof was added, the focused Windows packet suite alone took 278.7 seconds;
+keeping it in CI preserves the mandatory release gate without inflating local
+commit or push latency.
+
+Every Git `-z` path reader now requests bytes, splits only on NUL bytes, and
+requires fatal UTF-8 decoding followed by an exact byte-for-byte round trip
+before a path can be deduplicated or used as a key. Invalid UTF-8 names fail
+closed in index, candidate-tree, history, zero-SHA pre-push, and PR-target
+paths; valid emoji, combining characters, spaces, and newlines retain their
+byte identity. Hex transfer scanning keeps the maximal complete-byte prefix
+when a trailing nibble is odd and recognizes bounded whitespace-wrapped tokens
+inside prose without recursively decoding its output. ZIP and gzip rejection
+now requires a complete, plausible fixed header (and bounded gzip optional
+fields), preventing a short magic or standalone ZIP data descriptor from
+becoming an archive false positive while preserving split, Base64, and hex
+container detection. CLI modes reject duplicate or conflicting range/mode
+arguments. The pre-push hook wraps every hard gate and the optional Graphify
+refresh explicitly, so Husky's `sh -e` behavior cannot hide the intended failure
+or warning message.
+
+GitHub's Node 24 Linux runner exposed a deterministic glibc heap abort on the
+128 KiB embedded-Base64 boundary case. The bounded streaming detector had
+already found the packet, but diagnostic refinement then decoded the entire
+ASCII wrapper into four unnecessary UTF-16 candidates. Refinement now parses
+UTF-8 first and allocates UTF-16 candidates only when the original bytes contain
+a BOM or NUL signal; embedded Base64 quartets also stream through a bounded
+manual byte decoder. The exact focused suite passes in both Windows and a clean
+`node:24-bookworm` Linux repository, including direct and split 64/128 KiB
+boundary packets.
+
+Neither `b30769b3` nor its three-file crash correction `ce16574b` is an accepted
+candidate. `b30769b3` is rejected after the Linux abort and the later exact-SHA
+review; its recorded containment proof checked 51,841 paths, 58 commits, 52,264
+candidates, and 823,721,338 logical bytes. `ce16574b` removed that allocator
+crash but remained rejected after follow-up review found incomplete PEM EOF
+finalization, embedded whitespace state, gzip bound/overlap gaps, alternate
+index and commit-message coverage gaps, and lossy semantic UTF-8 parsing.
+
+The bounded successor finalizes an open PEM body at EOF; retains up to 4 KiB of
+embedded Base64 whitespace while decoding into a fixed 64 KiB byte batch and
+fails closed when an encoded candidate exceeds that whitespace bound;
+checks all four Base64 quartet phases and both whitespace-tolerant hexadecimal
+nibble phases so a short alphabet prefix cannot shift a private packet out of
+alignment; rejects semantic private-artifact descriptors above 64 MiB before
+either exact identity-read allocation;
+decodes non-canonical padding bits so they cannot hide the same private bytes,
+without recursively decoding output; and
+uses tri-state gzip parsing so a recognized over-bound FNAME/FCOMMENT fails
+closed. Its gzip overlap is derived from the exact 12,304-byte maximum header.
+Pre-commit preserves only an explicitly inherited authoritative
+`GIT_INDEX_FILE` after removing all other Git redirects, and a new
+`commit-msg` hook scans the actual message file used by `git commit -m` and
+`git commit -F`. Semantic private-artifact reads now use fatal UTF-8 decoding
+with an exact byte round trip. Synthetic fixtures exercise each boundary with
+no private packet rows. The intermediate `49eb3f01` contains only the
+separately reviewed moving-main CI bootstrap invariants; acceptance belongs
+only to the future exact SHA containing this bounded successor after its fresh
+proof and reviews. Historical `b30769b3` truly received the literal Opus 5 run
+recorded above; later exact candidate `c9ace302` received a separate literal
+Opus 5 review. Acceptance still requires the current PR head to match a fresh
+exact-SHA wrapper capture.
+
+The introducing PR's bootstrap now uses `d787b7e0` as a fixed trusted ancestry
+floor instead of requiring exact equality with a moving `main` tip. A base that
+lacks the checker may use the candidate fallback only when Git proves it
+descends from that protected base-repository commit; unrelated history fails
+closed. After this PR lands, bases contain the checker and use that trusted
+copy. The `pull_request_target` workflow also executes its checker from the
+current trusted workflow SHA, so older open PR bases that predate the checker
+do not fail with module-not-found. Regression assertions bind CI's
+pull-request trigger and tautological job condition to `main`, preventing a
+future trigger change from silently skipping containment and dependent jobs.
+The first ancestry-floor implementation at `dc6d4d47` is non-final: its
+trusted checker still required worktree `HEAD` to equal the older event base,
+and a later checker deletion could reopen candidate fallback. The corrected
+successor binds the worktree to required `GITHUB_SHA` while preserving the
+event's immutable base-to-head scan. The first superseding fix at `84f0302d`
+remained non-final because Git's default path-history simplification could hide
+an add/remove on a merged side branch. Its successor uses `--full-history`,
+fails closed if that query fails, and permanently refuses fallback once the
+checker path has appeared anywhere after the fixed floor.
+The remaining post-merge ruleset step and public-repository fetch dependency
+are recorded in the consolidated known-issues file.
+
+Git attributes now pin Husky hooks, GitHub workflows, and shell scripts to LF,
+preventing Windows checkout conversion from breaking Linux/shebang execution.
+
+An earlier publication review found three additional release-gate issues.
+The multi-minute packet suite is now CI-only instead of running serially in
+pre-push; local pre-push still hard-gates containment, typecheck, and build.
+The structural product-row signature has a reviewed, exact-path exemption
+registry for benign source fixtures; exemptions apply only to that one reason,
+cannot use prefixes, globs, traversal, private/Git paths, or tool-owned roots,
+and cannot suppress stronger format, path, archive, or non-regular-file
+findings. History carries the original repository path separately so a
+SHA-like filename prefix cannot impersonate an internal history label.
+Finally, the candidate-controlled CI job is named
+`Phase 3C Candidate Containment (CI)`, while the base-controlled workflow and
+job are named `Phase 3C Trusted Base Containment`. The owning suite rejects the
+old ambiguous name so the eventual ruleset cannot silently select the weaker
+check.
+
+The literal Opus 5 review of exact rejected `c9ace302` executed successfully
+but did not accept that SHA: it returned `SHIP-WITH-FOLLOWUPS` and identified
+the padded-Base64 valid-prefix erasure. Subsequent exact-SHA and PR review
+identified the remaining gaps closed by this correction. Product CSV/TSV
+headers, plausible Git
+pack containers, malformed wrappers with a valid encoded private prefix, and
+overlong whitespace-separated transfer candidates now fail closed. Outgoing
+tag inspection shares one scan budget with history traversal and supports both
+SHA-1 and SHA-256 object IDs. The Claude push-proof producer is stricter as
+well: only one terminal `FINAL_VERDICT: SHIP` with no contradictory verdict or
+  BLOCKER/HIGH/MED/LOW finding can mint exact-head proof; `SHIP-WITH-FOLLOWUPS` is
+review evidence but no longer push authorization. Bare BLOCKER/HIGH/MED section
+headings carry forward to their following finding text, so a grouped Markdown
+review cannot hide a blocking bullet beneath a contradictory terminal `SHIP`.
+Neither `c9ace302` nor its successor corrections are accepted without a fresh
+review of the current head.
+
+Additional boundary review found two transfer-alignment cases and one allocation
+bound that were not yet explicit. Embedded Base64 now scans all four quartet
+phases after an ordinary alphabet prefix, and whitespace-tolerant hexadecimal
+scanning covers both nibble phases; direct, worktree, staged-index, history,
+pre-push, and PR-event fixtures prove those shifted packets remain blocked.
+Semantic private-artifact reads now reject descriptors larger than 64 MiB
+before allocating, with a sparse-file regression proving the bound. All five
+private packet basenames are also ignored locally while remaining forbidden by
+the containment checker. The measured 1.61 GiB first-push scan had already
+crossed 80% of the original 2 GiB total logical-byte cap, so the bounded cap is
+now 3 GiB (about 53.7% used) with an exact regression assertion.
+
+Archive rejection now validates bounded TAR/ustar checksum/header structure,
+ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
+a 4,121-byte stream overlap for bounded binary-CPIO pathnames. Binary CPIO
+recognition validates a complete single-NUL pathname, so incidental bytes
+inside committed PNG assets do not become false archive containers. Tool-owned
+ignored dependency archives (including fflate fixtures) remain exempt from
+archive-only rejection, while private JSON/CSV signals and alternate encodings
+inside those paths still fail closed. Raw Git commit objects are streamed
+through `git cat-file --batch` for every checked history commit, so range,
+pre-push, push, PR, and PR-target checks do not build
+per-commit object buffers. The packet tests cover direct and split inputs,
+benign near-misses, archive propagation through Base64/hex, zero-SHA/full
+ancestry, existing/repointed remotes, opaque URL remotes, and commit-object
+messages. This is checker/test/changelog-only work; it applies no migration and
+makes no live-data or production change.
+
+## 2026-07-27 — Phase 3C containment rejects embedded repositories and Git-visible archives
+
+The private-artifact worktree scanner now rejects ignored **and untracked** directories that
+contain their own `.git` marker. Git reports an embedded checkout as one directory instead of
+enumerating its files, which could allow a private Phase 3C packet inside that checkout to avoid
+content scanning. The regression suite creates both nested-repository cases with a synthetic
+private marker and requires a fail-closed `embedded Git repository` verdict while preserving the
+existing allowance for unrelated ignored symlinks. Bare Git layouts containing `HEAD`, `config`,
+and loose or packed object paths are also rejected in worktree, index, candidate-tree, and history
+scans, including a bare layout rooted directly at a candidate root and an `objects/info/alternates`
+object-store marker. Git administration path segments such as a tracked `.git` pointer are rejected
+before blob scanning. Benign embedded repositories deliberately
+remain fail-closed containment candidates. ZIP/XLSX, gzip, bzip2, xz, 7z, and RAR candidates fail
+closed even with a harmless prefix when tracked, staged, modified, or non-ignored untracked because
+their compressed members cannot be inspected by the bounded raw-byte scanner; numeric signature
+definitions prevent the checker from rejecting its own source. Ordinary ignored dependency and
+cache files remain out of that archive-only check. Streamed property detection retains a recognized
+quoted key across arbitrary whitespace to its next delimiter without growing the fixed scan window.
+An incomplete JSON Unicode whitespace escape split across chunks is now carried and decoded before
+that delimiter check, matching the bounded direct detector. Standard and URL-safe Base64-wrapped
+packets are decoded by the same bounded structural scanner, including streaming quartet boundaries
+and unpadded final quanta. Pre-push remote discovery accepts slash-separated names that pass Git's
+own ref validation while rejecting malformed remote names without shell interpolation. Both
+containment workflows subscribe to pull-request `edited` events and explicitly require `main` as
+the current base, so retargeting an existing PR cannot skip the packet scan. Ignored archives in
+operator-controlled paths now fail closed; only explicit tool-owned dependency, build, coverage,
+browser-report, and Graphify roots retain the archive exception needed for ordinary generated files.
+Base64 packet detection now also inspects bounded encoded tokens inside JSON/data-URI wrappers and
+line-wrapped PEM bodies instead of requiring the entire candidate file to use the transfer alphabet.
+Pre-push containment now type-checks outgoing ref objects, scans annotated-tag messages and direct
+blob targets, peels bounded tag chains, and recursively inspects tree targets before accepting tags.
+The archive-only ignored-file exception now also covers only the generated descendants used by
+Playwright results and the Phase 1a proof writer; private JSON and CSV signals remain rejected there.
+Raw commit messages are scanned across every checked commit, zero-SHA pushes inspect full bounded
+ancestry without trusting tracking refs, URL remotes are accepted, and hex/UTF-32 packets are decoded.
+At that historical point, after main advanced through PRs #249 and #250, the
+candidate-only bootstrap pin was refreshed to exact base `3ca289c5`; the current
+pin is recorded above, and separate base-controlled workflow enforcement remains
+a parked gate.
+
 ## 2026-07-27 — The PR merge gate could not see a proof minted in a worktree; a refuted gauntlet finding could not be re-contested
 
 Two defects found while shipping PR #252, both fixed here.
@@ -100,7 +372,7 @@ merged it from the PR page.
 The new `proofSearchDirs()` (in `codex-push-lib.mjs`, shared with the Codex side) enumerates
 `git worktree list --porcelain` and scans every sibling checkout's session-state. **Widening the
 search does not widen what counts:** `proofValid()` still demands GitHub's exact head SHA, GitHub's
-exact `baseRefOid`, a clean/blockers-fixed verdict and an age inside 30 minutes, and
+exact `baseRefOid`, a clean verdict and an age inside 30 minutes, and
 `review-proof-guard.mjs` still blocks hand-writing a proof in any directory. These are sibling
 checkouts of one repository — a proof rejected in the primary checkout is rejected in all of them.
 Enumeration failure falls back to the primary directory alone, which can only make the gate

@@ -2,31 +2,38 @@
 
 **Owner:** Mason Wells
 **Approved:** 2026-07-22
-**Status:** Stage A live and dormant; Stage B1 landed; Stage B2 integrated and in testing/review. Stage C remains parked for Mason's row-by-row classification approval and exact checksum.
+**Status:** Stage A, Stage B1, and Stage B2 are landed. Stage C remains parked on the regenerated-and-verified 604-row aggregate-only post-Stage-A packet, fresh exact review, a protected green/CodeRabbit-resolved PR, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
 **Orchestrator:** GPT-5.6 Sol, high reasoning
 **Coordination lane:** this contract is persisted on the dedicated `codex/supplier-pricing-phase3` docs branch
-**Current B2 implementation lane:** isolated branch `codex/supplier-pricing-phase3-stage-b2`; B1 is landed historical work. Never reuse the coordination/docs branch or worktree `7582`
+**Current lane:** the Supplier Pricing Phase 3C owner-review packet is regenerated and verified at 604 aggregate-only rows, but parked pending fresh exact review, protected PR acceptance, and Mason's later row/field/checksum approval. B1 and B2 are landed historical work. Never reuse the coordination/docs branch or worktree `7582`.
 
-## Current Runner Instruction — Stage B2
+## Current Runner Instruction — Parked Stage C Review Packet
 
-Stage B1 has landed. Stage B2 is active on the dedicated
-`codex/supplier-pricing-phase3-stage-b2` branch. The first implementation slice
-owns all transactional Product-ID writers and import ambiguity guards.
-InventoryPage's hold and manual-add writers were integrated only after the
-Section 3 collision boundary was released. Stage B2 is now in testing/review;
-it is not accepted until the required authenticated browser proof and fresh
-exact-SHA independent Sol adversarial review pass.
+Stage A, B1, and B2 are landed. The only current Supplier Pricing lane is the
+parked Stage C owner-review packet: preserve the already regenerated-and-
+verified private post-Stage-A packet (604 aggregate-only rows), obtain fresh
+exact review and protected-PR acceptance, then obtain Mason's row/field/checksum
+approval before a separate guarded Stage C migration can be designed. Do not
+recapture or regenerate the packet unless an explicit invalidation condition
+occurs. This packet is not a classification, approval, migration, or live-data
+action.
 
-The active B2 deny set remains explicit:
+The current Stage C deny set remains explicit:
 
-- do not merge the B2 PR or start Stage C;
+- do not create or apply Stage C SQL, classify Product rows, or treat a packet as approval;
 - do not apply a live migration or mutate live Product, family, policy, return, credit, inventory, or pricing data;
 - do not enable or change `supplier_cost_basis_enabled`;
 - do not touch or reuse worktree `7582`.
 
+## Historical Runner Instruction — Stage B2
+
+Stage B2's dedicated implementation lane, transactional Product-ID writer
+scope, collision release, testing, and review gate are historical context only.
+It landed before this Stage C packet lane and must not be restarted.
+
 ## Historical Runner Instruction — Stage B1
 
-Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, or create the pre-Stage-A Goal.** Continue only from the active Stage B coordination packet and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The then-authorized outcome was a green, review-resolved B1 PR parked before merge; B2 remained locked until B1 was accepted and landed.
+Stage A, the #213 watcher, and the Goal-start sequence below are completed historical context. **Do not recreate the watcher, restart Stage A, create the pre-Stage-A Goal, or restart either landed Stage B lane.** Current runners must use the parked Stage C review-packet instruction near the top of this document and `docs/plans/2026-07-22-supplier-pricing-phase3-implementation-plan.md`. The then-authorized outcome was a green, review-resolved B1 PR parked before merge; B2 remained locked until B1 was accepted and landed.
 
 The active B1 deny set remains explicit:
 
@@ -117,7 +124,7 @@ The completed Stage A deliverable added a migration compatible with the then-cur
 
 The protected Stage A PR passed the required review and proof sequence before Mason authorized its merge and live migration. Those gates are historical evidence, not instructions to open or apply another Stage A change.
 
-### Stage B — exact-SKU Product-picker UI (B2 testing/review; B1 landed)
+### Stage B — exact-SKU Product-picker UI (landed)
 
 Only after Stage A is merged and its live migration is explicitly approved and proven, refresh from `main` and rerun the repo-wide Graphify/source Product-selector inventory. Implement the shared Product-option presentation across every included transactional selector in the approved plan.
 
@@ -127,11 +134,17 @@ Open a separate protected UI PR and stop before merge.
 
 ### Stage C — owner-approved classification
 
-The proposed manifest must reconcile every Product row as family-assigned, standalone, or unresolved, with policy evidence and expected-old-value guards. No proposed family or non-`unknown` policy becomes approved merely because an agent generated it.
+The proposed manifest must reconcile every Product row as family-assigned, standalone, or unresolved, with policy evidence and expected-old-value guards. No proposed family or non-`unknown` policy becomes approved merely because an agent generated it. The current path is verified 604-row aggregate-only packet → fresh exact review and protected PR acceptance → Mason row/field/checksum approval → separate guarded Stage C migration PR → separate live-apply approval.
 
-The pre-Stage-A packet is a proposal only. After Stage A is live, regenerate it from the actual new schema and live read-only values, producing a fresh count and checksum. Mason must approve or reject every row disposition and every changed field, including explicit acknowledgment of unresolved rows.
+The pre-Stage-A packet was a proposal only. It was superseded after Stage A by
+the current regenerated-and-verified 604-row aggregate-only packet. Do not
+recapture or regenerate it unless an explicit invalidation condition occurs.
+Mason must approve or reject every row disposition and every changed field,
+including explicit acknowledgment of unresolved rows.
 
-After Mason explicitly approves the exact regenerated packet, create a separate one-to-one data migration bound to its approval checksum. Stop again for normal migration review and explicit live-apply approval.
+After Mason explicitly approves the exact verified packet, create a separate
+one-to-one data migration bound to its approval checksum. Stop again for normal
+migration review and explicit live-apply approval.
 
 ### Stage D — postflight
 
@@ -162,7 +175,7 @@ Only one writer may edit a given stage at a time. Fable and the independent Sol 
 
 ## Historical Goal Start Instruction — Already Satisfied; Do Not Execute
 
-The following idempotent Goal-start sequence is retained only to explain how the original Phase 3 Goal was created. Current runners must use the Stage B1 instruction near the top of this document instead.
+The following idempotent Goal-start sequence is retained only to explain how the original Phase 3 Goal was created. Current runners must use the parked Stage C review-packet instruction near the top of this document instead.
 
 Once, and only once, a heartbeat returns `READY`, perform an idempotent start sequence keyed to this contract (`supplier-pricing-phase3-after-pr213`). Do not rely on read-then-create alone. Use the platform's conditional Goal creation/unfinished-Goal uniqueness guard so concurrent or repeated heartbeats can create at most one Goal; after any create rejection, re-read Goal state and accept it only when the active Goal matches this contract key and objective. Verify matching Goal ownership, and only then disable this watcher. If creation fails without a matching active Goal, leave the watcher active and report `FAILED`; never disable first and never create a duplicate.
 

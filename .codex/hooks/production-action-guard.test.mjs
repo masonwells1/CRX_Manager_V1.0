@@ -246,7 +246,10 @@ try {
   claudeGuard = runClaudePushGuard(`git -C "${noOrigin.repo}" push origin HEAD:main`, projectRoot);
   assert.match(claudeGuard.stdout, /"permissionDecision":"deny"/, "Claude guard fails closed when origin/main is unavailable");
 
-  assert.equal(evaluatePush(risky.repo, now).blocked, true, "risky main push denied without proof");
+  const missingProof = evaluatePush(risky.repo, now);
+  assert.equal(missingProof.blocked, true, "risky main push denied without proof");
+  assert.match(String(missingProof.reason || ""), /"verdict":"clean"/, "proof guidance requires a clean verdict");
+  assert.doesNotMatch(String(missingProof.reason || ""), /blockers-fixed/, "proof guidance omits obsolete verdicts");
 
   writeProof(risky.repo, valid);
   assert.equal(evaluatePush(risky.repo, now).blocked, false, "risky main push allowed with valid proof");
@@ -271,6 +274,8 @@ try {
 
   writeProof(risky.repo, { ...valid, verdict: "ship" });
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "wrong-verdict proof denied");
+  writeProof(risky.repo, { ...valid, verdict: "blockers-fixed" });
+  assert.equal(evaluatePush(risky.repo, now).blocked, true, "obsolete blockers-fixed proof denied");
 
   writeFileSync(proofPath(risky.repo), `\ufeff${JSON.stringify(valid)}`, "utf8");
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "BOM-corrupted proof denied");

@@ -1,9 +1,60 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-27** (live high-water re-read this date via the Supabase connector: **914 ledger rows, max version `20260727174805`** — three migrations applied live this date. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. Its third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore in which all twelve catalog fingerprints match live. **Section 0a now has nothing open**; it is retained for its proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-28** (live high-water re-read this date via the Supabase connector: **915 ledger rows, max version `20260727231652`** — four migrations applied live on 2026-07-27. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Section 0a now has nothing open**; it is retained for its proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
+
+---
+
+## 0. PARKED 2026-07-28 — two SECURITY DEFINER functions still leak pricing past the office-only reads
+
+**Status: fix WRITTEN and PARKED — migration `20260728123224_secdef_pricing_reads_office_only`
+is NOT applied live.** Mason approved draft → Codex → PR only; he merges, and the live apply is a
+separate explicitly-gated step. Merging the PR deploys the frontend via Vercel; it does **not**
+apply the migration.
+
+**Finding (audited and proven live 2026-07-27; full evidence in
+`docs/audits/2026-07-27-secdef-pricing-bypass-audit-handoff.md` — do not re-run the audit).**
+Migration `20260727231652_quote_and_rate_reads_office_only` restricted SELECT on `quote_items`,
+`quote_versions`, `customer_application_rates` and `rebate_programs` to `is_admin() OR is_sales_rep()`.
+SECURITY DEFINER bypasses RLS by design, so that policy cannot reach SECDEF readers. Exactly **20**
+SECDEF functions read those tables with EXECUTE to `authenticated`; **18 are already gated** in-body.
+Two were not:
+
+1. **`compute_application_service_fee(uuid, uuid, numeric, integer)` — HIGH, proven live.** No role
+   check of any kind. Impersonating a real active `driver` returned `rate_per_acre_cents: 800`,
+   `total_fee_cents: 80000`, plus `cost_per_acre_cents` and `total_cost_cents` — customer price and
+   internal cost in one response, so margin is one subtraction away. Control: the same impersonation
+   against `get_booking_settlement` raised `INSUFFICIENT_ROLE`, so the leak is real, not a test
+   artifact. It has **no frontend caller at all**, so the React route guard was never in the path;
+   the PostgREST endpoint was reachable with the field user's own JWT.
+2. **`get_program_completion(integer)` — MEDIUM, latent.** No role check. Returns per customer: farm
+   name, quote numbers, planned vs completed acres, and `invoiced_amount_cents`. It returns 0 rows
+   today **only** because the single planned quote has `season = NULL` — a data accident, not a
+   control. Called from `src/pages/OfficeCockpit.tsx` and `src/pages/ProgramTracker.tsx`, whose
+   routes are gated `allowedRoles={['admin','sales_rep']}`.
+
+Exposure is 5 active non-office accounts (2 driver, 1 applicator, 2 `entity_recipient` — the last is
+customer-facing), not just field staff.
+
+**Fix as written.** Both functions get the house in-body gate copied from the PARKED-007 block in
+`preview_field_app_invoice_split` — `AUTH_REQUIRED` when `auth.uid() IS NULL`, then
+`INSUFFICIENT_ROLE` unless `is_admin() OR is_sales_rep()`, both with ERRCODE
+`insufficient_privilege`. Both helpers were re-confirmed live to require `profiles.is_active = true`,
+so this matches the other 18 exactly. `compute_application_service_fee` additionally has its EXECUTE
+grant revoked from `authenticated`: its only callers, `save_job` and `transfer_job_to_invoice`, were
+re-confirmed live as `prosecdef = true`, owned by `postgres`, and already requiring an active
+admin/sales_rep profile — so nothing in the field breaks. `get_program_completion` keeps its grant
+because the two office pages call it.
+
+**Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
+`customer_application_rates` policies are untouched. Sales reps keep their access.
+
+**Known cosmetic leftover, not exploitable:** `enforce_quote_accepted_fully_drawn` is a trigger
+function (returns `trigger`, not RPC-callable) and is the only one in the set with EXECUTE to `anon`
+— inconsistent with `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`. Optional
+cleanup, deliberately not bundled here.
 
 ---
 
@@ -416,6 +467,9 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 
 The 2026-07-13 audit implemented the cheap hard-guard fixes (see CHANGELOG). These remaining items were adjudicated PARK — each needs either allowlist design or accepted-residual sign-off, not just code:
 
+- **Supplier Pricing Phase 3C PR containment remains PARKED.** The trusted `pull_request_target` workflow is a future-PR guard and cannot retroactively protect PR #246 because its base predates the workflow. After the introducing PR merges, only the exact `Phase 3C Trusted Base Containment` check may be enforced by `protect-main` or equivalent immutable required-workflow control, followed by live proof; `Phase 3C Candidate Containment (CI)` is deliberately candidate-controlled and must never be selected as the protected check. Until then, local pre-commit/pre-push hooks are the active guard against accidental private-packet commits, while candidate-controlled PR CI remains advisory. Its unauthenticated `refs/pull/<n>/head` fetch depends on this repository remaining public; private-repository use requires read-only authentication.
+- **Phase 3C first-push ancestry cap requires maintenance before 4,096 commits.** The checker currently measures 2,128 commits and deliberately fails closed when a brand-new remote ref would traverse more than `MAX_HISTORY_COMMITS = 4_096`. Reassess and raise the bounded cap with measured scan-budget proof well before repository ancestry approaches the limit; otherwise the first push of every new branch will be blocked.
+- **Phase 3C byte and candidate scan budgets require measured maintenance.** The measured first-push proof consumed about 1.61 GiB; `MAX_TOTAL_STRUCTURAL_SCAN_BYTES` was raised from 2 GiB (already about 80.5% used) to 3 GiB, leaving about 46% headroom. The same proof used 71,289 of `MAX_STRUCTURAL_SCAN_CANDIDATES = 100,000`. Re-measure and adjust either bound with adversarial memory/time proof before it reaches 80%; a breach intentionally blocks push and CI rather than scanning an unbounded repository.
 - **Proof-file self-attestation** — the migration-apply and Codex-push proof JSONs can be written by the same agent that should be gated by them; nothing binds the proof to an actual reviewer run. Partial raise-the-bar option: have the reviewer subagents write the proof themselves. Full closure impractical (accepted residual for a malicious agent; the fix targets honest confusion). The 2026-07-13 hands-free additions (content-bound `codex-review-mig-<name>.json` Codex proof, exact `queryHash` binding on both proofs, required `reviewers` array naming both reviewer subagents, and timestamp freshness bounded to [0, 30 min] so future-dated stamps fail) raise the honest-mistake bar further but remain self-attestable by a deliberately dishonest agent — same accepted residual. Likewise the destructive-SQL classifier is a lexical scanner, not a SQL parser: it is quote-aware and default-keep (five adversarial Codex rounds closed the comment/literal/dollar-quote hiding tricks), but a genuinely novel obfuscation could still slip it — the classifier's job is stopping honest mistakes, and its false positives merely park a migration for the morning.
 - **New live-sweep predicates worth writing** (scripts/db-invariant-sweeps/): a `concurrency-hotspot` predicate asserting the named race-prone functions (inventory reservations, prebook, number sequences, balances) contain `FOR UPDATE`/advisory locks; an `audit-log-completeness` predicate asserting each allowlisted money-mutator RPC writes `financial_audit_log`; more `fin-*` arithmetic identities per derived-value family (order/quote `total_profit`, `net_margin_pct`, per-line commissions).
 - **Write-time forgeable-actor hook** — a regex hook flagging new SECDEF functions with `p_performed_by`-style params lacking `ACTOR_MISMATCH` binding (today caught only post-write by live sweeps/reviewers).

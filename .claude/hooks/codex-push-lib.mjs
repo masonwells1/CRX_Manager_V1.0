@@ -231,7 +231,7 @@ export function contentIsRisky(diffText) {
 function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
   if (!data || data[ranKey] !== true) return false;
   const v = String(data.verdict || "");
-  if (v !== "clean" && v !== "blockers-fixed") return false;
+  if (v !== "clean") return false;
   if (headSha && data.head_sha !== headSha) return false;
   // Base-SHA binding: a proof records the exact origin/main it was reviewed
   // against (base_sha). origin/main can advance — a sibling session fetches a
@@ -277,7 +277,7 @@ export function claudeProofValid(data, headSha, nowMs, expectedBaseSha) {
 //
 // Widening the SEARCH does not widen what COUNTS. `proofValid()` still demands
 // the exact head SHA GitHub reports, the exact base GitHub will merge onto, a
-// clean/blockers-fixed verdict, and an age inside 30 minutes; and
+// clean verdict, and an age inside 30 minutes; and
 // `review-proof-guard.mjs` still blocks hand-writing a proof in ANY directory.
 // These are sibling checkouts of one repository, not arbitrary paths — a proof
 // that would be rejected in the primary checkout is rejected in every one.
