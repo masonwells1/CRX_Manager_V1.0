@@ -275,6 +275,7 @@ assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### HIGH:\n- colon-h
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "_BLOCKER: underscore finding_\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "## BLOCKER\nLow-level authorization bypass\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "## HIGH (0)\n### Summary\nClean review.\nFINAL_VERDICT: SHIP" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "## HIGH (0)\nFINAL_VERDICT: SHIP" }), "clean");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "## HIGH (0)\n- contradictory real finding\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### H\\I\\G\\H\n- markdown-escaped severity finding\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### H**I**G**H\n- emphasis-split severity finding\nFINAL_VERDICT: SHIP" }), null);
