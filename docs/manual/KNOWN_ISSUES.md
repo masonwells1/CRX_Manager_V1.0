@@ -143,9 +143,11 @@ surfaced, affecting disaster-recovery rebuilds only, not production.
    `914|20260727174805`. Re-applying the history file raises
    `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER` and the cron file raises
    `BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`, so both stay fail-closed. A post-baseline migration replays
-   onto the restored database cleanly — the exact step that used to stall at 16 of 50; that file is
-   an uncommitted migration in the working checkout, not part of this change, so from the committed
-   tree there is nothing past the high-water. `npm run test:schema-baseline` passes:
+   onto the restored database cleanly — the exact step that used to stall at 16 of 50. That file is
+   `quote_and_rate_reads_office_only`, applied to production by a separate session on 2026-07-27 as
+   ledger version `20260727231652`; replaying it brings the restore to `915|20260727231652`, matching
+   live's ledger exactly. It is not part of this change and its file is not in this tree, so from the
+   committed tree there is nothing past the high-water. `npm run test:schema-baseline` passes:
    `SCHEMA_BASELINE_PASS high_water=20260727174805 ledger_rows=914` /
    `POST_BASELINE_MIGRATIONS_PASS pending=0`.
    **Five real defects were found and fixed while doing it, all DR-only:**
