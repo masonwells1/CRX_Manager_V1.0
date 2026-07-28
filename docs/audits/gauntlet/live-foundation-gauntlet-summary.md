@@ -27,7 +27,7 @@ The July 14 all-section Codex-only run has a built, rollback-proven, Codex-adver
 
 ## Current Queue Position
 
-Sections 1, 2, 3, and 4 were refreshed on 2026-07-19, 2026-07-20, and 2026-07-22. Sections 5–8 were refreshed 2026-07-22 (T3 close-out, [2026-07-22-sections-05-08-t3-closeout-refresh.md](2026-07-22-sections-05-08-t3-closeout-refresh.md)); that refresh pass is closed, and the Section 7 custom-recipient HIGH it parked was closed live on 2026-07-22 (`20260722134252`, Mason's reject-at-creation decision). Section 9 is queued next.
+Sections 1, 2, 3, and 4 were refreshed on 2026-07-19, 2026-07-20, and 2026-07-22. Sections 5–8 were refreshed 2026-07-22 (T3 close-out, [2026-07-22-sections-05-08-t3-closeout-refresh.md](2026-07-22-sections-05-08-t3-closeout-refresh.md)); that refresh pass is closed, and the Section 7 custom-recipient HIGH it parked was closed live on 2026-07-22 (`20260722134252`, Mason's reject-at-creation decision). Section 9 was reviewed and remediated on 2026-07-26 through the full governed gate and its HIGH fixes are live — it is **not** queued. One Section 9 item remains open: the `quantity_on_order` reconciliation design on the unmerged docs-only branch `codex/section9-mismatch-design-20260725`, which the 2026-07-26 remediation did not close. Sections 10–15 are not encoded in the runner and must be run manually against the section descriptions in [live-foundation-gauntlet-index.md](live-foundation-gauntlet-index.md); the **Next Section** line at the bottom of that index is the authoritative queue pointer.
 
 ## Visibility Notes
 

@@ -76,7 +76,8 @@ These checks passed and need no action:
   **Both halves of this were wrong — corrected 2026-07-27:**
   - *Claude side:* `~/.claude/settings.json` pinned the bare alias `"model": "opus"`, which resolves to
     **Opus 4.8**, not Opus 5. That default was inherited by the reviewer subagents, the workflow
-    scripts (`gauntlet-sections-2-6-loop.js`, `money-inventory-hunt.js`), and
+    scripts (`gauntlet-sections-loop.js` — renamed from `gauntlet-sections-2-6-loop.js` on
+    2026-07-27 when it was extended to sections 1–9 — `money-inventory-hunt.js`), and
     `scripts/run-claude-review.mjs`, so the whole Claude-side review apparatus — including the
     money/inventory and RLS gates — had been running a generation behind. All of those now pin the
     canonical ID `claude-opus-5`.
