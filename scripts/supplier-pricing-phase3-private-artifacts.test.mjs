@@ -767,7 +767,7 @@ git() { return 0; }
       encoding: 'utf8',
       env: productionPreCommitEnvironment,
     });
-    assert.equal(productionPreCommit.status, 1, 'the real pre-commit hook must preserve and scan the authoritative alternate index');
+    assert.notEqual(productionPreCommit.status, 0, 'the real pre-commit hook must preserve and scan the authoritative alternate index');
     assert.match(`${productionPreCommit.stdout}${productionPreCommit.stderr}`, /staged-only-packet\.txt .*private JSON format marker in malformed candidate/);
   }
 

@@ -27,7 +27,7 @@ invalidation condition is recorded. PR #246 is already open and remains
 `PARKED`: its current head must match a recorded exact-reviewed SHA, and any
 later head change invalidates prior head-bound evidence. Before any future
 publication, re-fetch `origin/main` and recheck bootstrap pin
-`3ca289c5c5b91c800a350ab828a6000bd3d399e6` after #249 and #250
+`dd33f162365913867ff3aefd0b7e540a531d102f` after #253
 reconciliation; required checks (including Ubuntu
 PR CI), CodeRabbit resolution, and separate external trusted-workflow/ruleset
 activation plus post-activation proof remain mandatory before Mason's
@@ -122,12 +122,16 @@ and its final review/PR path; they do not reopen capture or materialization.
    bounded finding list to a fresh Terra writer. Freeze a new SHA and repeat
    the entire proof/review cycle.
 7. **Applicable delivery cycle:** before any future publication, re-fetch
-   `origin/main` and recheck the current `3ca289c5c5b91c800a350ab828a6000bd3d399e6`
+   `origin/main` and recheck the current `dd33f162365913867ff3aefd0b7e540a531d102f`
    bootstrap pin. PR #246 may be accepted only
    when its current head matches a recorded exact-reviewed SHA; a later head
    change starts a fresh proof/review cycle. Required checks, Vercel,
    CodeRabbit disposition, and external trusted-workflow/ruleset activation
    plus post-activation proof remain mandatory; park the PR without merging.
+   If containment and every dependent required check suddenly block unrelated
+   PRs, compare the PR event base SHA with
+   `.github/workflows/ci.yml`'s `phase3_bootstrap_base` before changing any
+   dependency or weakening the fail-closed gate.
 
 At most six correction cycles may edit the candidate. Three consecutive
 failures with the same root cause, an unavailable required reviewer, or an
@@ -213,7 +217,7 @@ already regenerated-and-verified 604-row aggregate-only packet. They are
 retained as evidence only and do not authorize a new capture or materialization
 run. The current loop completes only after the PR's current head matches a
 recorded exact-reviewed SHA, a recheck of current base/bootstrap
-`3ca289c5c5b91c800a350ab828a6000bd3d399e6` before any future publication,
+`dd33f162365913867ff3aefd0b7e540a531d102f` before any future publication,
 required Ubuntu PR CI green with real CodeRabbit findings resolved, external
 trusted-workflow/ruleset activation plus post-activation proof, and a
 protected PR parked without merge for Mason's row-by-row review. Until then it
@@ -249,7 +253,7 @@ This delivery mechanic does not authorize packet recapture or materialization.
 
 This mission may commit to `codex/phase3c-overnight-20260726`. Before any
 future publication, it must re-fetch/recheck the current
-`3ca289c5c5b91c800a350ab828a6000bd3d399e6` bootstrap pin; PR #246 can be
+`dd33f162365913867ff3aefd0b7e540a531d102f` bootstrap pin; PR #246 can be
 accepted only if its current head matches a recorded exact-reviewed SHA and the
 required checks, CodeRabbit resolution, and external trusted-workflow/ruleset
 activation plus proof are complete. It remains `PARKED` otherwise.

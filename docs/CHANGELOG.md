@@ -39,10 +39,14 @@ is still rejected at pre-commit. Only explicit top-level tool-generated roots
 operator-controlled nested `private/node_modules/` path is scanned normally.
 The pre-push hook handles a missing remote argument fail-closed, and CI
 documents that SQL validation depends on an unconditional containment job.
-Measured on the final real checkout, pre-commit completed in 4.37 seconds, the
-full ignored-path scan completed in 110.12 seconds, and a zero-SHA first-push
-simulation scanned 2,128 commits, 71,289 candidates, and 1.61 GB of logical
-content in 255.83 seconds without crossing either containment budget.
+Measured on the final real checkout, the containment-only pre-commit scan
+completed in 4.37 seconds, the full ignored-path scan completed in 110.12
+seconds, and a zero-SHA first-push simulation scanned 2,128 commits, 71,289
+candidates, and 1.61 GB of logical content in 255.83 seconds without crossing
+either containment budget. The full pre-commit hook also runs the correction
+guard suite; after the one-byte gzip boundary proof was added, the focused
+Windows packet suite alone took 278.7 seconds, so 4.37 seconds is not the total
+commit-hook runtime.
 
 Every Git `-z` path reader now requests bytes, splits only on NUL bytes, and
 requires fatal UTF-8 decoding followed by an exact byte-for-byte round trip
@@ -96,7 +100,7 @@ only to the future exact SHA containing this bounded successor after its fresh
 proof and reviews.
 
 The introducing PR's bootstrap pin now follows the current `main` commit after
-PR #252 advanced the base without introducing the trusted checker. A regression
+PR #253 advanced the base without introducing the trusted checker. A regression
 assertion binds CI's pull-request trigger to `main`, preventing a future trigger
 expansion from silently skipping containment and its dependent jobs. The
 remaining post-merge ruleset step and the public-repository fetch dependency are
@@ -153,8 +157,10 @@ The archive-only ignored-file exception now also covers only the generated desce
 Playwright results and the Phase 1a proof writer; private JSON and CSV signals remain rejected there.
 Raw commit messages are scanned across every checked commit, zero-SHA pushes inspect full bounded
 ancestry without trusting tracking refs, URL remotes are accepted, and hex/UTF-32 packets are decoded.
-After main advanced through PRs #249 and #250, the candidate-only bootstrap pin was refreshed to
-the exact `3ca289c5` base; separate base-controlled workflow enforcement remains a parked gate.
+At that historical point, after main advanced through PRs #249 and #250, the
+candidate-only bootstrap pin was refreshed to exact base `3ca289c5`; the current
+pin is recorded above, and separate base-controlled workflow enforcement remains
+a parked gate.
 ## 2026-07-27 — Quote pricing, per-customer rates and rebate terms become office-only (APPLIED `20260727231652`)
 
 **Status: APPLIED to live 2026-07-27.** Authored as `20260727193441`; the server assigned ledger

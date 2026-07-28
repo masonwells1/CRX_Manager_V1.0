@@ -171,9 +171,12 @@ then-current one-time CI bootstrap pin was
 reconciliation merged `origin/main` `d3bac970804bf6130b6bf6259eed05fad0367a9c`
 through normal merge `d0ff8e0b5ee59cd56f1c093fea92dba266fd17f3` without
 conflicts. Exact object checks confirm the #248 base likewise lacked both guard
-files. Current #250 `origin/main` is `3ca289c5c5b91c800a350ab828a6000bd3d399e6`
-after #249, incorporated through normal merge `35ec8fde0dc1d0ebce956f64d4320dc4d5536820`;
-it also lacks both guard files and is the active one-time CI bootstrap pin. The trusted-workflow/ruleset
+files. Historical #250 `origin/main` was
+`3ca289c5c5b91c800a350ab828a6000bd3d399e6` after #249, incorporated through
+normal merge `35ec8fde0dc1d0ebce956f64d4320dc4d5536820`. Current #253
+`origin/main` is `dd33f162365913867ff3aefd0b7e540a531d102f`, incorporated
+through merge `8de484afe9eb4f4e2c50ce9611538535caf533d8`; it also lacks both
+guard files and is the active one-time CI bootstrap pin. The trusted-workflow/ruleset
 external enforcement gap remains `PARKED`. The base must be freshly refetched
 and rechecked immediately before any future publication. This correction still
 requires final exact review on its containing SHA, identified only by Git and
@@ -197,7 +200,7 @@ The packet has been regenerated and verified, but Mason must not begin the
 row-by-row private-sheet review yet. All 604 owner decisions remain `PENDING`; no
 Product classification is approved. The remaining gate is a recorded exact
 review of the PR's current head, a fresh `origin/main` refetch and the current
-`3ca289c5c5b91c800a350ab828a6000bd3d399e6` bootstrap-pin recheck before any
+`dd33f162365913867ff3aefd0b7e540a531d102f` bootstrap-pin recheck before any
 future publication, and protected-PR acceptance with required checks —
 including Ubuntu PR CI — green, any real CodeRabbit finding resolved, and
 separate external trusted-workflow/ruleset activation plus post-activation
