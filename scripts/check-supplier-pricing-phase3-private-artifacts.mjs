@@ -100,9 +100,33 @@ export function validateStructuralSignatureExemptions(exemptions) {
   return Object.freeze(validated);
 }
 
+export function validateStructuralSignatureHistoryExemptions(exemptions) {
+  if (!exemptions || typeof exemptions !== 'object' || Array.isArray(exemptions)) throw new Error('private Phase 3C historical structural-signature exemptions must be an object');
+  const validated = {};
+  for (const [identity, reason] of Object.entries(exemptions)) {
+    const match = /^([0-9a-f]{40,64}):(.+)$/u.exec(identity);
+    if (!match) throw new Error('private Phase 3C historical structural-signature exemption requires an exact commit:path identity');
+    const pathError = unsafeStructuralSignatureExemptionPath(match[2]);
+    if (pathError) throw new Error(`private Phase 3C historical structural-signature exemption rejected: ${pathError}`);
+    if (typeof reason !== 'string' || reason.trim().length < 25) throw new Error(`private Phase 3C historical structural-signature exemption for ${identity} requires a concrete review reason`);
+    validated[identity] = reason.trim();
+  }
+  return Object.freeze(validated);
+}
+
 export const STRUCTURAL_SIGNATURE_EXEMPTIONS = validateStructuralSignatureExemptions({
 });
 const STRUCTURAL_SIGNATURE_EXEMPTION_PATHS = new Set(Object.keys(STRUCTURAL_SIGNATURE_EXEMPTIONS));
+const REVIEWED_SYNTHETIC_HISTORY_REASON = 'Reviewed synthetic scanner test source predating split-key fixture construction; contains no private packet rows.';
+export const STRUCTURAL_SIGNATURE_HISTORY_EXEMPTIONS = validateStructuralSignatureHistoryExemptions({
+  'fa78c4f76808159897b5bd3d9d29fd04ffa24341:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
+  '5e3bb07fa835928c951ee2b6dbd42315821bb7c9:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
+  '075d47e9eec1970935ed1da2e85b90fd7d0c0540:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
+  'dc6d4d47ad33dfe64b31295fffac39c980e15f2f:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
+  '84f0302d6c1ff5b1f7e4a858197381cea48fbff0:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
+  'c9ace3027bb4afcddb76adc128156e97eb63a12e:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
+});
+const STRUCTURAL_SIGNATURE_HISTORY_EXEMPTION_IDENTITIES = new Set(Object.keys(STRUCTURAL_SIGNATURE_HISTORY_EXEMPTIONS));
 
 /**
  * Husky and Git can export GIT_DIR/GIT_INDEX_FILE/etc. Those variables would
@@ -181,11 +205,18 @@ export function forbiddenArtifactReason(repoPath) {
 export function findForbiddenPrivateArtifactPaths(paths) {
   return paths.map(repoPath => ({ repoPath, reason: forbiddenArtifactReason(repoPath) })).filter(item => item.reason);
 }
-export function isStructuralSignatureExempt(repoPath, reason) {
-  return reason === STRUCTURAL_SIGNATURE_REASON && STRUCTURAL_SIGNATURE_EXEMPTION_PATHS.has(String(repoPath));
+export function isStructuralSignatureExempt(repoPath, reason, historyIdentity = null) {
+  if (reason !== STRUCTURAL_SIGNATURE_REASON) return false;
+  const normalizedPath = String(repoPath);
+  if (STRUCTURAL_SIGNATURE_EXEMPTION_PATHS.has(normalizedPath)) return true;
+  const identity = String(historyIdentity || '');
+  const separator = identity.indexOf(':');
+  return separator > 0 &&
+    identity.slice(separator + 1) === normalizedPath &&
+    STRUCTURAL_SIGNATURE_HISTORY_EXEMPTION_IDENTITIES.has(identity);
 }
-function acceptedStructuralReason(repoPath, reason) {
-  return reason && !isStructuralSignatureExempt(repoPath, reason) ? reason : null;
+function acceptedStructuralReason(repoPath, reason, historyIdentity = null) {
+  return reason && !isStructuralSignatureExempt(repoPath, reason, historyIdentity) ? reason : null;
 }
 function bareRepositoryObjectRoot(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
@@ -1699,7 +1730,7 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
   const reasons = await scanGitObjectEntries(entries, root, budget);
   for (const entry of entries) {
     const reason = reasons.get(entry.key);
-    const acceptedReason = acceptedStructuralReason(entry.exemptionPath, reason);
+    const acceptedReason = acceptedStructuralReason(entry.exemptionPath, reason, entry.repoPath);
     if (acceptedReason) violations.push({ repoPath: entry.repoPath, reason: acceptedReason });
   }
   return violations;

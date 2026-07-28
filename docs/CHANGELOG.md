@@ -35,6 +35,14 @@ prints the exact withholding reason instead of reporting only `VERIFIED`.
 Timeout help and the remaining Codex push-proof comments now match the
 implemented 15-minute default and clean-only verdict contract.
 
+The first Linux PR run then proved the current scanner was detecting literal
+synthetic snapshot-key fixtures in six immutable historical revisions of its
+own test file. Exact `commit:path` exemptions now cover only those reviewed
+synthetic revisions and only the structural-key reason. Path/container checks
+and every current, staged, worktree, renamed-path, archive, and non-exempt
+history scan remain active; validation and regression tests reject broader
+paths, reasons, commits, and unsafe containers.
+
 The private-artifact containment checker now keeps transfer decoding bounded in
 the hook/CI path. UTF-32 JSON and owner-decision CSV signals are decoded
 incrementally across all byte alignments after a BOM/NUL heuristic, with a

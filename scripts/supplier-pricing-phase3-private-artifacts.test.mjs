@@ -9,7 +9,7 @@ import { canonical, loadSnapshot, makeManifest, sha256 } from './generate-suppli
 import { buildOwnerDecisionSheet, ownerDecisionSheetHash } from './generate-supplier-pricing-phase3-owner-decision-sheet.mjs';
 import { verifyManifest } from './verify-supplier-pricing-phase3-classification-manifest.mjs';
 import { verifyOwnerDecisionSheet } from './verify-supplier-pricing-phase3-owner-decision-sheet.mjs';
-import { checkCommitMessagePrivateArtifactContainment, checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, forbiddenArtifactReason, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, isStructuralSignatureExempt, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, parseCli, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason, STRUCTURAL_SIGNATURE_EXEMPTIONS, STRUCTURAL_SIGNATURE_REASON, validateStructuralSignatureExemptions } from './check-supplier-pricing-phase3-private-artifacts.mjs';
+import { checkCommitMessagePrivateArtifactContainment, checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, forbiddenArtifactReason, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, isStructuralSignatureExempt, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, parseCli, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason, STRUCTURAL_SIGNATURE_EXEMPTIONS, STRUCTURAL_SIGNATURE_HISTORY_EXEMPTIONS, STRUCTURAL_SIGNATURE_REASON, validateStructuralSignatureExemptions, validateStructuralSignatureHistoryExemptions } from './check-supplier-pricing-phase3-private-artifacts.mjs';
 import { assertExternalArtifactPath, assertExternalPrivateDirectory, CONTAINER_TYPE_ALLOWLIST, loadValidatedSnapshot, MAX_PRIVATE_ARTIFACT_BYTES, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRODUCT_FORM_ALLOWLIST, readValidatedPrivateArtifact, REPO_ROOT, validatePostStageASnapshot, without, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const temp = mkdtempSync(path.join(os.tmpdir(), 'crx-phase3c-synthetic-'));
@@ -478,6 +478,16 @@ try {
   await assert.rejects(() => checkPrePushPrivateArtifactContainment({ root: boundedHistoryRepo, execute: overCapPrePushExecute, remoteName: 'origin', stdin: `refs/heads/packet ${boundedHistoryHead} refs/heads/packet ${'0'.repeat(40)}\n` }), /checked-commit cap exceeded/);
   assert.deepEqual(STRUCTURAL_SIGNATURE_EXEMPTIONS, {}, 'structural-signature path exemptions must remain empty');
   assert.equal(isStructuralSignatureExempt('scripts/supplier-pricing-phase3-private-artifacts.test.mjs', STRUCTURAL_SIGNATURE_REASON), false);
+  const reviewedHistoryIdentities = Object.keys(STRUCTURAL_SIGNATURE_HISTORY_EXEMPTIONS);
+  assert.equal(reviewedHistoryIdentities.length, 6, 'only the six reviewed historical synthetic test revisions may be exempt');
+  for (const identity of reviewedHistoryIdentities) {
+    const repoPath = identity.slice(identity.indexOf(':') + 1);
+    assert.equal(isStructuralSignatureExempt(repoPath, STRUCTURAL_SIGNATURE_REASON, identity), true);
+    assert.equal(isStructuralSignatureExempt(repoPath, 'private JSON format marker in malformed candidate', identity), false, 'history exemption must remain reason-specific');
+    assert.equal(isStructuralSignatureExempt(`${repoPath}.bak`, STRUCTURAL_SIGNATURE_REASON, identity), false, 'history exemption must remain path-specific');
+    const differentIdentity = `${identity[0] === '0' ? '1' : '0'}${identity.slice(1)}`;
+    assert.equal(isStructuralSignatureExempt(repoPath, STRUCTURAL_SIGNATURE_REASON, differentIdentity), false, 'history exemption must remain commit-specific');
+  }
   assert.equal(isStructuralSignatureExempt('scripts/supplier-pricing-phase3-private-artifacts.test.mjs', 'private JSON format marker in malformed candidate'), false, 'an exemption must not hide a different structural reason');
   assert.equal(isStructuralSignatureExempt('scripts/supplier-pricing-phase3-private-artifacts.test.mjs.bak', STRUCTURAL_SIGNATURE_REASON), false, 'an exemption must not act as a filename prefix');
   assert.equal(isStructuralSignatureExempt(`${'a'.repeat(40)}:scripts/supplier-pricing-phase3-private-artifacts.test.mjs`, STRUCTURAL_SIGNATURE_REASON), false, 'a SHA-like filename prefix must not impersonate an internal history label');
@@ -486,6 +496,9 @@ try {
     assert.throws(() => validateStructuralSignatureExemptions({ [unsafePath]: 'a concrete reviewed exemption reason for a benign file' }), /exemption rejected|concrete review reason/);
   }
   assert.throws(() => validateStructuralSignatureExemptions({ 'scripts/reviewed.mjs': 'too short' }), /concrete review reason/);
+  assert.throws(() => validateStructuralSignatureHistoryExemptions({ 'not-a-commit:scripts/reviewed.mjs': 'a concrete reviewed exemption reason for a benign historical file' }), /exact commit:path identity/);
+  assert.throws(() => validateStructuralSignatureHistoryExemptions({ [`${'a'.repeat(40)}:private-artifacts/reviewed.mjs`]: 'a concrete reviewed exemption reason for a benign historical file' }), /exemption rejected/);
+  assert.throws(() => validateStructuralSignatureHistoryExemptions({ [`${'a'.repeat(40)}:scripts/reviewed.mjs`]: 'too short' }), /concrete review reason/);
   const exemptionRepo = fixtureRepo('containment-reviewed-structural-exemption'); const exemptionInitial = git(exemptionRepo, ['rev-parse', 'HEAD']).trim(); const exemptionPath = 'scripts/supplier-pricing-phase3-private-artifacts.test.mjs'; mkdirSync(path.dirname(path.join(exemptionRepo, exemptionPath)), { recursive: true }); writeFileSync(path.join(exemptionRepo, exemptionPath), REVIEWED_STRUCTURAL_SIGNATURE_SOURCE); await containmentFails(exemptionRepo, exemptionPath, STRUCTURAL_SIGNATURE_REASON);
   git(exemptionRepo, ['add', exemptionPath]); await containmentFails(exemptionRepo, exemptionPath, STRUCTURAL_SIGNATURE_REASON); git(exemptionRepo, ['commit', '--quiet', '-m', 'synthetic structural fixture']);
   writeFileSync(path.join(exemptionRepo, exemptionPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); await containmentFails(exemptionRepo, exemptionPath, 'private JSON format marker in malformed candidate'); rmSync(path.join(exemptionRepo, exemptionPath));
