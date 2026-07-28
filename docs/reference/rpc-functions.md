@@ -226,7 +226,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `reopen_accounting_period(p_period_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor reopen of a closed accounting period (audited).
 - `batch_apply_all_prepayments(p_performed_by, p_idempotency_key)` → jsonb — admin-only. Applies every customer's available prepay balance to their oldest-unpaid posted invoices in one batch ("Apply all prepayments" button).
 - `preview_finance_charges(p_as_of_date)` → table — read-only preview of the charges `generate_finance_charges` would create (customer, overdue balance, rate, days overdue, charge amount).
-- `compute_application_service_fee(p_service_id, p_customer_id, p_acres, p_season)` → jsonb — computes a field-application service fee using the per-customer rate override, falling back to the service default.
+- `compute_application_service_fee(p_service_id, p_customer_id, p_acres, p_season)` → jsonb — private owner-invoked helper that computes a field-application service fee using the per-customer rate override, falling back to the service default. Migration `20260728182141` revoked direct `authenticated`/`anon` execution; browser code must not call this RPC.
 
 ## Pricing
 - `calculate_prices_from_margin()` — trigger: auto-calculate tier prices from margin target
@@ -448,7 +448,7 @@ The retained Phase 1a `preview_product_pricing_changes` and `apply_product_prici
 
 ### Custom Application Workflow
 - `create_job_from_quote_section(p_quote_id, p_section_id, p_performed_by, p_idempotency_key)` -> jsonb {job_id} -- Creates scheduled job from planned quote section with pre-filled chemicals and fields
-- `get_program_completion(p_season)` -> jsonb array -- Returns planned vs actual acres per program section for the Program Tracker dashboard
+- `get_program_completion(p_season)` -> jsonb array -- Office-only (active admin or sales rep) browser RPC. Returns planned vs actual acres per program section for the Program Tracker dashboard; migration `20260728182141` enforces the role gate in-body.
 
 ### Field Application Workflow V2 / Phase 1 (2026-04-29 rewrite)
 - `derive_customer_shares_from_fields(p_field_ids uuid[], p_applied_acres_map jsonb DEFAULT NULL)` -> jsonb `{rows[], customers[], total_applied_acres, field_count, fallback_used_field_ids[]}` — **Phase 1 rewrite:** returns per-(field × customer) detail in `rows` and per-customer aggregate in `customers`. Falls back to `fields.customer_id` at 100% when a field has no `field_billing_defaults` rows.

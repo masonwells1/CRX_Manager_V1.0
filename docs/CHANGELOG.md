@@ -65,6 +65,22 @@ the same parent shell and would reintroduce the identical fail-open (CodeRabbit,
 as passing, so the check cannot quietly stop detecting. Re-proved by poisoning the real manifest with
 `${root}`: both the check and the fixture test fail, and both pass again once restored.
 
+## 2026-07-28 — The parked SECURITY DEFINER pricing migration is applied
+
+Mason approved the parked migration after PR #246 landed. The mandatory migration reviewer rejected
+the first apply attempt because `CREATE OR REPLACE FUNCTION` would retain unsafe inherited execute
+grants unless the migration revoked them explicitly. The corrected ACL shape landed through PR #260:
+both functions revoke `PUBLIC` and `anon`; the internal `compute_application_service_fee` helper also
+revokes direct `authenticated` execution, while browser-facing `get_program_completion` deliberately
+regrants `authenticated` and `service_role`.
+
+Protected CI, SQL validation, CodeQL, Vercel, and CodeRabbit all passed; CodeRabbit produced no
+actionable comments. Terra and Luna returned CLEAN, and Opus 5 returned SHIP on the exact branch SHA.
+Fresh hash-bound RLS and drift proofs returned CLEAN immediately before the approved live apply.
+Supabase applied it as ledger version `20260728182141`. Read-only postflight catalog checks confirmed
+both functions are single `STABLE SECURITY DEFINER` overloads with `search_path=public, pg_temp`, both
+office-role guards present, no `anon` execution, and the intended authenticated/service-role grants.
+
 ## 2026-07-28 — A migration that shipped ten days ago was still counted as "awaiting apply"
 
 `/fleet` reported "2 parked migrations awaiting apply". One of them,

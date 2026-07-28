@@ -1,18 +1,23 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-28** (live high-water re-read this date via the Supabase connector: **915 ledger rows, max version `20260727231652`** — four migrations applied live on 2026-07-27. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Section 0a now has nothing open**; it is retained for its proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-28** (live high-water re-read this date via the Supabase connector: **916 ledger rows, max version `20260728182141`**. `secdef_pricing_reads_office_only` **RESOLVES section 0**: both remaining `SECURITY DEFINER` pricing readers now enforce active admin/sales-rep access in-body, with explicit execute grants. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Sections 0 and 0a now have nothing open**; they are retained for their proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 0. PARKED 2026-07-28 — two SECURITY DEFINER functions still leak pricing past the office-only reads
+## 0. RESOLVED 2026-07-28 — two SECURITY DEFINER functions leaked pricing past the office-only reads
 
-**Status: fix WRITTEN and PARKED — migration `20260728123224_secdef_pricing_reads_office_only`
-is NOT applied live.** Mason approved draft → Codex → PR only; he merges, and the live apply is a
-separate explicitly-gated step. Merging the PR deploys the frontend via Vercel; it does **not**
-apply the migration.
+**Status: FIXED LIVE by migration `20260728182141_secdef_pricing_reads_office_only`.**
+Mason explicitly approved the parked migration on 2026-07-28. The mandatory RLS and drift reviewers
+first blocked its inherited function ACLs; those findings were fixed by explicit `PUBLIC`/`anon`
+revokes and the required `authenticated` regrant. PR #260 then passed protected CI, SQL validation,
+CodeQL, Vercel, and CodeRabbit with no actionable comments before merge. Fresh hash-bound migration
+proofs returned CLEAN immediately before apply. Post-apply catalog proof confirms both functions are
+`STABLE SECURITY DEFINER`, pin `search_path=public, pg_temp`, and contain both `AUTH_REQUIRED` and
+the admin-or-sales-rep guard. `anon` can execute neither function; `authenticated` can execute only
+`get_program_completion`; `service_role` can execute both.
 
 **Finding (audited and proven live 2026-07-27; full evidence in
 `docs/audits/2026-07-27-secdef-pricing-bypass-audit-handoff.md` — do not re-run the audit).**
@@ -51,10 +56,56 @@ because the two office pages call it.
 **Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
 `customer_application_rates` policies are untouched. Sales reps keep their access.
 
-**Known cosmetic leftover, not exploitable:** `enforce_quote_accepted_fully_drawn` is a trigger
+**Accepted cosmetic inconsistency, not exploitable and no action planned:**
+`enforce_quote_accepted_fully_drawn` is a trigger
 function (returns `trigger`, not RPC-callable) and is the only one in the set with EXECUTE to `anon`
-— inconsistent with `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`. Optional
-cleanup, deliberately not bundled here.
+— inconsistent with `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`. This is
+recorded for audit accuracy, not as open remediation work.
+
+---
+
+## 0c. PARKED 2026-07-28 — logged-out visitors can execute 43 database functions
+
+**Status: fix WRITTEN and PARKED in two halves, NEITHER applied live.** Deliberately split so the
+easy half can be approved without the risky half.
+
+- **Half 1 — `20260728193000_revoke_anon_execute_non_policy_functions`** (this section's PR). 40
+  functions that appear in **no** RLS policy, so nothing changes from "returns nothing" to "hard
+  error". 20 are trigger-only (`RETURNS trigger`, no arguments) and PostgREST cannot expose them at
+  all. 12 are SECURITY DEFINER callables that already gate internally. **The other 8 are the actual
+  live exposure**: `calculate_billing_splits(bigint, numeric[])`, `check_period_open(date)` and the
+  six `next_*_number()` document-number allocators have no auth gate of any kind, and a logged-out
+  caller can invoke them today.
+- **Half 2 — `20260728193100_revoke_anon_execute_rls_role_helpers`** — `is_admin()`,
+  `is_applicator()`, `is_driver()`. These are evaluated **inside** RLS policies as the querying
+  role, so removing anon's EXECUTE turns a silent filter into `42501 permission denied for function
+  is_admin`. Blast radius measured live: 30 tables / 70 PUBLIC-audience policies for `is_admin`, 6
+  for `is_applicator`, 1 for `is_driver`. Judged safe because `is_sales_rep()` is already in exactly
+  that state on 24 tables in production today and nothing is broken by it, the login route never
+  reads those tables as anon (`src/App.tsx:185` — `login` is the only route outside
+  `<ProtectedRoute>`), no edge function reads as anon, and the `authenticated` grant is retained and
+  positively asserted. Approve this one separately.
+
+**Why this is not the blanket judgment it looks like.** The overnight Codex draft
+(`20260728185827_revoke_anon_security_definer_execute`) revoked **44** functions with the same
+boilerplate sentence repeated 44 times, and is superseded by these two files. It also included
+`handle_new_user()`, which must **not** be revoked: it is the `auth.users` trigger,
+`supabase_auth_admin` holds no grant of its own, is not a superuser, and is a member of no role — the
+PUBLIC grant is its only route, so revoking it would break signup.
+
+**Mechanics worth keeping.** Every REVOKE names **both** `PUBLIC` and `anon`: Supabase's
+`ALTER DEFAULT PRIVILEGES` hands `anon` its own EXECUTE on each new public function, so revoking
+from `PUBLIC` alone leaves that grant standing, and revoking from `anon` alone leaves the PUBLIC
+grant it inherits. Proof uses `has_function_privilege('anon', <oid>, 'EXECUTE')`, never a `proacl`
+scan.
+
+**Proof.** Schema rebuilt from zero in a throwaway PostgreSQL 17 container from baseline
+`20260727174805`, all six post-baseline migrations replayed in order, then 43/43 target signatures
+(parsed out of the migration files, not retyped) verified: `anon` EXECUTE false, `authenticated`
+EXECUTE true. Both files re-applied cleanly a second time. Independent `rls-security-reviewer` pass
+against live returned no BLOCKER and no HIGH: all 43 signatures match live with no overloads, and no
+cron job, edge function, cross-schema function body, `auth`/`storage` trigger, or PostgREST
+pre-request hook calls any of them.
 
 ---
 
