@@ -67,7 +67,8 @@ jobs:
             test "$phase3_attestation" = "$phase3_expected_attestation" || { echo 'trusted base containment checker failed the candidate-root handoff protocol' >&2; exit 1; }
           else
             git -C "$GITHUB_WORKSPACE" merge-base --is-ancestor "$phase3_bootstrap_ancestor" "$phase3_base" || { echo "trusted base containment checker is missing outside the initial bootstrap ancestry; refusing candidate fallback: expected ancestor $phase3_bootstrap_ancestor, event base $phase3_base" >&2; exit 1; }
-            test -z "$(git -C "$GITHUB_WORKSPACE" rev-list --max-count=1 "${phase3_bootstrap_ancestor}..${phase3_base}" -- "$phase3_checker_rel")" || { echo 'trusted base containment checker was previously present; refusing candidate fallback after removal' >&2; exit 1; }
+            phase3_checker_history="$(git -C "$GITHUB_WORKSPACE" rev-list --full-history --max-count=1 "${phase3_bootstrap_ancestor}..${phase3_base}" -- "$phase3_checker_rel")" || { echo 'failed to inspect trusted containment checker history; refusing candidate fallback' >&2; exit 1; }
+            test -z "$phase3_checker_history" || { echo 'trusted base containment checker was previously present; refusing candidate fallback after removal' >&2; exit 1; }
             phase3_candidate_entry="$(git -C "$GITHUB_WORKSPACE" ls-tree "$phase3_head" -- "$phase3_checker_rel")"
             phase3_candidate_oid="$(git -C "$GITHUB_WORKSPACE" rev-parse "${phase3_head}:${phase3_checker_rel}")"
             case "$phase3_candidate_entry" in

@@ -121,7 +121,10 @@ The first ancestry-floor implementation at `dc6d4d47` is non-final: its
 trusted checker still required worktree `HEAD` to equal the older event base,
 and a later checker deletion could reopen candidate fallback. The corrected
 successor binds the worktree to required `GITHUB_SHA` while preserving the
-event's immutable base-to-head scan, and permanently refuses fallback once the
+event's immutable base-to-head scan. The first superseding fix at `84f0302d`
+remained non-final because Git's default path-history simplification could hide
+an add/remove on a merged side branch. Its successor uses `--full-history`,
+fails closed if that query fails, and permanently refuses fallback once the
 checker path has appeared anywhere after the fixed floor.
 The remaining post-merge ruleset step and public-repository fetch dependency
 are recorded in the consolidated known-issues file.
