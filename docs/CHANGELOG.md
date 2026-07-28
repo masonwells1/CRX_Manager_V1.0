@@ -2,6 +2,38 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-28 — The staff directory view read profiles as its owner; the contact-sync triggers had no pinned lookup path
+
+`profile_public_view` was a `SECURITY DEFINER` view over `profiles`. Every signed-in user reading it
+got the *view owner's* row visibility, not their own — so a picker that only needed a name and a role
+was served through a permission level that could see the whole profiles table. Pointing a
+`security_invoker` view straight at `profiles` was not an option: the live `profiles` policy lets an
+administrator, or a user themself, read a profile, so every non-admin name/assignment picker in the
+app would have gone empty.
+
+The fix is a deliberately non-sensitive directory table. `profile_public_directory` holds four
+columns — `id`, `full_name`, `role`, `is_active` — with RLS on, `SELECT` granted only to
+`authenticated`, and a policy that additionally requires the reader to be an *active* profile.
+`profile_public_view` is rebuilt over that table with `security_invoker = true`, so it can no longer
+bypass anything. A trigger on `profiles` keeps the directory in step, and the migration's own check
+block refuses to finish if the view is not `security_invoker` or if `anon` retains any access.
+
+Separately, `sync_customer_to_primary_contact()` and `sync_primary_contact_to_customer()` — the pair
+that mirrors a customer's contact details onto its primary contact row and back — ran with **no
+pinned `search_path`**, so a caller's session setting decided which `public` objects they resolved.
+Both are now pinned to `public, pg_temp`, asserted by a check block that raises
+`CONTACT_SYNC_SEARCH_PATH_NOT_PINNED`.
+
+All three functions are also classified in `src/lib/rpcContracts.test.ts`'s mutator inventory. They
+are exempt because they are **trigger-only**, with the mechanism recorded per function, not because
+an exemption made the test green: each `RETURNS trigger` with no arguments, which PostgREST cannot
+expose at all; the two contact mirrors short-circuit on `pg_trigger_depth() > 1` so the recursive
+partner trigger cannot loop; and each write carries an `IS DISTINCT FROM` guard, so a replay writes
+nothing. `sync_profile_public_directory()` additionally has EXECUTE revoked from `PUBLIC`, `anon` and
+`authenticated` in the same migration.
+
+Neither migration has been applied to live.
+
 ## 2026-07-28 — All 30 Codex guards ran on Windows without ever running a guard
 
 Every `commandWindows` entry in `.codex/hooks.json` located the adapter with `Join-Path $root

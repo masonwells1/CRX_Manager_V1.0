@@ -2216,6 +2216,12 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  sync_customer_to_primary_contact:
+    'trigger-only contact mirror on customers: copies contact_name/phone/email onto the customer primary contact row. Not reachable from a client at all -- it RETURNS trigger with no arguments, so PostgREST cannot expose it, and pg_trigger_depth() > 1 short-circuits the recursive partner trigger. Convergent by construction: the UPSERT carries an IS DISTINCT FROM guard, so a replay writes nothing',
+  sync_primary_contact_to_customer:
+    'trigger-only contact mirror on customer_contacts: copies the primary contact name/phone/email back onto customers. Not reachable from a client at all -- it RETURNS trigger with no arguments, so PostgREST cannot expose it, and pg_trigger_depth() > 1 short-circuits the recursive partner trigger. Convergent by construction: the UPDATE carries an IS DISTINCT FROM guard, so a replay writes nothing',
+  sync_profile_public_directory:
+    'trigger-only staff-directory mirror on profiles: keeps profile_public_directory holding the four non-sensitive fields (id, full_name, role, is_active) and deletes the row on profile delete. Convergent (the UPSERT and the DELETE settle to the same state on replay) and EXECUTE is revoked from PUBLIC, anon, and authenticated in the same migration',
 };
 
 
