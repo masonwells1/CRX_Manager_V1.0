@@ -2,6 +2,214 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-28 — A Codex review that was merely slow reported as a review that could not be run
+
+`scripts/write-codex-push-proof.mjs` capped the review at 540s. A real review of the PR #255 guard
+diff ran ~8.5 minutes and was killed mid-scan at 9:00, printing `Codex review timed out after 540s —
+no proof written`. Nothing distinguished that from Codex being unavailable, and the merge-gate denial
+text an operator reads next says "If the Codex CLI is unavailable, PARK the change and tell Mason".
+So the cheap correct action (re-run with a bigger budget) looked like the expensive wrong one (park
+the work, or go looking for a way around the gate) — the failure mode a proof gate can least afford,
+since the pressure it creates points at bypassing itself.
+
+Two changes, both about that gap rather than about speed:
+
+- The default budget is now `DEFAULT_TIMEOUT_SEC = 1200` (~2.3x the measured worst case), so a normal
+  multi-file review finishes well inside the cap instead of racing it. A hung run is still bounded.
+- The timeout message now states that a timeout is **not** a verdict and **not** evidence the tool is
+  unavailable, and names the concrete retry (`--timeout <2x>`). `--help` says the same.
+
+Proven by running it, not only by tests: `--timeout 5` was forced against a real branch and emitted
+the new text with exit 2 and no proof written. Five deliberate breaks — default back to 540, default
+just under the 900s floor, and each of the three message obligations removed — were all caught by the
+new assertions, then reverted to green. Proof *validity* is untouched: `codex_ran`, verdict, exact
+`head_sha`, exact `base_sha`, and the 30-minute freshness window all still apply, and a timeout still
+mints nothing. `scripts/overnight-codex-gate.mjs` keeps its own 540s cap deliberately — bounded
+overnight fan-out is a cost control, and its message already tells the operator to split the batch.
+
+CodeRabbit caught a real hole in the new tests on review: the retry-hint assertion matched
+`--timeout <any digits>`, so a message telling the operator to retry with the *same* budget that had
+just timed out — or a smaller one — would have passed. The assertion now extracts the suggested
+number and requires it to exceed the cap that failed. Verified the hole was real (the old regex
+passes a `--timeout 600` hint after a 600s timeout) and that the replacement bites: three further
+mutations — suggest the same budget, suggest half of it, drop the number entirely — were all caught.
+
+## 2026-07-27 — The PR merge gate could not see a proof minted in a worktree; a refuted gauntlet finding could not be re-contested
+
+Two defects found while shipping PR #252, both fixed here.
+
+**1. The merge gate was blind to proofs minted in a linked worktree.** `pr-merge-guard.mjs`
+searched exactly one directory for the Codex proof — `<session cwd>/.claude/session-state` — and the
+Claude harness pins that cwd to the primary checkout and resets it after every command.
+`scripts/write-codex-push-proof.mjs` resolves its output from `git rev-parse --show-toplevel` of
+wherever it ran, i.e. the worktree holding the branch. A PR built in a worktree therefore wrote a
+valid, head- and base-bound, clean-verdict proof somewhere the gate never looked, and `gh pr merge`
+was denied no matter how many clean reviews were minted — head and base matched `gh pr view`
+exactly; only the directory differed. PR #252 was unmergeable by an agent for this reason and Mason
+merged it from the PR page.
+
+The new `proofSearchDirs()` (in `codex-push-lib.mjs`, shared with the Codex side) enumerates
+`git worktree list --porcelain` and scans every sibling checkout's session-state. **Widening the
+search does not widen what counts:** `proofValid()` still demands GitHub's exact head SHA, GitHub's
+exact `baseRefOid`, a clean/blockers-fixed verdict and an age inside 30 minutes, and
+`review-proof-guard.mjs` still blocks hand-writing a proof in any directory. These are sibling
+checkouts of one repository — a proof rejected in the primary checkout is rejected in all of them.
+Enumeration failure falls back to the primary directory alone, which can only make the gate
+stricter. Proven against the real layout: from `C:\CRX_Manager` the search now returns 6
+directories, including the worktree whose proof was invisible.
+
+**2. An equal-severity re-report at a REFUTED key was filed away unverified.** The escalation hole
+CodeRabbit found on PR #252, on the equal-rank path. `gauntlet-sections-loop.js` deduped on
+`title::location`, so a BLOCKER/HIGH reported again in round 2 at a location the skeptics had
+already refuted went into `duplicates` — which nothing verifies and which never blocks settlement.
+A weak early refutation therefore outlived a later, independently-evidenced report and the section
+settled **clean** on a defect that had been reported twice. Such a re-report now displaces the
+refutation and gets its own two-skeptic pass; the displaced record is kept as a trail and marked
+`wasConfirmed: false` on purpose, so a refutation that survives the second look stands rather than
+being resurrected by the reinstatement pass. Bounded by `MAX_ROUNDS`, not a counter: a key can be
+re-contested at most once per round.
+
+The displaced refutation must be at the **same severity**, a constraint CodeRabbit caught on #255
+before it shipped. Matching on `title::location` alone let a round-2 HIGH pull a round-1 BLOCKER's
+refutation out and relabel it as a HIGH outcome, leaving a trail that said something weaker than
+what was actually reported and dismissed. A lower-severity re-report is correctly a duplicate — the
+stronger version of that same claim already lost its adversarial pass. A higher-severity re-report
+never reaches this branch; it takes the escalation path. MED/LOW dedupe as before, and now do so
+without a separate severity test: only BLOCKER/HIGH are ever verified, so `refuted` cannot hold any
+other severity for a MED to match. The explicit class check that had guarded this was removed once
+it was proven unreachable.
+
+Both fixes are **mutation-tested** — 12 deliberate breaks, baseline GREEN, 12/12 killed. The
+`proofSearchDirs` wiring is additionally pinned by a source assertion, stated as such: the hook
+resolves the PR through `gh` before it ever looks for a proof, so the behavioural path is not
+reachable in-process.
+
+The re-contest tests assert **which round** each skeptic ran in — `[1,1]` where no re-contest is
+owed, `[1,1,2,2]` where one is — not merely how many ran, a weakness CodeRabbit spotted on #255: a
+bare total of two would also accept one call per round, a different failure wearing the right
+number. Its suggested fix keyed on `:r1`/`:r2` label suffixes, which the verify label does not carry
+(`S${num}:verify:${i}#${n}`); the round is captured at call time instead, where it is actually
+known.
+
+Note for the session that lands this: hooks load from the *session's* project directory, so until
+this merges and the primary checkout picks it up, the unfixed guard still gates this very PR.
+
+Verified: `gauntlet-sections-loop` tests pass, `pr-merge-guard` 47 assertions pass,
+`codex-push-lib` and `review-proof-guard` checks pass, `npm run test:agent-workflows`,
+`npm run agent-health`, and `npm run check:docs` all pass.
+
+## 2026-07-27 — Quote pricing, per-customer rates and rebate terms become office-only (APPLIED `20260727231652`)
+
+**Status: APPLIED to live 2026-07-27.** Authored as `20260727193441`; the server assigned ledger
+version `20260727231652` on apply and the disk file was renamed to match.
+
+**Post-apply proof.** All eight in-transaction postflight assertions passed, and `pg_policies` was
+re-read independently afterwards: all four SELECT policies are
+`(( SELECT is_admin()) OR ( SELECT is_sales_rep()))` granted to `{authenticated}` only, and the three
+`rebate_programs` write policies hold their admin-only shape. `anon` holds no SELECT grant on any of
+the four; `authenticated` and `service_role` still do. Per-role impersonation on live —
+admin **20 / 3**, sales_rep **20 / 3**, driver **0 / 0**, applicator **0 / 0** for
+`quote_items` / `quote_versions`. Driver and applicator read 20 / 3 before this migration, so that
+is the exposure it closed. `customer_application_rates` and `rebate_programs` are empty tables, so
+their half of the matrix is vacuous — it proves only that no role errors. `quote_sections` still
+reads 4 for an applicator, confirming the deliberate exception held.
+
+`run-sweeps.mjs` was **not** run and did not need to be: all 18 of its predicates target
+`SECURITY DEFINER` function bodies and financial data invariants, and this migration alters no
+`pg_proc` row and mutates no data. Two targeted checks were run instead — no view or materialized
+view references any of the four tables, and all 20 `authenticated`-executable functions that do are
+`SECURITY DEFINER` and therefore bypass RLS, so no office read path could regress. That last fact is
+also the standing caveat, and it is wider than the two functions named below: those 20 SECDEF
+functions remain a route to pricing figures for field roles that table-level RLS does not close.
+
+The role-scoping follow-up that the entry below deliberately left open.
+
+**Owner decision (Mason, in chat, 2026-07-27):** sales reps **should** see rebate programs and
+per-customer application rates. Both reviewers and the Codex pass had independently suggested
+narrowing those two tables further to admin-only, and that suggestion is **rejected** — sales reps
+need rebate terms and negotiated rates to do their job. The migration as written already grants
+`is_admin() OR is_sales_rep()` on all four tables, so this decision required no code change; it
+confirms the shape that was reviewed. Drivers and applicators remain excluded, which was never the
+contested half.
+
+An earlier revision of this entry asserted a "Mason's decision (2026-07-27)" *before* any decision
+existed. That fabricated claim was retracted, and this paragraph replaces it with the real one — the
+answer differs from what the retracted version claimed on the two tables above, which is exactly why
+inventing an owner decision is never harmless.
+
+**`20260727231652_quote_and_rate_reads_office_only.sql`** narrows four SELECT policies from "any
+active user" to "admin or sales_rep" — `quote_items`, `quote_versions`,
+`customer_application_rates`, `rebate_programs` — and revokes `anon`'s table-level SELECT grant on
+all four as defence in depth. `is_admin()`/`is_sales_rep()` already require an active profile
+(established by `20260714185631_harden_is_admin_search_path.sql` and
+`20260720235246_qualify_sales_rep_authorization_helper.sql`, the migrations that actually
+`CREATE OR REPLACE` the two helper bodies — an earlier revision of this entry cited `20260727145843`,
+which re-emits no helper body and only *asserts* the property), so this strictly narrows the existing
+predicate and no active office user loses access. It also fixes a real inconsistency:
+`public.quotes` was already office-only, so until now a
+driver could read every quote's line items and pricing snapshots while being unable to read the
+parent quote header.
+
+**Only four of the eight pricing tables.** `products`, `application_services`,
+`field_billing_defaults` and `blend_recipe_items` are read by pages drivers and applicators
+legitimately open, so restricting them would break the app rather than secure it. Hiding just the
+cost/margin *columns* is not expressible in RLS — every signed-in user shares the single
+`authenticated` grantee — so it needs a restricted view plus frontend work, tracked separately.
+
+**Two known gaps this does not close.** `compute_application_service_fee` and
+`get_program_completion` are `SECURITY DEFINER`, granted to `authenticated`, and carry no role gate
+in their bodies, so a driver or applicator can still obtain rates and quote-derived figures through
+a direct PostgREST `/rpc/` call. What ships here is "no direct table read", not "no path to the
+numbers".
+
+**Three REJECTs that were right.** The adversarial cross-model review rejected this migration three
+times, and each finding held up.
+
+*Reject 1 — replay-breaking grantee mismatch.* `rebate_programs_select` was created in
+`20260213200000` with no `TO` clause (grantee PUBLIC), no later migration ever changed the grantee,
+and live shows `{authenticated}` only through an out-of-band change that never landed on disk. The
+migration's own postflight asserts the grantee is exactly `{authenticated}`, so it would have passed
+on live and failed on a from-scratch replay. Fixed by stating `TO authenticated` explicitly on all
+four statements. (An earlier revision of this entry said the mismatch would have "aborted any
+from-scratch replay, which is precisely what the disaster-recovery restore and the schema-baseline
+verification do." Both halves were wrong: `scripts/verify-schema-baseline.mjs` never opens a database
+connection, and the DR restore loads a `pg_dump` baseline and then replays only migrations *past*
+high-water `20260727174805` — so a full from-zero replay is not on any current operational path.)
+
+*Reject 2 — a postflight that could go false green.* Check 1 originally listed the widening
+predicates to reject (`is_driver`, `is_applicator`, `auth.uid()`, `auth.role()`, bare `true`). A
+blacklist cannot be exhaustive, and this one was not: Codex constructed
+`is_admin() OR is_sales_rep() OR current_user = 'authenticated'`, which passes every assertion while
+restoring the exact broad exposure the migration exists to close. Replaced with a **whitelist** —
+erase every token the intended predicate is allowed to contain, and require the remainder to be
+empty. Anything the migration did not put there survives the erasure and turns the check red, so it
+fails closed by construction. Negative-tested against eight predicates on live, including all three
+Codex built.
+
+*Reject 3 — a self-fulfilling assertion.* Check 2 asserted only the *grantee* of the three
+`rebate_programs` write policies — which is exactly what the migration's own `ALTER POLICY`
+statements had just written, so it could never fail. Worse, `ALTER POLICY … TO role` preserves every
+clause it does not name, so a predicate that had already drifted to `WITH CHECK (true)` would have
+been carried forward untouched and reported green. Check 2 now pins the full shape: command,
+permissiveness, which clause carries the predicate, that the other clause is `NULL`, and that the
+predicate is exactly `is_admin()`.
+
+**Proof.** Rehearsed against live four times, each from a *simulated replay state*
+(`rebate_programs_select` first set back `TO public`) inside a transaction forced to roll back —
+starting from live would pass for the wrong reason. Final run: grantee `{public}` → `{authenticated}`,
+all **seven** postflight checks passing, row visibility under real role impersonation showing
+`quote_items` admin=20 sales_rep=20 driver=0, and a deliberate negative test in which
+`rebate_programs_insert` was drifted to `WITH CHECK (true)` mid-transaction — check 2 caught it by
+name, proving it is a real tripwire and not a rubber stamp. Live confirmed unchanged after every
+rollback. `customer_application_rates` and `rebate_programs` are both currently EMPTY, so their
+positive row-count proof is vacuous and is not claimed as evidence.
+
+`src/lib/rlsContracts.test.ts` gains matrix entries for the two tables that had none, and three
+header claims Codex flagged as inaccurate are corrected — most importantly, the file no longer claims
+these tests fail when a migration drops or replaces a policy. They are internal-consistency checks
+that never read the migrations or the database; the live gate is each migration's postflight block
+plus the RLS review agents.
+
 ## 2026-07-27 — Any foundation gauntlet section can now be re-run on demand, behind a deterministic evidence gate
 
 `/gauntlet-section` drives `.claude/workflows/gauntlet-sections-loop.js` (renamed from
@@ -70,6 +278,289 @@ Verified: `gauntlet-sections-loop` tests pass, `npm run test:agent-workflows` pa
 `npm run agent-health` passes, `npm run check:docs` passes — re-run in a clean worktree off
 `origin/main`, not only in the session checkout. Tooling only: no application code, no database
 change, no customer-facing behavior.
+
+## 2026-07-27 — Schema baseline refreshed to `20260727174805`; a from-zero rebuild completes again, and two DR defects fixed
+
+**No live database change.** All capture was read-only; every proof ran in a throwaway container.
+
+**The defect.** `supabase/baselines/` recorded high-water `20260719092832` (861 ledger rows) but its
+public-schema artifact already contained `split_invoice_creation_claims`, a table introduced by a
+later migration. The schema was ahead of its own ledger, so a from-zero replay died at migration 16
+of 50 on a drifted-RPC precondition. Production was never affected — this is the disaster-recovery
+path only. Closes the last open item in `KNOWN_ISSUES.md` §0a.
+
+**The fix.** Regenerated all artifacts from a fresh read-only capture of live at high-water
+`20260727174805` (914 ledger rows). **No applied migration was edited.** Mason supplied the
+`postgres` database password, which was the sole blocker.
+
+**Two real defects found while doing it, both DR-only:**
+
+- **Security — a restore silently re-opened `anon`.** A schema dump can only `GRANT`. A new Supabase
+  project ships `ALTER DEFAULT PRIVILEGES` that hand `anon`, the unauthenticated role, full CRUD on
+  every table and `EXECUTE` on every function `postgres` creates, and `REVOKE … FROM PUBLIC` does
+  **not** strip a role-specific grant. Restoring the old baseline therefore left `anon` holding
+  privileges production had revoked — undoing the hardening shipped in PR #249. The baseline now
+  carries a sixth artifact, `*_acl_lockdown.sql`, generated by `scripts/schema-baseline-acl.sql` +
+  `scripts/build-schema-baseline-acl.mjs`: it revokes the Supabase-managed roles to nothing,
+  re-applies production's exact 1600 grants (including the 93 `EXECUTE … TO PUBLIC` grants live
+  keeps), restores production's default privileges, and ends with a guard raising
+  `BASELINE_ACL_ANON_OVER_GRANTED` if `anon` still holds anything beyond `SELECT`/`MAINTAIN` on a
+  table. It is idempotent.
+- **Fidelity — `supabase db dump` deletes code.** It post-processes the dump and strips `--` comment
+  lines out of function bodies; 3 of 527 functions were affected. The public-schema artifact is now
+  built from raw `pg_dump`, normalized by `scripts/build-schema-baseline-public.mjs` (strips the
+  per-run `\restrict` tokens for byte-stability, and the 25 `ALTER DEFAULT PRIVILEGES` lines the ACL
+  lockdown owns — two of which are `FOR ROLE "supabase_admin"` and abort the restore outright).
+
+**Proof.** The six artifacts restored in `restore_order` into a throwaway PostgreSQL 17.6 container:
+**all thirteen catalog fingerprints match** (`columns`, `constraints`, `enums`, `indexes`,
+`relations_and_acl`, `column_acl`, `default_acl`, `view_definitions`, `triggers`, `function_security`,
+`function_canonical_source`, `policy_contracts`, `cron_contracts`); restored ledger reports `914|20260727174805`; re-applying the
+history file raises `BASELINE_HISTORY_RESTORE_REQUIRES_EMPTY_LEDGER` and the cron file raises
+`BASELINE_CRON_RESTORE_REQUIRES_ABSENT_JOBS`; the ACL lockdown re-applies cleanly; and a
+post-baseline migration replays onto the result — the exact step that used to stall at 16 of 50.
+That replayed file is `20260727231652_quote_and_rate_reads_office_only.sql`, applied to production by
+a separate session and landed on `main` in the entry above — not part of this change, and the only
+migration the repository holds past the baseline high-water.
+`npm run test:schema-baseline` reports
+`SCHEMA_BASELINE_PASS high_water=20260727174805 ledger_rows=914` and
+`POST_BASELINE_MIGRATIONS_PASS pending=1`, and the selector names that one file — which is the
+correct steady state: a baseline is a snapshot at its own high-water, and live moves on the next
+apply.
+
+**Guards added so this cannot silently regress.** `scripts/verify-schema-baseline.mjs` now binds the
+fingerprint and ACL SQL by SHA-256 (redefining "matches production" fails the gate), requires all six
+REVOKE forms and both sentinels in the lockdown, fails if `anon` is granted any table privilege
+beyond `SELECT`/`MAINTAIN`, and fails if any `disposable_restore_proof` flag is missing or not
+`true`. `scripts/list-post-baseline-migrations.test.mjs` now asserts the pending set structurally
+against the manifest high-water instead of naming example migrations that a refresh turns stale.
+`supabase/baselines/README.md` documents the real procedure. `.gitattributes` pins the two capture
+scripts to LF: the manifest binds them by the SHA-256 of their working-tree bytes, and on a Windows
+checkout `core.autocrlf=true` rewrote them to CRLF, so the gate failed on a fresh clone while
+passing in Linux CI — the binding now means the same thing on every platform.
+
+**Flagged, deliberately unchanged:** live grants `anon` `SELECT` on all 155 public tables and
+`SELECT, UPDATE, USAGE` on sequences (stock Supabase posture; reads are gated by RLS), and 543 repo
+migration filenames have no matching ledger version while 654 ledger versions have no file — a
+pre-existing consequence of applying migrations through the Management API, which assigns its own
+version. The baseline copies live's ledger verbatim so a restore mirrors production exactly.
+
+**Review follow-up (CodeRabbit, PR #251).** Two review rounds, twelve findings closed after the
+initial push. All but one sit in the verification layer rather than in the captured state; the
+exception widened the fidelity contract itself and is described at the end. `verify-schema-baseline.mjs` now checks `restore_order` by
+exact name and position rather than by length — a manifest that dropped the ACL lockdown and repeated
+another artifact was still six entries long and would have rebuilt a project with `anon`
+over-granted — and it enumerates the eleven required `disposable_restore_proof` checks rather than
+iterating whatever keys happen to be present, so a proof that simply omitted the checks it failed no
+longer passes. `assemble-schema-baseline.mjs` now asserts the high-water stamp appears exactly once in
+a restamped artifact before rewriting it, so a coincidental 14-digit run elsewhere in the file — a
+cron schedule, a literal, a version in a comment — is not silently rewritten along with it.
+`build-schema-baseline-acl.mjs` gained a routine-level guard, `BASELINE_ACL_ANON_EXECUTE_DRIFTED`:
+restoring the public schema alone leaves `anon` holding EXECUTE on **all 527** non-extension public
+functions, because the target project's default privileges grant it as each one is created. The
+lockdown cuts that to the **95** production actually grants — that is the PostgREST `/rpc/` surface —
+so the guard asserts that exact count rather than rejecting `anon` EXECUTE outright, which would
+reject live's own state. Extension-owned functions are excluded to match the capture: they belong to
+`supabase_admin`, the project owner cannot revoke them, and the baseline does not manage them. The
+same table guard now counts privileges granted to `PUBLIC` as reaching `anon`, because `anon`
+inherits them — filtering on the role name alone would let a capture hand `PUBLIC` write access to a
+table and still pass. Production grants nothing to `PUBLIC` on tables or sequences, only the 93
+function `EXECUTE` grants, so the widening rejects drift without rejecting live; the generator now
+refuses at build time if a capture ever contains a relation grant to `PUBLIC`, since such an artifact
+would grant what its own guard rejects. Last, `build-schema-baseline-platform.mjs` makes the platform
+overlay's single-use nature explicit with `BASELINE_PLATFORM_RESTORE_REQUIRES_ABSENT_BUCKETS`. The
+overlay drops only the policy names live holds today, so re-applying it over an older baseline's
+policies would leave the retired names in force, and policies are OR'ed — a retired unscoped policy
+surviving beside its scoped replacement silently widens access. Measured on the container, a second
+apply already failed: the bucket INSERT has no `ON CONFLICT`, so it died on a primary-key collision
+and rolled the whole transaction back, leaving the scoped policies intact. That protection was
+accidental and reported itself as an opaque duplicate-key error; it is now a deliberate, named
+refusal that no longer depends on the INSERT. Both artifacts were regenerated and the full
+disposable-restore proof re-run from scratch against them — all fingerprints still match live,
+`anon` EXECUTE lands on exactly 95, and `anon`/`PUBLIC` hold zero table privileges beyond `SELECT`.
+
+**Review round two.** The fidelity contract gained two digests, and it needed them.
+`scripts/schema-baseline-fingerprints.sql` recorded only table-level `relacl`, so production's 27
+column-level `INSERT`/`UPDATE` grants on `public.products` — the ones an authenticated user needs to
+edit a product — sat outside the contract entirely: dropping one would break product editing and
+adding one would widen write access, in both cases with every digest unchanged. It also recorded a
+view's columns but never its query or its `reloptions`, so `public.view_unmigrated_products` could
+lose `security_invoker='true'` — and begin executing with owner privileges instead of the caller's —
+without moving a fingerprint. `column_acl` and `view_definitions` close both — and `column_acl`
+earned its place immediately. Re-captured read-only from live and re-proved against a fresh
+disposable restore, it did **not** match: the restored database held **no column grants at all**.
+`REVOKE ALL ON ALL TABLES` strips column privileges along with table ones, and the ACL capture only
+ever emitted table-level grants, so the lockdown was deleting them and never putting them back.
+Production gives `authenticated` no table-level `INSERT` or `UPDATE` on `public.products` — those 27
+column grants are its entire write path — so a project rebuilt from the previous baseline would have
+come up with Product editing simply broken, and nothing in the old ten-digest contract could see it.
+`scripts/schema-baseline-acl.sql` now captures column grants (1600 statements → 1627), and the
+lockdown's `anon` guard scans column privileges as well as table ones, since a capture handing
+`anon` `INSERT` on a single column would otherwise pass a guard that only looked at whole tables.
+Re-proved end to end on a rebuilt container: all twelve digests match live, `anon` EXECUTE lands on
+95, `anon`/`PUBLIC` hold zero table *or column* privileges beyond `SELECT`, all three restore
+sentinels fire, the lockdown re-applies cleanly, and a post-baseline migration replays. Alongside
+them: `assemble-schema-baseline.mjs` and
+`verify-schema-baseline.mjs` now require a valid MD5 for exactly the digests the recorded SQL
+defines — derived from that SQL rather than duplicated as a second hard-coded list — so a truncated
+capture, or a manifest with a digest quietly dropped, fails instead of comparing against whatever
+survived. The restore proof must record PostgreSQL major **17** specifically, not any integer, since
+a proof taken on 15 or 16 says nothing about the project this rebuilds. And
+`list-post-baseline-migrations.test.mjs` now derives its expectation using the selector's
+captured-name rule as well as its version rule, so a migration whose ledger version differs from its
+filename timestamp no longer reads as one the selector wrongly withheld. Finally, the proof text
+above is corrected: the post-baseline migration that replayed is an uncommitted file that happens to
+sit in this working checkout, not part of this change.
+
+**Review round three.** Two more holes in the capture, both found by review rather than by the
+proof. The ACL capture aggregated `aclexplode` without `is_grantable`, so any `WITH GRANT OPTION`
+would have been re-emitted as a plain grant and the baseline would have restored weaker ACLs than
+live holds. Live was read read-only to size it: **zero** grantable entries across relations, columns,
+routines and default privileges — so the fix changes no output today, which is exactly why it was
+worth making now rather than after one appeared. All four streams now split grantable from
+non-grantable rows, and the re-capture against live came back **byte-identical** to the previous one,
+which is the proof that preserving the option cost nothing. Separately, the `anon` `EXECUTE` guard
+compared a *count*: 95 before, 95 after. A refreshed capture that swapped one RPC for a different,
+more sensitive one would have passed it unchanged while moving what an unauthenticated caller can
+reach — and `README.md` claimed an exact-set guarantee the guard did not deliver. It now embeds the
+captured function identities and compares the set in both directions, folding `PUBLIC`-granted
+`EXECUTE` in because `anon` inherits it. That is now a **required negative proof**: on the restored
+database, revoking `_require_auth()` from `anon` and granting an equivalent count elsewhere raises
+`BASELINE_ACL_ANON_EXECUTE_DRIFTED: unexpected …, missing public._require_auth()` — observed, not
+assumed. `verify-schema-baseline.mjs` also asserts the guard is still set-based, so it cannot
+regress to counting. Finally the fingerprint-name discovery added in round two is now
+whitespace-tolerant: the strict pattern would have silently shrunk the expected digest set if the SQL
+were ever reformatted, making the completeness guard fail exactly the way it exists to prevent. The
+whole disposable restore was rebuilt from scratch a third time against the regenerated artifacts —
+all twelve digests match live, `anon` effective `EXECUTE` is 95 by identity, `authenticated` holds
+its 54 column privileges on `public.products`, zero grantable entries, all three sentinels fire, the
+lockdown re-applies with no non-extension warnings, and the post-baseline migration replays.
+
+**Review round four.** One P1, and it was reproduced rather than argued: the verifier hashed
+whatever keys `manifest.artifacts` happened to carry. Drop the platform-overlay entry and that
+file's bytes are never checked — while the shape checks further down still read it off disk, and
+`restore_order` still lists it, so an operator restores it. Codex demonstrated the consequence by
+widening `customer_documents_objects_admin_select` from admin-only to bucket-only alongside the
+omission; the verifier printed `SCHEMA_BASELINE_PASS`. The artifact set is now enumerated the same
+way `restore_order` and the restore proofs already were — exactly the six restore files plus the
+bucket snapshot, by name — and the same reproduction now fails closed with
+`manifest artifacts must be exactly …`, confirmed by deleting the entry, running the verifier, and
+restoring the manifest byte-for-byte. This is the third guard in this PR to be fixed for the same
+underlying reason: a check that iterates what is present cannot detect what is absent.
+
+**Review round five.** Two P2s, both the same shape as the P1 before them: a digest cannot notice a
+field it does not carry. `columns` recorded name, type, not-null and default — but identity
+semantics live in `pg_attribute.attidentity`, not in any of those. `backup_runs.id` and
+`backup_snapshots.id` are identity columns and their insert paths omit `id`, so a restore that
+flipped one to `GENERATED BY DEFAULT` would have matched every fingerprint and broken the backup job
+at runtime. Measured rather than assumed: on the restored database, flipping
+`backup_snapshots.id` from `ALWAYS` to `BY DEFAULT` left the old digest at exactly
+`f5b56a799a24f65c153fcf326b83c43e` — the value the previous manifest published — and the new
+definition moves. Likewise `function_security` keyed on
+`pg_get_function_identity_arguments`, which drops argument defaults, and the source digest hashes
+only `prosrc`; changing `cancel_purchase_order`'s `p_reason` default from `'Cancelled'` to
+`'Voided'` left the old digest at exactly `422343713ca83d432817c53f1ac72f01`, also the published
+value, while the new one moves. That is not a corner case here: `p_idempotency_key text DEFAULT NULL`
+is a project-wide contract on mutating RPCs, and `PurchaseOrders.handleCancel` omits `p_reason` and
+relies on its default — after that drift PostgREST cannot resolve the call at all. Both digests now
+carry the missing fields, and both mutations are **required negative proofs** rather than notes.
+`disposable_restore_proof` is now thirteen checks. Re-captured from live read-only and re-proved on
+a container rebuilt from scratch: all twelve digests match, the three sentinels fire, the lockdown
+re-applies with no non-extension warnings, the migration replays to `915|20260727193441`, and the
+`anon` `EXECUTE` swap still raises with both an `unexpected` and a `missing` half at an unchanged
+effective count of 95 — that last one only becomes count-neutral once the grant is revoked from
+`PUBLIC` as well as from `anon`, which is itself why the guard folds `PUBLIC` in. No artifact bytes
+changed; only the fingerprint definition, two digests, and two proof flags.
+
+**Review round six.** Two more P2s of the same shape — and this time the whole file was swept
+rather than the two lines that were reported, because five separate digests turned out to carry
+the defect. The general form: a catalog's rendered text says what an object *is*, not whether it
+is *in force*. `pg_get_triggerdef()` describes a trigger identically whether or not it fires,
+because activation mode lives in `pg_trigger.tgenabled`; a disabled
+`trg_guard_audit_log_immutable` therefore matched every digest while the audit log stopped being
+immutable. Neither argument rendering in `function_security` mentions the result type, and the
+source digest hashes only `prosrc`, so `get_customer_summary` restored as `text` instead of
+`jsonb` matched everything while handing the frontend a string where it expects a
+`CustomerSummary`. Both measured, not argued: with the trigger disabled the old `triggers` digest
+sat at exactly `8034a4585904327730aaf54492214fd9`, and with the function re-created from the same
+body and the same three grants but returning `text` the old `function_security` digest sat at
+exactly `80de54a23a11d6f29e7f3893634b8717` — both the values the previous manifest published —
+while `function_canonical_source` stayed at `eb4600f2…` throughout, confirming the body really was
+unchanged. The sweep added the rest of the same class: `indisvalid` on `indexes` (a failed
+`CREATE INDEX CONCURRENTLY` renders an identical definition and enforces no UNIQUE constraint),
+`relforcerowsecurity` and `relpersistence` on `relations_and_acl` (RLS without FORCE still lets
+the owner bypass every policy; an `UNLOGGED` restore loses its rows on crash), `prokind`,
+`proisstrict` and `proleakproof` on `function_security` (leakproof lets the planner push a
+function below an RLS predicate — a read-access change, not a performance one), and `active` plus
+`username` on `cron_contracts` (a deactivated job, or one running as a different role, has the
+same schedule and command). Five of the twelve digests moved and the other seven are byte-identical,
+which is the check that nothing else was disturbed. One near-miss worth recording: the
+`function_security` `format()` string was left one placeholder short of its argument list, and
+`format()` discards extra arguments silently — that would have dropped `proacl` out of the digest
+entirely, the same defect one more layer down. The offline cron check in
+`verify-schema-baseline.mjs` now reconstructs `active`/`username` as the literals
+`cron.schedule` implies, so if live ever holds a deactivated job the artifact format is forced to
+grow rather than the check being loosened. `disposable_restore_proof` is now fifteen checks, five
+of them negative. Re-captured from live read-only and re-proved on a container rebuilt from
+scratch: all twelve digests match, the three sentinels fire, the lockdown re-applies with 24
+warnings and none outside `plpgsql`, the `anon` `EXECUTE` swap still raises both halves at an
+unchanged count of 95, and the post-baseline migration replays to `915|20260727193441`. No
+artifact bytes changed.
+
+**Review round seven.** The same class again in the three places it was still open, plus a
+vocabulary error in the proof itself that a live production apply exposed mid-flight.
+
+The three gaps. **Storage RLS** — PostgreSQL keeps a table's policies whether or not row-level
+security is switched on, and `relations_and_acl` only covered the `public` schema, so
+`storage.objects` restored with RLS *disabled* left all **27** Storage policies present,
+`policy_contracts` byte-identical, and every read on the customer-documents bucket falling
+through to the table grants. Measured: with RLS off the old digest sat at exactly
+`b92bb4af3bff3c5916bda2f48d88b7bd` — the value the round-six manifest published — while the new
+one moved from `f8a31d12…` to `f8129f07…`, and a policy count taken in the same breath still
+reported 27. **Default privileges** — a default privilege is a standing instruction about the
+*next* object, not a grant on any existing one, so no ACL digest can see it, and this project's
+`public` schema carries the stock Supabase rule
+(`anon=X/postgres,authenticated=X/postgres,service_role=X/postgres`) handing `anon` `EXECUTE` on
+every function `postgres` creates. That is the exact mechanism the ACL lockdown exists to contain,
+and it sat outside the fidelity contract entirely; a restore whose rule was quietly widened would
+have matched every digest and re-opened the surface the lockdown closes. The new thirteenth digest
+`default_acl` covers `pg_default_acl`; changing one entry moved it from `15c0e0c3…` to
+`8b2e8fc8…` and moved **none** of the other twelve. **Function language** — a function's language
+is not in its body. `_format_pricing_dollars` re-created as `plpgsql` with byte-identical `prosrc`
+and identical grants left `function_canonical_source` at `eb4600f2…` and the old
+`function_security` at `2c1a79aa…`, both unmoved, while the new definition went to `cb6e8374…`;
+invoking it raised `syntax error at or near "SELECT"`, which is what a rebuilt project would have
+hit the first time anything called it. Two details worth recording: live `prosrc` here is
+CRLF-wrapped (80 bytes, `0d0a` at both ends), so the swap has to re-create the body from an
+`E'...'` literal carrying the original `\r\n` or the source digest moves for the wrong reason; and
+creating it at all needs `SET check_function_bodies = off`.
+
+**The proof was comparing the wrong two things.** Round six recorded
+`all_catalog_fingerprints_match_live` against a *bare restore*. That claim only holds while no
+migration has applied since the artifacts were dumped — and during this round one did: another
+session applied `quote_and_rate_reads_office_only` to production at 23:16:52 as
+`20260727231652`, which revokes `SELECT` on four public tables from `anon` and rewrites eleven
+policies, moving `relations_and_acl` and `policy_contracts` out from under a capture that had
+already been taken. Two digests "mismatched" and nothing was wrong. Baseline ≠ live is the normal
+steady state; the property disaster recovery rests on is *baseline restore + replay of the
+post-baseline migrations == live*, which is strictly stronger. The proof flags now say that:
+`ledger_rows_and_high_water_match_manifest` is asserted against the restore standing at its own
+high-water, and the new `restore_plus_post_baseline_replay_matches_live` carries the live claim.
+Fingerprint capture moved with it — `assemble-schema-baseline.mjs` now reads
+`baseline_fingerprints.txt`, taken from the restored baseline, because dumping live once it has
+moved on would certify a baseline whose recorded digests no object in it actually has. The
+baseline stays at high-water `20260727174805`: the committed tree holds no migration past it, and
+re-basing onto another session's in-flight file would couple this change to work that is not part
+of it.
+
+`disposable_restore_proof` is now nineteen checks, eight of them negative. Re-proved on a
+container rebuilt from scratch: all thirteen digests match the manifest at `914|20260727174805`;
+replaying `20260727231652` and its ledger row brings the container to `915|20260727231652` with
+all thirteen matching live; the three restore sentinels fire; the lockdown re-applies with 24
+warnings, none outside `plpgsql`; the `anon` `EXECUTE` swap still raises both halves at an
+unchanged effective count of 95; and each of the seven drift mutations moved only the digest aimed
+at it, with every mutation reverted and the container ending back at all thirteen baseline values.
+Only the fingerprint definition, three digests, and the proof flag set changed — no artifact bytes.
 
 ## 2026-07-27 — Deactivation is now real: broad reads require an active profile, and deactivating a user revokes their auth access (APPLIED LIVE `20260727174657` + `20260727174805`)
 

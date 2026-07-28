@@ -1,4 +1,4 @@
--- CRX operational schedules at live high-water 20260719092832.
+-- CRX operational schedules at live high-water 20260727174805.
 -- Apply after the public schema baseline on a NEW Supabase project.
 BEGIN;
 
