@@ -135,8 +135,7 @@ are recorded in the consolidated known-issues file.
 Git attributes now pin Husky hooks, GitHub workflows, and shell scripts to LF,
 preventing Windows checkout conversion from breaking Linux/shebang execution.
 
-The literal Opus 5 publication review of exact `c9ace302` found three
-additional release-gate issues.
+An earlier publication review found three additional release-gate issues.
 The multi-minute packet suite is now CI-only instead of running serially in
 pre-push; local pre-push still hard-gates containment, typecheck, and build.
 The structural product-row signature has a reviewed, exact-path exemption
@@ -151,15 +150,19 @@ job are named `Phase 3C Trusted Base Containment`. The owning suite rejects the
 old ambiguous name so the eventual ruleset cannot silently select the weaker
 check.
 
-The final review-correction pass also closes gaps exposed only after exercising
-the committed bytes in a clean worktree. Product CSV/TSV headers, plausible Git
+The literal Opus 5 review of exact rejected `c9ace302` executed successfully
+but did not accept that SHA: it returned `SHIP-WITH-FOLLOWUPS` and identified
+the padded-Base64 valid-prefix erasure. Subsequent exact-SHA and PR review
+identified the remaining gaps closed by this correction. Product CSV/TSV
+headers, plausible Git
 pack containers, malformed wrappers with a valid encoded private prefix, and
 overlong whitespace-separated transfer candidates now fail closed. Outgoing
 tag inspection shares one scan budget with history traversal and supports both
 SHA-1 and SHA-256 object IDs. The Claude push-proof producer is stricter as
 well: only one terminal `FINAL_VERDICT: SHIP` with no contradictory verdict or
 BLOCKER/HIGH/MED finding can mint exact-head proof; `SHIP-WITH-FOLLOWUPS` is
-review evidence but no longer push authorization.
+review evidence but no longer push authorization. Neither `c9ace302` nor its
+successor corrections are accepted without a fresh review of the current head.
 
 Additional boundary review found two transfer-alignment cases and one allocation
 bound that were not yet explicit. Embedded Base64 now scans all four quartet

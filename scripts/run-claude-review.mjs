@@ -32,8 +32,17 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
   // winning a first-match regex and minting proof.
   if (matches.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(lines.at(-1) || "")) return null;
   if (matches[0][1].toUpperCase() !== "SHIP") return null;
-  if (lines.some((line) => /^OPUS5_VERDICT:\s*(?!SHIP\s*$)/i.test(line))) return null;
-  if (lines.some((line) => /^\s*(?:[-*]\s*)?(?:BLOCKER|HIGH|MED(?:IUM)?)\b\s*(?::|-|—)/i.test(line))) return null;
+  const normalizedLines = lines.map((line) => line
+    .replace(/^\s*(?:[#>*-]+\s*)?/u, "")
+    .replace(/\*\*/gu, "")
+    .replace(/`/gu, "")
+    .trim());
+  const machineVerdicts = normalizedLines.filter((line) => /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line));
+  if (machineVerdicts.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(machineVerdicts[0])) return null;
+  if (normalizedLines.some((line) => {
+    const finding = /^(?:BLOCKER|HIGH|MED(?:IUM)?)\b(?:\s*(?::|-|—)\s*|\s+)(.+)$/i.exec(line);
+    return finding && !/^(?:none\b|no\b.*\bfindings?\b|0\b|n\/a\b)/i.test(finding[1].trim());
+  })) return null;
   return "clean";
 }
 

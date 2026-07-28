@@ -260,9 +260,11 @@ try {
   }
   for (const tail of ['A', 'AA', '===', 'AAAA']) {
     const transfer = `${base64Snapshot}${tail}`;
+    assert.equal(structuralPrivateArtifactReason(Buffer.from(transfer)), 'private JSON format marker in malformed candidate', 'a whole-transfer padded Base64 packet must retain its maximal valid decoded prefix');
     assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: transfer }))), 'private JSON format marker in malformed candidate', 'malformed embedded Base64 residual must retain the maximal valid decoded prefix');
     const split = base64Snapshot.length - 1;
     assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(`{"payload":"${transfer.slice(0, split)}`), Buffer.from(`${transfer.slice(split)}"}`)]), 'private JSON format marker in malformed candidate', 'padded Base64 prefix detection must survive padding/tail chunk seams');
+    assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(base64Snapshot), Buffer.from(tail)]), 'private JSON format marker in malformed candidate', 'whole-transfer padded Base64 prefix detection must survive a padding/tail chunk seam');
   }
   const hexSnapshot = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })).toString('hex');
   const phaseShiftedHexSnapshot = `A${hexSnapshot}`;

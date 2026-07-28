@@ -264,6 +264,9 @@ assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "OPUS5_VERDICT: FIX\n
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "HIGH: valid blocker\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "MED - valid finding\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "BLOCKER: valid finding\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "**HIGH — valid finding**\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Verdict: SHIP-WITH-FOLLOWUPS\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### BLOCKER\nNone.\n### HIGH: no findings\n### MED\nN/A\nFINAL_VERDICT: SHIP" }), "clean");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "FINAL_VERDICT: NEEDS-WORK\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 1, stdout: "FINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "No explicit verdict" }), null);
