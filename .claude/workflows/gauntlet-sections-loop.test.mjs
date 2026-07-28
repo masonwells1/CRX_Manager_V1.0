@@ -999,13 +999,19 @@ for (const [label, layer] of [
 {
   const KEY = { title: 'Repeatedly reported lead', location: 'src/example.ts:12' }
   let round = 1
-  const { result, calls } = await executeWorkflow(async (_prompt, options) => {
+  // Which ROUND each skeptic ran in, recorded at call time. A bare count would let
+  // one round-1 call plus one round-2 call masquerade as a single two-skeptic pass.
+  // The verify label carries no round marker (`S2:verify:1#1`), so it must be captured
+  // here rather than parsed back out afterwards.
+  const verifyRounds = []
+  const { result } = await executeWorkflow(async (_prompt, options) => {
     if (options.label.endsWith(':r2')) round = 2
     if (options.label.endsWith(':adjudicate')) return advice
     if (options.label === 'S2:find1:r1' || options.label === 'S2:find1:r2') {
       return completeLayer([finding('HIGH', KEY)])
     }
     if (options.label.startsWith('S2:verify:')) {
+      verifyRounds.push(round)
       return round === 1
         ? { status: 'REFUTED', reasoning: 'Round 1 saw no defect.', verifiedAgainst: 'src/example.ts:12' }
         : { status: 'VERIFIED', reasoning: 'The re-report cites the real writer.', verifiedAgainst: 'src/example.ts:12' }
@@ -1026,10 +1032,12 @@ for (const [label, layer] of [
     section.superseded.some((f) => f.title === KEY.title && /re-contested/.test(f.reason || '')),
     'the displaced refutation must be kept as a trail, not silently deleted',
   )
-  // Four skeptic calls, not two: round 1 refuted it, round 2 actually re-examined it.
-  assert.equal(
-    calls.filter(({ options }) => options.label.startsWith('S2:verify:')).length,
-    4,
+  // A full two-skeptic pass in EACH round: round 1 refuted it, round 2 actually
+  // re-examined it. Asserting the rounds, not just the total, is what rules out a
+  // half-pass in each round adding up to the right-looking number.
+  assert.deepEqual(
+    verifyRounds,
+    [1, 1, 2, 2],
     'the re-contest must actually spend a second two-skeptic pass — otherwise nothing was re-examined',
   )
 }
@@ -1090,12 +1098,14 @@ for (const [label, layer] of [
 {
   const KEY = { title: 'Repeatedly reported lead', location: 'src/example.ts:12' }
   let round = 1
-  const { result, calls } = await executeWorkflow(async (_prompt, options) => {
+  const verifyRounds = []
+  const { result } = await executeWorkflow(async (_prompt, options) => {
     if (options.label.endsWith(':r2')) round = 2
     if (options.label.endsWith(':adjudicate')) return advice
     if (options.label === 'S2:find1:r1') return completeLayer([finding('BLOCKER', KEY)])
     if (options.label === 'S2:find1:r2') return completeLayer([finding('HIGH', KEY)])
     if (options.label.startsWith('S2:verify:')) {
+      verifyRounds.push(round)
       return { status: 'REFUTED', reasoning: 'Round 1 saw no defect.', verifiedAgainst: 'src/example.ts:12' }
     }
     return completeLayer()
@@ -1108,10 +1118,11 @@ for (const [label, layer] of [
   assert.equal(section.superseded.length, 0, 'nothing was re-contested, so nothing may be recorded as displaced')
   assert.equal(section.duplicates.filter((f) => f.severity === 'HIGH').length, 1, 'the lower-severity re-report is a recorded duplicate')
   assert.equal(section.counts.high, 0)
-  // Two skeptic calls, not four: no second adversarial pass is owed here.
-  assert.equal(
-    calls.filter(({ options }) => options.label.startsWith('S2:verify:')).length,
-    2,
+  // Both skeptic calls in round 1 and none in round 2. A bare count of two would also
+  // accept one call per round, which is a different failure wearing the right total.
+  assert.deepEqual(
+    verifyRounds,
+    [1, 1],
     'a lower-severity re-report must not buy itself a fresh two-skeptic pass',
   )
 }

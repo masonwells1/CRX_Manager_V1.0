@@ -52,10 +52,17 @@ Both fixes are **mutation-tested** — 12 deliberate breaks, baseline GREEN, 12/
 resolves the PR through `gh` before it ever looks for a proof, so the behavioural path is not
 reachable in-process.
 
+The re-contest tests assert **which round** each skeptic ran in — `[1,1]` where no re-contest is
+owed, `[1,1,2,2]` where one is — not merely how many ran, a weakness CodeRabbit spotted on #255: a
+bare total of two would also accept one call per round, a different failure wearing the right
+number. Its suggested fix keyed on `:r1`/`:r2` label suffixes, which the verify label does not carry
+(`S${num}:verify:${i}#${n}`); the round is captured at call time instead, where it is actually
+known.
+
 Note for the session that lands this: hooks load from the *session's* project directory, so until
 this merges and the primary checkout picks it up, the unfixed guard still gates this very PR.
 
-Verified: `gauntlet-sections-loop` tests pass, `pr-merge-guard` 46 assertions pass,
+Verified: `gauntlet-sections-loop` tests pass, `pr-merge-guard` 47 assertions pass,
 `codex-push-lib` and `review-proof-guard` checks pass, `npm run test:agent-workflows`,
 `npm run agent-health`, and `npm run check:docs` all pass.
 
