@@ -100,6 +100,10 @@ const multiFile = run(multiFilePayload);
 ok(multiFile.stdout.includes('"permissionDecision":"deny"'), "unsafe second file in a multi-file patch is denied");
 ok(multiFile.stdout.includes(".env.local"), "multi-file denial preserves the unsafe file path");
 
+const testFileSecret = run(patchFor("src/lib/supabase.test.ts", "const role = 'service_role';"));
+ok(testFileSecret.stdout.includes('"permissionDecision":"deny"'), "env guard covers frontend test files");
+ok(testFileSecret.stdout.includes("ENV GUARD"), "frontend test denial reaches the owning guard");
+
 const safe = run(patchFor("docs/safe.md", "safe text"));
 ok(safe.status === 0, "safe patch exits cleanly");
 ok(safe.stdout.includes('"permissionDecision":"allow"'), "safe patch is allowed");

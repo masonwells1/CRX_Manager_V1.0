@@ -9,10 +9,13 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { extractPatchChanges, isApplyPatchTool } from "./patch-input-lib.mjs";
 
+const MAX_FANOUT_MS = 45_000;
+
 function guardsForPath(filePath, content) {
   const normalized = filePath.replace(/\\/g, "/");
   const basename = normalized.split("/").pop() || "";
   const isMigration = normalized.endsWith(".sql") && normalized.includes("/supabase/migrations/");
+  const isFrontendFile = /\/src\/.*\.(?:ts|tsx|js|jsx)$/.test(normalized);
   const isSourceTs =
     /\/src\/.*\.tsx?$/.test(normalized) &&
     !/\.(?:test|spec)\.tsx?$/.test(normalized);
@@ -21,7 +24,7 @@ function guardsForPath(filePath, content) {
   if (isMigration) selected.push("sql-safety.mjs", "idempotency-body-check.mjs", "rls-on-new-tables.mjs");
   if (isMigration || isSourceTs) selected.push("status-enum-check.mjs", "generated-column-check.mjs");
   if (isSourceTs) selected.push("money-safety.mjs");
-  if (/^\.env(?:\.|$)/.test(basename) || isSourceTs || isSourceJs) selected.push("env-guard.mjs");
+  if (/^\.env(?:\.|$)/.test(basename) || isFrontendFile || isSourceJs) selected.push("env-guard.mjs");
   if (!content && !/^\.env(?:\.|$)/.test(basename)) return [];
   return selected;
 }
@@ -65,6 +68,7 @@ if (changes.length === 0 && errors.length === 0) {
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const startedAt = Date.now();
 const denials = [];
 const warnings = [];
 const workItems = changes.reduce(
@@ -89,11 +93,19 @@ for (const change of changes) {
   });
 
   for (const guard of guardsForPath(change.filePath, change.content)) {
+    const remainingMs = MAX_FANOUT_MS - (Date.now() - startedAt);
+    if (remainingMs <= 1_000) {
+      respond(
+        "deny",
+        `PATCH GUARD FANOUT: safety checks exceeded the ${MAX_FANOUT_MS / 1_000}-second internal budget. ` +
+          "Split the patch into smaller changes."
+      );
+    }
     const result = spawnSync(process.execPath, [path.join(here, guard)], {
       input: syntheticPayload,
       encoding: "utf8",
       env: process.env,
-      timeout: 12_000,
+      timeout: Math.min(12_000, remainingMs - 500),
     });
     if (result.error || result.status !== 0) {
       denials.push(
