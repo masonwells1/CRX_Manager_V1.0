@@ -117,6 +117,12 @@ current trusted workflow SHA, so older open PR bases that predate the checker
 do not fail with module-not-found. Regression assertions bind CI's
 pull-request trigger and tautological job condition to `main`, preventing a
 future trigger change from silently skipping containment and dependent jobs.
+The first ancestry-floor implementation at `dc6d4d47` is non-final: its
+trusted checker still required worktree `HEAD` to equal the older event base,
+and a later checker deletion could reopen candidate fallback. The corrected
+successor binds the worktree to required `GITHUB_SHA` while preserving the
+event's immutable base-to-head scan, and permanently refuses fallback once the
+checker path has appeared anywhere after the fixed floor.
 The remaining post-merge ruleset step and public-repository fetch dependency
 are recorded in the consolidated known-issues file.
 

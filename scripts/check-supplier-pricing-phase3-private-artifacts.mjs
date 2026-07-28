@@ -1812,11 +1812,14 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
   if (name === 'pull_request_target') {
     const base = assertCommitSha(event?.pull_request?.base?.sha, 'pull-request base');
     const head = assertCommitSha(event?.pull_request?.head?.sha, 'pull-request head');
-    // pull_request_target deliberately runs the checker from the base commit.
+    const trustedWorkflow = assertCommitSha(environment.GITHUB_SHA, 'trusted workflow');
+    // pull_request_target deliberately runs the checker from the current
+    // trusted default-branch commit. The event base may be older when an open
+    // PR is synchronized after this workflow is introduced.
     // It never materializes candidate files: the exact candidate tree and
     // history are scanned through Git objects only.
     for (const sha of [base, head]) if (!eventCommitIsAvailable(sha, root, execute)) throw new Error('private Phase 3C CI containment event commit is unavailable');
-    const trustedBaseRoot = canonicalContainmentRoot(root, base, execute);
+    const trustedBaseRoot = canonicalContainmentRoot(root, trustedWorkflow, execute);
     const budget = new ScanBudget();
     const candidate = await candidateCommitTreeViolations(head, trustedBaseRoot, execute, budget);
     const targetCommits = commitsForRange(`${base}..${head}`, trustedBaseRoot, execute);
