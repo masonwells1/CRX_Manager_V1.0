@@ -63,6 +63,27 @@ ACL. They are stated so the grant set is explicit in the migration rather than i
 reviewer finding that prompted them was a false positive against live, but the fix is free and is
 the pattern `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql` already set.
 
+**Added 2026-07-28, second reviewer round — postflight assertions.** Both apply-gate reviewers
+independently asked for one (`rls-security-reviewer` M1, `migration-drift-reviewer` H1): every
+sibling hardening migration closes with a `DO $$ ... $$` block that asserts the change landed, and
+this one asserted nothing. Without it, a later `CREATE OR REPLACE` that re-emits either body without
+the gate fails **silently** — the pending-migration overlap-clobber class. The migration now ends
+with six assertions: overload count still 1 each, the gate present in the applied `prosrc` (not just
+in the file), both still `SECURITY DEFINER` with a pinned `search_path`, `authenticated` no longer
+holding EXECUTE on `compute_application_service_fee`, `authenticated` **still** holding it on
+`get_program_completion`, and neither reachable by `anon`.
+
+Assertion 5 is deliberately a *positive* check. Silently losing the `authenticated` grant on
+`get_program_completion` would take `OfficeCockpit` and `ProgramTracker` offline for the office —
+a worse outcome than the leak this migration closes — and a postflight that only checks for removed
+access would not notice.
+
+The block was **proven non-vacuous before commit**: executed against live in its exact committed
+form it raised `VERIFICATION FAILED: compute_application_service_fee body has no office-only gate`
+at assertion 2, having passed 1 and 3. Assertion 4 also fails against current live state
+(`has_function_privilege('authenticated', ...)` is still `true`). Those two are precisely what the
+apply is meant to flip, so the block goes red before and green after rather than passing either way.
+
 **Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
 `customer_application_rates` policies are untouched. Sales reps keep their access.
 

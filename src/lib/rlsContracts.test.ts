@@ -378,11 +378,16 @@ const APPEND_ONLY_TABLES = [
 /**
  * Tables a driver must not be able to read or write DIRECTLY.
  *
- * "Directly" is the honest scope: a few SECURITY DEFINER RPCs are granted to
- * `authenticated` with no role gate and return figures derived from these
- * tables (get_program_completion over quote_items,
- * compute_application_service_fee over customer rates). Closing those is
- * tracked separately — see the header of 20260727231652.
+ * "Directly" is the honest scope: RLS on these tables does not reach a
+ * SECURITY DEFINER function, so a SECDEF RPC granted to `authenticated` with no
+ * role gate can still return figures derived from them. The two that did —
+ * get_program_completion over quote_items and compute_application_service_fee
+ * over customer rates — were closed by 20260728123224, which puts an
+ * is_admin()/is_sales_rep() gate in each body and revokes `authenticated`
+ * EXECUTE on compute_application_service_fee outright. The remaining gap is
+ * application_services itself: default_rate_per_acre_cents and
+ * cost_per_acre_cents are readable by any active profile via the
+ * application_services_select policy.
  */
 const DRIVER_BLOCKED_TABLES = [
   'cost_history',
