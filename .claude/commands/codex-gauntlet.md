@@ -152,7 +152,12 @@ If Claude skills or hooks changed, run:
 
 ## Foundation Audit Mode
 
-Run the existing `/review-workflow` process. It is read-only except for its one audit report file.
+Two different tools — pick by how broad the question is:
+
+- **Whole-app sweep** ("is the app broadly safe to build on?") → run the existing `/review-workflow` process. It is read-only except for its one audit report file.
+- **One numbered area** ("re-check the money section", "audit commissions", "run gauntlet section 3") → run **`/gauntlet-section`**, which drives `.claude/workflows/gauntlet-sections-loop.js` over the numbered CRX Live Foundation Gauntlet sections (1 Security · 2 Money · 3 Inventory · 4 Lifecycle · 5 DB-drift · 6 Idempotency · 7 Commissions · 8 Returns/Credits · 9 PO-AP). It requires a fresh caller-collected live-evidence packet and settles each section on a deterministic code gate, not an agent opinion. Sections 10–15 are not encoded yet and must still be run by hand against `docs/audits/gauntlet/live-foundation-gauntlet-index.md`.
+
+Do not run the whole-app sweep when Mason asked about one area — the section runner is far cheaper and its findings land in the tracked queue.
 
 Then:
 

@@ -8,8 +8,20 @@
  *    for "who can do what" in the database. If a policy changes, this file
  *    must be updated to match.
  *
- * 2. **Regression prevention**: If a migration accidentally drops or replaces
- *    a policy, these tests will fail — before the change reaches production.
+ * 2. **Internal-consistency checks**: the tests below assert that this matrix
+ *    is coherent with itself — a child table cannot be more permissive than its
+ *    parent, a blocked table is blocked on every operation, and so on.
+ *
+ *    They do NOT read the migrations or the live database. A migration that
+ *    drops or widens a policy will therefore NOT fail these tests on its own;
+ *    it fails only once someone updates this matrix to match and a consistency
+ *    rule breaks. The live-policy gate is the postflight block inside each
+ *    migration plus the RLS review agents — not this file.
+ *
+ * ROLE COVERAGE: the matrix models admin, sales_rep, and driver. `applicator`
+ * is a fourth app role and is not represented here; treat driver as the
+ * field-role stand-in and verify applicator access against the policies
+ * themselves.
  *
  * RLS policies in Supabase fail SILENTLY:
  *   - Blocked SELECT returns [] (empty array), not an error
@@ -129,18 +141,38 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
     access: {
       admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'all', DELETE: 'all' },
       sales_rep: { SELECT: 'all', INSERT: 'own', UPDATE: 'own', DELETE: 'own' },
-      driver:    { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+      driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Items inherit access through quote ownership',
+    notes: 'Items inherit access through quote ownership. Office-only reads since 20260727231652 — a driver could previously read every quote line item and its pricing while being unable to read the parent quote.',
   },
   {
     table: 'quote_versions',
     access: {
       admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'none', DELETE: 'none' },
       sales_rep: { SELECT: 'all', INSERT: 'own', UPDATE: 'none', DELETE: 'none' },
-      driver:    { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+      driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Versions are append-only snapshots; never updated or deleted',
+    notes: 'Versions are append-only snapshots; never updated or deleted. Office-only reads since 20260727231652 — snapshot_data carries full quote pricing.',
+  },
+
+  // ─── Pricing / Margin ───────────────────────────────────────────────
+  {
+    table: 'customer_application_rates',
+    access: {
+      admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'all', DELETE: 'all' },
+      sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+      driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+    },
+    notes: 'Negotiated per-customer rates. Writes are admin-only. Office-only reads since 20260727231652. The row carries rate_per_acre_cents but NOT cost_per_acre_cents — cost lives on application_services, which stays driver-readable because Jobs/JobDetail need it. So this table alone is the negotiated price, not the margin; margin is the join of the two, and this migration breaks that join for drivers.',
+  },
+  {
+    table: 'rebate_programs',
+    access: {
+      admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'all', DELETE: 'all' },
+      sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+      driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+    },
+    notes: 'Supplier rebate terms. Writes are admin-only. Office-only reads since 20260727231652, which also pinned the SELECT policy to TO authenticated — the original migration left it TO public, so a replay and live had drifted apart.',
   },
 
   // ─── Orders ─────────────────────────────────────────────────────────
@@ -343,12 +375,24 @@ const APPEND_ONLY_TABLES = [
   'failed_notifications',
 ];
 
-/** Tables that should be completely invisible to drivers */
+/**
+ * Tables a driver must not be able to read or write DIRECTLY.
+ *
+ * "Directly" is the honest scope: a few SECURITY DEFINER RPCs are granted to
+ * `authenticated` with no role gate and return figures derived from these
+ * tables (get_program_completion over quote_items,
+ * compute_application_service_fee over customer rates). Closing those is
+ * tracked separately — see the header of 20260727231652.
+ */
 const DRIVER_BLOCKED_TABLES = [
   'cost_history',
   'purchase_orders',
   'purchase_order_items',
   'quotes',
+  'quote_items',
+  'quote_versions',
+  'customer_application_rates',
+  'rebate_programs',
   'orders',
   'order_items',
   'commissions',
@@ -378,6 +422,12 @@ const ADMIN_ONLY_WRITE_TABLES = [
   'cost_history',
   'invoices',
   'payments',
+  // Verified live 2026-07-27: car_admin_{insert,update,delete} gate on an
+  // inline profiles.role='admin' AND is_active check; rebate_programs_
+  // {insert,update,delete} gate on is_admin(). Reads narrow to office-only in
+  // 20260727231652; writes were already admin-only and are unchanged by it.
+  'customer_application_rates',
+  'rebate_programs',
 ];
 
 // ─── Test Suites ──────────────────────────────────────────────────────

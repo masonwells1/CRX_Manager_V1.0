@@ -36,7 +36,7 @@ Filename: `docs/audits/<YYYY-MM-DD>-codex-<short-slug>-prompt.md`
 Date is today (use the current date — check Bash `date -u +"%Y-%m-%d"` if unsure).
 Slug is kebab-case, under 50 chars, e.g. `post-b10-followup` or `rls-secdef-sweep-v2`.
 
-Structure (match existing audit prompt format from `docs/audits/2026-05-26-codex-post-b10-audit-prompt.md`):
+Structure (the template below is authoritative; `docs/audits/2026-06-09-codex-foundation-audit-remediation-prompt.md` is a real worked example if you want one):
 
 ```markdown
 # Codex Cross-Review Prompt — <Topic>
