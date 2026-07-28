@@ -515,9 +515,27 @@ async function runSection(num) {
         // Bounded by MAX_ROUNDS, not by a counter: a key can be re-contested at most once
         // per round, because the refuted record is removed here and only a fresh
         // adversarial REFUTED verdict can put it back.
-        if ((finding.severity === 'BLOCKER' || finding.severity === 'HIGH') && refuted.some((f) => keyOf(f) === key)) {
+        //
+        // The refutation displaced must be at the SAME severity. Matching on the key
+        // alone let a round-2 HIGH delete a round-1 BLOCKER's refutation and relabel it
+        // as a HIGH outcome — an audit trail that says something weaker than what was
+        // actually reported and dismissed. A LOWER-severity re-report is correctly a
+        // duplicate: the stronger version of that same claim already lost its
+        // adversarial pass, so the weaker one has no new standing. (A HIGHER-severity
+        // re-report never reaches here at all — it fails `rank <= seen.get(key)` and
+        // takes the escalation path below.) Testing `rank === seen.get(key)` instead
+        // would be wrong: `seen` holds the max rank ever recorded at the key, which a
+        // CONFIRMED finding may have raised, and that has no bearing on which
+        // refutation is being re-contested.
+        //
+        // No separate BLOCKER/HIGH test is needed to keep MED/LOW out: only BLOCKER and
+        // HIGH are ever verified (see `toVerify` below), so `refuted` cannot contain any
+        // other severity and a MED can never match one. The same predicate does the
+        // splice, so the removal never depends on that one-record-per-key invariant.
+        const refutedHere = (f) => keyOf(f) === key && f.severity === finding.severity
+        if (refuted.some(refutedHere)) {
           for (let i = refuted.length - 1; i >= 0; i -= 1) {
-            if (keyOf(refuted[i]) === key) {
+            if (refutedHere(refuted[i])) {
               // wasConfirmed:false is deliberate — the reinstatement pass below must not
               // resurrect this if the re-contest also fails. A refutation that survives a
               // second, independently-evidenced look stands.

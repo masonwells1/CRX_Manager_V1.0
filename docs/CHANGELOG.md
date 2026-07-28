@@ -34,11 +34,20 @@ A weak early refutation therefore outlived a later, independently-evidenced repo
 settled **clean** on a defect that had been reported twice. Such a re-report now displaces the
 refutation and gets its own two-skeptic pass; the displaced record is kept as a trail and marked
 `wasConfirmed: false` on purpose, so a refutation that survives the second look stands rather than
-being resurrected by the reinstatement pass. MED/LOW still dedupe as before — they never get the
-adversarial pass, so re-contesting one would spend skeptics on a severity the workflow does not
-verify. Bounded by `MAX_ROUNDS`, not a counter: a key can be re-contested at most once per round.
+being resurrected by the reinstatement pass. Bounded by `MAX_ROUNDS`, not a counter: a key can be
+re-contested at most once per round.
 
-Both fixes are **mutation-tested** — 8 deliberate breaks, baseline GREEN, 8/8 killed. The
+The displaced refutation must be at the **same severity**, a constraint CodeRabbit caught on #255
+before it shipped. Matching on `title::location` alone let a round-2 HIGH pull a round-1 BLOCKER's
+refutation out and relabel it as a HIGH outcome, leaving a trail that said something weaker than
+what was actually reported and dismissed. A lower-severity re-report is correctly a duplicate — the
+stronger version of that same claim already lost its adversarial pass. A higher-severity re-report
+never reaches this branch; it takes the escalation path. MED/LOW dedupe as before, and now do so
+without a separate severity test: only BLOCKER/HIGH are ever verified, so `refuted` cannot hold any
+other severity for a MED to match. The explicit class check that had guarded this was removed once
+it was proven unreachable.
+
+Both fixes are **mutation-tested** — 12 deliberate breaks, baseline GREEN, 12/12 killed. The
 `proofSearchDirs` wiring is additionally pinned by a source assertion, stated as such: the hook
 resolves the PR through `gh` before it ever looks for a proof, so the behavioural path is not
 reachable in-process.

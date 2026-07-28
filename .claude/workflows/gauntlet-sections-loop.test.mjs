@@ -1082,6 +1082,40 @@ for (const [label, layer] of [
   assert.equal(section.superseded.length, 0)
 }
 
+// ...and neither may a LOWER-severity BLOCKER/HIGH re-report. Matching the refutation
+// on title+location alone let a round-2 HIGH pull a round-1 BLOCKER's refutation out
+// and relabel it as a HIGH outcome, so the trail recorded something weaker than what
+// was actually reported and dismissed. The stronger version of that same claim already
+// lost its adversarial pass; the weaker one is a duplicate.
+{
+  const KEY = { title: 'Repeatedly reported lead', location: 'src/example.ts:12' }
+  let round = 1
+  const { result, calls } = await executeWorkflow(async (_prompt, options) => {
+    if (options.label.endsWith(':r2')) round = 2
+    if (options.label.endsWith(':adjudicate')) return advice
+    if (options.label === 'S2:find1:r1') return completeLayer([finding('BLOCKER', KEY)])
+    if (options.label === 'S2:find1:r2') return completeLayer([finding('HIGH', KEY)])
+    if (options.label.startsWith('S2:verify:')) {
+      return { status: 'REFUTED', reasoning: 'Round 1 saw no defect.', verifiedAgainst: 'src/example.ts:12' }
+    }
+    return completeLayer()
+  }, liveArgs([2]))
+
+  const section = result.results[0]
+  assert.equal(round, 2, 'the fixture must actually reach round 2')
+  assert.equal(section.refuted.length, 1, 'the BLOCKER refutation must survive a lower-severity re-report')
+  assert.equal(section.refuted[0].severity, 'BLOCKER', 'the trail must still say a BLOCKER was reported and dismissed')
+  assert.equal(section.superseded.length, 0, 'nothing was re-contested, so nothing may be recorded as displaced')
+  assert.equal(section.duplicates.filter((f) => f.severity === 'HIGH').length, 1, 'the lower-severity re-report is a recorded duplicate')
+  assert.equal(section.counts.high, 0)
+  // Two skeptic calls, not four: no second adversarial pass is owed here.
+  assert.equal(
+    calls.filter(({ options }) => options.label.startsWith('S2:verify:')).length,
+    2,
+    'a lower-severity re-report must not buy itself a fresh two-skeptic pass',
+  )
+}
+
 // ── A snake_case token buried in prose is not an openable citation ────────────
 // The catch-all matched an identifier ANYWHERE in a sentence, so "the code around
 // payment_button" satisfied the citation gate while identifying nothing. On the

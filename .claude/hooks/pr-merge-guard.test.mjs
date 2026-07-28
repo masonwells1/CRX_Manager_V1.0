@@ -136,8 +136,20 @@ eq(proofSearchDirs("C:/repo", () => undefined).length, 1, "undefined porcelain d
 // looks for a proof, and a fake `gh` on PATH is unspawnable on Windows (Node refuses
 // to exec a .cmd without a shell). So assert the call site exists and that the old
 // single-directory scan has not come back.
+// Name the ENUMERATOR, not just the function: `proofSearchDirs(projectDir, () => "")`
+// type-checks, passes a name-free regex, and silently restores primary-only discovery
+// -- the exact bug, wearing the fix's clothes.
 const guardSource = readFileSync(path.join(__dirname, "pr-merge-guard.mjs"), "utf8");
-ok(/for\s*\(\s*const\s+stateDir\s+of\s+proofSearchDirs\(/.test(guardSource), "the proof scan iterates proofSearchDirs, not one hard-coded directory");
+ok(
+  /for\s*\(\s*const\s+stateDir\s+of\s+proofSearchDirs\(\s*projectDir\s*,\s*listWorktreesFromProjectDir\s*\)/.test(guardSource),
+  "the proof scan iterates proofSearchDirs over the real worktree enumerator, not one hard-coded directory",
+);
+// ...and the enumerator must really enumerate. A stub named listWorktreesFromProjectDir
+// would satisfy the call-site check above while returning nothing.
+ok(
+  /function\s+listWorktreesFromProjectDir\b[\s\S]{0,600}?["'`]worktree["'`][\s\S]{0,200}?--porcelain/.test(guardSource),
+  "listWorktreesFromProjectDir actually shells out to `git worktree list --porcelain`",
+);
 ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);
