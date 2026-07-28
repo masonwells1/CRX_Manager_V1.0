@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-28 — A Codex review that was merely slow reported as a review that could not be run
+
+`scripts/write-codex-push-proof.mjs` capped the review at 540s. A real review of the PR #255 guard
+diff ran ~8.5 minutes and was killed mid-scan at 9:00, printing `Codex review timed out after 540s —
+no proof written`. Nothing distinguished that from Codex being unavailable, and the merge-gate denial
+text an operator reads next says "If the Codex CLI is unavailable, PARK the change and tell Mason".
+So the cheap correct action (re-run with a bigger budget) looked like the expensive wrong one (park
+the work, or go looking for a way around the gate) — the failure mode a proof gate can least afford,
+since the pressure it creates points at bypassing itself.
+
+Two changes, both about that gap rather than about speed:
+
+- The default budget is now `DEFAULT_TIMEOUT_SEC = 1200` (~2.3x the measured worst case), so a normal
+  multi-file review finishes well inside the cap instead of racing it. A hung run is still bounded.
+- The timeout message now states that a timeout is **not** a verdict and **not** evidence the tool is
+  unavailable, and names the concrete retry (`--timeout <2x>`). `--help` says the same.
+
+Proven by running it, not only by tests: `--timeout 5` was forced against a real branch and emitted
+the new text with exit 2 and no proof written. Five deliberate breaks — default back to 540, default
+just under the 900s floor, and each of the three message obligations removed — were all caught by the
+new assertions, then reverted to green. Proof *validity* is untouched: `codex_ran`, verdict, exact
+`head_sha`, exact `base_sha`, and the 30-minute freshness window all still apply, and a timeout still
+mints nothing. `scripts/overnight-codex-gate.mjs` keeps its own 540s cap deliberately — bounded
+overnight fan-out is a cost control, and its message already tells the operator to split the batch.
+
 ## 2026-07-27 — The PR merge gate could not see a proof minted in a worktree; a refuted gauntlet finding could not be re-contested
 
 Two defects found while shipping PR #252, both fixed here.

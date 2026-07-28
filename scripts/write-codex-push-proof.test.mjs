@@ -11,9 +11,11 @@ import {
   codexExecutable,
   codexPushProofPath,
   codexReviewProofVerdict,
+  DEFAULT_TIMEOUT_SEC,
   defaultCodexBinRoot,
   GUARDED_BASE,
   parseArgs,
+  timeoutMessage,
   worktreeIsClean,
 } from "./write-codex-push-proof.mjs";
 // Cross-check against the REAL guard validator so the minted proof shape can
@@ -23,7 +25,27 @@ import { proofValid } from "../.claude/hooks/codex-push-lib.mjs";
 // ── arg parsing ──────────────────────────────────────────────────────────────
 const dflt = parseArgs([]);
 assert.equal(dflt.dryRun, false);
-assert.equal(dflt.timeoutSec, 540);
+assert.equal(dflt.timeoutSec, DEFAULT_TIMEOUT_SEC);
+// A cap that sits near a normal review's runtime fails DANGEROUSLY: the run dies
+// mid-scan, writes no proof, and reads as "Codex is unavailable — park the change"
+// when the review was merely cut off. A real multi-file guard review measured ~8.5
+// min (PR #255), so anything under 15 min is back in that failure band.
+assert.ok(
+  DEFAULT_TIMEOUT_SEC >= 900,
+  "default review budget must stay well clear of a normal multi-file review (>= 900s), or a slow review masquerades as an unavailable tool",
+);
+
+// The timeout text must actively correct the wrong conclusion, not just report the
+// number — an operator who reads "no proof written" as a verdict either parks work
+// that was fine or goes looking for a way around the gate.
+const timedOut = timeoutMessage(600);
+assert.match(timedOut, /timed out after 600s/, "states what actually happened");
+assert.match(timedOut, /NOT a verdict/i, "says a timeout is not a review outcome");
+assert.match(timedOut, /--timeout \d+/, "names the concrete flag and a bigger number to retry with");
+assert.ok(
+  /\bre-?run\b/i.test(timedOut),
+  "tells the operator to retry rather than escalate or park",
+);
 assert.equal(dflt.base, undefined, "no caller-facing base field — the base is pinned, never parsed");
 
 const withFlags = parseArgs(["--timeout", "120", "--dry-run"]);
