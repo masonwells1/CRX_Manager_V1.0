@@ -195,8 +195,22 @@ try {
     }
   }
   for (const [name, header] of [
+    ['CSV opposite delimiter is ordinary field data', 'id,sku,product_name,pricing_version,updated_at,extra\tfield'],
+    ['TSV opposite delimiter is ordinary field data', 'id\tsku\tproduct_name\tpricing_version\tupdated_at\textra,field'],
+  ]) {
+    assert.equal(structuralPrivateArtifactReason(Buffer.from(header)), 'private product CSV/TSV header structure', `${name} must be rejected directly`);
+    for (let split = 1; split < header.length; split += 1) {
+      assert.equal(
+        structuralPrivateArtifactStreamReason([Buffer.from(header.slice(0, split)), Buffer.from(header.slice(split))]),
+        'private product CSV/TSV header structure',
+        `${name} must survive chunk seam ${split}/${header.length}`,
+      );
+    }
+  }
+  for (const [name, header] of [
     ['closed quoted text is one non-header cell', '"updated_at,product_name,id,pricing_version,sku"'],
     ['quoted extra with missing required header', 'updated_at,product_name,"extra\nfield",id,pricing_version,not_sku'],
+    ['escaped quote cannot manufacture product_name', 'id,sku,"product_""name",pricing_version,updated_at'],
     ['ordinary prose with a parenthetical severity', 'ordinary (HIGH) prose, not a Product header'],
   ]) {
     assert.equal(structuralPrivateArtifactReason(Buffer.from(header)), null, `${name} must remain benign directly`);

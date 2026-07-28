@@ -334,3 +334,18 @@ Each cycle records:
 - live/deployment state;
 - correction lessons; and
 - next safe cycle or parked gate.
+
+## Current cycle status — rejected `12f19cb5` (2026-07-28)
+
+- `PROOF — Ran/Saw:` exact Windows, simulated pre-push, and network-disabled
+  Linux packets were green for
+  `12f19cb583343bd890f5d8e65f6c9b204954c2be`.
+- `REVIEW — Rejected:` Luna and fresh independent Sol reproduced actionable
+  shared review-parser and Product CSV/TSV header-parser defects. The immutable
+  details and disposition are appended to the ledger.
+- `NOW:` bounded Terra repair is uncommitted and is not review evidence.
+- `REMAINING:` rerun complete proof, freeze a new exact SHA, then obtain fresh
+  Luna, independent Sol, and literal `claude-opus-5 --effort high` verdicts.
+- `GUARD:` PR #246 remains `PARKED`; this cycle authorizes no merge, deploy,
+  live mutation, Product decision, migration/apply, flag change, permission
+  change, external-trust-setting change, deletion, or force-push.

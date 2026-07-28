@@ -740,13 +740,13 @@ function createOwnerHeaderStreamDetector() {
     finish() { finishLine(); return found; },
   };
 }
-function createProductHeaderStreamDetector() {
+function createProductHeaderDialectStreamDetector(dialectDelimiter) {
   const requiredHeaders = new Set(PRODUCT_ROW_KEYS);
   const maxRequiredHeaderChars = Math.max(...PRODUCT_ROW_KEYS.map(header => header.length));
   const matchedHeaders = new Set();
   let cell = '';
   let discardedCell = false;
-  let delimiter = null;
+  let sawDelimiter = false;
   let invalidLine = false;
   let inQuotes = false;
   let pendingQuote = false;
@@ -757,7 +757,7 @@ function createProductHeaderStreamDetector() {
   const unclosedQuoteHeaders = new Set();
   let unclosedQuoteCell = '';
   let discardedUnclosedQuoteCell = false;
-  let unclosedQuoteDelimiter = null;
+  let sawUnclosedQuoteDelimiter = false;
   let found = false;
   const isPaddingWhitespace = character => {
     const code = character.codePointAt(0);
@@ -775,6 +775,12 @@ function createProductHeaderStreamDetector() {
     if (cell.length < maxRequiredHeaderChars) cell += character;
     else discardedCell = true;
   };
+  const appendEscapedQuote = () => {
+    if (cell.length < maxRequiredHeaderChars) cell += '"';
+    else discardedCell = true;
+    if (unclosedQuoteCell.length < maxRequiredHeaderChars) unclosedQuoteCell += '"';
+    else discardedUnclosedQuoteCell = true;
+  };
   const appendUnclosedQuoteCharacter = character => {
     if (character === '"' || isPaddingWhitespace(character)) return;
     if (unclosedQuoteCell.length < maxRequiredHeaderChars) unclosedQuoteCell += character;
@@ -789,12 +795,12 @@ function createProductHeaderStreamDetector() {
     unclosedQuoteHeaders.clear();
     unclosedQuoteCell = '';
     discardedUnclosedQuoteCell = false;
-    unclosedQuoteDelimiter = null;
+    sawUnclosedQuoteDelimiter = false;
   };
   const feedUnclosedQuoteCharacter = character => {
-    if (character === ',' || character === '\t' || OWNER_HEADER_RECORD_DELIMITER_RE.test(character)) {
+    if (character === dialectDelimiter || (OWNER_HEADER_RECORD_DELIMITER_RE.test(character) && character !== '\t')) {
       finishUnclosedQuoteCell();
-      if ((character === ',' || character === '\t') && unclosedQuoteDelimiter === null) unclosedQuoteDelimiter = character;
+      if (character === dialectDelimiter) sawUnclosedQuoteDelimiter = true;
       return;
     }
     appendUnclosedQuoteCharacter(character);
@@ -806,9 +812,9 @@ function createProductHeaderStreamDetector() {
   };
   const finishLine = () => {
     finishCell();
-    if (!invalidLine && delimiter !== null && [...requiredHeaders].every(header => matchedHeaders.has(header))) found = true;
+    if (!invalidLine && sawDelimiter && [...requiredHeaders].every(header => matchedHeaders.has(header))) found = true;
     matchedHeaders.clear();
-    delimiter = null;
+    sawDelimiter = false;
     invalidLine = false;
     inQuotes = false;
     pendingQuote = false;
@@ -833,6 +839,7 @@ function createProductHeaderStreamDetector() {
               if (current === '"') {
                 // RFC4180 escaped quote. It remains inside the quoted cell.
                 pendingQuote = false;
+                appendEscapedQuote();
                 continue;
               }
               // The previous quote closed the cell. Consume the current byte
@@ -858,7 +865,7 @@ function createProductHeaderStreamDetector() {
               reprocess = true;
               continue;
             }
-            if (current === ',' || current === '\t') {
+            if (current === dialectDelimiter) {
               afterQuote = false;
               reprocess = true;
               continue;
@@ -873,9 +880,8 @@ function createProductHeaderStreamDetector() {
             continue;
           }
           if (OWNER_HEADER_RECORD_DELIMITER_RE.test(current) && current !== '\t') { finishLine(); continue; }
-          if (current === ',' || current === '\t') {
-            if (delimiter === null) delimiter = current;
-            else if (delimiter !== current) invalidLine = true;
+          if (current === dialectDelimiter) {
+            sawDelimiter = true;
             finishCell();
             continue;
           }
@@ -905,12 +911,24 @@ function createProductHeaderStreamDetector() {
           // an opening quote cannot conceal every remaining Product key.
           finishUnclosedQuoteCell();
           for (const header of unclosedQuoteHeaders) matchedHeaders.add(header);
-          if (delimiter === null && unclosedQuoteDelimiter !== null) delimiter = unclosedQuoteDelimiter;
+          if (sawUnclosedQuoteDelimiter) sawDelimiter = true;
           inQuotes = false;
         }
       }
       finishLine();
       return found;
+    },
+  };
+}
+function createProductHeaderStreamDetector() {
+  const detectors = [createProductHeaderDialectStreamDetector(','), createProductHeaderDialectStreamDetector('\t')];
+  return {
+    feed(text) {
+      for (const detector of detectors) detector.feed(text);
+    },
+    finish() {
+      const results = detectors.map(detector => detector.finish());
+      return results.some(Boolean);
     },
   };
 }

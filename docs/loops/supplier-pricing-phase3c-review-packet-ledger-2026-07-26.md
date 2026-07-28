@@ -706,3 +706,22 @@ live mutation, flag enablement, deploy, or merge.
 - `DISPOSITION:` bounded repair work after `a5a66753` is unreviewed evidence.
   PR #246 remains `PARKED`; no merge, deploy, live mutation, Product
   classification, migration, or flag authorization is granted here.
+
+## Rejected exact candidate — `12f19cb5` (2026-07-28)
+
+- `PROOF — Ran/Saw:` the exact Windows Phase 3C packet, simulated pre-push
+  containment, and network-disabled Linux exact-SHA packet were green for
+  `12f19cb583343bd890f5d8e65f6c9b204954c2be`.
+- `REVIEW — Rejected:` Luna returned actionable findings for confusable
+  Unicode/format characters in leading review labels, inconsistent
+  machine-verdict separator normalization, wrapped zero/`None` details, and
+  non-atomic `FIX/FOLLOW-UP (0)` parsing. Fresh independent Sol also reproduced
+  actionable punctuation-only headings, common paired quote wrappers,
+  CSV/TSV opposite-delimiter handling, and escaped-quote header manufacture.
+  Literal Opus's nonblocking parser nits and verdict are non-accepting for this
+  cycle because any actionable reviewer rejection invalidates the candidate.
+- `DISPOSITION:` `12f19cb583343bd890f5d8e65f6c9b204954c2be` remains rejected.
+  The bounded parser and regression repair after it is uncommitted, unreviewed
+  evidence. PR #246 remains `PARKED`; no merge, deploy, live mutation, Product
+  classification, migration, flag, permission, or external-trust-setting
+  authorization is granted here.

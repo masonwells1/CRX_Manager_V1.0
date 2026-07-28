@@ -29,11 +29,48 @@ const REVIEW_WRAPPER_PAIRS = new Map([
   ["[", "]"], ["(", ")"], ["{", "}"], ["<", ">"],
   ["【", "】"], ["〔", "〕"], ["（", "）"], ["［", "］"], ["｛", "｝"],
   ["〈", "〉"], ["《", "》"], ["「", "」"], ["『", "』"],
+  ["“", "”"], ["‘", "’"], ["«", "»"], ["‹", "›"], ['"', '"'],
 ]);
 const REVIEW_SEVERITY_TOKEN_RE = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?$/i;
-const REVIEW_ACTION_TOKEN_RE = /^(?:FIX(?:ES)?|FOLLOW-?UPS?|FIX\s*\/\s*FOLLOW-?UPS?)(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?$/i;
+const REVIEW_ACTION_TOKEN_RE = /^(?:FIX\s*\/\s*FOLLOW-?UPS?|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?$/i;
 const REVIEW_MACHINE_VERDICT_RE = /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT)\s*:/i;
 const REVIEW_WRAPPER_DEPTH_LIMIT = 12;
+const REVIEW_SECURITY_PREFIX_LIMIT = 96;
+const REVIEW_CONFUSABLE_ASCII = new Map([
+  ["Α", "A"], ["А", "A"], ["а", "a"],
+  ["Β", "B"], ["В", "B"],
+  ["Ϲ", "C"], ["С", "C"], ["с", "c"],
+  ["Ԁ", "D"],
+  ["Ε", "E"], ["Е", "E"], ["е", "e"],
+  ["Ϝ", "F"], ["Ғ", "F"],
+  ["Ꮐ", "G"], ["ɢ", "g"],
+  ["Η", "H"], ["Н", "H"], ["н", "h"],
+  ["Ι", "I"], ["І", "I"], ["Ӏ", "I"], ["і", "i"], ["ι", "i"],
+  ["Ј", "J"], ["ј", "j"],
+  ["Κ", "K"], ["К", "K"], ["κ", "k"], ["к", "k"],
+  ["Μ", "M"], ["М", "M"], ["м", "m"],
+  ["Ν", "N"],
+  ["Ο", "O"], ["О", "O"], ["ο", "o"], ["о", "o"],
+  ["Ρ", "P"], ["Р", "P"], ["ρ", "p"], ["р", "p"],
+  ["Ԛ", "Q"],
+  ["Ѕ", "S"], ["ѕ", "s"],
+  ["Τ", "T"], ["Т", "T"], ["τ", "t"],
+  ["Ѵ", "V"], ["ν", "v"],
+  ["Ԝ", "W"], ["ԝ", "w"],
+  ["Χ", "X"], ["Х", "X"], ["χ", "x"], ["х", "x"],
+  ["Υ", "Y"], ["У", "Y"], ["у", "y"],
+  ["Ζ", "Z"],
+]);
+
+function foldLeadingReviewSecurityText(value) {
+  const characters = Array.from(String(value || ""));
+  const prefix = characters.slice(0, REVIEW_SECURITY_PREFIX_LIMIT).join("")
+    .normalize("NFKC")
+    .replace(/[\p{Cf}\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu, "")
+    .replace(/[∶꞉ː⁝︰﹕]/gu, ":")
+    .replace(/./gu, character => REVIEW_CONFUSABLE_ASCII.get(character) ?? character);
+  return prefix + characters.slice(REVIEW_SECURITY_PREFIX_LIMIT).join("");
+}
 
 function stripReviewMarkdownPrefixes(value) {
   let remaining = String(value || "");
@@ -47,6 +84,7 @@ function stripReviewMarkdownPrefixes(value) {
 
 function isBalancedOuterReviewWrapper(value, opening, closing) {
   if (!value.startsWith(opening) || !value.endsWith(closing)) return false;
+  if (opening === closing) return value.length >= 2 && !value.slice(1, -1).includes(opening);
   let depth = 0;
   for (let index = 0; index < value.length; index += 1) {
     const character = value[index];
@@ -75,6 +113,12 @@ function leadingBalancedReviewWrapper(value) {
   const opening = source[0];
   const closing = REVIEW_WRAPPER_PAIRS.get(opening);
   if (!closing) return null;
+  if (opening === closing) {
+    const closingIndex = source.indexOf(closing, 1);
+    return closingIndex < 0
+      ? null
+      : { token: source.slice(1, closingIndex).trim(), rest: source.slice(closingIndex + 1) };
+  }
   let depth = 0;
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
@@ -88,6 +132,16 @@ function leadingBalancedReviewWrapper(value) {
   return null;
 }
 
+function stripLeadingReviewSeparatorPunctuation(value) {
+  const source = String(value || "");
+  let separatorLength = 0;
+  for (const character of source) {
+    if (REVIEW_WRAPPER_PAIRS.has(character) || !/[\p{P}\p{S}]/u.test(character)) break;
+    separatorLength += character.length;
+  }
+  return source.slice(separatorLength).trimStart();
+}
+
 function normalizeWrappedReviewClassification(value) {
   const source = String(value || "").trim();
   const wrapped = leadingBalancedReviewWrapper(source);
@@ -97,15 +151,27 @@ function normalizeWrappedReviewClassification(value) {
   if (!REVIEW_SEVERITY_TOKEN_RE.test(compactToken) && !REVIEW_ACTION_TOKEN_RE.test(compactToken) && !REVIEW_MACHINE_VERDICT_RE.test(token)) return source;
   const suffix = unwrapBalancedReviewPunctuation(wrapped.rest.trimStart());
   if (!suffix) return token;
-  if (/^[.:|—-]/u.test(suffix)) return `${token}: ${suffix.slice(1).trimStart()}`;
+  const detail = stripLeadingReviewSeparatorPunctuation(suffix);
+  if (detail !== suffix) return `${token}: ${detail}`;
   return `${token} ${suffix}`;
 }
 
+function canonicalReviewMachineLine(value) {
+  const candidate = foldLeadingReviewSecurityText(String(value || "").trim());
+  const label = /^(FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT)(.*)$/i.exec(candidate);
+  if (!label) return null;
+  const separatorAndValue = /^(\s*[\p{P}\p{S}]*):([\p{P}\p{S}]*\s*)(\S.*)$/u.exec(label[2]);
+  if (!separatorAndValue || separatorAndValue[1].includes("_") || separatorAndValue[2].includes("_")) return null;
+  return `${label[1].toUpperCase()}: ${separatorAndValue[3].trim()}`;
+}
+
 function normalizeReviewMachineLine(value) {
-  const unwrapped = unwrapBalancedReviewPunctuation(value);
-  if (REVIEW_MACHINE_VERDICT_RE.test(unwrapped)) return unwrapped;
+  const unwrapped = unwrapBalancedReviewPunctuation(foldLeadingReviewSecurityText(value));
+  const direct = canonicalReviewMachineLine(unwrapped);
+  if (direct) return direct;
   const wrapped = leadingBalancedReviewWrapper(unwrapped);
-  if (wrapped && REVIEW_MACHINE_VERDICT_RE.test(wrapped.token) && /^[\s.:;!?…—-]*$/u.test(wrapped.rest)) return wrapped.token;
+  const wrappedMachine = wrapped ? canonicalReviewMachineLine(wrapped.token) : null;
+  if (wrappedMachine && /^[\s\p{P}\p{S}]*$/u.test(wrapped.rest)) return wrappedMachine;
   return unwrapped;
 }
 
@@ -120,23 +186,35 @@ function normalizeReviewClassificationLine(value) {
 }
 
 export function normalizeReviewOutputLine(line) {
-  const presentation = stripReviewMarkdownPrefixes(line)
+  const presentation = foldLeadingReviewSecurityText(stripReviewMarkdownPrefixes(line)
     .replace(/[*`\\]/gu, "")
-    .trim();
+    .trim());
   const machine = normalizeReviewMachineLine(presentation);
   return { machine, classified: normalizeReviewClassificationLine(machine) };
 }
 
 export function reviewOutputHasActionableFindings(stdout) {
   const normalizedLines = String(stdout || "").split(/\r?\n/).map(normalizeReviewOutputLine);
-  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(unwrapBalancedReviewPunctuation(value).trim());
-  const severityPattern = "(BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)";
+  const noFinding = (value) => {
+    let candidate = stripLeadingReviewSeparatorPunctuation(String(value || "").trim());
+    for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
+      const next = unwrapBalancedReviewPunctuation(candidate.replace(/[.!?…;:。！？]+$/u, "").trim());
+      if (next === candidate) break;
+      candidate = next;
+    }
+    return /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)$/i.test(candidate);
+  };
+  const severityTokenPattern = "BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?";
+  const actionTokenPattern = "FIX\\s*\\/\\s*FOLLOW-?UPS?|FIX(?:ES)?|FOLLOW-?UPS?";
+  const severityPattern = `(${severityTokenPattern})`;
+  const actionPattern = `(${actionTokenPattern})`;
+  const findingLabelPattern = `(${severityTokenPattern}|${actionTokenPattern})`;
   const countPattern = "(?:\\s*\\(\\s*(\\d+)(?:\\s+findings?)?\\s*\\))?";
   // Once an exact severity/action label begins the line, punctuation or a
   // symbol before nonempty detail is a finding separator. This is intentionally
   // broader than a hand-maintained colon/dash list, while mid-sentence prose
   // never reaches these anchored classifiers.
-  const detailSeparator = "(?:\\s*[\\p{P}\\p{S}]+\\s*|\\s+)";
+  const detailSeparator = "(?:\\s+|\\s*[\\p{P}\\p{S}]+\\s*)";
   const parseCount = value => {
     const match = /^(?:COUNT\s*[:=]\s*)?(\d+)(?:\s+findings?)?$/i.exec(String(value || "").trim());
     return match ? Number(match[1]) : null;
@@ -199,7 +277,7 @@ export function reviewOutputHasActionableFindings(stdout) {
       }
       continue;
     }
-    const blockingHeading = new RegExp(`^${severityPattern}${countPattern}\\s*:?\\s*$`, "i").exec(line);
+    const blockingHeading = new RegExp(`^${severityPattern}${countPattern}\\s*[\\p{P}\\p{S}]*\\s*$`, "iu").exec(line);
     if (blockingHeading) {
       if (/^NIT(?:PICK)?$/i.test(blockingHeading[1])) {
         if (blockingSection === "requires-empty") return true;
@@ -213,15 +291,15 @@ export function reviewOutputHasActionableFindings(stdout) {
       }
       continue;
     }
-    const fixHeading = new RegExp(`^(?:FIX(?:ES)?|FOLLOW-?UPS?|FIX\\s*\\/\\s*FOLLOW-?UPS?)${countPattern}\\s*:?\\s*$`, "i").exec(line);
+    const fixHeading = new RegExp(`^${actionPattern}${countPattern}\\s*[\\p{P}\\p{S}]*\\s*$`, "iu").exec(line);
     if (fixHeading) {
-      const count = fixHeading[1] === undefined ? null : Number(fixHeading[1]);
+      const count = fixHeading[2] === undefined ? null : Number(fixHeading[2]);
       if (count !== null && count > 0) return true;
       blockingSection = count === 0 ? "declared-empty" : "requires-empty";
       severityContextActive = true;
       continue;
     }
-    const finding = new RegExp(`^(?:${severityPattern}|FIX(?:ES)?|FOLLOW-?UPS?|FIX\\s*\\/\\s*FOLLOW-?UPS?)${countPattern}${detailSeparator}(.+)$`, "iu").exec(line);
+    const finding = new RegExp(`^${findingLabelPattern}${countPattern}${detailSeparator}(.+)$`, "iu").exec(line);
     if (finding) {
       const severity = finding[1];
       const count = finding[2] === undefined ? null : Number(finding[2]);
