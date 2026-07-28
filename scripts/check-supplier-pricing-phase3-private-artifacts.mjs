@@ -53,7 +53,6 @@ const MAX_JSON_NODES = 1_000_000;
 const REGULAR_GIT_MODES = new Set(['100644', '100755']);
 const PRIVATE_ARTIFACT_BASENAMES_LOWER = new Set([...PRIVATE_ARTIFACT_BASENAMES].map(name => name.toLowerCase()));
 const JSON_FORMATS = new Set(APPROVED_SERIALIZED_FORMATS);
-const ZERO_SHA = '0000000000000000000000000000000000000000';
 const ZERO_SHA_PATTERN = /^(?:0{40}|0{64})$/;
 const SNAPSHOT_ROOT_KEYS = ['products', 'snapshot_sha256', 'expected_old_phase3_defaults', 'migration_high_water'];
 const MANIFEST_ROOT_KEYS = ['rows', 'manifest_sha256', 'generated_from_snapshot_sha256', 'summary', 'approval_state'];
@@ -61,6 +60,7 @@ const PRODUCT_ROW_KEYS = ['id', 'sku', 'product_name', 'pricing_version', 'updat
 const MANIFEST_ROW_KEYS = ['product_id', 'current_product', 'proposed_phase3', 'field_decisions', 'row_sha256'];
 const STRUCTURAL_KEY_GROUPS = [SNAPSHOT_ROOT_KEYS, MANIFEST_ROOT_KEYS, PRODUCT_ROW_KEYS, MANIFEST_ROW_KEYS];
 export const STRUCTURAL_SIGNATURE_REASON = 'private snapshot or manifest key structure';
+export const PRODUCT_HEADER_REASON = 'private product CSV/TSV header structure';
 const STREAM_TAIL_CHARS = Math.max(4096, OWNER_DECISION_HEADERS.join(',').length * 4);
 const OWNER_HEADER_RECORD_DELIMITER_RE = /[\r\n\v\f\u0085\u2028\u2029\u001c-\u001f]/u;
 const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
@@ -100,7 +100,6 @@ export function validateStructuralSignatureExemptions(exemptions) {
 }
 
 export const STRUCTURAL_SIGNATURE_EXEMPTIONS = validateStructuralSignatureExemptions({
-  'scripts/supplier-pricing-phase3-private-artifacts.test.mjs': 'Phase 3C adversarial test source intentionally embeds a synthetic product-row signature; it contains no private artifact and remains path-exact.',
 });
 const STRUCTURAL_SIGNATURE_EXEMPTION_PATHS = new Set(Object.keys(STRUCTURAL_SIGNATURE_EXEMPTIONS));
 
@@ -470,6 +469,12 @@ function hasPlausibleLz4Frame(source, offset) {
 function hasPlausibleLz4LegacyFrame(source, offset) {
   return bytesAt(source, offset, [0x02, 0x21, 0x4c, 0x18]) && offset + 8 <= source.length;
 }
+function hasPlausibleGitPackHeader(source, offset) {
+  if (offset < 0 || offset + 32 > source.length || !bytesAt(source, offset, [0x50, 0x41, 0x43, 0x4b])) return false;
+  const version = source.readUInt32BE(offset + 4);
+  const objectCount = source.readUInt32BE(offset + 8);
+  return (version === 2 || version === 3) && objectCount <= 100_000_000;
+}
 function hasSkippableFrame(source, offset) {
   if (offset < 0 || offset + 8 > source.length || source[offset] < 0x50 || source[offset] > 0x5f
     || !bytesAt(source, offset + 1, [0x2a, 0x4d, 0x18])) return false;
@@ -513,6 +518,7 @@ function compressedArchiveReason(bytes) {
   if (findValidated(Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), index => hasPlausibleZstdFrame(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x04, 0x22, 0x4d, 0x18]), index => hasPlausibleLz4Frame(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x02, 0x21, 0x4c, 0x18]), index => hasPlausibleLz4LegacyFrame(source, index))) return 'compressed archive container cannot be inspected';
+  if (findValidated(Buffer.from([0x50, 0x41, 0x43, 0x4b]), index => hasPlausibleGitPackHeader(source, index))) return 'compressed archive container cannot be inspected';
   const skippableSuffix = Buffer.from([0x2a, 0x4d, 0x18]);
   for (let suffix = source.indexOf(skippableSuffix); suffix !== -1; suffix = source.indexOf(skippableSuffix, suffix + 1)) {
     if (hasSkippableFrame(source, suffix - 1)) return 'compressed archive container cannot be inspected';
@@ -677,6 +683,36 @@ function createOwnerHeaderStreamDetector() {
     finish() { finishLine(); return found; },
   };
 }
+function createProductHeaderStreamDetector() {
+  const canonicalHeader = PRODUCT_ROW_KEYS.join(',');
+  let line = '';
+  let discarded = false;
+  let found = false;
+  const isPaddingWhitespace = character => {
+    const code = character.codePointAt(0);
+    if (character === '\t') return false;
+    if (code <= 0x20) return code === 0x20 || (code >= 0x0a && code <= 0x0d);
+    return code === 0x00a0 || code === 0x1680 || (code >= 0x2000 && code <= 0x200a)
+      || code === 0x202f || code === 0x205f || code === 0x3000 || code === 0xfeff;
+  };
+  const finishLine = () => {
+    const normalized = line.includes('\t') && !line.includes(',') ? line.replaceAll('\t', ',') : line;
+    if (!discarded && normalized === canonicalHeader) found = true;
+    line = '';
+    discarded = false;
+  };
+  return {
+    feed(text) {
+      for (const character of text) {
+        if (OWNER_HEADER_RECORD_DELIMITER_RE.test(character) && character !== '\t') { finishLine(); continue; }
+        if (character === '"' || isPaddingWhitespace(character)) continue;
+        if (line.length < canonicalHeader.length) line += character;
+        else discarded = true;
+      }
+    },
+    finish() { finishLine(); return found; },
+  };
+}
 function createStructuralTextStreamScanner() {
   let tail = '';
   let incompleteUnicodeEscape = '';
@@ -689,6 +725,7 @@ function createStructuralTextStreamScanner() {
   const deferredPropertyPattern = new RegExp(`"(${structuralAlternation})"\\s*$`);
   const formatValuePattern = new RegExp(`"(${[...JSON_FORMATS].map(escapedRegex).join('|')})(?:"|(?=\\s*[,}\\]]|$))`, 'g');
   const ownerHeader = createOwnerHeaderStreamDetector();
+  const productHeader = createProductHeaderStreamDetector();
   let pendingProperty = null;
   const signalProperty = key => {
     if (key === 'format') formatPropertySignal = true;
@@ -705,6 +742,7 @@ function createStructuralTextStreamScanner() {
       const decoded = decodeChunk(text);
       const window = tail + decoded;
       ownerHeader.feed(decoded);
+      productHeader.feed(decoded);
       if (pendingProperty) {
         const next = decoded.match(/\S/u)?.[0];
         if (next) {
@@ -722,10 +760,12 @@ function createStructuralTextStreamScanner() {
     },
     finish() {
       const ownerSignal = ownerHeader.finish();
+      const productHeaderSignal = productHeader.finish();
       const structuralSignal = STRUCTURAL_KEY_GROUPS.some(group => group.every(key => propertySignals.has(key)));
       if (formatPropertySignal && formatValueSignals.size > 0) return 'private JSON format marker in malformed candidate';
       if (structuralSignal) return 'private snapshot or manifest key structure';
       if (ownerSignal) return 'owner decision sheet CSV header structure';
+      if (productHeaderSignal) return PRODUCT_HEADER_REASON;
       return null;
     },
   };
@@ -875,7 +915,7 @@ function createOffsetStreamDecoder(decoder, initialSkip) {
 
 function createBase64TransferScanner({ checkArchives = true } = {}) {
   let decoded = null;
-  let quartet = ''; let active = true; let saw = false; let terminal = false;
+  let quartet = ''; let active = true; let saw = false; let terminal = false; let preserveDecodedPrefix = false;
   const feedDecoded = bytes => {
     decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
     decoded.feed(bytes);
@@ -888,7 +928,11 @@ function createBase64TransferScanner({ checkArchives = true } = {}) {
       if (BASE64_TRANSFER_BYTE_ALLOWED[bytes[index]] === 0) { active = false; return; }
     }
     const transfer = bytes.toString('latin1').replace(/[\t\n\r ]/g, '');
-    if (!BASE64_TRANSFER_CHARACTERS_RE.test(transfer) || (terminal && transfer.length > 0)) { active = false; return; }
+    if (!BASE64_TRANSFER_CHARACTERS_RE.test(transfer) || (terminal && transfer.length > 0)) {
+      preserveDecodedPrefix = terminal && transfer.length > 0;
+      active = false;
+      return;
+    }
     const normalized = transfer.replaceAll('-', '+').replaceAll('_', '/');
     if (normalized.length === 0) return;
     saw = true;
@@ -911,7 +955,8 @@ function createBase64TransferScanner({ checkArchives = true } = {}) {
       for (let offset = 0; active && offset < source.length; offset += BASE64_TRANSFER_CHUNK_BYTES) consumeChunk(source.subarray(offset, offset + BASE64_TRANSFER_CHUNK_BYTES));
     },
     finish() {
-      if (!active || !saw) return null;
+      if (!saw) return null;
+      if (!active) return preserveDecodedPrefix ? decoded?.finish() ?? null : null;
       if (quartet.length) {
         // URL-safe transfer encoding commonly omits terminal padding. Only a
         // valid 2- or 3-character final quantum is safe to complete here.
@@ -937,7 +982,7 @@ function base64AlphabetValue(byte) {
 function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharacterSkip = 0 } = {}) {
   if (!Number.isInteger(initialCharacterSkip) || initialCharacterSkip < 0 || initialCharacterSkip > 3) throw new Error('private Phase 3C Base64 alignment is invalid');
   let characterSkip = initialCharacterSkip;
-  let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = null; let used = 0; let length = 0; let whitespace = 0; let whitespaceOverbound = false; let active = true; let terminal = false; let terminalTail = 0; let found = null;
+  let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = null; let used = 0; let length = 0; let whitespace = 0; let whitespaceOverbound = false; let active = true; let preserveDecodedPrefix = false; let terminal = false; let terminalTail = 0; let found = null;
   const flushDecodedBytes = () => {
     if (used === 0) return;
     decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
@@ -981,8 +1026,9 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
     return decoded?.finish() ?? null;
   };
   const finishToken = () => {
-    if (!active || length < 32) return null;
-    if (terminal) return terminalTail <= 1 ? finishDecoded() : null;
+    if (length < 32) return null;
+    if (!active) return preserveDecodedPrefix ? finishDecoded() : null;
+    if (terminal) return finishDecoded();
     // With one residual alphabet character, complete quanta remain a maximal
     // valid prefix. This covers an unpadded packet plus one trailing alphabet
     // character without decoding that unusable byte.
@@ -990,7 +1036,7 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
     if ((quartet.length === 2 || quartet.length === 3) && !feedDecoded(quartet.padEnd(4, '='))) return null;
     return finishDecoded();
   };
-  const reset = () => { characterSkip = initialCharacterSkip; quartet = ''; decoded = null; pendingQuartets = ''; batch = null; used = 0; length = 0; whitespace = 0; whitespaceOverbound = false; active = true; terminal = false; terminalTail = 0; };
+  const reset = () => { characterSkip = initialCharacterSkip; quartet = ''; decoded = null; pendingQuartets = ''; batch = null; used = 0; length = 0; whitespace = 0; whitespaceOverbound = false; active = true; preserveDecodedPrefix = false; terminal = false; terminalTail = 0; };
   const flush = () => { found ??= finishToken(); reset(); };
   const receive = byte => {
     const alphabet = base64AlphabetValue(byte);
@@ -999,7 +1045,7 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
       length += 1;
       if (whitespaceOverbound && length >= 32) { found ??= 'encoded transfer candidate exceeds bounded whitespace limit'; active = false; return; }
       if (characterSkip > 0) { characterSkip -= 1; return; }
-      if (terminal) { terminalTail += 1; if (terminalTail > 1) active = false; return; }
+      if (terminal) { terminalTail += 1; if (terminalTail > 1) { preserveDecodedPrefix = true; active = false; } return; }
       if (!active || quartet.includes('=')) { active = false; return; }
       quartet += alphabet;
       if (quartet.length === 4) { if (!feedDecoded(quartet)) active = false; quartet = ''; }
@@ -1007,7 +1053,7 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
     }
     if (byte === 0x3d) {
       length += 1;
-      if (!active || terminal || quartet.length < 2) { active = false; return; }
+      if (!active || terminal || quartet.length < 2) { preserveDecodedPrefix = terminal; active = false; return; }
       quartet += '=';
       if (quartet.length < 4) return;
       if (!/^(?:[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/.test(quartet)) { active = false; return; }
@@ -1104,7 +1150,7 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false, ini
 function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, initialNibbleSkip = 0 } = {}) {
   if (!Number.isInteger(initialNibbleSkip) || initialNibbleSkip < 0 || initialNibbleSkip > 1) throw new Error('private Phase 3C hexadecimal alignment is invalid');
   let nibbleSkip = initialNibbleSkip;
-  let scanner = null; let high = -1; let length = 0; let effectiveLength = 0; let whitespace = 0; let prefix = ''; let batch = null; let used = 0; let found = null;
+  let scanner = null; let high = -1; let length = 0; let effectiveLength = 0; let whitespace = 0; let whitespaceOverbound = false; let prefix = ''; let batch = null; let used = 0; let found = null;
   const feedBatch = () => {
     if (used === 0) return;
     scanner ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
@@ -1123,13 +1169,14 @@ function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, initial
     feedBatch();
     return scanner?.finish() ?? null;
   };
-  const reset = () => { nibbleSkip = initialNibbleSkip; scanner = null; high = -1; length = 0; effectiveLength = 0; whitespace = 0; prefix = ''; batch = null; used = 0; };
+  const reset = () => { nibbleSkip = initialNibbleSkip; scanner = null; high = -1; length = 0; effectiveLength = 0; whitespace = 0; whitespaceOverbound = false; prefix = ''; batch = null; used = 0; };
   const flush = () => { if (length > 0) found ??= finishToken(); reset(); };
   const receive = byte => {
     const nibble = hexNibble(byte);
     if (nibble !== -1) {
       whitespace = 0;
       length += 1;
+      if (whitespaceOverbound && length >= 64) { found ??= 'encoded transfer candidate exceeds bounded whitespace limit'; return; }
       if (nibbleSkip > 0) { nibbleSkip -= 1; return; }
       effectiveLength += 1;
       if (effectiveLength <= 64) {
@@ -1145,8 +1192,11 @@ function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, initial
       return;
     }
     if (isHexTransferWhitespace(byte) && length > 0) {
-      whitespace += 1;
+      whitespace = Math.min(whitespace + 1, MAX_EMBEDDED_HEX_WHITESPACE_BYTES + 1);
       if (whitespace <= MAX_EMBEDDED_HEX_WHITESPACE_BYTES) return;
+      whitespaceOverbound = true;
+      if (length >= 64) found ??= 'encoded transfer candidate exceeds bounded whitespace limit';
+      return;
     }
     flush();
   };
@@ -1655,7 +1705,7 @@ function executeWithAuthoritativeIndex(execute, root, indexFile) {
   });
 }
 
-export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, ranges = [], commits = [], includeIgnored = true, indexFile = null, testLimits = {} } = {}) {
+export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, ranges = [], commits = [], includeIgnored = true, indexFile = null, testLimits = {}, budget = new ScanBudget() } = {}) {
   const authoritativeExecute = executeWithAuthoritativeIndex(execute, root, indexFile);
   const ignoredVisible = includeIgnored
     ? gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, authoritativeExecute)
@@ -1670,7 +1720,6 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
   const rangeCommits = ranges.flatMap(range => commitsForRange(range, root, authoritativeExecute));
   const checkedCommits = [...new Set([...commits.map(commit => assertCommitSha(commit, 'history')), ...rangeCommits])];
   if (checkedCommits.length > reducedContainmentLimit(testLimits.maxCheckedCommits, MAX_HISTORY_COMMITS)) throw new Error('private Phase 3C containment checked-commit cap exceeded');
-  const budget = new ScanBudget();
   const index = await currentIndexCandidateViolations(root, authoritativeExecute, budget);
   const worktree = worktreeContentViolations(root, authoritativeExecute, budget, { includeIgnored });
   const historyBudget = new HistoryTraversalBudget(reducedContainmentLimit(testLimits.maxHistoryPaths, MAX_STRUCTURAL_SCAN_CANDIDATES - budget.candidates));
@@ -1724,7 +1773,7 @@ async function inspectOutgoingRefObject({ localRef, localSha, root, execute, bud
       if (reason) violations.push({ repoPath: localRef, reason });
       const headerEnd = bytes.indexOf(Buffer.from('\n\n'));
       const headers = bytes.subarray(0, headerEnd === -1 ? bytes.length : headerEnd).toString('ascii');
-      const target = /^object ([0-9a-f]{40,64})$/m.exec(headers)?.[1];
+      const target = /^object ((?:[0-9a-f]{40}|[0-9a-f]{64}))$/m.exec(headers)?.[1];
       if (!target) throw new Error('private Phase 3C pre-push containment received a malformed tag object');
       queue.push({ sha: target, depth: depth + 1 });
       continue;
@@ -1774,7 +1823,7 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     const summary = [...new Map(objectViolations.map(item => [`${item.repoPath}\0${item.reason}`, item])).values()];
     throw new Error(`private Phase 3C artifact containment failure: ${summary.map(item => `${item.repoPath} (${item.reason})`).join(', ')}`);
   }
-  return checkPrivateArtifactContainment({ root, execute, ranges, commits });
+  return checkPrivateArtifactContainment({ root, execute, ranges, commits, budget: outgoingBudget });
 }
 function commitsForNewPush(head, root, execute) {
   return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(head, 'push head')], root, execute);

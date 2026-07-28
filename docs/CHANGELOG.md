@@ -151,6 +151,16 @@ job are named `Phase 3C Trusted Base Containment`. The owning suite rejects the
 old ambiguous name so the eventual ruleset cannot silently select the weaker
 check.
 
+The final review-correction pass also closes gaps exposed only after exercising
+the committed bytes in a clean worktree. Product CSV/TSV headers, plausible Git
+pack containers, malformed wrappers with a valid encoded private prefix, and
+overlong whitespace-separated transfer candidates now fail closed. Outgoing
+tag inspection shares one scan budget with history traversal and supports both
+SHA-1 and SHA-256 object IDs. The Claude push-proof producer is stricter as
+well: only one terminal `FINAL_VERDICT: SHIP` with no contradictory verdict or
+BLOCKER/HIGH/MED finding can mint exact-head proof; `SHIP-WITH-FOLLOWUPS` is
+review evidence but no longer push authorization.
+
 Additional boundary review found two transfer-alignment cases and one allocation
 bound that were not yet explicit. Embedded Base64 now scans all four quartet
 phases after an ordinary alphabet prefix, and whitespace-tolerant hexadecimal

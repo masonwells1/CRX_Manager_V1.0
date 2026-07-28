@@ -30,8 +30,10 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
   // Exactly one terminal machine-readable verdict is required. This prevents
   // a quoted/injected `Verdict: SHIP` earlier in free-form review prose from
   // winning a first-match regex and minting proof.
-  if (matches.length !== 1 || !/^FINAL_VERDICT:/i.test(lines.at(-1) || "")) return null;
-  if (matches[0][1].toUpperCase() === "NEEDS-WORK") return null;
+  if (matches.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(lines.at(-1) || "")) return null;
+  if (matches[0][1].toUpperCase() !== "SHIP") return null;
+  if (lines.some((line) => /^OPUS5_VERDICT:\s*(?!SHIP\s*$)/i.test(line))) return null;
+  if (lines.some((line) => /^\s*(?:[-*]\s*)?(?:BLOCKER|HIGH|MED(?:IUM)?)\b\s*(?::|-|—)/i.test(line))) return null;
   return "clean";
 }
 

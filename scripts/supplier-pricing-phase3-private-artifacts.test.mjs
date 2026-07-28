@@ -168,7 +168,7 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`Public format name: ${POST_STAGE_A_SNAPSHOT_FORMAT}\n`)), null);
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`const format = ${JSON.stringify(POST_STAGE_A_SNAPSHOT_FORMAT)};\n`)), null);
   const canonicalOwnerHeader = OWNER_DECISION_HEADERS.join(',');
-  const canonicalProductHeader = ['id', 'sku', 'product_name', 'pricing_version', 'updated_at'].join(',');
+  const canonicalProductHeader = Object.keys(JSON.parse(REVIEWED_STRUCTURAL_SIGNATURE_SOURCE)).join(',');
   for (const header of [
     canonicalProductHeader,
     canonicalProductHeader.replaceAll(',', '\t'),
@@ -203,7 +203,7 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from(openPemAtEof)), 'private JSON format marker in malformed candidate', 'an open PEM body must be finalized at EOF');
   const crlfPem = `-----BEGIN CRX PACKET-----\r\n${base64Snapshot.match(/.{1,19}/g).join('\r\n')}\r\n-----END CRX PACKET-----\r\n`;
   assert.equal(structuralPrivateArtifactReason(Buffer.from(crlfPem)), 'private JSON format marker in malformed candidate', 'CRLF PEM-wrapped Base64 must be decoded across short Windows lines');
-  for (const prefix of ['BAD', ' \t '.repeat(32), 'x'.repeat(300)]) assert.equal(structuralPrivateArtifactReason(Buffer.from(`${prefix}${crlfPem}`)), null, 'same-line content before a PEM BEGIN marker must remain benign');
+  for (const prefix of ['BAD', ' \t '.repeat(32), 'x'.repeat(300)]) assert.equal(structuralPrivateArtifactReason(Buffer.from(`${prefix}${crlfPem}`)), 'private JSON format marker in malformed candidate', 'a malformed PEM wrapper must not erase the valid padded private Base64 body');
   const lfSplit = lfPem.indexOf('\n'); assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(lfPem.slice(0, lfSplit)), Buffer.from(lfPem.slice(lfSplit))]), 'private JSON format marker in malformed candidate', 'LF PEM detection must survive a line-boundary split');
   for (let split = crlfPem.indexOf('\r'); split !== -1; split = crlfPem.indexOf('\r', split + 1)) assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(crlfPem.slice(0, split + 1)), Buffer.from(crlfPem.slice(split + 1))]), 'private JSON format marker in malformed candidate', 'CRLF PEM detection must survive a split between CR and LF');
   const wrappedBase64 = JSON.stringify({ payload: urlSafeBase64Snapshot.replace(/=+$/, '') });
@@ -465,7 +465,10 @@ try {
   const rawHistoryArgv = boundedRangeCalls.find(args => args[0] === 'diff-tree'); assert(rawHistoryArgv.includes('--raw') && rawHistoryArgv.includes('--no-renames'), 'history traversal must read destination objects from one raw diff');
   assert(!boundedRangeCalls.some(args => args[0] === 'ls-tree'), 'ordinary changed paths must not spawn one ls-tree process per history entry');
   const boundedPrePushCalls = []; const boundedPrePushExecute = (command, args, options) => { boundedPrePushCalls.push(args); return fixtureGitExecute(command, args, options); };
-  await checkPrePushPrivateArtifactContainment({ root: boundedHistoryRepo, execute: boundedPrePushExecute, remoteName: 'origin', stdin: `refs/heads/packet ${boundedHistoryHead} refs/heads/packet ${'0'.repeat(40)}\n` });
+  const ordinaryContainmentMetrics = await checkPrivateArtifactContainment({ root: boundedHistoryRepo });
+  const boundedPrePushMetrics = await checkPrePushPrivateArtifactContainment({ root: boundedHistoryRepo, execute: boundedPrePushExecute, remoteName: 'origin', stdin: `refs/heads/packet ${boundedHistoryHead} refs/heads/packet ${'0'.repeat(40)}\n` });
+  assert(boundedPrePushMetrics.scanned_candidate_count > ordinaryContainmentMetrics.scanned_candidate_count, 'pre-push metrics must include direct outgoing object scans in the shared budget');
+  assert(boundedPrePushMetrics.scanned_logical_bytes > ordinaryContainmentMetrics.scanned_logical_bytes, 'pre-push byte metrics must include direct outgoing object scans in the shared budget');
   const boundedPrePushArgv = boundedPrePushCalls.find(args => args[0] === 'rev-list'); assert.deepEqual(boundedPrePushArgv.slice(0, 3), ['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`]); assert(!boundedPrePushArgv.includes('--not'), 'new-ref history enumeration must scan full bounded ancestry');
   const overCapPrePushExecute = (command, args, options) => args[0] === 'rev-list'
     ? `${Array.from({ length: MAX_HISTORY_COMMITS + 1 }, (_unused, index) => index.toString(16).padStart(40, '0')).join('\n')}\n`
@@ -990,11 +993,16 @@ git() { return 0; }
     'late-owner-header.csv': `# ordinary comment\n${OWNER_DECISION_HEADERS.join(',')}\n`,
     'phase-shifted-base64.txt': phaseShiftedBase64Snapshot,
     'phase-shifted-hex.txt': phaseShiftedHexSnapshot,
+    'private-product.tsv': canonicalProductHeader.replaceAll(',', '\t'),
+    'ordinary.bin': plausiblePack,
+    'private.bundle': Buffer.concat([Buffer.from('ordinary bundle preamble\n'), plausiblePack]),
   };
   const validatesEveryPositionClass = error => Object.keys(positionHistoryFiles).every(repoPath => error.message.includes(repoPath))
     && error.message.includes('private JSON format marker in malformed candidate')
     && error.message.includes('private snapshot or manifest key structure')
-    && error.message.includes('owner decision sheet CSV header structure');
+    && error.message.includes('owner decision sheet CSV header structure')
+    && error.message.includes('private product CSV/TSV header structure')
+    && error.message.includes('compressed archive container cannot be inspected');
   for (const [repoPath, contents] of Object.entries(positionHistoryFiles)) writeFileSync(path.join(positionHistoryRepo, repoPath), contents);
   await assert.rejects(() => fixtureContainment(positionHistoryRepo), validatesEveryPositionClass);
   git(positionHistoryRepo, ['add', ...Object.keys(positionHistoryFiles)]);

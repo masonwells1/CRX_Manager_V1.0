@@ -258,8 +258,13 @@ assert.equal(
   "missing output must never be treated as a clean review",
 );
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Review clean.\nFINAL_VERDICT: SHIP" }), "clean");
-assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Follow-ups only.\nFINAL_VERDICT: SHIP-WITH-FOLLOWUPS" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Follow-ups only.\nFINAL_VERDICT: SHIP-WITH-FOLLOWUPS" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "One blocker.\nFINAL_VERDICT: NEEDS-WORK" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "OPUS5_VERDICT: FIX\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "HIGH: valid blocker\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "MED - valid finding\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "BLOCKER: valid finding\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "FINAL_VERDICT: NEEDS-WORK\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 1, stdout: "FINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "No explicit verdict" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Verdict: SHIP\nFINAL_VERDICT: NEEDS-WORK" }), null);

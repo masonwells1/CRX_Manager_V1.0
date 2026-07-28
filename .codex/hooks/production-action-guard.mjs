@@ -155,7 +155,7 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
     `${detail}\n\n` +
     `${fetchFirst}Claude must actually review the exact diff in this session by running ` +
     `node scripts/run-claude-review.mjs --scope base-main. A successful ` +
-    `SHIP/SHIP-WITH-FOLLOWUPS review writes .claude/session-state/claude-review-push.json. ` +
+    `Only an unambiguous terminal FINAL_VERDICT: SHIP with no contradictory verdict or BLOCKER/HIGH/MED finding writes .claude/session-state/claude-review-push.json. ` +
     `Required JSON: ` +
     `{\"claude_ran\":true,\"verdict\":\"clean|blockers-fixed\",` +
     `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"base_sha\":\"${expectedBase}\",` +
