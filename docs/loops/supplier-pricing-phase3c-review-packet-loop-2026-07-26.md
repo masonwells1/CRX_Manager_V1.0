@@ -20,8 +20,10 @@ they do not describe this later review. `49eb3f01` contains only adopted
 moving-main CI invariants and remains an intermediate base. The bounded
 successor at `fa78c4f7` received a literal Opus 5 `SHIP-WITH-FOLLOWUPS`, but
 later transfer-alignment and bounded-read corrections superseded that head.
-The current candidate still requires a frozen exact SHA, full proof, and a
-matching fresh review capture before it can replace these rejected candidates.
+The accepted candidate is whichever committed head the orchestrator records
+after the latest correction with full proof and matching fresh review captures.
+This mission document deliberately does not predict the SHA of the commit that
+contains itself; the orchestrator binds evidence to `git rev-parse HEAD`.
 
 Capture and packet materialization are completed. An unattended agent must not
 recapture, regenerate, or materialize the private packet unless an explicit
@@ -335,7 +337,7 @@ Each cycle records:
 - correction lessons; and
 - next safe cycle or parked gate.
 
-## Current cycle status — rejected `12f19cb5` (2026-07-28)
+## Prior cycle status — rejected `12f19cb5` (2026-07-28)
 
 - `PROOF — Ran/Saw:` exact Windows, simulated pre-push, and network-disabled
   Linux packets were green for
@@ -343,8 +345,29 @@ Each cycle records:
 - `REVIEW — Rejected:` Luna and fresh independent Sol reproduced actionable
   shared review-parser and Product CSV/TSV header-parser defects. The immutable
   details and disposition are appended to the ledger.
-- `NOW:` bounded Terra repair is uncommitted and is not review evidence.
-- `REMAINING:` rerun complete proof, freeze a new exact SHA, then obtain fresh
+- `DISPOSITION:` its bounded Terra repair was later committed as `523d4412`;
+  no uncommitted state from that repair is current.
+- `GUARD:` PR #246 remains `PARKED`; this cycle authorizes no merge, deploy,
+  live mutation, Product decision, migration/apply, flag change, permission
+  change, external-trust-setting change, deletion, or force-push.
+
+## Current cycle status — rejected `523d4412` (2026-07-28)
+
+- `PROOF — Ran/Saw:` exact Windows, simulated pre-push, and network-disabled
+  Linux packets were green for
+  `523d4412c7ca7f6c739297eb62a4e9de7e5da696`.
+- `REVIEW — Rejected:` fresh independent Sol reproduced format-character
+  Markdown-prefix bypasses, missing straight-apostrophe wrappers, and two
+  letter-L confusables in the shared Claude/Codex proof parser. Luna separately
+  reproduced fail-open security-fold, Markdown-prefix, and balanced-wrapper
+  limit exhaustion. Literal `claude-opus-5 --effort high` returned
+  `FINAL_VERDICT: SHIP`, but any actionable reviewer rejection invalidates the
+  candidate.
+- `CURRENT CANDIDATE:` the commit containing the bounded Terra correction is
+  identified from `git rev-parse HEAD` after the orchestrator commits it. This
+  self-referential document does not guess that commit's SHA or call a committed
+  candidate uncommitted.
+- `REMAINING:` run complete proof on that committed head, then obtain fresh
   Luna, independent Sol, and literal `claude-opus-5 --effort high` verdicts.
 - `GUARD:` PR #246 remains `PARKED`; this cycle authorizes no merge, deploy,
   live mutation, Product decision, migration/apply, flag change, permission

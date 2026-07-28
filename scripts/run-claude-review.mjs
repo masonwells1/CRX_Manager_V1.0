@@ -29,7 +29,7 @@ const REVIEW_WRAPPER_PAIRS = new Map([
   ["[", "]"], ["(", ")"], ["{", "}"], ["<", ">"],
   ["【", "】"], ["〔", "〕"], ["（", "）"], ["［", "］"], ["｛", "｝"],
   ["〈", "〉"], ["《", "》"], ["「", "」"], ["『", "』"],
-  ["“", "”"], ["‘", "’"], ["«", "»"], ["‹", "›"], ['"', '"'],
+  ["“", "”"], ["‘", "’"], ["«", "»"], ["‹", "›"], ['"', '"'], ["'", "'"],
 ]);
 const REVIEW_SEVERITY_TOKEN_RE = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?$/i;
 const REVIEW_ACTION_TOKEN_RE = /^(?:FIX\s*\/\s*FOLLOW-?UPS?|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?$/i;
@@ -48,6 +48,7 @@ const REVIEW_CONFUSABLE_ASCII = new Map([
   ["Ι", "I"], ["І", "I"], ["Ӏ", "I"], ["і", "i"], ["ι", "i"],
   ["Ј", "J"], ["ј", "j"],
   ["Κ", "K"], ["К", "K"], ["κ", "k"], ["к", "k"],
+  ["ӏ", "L"], ["Ꮮ", "L"],
   ["Μ", "M"], ["М", "M"], ["м", "m"],
   ["Ν", "N"],
   ["Ο", "O"], ["О", "O"], ["ο", "o"], ["о", "o"],
@@ -62,7 +63,7 @@ const REVIEW_CONFUSABLE_ASCII = new Map([
   ["Ζ", "Z"],
 ]);
 
-function foldLeadingReviewSecurityText(value) {
+function foldLeadingReviewSecurityTextOnce(value) {
   const characters = Array.from(String(value || ""));
   const prefix = characters.slice(0, REVIEW_SECURITY_PREFIX_LIMIT).join("")
     .normalize("NFKC")
@@ -72,13 +73,28 @@ function foldLeadingReviewSecurityText(value) {
   return prefix + characters.slice(REVIEW_SECURITY_PREFIX_LIMIT).join("");
 }
 
-function stripReviewMarkdownPrefixes(value) {
+function foldLeadingReviewSecurityText(value, state = null) {
+  let folded = String(value || "");
+  // Two bounded passes let removal of an invisible prefix expose the next
+  // bounded prefix without ever scanning an unbounded reviewer line.
+  for (let depth = 0; depth < 2; depth += 1) {
+    folded = foldLeadingReviewSecurityTextOnce(folded);
+  }
+  if (foldLeadingReviewSecurityTextOnce(folded) !== folded && state) state.invalid = true;
+  return folded;
+}
+
+const REVIEW_MARKDOWN_PREFIX_RE = /^\s*(?:>\s*|#{1,6}(?=\s|$)\s*|(?:[-*+]\s+|\d+[.)]\s+)(?:\[(?:\s|x|X)\]\s+)?|\[(?:\s|x|X)\]\s+)/u;
+
+function stripReviewMarkdownPrefixes(value, state = null) {
   let remaining = String(value || "");
   for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
-    const match = /^\s*(?:>\s*|#{1,6}(?=\s|$)\s*|(?:[-*+]\s+|\d+[.)]\s+)(?:\[(?:\s|x|X)\]\s+)?|\[(?:\s|x|X)\]\s+)/u.exec(remaining);
+    const match = REVIEW_MARKDOWN_PREFIX_RE.exec(remaining);
     if (!match || match[0].length === 0) break;
     remaining = remaining.slice(match[0].length);
   }
+  const exhausted = REVIEW_MARKDOWN_PREFIX_RE.exec(remaining);
+  if (exhausted?.[0]?.length && state) state.invalid = true;
   return remaining;
 }
 
@@ -97,7 +113,7 @@ function isBalancedOuterReviewWrapper(value, opening, closing) {
   return depth === 0;
 }
 
-function unwrapBalancedReviewPunctuation(value) {
+function unwrapBalancedReviewPunctuation(value, state = null) {
   let unwrapped = String(value || "").trim();
   for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
     const opening = unwrapped[0];
@@ -105,10 +121,13 @@ function unwrapBalancedReviewPunctuation(value) {
     if (!closing || !isBalancedOuterReviewWrapper(unwrapped, opening, closing)) break;
     unwrapped = unwrapped.slice(1, -1).trim();
   }
+  const opening = unwrapped[0];
+  const closing = REVIEW_WRAPPER_PAIRS.get(opening);
+  if (closing && isBalancedOuterReviewWrapper(unwrapped, opening, closing) && state) state.invalid = true;
   return unwrapped;
 }
 
-function leadingBalancedReviewWrapper(value) {
+function leadingBalancedReviewWrapper(value, state = null) {
   const source = String(value || "").trimStart();
   const opening = source[0];
   const closing = REVIEW_WRAPPER_PAIRS.get(opening);
@@ -125,7 +144,7 @@ function leadingBalancedReviewWrapper(value) {
     if (character === opening) depth += 1;
     else if (character === closing) {
       depth -= 1;
-      if (depth === 0) return { token: unwrapBalancedReviewPunctuation(source.slice(1, index)), rest: source.slice(index + 1) };
+      if (depth === 0) return { token: unwrapBalancedReviewPunctuation(source.slice(1, index), state), rest: source.slice(index + 1) };
       if (depth < 0) return null;
     }
   }
@@ -142,22 +161,22 @@ function stripLeadingReviewSeparatorPunctuation(value) {
   return source.slice(separatorLength).trimStart();
 }
 
-function normalizeWrappedReviewClassification(value) {
+function normalizeWrappedReviewClassification(value, state = null) {
   const source = String(value || "").trim();
-  const wrapped = leadingBalancedReviewWrapper(source);
+  const wrapped = leadingBalancedReviewWrapper(source, state);
   if (!wrapped) return source;
   const token = wrapped.token;
   const compactToken = token.replace(/_/gu, "");
   if (!REVIEW_SEVERITY_TOKEN_RE.test(compactToken) && !REVIEW_ACTION_TOKEN_RE.test(compactToken) && !REVIEW_MACHINE_VERDICT_RE.test(token)) return source;
-  const suffix = unwrapBalancedReviewPunctuation(wrapped.rest.trimStart());
+  const suffix = unwrapBalancedReviewPunctuation(wrapped.rest.trimStart(), state);
   if (!suffix) return token;
   const detail = stripLeadingReviewSeparatorPunctuation(suffix);
   if (detail !== suffix) return `${token}: ${detail}`;
   return `${token} ${suffix}`;
 }
 
-function canonicalReviewMachineLine(value) {
-  const candidate = foldLeadingReviewSecurityText(String(value || "").trim());
+function canonicalReviewMachineLine(value, state = null) {
+  const candidate = foldLeadingReviewSecurityText(String(value || "").trim(), state);
   const label = /^(FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT)(.*)$/i.exec(candidate);
   if (!label) return null;
   const separatorAndValue = /^(\s*[\p{P}\p{S}]*):([\p{P}\p{S}]*\s*)(\S.*)$/u.exec(label[2]);
@@ -165,20 +184,20 @@ function canonicalReviewMachineLine(value) {
   return `${label[1].toUpperCase()}: ${separatorAndValue[3].trim()}`;
 }
 
-function normalizeReviewMachineLine(value) {
-  const unwrapped = unwrapBalancedReviewPunctuation(foldLeadingReviewSecurityText(value));
-  const direct = canonicalReviewMachineLine(unwrapped);
+function normalizeReviewMachineLine(value, state = null) {
+  const unwrapped = unwrapBalancedReviewPunctuation(foldLeadingReviewSecurityText(value, state), state);
+  const direct = canonicalReviewMachineLine(unwrapped, state);
   if (direct) return direct;
-  const wrapped = leadingBalancedReviewWrapper(unwrapped);
-  const wrappedMachine = wrapped ? canonicalReviewMachineLine(wrapped.token) : null;
+  const wrapped = leadingBalancedReviewWrapper(unwrapped, state);
+  const wrappedMachine = wrapped ? canonicalReviewMachineLine(wrapped.token, state) : null;
   if (wrappedMachine && /^[\s\p{P}\p{S}]*$/u.test(wrapped.rest)) return wrappedMachine;
   return unwrapped;
 }
 
-function normalizeReviewClassificationLine(value) {
-  let classified = normalizeWrappedReviewClassification(value);
+function normalizeReviewClassificationLine(value, state = null) {
+  let classified = normalizeWrappedReviewClassification(value, state);
   const severityPrefix = /^(severity\s*:\s*)(.+)$/i.exec(classified);
-  if (severityPrefix) classified = `Severity: ${normalizeWrappedReviewClassification(severityPrefix[2])}`;
+  if (severityPrefix) classified = `Severity: ${normalizeWrappedReviewClassification(severityPrefix[2], state)}`;
   // Underscores are removed only from the presentation-only classification
   // channel so `_H_I_G_H_` remains a severity label. `machine` below keeps
   // `FINAL_VERDICT` and the other true machine identities byte-for-byte.
@@ -186,19 +205,27 @@ function normalizeReviewClassificationLine(value) {
 }
 
 export function normalizeReviewOutputLine(line) {
-  const presentation = foldLeadingReviewSecurityText(stripReviewMarkdownPrefixes(line)
+  const state = { invalid: false };
+  // Fold format/variation characters before stripping Markdown so invisible
+  // characters cannot split a heading or list marker (for example,
+  // "\u200b### HIGH" or "-\u200b HIGH"). Fold the newly exposed prefix once
+  // more; each pass remains capped at REVIEW_SECURITY_PREFIX_LIMIT.
+  const securityFolded = foldLeadingReviewSecurityText(line, state);
+  const presentation = foldLeadingReviewSecurityText(stripReviewMarkdownPrefixes(securityFolded, state)
     .replace(/[*`\\]/gu, "")
-    .trim());
-  const machine = normalizeReviewMachineLine(presentation);
-  return { machine, classified: normalizeReviewClassificationLine(machine) };
+    .trim(), state);
+  const machine = normalizeReviewMachineLine(presentation, state);
+  return { machine, classified: normalizeReviewClassificationLine(machine, state), invalid: state.invalid };
 }
 
 export function reviewOutputHasActionableFindings(stdout) {
   const normalizedLines = String(stdout || "").split(/\r?\n/).map(normalizeReviewOutputLine);
   const noFinding = (value) => {
+    const state = { invalid: false };
     let candidate = stripLeadingReviewSeparatorPunctuation(String(value || "").trim());
     for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
-      const next = unwrapBalancedReviewPunctuation(candidate.replace(/[.!?…;:。！？]+$/u, "").trim());
+      const next = unwrapBalancedReviewPunctuation(candidate.replace(/[.!?…;:。！？]+$/u, "").trim(), state);
+      if (state.invalid) return false;
       if (next === candidate) break;
       candidate = next;
     }
@@ -221,12 +248,20 @@ export function reviewOutputHasActionableFindings(stdout) {
   };
   let blockingSection = null;
   let severityContextActive = false;
-  for (const { classified: line, machine } of normalizedLines) {
+  for (const { classified: line, machine, invalid } of normalizedLines) {
+    if (invalid) return true;
     if (!line) continue;
     if (/^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT):/i.test(machine)) return true;
+    let tableNormalizationInvalid = false;
     const tableCells = line.includes("|")
-      ? line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => normalizeReviewClassificationLine(cell))
+      ? line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => {
+        const state = { invalid: false };
+        const normalized = normalizeReviewClassificationLine(cell, state);
+        if (state.invalid) tableNormalizationInvalid = true;
+        return normalized;
+      })
       : null;
+    if (tableNormalizationInvalid) return true;
     const tableSeverity = tableCells?.map((cell) => new RegExp(`^${severityPattern}${countPattern}$`, "i").exec(cell))
       .find((match) => match) ?? null;
     if (tableSeverity) {

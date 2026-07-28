@@ -721,7 +721,44 @@ live mutation, flag enablement, deploy, or merge.
   Literal Opus's nonblocking parser nits and verdict are non-accepting for this
   cycle because any actionable reviewer rejection invalidates the candidate.
 - `DISPOSITION:` `12f19cb583343bd890f5d8e65f6c9b204954c2be` remains rejected.
-  The bounded parser and regression repair after it is uncommitted, unreviewed
-  evidence. PR #246 remains `PARKED`; no merge, deploy, live mutation, Product
+  The bounded parser and regression repair after it was then-uncommitted and
+  remained unreviewed evidence until committed as `523d4412`. PR #246 remains
+  `PARKED`; no merge, deploy, live mutation, Product classification, migration,
+  flag, permission, or external-trust-setting authorization is granted here.
+
+## Rejected exact candidate — `523d4412` (2026-07-28)
+
+- `PROOF — Ran/Saw:` the exact Windows Phase 3C packet, simulated pre-push
+  containment, and network-disabled Linux exact-SHA packet were green for
+  `523d4412c7ca7f6c739297eb62a4e9de7e5da696`. The containment proof checked
+  51,770 paths, 7 commits, 51,855 candidates, and 777,197,147 logical bytes.
+- `OPUS 5 — Non-accepting after rejection:` literal `claude-opus-5 --effort
+  high` run `2026-07-28T12-23-58-050Z-690963cc` completed with no permission
+  denials and `FINAL_VERDICT: SHIP`. The later reproducible Sol rejection
+  overrules that otherwise clean exact-SHA verdict.
+- `REVIEW — Rejected:` fresh independent Sol reproduced two leading
+  format-character bypasses in both proof consumers:
+  `\u200b### HIGH` and `-\u200b HIGH` survived because Markdown stripping ran
+  before security folding. The same review found the missing straight
+  apostrophe paired wrapper and unmapped letter-L confusables U+04CF Cyrillic
+  small palochka and U+13DE Cherokee LE, including `BLOCKER`/adjacent action
+  token variants.
+- `LUNA — Rejected:` Luna independently proved that exhausting each bounded
+  normalization lane silently stopped instead of invalidating proof. The exact
+  false-clean classes were 193 leading U+200B characters, 13 leading Markdown
+  quote markers, and 24 balanced square-bracket wrapper layers before a HIGH
+  finding. Luna found no additional candidate defect outside this shared
+  parser.
+- `BASELINE FOLLOW-UP — Outside this Phase 3C repair:` Luna separately observed
+  that `.codex/hooks/production-action-guard.mjs` does not recognize the
+  `gh -R owner/repo api -X PUT .../pulls/246/merge` argument order. That gap was
+  not introduced by this candidate and must receive its own bounded guard
+  repair; it is not authorization to merge, change settings, or widen this
+  parser correction.
+- `DISPOSITION:` `523d4412c7ca7f6c739297eb62a4e9de7e5da696` remains rejected.
+  The commit containing the bounded Terra correction becomes the current
+  candidate when the orchestrator records its actual `git rev-parse HEAD`
+  after commit; this append-only ledger does not predict its own commit SHA.
+  PR #246 remains `PARKED`; no merge, deploy, live mutation, Product
   classification, migration, flag, permission, or external-trust-setting
   authorization is granted here.
