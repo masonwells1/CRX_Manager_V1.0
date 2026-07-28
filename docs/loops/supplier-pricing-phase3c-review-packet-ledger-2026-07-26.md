@@ -692,3 +692,17 @@ live mutation, flag enablement, deploy, or merge.
   trusted-workflow/ruleset activation and proof; this record authorizes no
   merge, deploy, live mutation, Product classification, migration, or flag
   change.
+
+## Rejected exact candidate — `a5a66753` (2026-07-28)
+
+- `PROOF — Ran/Saw:` Windows and offline Linux Phase 3C proof packets were
+  green for `a5a6675312971904a16a475ee1efef89df9f072b`.
+- `REVIEW — Rejected:` Sol returned `FIX` for the shared proof parser and
+  quote-aware Product CSV/TSV header detection. Luna returned `FIX` for the
+  wider wrapper grammar. Its external-bootstrap trust-boundary observation is
+  the already-known `PARKED` limitation, not a candidate defect. Literal
+  `claude-opus-5` returned `SHIP-for-PARK`, but that clean verdict was
+  overruled by the reproducible Sol/Luna defects.
+- `DISPOSITION:` bounded repair work after `a5a66753` is unreviewed evidence.
+  PR #246 remains `PARKED`; no merge, deploy, live mutation, Product
+  classification, migration, or flag authorization is granted here.

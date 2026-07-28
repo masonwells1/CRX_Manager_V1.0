@@ -294,6 +294,50 @@ assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "[MEDIUM (1)] proof b
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "- [LOW]\n  - [None]\nFINAL_VERDICT: SHIP" }), "clean");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "[LOW (0)] [None]\n[NIT] optional wording polish\nFINAL_VERDICT: SHIP" }), "clean");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "This prose mentions a [HIGH] confidence check, not a finding.\nFINAL_VERDICT: SHIP" }), "clean");
+// Reviewers use more than square brackets when formatting findings. The proof
+// grammar must classify those line-start labels consistently, while leaving
+// ordinary prose and explicit empty/NIT-only sections eligible for clean proof.
+for (const finding of [
+  "- [ ] [HIGH] auth bypass",
+  "> - [ ] **[MEDIUM (1)]** proof gap",
+  "[HIGH]. auth bypass",
+  "Severity: [HIGH] auth bypass",
+  "[VERDICT: NEEDS-WORK]",
+  "(HIGH) authorization bypass",
+  "Severity: (HIGH) authorization bypass",
+  "<HIGH> authorization bypass",
+  "【HIGH】 authorization bypass",
+  "〔HIGH〕 authorization bypass",
+  "\t> - [ ] **〔 MEDIUM ( 1 ) 〕**\tproof gap",
+  "[[HIGH]] authorization bypass",
+  "[ [HIGH] ] authorization bypass",
+  "<OPUS5_VERDICT: FIX>",
+  "[FIX] required",
+  "(FOLLOW-UP) authorization fix",
+  "HIGH. authorization bypass",
+  "[HIGH]; authorization bypass",
+  "(MED)! proof gap",
+  "Severity: HIGH. authorization bypass",
+  "HIGH ; authorization bypass",
+]) {
+  assert.equal(claudeReviewProofVerdict({ status: 0, stdout: `${finding}\nFINAL_VERDICT: SHIP` }), null, `wrapped actionable review content must refuse Claude proof: ${finding}`);
+}
+for (const clean of [
+  "[HIGH (0)] [None]",
+  "Severity: <LOW> N/A",
+  "【NIT】 optional wording polish",
+  "FIX (0): None",
+  "FOLLOW-UP (0): N/A",
+  "HIGH : None",
+  "Severity: LOW - N/A",
+  "FIX (0) : None",
+  "The operator selected (HIGH) confidence, not a severity finding.",
+]) {
+  assert.equal(claudeReviewProofVerdict({ status: 0, stdout: `${clean}\nFINAL_VERDICT: SHIP` }), "clean", `explicitly clean or ordinary prose must remain eligible: ${clean}`);
+}
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Review clean.\n[FINAL_VERDICT: SHIP]" }), null, "wrapper normalization must not manufacture a terminal Claude verdict");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "[FINAL_VERDICT: SHIP]\nFINAL_VERDICT: SHIP" }), null, "a wrapped injected Claude verdict must contradict the real terminal verdict");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Review clean.\nFINAL VERDICT: SHIP" }), null, "machine verdict identity must retain its underscore");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "**FIX:** required\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Follow-ups:\n- fix real bug\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### HIGH\nNone.\n### Summary\nClean review.\nFINAL_VERDICT: SHIP" }), "clean");

@@ -240,7 +240,7 @@ remains `PARKED` and all 604 decisions remain `PENDING`.
 - focused, full, build, workflow, privacy, and deterministic proof is green;
 - Luna returns `CLEAN`;
 - a fresh independent Sol returns `CLEAN` for the exact SHA;
-- Claude review records its exact latest-available resolved Opus model, ends
+- Claude review uses literal `claude-opus-5 --effort high`, ends
   with exactly `FINAL_VERDICT: SHIP`, and reports no actionable
   BLOCKER/HIGH/MED/LOW finding or required fix/follow-up; NIT-only polish is
   nonblocking;

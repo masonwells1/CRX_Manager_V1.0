@@ -21,23 +21,122 @@ export function defaultClaudeReviewOutputPath({ root = ROOT } = {}) {
   return path.join(root, ".claude", "session-state", "claude-review-latest.txt");
 }
 
+// Keep presentation normalization bounded and deliberately narrower than a
+// Markdown parser. Review output is untrusted proof input: common line-start
+// wrappers must not hide a finding, but we must never synthesize a machine
+// verdict by deleting meaningful characters from an arbitrary line.
+const REVIEW_WRAPPER_PAIRS = new Map([
+  ["[", "]"], ["(", ")"], ["{", "}"], ["<", ">"],
+  ["【", "】"], ["〔", "〕"], ["（", "）"], ["［", "］"], ["｛", "｝"],
+  ["〈", "〉"], ["《", "》"], ["「", "」"], ["『", "』"],
+]);
+const REVIEW_SEVERITY_TOKEN_RE = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?$/i;
+const REVIEW_ACTION_TOKEN_RE = /^(?:FIX(?:ES)?|FOLLOW-?UPS?|FIX\s*\/\s*FOLLOW-?UPS?)(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?$/i;
+const REVIEW_MACHINE_VERDICT_RE = /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT)\s*:/i;
+const REVIEW_WRAPPER_DEPTH_LIMIT = 12;
+
+function stripReviewMarkdownPrefixes(value) {
+  let remaining = String(value || "");
+  for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
+    const match = /^\s*(?:>\s*|#{1,6}(?=\s|$)\s*|(?:[-*+]\s+|\d+[.)]\s+)(?:\[(?:\s|x|X)\]\s+)?|\[(?:\s|x|X)\]\s+)/u.exec(remaining);
+    if (!match || match[0].length === 0) break;
+    remaining = remaining.slice(match[0].length);
+  }
+  return remaining;
+}
+
+function isBalancedOuterReviewWrapper(value, opening, closing) {
+  if (!value.startsWith(opening) || !value.endsWith(closing)) return false;
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === opening) depth += 1;
+    else if (character === closing) {
+      depth -= 1;
+      if (depth < 0 || (depth === 0 && index !== value.length - 1)) return false;
+    }
+  }
+  return depth === 0;
+}
+
+function unwrapBalancedReviewPunctuation(value) {
+  let unwrapped = String(value || "").trim();
+  for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
+    const opening = unwrapped[0];
+    const closing = REVIEW_WRAPPER_PAIRS.get(opening);
+    if (!closing || !isBalancedOuterReviewWrapper(unwrapped, opening, closing)) break;
+    unwrapped = unwrapped.slice(1, -1).trim();
+  }
+  return unwrapped;
+}
+
+function leadingBalancedReviewWrapper(value) {
+  const source = String(value || "").trimStart();
+  const opening = source[0];
+  const closing = REVIEW_WRAPPER_PAIRS.get(opening);
+  if (!closing) return null;
+  let depth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === opening) depth += 1;
+    else if (character === closing) {
+      depth -= 1;
+      if (depth === 0) return { token: unwrapBalancedReviewPunctuation(source.slice(1, index)), rest: source.slice(index + 1) };
+      if (depth < 0) return null;
+    }
+  }
+  return null;
+}
+
+function normalizeWrappedReviewClassification(value) {
+  const source = String(value || "").trim();
+  const wrapped = leadingBalancedReviewWrapper(source);
+  if (!wrapped) return source;
+  const token = wrapped.token;
+  const compactToken = token.replace(/_/gu, "");
+  if (!REVIEW_SEVERITY_TOKEN_RE.test(compactToken) && !REVIEW_ACTION_TOKEN_RE.test(compactToken) && !REVIEW_MACHINE_VERDICT_RE.test(token)) return source;
+  const suffix = unwrapBalancedReviewPunctuation(wrapped.rest.trimStart());
+  if (!suffix) return token;
+  if (/^[.:|—-]/u.test(suffix)) return `${token}: ${suffix.slice(1).trimStart()}`;
+  return `${token} ${suffix}`;
+}
+
+function normalizeReviewMachineLine(value) {
+  const unwrapped = unwrapBalancedReviewPunctuation(value);
+  if (REVIEW_MACHINE_VERDICT_RE.test(unwrapped)) return unwrapped;
+  const wrapped = leadingBalancedReviewWrapper(unwrapped);
+  if (wrapped && REVIEW_MACHINE_VERDICT_RE.test(wrapped.token) && /^[\s.:;!?…—-]*$/u.test(wrapped.rest)) return wrapped.token;
+  return unwrapped;
+}
+
+function normalizeReviewClassificationLine(value) {
+  let classified = normalizeWrappedReviewClassification(value);
+  const severityPrefix = /^(severity\s*:\s*)(.+)$/i.exec(classified);
+  if (severityPrefix) classified = `Severity: ${normalizeWrappedReviewClassification(severityPrefix[2])}`;
+  // Underscores are removed only from the presentation-only classification
+  // channel so `_H_I_G_H_` remains a severity label. `machine` below keeps
+  // `FINAL_VERDICT` and the other true machine identities byte-for-byte.
+  return classified.replace(/^_+|_+$/gu, "").replace(/_/gu, "").trim();
+}
+
 export function normalizeReviewOutputLine(line) {
-  const machine = String(line || "")
-    .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
+  const presentation = stripReviewMarkdownPrefixes(line)
     .replace(/[*`\\]/gu, "")
-    .replace(/^_+|_+$/gu, "")
     .trim();
-  // Reviewers commonly wrap headings, counts, and explicit empty markers in
-  // brackets. Classification must treat those as the same grammar as bare
-  // labels, while `machine` preserves the normalized text for verdict checks.
-  return { machine, classified: machine.replace(/[_\[\]]/gu, "") };
+  const machine = normalizeReviewMachineLine(presentation);
+  return { machine, classified: normalizeReviewClassificationLine(machine) };
 }
 
 export function reviewOutputHasActionableFindings(stdout) {
   const normalizedLines = String(stdout || "").split(/\r?\n/).map(normalizeReviewOutputLine);
-  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(value.trim());
+  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(unwrapBalancedReviewPunctuation(value).trim());
   const severityPattern = "(BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)";
   const countPattern = "(?:\\s*\\(\\s*(\\d+)(?:\\s+findings?)?\\s*\\))?";
+  // Once an exact severity/action label begins the line, punctuation or a
+  // symbol before nonempty detail is a finding separator. This is intentionally
+  // broader than a hand-maintained colon/dash list, while mid-sentence prose
+  // never reaches these anchored classifiers.
+  const detailSeparator = "(?:\\s*[\\p{P}\\p{S}]+\\s*|\\s+)";
   const parseCount = value => {
     const match = /^(?:COUNT\s*[:=]\s*)?(\d+)(?:\s+findings?)?$/i.exec(String(value || "").trim());
     return match ? Number(match[1]) : null;
@@ -48,7 +147,7 @@ export function reviewOutputHasActionableFindings(stdout) {
     if (!line) continue;
     if (/^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT):/i.test(machine)) return true;
     const tableCells = line.includes("|")
-      ? line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim())
+      ? line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => normalizeReviewClassificationLine(cell))
       : null;
     const tableSeverity = tableCells?.map((cell) => new RegExp(`^${severityPattern}${countPattern}$`, "i").exec(cell))
       .find((match) => match) ?? null;
@@ -78,7 +177,7 @@ export function reviewOutputHasActionableFindings(stdout) {
       }
       continue;
     }
-    const severityLabel = new RegExp(`^SEVERITY\\s*(?::|-|—|\\|)\\s*${severityPattern}${countPattern}(?:\\s*(?::|-|—|\\|)\\s*(.+))?$`, "i").exec(line);
+    const severityLabel = new RegExp(`^SEVERITY\\s*:\\s*${severityPattern}${countPattern}(?:${detailSeparator}(.+))?$`, "iu").exec(line);
     if (severityLabel) {
       const isNit = /^NIT(?:PICK)?$/i.test(severityLabel[1]);
       const count = severityLabel[2] === undefined ? null : Number(severityLabel[2]);
@@ -122,7 +221,7 @@ export function reviewOutputHasActionableFindings(stdout) {
       severityContextActive = true;
       continue;
     }
-    const finding = new RegExp(`^(?:${severityPattern}|FIX(?:ES)?|FOLLOW-?UPS?|FIX\\s*\\/\\s*FOLLOW-?UPS?)${countPattern}(?:\\s*(?::|-|—)\\s*|\\s+)(.+)$`, "i").exec(line);
+    const finding = new RegExp(`^(?:${severityPattern}|FIX(?:ES)?|FOLLOW-?UPS?|FIX\\s*\\/\\s*FOLLOW-?UPS?)${countPattern}${detailSeparator}(.+)$`, "iu").exec(line);
     if (finding) {
       const severity = finding[1];
       const count = finding[2] === undefined ? null : Number(finding[2]);

@@ -173,6 +173,37 @@ try {
   const fullProductExportHeader = Object.keys(product(id1)).join(',');
   const reorderedProductSupersetHeader = ['container_type', 'updated_at', 'product_name', 'product_form', 'id', 'container_size', 'pricing_version', 'sku', 'inventory_unit', 'is_active'].join(',');
   const lateRequiredProductHeader = `${Array.from({ length: 700 }, (_unused, index) => `extra_product_column_${index}`).join(',')},${reorderedProductSupersetHeader}`;
+  // Product headers are recognized by the shared bounded streaming scanner.
+  // Delimiters and record endings inside a valid quoted cell are data, not
+  // structure; every split below proves that quote state survives chunk seams.
+  const quotedProductHeaderCases = [
+    ['CSV multiline quoted extra', 'updated_at,product_name,"extra\nfield",id,pricing_version,sku'],
+    ['TSV quoted opposite delimiter', '"extra,field"\tupdated_at\tproduct_name\tid\tpricing_version\tsku'],
+    ['CSV quoted tab extra', 'updated_at,product_name,"extra\tfield",id,pricing_version,sku'],
+    ['CSV escaped quote extra', 'updated_at,product_name,"extra ""quoted"" field",id,pricing_version,sku'],
+    // An opening quote cannot hide otherwise complete Product headers at EOF.
+    ['CSV unclosed quote fail-safe', 'updated_at,product_name,"extra,id,pricing_version,sku'],
+  ];
+  for (const [name, header] of quotedProductHeaderCases) {
+    assert.equal(structuralPrivateArtifactReason(Buffer.from(header)), 'private product CSV/TSV header structure', `${name} must be rejected directly`);
+    for (let split = 1; split < header.length; split += 1) {
+      assert.equal(
+        structuralPrivateArtifactStreamReason([Buffer.from(header.slice(0, split)), Buffer.from(header.slice(split))]),
+        'private product CSV/TSV header structure',
+        `${name} must survive chunk seam ${split}/${header.length}`,
+      );
+    }
+  }
+  for (const [name, header] of [
+    ['closed quoted text is one non-header cell', '"updated_at,product_name,id,pricing_version,sku"'],
+    ['quoted extra with missing required header', 'updated_at,product_name,"extra\nfield",id,pricing_version,not_sku'],
+    ['ordinary prose with a parenthetical severity', 'ordinary (HIGH) prose, not a Product header'],
+  ]) {
+    assert.equal(structuralPrivateArtifactReason(Buffer.from(header)), null, `${name} must remain benign directly`);
+    for (let split = 1; split < header.length; split += 1) {
+      assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(header.slice(0, split)), Buffer.from(header.slice(split))]), null, `${name} must remain benign across chunk seam ${split}/${header.length}`);
+    }
+  }
   assert(lateRequiredProductHeader.length > 4096, 'late required-header fixture must exceed the old fixed whole-line cap');
   for (const header of [
     canonicalProductHeader,
@@ -1107,6 +1138,7 @@ git() { return 0; }
     'phase-shifted-hex.txt': phaseShiftedHexSnapshot,
     'private-product-reordered.csv': reorderedProductSupersetHeader,
     'private-product-late-superset.tsv': lateRequiredProductHeader.replaceAll(',', '\t'),
+    'private-product-quoted-extra.csv': quotedProductHeaderCases[0][1],
     'ordinary.bin': plausiblePack,
     'private.bundle': Buffer.concat([Buffer.from('ordinary bundle preamble\n'), plausiblePack]),
   };

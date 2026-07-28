@@ -748,6 +748,16 @@ function createProductHeaderStreamDetector() {
   let discardedCell = false;
   let delimiter = null;
   let invalidLine = false;
+  let inQuotes = false;
+  let pendingQuote = false;
+  let afterQuote = false;
+  // If a quoted cell is still open at EOF, its commas/tabs are ambiguous. Keep
+  // only bounded header-sized fragments so an unterminated quote cannot hide a
+  // complete Product header while a valid quoted extra remains ordinary data.
+  const unclosedQuoteHeaders = new Set();
+  let unclosedQuoteCell = '';
+  let discardedUnclosedQuoteCell = false;
+  let unclosedQuoteDelimiter = null;
   let found = false;
   const isPaddingWhitespace = character => {
     const code = character.codePointAt(0);
@@ -756,8 +766,41 @@ function createProductHeaderStreamDetector() {
     return code === 0x00a0 || code === 0x1680 || (code >= 0x2000 && code <= 0x200a)
       || code === 0x202f || code === 0x205f || code === 0x3000 || code === 0xfeff;
   };
+  const addHeader = (target, value, discarded) => {
+    const normalized = normalizeCsvHeaderCell(value);
+    if (!discarded && requiredHeaders.has(normalized)) target.add(normalized);
+  };
+  const appendCellCharacter = character => {
+    if (character === '"' || isPaddingWhitespace(character)) return;
+    if (cell.length < maxRequiredHeaderChars) cell += character;
+    else discardedCell = true;
+  };
+  const appendUnclosedQuoteCharacter = character => {
+    if (character === '"' || isPaddingWhitespace(character)) return;
+    if (unclosedQuoteCell.length < maxRequiredHeaderChars) unclosedQuoteCell += character;
+    else discardedUnclosedQuoteCell = true;
+  };
+  const finishUnclosedQuoteCell = () => {
+    addHeader(unclosedQuoteHeaders, unclosedQuoteCell, discardedUnclosedQuoteCell);
+    unclosedQuoteCell = '';
+    discardedUnclosedQuoteCell = false;
+  };
+  const resetUnclosedQuoteState = () => {
+    unclosedQuoteHeaders.clear();
+    unclosedQuoteCell = '';
+    discardedUnclosedQuoteCell = false;
+    unclosedQuoteDelimiter = null;
+  };
+  const feedUnclosedQuoteCharacter = character => {
+    if (character === ',' || character === '\t' || OWNER_HEADER_RECORD_DELIMITER_RE.test(character)) {
+      finishUnclosedQuoteCell();
+      if ((character === ',' || character === '\t') && unclosedQuoteDelimiter === null) unclosedQuoteDelimiter = character;
+      return;
+    }
+    appendUnclosedQuoteCharacter(character);
+  };
   const finishCell = () => {
-    if (!discardedCell && requiredHeaders.has(normalizeCsvHeaderCell(cell))) matchedHeaders.add(normalizeCsvHeaderCell(cell));
+    addHeader(matchedHeaders, cell, discardedCell);
     cell = '';
     discardedCell = false;
   };
@@ -767,23 +810,108 @@ function createProductHeaderStreamDetector() {
     matchedHeaders.clear();
     delimiter = null;
     invalidLine = false;
+    inQuotes = false;
+    pendingQuote = false;
+    afterQuote = false;
+    resetUnclosedQuoteState();
+  };
+  const beginQuotedCell = () => {
+    inQuotes = true;
+    pendingQuote = false;
+    afterQuote = false;
+    resetUnclosedQuoteState();
   };
   return {
     feed(text) {
       for (const character of text) {
-        if (OWNER_HEADER_RECORD_DELIMITER_RE.test(character) && character !== '\t') { finishLine(); continue; }
-        if (character === ',' || character === '\t') {
-          if (delimiter === null) delimiter = character;
-          else if (delimiter !== character) invalidLine = true;
-          finishCell();
-          continue;
+        let current = character;
+        let reprocess = true;
+        while (reprocess) {
+          reprocess = false;
+          if (inQuotes) {
+            if (pendingQuote) {
+              if (current === '"') {
+                // RFC4180 escaped quote. It remains inside the quoted cell.
+                pendingQuote = false;
+                continue;
+              }
+              // The previous quote closed the cell. Consume the current byte
+              // with the ordinary delimiter/record grammar instead.
+              inQuotes = false;
+              pendingQuote = false;
+              afterQuote = true;
+              resetUnclosedQuoteState();
+              reprocess = true;
+              continue;
+            }
+            if (current === '"') {
+              pendingQuote = true;
+              continue;
+            }
+            appendCellCharacter(current);
+            feedUnclosedQuoteCharacter(current);
+            continue;
+          }
+          if (afterQuote) {
+            if (OWNER_HEADER_RECORD_DELIMITER_RE.test(current) && current !== '\t') {
+              afterQuote = false;
+              reprocess = true;
+              continue;
+            }
+            if (current === ',' || current === '\t') {
+              afterQuote = false;
+              reprocess = true;
+              continue;
+            }
+            if (isPaddingWhitespace(current)) continue;
+            // Text after a closing quote is malformed, but preserving the
+            // existing mixed-delimiter rejection is safer than reclassifying
+            // it as a valid Product header.
+            afterQuote = false;
+            invalidLine = true;
+            reprocess = true;
+            continue;
+          }
+          if (OWNER_HEADER_RECORD_DELIMITER_RE.test(current) && current !== '\t') { finishLine(); continue; }
+          if (current === ',' || current === '\t') {
+            if (delimiter === null) delimiter = current;
+            else if (delimiter !== current) invalidLine = true;
+            finishCell();
+            continue;
+          }
+          if (current === '"' && cell.length === 0 && !discardedCell) {
+            beginQuotedCell();
+            continue;
+          }
+          if (current === '"') {
+            invalidLine = true;
+            continue;
+          }
+          appendCellCharacter(current);
         }
-        if (character === '"' || isPaddingWhitespace(character)) continue;
-        if (cell.length < maxRequiredHeaderChars) cell += character;
-        else discardedCell = true;
       }
     },
-    finish() { finishLine(); return found; },
+    finish() {
+      if (inQuotes) {
+        if (pendingQuote) {
+          // A quote at EOF closes a valid final quoted cell.
+          inQuotes = false;
+          pendingQuote = false;
+          afterQuote = false;
+          resetUnclosedQuoteState();
+        } else {
+          // Fail closed only for this malformed EOF case: replay the bounded
+          // comma/tab-separated fragments from the still-open quoted cell so
+          // an opening quote cannot conceal every remaining Product key.
+          finishUnclosedQuoteCell();
+          for (const header of unclosedQuoteHeaders) matchedHeaders.add(header);
+          if (delimiter === null && unclosedQuoteDelimiter !== null) delimiter = unclosedQuoteDelimiter;
+          inQuotes = false;
+        }
+      }
+      finishLine();
+      return found;
+    },
   };
 }
 function createStructuralTextStreamScanner() {
