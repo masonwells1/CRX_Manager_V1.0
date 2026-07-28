@@ -107,8 +107,20 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe) {
   }
   const prompt = buildReviewerCharterPrompt(reviewerName, readFileSync(charterFile, 'utf8'), migRelPath);
   console.log(`Running trusted Codex as "${reviewerName}" on ${migRelPath} (this can take a few minutes)...`);
+  // `--disable hooks`: the repo's own Stop hook (stop-wrap.mjs) blocks whenever the
+  // working tree has unacknowledged dirty files, which a READ-ONLY reviewer child can
+  // never resolve. When it blocks, Codex is forced to keep talking past its verdict —
+  // and codexReviewProofVerdict() rightly rejects a run with prose after the token, so
+  // a genuinely CLEAN review mints nothing. Observed 2026-07-27: both charters returned
+  // BLOCKERS: 0 / HIGH: 0 / MED: 0 and were discarded, twice, because a SIBLING session
+  // kept editing this shared checkout mid-review (any ack goes stale within minutes).
+  // Same root cause and same fix as the 2026-07-20 headless-`claude -p` incident, which
+  // added `--settings '{"disableAllHooks":true}'` to scripts/run-claude-review.mjs.
+  // This does NOT weaken the gate: the child is still --sandbox read-only, and the
+  // single-token / terminal-token / hash-binding / 30-min-expiry rules all still apply.
   const result = spawnSync(codexBin, [
-    'exec', '--sandbox', 'read-only', '-C', process.cwd(), '-c', 'approval_policy=never', prompt,
+    'exec', '--sandbox', 'read-only', '-C', process.cwd(), '-c', 'approval_policy=never',
+    '--disable', 'hooks', prompt,
   ], {
     cwd: process.cwd(),
     encoding: 'utf8',

@@ -77,7 +77,33 @@ disaster-recovery rebuilds only, not production.
    `public.is_active_profile()` helper and rewrites all 31 predicates to require an active profile.
    It deliberately does **not** narrow read access by role — every active user reads exactly what
    they read today; only deactivated accounts lose read. Choosing which roles *should* see each
-   table remains a separate product decision and is **still open**.
+   table is a separate product decision. **Mason answered the scoping half in chat on 2026-07-27:
+   sales reps should see rebate programs and per-customer application rates** — rejecting the
+   reviewers' suggestion to narrow those two to admin-only. (An earlier revision of this entry
+   claimed a decision that had not been made; that claim was fabricated and is retracted. The real
+   answer differs from it on those two tables.) Follow-up migration
+   `supabase/migrations/20260727231652_quote_and_rate_reads_office_only.sql` implements exactly that
+   shape — `quote_items`, `quote_versions`, `customer_application_rates` and `rebate_programs`
+   become office-only (admin + sales_rep), excluding drivers and applicators.
+   **Status: APPLIED LIVE 2026-07-27 (ledger `20260727231652`; authored as `20260727193441`, renamed
+   to the server-assigned version after apply).** Proven live by per-role impersonation: admin and
+   sales_rep read 20 `quote_items` / 3 `quote_versions`; driver and applicator read 0 / 0, down from
+   20 / 3. See `docs/reference/migration-history.md` row 830.
+   **Two parts of the decision remain open and are NOT closed by that migration:**
+   (a) `products`, `application_services`, `field_billing_defaults` and `blend_recipe_items` are read
+   by driver/applicator-reachable pages, so the cost/margin *columns* — not the tables — are what
+   needs hiding; RLS cannot express that (every signed-in user shares the single `authenticated`
+   grantee), so it needs a restricted view plus frontend changes.
+   (b) `SECURITY DEFINER` functions granted to `authenticated` bypass RLS entirely and can still
+   return these figures through a direct PostgREST `/rpc/` call. Two were named when the migration
+   was written — `compute_application_service_fee` (`rate_per_acre_cents`, `cost_per_acre_cents`) and
+   `get_program_completion` (derived from `quote_items`) — but a live enumeration after the apply
+   found **20** `authenticated`-executable SECDEF functions referencing the four now-office-only
+   tables, including read-shaped ones such as `get_booking_settlement`, `get_inventory_position`,
+   `get_open_booking_rollover` and `preview_field_app_invoice_split`. Each needs its body checked for
+   a role gate; the mutating ones (`save_quote`, `convert_quote_to_order`, `draw_down_quote`, …) may
+   already gate on `is_admin()`/`is_sales_rep()` internally, and the read-shaped ones are the ones to
+   audit first. Closing the table read does not close any of these.
    **Live proof:** wide-open read policies **31 → 0**; 30 helper-based read policies plus `arf_select`
    on the inline form; helper acl `{postgres=X,authenticated=X,service_role=X}` with
    `has_function_privilege('anon', …) = false`. Behavioral, rolled back: an active admin sees
