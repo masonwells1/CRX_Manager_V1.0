@@ -49,6 +49,17 @@
 -- removed, office-role predicate weakened, SQLSTATE downgraded, error-label tokens retained while the
 -- checks were deleted, guard moved after the read, `search_path=attacker, pg_temp`, a non-canonical
 -- search_path spelling, and proconfig dropped entirely.
+--
+-- KNOWN LIMIT -- this is a regression ALARM, not a proof of enforcement. It reads catalog text, so it
+-- establishes that the guard is present, correctly shaped, and positioned ahead of the read; it
+-- cannot establish that the guard is REACHABLE. A body that satisfies every arm while burying the
+-- checks in a branch that never executes would still pass. Static analysis cannot close that gap.
+-- So: a green sweep is necessary, never sufficient. Whenever either body is re-emitted, prove the
+-- gate the way the original fix was proven -- impersonate a real non-office JWT
+-- (`set_config('request.jwt.claims', ...)` + `SET LOCAL ROLE authenticated`) and confirm SQLSTATE
+-- 42501, with an active admin as the positive control. A service_role/postgres call proves nothing
+-- here: `auth.uid()` is NULL for those, so both functions raise AUTH_REQUIRED for the wrong reason
+-- and look blocked even with the office-role check deleted.
 
 -- Match on `oid::regprocedure::text`, NOT pg_get_function_identity_arguments -- the latter includes
 -- parameter NAMES ('p_service_id uuid, ...'), so a signature-only comparison against it never
