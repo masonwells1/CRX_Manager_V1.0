@@ -44,7 +44,7 @@
 --
 -- Verified against live 2026-07-28: zero rows, both functions resolved.
 --
--- Mutation-tested against the live bodies the same date, so the zero above is not vacuous. Fifteen
+-- Mutation-tested against the live bodies the same date, so the zero above is not vacuous. Sixteen
 -- mutations, each fired the correct arm, and the unmutated control fired neither:
 --    1 null-session test removed          9 whole gate line-commented with `--`
 --    2 office-role predicate weakened    10 whole gate wrapped in a /* */ block comment
@@ -53,11 +53,13 @@
 --      deleted                           13 SECURITY DEFINER dropped
 --    5 guard relocated after the read    14 gate DELETED, parked in `$guard1$` (DIGIT in the tag)
 --    6 search_path=attacker, pg_temp     15 gate DELETED, parked in `$phase3_x$` (repo-style tag)
---    7 non-canonical search_path spelling
+--    7 non-canonical search_path spelling 16 protected read re-spelled `"public"."quote_items"`
 --    8 proconfig dropped entirely
 -- 9 and 10 motivated `exec_src`; 11 and 12 motivated `code_src`; 14 and 15 forced the dollar-quote tag
 -- grammar to be widened -- both of them PASSED an earlier revision of this file that matched only
--- letters-and-underscore tags.
+-- letters-and-underscore tags. 16 forced `protected_read_not_located`: it left the gate untouched and
+-- merely quoted the table name, which dropped read_pos to 0 and -- under the old `read_pos > 0 AND ...`
+-- ordering condition -- turned the position check off without firing anything.
 --
 -- When re-running this set, capture the gate with a regex whose FIRST quantifier is non-greedy
 -- (`'(IF auth\.uid\(\) IS NULL THEN.*?END IF;.*?END IF;)'`). A leading `\s+` silently makes the whole
@@ -99,6 +101,10 @@
 -- where that put the "read" at offset 293 and the guard at 574 and reported a false violation.
 -- Comment stripping now removes that particular collision on its own; the anchor stays anyway, because
 -- it also keeps the position check off table names appearing in string literals or column aliases.
+-- Because the pattern is narrower than SQL's spelling freedom, a NON-match is treated as a violation
+-- (`protected_read_not_located`) rather than as permission to skip the position check -- see that arm.
+-- Practical consequence: a legitimate rewrite that changes how the read is spelled will trip this
+-- predicate, and the fix is to widen `read_pattern` here in the same change.
 WITH target(signature, needs_authenticated_exec, read_pattern) AS (
   VALUES
     ('compute_application_service_fee(uuid,uuid,numeric,integer)', false,
@@ -206,8 +212,29 @@ violation AS (
       OR code_src !~* 'NOT\s*\(\s*(public\.)?is_admin\(\)\s*OR\s*(public\.)?is_sales_rep\(\)\s*\)'
       OR exec_src !~* 'ERRCODE\s*=\s*''insufficient_privilege'''
       OR guard_pos = 0
-      OR (read_pos > 0 AND guard_pos > read_pos)
+      OR guard_pos > read_pos
     )
+
+  UNION ALL
+  -- Fail closed when the protected read cannot be found at all.
+  --
+  -- The ordering check above used to be written `read_pos > 0 AND guard_pos > read_pos`, which SKIPPED
+  -- itself whenever read_pattern failed to match -- so a rewrite that merely spells the table
+  -- differently disabled the position check without tripping anything. `FROM "public"."quote_items"`
+  -- is enough: quoted identifiers are perfectly ordinary SQL and the pattern does not cover them.
+  -- Proven live on get_program_completion: the control resolves read_pos = 2545, and re-spelling every
+  -- reference as `"public"."quote_items"` drops read_pos to 0 while the old ordering condition stayed
+  -- silent. That function still carries EXECUTE for `authenticated`, so the silent case is exactly the
+  -- one that matters.
+  --
+  -- So an unlocatable read is now a violation in its own right, and the ordering condition above is
+  -- unconditional (`guard_pos > read_pos` is trivially true at read_pos = 0, but this arm names the
+  -- real problem). A cosmetic rewrite of the FROM clause will raise this alarm rather than pass; that
+  -- is the intended direction. Widen read_pattern -- do NOT delete this arm -- when that happens.
+  SELECT signature, 'protected_read_not_located'
+  FROM resolved
+  WHERE oid IS NOT NULL
+    AND read_pos = 0
 
   UNION ALL
   -- Exact search_path, not a substring match. '%pg_temp%' would also accept
