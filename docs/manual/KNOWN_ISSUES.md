@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-28** (live high-water re-read this date via the Supabase connector: **916 ledger rows, max version `20260728182141`** — that top row is `20260728123224_secdef_pricing_reads_office_only`, applied 2026-07-28 18:21:41 UTC by a parallel session under a server-assigned version; reconcile it on `name`, not `version`, and see section 0. Before it: **915 rows, max `20260727231652`** — four migrations applied live on 2026-07-27. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Section 0a now has nothing open**; it is retained for its proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-28** (live high-water re-read this date via the Supabase connector: **916 ledger rows, max version `20260728182141`**. `secdef_pricing_reads_office_only` **RESOLVES section 0**: both remaining `SECURITY DEFINER` pricing readers now enforce active admin/sales-rep access in-body, with explicit execute grants. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Sections 0 and 0a now have nothing open**; they are retained for their proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -9,13 +9,23 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## 0. RESOLVED 2026-07-28 — two SECURITY DEFINER functions leaked pricing past the office-only reads
 
-**Status: CLOSED — migration `20260728123224_secdef_pricing_reads_office_only` is APPLIED LIVE**
-(2026-07-28 18:21:41 UTC). **Ledger identity — reconcile on `name`, not `version`:** it was applied
-by a parallel session, so the server assigned ledger version **`20260728182141`** while `name` stayed
-`20260728123224_secdef_pricing_reads_office_only`. A lookup by version `20260728123224` returns zero
-rows and reads as "never applied" — it is not. Earlier revisions of this section said PARKED / NOT
-applied live; that was true when written and is now stale. Verification, the residual exposure that
-is still open, and the standing regression guard are recorded at the end of this section.
+**Status: FIXED LIVE by migration `20260728182141_secdef_pricing_reads_office_only`**
+(applied 2026-07-28 18:21:41 UTC). Mason explicitly approved the parked migration on 2026-07-28. The
+mandatory RLS and drift reviewers first blocked its inherited function ACLs; those findings were
+fixed by explicit `PUBLIC`/`anon` revokes and the required `authenticated` regrant. PR #257 landed
+the gate and PR #260 the pinned execute grants; both passed protected CI, SQL validation, CodeQL,
+Vercel, and CodeRabbit with no actionable comments before merge. Fresh hash-bound migration proofs
+returned CLEAN immediately before apply. Post-apply catalog proof confirms both functions are
+`STABLE SECURITY DEFINER`, pin `search_path=public, pg_temp`, and contain both `AUTH_REQUIRED` and
+the admin-or-sales-rep guard. `anon` can execute neither function; `authenticated` can execute only
+`get_program_completion`; `service_role` can execute both.
+
+**Ledger-identity note, now historical.** It was applied by a parallel session, so the server
+assigned ledger version `20260728182141` while the file on disk was still named
+`20260728123224_secdef_pricing_reads_office_only.sql` — a lookup by version `20260728123224`
+returned zero rows and read as "never applied". The file has since been renamed to match the ledger
+version, so the two now agree and no name-vs-version reconciliation is needed any more. Earlier
+revisions of this section said PARKED / NOT applied live; that was true when written and is stale.
 
 **Finding (audited and proven live 2026-07-27; full evidence in
 `docs/audits/2026-07-27-secdef-pricing-bypass-audit-handoff.md` — do not re-run the audit).**
@@ -66,11 +76,6 @@ ACL. They are stated so the grant set is explicit in the migration rather than i
 reviewer finding that prompted them was a false positive against live, but the fix is free and is
 the pattern `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql` already set.
 
-**APPLIED LIVE 2026-07-28 18:21:41 UTC — leak CLOSED.** Applied by a parallel session, so the
-`supabase_migrations.schema_migrations` row carries **version `20260728182141`** with
-`name = '20260728123224_secdef_pricing_reads_office_only'`. Reconcile on `name`, not `version` — a
-lookup by version `20260728123224` returns nothing and will read as "never applied".
-
 **Verified live after the apply, two directions.** Catalog state: both bodies contain the
 `AUTH_REQUIRED`/`INSUFFICIENT_ROLE` gate, both remain `SECURITY DEFINER` with a pinned `search_path`,
 one overload each, `authenticated` no longer holds EXECUTE on `compute_application_service_fee`,
@@ -102,33 +107,48 @@ assertion 2 (having passed 1 and 3), and assertion 4 also failed then
 (`has_function_privilege('authenticated', ...)` was still `true`). After the apply the same set passes.
 Red before, green after — not green either way.
 
-**Still open, reported separately:** `application_services.default_rate_per_acre_cents` and
-`cost_per_acre_cents` remain readable by any active profile through the `application_services_select`
-policy (`USING (is_active_profile())`). Live count of services with `cost_per_acre_cents > 0` is
-currently **0** of 4, so nothing is leaking today, but the policy is the residual hole — the two SECDEF
-functions were only one route to those columns.
+**Residual item — CLOSED by `20260728210030_application_service_cost_admin_only`.**
+`application_services.cost_per_acre_cents` was readable by any active profile through the
+`application_services_select` policy (`USING (is_active_profile())`) — the two SECDEF functions were
+only one route to it. Live count of services with `cost_per_acre_cents > 0` was **0** of 4, so nothing
+had leaked; the fix landed before the column was populated.
 
-**No consumer justifies it (verified live 2026-07-28).** An earlier note in `src/lib/rlsContracts.test.ts`
+**No consumer justified it (verified live 2026-07-28).** An earlier note in `src/lib/rlsContracts.test.ts`
 claimed the column stayed driver-readable "because Jobs/JobDetail need it". They do not. Every
 driver-facing read is column-narrow — `ApplicationServicePicker` takes `id, name,
 default_rate_per_acre_cents, is_active`; `Jobs.tsx`, `BlendTicketDetail.tsx` and
 `FieldAppSplitInvoiceEditor.tsx` take `id, name` (plus `vehicle_id`); `JobDetail.tsx` never references
-the table. The only readers of `cost_per_acre_cents` are `ApplicationServices.tsx` and
-`ApplicationServiceDetail.tsx`, both mounted behind `<ProtectedRoute allowedRoles={['admin']}>`. So this
-is the same shape as the leak just closed — a React route guard that is not in the data path — and
-closing it costs nothing in function. Postgres has no column-level RLS and every app user shares the
-`authenticated` role, so a column GRANT cannot discriminate by app role: the fix is to move
-`cost_per_acre_cents` onto an office-gated companion table (`is_admin() OR is_sales_rep()`), which is a
-zero-risk data move while the live count is still 0. Needs Mason's approval — it is a schema change
-plus two admin-page edits.
+the table. The only readers of `cost_per_acre_cents` were `ApplicationServices.tsx` and
+`ApplicationServiceDetail.tsx`, both mounted behind `<ProtectedRoute allowedRoles={['admin']}>` — the
+same shape as the leak just closed, a React route guard that is not in the data path.
+
+**How it was fixed, and a correction to what this section previously said.** An earlier revision
+concluded that "a column GRANT cannot discriminate by app role, so the fix is to move the column to an
+office-gated companion table". The premise is right — Postgres has no column-level RLS and every app
+user shares the `authenticated` role — but the conclusion was wrong, and no table move was needed. A
+`SECURITY DEFINER` function owned by `postgres` reads columns **as postgres**, so revoking the column
+from `authenticated` does not affect it. The migration therefore revokes `SELECT, INSERT, UPDATE,
+REFERENCES` on the table from `authenticated`, re-grants on the explicit nine-column list that omits
+the cost, and re-admits admins through two gated RPCs
+(`admin_get_application_service_costs` / `admin_set_application_service_cost`). Note the revoke-then-regrant
+shape is required: a table-level grant implies every column and `REVOKE … (col)` does not subtract from
+it. All five functions that touch `application_services` were verified live to be SECDEF owned by
+`postgres`, so the money engine is untouched — including `preview_field_app_invoice_split`, which reads
+the table with `SELECT *` and never names the cost column at all.
+
+**Two traps this class of change sets, worth remembering.** (1) PostgREST `.select()` with no argument
+means `select=*`, so `DELETE … RETURNING *` on a table with a revoked column now fails; name the columns.
+(2) In PL/pgSQL, `bool_and()` assigned into an `integer` variable is not an implicit cast — it falls back
+to I/O conversion and dies with `22P02 invalid input syntax for type integer: "t"`.
 
 **Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
 `customer_application_rates` policies are untouched. Sales reps keep their access.
 
-**Known cosmetic leftover, not exploitable:** `enforce_quote_accepted_fully_drawn` is a trigger
+**Accepted cosmetic inconsistency, not exploitable and no action planned:**
+`enforce_quote_accepted_fully_drawn` is a trigger
 function (returns `trigger`, not RPC-callable) and is the only one in the set with EXECUTE to `anon`
-— inconsistent with `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`. Optional
-cleanup, deliberately not bundled here.
+— inconsistent with `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`. This is
+recorded for audit accuracy, not as open remediation work.
 
 ---
 
