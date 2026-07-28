@@ -23,8 +23,7 @@ grouped `FIX`/`FOLLOW-UPS` findings, and finding text that starts with
 `Low-level`. Regression coverage preserves legitimate empty severity sections
 while rejecting each reproduced proof-minting bypass, including a terminal
 zero-count section immediately before the unchanged machine verdict. The Phase
-3C CI bootstrap
-also emits deliberate update guidance when a candidate head predates the
+3C CI bootstrap also emits deliberate update guidance when a candidate head predates the
 containment checker instead of exiting with an opaque Git error. The owning
 packet, agent-workflow, parser, and documentation checks pass with these guards.
 
@@ -37,6 +36,13 @@ generated workflow map. Exact top-level ignored local-tool roots (`backups/`,
 `.perf-sweep-data/`, `.epa-data-quality/`, `.vercel/`) skip before file reads;
 forced-tracked, staged, modified, and historical content under those paths
 retains the ordinary capped scanners.
+
+The Phase 3C containment history scan now exempts only six reviewed immutable
+revisions of its synthetic test fixture, matched by exact commit, path, and
+structural-signature reason. The exported audit records are deeply frozen while
+the lookup set stays private; current, staged, worktree, future-history,
+lookalike-path, and other-reason candidates remain fully scanned. A local replay
+of PR #246's real base-to-candidate GitHub event completed successfully.
 
 The private-artifact containment checker now keeps transfer decoding bounded in
 the hook/CI path. UTF-32 JSON and owner-decision CSV signals are decoded
@@ -194,7 +200,7 @@ overlong whitespace-separated transfer candidates now fail closed. Outgoing
 tag inspection shares one scan budget with history traversal and supports both
 SHA-1 and SHA-256 object IDs. The Claude push-proof producer is stricter as
 well: only one terminal `FINAL_VERDICT: SHIP` with no contradictory verdict or
-BLOCKER/HIGH/MED finding can mint exact-head proof; `SHIP-WITH-FOLLOWUPS` is
+  BLOCKER/HIGH/MED/LOW finding can mint exact-head proof; `SHIP-WITH-FOLLOWUPS` is
 review evidence but no longer push authorization. Bare BLOCKER/HIGH/MED section
 headings carry forward to their following finding text, so a grouped Markdown
 review cannot hide a blocking bullet beneath a contradictory terminal `SHIP`.
@@ -285,7 +291,7 @@ merged it from the PR page.
 The new `proofSearchDirs()` (in `codex-push-lib.mjs`, shared with the Codex side) enumerates
 `git worktree list --porcelain` and scans every sibling checkout's session-state. **Widening the
 search does not widen what counts:** `proofValid()` still demands GitHub's exact head SHA, GitHub's
-exact `baseRefOid`, a clean/blockers-fixed verdict and an age inside 30 minutes, and
+ exact `baseRefOid`, a clean verdict and an age inside 30 minutes, and
 `review-proof-guard.mjs` still blocks hand-writing a proof in any directory. These are sibling
 checkouts of one repository — a proof rejected in the primary checkout is rejected in all of them.
 Enumeration failure falls back to the primary directory alone, which can only make the gate

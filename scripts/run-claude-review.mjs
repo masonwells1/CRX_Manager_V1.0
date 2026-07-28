@@ -162,19 +162,10 @@ export function reviewOutputHasActionableFindings(stdout) {
 
 export function claudePushProofRefusalDiagnostic({
   executionState,
-  initialClean,
-  contextUnchanged,
-  proofVerdict,
-  headSha,
-  baseSha,
+  withholdReason,
 } = {}) {
-  if (executionState !== "VERIFIED") return null;
-  let reason = "terminal SHIP contract or actionable-finding check failed";
-  if (!initialClean) reason = "the reviewed base-main scope started from a dirty worktree";
-  else if (!contextUnchanged) reason = "HEAD, origin/main, or the worktree changed during review";
-  else if (!/^[0-9a-f]{40}$/i.test(String(headSha || "")) || !/^[0-9a-f]{40}$/i.test(String(baseSha || ""))) reason = "HEAD or origin/main did not resolve to a full commit SHA";
-  else if (proofVerdict) reason = "the proof could not be bound to the verified commit context";
-  return `Claude review VERIFIED but no push proof was minted: ${reason}.`;
+  if (executionState !== "VERIFIED" || typeof withholdReason !== "string" || !withholdReason.trim()) return null;
+  return `Claude review VERIFIED but no push proof was minted: ${withholdReason.trim()}.`;
 }
 
 export function claudeReviewProofVerdict({ status, stdout } = {}) {
@@ -198,6 +189,32 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
   if (machineVerdicts.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(machineVerdicts[0])) return null;
   if (reviewOutputHasActionableFindings(lines.slice(0, -1).join("\n"))) return null;
   return "clean";
+}
+
+export function claudeReviewProofWithholdReason({
+  executionState,
+  initialStatus,
+  contextUnchanged,
+  proofVerdict,
+  headSha,
+  baseSha,
+} = {}) {
+  if (executionState !== "VERIFIED") {
+    return `review execution state is ${executionState || "unknown"}, not VERIFIED`;
+  }
+  if (String(initialStatus || "").trim()) {
+    return "the worktree or index was dirty when the review started";
+  }
+  if (!contextUnchanged) {
+    return "HEAD, origin/main, or worktree state changed while the review was running";
+  }
+  if (!/^[0-9a-f]{40}$/i.test(headSha || "") || !/^[0-9a-f]{40}$/i.test(baseSha || "")) {
+    return "HEAD or origin/main did not resolve to a full 40-character commit SHA";
+  }
+  if (!proofVerdict) {
+    return "review output did not satisfy the clean-proof contract: exactly one terminal FINAL_VERDICT: SHIP and no actionable BLOCKER, HIGH, MED, LOW, FIX, or FOLLOW-UP finding";
+  }
+  return null;
 }
 
 export function claudeExecutable({
@@ -259,7 +276,7 @@ function usage() {
     "  --output <path>       Output file (default .claude/session-state/claude-review-latest.txt)",
     "  --model <alias>       Claude model alias/id (default claude-opus-5)",
     "  --effort <level>      low|medium|high|xhigh|max (default high)",
-    "  --timeout-ms <ms>     Hard timeout; timeout is BLOCKED (default 300000)",
+    "  --timeout-ms <ms>     Hard timeout; timeout is BLOCKED (default 900000)",
     "  --dry-run             Print the prompt instead of calling Claude",
   ].join("\n");
 }
@@ -531,12 +548,13 @@ export function buildClaudeReviewPrompt({
     "- Flag correctness / red-line / requirement-gap issues only; do not pad the report with style or defensive-coding nitpicks.",
     "",
     "Expected output:",
-    "- verdict: SHIP / NEEDS-WORK",
-    "- findings grouped as BLOCKER / HIGH / MED / LOW / NIT",
+    "- use separate BLOCKER, HIGH, MED, LOW, and NIT sections; never combine severity headings",
+    "- write `None.` in each BLOCKER, HIGH, MED, and LOW section that has no finding",
     "- SHIP requires no actionable BLOCKER/HIGH/MED/LOW and no required FIX/follow-up; NIT-only polish is nonblocking",
     "- each finding must cite file:line evidence",
     "- explicitly say where you agree or disagree with Codex's position",
     "- exact next step for Mason in plain English",
+    "- do not emit any other VERDICT or OPUS5_VERDICT label",
     "- end with exactly one final line: FINAL_VERDICT: SHIP or FINAL_VERDICT: NEEDS-WORK",
   ];
 
@@ -806,18 +824,22 @@ export function runClaudeReview(options) {
       !gitContext.status.trim() && contextUnchanged
       ? claudeReviewProofVerdict({ status: result.status, stdout: parsed.result })
       : null;
-    if (proofVerdict && /^[0-9a-f]{40}$/i.test(headSha) && /^[0-9a-f]{40}$/i.test(baseSha)) {
+    const withholdReason = claudeReviewProofWithholdReason({
+      executionState,
+      initialStatus: gitContext.status,
+      contextUnchanged,
+      proofVerdict,
+      headSha,
+      baseSha,
+    });
+    if (!withholdReason) {
       const proofPath = writeClaudePushProof({ headSha, baseSha, verdict: proofVerdict });
       process.stdout.write(`Claude push proof written to ${proofPath}\n`);
     } else {
       clearClaudePushProof();
       const diagnostic = claudePushProofRefusalDiagnostic({
         executionState,
-        initialClean: !gitContext.status.trim(),
-        contextUnchanged,
-        proofVerdict,
-        headSha,
-        baseSha,
+        withholdReason,
       });
       if (diagnostic) process.stderr.write(`${diagnostic}\n`);
     }

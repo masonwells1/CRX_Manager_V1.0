@@ -9,7 +9,7 @@ import { canonical, loadSnapshot, makeManifest, sha256 } from './generate-suppli
 import { buildOwnerDecisionSheet, ownerDecisionSheetHash } from './generate-supplier-pricing-phase3-owner-decision-sheet.mjs';
 import { verifyManifest } from './verify-supplier-pricing-phase3-classification-manifest.mjs';
 import { verifyOwnerDecisionSheet } from './verify-supplier-pricing-phase3-owner-decision-sheet.mjs';
-import { checkCommitMessagePrivateArtifactContainment, checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, forbiddenArtifactReason, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, isStructuralSignatureExempt, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, parseCli, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason, STRUCTURAL_SIGNATURE_EXEMPTIONS, STRUCTURAL_SIGNATURE_REASON, validateStructuralSignatureExemptions } from './check-supplier-pricing-phase3-private-artifacts.mjs';
+import { checkCommitMessagePrivateArtifactContainment, checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, forbiddenArtifactReason, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS, ignoredLargeCandidateHasPrivateSignal, isStructuralSignatureExempt, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, parseCli, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason, STRUCTURAL_SIGNATURE_EXEMPTIONS, STRUCTURAL_SIGNATURE_REASON, validateHistoricalStructuralSignatureExemptions, validateStructuralSignatureExemptions } from './check-supplier-pricing-phase3-private-artifacts.mjs';
 import { assertExternalArtifactPath, assertExternalPrivateDirectory, CONTAINER_TYPE_ALLOWLIST, loadValidatedSnapshot, MAX_PRIVATE_ARTIFACT_BYTES, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRODUCT_FORM_ALLOWLIST, readValidatedPrivateArtifact, REPO_ROOT, validatePostStageASnapshot, without, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const temp = mkdtempSync(path.join(os.tmpdir(), 'crx-phase3c-synthetic-'));
@@ -478,9 +478,9 @@ try {
       }
     }
   }
-  const perFileBudget = new ScanBudget(); perFileBudget.admit(MAX_STRUCTURAL_SCAN_BYTES); throws(() => new ScanBudget().admit(MAX_STRUCTURAL_SCAN_BYTES + 1), 'per-file');
+  const perFileBudget = new ScanBudget(); perFileBudget.admit(MAX_STRUCTURAL_SCAN_BYTES, 'public/exact-limit.bin'); throws(() => new ScanBudget().admit(MAX_STRUCTURAL_SCAN_BYTES + 1, 'public/over-limit.bin'), 'per-file scan cap exceeded at public/over-limit\\.bin');
   assert.equal(MAX_TOTAL_STRUCTURAL_SCAN_BYTES, 3 * 1024 * 1024 * 1024, 'total scan budget must retain measured first-push headroom');
-  const totalBudget = new ScanBudget(); for (let index = 0; index < MAX_TOTAL_STRUCTURAL_SCAN_BYTES / MAX_STRUCTURAL_SCAN_BYTES; index += 1) totalBudget.admit(MAX_STRUCTURAL_SCAN_BYTES); throws(() => totalBudget.admit(1), 'total-byte');
+  const totalBudget = new ScanBudget(); for (let index = 0; index < MAX_TOTAL_STRUCTURAL_SCAN_BYTES / MAX_STRUCTURAL_SCAN_BYTES; index += 1) totalBudget.admit(MAX_STRUCTURAL_SCAN_BYTES, `public/charged-${index}.bin`); throws(() => totalBudget.admit(1, 'public/over-total.bin'), 'total-byte scan cap exceeded at public/over-total\\.bin');
   const candidateBudget = new ScanBudget(); for (let index = 0; index < MAX_STRUCTURAL_SCAN_CANDIDATES; index += 1) candidateBudget.admit(0); throws(() => candidateBudget.admit(0), 'candidate-count');
   assert.equal(MAX_HISTORY_COMMITS, 4_096);
   const gitOutputOptions = []; const capturedGitOutput = (_command, _args, options) => { gitOutputOptions.push(options); return 'synthetic git output'; };
@@ -513,6 +513,42 @@ try {
   await assert.rejects(() => checkPrePushPrivateArtifactContainment({ root: boundedHistoryRepo, execute: overCapPrePushExecute, remoteName: 'origin', stdin: `refs/heads/packet ${boundedHistoryHead} refs/heads/packet ${'0'.repeat(40)}\n` }), /checked-commit cap exceeded/);
   assert.deepEqual(STRUCTURAL_SIGNATURE_EXEMPTIONS, {}, 'structural-signature path exemptions must remain empty');
   assert.equal(isStructuralSignatureExempt('scripts/supplier-pricing-phase3-private-artifacts.test.mjs', STRUCTURAL_SIGNATURE_REASON), false);
+  const reviewedHistoricalFixtureCommits = [
+    'fa78c4f76808159897b5bd3d9d29fd04ffa24341',
+    '5e3bb07fa835928c951ee2b6dbd42315821bb7c9',
+    '075d47e9eec1970935ed1da2e85b90fd7d0c0540',
+    'dc6d4d47ad33dfe64b31295fffac39c980e15f2f',
+    '84f0302d6c1ff5b1f7e4a858197381cea48fbff0',
+    'c9ace3027bb4afcddb76adc128156e97eb63a12e',
+  ];
+  const reviewedHistoricalFixturePath = 'scripts/supplier-pricing-phase3-private-artifacts.test.mjs';
+  assert.equal(Object.isFrozen(HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS), true, 'exported historical exemption audit records must be immutable');
+  assert.equal(HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS.length, 6);
+  assert(HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS.every(record => Object.isFrozen(record)), 'each exported audit record must be immutable');
+  assert.throws(() => HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS.push({}), TypeError);
+  assert.throws(() => { HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS[0].commit = 'a'.repeat(40); }, TypeError);
+  const validHistoricalExemption = {
+    commit: reviewedHistoricalFixtureCommits[0],
+    repoPath: reviewedHistoricalFixturePath,
+    reason: STRUCTURAL_SIGNATURE_REASON,
+    rationale: 'Reviewed immutable synthetic test fixture with no private packet data.',
+  };
+  for (const invalidExemptions of [
+    [{ ...validHistoricalExemption, commit: 'not-a-sha' }],
+    [{ ...validHistoricalExemption, repoPath: `${reviewedHistoricalFixturePath}.bak/../unsafe` }],
+    [{ ...validHistoricalExemption, reason: 'private JSON format marker in malformed candidate' }],
+    [{ ...validHistoricalExemption, rationale: 'too short' }],
+    [validHistoricalExemption, { ...validHistoricalExemption }],
+  ]) {
+    assert.throws(() => validateHistoricalStructuralSignatureExemptions(invalidExemptions), /historical structural-signature exemption|duplicated/);
+  }
+  for (const commit of reviewedHistoricalFixtureCommits) {
+    assert.equal(isStructuralSignatureExempt(reviewedHistoricalFixturePath, STRUCTURAL_SIGNATURE_REASON, commit), true, `reviewed immutable fixture ${commit} must be exempt in history only`);
+    assert.equal(isStructuralSignatureExempt(reviewedHistoricalFixturePath, 'private JSON format marker in malformed candidate', commit), false, 'history exemption must not hide another reason');
+    assert.equal(isStructuralSignatureExempt(`${reviewedHistoricalFixturePath}.bak`, STRUCTURAL_SIGNATURE_REASON, commit), false, 'history exemption must not match a lookalike path');
+    assert.equal(isStructuralSignatureExempt(reviewedHistoricalFixturePath, STRUCTURAL_SIGNATURE_REASON, `${commit[0] === '0' ? '1' : '0'}${commit.slice(1)}`), false, 'history exemption must not match another commit');
+  }
+  assert.equal(isStructuralSignatureExempt(reviewedHistoricalFixturePath, STRUCTURAL_SIGNATURE_REASON), false, 'current worktree/index scans must not inherit a history exemption');
   assert.equal(isStructuralSignatureExempt('scripts/supplier-pricing-phase3-private-artifacts.test.mjs', 'private JSON format marker in malformed candidate'), false, 'an exemption must not hide a different structural reason');
   assert.equal(isStructuralSignatureExempt('scripts/supplier-pricing-phase3-private-artifacts.test.mjs.bak', STRUCTURAL_SIGNATURE_REASON), false, 'an exemption must not act as a filename prefix');
   assert.equal(isStructuralSignatureExempt(`${'a'.repeat(40)}:scripts/supplier-pricing-phase3-private-artifacts.test.mjs`, STRUCTURAL_SIGNATURE_REASON), false, 'a SHA-like filename prefix must not impersonate an internal history label');

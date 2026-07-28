@@ -87,7 +87,7 @@ function unsafeStructuralSignatureExemptionPath(repoPath) {
   const segments = repoPath.split('/');
   if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) return 'path must not contain empty or traversal segments';
   if (segments.some(segment => segment.toLowerCase() === 'private-artifacts' || segment.toLowerCase() === '.git')) return 'path must not be inside a private-artifact or Git administration path';
-  if ([...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => repoPath.startsWith(prefix))) return 'path must not use a tool-owned or ignored prefix';
+  if ([...TOOL_OWNED_IGNORED_PREFIXES, ...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => repoPath.startsWith(prefix))) return 'path must not use a tool-owned or ignored prefix';
   return null;
 }
 
@@ -111,6 +111,46 @@ export function validateStructuralSignatureExemptions(exemptions) {
 export const STRUCTURAL_SIGNATURE_EXEMPTIONS = validateStructuralSignatureExemptions({
 });
 const STRUCTURAL_SIGNATURE_EXEMPTION_PATHS = new Set(Object.keys(STRUCTURAL_SIGNATURE_EXEMPTIONS));
+
+export function validateHistoricalStructuralSignatureExemptions(exemptions) {
+  if (!Array.isArray(exemptions)) throw new Error('private Phase 3C historical structural-signature exemptions must be an array');
+  const identities = new Set();
+  const validated = [];
+  for (const exemption of exemptions) {
+    if (!exemption || typeof exemption !== 'object' || Array.isArray(exemption)) throw new Error('private Phase 3C historical structural-signature exemption must be an object');
+    const commit = String(exemption.commit || '').toLowerCase();
+    const repoPath = String(exemption.repoPath || '');
+    if (!/^[0-9a-f]{40}$/u.test(commit)) throw new Error('private Phase 3C historical structural-signature exemption requires an exact SHA-1 commit');
+    const pathError = unsafeStructuralSignatureExemptionPath(repoPath);
+    if (pathError) throw new Error(`private Phase 3C historical structural-signature exemption rejected: ${pathError}`);
+    if (exemption.reason !== STRUCTURAL_SIGNATURE_REASON) throw new Error('private Phase 3C historical structural-signature exemption requires the exact structural-signature reason');
+    if (typeof exemption.rationale !== 'string' || exemption.rationale.trim().length < 25) throw new Error('private Phase 3C historical structural-signature exemption requires a concrete review rationale');
+    const identity = `${commit}\0${repoPath}\0${exemption.reason}`;
+    if (identities.has(identity)) throw new Error('private Phase 3C historical structural-signature exemption is duplicated');
+    identities.add(identity);
+    validated.push(Object.freeze({
+      commit,
+      repoPath,
+      reason: exemption.reason,
+      rationale: exemption.rationale.trim(),
+    }));
+  }
+  return Object.freeze(validated);
+}
+
+const REVIEWED_HISTORICAL_FIXTURE_PATH = 'scripts/supplier-pricing-phase3-private-artifacts.test.mjs';
+const REVIEWED_HISTORICAL_FIXTURE_RATIONALE = 'Reviewed immutable synthetic scanner-test fixture revision; contains no private packet data.';
+export const HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS = validateHistoricalStructuralSignatureExemptions([
+  { commit: 'fa78c4f76808159897b5bd3d9d29fd04ffa24341', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: '5e3bb07fa835928c951ee2b6dbd42315821bb7c9', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: '075d47e9eec1970935ed1da2e85b90fd7d0c0540', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: 'dc6d4d47ad33dfe64b31295fffac39c980e15f2f', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: '84f0302d6c1ff5b1f7e4a858197381cea48fbff0', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: 'c9ace3027bb4afcddb76adc128156e97eb63a12e', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+]);
+const HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTION_IDENTITIES = new Set(
+  HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS.map(({ commit, repoPath, reason }) => `${commit}\0${repoPath}\0${reason}`),
+);
 
 /**
  * Husky and Git can export GIT_DIR/GIT_INDEX_FILE/etc. Those variables would
@@ -189,11 +229,15 @@ export function forbiddenArtifactReason(repoPath) {
 export function findForbiddenPrivateArtifactPaths(paths) {
   return paths.map(repoPath => ({ repoPath, reason: forbiddenArtifactReason(repoPath) })).filter(item => item.reason);
 }
-export function isStructuralSignatureExempt(repoPath, reason) {
-  return reason === STRUCTURAL_SIGNATURE_REASON && STRUCTURAL_SIGNATURE_EXEMPTION_PATHS.has(String(repoPath));
+export function isStructuralSignatureExempt(repoPath, reason, historyCommit = null) {
+  const normalizedPath = String(repoPath);
+  if (reason !== STRUCTURAL_SIGNATURE_REASON) return false;
+  if (STRUCTURAL_SIGNATURE_EXEMPTION_PATHS.has(normalizedPath)) return true;
+  if (typeof historyCommit !== 'string') return false;
+  return HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTION_IDENTITIES.has(`${historyCommit.toLowerCase()}\0${normalizedPath}\0${reason}`);
 }
-function acceptedStructuralReason(repoPath, reason) {
-  return reason && !isStructuralSignatureExempt(repoPath, reason) ? reason : null;
+function acceptedStructuralReason(repoPath, reason, historyCommit = null) {
+  return reason && !isStructuralSignatureExempt(repoPath, reason, historyCommit) ? reason : null;
 }
 function bareRepositoryObjectRoot(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
@@ -245,11 +289,11 @@ function normalizeCsvHeaderCell(value) {
 
 export class ScanBudget {
   constructor() { this.candidates = 0; this.logicalBytes = 0; }
-  admit(size) {
-    if (!Number.isSafeInteger(size) || size < 0) throw new Error('private Phase 3C containment could not determine candidate size');
-    if (this.candidates >= MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error('private Phase 3C containment candidate-count cap exceeded');
-    if (size > MAX_STRUCTURAL_SCAN_BYTES) throw new Error('private Phase 3C containment per-file scan cap exceeded');
-    if (this.logicalBytes > MAX_TOTAL_STRUCTURAL_SCAN_BYTES - size) throw new Error('private Phase 3C containment total-byte scan cap exceeded');
+  admit(size, repoPath = '<unknown>') {
+    if (!Number.isSafeInteger(size) || size < 0) throw new Error(`private Phase 3C containment could not determine candidate size at ${repoPath}`);
+    if (this.candidates >= MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error(`private Phase 3C containment candidate-count cap exceeded at ${repoPath}`);
+    if (size > MAX_STRUCTURAL_SCAN_BYTES) throw new Error(`private Phase 3C containment per-file scan cap exceeded at ${repoPath}`);
+    if (this.logicalBytes > MAX_TOTAL_STRUCTURAL_SCAN_BYTES - size) throw new Error(`private Phase 3C containment total-byte scan cap exceeded at ${repoPath}`);
     this.candidates += 1;
     this.logicalBytes += size;
   }
@@ -1413,7 +1457,7 @@ function scanWorktreeCandidate(root, repoPath, { afterFirstPass, cache = null, b
   if (!entry.isFile()) return null;
   const followed = statSync(file);
   if (!sameWorktreeStatIdentity(entry, followed) || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
-  budget.admit(entry.size);
+  budget.admit(entry.size, repoPath);
   const fd = openSync(file, 'r');
   try {
     assertStableWorktreeCandidate(root, repoPath, file, entry, fd, cache);
@@ -1497,7 +1541,7 @@ async function scanGitObjectEntries(entries, root, budget) {
       if (match[1].toLowerCase() !== entry.spec.toLowerCase()) throw new Error('private Phase 3C containment received a mismatched Git blob header');
       if (match[2] !== (entry.type ?? 'blob')) throw new Error('private Phase 3C containment received an unexpected Git object type');
       const size = Number(match[3]);
-      budget.admit(size);
+      budget.admit(size, entry.repoPath);
       const scanner = createStructuralByteStreamScanner();
       let remaining = size;
       while (remaining > 0) {
@@ -1647,6 +1691,11 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // Other ignored paths remain operator-controlled packet candidates, so an
     // ignored archive at the repository root or in an ordinary folder fails
     // closed just like tracked and untracked archives.
+    // These exact top-level roots are generated locally and ignored by Git.
+    // Skipping them at the ignored-source boundary prevents backups and tool
+    // caches from blocking every push. If a file is force-added, its source is
+    // staged/tracked instead and it receives the full structural/archive scan.
+    if (source === 'ignored' && isOperatorOwnedIgnoredPath(repoPath)) continue;
     const checkArchives = source !== 'ignored' || !isToolOwnedIgnoredPath(repoPath);
     const result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
     const acceptedReason = acceptedStructuralReason(repoPath, result?.reason);
@@ -1733,13 +1782,13 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
       const bareRoot = commitContainsBareRepository(commit, repoPath, root, execute);
       if (bareRoot) violations.push({ repoPath: `${commit}:${bareRoot}`, reason: 'bare Git repository' });
       if (!REGULAR_GIT_MODES.has(tree.mode) || tree.type !== 'blob') { violations.push({ repoPath: `${commit}:${repoPath}`, reason: 'non-regular Git mode' }); continue; }
-      entries.push({ repoPath: `${commit}:${repoPath}`, exemptionPath: repoPath, spec: tree.object, key: `history:${commit}:${repoPath}` });
+      entries.push({ repoPath: `${commit}:${repoPath}`, exemptionPath: repoPath, commit, spec: tree.object, key: `history:${commit}:${repoPath}` });
     }
   }
   const reasons = await scanGitObjectEntries(entries, root, budget);
   for (const entry of entries) {
     const reason = reasons.get(entry.key);
-    const acceptedReason = acceptedStructuralReason(entry.exemptionPath, reason);
+    const acceptedReason = acceptedStructuralReason(entry.exemptionPath, reason, entry.commit);
     if (acceptedReason) violations.push({ repoPath: entry.repoPath, reason: acceptedReason });
   }
   return violations;
@@ -1818,7 +1867,7 @@ async function inspectOutgoingRefObject({ localRef, localSha, root, execute, bud
     }
     if (type === 'tag') {
       const bytes = gitOutput(['cat-file', 'tag', sha], root, execute, { encoding: null });
-      budget.admit(bytes.length);
+      budget.admit(bytes.length, localRef);
       const reason = structuralPrivateArtifactReason(bytes);
       if (reason) violations.push({ repoPath: localRef, reason });
       const headerEnd = bytes.indexOf(Buffer.from('\n\n'));
