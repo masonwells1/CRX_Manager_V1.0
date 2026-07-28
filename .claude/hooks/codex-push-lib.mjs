@@ -263,6 +263,50 @@ export function claudeProofValid(data, headSha, nowMs, expectedBaseSha) {
   return reviewProofValid(data, headSha, nowMs, "claude_ran", expectedBaseSha);
 }
 
+// Every session-state directory belonging to THIS repository — the primary
+// checkout plus each linked worktree.
+//
+// Why this exists (2026-07-27, PR #252): pr-merge-guard resolves its root from
+// the SESSION's cwd, which the Claude harness pins to the primary checkout and
+// resets after every command. `scripts/write-codex-push-proof.mjs` resolves its
+// OUTPUT from `git rev-parse --show-toplevel` of wherever it ran — the worktree
+// holding the branch. A PR built in a linked worktree therefore wrote a
+// perfectly valid proof somewhere the merge guard never looked, and `gh pr merge`
+// was denied no matter how many clean Codex reviews were minted. Head and base
+// matched `gh pr view` exactly; only the directory differed.
+//
+// Widening the SEARCH does not widen what COUNTS. `proofValid()` still demands
+// the exact head SHA GitHub reports, the exact base GitHub will merge onto, a
+// clean/blockers-fixed verdict, and an age inside 30 minutes; and
+// `review-proof-guard.mjs` still blocks hand-writing a proof in ANY directory.
+// These are sibling checkouts of one repository, not arbitrary paths — a proof
+// that would be rejected in the primary checkout is rejected in every one.
+//
+// `listWorktrees` is injected so this is testable without a real repo.
+export function proofSearchDirs(root, listWorktrees) {
+  const stateDir = (dir) => path.resolve(dir, ".claude", "session-state");
+  const dirs = [stateDir(root)];
+  let porcelain;
+  try {
+    porcelain = listWorktrees();
+  } catch {
+    // Enumeration unavailable (no git, not a repo, timeout). Fall back to the
+    // primary directory alone: losing the widening can only make the gate
+    // STRICTER, never laxer, so this fails in the safe direction.
+    return dirs;
+  }
+  for (const line of String(porcelain ?? "").split(/\r?\n/)) {
+    // `\s+(.+)` (not `\s*(.*)`) is what keeps a pathless `worktree` line out: an empty
+    // capture would resolve against process.cwd() and manufacture a search directory
+    // that has nothing to do with this repository.
+    const match = /^worktree\s+(.+)$/.exec(line.trim());
+    if (match) dirs.push(stateDir(match[1]));
+  }
+  // The primary checkout appears in `git worktree list` too — scanning a path
+  // twice is wasted I/O, not a correctness bug, but dedupe it anyway.
+  return [...new Set(dirs)];
+}
+
 // ── PR-merge request detection (2026-07-16 scaffolding review Theme 1) ───────
 // Since the 2026-07-14 `protect-main` ruleset, work lands on main via PR merge,
 // not `git push` — so the merge action needs the same risky-diff Codex gate the

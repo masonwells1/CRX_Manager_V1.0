@@ -3,12 +3,14 @@
 // codex-push-lib.mjs and the hook's no-gh-needed decision paths via stdin spawn.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ghApiMergeRequest,
   ghMergeRequest,
   mcpMergeRequest,
+  proofSearchDirs,
   pullRequestChecksGreen,
 } from "./codex-push-lib.mjs";
 
@@ -92,5 +94,50 @@ ok(r.status === 0 && r.decision === null, "unrelated MCP tool passes through");
 
 r = runHook({});
 ok(r.status === 0 && r.decision === null, "empty payload passes through (never crashes the session)");
+
+// ── proofSearchDirs ──────────────────────────────────────────────────────────
+// Regression cover for the 2026-07-27 defect that made PR #252 unmergeable: the
+// guard searched ONLY the session's primary checkout, while the proof-minting
+// script writes into whichever worktree it ran in. A clean, correctly-bound
+// proof was therefore invisible and every merge attempt was denied.
+const PORCELAIN = [
+  "worktree C:/CRX_Manager",
+  "HEAD 26a5f88b960fe477b334ae4101c67dc0b21fca3c",
+  "branch refs/heads/main",
+  "",
+  "worktree C:/Users/mason/.claude/worktrees/gauntlet-runner/CRX_Manager",
+  "HEAD 79efc903b199f73b20ee0494fc40b4ed15e11e99",
+  "branch refs/heads/claude/gauntlet-section-runner-20260727",
+  "",
+].join("\n");
+
+let dirs = proofSearchDirs("C:/CRX_Manager", () => PORCELAIN);
+ok(
+  dirs.includes(path.resolve("C:/Users/mason/.claude/worktrees/gauntlet-runner/CRX_Manager/.claude/session-state")),
+  "a linked worktree's session-state is searched — this is the PR #252 bug",
+);
+ok(dirs.includes(path.resolve("C:/CRX_Manager/.claude/session-state")), "the primary checkout is still searched");
+eq(dirs.length, new Set(dirs).size, "the primary checkout, listed twice by git, is not scanned twice");
+
+// Enumeration failure must fall back to the primary directory, never throw and
+// never return nothing: an empty list would silently make EVERY risky merge
+// deniable-but-unprovable, and a throw would crash the hook mid-gate.
+dirs = proofSearchDirs("C:/CRX_Manager", () => { throw new Error("git unavailable"); });
+eq(dirs, [path.resolve("C:/CRX_Manager/.claude/session-state")], "git failure falls back to the primary dir (stricter, not laxer)");
+
+// Degenerate porcelain must not manufacture bogus search paths.
+eq(proofSearchDirs("C:/repo", () => "").length, 1, "empty porcelain yields only the primary dir");
+eq(proofSearchDirs("C:/repo", () => "worktree   \nHEAD abc").length, 1, "a blank worktree path is ignored, not resolved to cwd");
+eq(proofSearchDirs("C:/repo", () => undefined).length, 1, "undefined porcelain does not throw");
+
+// WIRING check, deliberately source-level. Everything above proves proofSearchDirs
+// behaves; none of it proves pr-merge-guard actually CALLS it. The behavioural path
+// cannot be reached in-process: the hook resolves the PR through `gh` before it ever
+// looks for a proof, and a fake `gh` on PATH is unspawnable on Windows (Node refuses
+// to exec a .cmd without a shell). So assert the call site exists and that the old
+// single-directory scan has not come back.
+const guardSource = readFileSync(path.join(__dirname, "pr-merge-guard.mjs"), "utf8");
+ok(/for\s*\(\s*const\s+stateDir\s+of\s+proofSearchDirs\(/.test(guardSource), "the proof scan iterates proofSearchDirs, not one hard-coded directory");
+ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);
