@@ -9,9 +9,10 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
-## 2026-07-28 — PROPOSED: revoking anon EXECUTE ships in two halves, and the RLS role helpers are the risky half
+## 2026-07-28 — SETTLED: revoking anon EXECUTE ships in two halves, and the RLS role helpers are the risky half
 
-**Decision (this session, awaiting Mason):** Codex's draft
+**Decision (Mason, in-chat — "ok continue and make it all live please", after the two-half split and
+the blast radius of part 2 were put to him explicitly):** Codex's draft
 `20260728185827_revoke_anon_security_definer_execute.sql` revoked anon EXECUTE on 43 functions in
 one file with one justification sentence copy-pasted 43 times. It is **split into two migrations
 and two PRs** rather than shipped as one.
@@ -43,9 +44,13 @@ Read-only check against live `rhyzpcqhnizqbxphqdkr`:
   production is fine, which is the closest thing to a live experiment available without applying
   anything.
 - **`handle_new_user()` is never revoked**, in either half. It runs as the signup trigger.
-- **Every REVOKE must name both `PUBLIC` and `anon`.** Supabase's `ALTER DEFAULT PRIVILEGES`
-  grants `anon` EXECUTE directly on each new public function, so revoking `PUBLIC` alone leaves
-  the grant standing. A REVOKE that names only one of the two is a no-op in practice.
+- **Every REVOKE must name both `PUBLIC` and `anon`.** The two grants are independent, and
+  removing either one alone leaves `anon` still able to execute. Supabase's `ALTER DEFAULT
+  PRIVILEGES` grants `anon` EXECUTE *directly* on each new public function, so revoking only
+  `PUBLIC` leaves that direct grant standing; revoking only `anon` leaves the access it inherits
+  through `PUBLIC`. (Revoking `PUBLIC` on its own is not useless — it does remove the inherited
+  access for roles that hold no direct grant — it simply does not achieve the goal here.) Only
+  revoking both removes `anon`'s effective access.
 - **Prove a revoke with `has_function_privilege(...)`, never a `proacl` scan.** `proacl` is NULL
   for default privileges, so a scan reports "no anon grant" on a function anon can call.
 - The safe default when in doubt is to revoke **fewer** functions, not more.
