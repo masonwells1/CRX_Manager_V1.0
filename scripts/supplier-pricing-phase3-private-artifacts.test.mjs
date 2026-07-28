@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -9,7 +9,7 @@ import { canonical, loadSnapshot, makeManifest, sha256 } from './generate-suppli
 import { buildOwnerDecisionSheet, ownerDecisionSheetHash } from './generate-supplier-pricing-phase3-owner-decision-sheet.mjs';
 import { verifyManifest } from './verify-supplier-pricing-phase3-classification-manifest.mjs';
 import { verifyOwnerDecisionSheet } from './verify-supplier-pricing-phase3-owner-decision-sheet.mjs';
-import { checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, forbiddenArtifactReason, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, parseCli, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason } from './check-supplier-pricing-phase3-private-artifacts.mjs';
+import { checkCommitMessagePrivateArtifactContainment, checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, forbiddenArtifactReason, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, parseCli, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason } from './check-supplier-pricing-phase3-private-artifacts.mjs';
 import { assertExternalArtifactPath, assertExternalPrivateDirectory, CONTAINER_TYPE_ALLOWLIST, loadValidatedSnapshot, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRODUCT_FORM_ALLOWLIST, readValidatedPrivateArtifact, REPO_ROOT, validatePostStageASnapshot, without, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const temp = mkdtempSync(path.join(os.tmpdir(), 'crx-phase3c-synthetic-'));
@@ -34,7 +34,15 @@ function sanitizedFixtureGitEnv(overrides = {}) {
 }
 function git(root, args, inheritedEnv = {}) { return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: sanitizedFixtureGitEnv(inheritedEnv) }); }
 function gitResult(root, args, inheritedEnv = {}) { return spawnSync('git', args, { cwd: root, encoding: 'utf8', env: sanitizedFixtureGitEnv(inheritedEnv) }); }
+function gitWithIndex(root, args, indexFile) { const env = sanitizedFixtureGitEnv(); env.GIT_INDEX_FILE = indexFile; return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }); }
+function gitResultWithIndex(root, args, indexFile) { const env = sanitizedFixtureGitEnv(); env.GIT_INDEX_FILE = indexFile; return spawnSync('git', args, { cwd: root, encoding: 'utf8', env }); }
 function fixtureGitExecute(command, args, options = {}) { return execFileSync(command, args, { ...options, env: sanitizedFixtureGitEnv(options.env) }); }
+function writeExecutableHook(root, name, body) {
+  const hooks = path.join(root, '.fixture-hooks'); mkdirSync(hooks, { recursive: true });
+  const hook = path.join(hooks, name); writeFileSync(hook, `#!/bin/sh\n${body}\n`, 'utf8'); chmodSync(hook, 0o755);
+  git(root, ['config', 'core.hooksPath', '.fixture-hooks']);
+  return hook;
+}
 function binaryCpioHeader(byteOrder, pathname) {
   const name = Buffer.from(pathname, 'binary'); const bytes = Buffer.alloc(26 + name.length);
   bytes.set(byteOrder === 'le' ? Buffer.from([0xc7, 0x71]) : Buffer.from([0x71, 0xc7]));
@@ -166,6 +174,8 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`data:application/json;base64,${base64Snapshot}`)), 'private JSON format marker in malformed candidate', 'data-URI Base64 must be decoded');
   const lfPem = `-----BEGIN CRX PACKET-----\n${base64Snapshot.match(/.{1,20}/g).join('\n')}\n-----END CRX PACKET-----`;
   assert.equal(structuralPrivateArtifactReason(Buffer.from(lfPem)), 'private JSON format marker in malformed candidate', 'PEM-wrapped Base64 must be decoded across lines');
+  const openPemAtEof = `-----BEGIN CRX PACKET-----\n${base64Snapshot.match(/.{1,17}/g).join('\n')}`;
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(openPemAtEof)), 'private JSON format marker in malformed candidate', 'an open PEM body must be finalized at EOF');
   const crlfPem = `-----BEGIN CRX PACKET-----\r\n${base64Snapshot.match(/.{1,19}/g).join('\r\n')}\r\n-----END CRX PACKET-----\r\n`;
   assert.equal(structuralPrivateArtifactReason(Buffer.from(crlfPem)), 'private JSON format marker in malformed candidate', 'CRLF PEM-wrapped Base64 must be decoded across short Windows lines');
   for (const prefix of ['BAD', ' \t '.repeat(32), 'x'.repeat(300)]) assert.equal(structuralPrivateArtifactReason(Buffer.from(`${prefix}${crlfPem}`)), null, 'same-line content before a PEM BEGIN marker must remain benign');
@@ -173,6 +183,9 @@ try {
   for (let split = crlfPem.indexOf('\r'); split !== -1; split = crlfPem.indexOf('\r', split + 1)) assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(crlfPem.slice(0, split + 1)), Buffer.from(crlfPem.slice(split + 1))]), 'private JSON format marker in malformed candidate', 'CRLF PEM detection must survive a split between CR and LF');
   const wrappedBase64 = JSON.stringify({ payload: urlSafeBase64Snapshot.replace(/=+$/, '') });
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(wrappedBase64.slice(0, 19)), Buffer.from(wrappedBase64.slice(19))]), 'private JSON format marker in malformed candidate', 'wrapped URL-safe Base64 detection must survive a read split');
+  const whitespaceWrappedBase64 = `payload:${base64Snapshot.match(/.{1,16}/g).join('\r\n \t')};`;
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(whitespaceWrappedBase64)), 'private JSON format marker in malformed candidate', 'embedded Base64 must retain bounded whitespace and newline state');
+  assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(whitespaceWrappedBase64.slice(0, 23)), Buffer.from(whitespaceWrappedBase64.slice(23))]), 'private JSON format marker in malformed candidate', 'whitespace-wrapped embedded Base64 must survive stream splits');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: 'b3JkaW5hcnkgcHVibGljIGNvbnRlbnQ=' }))), null, 'benign wrapped Base64 must not become a containment violation');
   assert.equal(structuralPrivateArtifactReason(Buffer.from('b3JkaW5hcnkgcHVibGljIGNvbnRlbnQ=')), null, 'benign Base64 must not become a containment violation');
   const paddedBase64Prefix = `${base64Snapshot}A`; const unpaddedBase64Prefix = `${base64Snapshot.replace(/=+$/, '')}A`;
@@ -183,12 +196,23 @@ try {
   }
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: 'b3JkaW5hcnkgcHVibGljIGNvbnRlbnQ=A' }))), null, 'benign invalid Base64 must not become a containment violation');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(Buffer.from(base64Snapshot).toString('base64'))), null, 'encoded packets must not be recursively decoded');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const paddingOffset = base64Snapshot.indexOf('=');
+  assert.notEqual(paddingOffset, -1, 'synthetic Base64 marker must exercise terminal padding');
+  const significantOffset = paddingOffset - 1;
+  const significantValue = alphabet.indexOf(base64Snapshot[significantOffset]);
+  const nonCanonicalBase64 = `${base64Snapshot.slice(0, significantOffset)}${alphabet[significantValue + 1]}${base64Snapshot.slice(significantOffset + 1)}`;
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: nonCanonicalBase64 }))), 'private JSON format marker in malformed candidate', 'non-canonical Base64 padding bits must not hide decoded private bytes');
   assert.equal(structuralPrivateArtifactReason(Buffer.from('AAAA!'.repeat(8_192))), null, 'many short source-like Base64 tokens must remain bounded and benign');
   const boundaryMarker = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
   for (const decodedLength of [64 * 1024, 128 * 1024]) {
     const decoded = Buffer.concat([Buffer.alloc(decodedLength - boundaryMarker.length, 0x78), boundaryMarker]); const transfer = decoded.toString('base64'); const wrapped = JSON.stringify({ payload: transfer });
     assert.equal(structuralPrivateArtifactReason(Buffer.from(wrapped)), 'private JSON format marker in malformed candidate', `${decodedLength / 1024} KiB embedded Base64 must cross fixed decoded-batch boundaries`);
     assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(wrapped.slice(0, Math.floor(wrapped.length / 2))), Buffer.from(wrapped.slice(Math.floor(wrapped.length / 2)))]), 'private JSON format marker in malformed candidate', `${decodedLength / 1024} KiB embedded Base64 must survive a token stream split`);
+    if (decodedLength === 128 * 1024) {
+      const whitespaceTransfer = transfer.match(/.{1,76}/g).join('\n');
+      assert.equal(structuralPrivateArtifactReason(Buffer.from(`payload:${whitespaceTransfer};`)), 'private JSON format marker in malformed candidate', '128 KiB embedded Base64 with line wrapping must remain bounded and detectable');
+    }
   }
   const fuzzMarker = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
   for (let seed = 1; seed <= 8; seed += 1) {
@@ -216,12 +240,20 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.alloc(MAX_STRUCTURAL_SCAN_BYTES + 1, 0x61)), 'private artifact candidate exceeds bounded structural scan limit', 'oversized whole-file hexadecimal input must stop at the structural scan bound');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(Buffer.from(hexSnapshot).toString('hex'))), null, 'decoded hexadecimal bytes must not recursively re-enter transfer decoding');
   const validZip = zipLocalHeader(); const validGzip = gzipHeader({ extra: Buffer.from([1, 2]), name: 'packet', comment: 'bounded', hcrc: true });
+  const exactMaximumGzip = gzipHeader({ extra: Buffer.alloc(4096, 0x45), name: 'n'.repeat(4096), comment: 'c'.repeat(4096), hcrc: true });
+  const overboundGzipName = gzipHeader({ name: 'n'.repeat(4097) });
+  const overboundGzipComment = gzipHeader({ comment: 'c'.repeat(4097) });
   assert.equal(structuralPrivateArtifactReason(Buffer.from(validZip.toString('hex'))), 'compressed archive container cannot be inspected', 'hex decoding must retain structured ZIP archive checks');
   assert.equal(structuralPrivateArtifactReason(validZip), 'compressed archive container cannot be inspected', 'a complete ZIP local header must fail closed');
   assert.equal(structuralPrivateArtifactReason(validGzip), 'compressed archive container cannot be inspected', 'a complete gzip fixed header with bounded optional fields must fail closed');
   assert.equal(structuralPrivateArtifactReason(Buffer.concat([Buffer.from('harmless self-extracting prefix'), validZip])), 'compressed archive container cannot be inspected', 'prefixed structured ZIP headers must fail closed');
   assert.equal(structuralPrivateArtifactStreamReason([validZip.subarray(0, 29), validZip.subarray(29)]), 'compressed archive container cannot be inspected', 'ZIP fixed headers must survive stream splits');
   assert.equal(structuralPrivateArtifactStreamReason([validGzip.subarray(0, 10), validGzip.subarray(10)]), 'compressed archive container cannot be inspected', 'gzip optional fields must survive stream splits');
+  assert.equal(structuralPrivateArtifactStreamReason([exactMaximumGzip.subarray(0, -1), exactMaximumGzip.subarray(-1)]), 'compressed archive container cannot be inspected', 'the exact maximum gzip header must fit the retained stream overlap');
+  assert.equal(structuralPrivateArtifactReason(overboundGzipName), 'compressed archive container cannot be inspected', 'a recognized over-bound gzip FNAME must fail closed');
+  assert.equal(structuralPrivateArtifactReason(overboundGzipComment), 'compressed archive container cannot be inspected', 'a recognized over-bound gzip FCOMMENT must fail closed');
+  assert.equal(structuralPrivateArtifactStreamReason([overboundGzipName.subarray(0, 2048), overboundGzipName.subarray(2048)]), 'compressed archive container cannot be inspected', 'an over-bound gzip FNAME must fail closed across stream chunks');
+  assert.equal(structuralPrivateArtifactStreamReason([overboundGzipComment.subarray(0, 2048), overboundGzipComment.subarray(2048)]), 'compressed archive container cannot be inspected', 'an over-bound gzip FCOMMENT must fail closed across stream chunks');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(validZip.toString('base64'))), 'compressed archive container cannot be inspected', 'Base64-wrapped structured ZIP headers must fail closed');
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x50, 0x4b, 0x03, 0x04])), null, 'a short ZIP signature alone is benign');
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x50, 0x4b, 0x07, 0x08, 0, 0, 0, 0])), null, 'a standalone ZIP data descriptor signature is benign');
@@ -229,6 +261,7 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x1f, 0x8b, 0x08, 0x00])), null, 'a short gzip signature alone is benign');
   assert.equal(structuralPrivateArtifactReason(gzipHeader({ flags: 0xe0 })), null, 'gzip reserved flags must not match');
   assert.equal(structuralPrivateArtifactReason(gzipHeader({ flags: 0x08 })), null, 'gzip optional fields must be complete before matching');
+  assert.equal(structuralPrivateArtifactReason(Buffer.concat([gzipHeader({ flags: 0x08 }), Buffer.alloc(4096, 0x6e)])), null, 'an unterminated gzip FNAME at the exact bound remains incomplete');
   assert.equal(structuralPrivateArtifactReason(Buffer.from([0x42, 0x5a, 0x68, 0x39, 0x31, 0x41, 0x59, 0x26, 0x53, 0x59])), 'compressed archive container cannot be inspected');
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from([0x42, 0x5a, 0x68, 0x39]), Buffer.from([0x31, 0x41, 0x59, 0x26, 0x53, 0x59])]), 'compressed archive container cannot be inspected');
   assert.equal(structuralPrivateArtifactReason(Buffer.concat([Buffer.from('ordinary prefix'), Buffer.from([0x42, 0x5a, 0x68, 0x39, 0x31, 0x41, 0x59, 0x26, 0x53, 0x59])])), 'compressed archive container cannot be inspected');
@@ -672,6 +705,29 @@ try {
   });
   assert.deepEqual(Object.fromEntries(Object.keys(hostileHookEnvironment).map(key => [key, process.env[key] ?? null])), environmentBefore);
 
+  // A real `git commit` can use an alternate index. The staged packet exists
+  // only in that authoritative index while the worktree/default index remain
+  // benign, proving the pre-commit process must preserve GIT_INDEX_FILE.
+  const alternateIndexRepo = fixtureRepo('containment-alternate-index-commit');
+  mkdirSync(path.join(alternateIndexRepo, 'scripts'));
+  for (const name of ['check-supplier-pricing-phase3-private-artifacts.mjs', 'supplier-pricing-phase3-private-artifacts.mjs']) {
+    writeFileSync(path.join(alternateIndexRepo, 'scripts', name), readFileSync(path.join(REPO_ROOT, 'scripts', name)));
+  }
+  git(alternateIndexRepo, ['add', 'scripts']);
+  git(alternateIndexRepo, ['commit', '--quiet', '-m', 'install synthetic containment checker']);
+  writeExecutableHook(alternateIndexRepo, 'pre-commit', 'node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit');
+  const alternateIndex = path.join(temp, 'authoritative-alternate.index');
+  gitWithIndex(alternateIndexRepo, ['read-tree', 'HEAD'], alternateIndex);
+  const alternatePacketPath = path.join(alternateIndexRepo, 'staged-only-packet.txt');
+  writeFileSync(alternatePacketPath, JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+  gitWithIndex(alternateIndexRepo, ['add', 'staged-only-packet.txt'], alternateIndex);
+  writeFileSync(alternatePacketPath, 'ordinary benign worktree content\n');
+  const alternateHeadBefore = git(alternateIndexRepo, ['rev-parse', 'HEAD']).trim();
+  const alternateCommit = gitResultWithIndex(alternateIndexRepo, ['commit', '--quiet', '-m', 'synthetic alternate-index commit'], alternateIndex);
+  assert.notEqual(alternateCommit.status, 0, 'a real alternate-index commit containing a staged packet must be blocked');
+  assert.match(`${alternateCommit.stdout}${alternateCommit.stderr}`, /staged-only-packet\.txt .*private JSON format marker in malformed candidate/);
+  assert.equal(git(alternateIndexRepo, ['rev-parse', 'HEAD']).trim(), alternateHeadBefore, 'blocked alternate-index commit must not advance HEAD');
+
   // Renamed/minified packet structures are rejected in index, worktree, and every pushed history commit.
   const committedRepo = fixtureRepo('containment-clean-committed'); const committedPath = 'ordinary-notes.txt'; writeFileSync(path.join(committedRepo, committedPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); git(committedRepo, ['add', committedPath]); git(committedRepo, ['commit', '--quiet', '-m', 'synthetic committed packet']); await containmentFails(committedRepo, committedPath, 'private JSON format marker in malformed candidate');
   const stagedRepo = fixtureRepo('containment-staged'); const stagedPath = 'renamed-public.txt'; writeFileSync(path.join(stagedRepo, stagedPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); git(stagedRepo, ['add', stagedPath]); await containmentFails(stagedRepo, stagedPath, 'private JSON format marker in malformed candidate');
@@ -869,6 +925,9 @@ try {
   const cliBinding = binding(snapshot);
   assert.deepEqual(loadFixtureSnapshot(cliSnapshot, { snapshot_sha256: snapshot.snapshot_sha256, product_count: snapshot.products.length }), snapshot);
   const cliManifest = makeManifest(snapshot); const cliManifestPath = path.join(privateDir, POST_STAGE_A_MANIFEST_NAME); writePrivateArtifactAtomic(cliManifestPath, POST_STAGE_A_MANIFEST_NAME, canonical(cliManifest), { ...fixturePrivateOptions }); assert.deepEqual(verifyManifest(snapshot, readValidatedPrivateArtifact(cliManifestPath, POST_STAGE_A_MANIFEST_NAME, REPO_ROOT, fixturePrivateOptions).text), { count: 2, hash: cliManifest.manifest_sha256 });
+  writeFileSync(cliManifestPath, Buffer.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x80, 0x7d]));
+  throws(() => readValidatedPrivateArtifact(cliManifestPath, POST_STAGE_A_MANIFEST_NAME, REPO_ROOT, fixturePrivateOptions), 'invalid UTF-8');
+  writePrivateArtifactAtomic(cliManifestPath, POST_STAGE_A_MANIFEST_NAME, canonical(cliManifest), { ...fixturePrivateOptions });
   const cliSheet = path.join(privateDir, OWNER_DECISION_SHEET_NAME); const sheetText = buildOwnerDecisionSheet(cliManifest); writePrivateArtifactAtomic(cliSheet, OWNER_DECISION_SHEET_NAME, sheetText, { ...fixturePrivateOptions }); assert.deepEqual(verifyOwnerDecisionSheet(cliManifest, readValidatedPrivateArtifact(cliSheet, OWNER_DECISION_SHEET_NAME, REPO_ROOT, fixturePrivateOptions).text), { count: 2, hash: ownerDecisionSheetHash(sheetText) });
   for (const args of [[], ['--summary', '--write'], ['--write', '--write'], ['--write', '--snapshot'], ['--write', 'junk'], ['--wat'], ['--summary', '--manifest', 'x'], ['--write', '--snapshot', cliSnapshot, '--snapshot', cliSnapshot, '--manifest', path.join(privateDir, POST_STAGE_A_MANIFEST_NAME)]]) assert.notEqual(run(['scripts/generate-supplier-pricing-phase3-classification-manifest.mjs', ...args]).status, 0);
   const invalidPathOptions = [
@@ -886,9 +945,25 @@ try {
   const v1Product = { id: id1, sku: 'SYN-V1', product_name: 'Synthetic only', product_form: 'synthetic-form', container_size: '1', container_type: 'jug', container_unit: 'gal', unit_size: '1 gal', inventory_unit: 'gal', is_active: true, pricing_version: 7, updated_at: '2026-07-26T00:00:00.000Z', active_return_statuses: [] };
   const v1 = { format: 'crx-supplier-pricing-phase3-pre-stage-a-product-snapshot-v1', snapshot_timestamp_utc: '2026-07-23T00:00:00.000Z', migration_high_water: '20260722202622', expected_old_phase3_defaults: { product_family_id: null, return_policy: 'unknown', packaging_variant: null, is_full_tote_only: false }, products: [v1Product] }; v1.snapshot_sha256 = sha256(v1);
   const v1File = writeSnapshot(v1, PRE_STAGE_A_SNAPSHOT_NAME); assert.equal(makeManifest(loadSnapshot(v1File, null, fixturePrivateOptions)).manifest_sha256, '849757da67a2abdeb5e99683ebfc624822e23b08748987dacc69cc7ba52dd1c8');
-  const preCommit = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-commit'), 'utf8'); const prePush = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-push'), 'utf8'); const ci = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const preCommit = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-commit'), 'utf8'); const commitMsg = readFileSync(path.join(REPO_ROOT, '.husky', 'commit-msg'), 'utf8'); const prePush = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-push'), 'utf8'); const ci = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
   const trustedTargetWorkflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'phase3-private-artifact-containment.yml'), 'utf8');
   assert(preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit') < preCommit.indexOf('validate-sql.sh'));
+  assert(commitMsg.includes('check-supplier-pricing-phase3-private-artifacts.mjs --commit-msg "${1:-}"'));
+  const benignMessageFile = path.join(temp, 'benign-commit-message.txt'); writeFileSync(benignMessageFile, 'ordinary synthetic commit message\n');
+  assert.deepEqual(checkCommitMessagePrivateArtifactContainment(benignMessageFile), { scanned_logical_bytes: 34 });
+  const privateMessageFile = path.join(temp, 'private-commit-message.txt'); writeFileSync(privateMessageFile, JSON.stringify({ payload: base64Snapshot }));
+  assert.throws(() => checkCommitMessagePrivateArtifactContainment(privateMessageFile), /commit-message containment failure.*private JSON format marker in malformed candidate/);
+  const nodeForHook = process.execPath.replaceAll('\\', '/');
+  const checkerForHook = path.join(REPO_ROOT, 'scripts', 'check-supplier-pricing-phase3-private-artifacts.mjs').replaceAll('\\', '/');
+  const installCommitMessageHook = root => writeExecutableHook(root, 'commit-msg', `"${nodeForHook}" "${checkerForHook}" --commit-msg "$1"`);
+  const benignMessageRepo = fixtureRepo('commit-message-benign'); writeFileSync(path.join(benignMessageRepo, 'benign.txt'), 'ordinary\n'); git(benignMessageRepo, ['add', 'benign.txt']); installCommitMessageHook(benignMessageRepo);
+  assert.equal(gitResult(benignMessageRepo, ['commit', '--quiet', '-m', 'ordinary synthetic commit']).status, 0, 'a benign real git commit message must pass');
+  const privateInlineMessageRepo = fixtureRepo('commit-message-private-inline'); writeFileSync(path.join(privateInlineMessageRepo, 'change.txt'), 'ordinary\n'); git(privateInlineMessageRepo, ['add', 'change.txt']); installCommitMessageHook(privateInlineMessageRepo); const inlineHead = git(privateInlineMessageRepo, ['rev-parse', 'HEAD']).trim();
+  const privateInlineCommit = gitResult(privateInlineMessageRepo, ['commit', '--quiet', '-m', JSON.stringify({ payload: base64Snapshot })]);
+  assert.notEqual(privateInlineCommit.status, 0, 'git commit -m must block a private packet in the commit object'); assert.equal(git(privateInlineMessageRepo, ['rev-parse', 'HEAD']).trim(), inlineHead);
+  const privateFileMessageRepo = fixtureRepo('commit-message-private-file'); writeFileSync(path.join(privateFileMessageRepo, 'change.txt'), 'ordinary\n'); git(privateFileMessageRepo, ['add', 'change.txt']); installCommitMessageHook(privateFileMessageRepo); const fileHead = git(privateFileMessageRepo, ['rev-parse', 'HEAD']).trim();
+  const privateFileCommit = gitResult(privateFileMessageRepo, ['commit', '--quiet', '-F', privateMessageFile]);
+  assert.notEqual(privateFileCommit.status, 0, 'git commit -F must block a private packet in the commit object'); assert.equal(git(privateFileMessageRepo, ['rev-parse', 'HEAD']).trim(), fileHead);
   assert(prePush.includes('check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "${1:-}"'));
   assert.equal((prePush.match(/if ! node scripts\/check-supplier-pricing-phase3-private-artifacts\.mjs --pre-push/g) ?? []).length, 1, 'pre-push containment must retain one fail-closed shell guard');
   assert.equal((prePush.match(/if ! npm run typecheck/g) ?? []).length, 1, 'pre-push typecheck must retain one fail-closed shell guard');
@@ -900,14 +975,18 @@ try {
       ['containment', 'node() { return 42; }; npm() { return 0; };'],
       ['typecheck', 'node() { return 0; }; npm() { if [ "$2" = "typecheck" ]; then return 42; fi; return 0; };'],
       ['build', 'node() { return 0; }; npm() { if [ "$2" = "build" ]; then return 42; fi; return 0; };'],
-    ]) assert.equal(runPrePushHook(functions, ['origin'], 'refs/heads/test deadbeef refs/heads/test deadbeef\n').status, 1, `${name} failure must block push with exit 1`);
+    ]) {
+      const hookRun = runPrePushHook(functions, ['origin'], 'refs/heads/test deadbeef refs/heads/test deadbeef\n');
+      assert.equal(hookRun.status, 1, `${name} failure must block push with exit 1: ${hookRun.stdout}${hookRun.stderr}`);
+    }
     assert.equal(runPrePushHook('node() { if [ "$1" = "scripts/graphify-refresh.mjs" ]; then return 42; fi; return 0; }; npm() { return 0; };', ['origin'], 'refs/heads/test deadbeef refs/heads/test deadbeef\n').status, 0, 'Graphify refresh remains optional after its failure');
     assert.equal(runPrePushHook('', [], '').status, 1, 'a missing pre-push remote must fail closed before typecheck/build');
   }
-  assert.deepEqual(parseCli(['--pre-commit']), { ranges: [], prePushRemote: null, preCommit: true, githubEvent: false, root: null, attestGitHubHandoff: false });
-  assert.deepEqual(parseCli(['--pre-push', 'origin']), { ranges: [], prePushRemote: 'origin', preCommit: false, githubEvent: false, root: null, attestGitHubHandoff: false });
+  assert.deepEqual(parseCli(['--pre-commit']), { ranges: [], prePushRemote: null, preCommit: true, commitMessageFile: null, githubEvent: false, root: null, attestGitHubHandoff: false });
+  assert.deepEqual(parseCli(['--commit-msg', benignMessageFile]), { ranges: [], prePushRemote: null, preCommit: false, commitMessageFile: benignMessageFile, githubEvent: false, root: null, attestGitHubHandoff: false });
+  assert.deepEqual(parseCli(['--pre-push', 'origin']), { ranges: [], prePushRemote: 'origin', preCommit: false, commitMessageFile: null, githubEvent: false, root: null, attestGitHubHandoff: false });
   assert.deepEqual(parseCli(['--range', `${'a'.repeat(40)}..${'b'.repeat(40)}`]).ranges.length, 1);
-  for (const args of [['--pre-commit', '--pre-commit'], ['--pre-push', 'origin', '--pre-push', 'origin'], ['--github-event', '--github-event'], ['--range', 'a..b', '--range', 'c..d'], ['--pre-push'], ['--pre-push', '--range', 'a..b'], ['--range'], ['--pre-commit', '--range', 'a..b'], ['--pre-push', 'origin', '--range', 'a..b'], ['--github-event', '--range', 'a..b'], ['--pre-commit', '--pre-push', 'origin'], ['--github-event', '--pre-commit']]) assert.throws(() => parseCli(args), /disclosure-safe usage/);
+  for (const args of [['--pre-commit', '--pre-commit'], ['--commit-msg', benignMessageFile, '--commit-msg', benignMessageFile], ['--commit-msg'], ['--pre-push', 'origin', '--pre-push', 'origin'], ['--github-event', '--github-event'], ['--range', 'a..b', '--range', 'c..d'], ['--pre-push'], ['--pre-push', '--range', 'a..b'], ['--range'], ['--pre-commit', '--range', 'a..b'], ['--commit-msg', benignMessageFile, '--range', 'a..b'], ['--pre-push', 'origin', '--range', 'a..b'], ['--github-event', '--range', 'a..b'], ['--pre-commit', '--pre-push', 'origin'], ['--commit-msg', benignMessageFile, '--pre-commit'], ['--github-event', '--pre-commit']]) assert.throws(() => parseCli(args), /disclosure-safe usage/);
   assert(ci.indexOf('phase3-private-artifact-containment:') < ci.indexOf('sql-validation:'));
   assert(ci.includes('needs: phase3-private-artifact-containment'));
   assert(ci.includes('needs: [phase3-private-artifact-containment, sql-validation]'));

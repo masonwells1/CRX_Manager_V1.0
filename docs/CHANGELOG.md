@@ -25,8 +25,11 @@ packets, archive near-misses, critical stream splits, encoded packets under
 ignored tool roots, and the tracked PNG assets that exposed the binary CPIO
 false-positive risk.
 
-The exact-SHA Opus 5 release review identified avoidable first-push and local
-hook costs. History traversal now reads each changed path's destination mode
+The later literal Opus 5 exact-SHA review of `b30769b3` ran under wrapper run
+`2026-07-27T23-29-35-252Z-3ef35b3a`; this is distinct from the older review
+cycles documented below where no Opus 5 backend had run. That review identified
+avoidable first-push and local hook costs. History traversal now reads each
+changed path's destination mode
 and object ID from one bounded raw `git diff-tree` stream instead of spawning
 `git ls-tree` once per path. Pre-commit scans tracked, staged, modified, and
 untracked content, while the full ignored dependency/build-output sweep remains
@@ -66,6 +69,30 @@ a BOM or NUL signal; embedded Base64 quartets also stream through a bounded
 manual byte decoder. The exact focused suite passes in both Windows and a clean
 `node:24-bookworm` Linux repository, including direct and split 64/128 KiB
 boundary packets.
+
+Neither `b30769b3` nor its three-file crash correction `ce16574b` is an accepted
+candidate. `b30769b3` is rejected after the Linux abort and the later exact-SHA
+review; its recorded containment proof checked 51,841 paths, 58 commits, 52,264
+candidates, and 823,721,338 logical bytes. `ce16574b` removed that allocator
+crash but remained rejected after follow-up review found incomplete PEM EOF
+finalization, embedded whitespace state, gzip bound/overlap gaps, alternate
+index and commit-message coverage gaps, and lossy semantic UTF-8 parsing.
+
+The bounded successor finalizes an open PEM body at EOF; retains up to 4 KiB of
+embedded Base64 whitespace while decoding into a fixed 64 KiB byte batch;
+decodes non-canonical padding bits so they cannot hide the same private bytes,
+without recursively decoding output; and
+uses tri-state gzip parsing so a recognized over-bound FNAME/FCOMMENT fails
+closed. Its gzip overlap is derived from the exact 12,304-byte maximum header.
+Pre-commit preserves only an explicitly inherited authoritative
+`GIT_INDEX_FILE` after removing all other Git redirects, and a new
+`commit-msg` hook scans the actual message file used by `git commit -m` and
+`git commit -F`. Semantic private-artifact reads now use fatal UTF-8 decoding
+with an exact byte round trip. Synthetic fixtures exercise each boundary with
+no private packet rows. The intermediate `49eb3f01` contains only the
+separately reviewed moving-main CI bootstrap invariants; acceptance belongs
+only to the future exact SHA containing this bounded successor after its fresh
+proof and reviews.
 
 The introducing PR's bootstrap pin now follows the current `main` commit after
 PR #252 advanced the base without introducing the trusted checker. A regression

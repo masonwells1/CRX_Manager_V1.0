@@ -176,6 +176,13 @@ function readExactDescriptor(fd, size, label) {
   }
   return bytes;
 }
+function decodeExactUtf8(bytes, label) {
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+  catch (_error) { throw new Error(`${label} contains invalid UTF-8`); }
+  assert(Buffer.from(text, 'utf8').equals(bytes), `${label} contains invalid UTF-8`);
+  return text;
+}
 export function readValidatedPrivateArtifact(file, expectedBasename, repoRoot = REPO_ROOT, { beforeOpen, beforeRead, afterFirstRead, afterRead, testApprovedRoot } = {}) {
   const options = { testApprovedRoot };
   const resolved = assertExternalArtifactPath(file, expectedBasename, repoRoot, { mustExist: true, ...options });
@@ -199,7 +206,7 @@ export function readValidatedPrivateArtifact(file, expectedBasename, repoRoot = 
     assert(sameStatIdentity(before, after) && after.isFile() && after.nlink === 1, 'private artifact descriptor changed during read');
     assert(first.equals(second), 'private artifact bytes changed during read');
     assertOpenedArtifactMatchesPath(fd, resolved, expectedBasename, 'private artifact path', repoRoot, options);
-    return { path: resolved, text: first.toString('utf8') };
+    return { path: resolved, text: decodeExactUtf8(first, 'private artifact') };
   } finally {
     if (fd !== undefined) closeSync(fd);
   }

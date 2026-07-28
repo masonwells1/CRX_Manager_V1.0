@@ -43,7 +43,11 @@ const UTF32_TEXT_CHUNK_CHARS = 4096;
 const CPIO_BINARY_HEADER_BYTES = 26;
 const MAX_CPIO_BINARY_NAME_BYTES = 4096;
 const MAX_GZIP_OPTIONAL_FIELD_BYTES = 4096;
-const ARCHIVE_STREAM_TAIL_BYTES = Math.max(511, CPIO_BINARY_HEADER_BYTES + MAX_CPIO_BINARY_NAME_BYTES - 1, 10 + (MAX_GZIP_OPTIONAL_FIELD_BYTES * 3));
+// Fixed header + XLEN + maximum FEXTRA + maximum NUL-terminated FNAME and
+// FCOMMENT + FHCRC. Retaining one byte less is the exact overlap needed for a
+// maximum-size header whose final byte arrives in the next stream chunk.
+const MAX_GZIP_HEADER_BYTES = 10 + 2 + MAX_GZIP_OPTIONAL_FIELD_BYTES + ((MAX_GZIP_OPTIONAL_FIELD_BYTES + 1) * 2) + 2;
+const ARCHIVE_STREAM_TAIL_BYTES = Math.max(511, CPIO_BINARY_HEADER_BYTES + MAX_CPIO_BINARY_NAME_BYTES - 1, MAX_GZIP_HEADER_BYTES - 1);
 const TRANSFER_DECODE_CHUNK_BYTES = 64 * 1024;
 const MAX_JSON_NODES = 1_000_000;
 const REGULAR_GIT_MODES = new Set(['100644', '100755']);
@@ -61,7 +65,7 @@ const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
 const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
 const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
-const EMBEDDED_BASE64_CANDIDATE_RE = /[A-Za-z0-9+/_=-]{32}/;
+const MAX_EMBEDDED_BASE64_WHITESPACE_BYTES = 4096;
 const MAX_EMBEDDED_HEX_WHITESPACE_BYTES = 4096;
 const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
 
@@ -365,31 +369,39 @@ function hasPlausibleZipEocd(source, offset) {
   const commentLength = source.readUInt16LE(offset + 20);
   return disk === 0 && centralDisk === 0 && entriesOnDisk === entriesTotal && offset + 22 + commentLength <= source.length;
 }
-function boundedGzipZeroTerminatedFieldEnd(source, offset) {
-  const maximum = Math.min(source.length, offset + MAX_GZIP_OPTIONAL_FIELD_BYTES + 1);
-  const terminator = source.subarray(offset, maximum).indexOf(0);
-  return terminator === -1 ? null : offset + terminator + 1;
+function boundedGzipZeroTerminatedField(source, offset) {
+  const available = source.length - offset;
+  const inspected = Math.min(available, MAX_GZIP_OPTIONAL_FIELD_BYTES + 1);
+  const terminator = source.subarray(offset, offset + inspected).indexOf(0);
+  if (terminator !== -1) return { state: 'complete', end: offset + terminator + 1 };
+  return available > MAX_GZIP_OPTIONAL_FIELD_BYTES ? { state: 'recognized-overbound' } : { state: 'incomplete' };
 }
-function hasPlausibleGzipHeader(source, offset) {
+function gzipHeaderState(source, offset) {
   // RFC 1952 fixed header: magic, method 8, FLG with reserved bits clear,
-  // MTIME/XFL/OS. Optional fields are only trusted when fully bounded.
-  if (!bytesAt(source, offset, [0x1f, 0x8b, 0x08]) || offset + 10 > source.length) return false;
+  // MTIME/XFL/OS. The tri-state result distinguishes a benign invalid header
+  // from an incomplete recognized header and from a recognized archive. Once
+  // a valid fixed header declares an over-bound optional field, fail closed
+  // even if its terminator has not arrived.
+  if (!bytesAt(source, offset, [0x1f, 0x8b, 0x08])) return 'invalid';
+  if (offset + 10 > source.length) return 'incomplete';
   const flags = source[offset + 3];
-  if ((flags & 0xe0) !== 0) return false;
+  if ((flags & 0xe0) !== 0) return 'invalid';
   let cursor = offset + 10;
   if (flags & 0x04) {
-    if (cursor + 2 > source.length) return false;
+    if (cursor + 2 > source.length) return 'incomplete';
     const extraLength = source.readUInt16LE(cursor);
-    if (extraLength > MAX_GZIP_OPTIONAL_FIELD_BYTES || cursor + 2 + extraLength > source.length) return false;
+    if (extraLength > MAX_GZIP_OPTIONAL_FIELD_BYTES) return 'recognized-overbound';
+    if (cursor + 2 + extraLength > source.length) return 'incomplete';
     cursor += 2 + extraLength;
   }
   for (const flag of [0x08, 0x10]) {
     if (!(flags & flag)) continue;
-    const end = boundedGzipZeroTerminatedFieldEnd(source, cursor);
-    if (end === null) return false;
-    cursor = end;
+    const field = boundedGzipZeroTerminatedField(source, cursor);
+    if (field.state !== 'complete') return field.state;
+    cursor = field.end;
   }
-  return !(flags & 0x02) || cursor + 2 <= source.length;
+  if ((flags & 0x02) && cursor + 2 > source.length) return 'incomplete';
+  return 'recognized';
 }
 function hasPlausibleCabHeader(source, offset) {
   if (source[offset] !== 0x4d || offset + 36 > source.length || !bytesAt(source, offset, [0x4d, 0x53, 0x43, 0x46])) return false;
@@ -445,8 +457,12 @@ function compressedArchiveReason(bytes) {
     return false;
   };
   if (findValidated(Buffer.from([0x50, 0x4b, 0x03, 0x04]), index => hasPlausibleZipLocalHeader(source, index))
-    || findValidated(Buffer.from([0x50, 0x4b, 0x05, 0x06]), index => hasPlausibleZipEocd(source, index))
-    || findValidated(Buffer.from([0x1f, 0x8b, 0x08]), index => hasPlausibleGzipHeader(source, index))) return 'compressed archive container cannot be inspected';
+    || findValidated(Buffer.from([0x50, 0x4b, 0x05, 0x06]), index => hasPlausibleZipEocd(source, index))) return 'compressed archive container cannot be inspected';
+  const gzipPrefix = Buffer.from([0x1f, 0x8b, 0x08]);
+  for (let index = source.indexOf(gzipPrefix); index !== -1; index = source.indexOf(gzipPrefix, index + 1)) {
+    const state = gzipHeaderState(source, index);
+    if (state === 'recognized' || state === 'recognized-overbound') return 'compressed archive container cannot be inspected';
+  }
   if (findValidated(Buffer.from([0x75, 0x73, 0x74, 0x61, 0x72]), index => hasPlausibleTarHeader(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x30, 0x37, 0x30, 0x37, 0x30]), index => hasPlausibleCpioHeader(source, index))) return 'compressed archive container cannot be inspected';
   if (findValidated(Buffer.from([0x71, 0xc7]), index => hasPlausibleCpioHeader(source, index))
@@ -498,6 +514,35 @@ export function structuralPrivateArtifactReason(bytes) {
     normalizeText(decodeUtf16Be(buffer, 1)),
   ]) ?? reason;
 }
+
+export function checkCommitMessagePrivateArtifactContainment(file) {
+  if (typeof file !== 'string' || file.length === 0 || file.includes('\0')) throw new Error('private Phase 3C commit-message containment requires a message file');
+  const resolved = path.resolve(file);
+  const entry = lstatSync(resolved);
+  if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('private Phase 3C commit-message containment requires a regular non-link file');
+  if (entry.size > MAX_STRUCTURAL_SCAN_BYTES) throw new Error('private Phase 3C commit-message containment failure: commit message exceeds bounded structural scan limit');
+  let fd;
+  try {
+    fd = openSync(resolved, 'r');
+    const before = fstatSync(fd);
+    if (!sameWorktreeStatIdentity(entry, before)) throw new Error('private Phase 3C commit message changed during scan');
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (count <= 0) throw new Error('private Phase 3C commit message changed during scan');
+      offset += count;
+    }
+    const after = fstatSync(fd);
+    if (!sameWorktreeStatIdentity(before, after)) throw new Error('private Phase 3C commit message changed during scan');
+    const reason = structuralPrivateArtifactReason(bytes);
+    if (reason) throw new Error(`private Phase 3C commit-message containment failure: commit message (${reason})`);
+    return { scanned_logical_bytes: bytes.length };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 function sameFileIdentity(left, right) { return left.dev === right.dev && left.ino === right.ino; }
 function sameWorktreeStatIdentity(left, right) {
   return sameFileIdentity(left, right)
@@ -848,16 +893,17 @@ function base64AlphabetValue(byte) {
   return null;
 }
 function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
-  let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = []; let length = 0; let active = true; let terminal = false; let terminalTail = 0; let found = null;
+  let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = null; let used = 0; let length = 0; let whitespace = 0; let active = true; let terminal = false; let terminalTail = 0; let found = null;
   const flushDecodedBytes = () => {
-    if (batch.length === 0) return;
+    if (used === 0) return;
     decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
-    decoded.feed(Buffer.from(batch));
-    batch = [];
+    decoded.feed(batch.subarray(0, used));
+    used = 0;
   };
   const addDecodedByte = value => {
-    batch.push(value);
-    if (batch.length === TRANSFER_DECODE_CHUNK_BYTES) flushDecodedBytes();
+    batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
+    batch[used++] = value;
+    if (used === batch.length) flushDecodedBytes();
   };
   const decodeQuartet = value => {
     const sextet = character => {
@@ -869,19 +915,27 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
     };
     const first = sextet(value[0]); const second = sextet(value[1]);
     addDecodedByte((first << 2) | (second >> 4));
-    if (value[2] === '=') return;
+    if (value[2] === '=') return true;
     const third = sextet(value[2]);
     addDecodedByte(((second & 0x0f) << 4) | (third >> 2));
-    if (value[3] === '=') return;
+    if (value[3] === '=') return true;
     addDecodedByte(((third & 0x03) << 6) | sextet(value[3]));
+    return true;
   };
   const feedDecoded = value => {
     pendingQuartets += value;
-    if (length < 32) return;
-    for (let index = 0; index < pendingQuartets.length; index += 4) decodeQuartet(pendingQuartets.slice(index, index + 4));
+    if (length < 32) return true;
+    for (let index = 0; index < pendingQuartets.length; index += 4) {
+      if (!decodeQuartet(pendingQuartets.slice(index, index + 4))) return false;
+    }
     pendingQuartets = '';
+    return true;
   };
-  const finishDecoded = () => { if (length >= 32 && pendingQuartets) feedDecoded(''); flushDecodedBytes(); return decoded?.finish() ?? null; };
+  const finishDecoded = () => {
+    if (length >= 32 && pendingQuartets && !feedDecoded('')) return null;
+    flushDecodedBytes();
+    return decoded?.finish() ?? null;
+  };
   const finishToken = () => {
     if (!active || length < 32) return null;
     if (terminal) return terminalTail <= 1 ? finishDecoded() : null;
@@ -889,19 +943,20 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
     // valid prefix. This covers an unpadded packet plus one trailing alphabet
     // character without decoding that unusable byte.
     if (quartet.length === 1) return finishDecoded();
-    if (quartet.length === 2 || quartet.length === 3) feedDecoded(quartet.padEnd(4, '='));
+    if ((quartet.length === 2 || quartet.length === 3) && !feedDecoded(quartet.padEnd(4, '='))) return null;
     return finishDecoded();
   };
-  const reset = () => { quartet = ''; decoded = null; pendingQuartets = ''; batch = []; length = 0; active = true; terminal = false; terminalTail = 0; };
+  const reset = () => { quartet = ''; decoded = null; pendingQuartets = ''; batch = null; used = 0; length = 0; whitespace = 0; active = true; terminal = false; terminalTail = 0; };
   const flush = () => { found ??= finishToken(); reset(); };
   const receive = byte => {
     const alphabet = base64AlphabetValue(byte);
     if (alphabet !== null) {
+      whitespace = 0;
       length += 1;
       if (terminal) { terminalTail += 1; if (terminalTail > 1) active = false; return; }
       if (!active || quartet.includes('=')) { active = false; return; }
       quartet += alphabet;
-      if (quartet.length === 4) { feedDecoded(quartet); quartet = ''; }
+      if (quartet.length === 4) { if (!feedDecoded(quartet)) active = false; quartet = ''; }
       return;
     }
     if (byte === 0x3d) {
@@ -910,7 +965,12 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
       quartet += '=';
       if (quartet.length < 4) return;
       if (!/^(?:[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/.test(quartet)) { active = false; return; }
-      feedDecoded(quartet); quartet = ''; terminal = true; return;
+      if (!feedDecoded(quartet)) { active = false; return; }
+      quartet = ''; terminal = true; return;
+    }
+    if ((byte === 0x09 || byte === 0x0a || byte === 0x0d || byte === 0x20) && length > 0 && active) {
+      whitespace += 1;
+      if (whitespace <= MAX_EMBEDDED_BASE64_WHITESPACE_BYTES) return;
     }
     flush();
   };
@@ -1046,35 +1106,18 @@ function createPemBase64Scanner({ checkArchives = true } = {}) {
         body?.feed(Buffer.from([byte]));
       }
     },
-    finish() { if (line.length || overflow) finishLine(); return found; },
-  };
-}
-function createLazyTokenScanner({ minimumRun, candidatePattern, createScanner }) {
-  let scanner = null;
-  let tail = Buffer.alloc(0);
-  return {
-    feed(bytes) {
-      const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-      if (scanner) { scanner.feed(source); return; }
-      const probe = tail.length === 0 ? source : Buffer.concat([tail, source]);
-      const match = probe.toString('latin1').search(candidatePattern);
-      if (match !== -1) {
-        scanner = createScanner();
-        scanner.feed(probe.subarray(match));
-        tail = Buffer.alloc(0);
-        return;
-      }
-      tail = Buffer.from(probe.subarray(-(minimumRun - 1)));
+    finish() {
+      if (line.length || overflow) finishLine();
+      if (body !== null) { found ??= body.finish(); body = null; }
+      return found;
     },
-    finish() { return scanner?.finish() ?? null; },
   };
 }
 function createAlternateEncodingScanner({ checkArchives = true } = {}) {
-  const embeddedBase64 = createLazyTokenScanner({
-    minimumRun: 32,
-    candidatePattern: EMBEDDED_BASE64_CANDIDATE_RE,
-    createScanner: () => createEmbeddedBase64TokenScanner({ checkArchives }),
-  });
+  // Keep this scanner live from byte zero so MIME-style line wrapping can
+  // cross the 32-character activation threshold. Before that threshold it
+  // retains at most eight quartets and performs no decoded-byte allocation.
+  const embeddedBase64 = createEmbeddedBase64TokenScanner({ checkArchives });
   const pemBase64 = createPemBase64Scanner({ checkArchives });
   const wholeHex = createHexTransferScanner({ checkArchives, wholeFile: true });
   const embeddedHex = createEmbeddedWhitespaceHexTokenScanner({ checkArchives });
@@ -1514,30 +1557,41 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
   return violations;
 }
 
-export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, ranges = [], commits = [], includeIgnored = true, testLimits = {} } = {}) {
+function executeWithAuthoritativeIndex(execute, root, indexFile) {
+  if (indexFile === null) return execute;
+  if (typeof indexFile !== 'string' || indexFile.length === 0 || indexFile.includes('\0')) throw new Error('private Phase 3C containment received an invalid GIT_INDEX_FILE');
+  const authoritativeIndex = path.resolve(root, indexFile);
+  return (command, args, options = {}) => execute(command, args, {
+    ...options,
+    env: { ...options.env, GIT_INDEX_FILE: authoritativeIndex },
+  });
+}
+
+export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, ranges = [], commits = [], includeIgnored = true, indexFile = null, testLimits = {} } = {}) {
+  const authoritativeExecute = executeWithAuthoritativeIndex(execute, root, indexFile);
   const ignoredVisible = includeIgnored
-    ? gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, execute)
+    ? gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, authoritativeExecute)
     : [];
   const visible = new Set(uniqueValidatedGitPaths([
-    ...gitPaths(['ls-files', '-z'], root, execute),
-    ...gitPaths(['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR'], root, execute),
-    ...gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute),
+    ...gitPaths(['ls-files', '-z'], root, authoritativeExecute),
+    ...gitPaths(['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR'], root, authoritativeExecute),
+    ...gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, authoritativeExecute),
     ...ignoredVisible,
   ]));
   if (visible.size > MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error('private Phase 3C containment candidate-count cap exceeded');
-  const rangeCommits = ranges.flatMap(range => commitsForRange(range, root, execute));
+  const rangeCommits = ranges.flatMap(range => commitsForRange(range, root, authoritativeExecute));
   const checkedCommits = [...new Set([...commits.map(commit => assertCommitSha(commit, 'history')), ...rangeCommits])];
   if (checkedCommits.length > reducedContainmentLimit(testLimits.maxCheckedCommits, MAX_HISTORY_COMMITS)) throw new Error('private Phase 3C containment checked-commit cap exceeded');
   const budget = new ScanBudget();
-  const index = await currentIndexCandidateViolations(root, execute, budget);
-  const worktree = worktreeContentViolations(root, execute, budget, { includeIgnored });
+  const index = await currentIndexCandidateViolations(root, authoritativeExecute, budget);
+  const worktree = worktreeContentViolations(root, authoritativeExecute, budget, { includeIgnored });
   const historyBudget = new HistoryTraversalBudget(reducedContainmentLimit(testLimits.maxHistoryPaths, MAX_STRUCTURAL_SCAN_CANDIDATES - budget.candidates));
   const violations = [
     ...findForbiddenPrivateArtifactPaths([...visible]),
     ...index.violations,
-    ...stagedIndexContentViolations(root, execute, index.entries),
+    ...stagedIndexContentViolations(root, authoritativeExecute, index.entries),
     ...worktree.violations,
-    ...await historyViolations(checkedCommits, root, execute, budget, historyBudget),
+    ...await historyViolations(checkedCommits, root, authoritativeExecute, budget, historyBudget),
   ];
   if (violations.length) {
     const summary = [...new Map(violations.map(item => [`${item.repoPath}\0${item.reason}`, item])).values()];
@@ -1718,30 +1772,40 @@ export async function checkGitHubEventPrivateArtifactContainment({ root = REPO_R
 }
 
 export function parseCli(args) {
-  const result = { ranges: [], prePushRemote: null, preCommit: false, githubEvent: false, root: null, attestGitHubHandoff: false };
+  const result = { ranges: [], prePushRemote: null, preCommit: false, commitMessageFile: null, githubEvent: false, root: null, attestGitHubHandoff: false };
   for (let index = 0; index < args.length; index += 1) {
     const token = args[index];
     if (token === '--range') { if (result.ranges.length) throw new Error('disclosure-safe usage: duplicate --range'); const value = args[++index]; if (typeof value !== 'string' || !value || value.startsWith('--')) throw new Error('disclosure-safe usage: --range requires base..head'); result.ranges.push(value); continue; }
     if (token === '--pre-push') { if (result.prePushRemote !== null) throw new Error('disclosure-safe usage: duplicate --pre-push'); const value = args[++index]; if (typeof value !== 'string' || !value || value.startsWith('--')) throw new Error('disclosure-safe usage: --pre-push requires remote name'); result.prePushRemote = value; continue; }
     if (token === '--pre-commit') { if (result.preCommit) throw new Error('disclosure-safe usage: duplicate --pre-commit'); result.preCommit = true; continue; }
+    if (token === '--commit-msg') { if (result.commitMessageFile !== null) throw new Error('disclosure-safe usage: duplicate --commit-msg'); const value = args[++index]; if (typeof value !== 'string' || !value || value.startsWith('--')) throw new Error('disclosure-safe usage: --commit-msg requires a message file'); result.commitMessageFile = value; continue; }
     if (token === '--github-event') { if (result.githubEvent) throw new Error('disclosure-safe usage: duplicate --github-event'); result.githubEvent = true; continue; }
     if (token === GITHUB_EVENT_HANDOFF_FLAG) { if (result.attestGitHubHandoff) throw new Error('disclosure-safe usage: duplicate GitHub handoff attestation'); result.attestGitHubHandoff = true; continue; }
     if (token === '--root') { if (result.root !== null) throw new Error('disclosure-safe usage: duplicate --root'); const value = args[++index]; if (typeof value !== 'string' || !path.isAbsolute(value)) throw new Error('disclosure-safe usage: --root requires an absolute path'); result.root = value; continue; }
     throw new Error('disclosure-safe usage: unknown containment option');
   }
-  if ((result.prePushRemote !== null ? 1 : 0) + Number(result.preCommit) + Number(result.githubEvent) > 1) throw new Error('disclosure-safe usage: pre-commit, pre-push, and GitHub-event modes are exclusive');
-  if (result.ranges.length && (result.prePushRemote !== null || result.preCommit || result.githubEvent)) throw new Error('disclosure-safe usage: --range is only valid in direct containment mode');
+  if ((result.prePushRemote !== null ? 1 : 0) + Number(result.preCommit) + (result.commitMessageFile !== null ? 1 : 0) + Number(result.githubEvent) > 1) throw new Error('disclosure-safe usage: pre-commit, commit-message, pre-push, and GitHub-event modes are exclusive');
+  if (result.ranges.length && (result.prePushRemote !== null || result.preCommit || result.commitMessageFile !== null || result.githubEvent)) throw new Error('disclosure-safe usage: --range is only valid in direct containment mode');
   if (result.root !== null && !result.githubEvent) throw new Error('disclosure-safe usage: --root requires --github-event');
   if (result.attestGitHubHandoff && (!result.githubEvent || result.root === null)) throw new Error('disclosure-safe usage: GitHub handoff attestation requires --github-event and --root');
   return result;
 }
 async function main() {
   const cli = parseCli(process.argv.slice(2));
+  if (cli.commitMessageFile !== null) {
+    const result = checkCommitMessagePrivateArtifactContainment(cli.commitMessageFile);
+    console.log(`PHASE3_PRIVATE_ARTIFACT_COMMIT_MESSAGE_PASS scanned_logical_bytes=${result.scanned_logical_bytes}`);
+    return;
+  }
   const result = cli.githubEvent
     ? await checkGitHubEventPrivateArtifactContainment({ root: cli.root ?? REPO_ROOT })
     : cli.prePushRemote !== null
       ? await checkPrePushPrivateArtifactContainment({ remoteName: cli.prePushRemote, stdin: readFileSync(0, 'utf8') })
-      : await checkPrivateArtifactContainment({ ranges: cli.ranges, includeIgnored: !cli.preCommit });
+      : await checkPrivateArtifactContainment({
+        ranges: cli.ranges,
+        includeIgnored: !cli.preCommit,
+        indexFile: cli.preCommit && Object.hasOwn(process.env, 'GIT_INDEX_FILE') ? process.env.GIT_INDEX_FILE : null,
+      });
   if (cli.attestGitHubHandoff) console.log(githubEventHandoffAttestation(result.github_event_head));
   else console.log(`PHASE3_PRIVATE_ARTIFACT_CONTAINMENT_PASS checked_paths=${result.checked_path_count} checked_commits=${result.checked_commit_count} scanned_candidates=${result.scanned_candidate_count} scanned_logical_bytes=${result.scanned_logical_bytes}`);
 }

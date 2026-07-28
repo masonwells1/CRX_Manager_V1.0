@@ -9,6 +9,18 @@ post-Stage-A owner-review packet has already been regenerated and verified at
 604 aggregate-only rows. All 604 decisions remain `PENDING`; no Product
 classification is approved. There is no current 595-active assertion.
 
+The current containment correction is not accepted: `b30769b3` is rejected
+after a Node 24 Linux glibc abort and later exact-SHA review, and its three-file
+crash correction `ce16574b` is rejected after follow-up boundedness and hook
+findings. The recorded `b30769b3` proof checked 51,841 paths, 58 commits, 52,264
+candidates, and 823,721,338 logical bytes. A later literal Opus 5 review of
+that exact SHA ran as `2026-07-27T23-29-35-252Z-3ef35b3a`. Older historical
+sections below accurately say no Opus 5 review had run in those earlier cycles;
+they do not describe this later review. `49eb3f01` contains only adopted
+moving-main CI invariants and remains an intermediate base. The bounded
+successor still requires a frozen exact SHA, full proof, and fresh required
+reviews before it can replace these rejected candidates.
+
 Capture and packet materialization are completed. An unattended agent must not
 recapture, regenerate, or materialize the private packet unless an explicit
 invalidation condition is recorded. PR #246 is already open and remains
@@ -58,8 +70,10 @@ not casually become the implementation writer.
   adversarial review on the same exact candidate SHA. The review capture must
   record the requested alias, resolved model, every finding, and a categorical
   verdict. The requested `opus` alias in Cycle 1 resolved to
-  `claude-opus-4-8`; no Opus 5 review ran or may be claimed. A literal Opus 5
-  rerun remains optional only if that backend later becomes available.
+  `claude-opus-4-8`; no Opus 5 review ran in that historical cycle. A later
+  literal Opus 5 review did run against exact `b30769b3` under
+  `2026-07-27T23-29-35-252Z-3ef35b3a`, but it does not retroactively change
+  Cycle 1 provenance or accept either `b30769b3` or `ce16574b`.
 
 The orchestrator invokes Codex workers through `scripts/codex-build.mjs` with
 the model and effort pinned explicitly. Claude review runs through

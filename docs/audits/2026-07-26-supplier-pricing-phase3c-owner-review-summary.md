@@ -6,6 +6,25 @@
 RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND EXTERNAL
 TRUSTED-WORKFLOW/RULESET ACTIVATION PLUS PROOF`
 
+The containment candidates `b30769b3` and `ce16574b` are explicitly rejected.
+The recorded `b30769b3` proof checked 51,841 paths, 58 commits, 52,264
+candidates, and 823,721,338 logical bytes, but GitHub's Node 24 Linux runner
+then reproduced a deterministic glibc allocator abort in the 128 KiB embedded
+Base64 boundary fixture. `ce16574b` corrected that three-file crash path, but
+follow-up review found the bounded PEM, Base64 whitespace/padding, gzip
+tri-state/overlap, authoritative alternate-index, commit-message, and semantic
+UTF-8 gaps unresolved. The moving-main-only intermediate `49eb3f01` does not
+accept those inherited gaps.
+
+A later literal Opus 5 review of exact `b30769b3` ran under wrapper run
+`2026-07-27T23-29-35-252Z-3ef35b3a`. References below saying no Opus 5 review
+had run remain truthful for their older historical cycles; they are not the
+current provenance for `b30769b3`. Acceptance is pending a fresh exact-SHA
+proof and full required reviews of the future commit containing all bounded
+successor corrections. This correction status does not reopen the private
+packet, owner review, classification, migration, live-data, flag, deploy, or
+merge gates.
+
 The reviewed packet commit
 `d38d41f63e68971f08f7158bf5a104af62d232aa` has immutable parent
 `07813f698e4cf12e09fd4378837f5134ed5c3850`. The parent remains the

@@ -23,6 +23,43 @@
 
 ### PR #246 containment correction — still PARKED
 
+Current containment-correction provenance is fail-closed:
+
+- `b30769b381d80b901aed73c254f5b9242f933e5a` is rejected. Its recorded
+  containment proof checked 51,841 paths, 58 commits, 52,264 candidates, and
+  823,721,338 logical bytes, but the GitHub Node 24 Linux job then exposed a
+  deterministic glibc allocator abort in the 128 KiB embedded-Base64 boundary
+  case.
+- `ce16574b02ec9c4e40c351f69ba3e237caf2e9c4` is also rejected. It corrected
+  only the three-file allocator-crash path; follow-up review still required
+  PEM EOF finalization, bounded embedded whitespace and canonical padding,
+  tri-state/over-bound gzip parsing with exact maximum-header overlap,
+  authoritative alternate-index scanning, a commit-message hook, and fatal
+  exact UTF-8 semantic parsing.
+- A later literal Opus 5 review of exact `b30769b3` ran as
+  `2026-07-27T23-29-35-252Z-3ef35b3a`. Statements later in this append-only
+  historical ledger that no Opus 5 review had run refer to their older cycles
+  and do not supersede this later exact-SHA provenance.
+- `49eb3f011da17d541bcd81cdd437da29db0c707e` contains the separately reviewed
+  moving-main bootstrap/CI invariants only. It is an intermediate base, not an
+  accepted containment candidate. The successor containing all bounded
+  corrections remains pending its exact SHA, full proof, and fresh required
+  reviews.
+- Pre-freeze bounded-successor proof used synthetic data only. Three Node
+  syntax checks passed; the focused Windows suite passed in 167.5 seconds; a
+  clean disposable `node:24-bookworm` repository on Node 24.18.0 passed the
+  same focused suite; and the real full worktree containment sweep passed for
+  51,845 paths, 51,854 candidates, and 793,364,183 logical bytes. The focused
+  suite includes real alternate-index and commit-message Git commits, exact
+  gzip-boundary splits, Base64 boundary/fuzz/non-recursion cases, and fatal
+  UTF-8 rejection. Local docs, shared-agent guidance, workflow, and mission-doc
+  checks also passed. These are pre-commit proof facts, not an exact-SHA review
+  or acceptance verdict.
+
+No private packet was recaptured, regenerated, opened, or displayed during
+this correction. No classification, flag, migration, live-data, deployment, or
+merge authority changed.
+
 Two real PR review findings are under bounded correction: ignored ordinary
 non-regular filesystem entries (including tooling symlinks) must not be
 dereferenced, while forbidden Phase 3C paths remain a fail-closed violation;
