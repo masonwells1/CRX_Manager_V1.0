@@ -51,6 +51,19 @@ Use this when Mason asks for a broad app safety review.
 5. Convert recurring confirmed bug classes into prevention actions.
 6. Stop with a compact verdict and report path.
 
+### Section Mode (one numbered area)
+
+Use this when Mason names a single area rather than the whole app — "re-check the money section", "audit commissions", "run gauntlet section 3".
+
+Run `/gauntlet-section`, which drives `.claude/workflows/gauntlet-sections-loop.js` over the numbered CRX Live Foundation Gauntlet sections: 1 Security · 2 Money · 3 Inventory · 4 Lifecycle · 5 DB-drift · 6 Idempotency · 7 Commissions · 8 Returns/Credits · 9 PO-AP. Pass the sections you want (`args.sections`, e.g. `[3]` or `[7,8]`).
+
+Two things make this different from Foundation Audit Mode:
+
+- **The caller collects the live evidence.** The workflow's agents are capability-constrained to `Explore` and cannot reach Supabase, so every live claim comes from a read-only evidence packet you gather first. The packet must be under six hours old or the run returns BLOCKED.
+- **Settlement is decided by code, not an agent.** `adjudication.settled` is false whenever an evidence source was blocked or a BLOCKER/HIGH verdict came back inconclusive. Never override it, and never report a section clean because an agent said it was.
+
+Sections 10–15 are not encoded in the runner yet and must be run manually against `docs/audits/gauntlet/live-foundation-gauntlet-index.md`. Every run updates that index and `live-foundation-gauntlet-summary.md`.
+
 ## Evidence Truth States
 
 Every review layer and verifier must end in exactly one execution state:

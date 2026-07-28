@@ -20,6 +20,8 @@ In summary, that prompt makes you:
 - **A clean result is a valid, valuable result** — do not manufacture findings to look productive.
 - **Cite or cut** — every finding carries a hard citation; unconfirmed leads go in a separate "needs human check" list, not the ranked findings.
 - **Complements `/review-workflow`.** `/review-workflow` is the broad workflow sweep; this is the focused, repeatable "did the map drift from reality?" pass. Don't duplicate it.
+- **Spend the run where nothing else looks.** Passes 1–5 overlap heavily with `/review-workflow` Layers A and B (orphan pages, broken navigation, dead RPCs, page→RPC wiring, role gating, and lifecycle-vs-live-CHECK are all covered there). The passes unique to this audit are **Pass 0** (harvest the map's own auto-checks) and **Pass 6** (map defects — where `scripts/generate-workflow-map.mjs` itself produces a stale or wrong map). If you only have budget for part of the audit, run those two.
+- **A prior report is a lead list, not evidence.** You may read a recent `/review-workflow` report to skip re-deriving leads it already chased — but never carry its *results* into this report. This is a drift audit: certifying "no drift" from a document rather than from current source and live state is the exact failure it exists to catch. Anything you did not confirm against current state this run goes in the "needs human check" list with the report and date it came from, never in the ranked findings. If `origin/main` has moved since that report was written, treat it as history and re-derive.
 
 ## After the report
 
