@@ -231,7 +231,7 @@ export function contentIsRisky(diffText) {
 function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
   if (!data || data[ranKey] !== true) return false;
   const v = String(data.verdict || "");
-  if (v !== "clean" && v !== "blockers-fixed") return false;
+  if (v !== "clean") return false;
   if (headSha && data.head_sha !== headSha) return false;
   // Base-SHA binding: a proof records the exact origin/main it was reviewed
   // against (base_sha). origin/main can advance — a sibling session fetches a

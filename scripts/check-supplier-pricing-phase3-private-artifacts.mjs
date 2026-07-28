@@ -70,6 +70,7 @@ for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 const MAX_EMBEDDED_BASE64_WHITESPACE_BYTES = 4096;
 const MAX_EMBEDDED_HEX_WHITESPACE_BYTES = 4096;
 const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
+const OPERATOR_OWNED_IGNORED_PREFIXES = new Set(['backups/', '.perf-sweep-data/', '.epa-data-quality/', '.vercel/']);
 
 function unsafeStructuralSignatureExemptionPath(repoPath) {
   if (typeof repoPath !== 'string' || repoPath.length === 0 || repoPath.includes('\\') || repoPath.includes('\0')) return 'path must be a non-empty normalized POSIX path';
@@ -78,7 +79,7 @@ function unsafeStructuralSignatureExemptionPath(repoPath) {
   const segments = repoPath.split('/');
   if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) return 'path must not contain empty or traversal segments';
   if (segments.some(segment => segment.toLowerCase() === 'private-artifacts' || segment.toLowerCase() === '.git')) return 'path must not be inside a private-artifact or Git administration path';
-  if ([...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => repoPath.startsWith(prefix))) return 'path must not use a tool-owned or ignored prefix';
+  if ([...TOOL_OWNED_IGNORED_PREFIXES, ...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => repoPath.startsWith(prefix))) return 'path must not use a tool-owned or ignored prefix';
   return null;
 }
 
@@ -205,6 +206,10 @@ function isToolOwnedIgnoredPath(repoPath) {
   // archive inspection; broad segment matching would let it hide a packet.
   return [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
 }
+function isOperatorOwnedIgnoredPath(repoPath) {
+  const normalized = repoPath.replaceAll('\\', '/');
+  return [...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
+}
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
   const roots = new Set();
@@ -232,11 +237,11 @@ function normalizeCsvHeaderCell(value) {
 
 export class ScanBudget {
   constructor() { this.candidates = 0; this.logicalBytes = 0; }
-  admit(size) {
-    if (!Number.isSafeInteger(size) || size < 0) throw new Error('private Phase 3C containment could not determine candidate size');
-    if (this.candidates >= MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error('private Phase 3C containment candidate-count cap exceeded');
-    if (size > MAX_STRUCTURAL_SCAN_BYTES) throw new Error('private Phase 3C containment per-file scan cap exceeded');
-    if (this.logicalBytes > MAX_TOTAL_STRUCTURAL_SCAN_BYTES - size) throw new Error('private Phase 3C containment total-byte scan cap exceeded');
+  admit(size, repoPath = '<unknown>') {
+    if (!Number.isSafeInteger(size) || size < 0) throw new Error(`private Phase 3C containment could not determine candidate size at ${repoPath}`);
+    if (this.candidates >= MAX_STRUCTURAL_SCAN_CANDIDATES) throw new Error(`private Phase 3C containment candidate-count cap exceeded at ${repoPath}`);
+    if (size > MAX_STRUCTURAL_SCAN_BYTES) throw new Error(`private Phase 3C containment per-file scan cap exceeded at ${repoPath}`);
+    if (this.logicalBytes > MAX_TOTAL_STRUCTURAL_SCAN_BYTES - size) throw new Error(`private Phase 3C containment total-byte scan cap exceeded at ${repoPath}`);
     this.candidates += 1;
     this.logicalBytes += size;
   }
@@ -1367,7 +1372,7 @@ function scanWorktreeCandidate(root, repoPath, { afterFirstPass, cache = null, b
   if (!entry.isFile()) return null;
   const followed = statSync(file);
   if (!sameWorktreeStatIdentity(entry, followed) || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
-  budget.admit(entry.size);
+  budget.admit(entry.size, repoPath);
   const fd = openSync(file, 'r');
   try {
     assertStableWorktreeCandidate(root, repoPath, file, entry, fd, cache);
@@ -1451,7 +1456,7 @@ async function scanGitObjectEntries(entries, root, budget) {
       if (match[1].toLowerCase() !== entry.spec.toLowerCase()) throw new Error('private Phase 3C containment received a mismatched Git blob header');
       if (match[2] !== (entry.type ?? 'blob')) throw new Error('private Phase 3C containment received an unexpected Git object type');
       const size = Number(match[3]);
-      budget.admit(size);
+      budget.admit(size, entry.repoPath);
       const scanner = createStructuralByteStreamScanner();
       let remaining = size;
       while (remaining > 0) {
@@ -1597,6 +1602,11 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // Other ignored paths remain operator-controlled packet candidates, so an
     // ignored archive at the repository root or in an ordinary folder fails
     // closed just like tracked and untracked archives.
+    // These exact top-level roots are generated locally and ignored by Git.
+    // Skipping them at the ignored-source boundary prevents backups and tool
+    // caches from blocking every push. If a file is force-added, its source is
+    // staged/tracked instead and it receives the full structural/archive scan.
+    if (source === 'ignored' && isOperatorOwnedIgnoredPath(repoPath)) continue;
     const checkArchives = source !== 'ignored' || !isToolOwnedIgnoredPath(repoPath);
     const result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
     const acceptedReason = acceptedStructuralReason(repoPath, result?.reason);
@@ -1768,7 +1778,7 @@ async function inspectOutgoingRefObject({ localRef, localSha, root, execute, bud
     }
     if (type === 'tag') {
       const bytes = gitOutput(['cat-file', 'tag', sha], root, execute, { encoding: null });
-      budget.admit(bytes.length);
+      budget.admit(bytes.length, localRef);
       const reason = structuralPrivateArtifactReason(bytes);
       if (reason) violations.push({ repoPath: localRef, reason });
       const headerEnd = bytes.indexOf(Buffer.from('\n\n'));

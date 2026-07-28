@@ -10,10 +10,20 @@ grouped `FIX`/`FOLLOW-UPS` findings, and finding text that starts with
 `Low-level`. Regression coverage preserves legitimate empty severity sections
 while rejecting each reproduced proof-minting bypass, including a terminal
 zero-count section immediately before the unchanged machine verdict. The Phase
-3C CI bootstrap
-also emits deliberate update guidance when a candidate head predates the
+3C CI bootstrap also emits deliberate update guidance when a candidate head predates the
 containment checker instead of exiting with an opaque Git error. The owning
 packet, agent-workflow, parser, and documentation checks pass with these guards.
+
+The follow-up exact-SHA Opus 5 review identified additional operability and
+proof-contract gaps. Root-only ignored output under `backups/`,
+`.perf-sweep-data/`, `.epa-data-quality/`, and `.vercel/` now skips archive
+rejection and byte-budget charging at the ignored-source boundary; force-added
+files and nested lookalike paths remain fully guarded. Scan-cap errors identify
+the offending repository path. The review-proof parser now rejects actionable
+LOW findings and table or `Severity:` formats, the proof consumer accepts only
+the trusted minter's `clean` verdict, the generated workflow map is rescanned
+after staging, and the candidate containment job has a 12-minute timeout.
+Focused regressions cover each behavior.
 
 The private-artifact containment checker now keeps transfer decoding bounded in
 the hook/CI path. UTF-32 JSON and owner-decision CSV signals are decoded

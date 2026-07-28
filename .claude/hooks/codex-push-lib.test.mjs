@@ -140,6 +140,11 @@ assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 100
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now + 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, head_sha: "" }, sha, now), false);
+assert.equal(
+  proofValid({ ...codexProof, verdict: "blockers-fixed" }, sha, now),
+  false,
+  "obsolete blockers-fixed Codex proof is rejected",
+);
 
 // Base-SHA binding (2026-07-14): when the guard supplies the origin/main it is
 // gating against, the proof's base_sha must match. A moved base — origin/main
@@ -156,9 +161,14 @@ assert.equal(
 // mirroring how the head_sha check is gated on a supplied headSha.
 assert.equal(proofValid({ ...codexProof, base_sha: undefined }, sha, now), true, "base check is skipped when no base is expected");
 
-const claudeProof = { claude_ran: true, verdict: "blockers-fixed", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };
+const claudeProof = { claude_ran: true, verdict: "clean", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };
 assert.equal(claudeProofValid(claudeProof, sha, now), true);
 assert.equal(claudeProofValid({ ...claudeProof, claude_ran: false }, sha, now), false);
+assert.equal(
+  claudeProofValid({ ...claudeProof, verdict: "blockers-fixed" }, sha, now),
+  false,
+  "obsolete blockers-fixed Claude proof is rejected",
+);
 assert.equal(claudeProofValid({ ...claudeProof, verdict: "ship" }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, head_sha: "b".repeat(40) }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, timestamp: new Date(now + 60_000).toISOString() }, sha, now), false);

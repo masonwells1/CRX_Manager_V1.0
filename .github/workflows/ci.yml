@@ -20,6 +20,7 @@ jobs:
     name: Phase 3C Candidate Containment (CI)
     if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     # This is intentionally the first content-processing job. It uses only
     # runner-bundled Node and Git: no candidate .nvmrc, package metadata, or
     # dependencies are processed before containment.
