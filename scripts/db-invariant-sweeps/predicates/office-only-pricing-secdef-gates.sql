@@ -61,6 +61,14 @@
 -- merely quoted the table name, which dropped read_pos to 0 and -- under the old `read_pos > 0 AND ...`
 -- ordering condition -- turned the position check off without firing anything.
 --
+-- Two further inert-text vectors were closed on 2026-07-28 after review, and the strip was verified
+-- live on synthetic bodies rather than by re-mutating the real functions:
+--   17 gate DELETED, text parked after a `\'` inside an `E'...'` string -- the old literal strip ended
+--      at the escaped quote and left the guard text visible in `code_src`
+--   18 gate DELETED, text parked in double-quoted identifiers (`PERFORM 1 AS "auth.uid() IS NULL"`)
+-- Both now collapse to blanks, while an unmutated gate string passes through byte-identical, and the
+-- whole predicate still returns zero rows against the two live bodies.
+--
 -- When re-running this set, capture the gate with a regex whose FIRST quantifier is non-greedy
 -- (`'(IF auth\.uid\(\) IS NULL THEN.*?END IF;.*?END IF;)'`). A leading `\s+` silently makes the whole
 -- match greedy -- it swallowed 1625 of 2464 body chars including the protected read, which made the
@@ -147,9 +155,18 @@ WITH target(signature, needs_authenticated_exec, read_pattern) AS (
 --       collapses to 'keep1 ~ keep2' with `*` and to 'keep1 ~ MIDDLE ~ keep2' with `*?`. The same trap
 --       applies to the /* */ strip above, which is already safe because `.*?` is its first quantifier.
 --
--- Both strips are deliberately naive and may over-blank. That is the safe direction: over-stripping can
+--       The single-quote strip also treats `\<any>` as an in-literal pair, so an `E'... \' ...'` string
+--       is consumed whole instead of being ended early at the escaped quote. With standard_conforming_
+--       strings a lone backslash inside a plain literal is just a character, so this only ever swallows
+--       MORE than the real grammar would -- the safe direction (see below).
+--
+--       A third strip blanks double-quoted identifiers. Without it, inert alias text such as
+--       `PERFORM 1 AS "auth.uid() IS NULL"` -- which executes nothing -- would satisfy the structural
+--       checks. A quoted identifier can never BE a guard call, so blanking it can only remove matches.
+--
+-- All three strips are deliberately naive and may over-blank. That is the safe direction: over-stripping can
 -- only DELETE a guard match and raise a false alarm, never manufacture a guard that is not there. A
--- false alarm costs one investigation; a missed leak costs customer pricing. If either strip is ever
+-- false alarm costs one investigation; a missed leak costs customer pricing. If any strip is ever
 -- refined, re-run the mutation set and keep that asymmetry -- and note that the SQLSTATE arm depends on
 -- exec_src RETAINING literals, so it is not a candidate for the same treatment.
 resolved_raw AS (
@@ -185,8 +202,10 @@ resolved AS (
   FROM resolved_raw r
   CROSS JOIN LATERAL (
     SELECT regexp_replace(
-             regexp_replace(r.exec_src, '\$([^$]*?)\$.*?\$\1\$', ' ', 'gs'),
-             '''(?:[^'']|'''')*''', ' ', 'g') AS code_src
+             regexp_replace(
+               regexp_replace(r.exec_src, '\$([^$]*?)\$.*?\$\1\$', ' ', 'gs'),
+               '''(?:[^''\\]|''''|\\.)*''', ' ', 'g'),
+             '"(?:[^"]|"")*"', ' ', 'g') AS code_src
   ) c
 ),
 violation AS (

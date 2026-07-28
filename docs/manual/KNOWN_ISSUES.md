@@ -107,12 +107,18 @@ assertion 2 (having passed 1 and 3), and assertion 4 also failed then
 (`has_function_privilege('authenticated', ...)` was still `true`). After the apply the same set passes.
 Red before, green after — not green either way.
 
-**Still open, reported separately.** `application_services.default_rate_per_acre_cents` and
-`cost_per_acre_cents` remain readable by any active profile through the
-`application_services_select` policy (`USING (is_active_profile())`) — the two SECDEF functions were
-only one route to those columns. Live count of services with `cost_per_acre_cents > 0` is currently
-**0** of 4, so nothing is leaking today, but the policy is the residual hole. Mason approved the fix
-on 2026-07-28; it lands separately as `20260728210030_application_service_cost_admin_only`.
+**Still open, reported separately.** `application_services.cost_per_acre_cents` — the internal
+per-acre cost — remains readable by any active profile through the `application_services_select`
+policy (`USING (is_active_profile())`); the two SECDEF functions were only one route to it. Live
+count of services with `cost_per_acre_cents > 0` is currently **0** of 4, so nothing is leaking
+today, but the policy is the residual hole. Mason approved the fix on 2026-07-28; it lands
+separately as `20260728210030_application_service_cost_admin_only`, which revokes the table-level
+grant and re-grants an explicit column list omitting only `cost_per_acre_cents`.
+
+`default_rate_per_acre_cents` is **deliberately not** part of that hole. It is the customer-billed
+rate, not an internal cost, and `ApplicationServicePicker` reads it to render the per-acre default in
+the dropdown that `JobDetail`, `CustomerDetail` and `FieldApplicationInvoice` mount — revoking it
+would empty the applicator's service picker. It stays in the re-granted column list.
 
 **No consumer justifies it (verified live 2026-07-28).** An earlier note in `src/lib/rlsContracts.test.ts`
 claimed the column stayed driver-readable "because Jobs/JobDetail need it". They do not. Every
