@@ -1212,7 +1212,11 @@ for (const [label, mutate] of [
 // the doc's own example through the workflow so the two cannot drift again.
 {
   const commandDoc = await readFile(new URL('../commands/gauntlet-section.md', import.meta.url), 'utf8')
-  const block = /```json\n([\s\S]*?)```/.exec(commandDoc)
+  // `\r?\n`: the doc is stored LF but checks out CRLF on Windows worktrees, and an
+  // LF-only fence pattern made this guard fail for reasons that had nothing to do
+  // with the doc's contents. JSON.parse below tolerates the \r, so only the fence
+  // match needs to.
+  const block = /```json\r?\n([\s\S]*?)```/.exec(commandDoc)
   assert.ok(block, '.claude/commands/gauntlet-section.md must carry a ```json invocation example')
 
   const nowMs = Date.now()
