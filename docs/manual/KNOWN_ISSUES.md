@@ -63,26 +63,47 @@ ACL. They are stated so the grant set is explicit in the migration rather than i
 reviewer finding that prompted them was a false positive against live, but the fix is free and is
 the pattern `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql` already set.
 
-**Added 2026-07-28, second reviewer round — postflight assertions.** Both apply-gate reviewers
-independently asked for one (`rls-security-reviewer` M1, `migration-drift-reviewer` H1): every
-sibling hardening migration closes with a `DO $$ ... $$` block that asserts the change landed, and
-this one asserted nothing. Without it, a later `CREATE OR REPLACE` that re-emits either body without
-the gate fails **silently** — the pending-migration overlap-clobber class. The migration now ends
-with six assertions: overload count still 1 each, the gate present in the applied `prosrc` (not just
-in the file), both still `SECURITY DEFINER` with a pinned `search_path`, `authenticated` no longer
-holding EXECUTE on `compute_application_service_fee`, `authenticated` **still** holding it on
-`get_program_completion`, and neither reachable by `anon`.
+**APPLIED LIVE 2026-07-28 18:21:41 UTC — leak CLOSED.** Applied by a parallel session, so the
+`supabase_migrations.schema_migrations` row carries **version `20260728182141`** with
+`name = '20260728123224_secdef_pricing_reads_office_only'`. Reconcile on `name`, not `version` — a
+lookup by version `20260728123224` returns nothing and will read as "never applied".
 
-Assertion 5 is deliberately a *positive* check. Silently losing the `authenticated` grant on
-`get_program_completion` would take `OfficeCockpit` and `ProgramTracker` offline for the office —
-a worse outcome than the leak this migration closes — and a postflight that only checks for removed
-access would not notice.
+**Verified live after the apply, two directions.** Catalog state: both bodies contain the
+`AUTH_REQUIRED`/`INSUFFICIENT_ROLE` gate, both remain `SECURITY DEFINER` with a pinned `search_path`,
+one overload each, `authenticated` no longer holds EXECUTE on `compute_application_service_fee`,
+`authenticated` **still** holds it on `get_program_completion`, and `anon` reaches neither. Behaviour,
+impersonating a real active `driver` (`5bfbf33a-…`) — a service-role call proves nothing here, because
+`auth.uid()` is NULL for `postgres` and both functions would raise `AUTH_REQUIRED` for the wrong
+reason: **both refused with SQLSTATE 42501**. Positive control: the same call as an active `admin`
+passed the gate, so the guard discriminates by role rather than blocking everyone.
 
-The block was **proven non-vacuous before commit**: executed against live in its exact committed
-form it raised `VERIFICATION FAILED: compute_application_service_fee body has no office-only gate`
-at assertion 2, having passed 1 and 3. Assertion 4 also fails against current live state
-(`has_function_privilege('authenticated', ...)` is still `true`). Those two are precisely what the
-apply is meant to flip, so the block goes red before and green after rather than passing either way.
+**No postflight `DO $$ ... $$` block shipped inside the migration.** Both apply-gate reviewers asked
+for one (`rls-security-reviewer` M1, `migration-drift-reviewer` H1) and it was written, but the file
+had already merged via PR #257 and was then applied — editing an applied migration is a hard-rule
+violation, and a database that has recorded the version will never execute added statements. Codex
+flagged exactly this and blocked the push. The assertions were instead **executed read-only against
+live** (all six passed) and their durable form now lives in
+`scripts/db-invariant-sweeps/predicates/office-only-pricing-secdef-gates.sql`, which is strictly
+better: a postflight block runs once at apply time, whereas the sweep re-checks on every run and so
+actually catches the pending-migration overlap-clobber class — a later `CREATE OR REPLACE` that
+re-emits either body without the gate.
+
+That predicate includes a deliberately *positive* check: silently losing the `authenticated` grant on
+`get_program_completion` would take `OfficeCockpit` and `ProgramTracker` offline for the office — a
+worse outcome than the leak this migration closed — and a sweep that only looked for excess access
+would not notice.
+
+The assertion set was **proven non-vacuous**: run against live in its exact form *before* the apply it
+raised `VERIFICATION FAILED: compute_application_service_fee body has no office-only gate` at
+assertion 2 (having passed 1 and 3), and assertion 4 also failed then
+(`has_function_privilege('authenticated', ...)` was still `true`). After the apply the same set passes.
+Red before, green after — not green either way.
+
+**Still open, reported separately:** `application_services.default_rate_per_acre_cents` and
+`cost_per_acre_cents` remain readable by any active profile through the `application_services_select`
+policy (`USING (is_active_profile())`). Live count of services with `cost_per_acre_cents > 0` is
+currently **0**, so nothing is leaking today, but the policy is the residual hole — the two SECDEF
+functions were only one route to those columns.
 
 **Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
 `customer_application_rates` policies are untouched. Sales reps keep their access.

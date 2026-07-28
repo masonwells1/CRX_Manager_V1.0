@@ -127,12 +127,6 @@ $function$;
 -- active admin/sales_rep profile. Dropping the direct grant costs the field
 -- nothing and kills the direct-API route even if the in-body guard is ever
 -- weakened. Precedent: 20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql.
--- anon/PUBLIC are already absent from this function's ACL on live (verified
--- 2026-07-28: proacl = {postgres=X/postgres,authenticated=X/postgres,
--- service_role=X/postgres}, has_function_privilege('anon', ...) = false), and
--- CREATE OR REPLACE preserves the existing ACL, so those two are no-ops today.
--- They are named anyway so the grant set is explicit in the migration rather
--- than inherited. Only the `authenticated` revoke changes live state.
 REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer)
   FROM PUBLIC, anon, authenticated;
 
@@ -206,89 +200,8 @@ BEGIN
 END;
 $function$;
 
--- Same explicit-grant-set treatment as above. `authenticated` KEEPS its EXECUTE
--- here (OfficeCockpit.tsx and ProgramTracker.tsx call this RPC); revoking from
--- anon/PUBLIC does not touch that separate, explicit grant. Verified 2026-07-28
--- on live: proacl = {postgres=X/postgres,authenticated=X/postgres,
--- service_role=X/postgres}, has_function_privilege('anon', ...) = false, so the
--- revoke is a no-op today and the GRANT restates what is already in place.
--- caller-analysis: get_program_completion :: two live browser callers, src/pages/OfficeCockpit.tsx:599 and src/pages/ProgramTracker.tsx:53, both calling as a signed-in `authenticated` user. `authenticated` KEEPS its EXECUTE grant here (deliberately NOT revoked), and revoking anon/PUBLIC does not touch that separate explicit grant, so neither callsite changes. The in-body admin/sales_rep gate added above is the real control, and both pages are already routed allowedRoles={['admin','sales_rep']}, so every legitimate caller passes it. Postflight assertion 5 below fails the migration if `authenticated` ever loses EXECUTE on this function.
--- caller-analysis: compute_application_service_fee :: zero browser callers (no `.rpc('compute_application_service_fee')` anywhere in src/ or supabase/functions/). Its sole caller is transfer_job_to_invoice, a SECURITY DEFINER function owned by postgres that already requires an active admin/sales_rep, so the nested EXECUTE check runs as postgres and is unaffected by the `authenticated` revoke. NOTE: the header comment at the top of this file also names save_job as a caller — that is WRONG, inherited from the audit handoff; a live scan of every function body in pg_proc.prosrc found transfer_job_to_invoice only.
+-- Preserve the browser RPC for office users while making the ACL explicit.
+-- CREATE OR REPLACE normally retains the existing ACL, but restating it here
+-- prevents replay or default-privilege drift from exposing this SECDEF reader.
 REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_program_completion(integer) TO authenticated, service_role;
-
--- ---------------------------------------------------------------------------
--- Postflight verification
--- ---------------------------------------------------------------------------
--- This migration rewrites two entire function bodies and drops one grant.
--- Without assertions a partially-applied or subtly-wrong result looks exactly
--- like a successful one, and a later CREATE OR REPLACE that re-emits either body
--- without the gate would fail silently (the "pending-migration overlap clobber"
--- class). Pattern follows 20260430170000_field_app_workflow_phase4.sql:116.
---
--- Note assertion 5 is a POSITIVE check: silently LOSING the authenticated grant
--- on get_program_completion would take OfficeCockpit and ProgramTracker offline
--- for the office, which is a worse outcome than the leak this migration closes.
-DO $$
-DECLARE
-  v_count int;
-  v_src   text;
-BEGIN
-  -- 1. Still exactly one overload each — no accidental second signature.
-  SELECT count(*) INTO v_count FROM pg_proc
-   WHERE pronamespace = 'public'::regnamespace AND proname = 'compute_application_service_fee';
-  IF v_count <> 1 THEN
-    RAISE EXCEPTION 'VERIFICATION FAILED: compute_application_service_fee has % overloads (expected 1)', v_count;
-  END IF;
-
-  SELECT count(*) INTO v_count FROM pg_proc
-   WHERE pronamespace = 'public'::regnamespace AND proname = 'get_program_completion';
-  IF v_count <> 1 THEN
-    RAISE EXCEPTION 'VERIFICATION FAILED: get_program_completion has % overloads (expected 1)', v_count;
-  END IF;
-
-  -- 2. The gate actually landed in the APPLIED body, not just in this file.
-  SELECT prosrc INTO v_src FROM pg_proc
-   WHERE pronamespace = 'public'::regnamespace AND proname = 'compute_application_service_fee';
-  IF v_src NOT LIKE '%INSUFFICIENT_ROLE%' OR v_src NOT LIKE '%AUTH_REQUIRED%' THEN
-    RAISE EXCEPTION 'VERIFICATION FAILED: compute_application_service_fee body has no office-only gate';
-  END IF;
-
-  SELECT prosrc INTO v_src FROM pg_proc
-   WHERE pronamespace = 'public'::regnamespace AND proname = 'get_program_completion';
-  IF v_src NOT LIKE '%INSUFFICIENT_ROLE%' OR v_src NOT LIKE '%AUTH_REQUIRED%' THEN
-    RAISE EXCEPTION 'VERIFICATION FAILED: get_program_completion body has no office-only gate';
-  END IF;
-
-  -- 3. Both still SECURITY DEFINER with a pinned search_path (CREATE OR REPLACE
-  --    silently drops either one if the header is wrong).
-  SELECT count(*) INTO v_count FROM pg_proc
-   WHERE pronamespace = 'public'::regnamespace
-     AND proname IN ('compute_application_service_fee', 'get_program_completion')
-     AND prosecdef
-     AND array_to_string(proconfig, ',') LIKE '%search_path=%pg_temp%';
-  IF v_count <> 2 THEN
-    RAISE EXCEPTION 'VERIFICATION FAILED: expected 2 SECDEF functions with a pinned search_path, found %', v_count;
-  END IF;
-
-  -- 4. The revoke took: authenticated can no longer reach the fee calculator.
-  IF has_function_privilege('authenticated',
-       'public.compute_application_service_fee(uuid,uuid,numeric,integer)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'VERIFICATION FAILED: authenticated still has EXECUTE on compute_application_service_fee';
-  END IF;
-
-  -- 5. POSITIVE check — the office pages MUST keep working.
-  IF NOT has_function_privilege('authenticated',
-       'public.get_program_completion(integer)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'VERIFICATION FAILED: authenticated lost EXECUTE on get_program_completion — OfficeCockpit and ProgramTracker would break';
-  END IF;
-
-  -- 6. Neither function is reachable anonymously.
-  IF has_function_privilege('anon',
-       'public.compute_application_service_fee(uuid,uuid,numeric,integer)', 'EXECUTE')
-     OR has_function_privilege('anon', 'public.get_program_completion(integer)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'VERIFICATION FAILED: anon can still EXECUTE one of the guarded pricing functions';
-  END IF;
-
-  RAISE NOTICE 'secdef_pricing_reads_office_only: all 6 postflight assertions passed';
-END $$;
