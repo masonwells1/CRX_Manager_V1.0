@@ -2,6 +2,70 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-27 — The PR merge gate could not see a proof minted in a worktree; a refuted gauntlet finding could not be re-contested
+
+Two defects found while shipping PR #252, both fixed here.
+
+**1. The merge gate was blind to proofs minted in a linked worktree.** `pr-merge-guard.mjs`
+searched exactly one directory for the Codex proof — `<session cwd>/.claude/session-state` — and the
+Claude harness pins that cwd to the primary checkout and resets it after every command.
+`scripts/write-codex-push-proof.mjs` resolves its output from `git rev-parse --show-toplevel` of
+wherever it ran, i.e. the worktree holding the branch. A PR built in a worktree therefore wrote a
+valid, head- and base-bound, clean-verdict proof somewhere the gate never looked, and `gh pr merge`
+was denied no matter how many clean reviews were minted — head and base matched `gh pr view`
+exactly; only the directory differed. PR #252 was unmergeable by an agent for this reason and Mason
+merged it from the PR page.
+
+The new `proofSearchDirs()` (in `codex-push-lib.mjs`, shared with the Codex side) enumerates
+`git worktree list --porcelain` and scans every sibling checkout's session-state. **Widening the
+search does not widen what counts:** `proofValid()` still demands GitHub's exact head SHA, GitHub's
+exact `baseRefOid`, a clean/blockers-fixed verdict and an age inside 30 minutes, and
+`review-proof-guard.mjs` still blocks hand-writing a proof in any directory. These are sibling
+checkouts of one repository — a proof rejected in the primary checkout is rejected in all of them.
+Enumeration failure falls back to the primary directory alone, which can only make the gate
+stricter. Proven against the real layout: from `C:\CRX_Manager` the search now returns 6
+directories, including the worktree whose proof was invisible.
+
+**2. An equal-severity re-report at a REFUTED key was filed away unverified.** The escalation hole
+CodeRabbit found on PR #252, on the equal-rank path. `gauntlet-sections-loop.js` deduped on
+`title::location`, so a BLOCKER/HIGH reported again in round 2 at a location the skeptics had
+already refuted went into `duplicates` — which nothing verifies and which never blocks settlement.
+A weak early refutation therefore outlived a later, independently-evidenced report and the section
+settled **clean** on a defect that had been reported twice. Such a re-report now displaces the
+refutation and gets its own two-skeptic pass; the displaced record is kept as a trail and marked
+`wasConfirmed: false` on purpose, so a refutation that survives the second look stands rather than
+being resurrected by the reinstatement pass. Bounded by `MAX_ROUNDS`, not a counter: a key can be
+re-contested at most once per round.
+
+The displaced refutation must be at the **same severity**, a constraint CodeRabbit caught on #255
+before it shipped. Matching on `title::location` alone let a round-2 HIGH pull a round-1 BLOCKER's
+refutation out and relabel it as a HIGH outcome, leaving a trail that said something weaker than
+what was actually reported and dismissed. A lower-severity re-report is correctly a duplicate — the
+stronger version of that same claim already lost its adversarial pass. A higher-severity re-report
+never reaches this branch; it takes the escalation path. MED/LOW dedupe as before, and now do so
+without a separate severity test: only BLOCKER/HIGH are ever verified, so `refuted` cannot hold any
+other severity for a MED to match. The explicit class check that had guarded this was removed once
+it was proven unreachable.
+
+Both fixes are **mutation-tested** — 12 deliberate breaks, baseline GREEN, 12/12 killed. The
+`proofSearchDirs` wiring is additionally pinned by a source assertion, stated as such: the hook
+resolves the PR through `gh` before it ever looks for a proof, so the behavioural path is not
+reachable in-process.
+
+The re-contest tests assert **which round** each skeptic ran in — `[1,1]` where no re-contest is
+owed, `[1,1,2,2]` where one is — not merely how many ran, a weakness CodeRabbit spotted on #255: a
+bare total of two would also accept one call per round, a different failure wearing the right
+number. Its suggested fix keyed on `:r1`/`:r2` label suffixes, which the verify label does not carry
+(`S${num}:verify:${i}#${n}`); the round is captured at call time instead, where it is actually
+known.
+
+Note for the session that lands this: hooks load from the *session's* project directory, so until
+this merges and the primary checkout picks it up, the unfixed guard still gates this very PR.
+
+Verified: `gauntlet-sections-loop` tests pass, `pr-merge-guard` 47 assertions pass,
+`codex-push-lib` and `review-proof-guard` checks pass, `npm run test:agent-workflows`,
+`npm run agent-health`, and `npm run check:docs` all pass.
+
 ## 2026-07-27 — Quote pricing, per-customer rates and rebate terms become office-only (APPLIED `20260727231652`)
 
 **Status: APPLIED to live 2026-07-27.** Authored as `20260727193441`; the server assigned ledger
@@ -113,6 +177,7 @@ header claims Codex flagged as inaccurate are corrected — most importantly, th
 these tests fail when a migration drops or replaces a policy. They are internal-consistency checks
 that never read the migrations or the database; the live gate is each migration's postflight block
 plus the RLS review agents.
+
 ## 2026-07-27 — Any foundation gauntlet section can now be re-run on demand, behind a deterministic evidence gate
 
 `/gauntlet-section` drives `.claude/workflows/gauntlet-sections-loop.js` (renamed from

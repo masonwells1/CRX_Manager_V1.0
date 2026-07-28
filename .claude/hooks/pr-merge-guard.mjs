@@ -32,6 +32,7 @@ import {
   ghApiMergeRequest,
   ghMergeRequest,
   mcpMergeRequest,
+  proofSearchDirs,
   proofValid,
   pullRequestChecksGreen,
   riskyFiles,
@@ -91,6 +92,15 @@ function gh(args) {
     timeout: 10_000,
     stdio: ["ignore", "pipe", "ignore"],
     maxBuffer: 16 * 1024 * 1024,
+  });
+}
+
+function listWorktreesFromProjectDir() {
+  return execFileSync("git", ["worktree", "list", "--porcelain"], {
+    cwd: projectDir,
+    encoding: "utf8",
+    timeout: 10_000,
+    stdio: ["ignore", "pipe", "ignore"],
   });
 }
 // Gate ONE merge request. Either returns (this request is allowed) or calls
@@ -179,18 +189,19 @@ function gateRequest(request) {
     deny("PR MERGE GATE: GitHub returned an unusable baseRefOid, so the proof cannot be bound to the real base (fail closed).");
   }
 
-  const stateDir = path.join(projectDir, ".claude", "session-state");
   let valid = false;
-  try {
-    if (existsSync(stateDir)) {
+  outer:
+  for (const stateDir of proofSearchDirs(projectDir, listWorktreesFromProjectDir)) {
+    try {
+      if (!existsSync(stateDir)) continue;
       for (const f of readdirSync(stateDir)) {
         if (!/^codex-review-[A-Za-z0-9_.-]+\.json$/.test(f)) continue;
         let data;
         try { data = JSON.parse(readFileSync(path.join(stateDir, f), "utf8")); } catch { continue; }
-        if (proofValid(data, headSha, Date.now(), baseSha)) { valid = true; break; }
+        if (proofValid(data, headSha, Date.now(), baseSha)) { valid = true; break outer; }
       }
-    }
-  } catch { /* unreadable means no proof */ }
+    } catch { /* unreadable directory means no proof HERE — keep looking */ }
+  }
   if (valid) return;
 
   const riskyDescription = risky.length > 0
