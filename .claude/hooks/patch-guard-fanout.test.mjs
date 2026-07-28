@@ -154,9 +154,32 @@ try {
   }, tempRoot);
   ok(missingRelevant.stdout.includes('"permissionDecision":"deny"'), "unreconstructable safety-relevant update fails closed");
   ok(missingRelevant.stdout.includes("could not reconstruct"), "reconstruction failure is explicit");
+
+  const missingScriptSql = run({
+    tool_name: "apply_patch",
+    tool_input: {
+      input: `*** Begin Patch
+*** Update File: scripts/missing.sql
+@@
+-old
++new
+*** End Patch`,
+    },
+  }, tempRoot);
+  ok(missingScriptSql.stdout.includes('"permissionDecision":"deny"'), "unreconstructable SQL outside migrations also fails closed");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }
+
+const largePatchSections = Array.from({ length: 31 }, (_, index) =>
+  `*** Add File: src/lib/bounded-${index}.ts\n+export const value${index} = ${index};`
+).join("\n");
+const bounded = run({
+  tool_name: "mcp__codex__apply_patch",
+  tool_input: { input: `*** Begin Patch\n${largePatchSections}\n*** End Patch` },
+});
+ok(bounded.stdout.includes('"permissionDecision":"deny"'), "oversized safety fanout fails closed before timeout");
+ok(bounded.stdout.includes("bounded limit"), "oversized denial explains how to split the patch");
 
 for (const manifestPath of [".claude/settings.json", ".codex/hooks.json"]) {
   const manifest = JSON.parse(readFileSync(path.join(path.resolve(here, "..", ".."), manifestPath), "utf8"));

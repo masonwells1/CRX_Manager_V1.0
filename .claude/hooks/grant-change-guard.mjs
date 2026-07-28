@@ -70,22 +70,17 @@ const isPatchTool = isApplyPatchTool(toolName);
 if (!["write", "edit", "multiedit"].includes(toolName) && !isPatchTool) allow();
 
 const input = payload?.tool_input || {};
-const patchText = isPatchTool
-  ? String(input.patch ?? input.diff ?? input.input ?? input.changes ?? "")
-  : "";
 const { changes: patchChanges, errors: patchErrors } = isPatchTool
   ? extractPatchChanges(input, process.env.CLAUDE_PROJECT_DIR || process.cwd())
   : { changes: [], errors: [] };
 const migrationPatchChanges = patchChanges.filter(
   ({ filePath }) => filePath.endsWith(".sql") && filePath.includes("/supabase/migrations/")
 );
+const migrationContentChanges = migrationPatchChanges.filter(({ operation }) => operation !== "move-source");
 const moveOnlyPatch =
-  /^\*{3}\s+Move to:/mi.test(patchText) &&
-  !patchText.split(/\r?\n/).some(
-    (line) =>
-      (line.startsWith("+") && !line.startsWith("+++")) ||
-      (line.startsWith("-") && !line.startsWith("---"))
-  );
+  migrationContentChanges.length === 1 &&
+  migrationContentChanges[0].operation === "move-destination" &&
+  !migrationContentChanges[0].hasContentChanges;
 const migrationPatchErrors = patchErrors.filter(
   ({ filePath }) => filePath.endsWith(".sql") && filePath.includes("/supabase/migrations/")
 );
@@ -95,15 +90,15 @@ if (migrationPatchErrors.length > 0) {
       migrationPatchErrors.map(({ filePath, reason }) => `${filePath}: ${reason}`).join("\n")
   );
 }
-if (isPatchTool && migrationPatchChanges.length > 1 && !moveOnlyPatch) {
+if (isPatchTool && migrationContentChanges.length > 1) {
   deny(
     "GRANT-CHANGE GUARD: one apply_patch payload changes multiple migration SQL files. " +
       "Split migration edits into one patch per file so caller-analysis markers cannot cross file boundaries."
   );
 }
 let filePath = (input.file_path || "").replace(/\\/g, "/");
-if (isPatchTool && migrationPatchChanges.length > 0) {
-  filePath = migrationPatchChanges.find(({ content }) => content)?.filePath || migrationPatchChanges[0].filePath;
+if (isPatchTool && migrationContentChanges.length > 0) {
+  filePath = migrationContentChanges[0].filePath;
 }
 if (!filePath.endsWith(".sql") || !filePath.includes("supabase/migrations/")) allow();
 
@@ -116,7 +111,7 @@ else if (isPatchTool) {
   // A B7 move-only patch changes no SQL content and was already reviewed under
   // its original filename. Do not reinterpret the unchanged applied body.
   if (moveOnlyPatch) allow();
-  newContent = migrationPatchChanges[0]?.content || "";
+  newContent = migrationContentChanges[0]?.content || "";
 }
 if (!newContent) allow();
 
@@ -148,7 +143,7 @@ if (!/\b(grant|revoke)\b/i.test(newContent)) allow();
 let markerSource = newContent;
 try {
   if (toolName !== "write" && existsSync(filePath)) {
-    markerSource = readFileSync(filePath, "utf8") + "\n" + newContent + "\n" + patchText;
+    markerSource = readFileSync(filePath, "utf8") + "\n" + newContent;
   }
 } catch {
   /* fall back to new content only */

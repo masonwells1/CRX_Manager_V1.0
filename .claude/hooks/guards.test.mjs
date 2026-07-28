@@ -266,5 +266,28 @@ r = runHook("grant-change-guard.mjs", {
   tool_input: { input: moveOnlyMigrationPatch },
 });
 ok(r.stdout.includes('"permissionDecision":"allow"'), "grant-change-guard preserves reviewed B7 move-only patches");
+const moveWithDocsPatch = `*** Begin Patch
+*** Update File: supabase/migrations/20260728182141_secdef_pricing_reads_office_only.sql
+*** Move to: supabase/migrations/20990101000004_move_with_docs_fixture.sql
+*** Add File: docs/move_fixture.md
++ledger note
+*** End Patch`;
+r = runHook("grant-change-guard.mjs", {
+  tool_name: "mcp__codex__apply_patch",
+  tool_input: { input: moveWithDocsPatch },
+});
+ok(r.stdout.includes('"permissionDecision":"allow"'), "unrelated edits do not misclassify a B7 move as two migrations");
+const crossFileMarkerPatch = `*** Begin Patch
+*** Add File: supabase/migrations/20990101000005_cross_file_marker.sql
++REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM authenticated;
+*** Add File: docs/cross_file_marker.md
++-- caller-analysis: get_program_completion :: marker belongs to the docs file
+*** End Patch`;
+r = runHook("grant-change-guard.mjs", {
+  tool_name: "mcp__codex__apply_patch",
+  tool_input: { input: crossFileMarkerPatch },
+});
+ok(r.stdout.includes('"permissionDecision":"deny"'), "caller-analysis marker cannot cross from a non-migration file");
+ok(r.stdout.includes("get_program_completion"), "cross-file marker denial names the unreviewed function");
 
 console.log(`guards: ${pass} assertions passed`);

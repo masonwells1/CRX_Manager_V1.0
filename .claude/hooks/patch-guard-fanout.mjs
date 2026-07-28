@@ -9,15 +9,22 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { extractPatchChanges, isApplyPatchTool } from "./patch-input-lib.mjs";
 
-const GUARDS = [
-  "sql-safety.mjs",
-  "money-safety.mjs",
-  "idempotency-body-check.mjs",
-  "rls-on-new-tables.mjs",
-  "status-enum-check.mjs",
-  "generated-column-check.mjs",
-  "env-guard.mjs",
-];
+function guardsForPath(filePath, content) {
+  const normalized = filePath.replace(/\\/g, "/");
+  const basename = normalized.split("/").pop() || "";
+  const isMigration = normalized.endsWith(".sql") && normalized.includes("/supabase/migrations/");
+  const isSourceTs =
+    /\/src\/.*\.tsx?$/.test(normalized) &&
+    !/\.(?:test|spec)\.tsx?$/.test(normalized);
+  const isSourceJs = /\/src\/.*\.jsx?$/.test(normalized);
+  const selected = [];
+  if (isMigration) selected.push("sql-safety.mjs", "idempotency-body-check.mjs", "rls-on-new-tables.mjs");
+  if (isMigration || isSourceTs) selected.push("status-enum-check.mjs", "generated-column-check.mjs");
+  if (isSourceTs) selected.push("money-safety.mjs");
+  if (/^\.env(?:\.|$)/.test(basename) || isSourceTs || isSourceJs) selected.push("env-guard.mjs");
+  if (!content && !/^\.env(?:\.|$)/.test(basename)) return [];
+  return selected;
+}
 
 function respond(decision, reason, systemMessage) {
   const output = {
@@ -60,6 +67,17 @@ if (changes.length === 0 && errors.length === 0) {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const denials = [];
 const warnings = [];
+const workItems = changes.reduce(
+  (count, change) => count + guardsForPath(change.filePath, change.content).length,
+  0
+);
+if (workItems > 120) {
+  respond(
+    "deny",
+    `PATCH GUARD FANOUT: this patch requires ${workItems} safety checks, exceeding the bounded limit of 120. ` +
+      "Split it into smaller patches so the PreToolUse gate cannot time out."
+  );
+}
 
 for (const change of changes) {
   const syntheticPayload = JSON.stringify({
@@ -70,7 +88,7 @@ for (const change of changes) {
     },
   });
 
-  for (const guard of GUARDS) {
+  for (const guard of guardsForPath(change.filePath, change.content)) {
     const result = spawnSync(process.execPath, [path.join(here, guard)], {
       input: syntheticPayload,
       encoding: "utf8",

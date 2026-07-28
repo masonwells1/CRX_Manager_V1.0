@@ -169,7 +169,7 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/patch-guard-fanout.mjs\"",
-            "timeout": 30
+            "timeout": 60
           },
           {
             "type": "command",

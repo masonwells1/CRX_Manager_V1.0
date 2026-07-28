@@ -38,7 +38,7 @@ export function extractPatchTargetPaths(toolInput = {}, root = process.cwd()) {
 function findLine(lines, context, start) {
   const needle = context.trim();
   for (let i = start; i < lines.length; i++) {
-    if (lines[i] === context || lines[i].trim() === needle || lines[i].includes(context)) return i;
+    if (lines[i] === context || lines[i].trim() === needle) return i;
   }
   return -1;
 }
@@ -82,8 +82,8 @@ function relevantSafetyPath(filePath) {
   const normalized = filePath.replace(/\\/g, "/");
   const basename = normalized.split("/").pop() || "";
   return (
-    normalized.includes("/supabase/migrations/") ||
-    /\/src\/.*\.(?:ts|tsx|js|jsx)$/.test(normalized) ||
+    /\.(?:sql|ts|tsx)$/.test(normalized) ||
+    /\/src\/.*\.(?:js|jsx)$/.test(normalized) ||
     /^\.env(?:\.|$)/.test(basename)
   );
 }
@@ -159,11 +159,26 @@ export function extractPatchChanges(toolInput = {}, root = process.cwd()) {
         content = applyUpdate(readFileSync(sourcePath, "utf8"), section.hunks);
       }
 
-      if (section.moveTo) changes.push({ filePath: sourcePath, content: "" });
+      if (section.moveTo) {
+        changes.push({
+          filePath: sourcePath,
+          content: "",
+          operation: "move-source",
+          hasContentChanges: false,
+        });
+      }
       if (section.operation !== "delete") {
-        changes.push({ filePath: destinationPath, content });
+        const hasContentChanges = section.hunks.some(({ lines }) =>
+          lines.some(({ prefix }) => prefix === "+" || prefix === "-")
+        );
+        changes.push({
+          filePath: destinationPath,
+          content,
+          operation: section.moveTo ? "move-destination" : section.operation,
+          hasContentChanges,
+        });
       } else {
-        changes.push({ filePath: sourcePath, content: "" });
+        changes.push({ filePath: sourcePath, content: "", operation: "delete", hasContentChanges: false });
       }
     } catch (error) {
       errors.push({

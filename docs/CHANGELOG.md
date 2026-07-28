@@ -59,6 +59,9 @@ guards against each file independently. Regression fixtures prove one representa
 both patch tool names, reconstructed update postimages, protected env moves, and an unsafe second file
 in a multi-file patch. Patch destinations also fan out through the existing migration reminder and
 per-file ESLint autofix after a successful write.
+Caller-analysis markers are read only from their own reconstructed migration, move-only migrations
+are classified independently of unrelated co-patched docs, and fanout work is path-filtered and
+bounded so a large patch is denied before the PreToolUse timeout can turn the control fail-open.
 
 ## 2026-07-28 — A migration that shipped ten days ago was still counted as "awaiting apply"
 
