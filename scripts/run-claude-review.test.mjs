@@ -286,6 +286,14 @@ assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "## HIGH (0)\n- contr
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### H\\I\\G\\H\n- markdown-escaped severity finding\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### H**I**G**H\n- emphasis-split severity finding\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### _H_I_G_H_\n- underscore-split severity finding\nFINAL_VERDICT: SHIP" }), null);
+// Bracketed severity labels are common in reviewer output. They must be parsed
+// identically to bare labels so a terminal SHIP cannot erase a real finding.
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "[BLOCKER] authorization bypass\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "> - **[HIGH]** authorization bypass\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "[MEDIUM (1)] proof binding is incorrect\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "- [LOW]\n  - [None]\nFINAL_VERDICT: SHIP" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "[LOW (0)] [None]\n[NIT] optional wording polish\nFINAL_VERDICT: SHIP" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "This prose mentions a [HIGH] confidence check, not a finding.\nFINAL_VERDICT: SHIP" }), "clean");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "**FIX:** required\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Follow-ups:\n- fix real bug\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### HIGH\nNone.\n### Summary\nClean review.\nFINAL_VERDICT: SHIP" }), "clean");

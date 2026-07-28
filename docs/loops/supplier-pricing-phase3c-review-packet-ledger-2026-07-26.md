@@ -668,3 +668,27 @@ live mutation, flag enablement, deploy, or merge.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
 - `NEEDS MASON:` no action until the external gates complete; afterward, row-by-row private-sheet review and explicit packet approval.
 - `VERDICT:` PARKED — PR #246 OPEN; CURRENT HEAD MUST MATCH A RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PLUS PROOF PENDING
+
+## Integrated cleanroom review cycle — 2026-07-28
+
+- Integrated lineage: `68907fd1c4c8b3b50397ad6e62a009c83d2e0680`,
+  `ef9eb2780647b83dad7906eb09f412dbfacd376a`,
+  `68aebbd597f95e4ecb23ac20019a3ee33f8ba227`,
+  `c8a7e12a72736f72c0df3c51e0b6594246c93fb9`, and rejected exact candidate
+  `f1d9d22023611b3f376d1e97d2dd854a887156e7`.
+- `PROOF — Ran/Saw:` the exact candidate's Windows Phase 3C packet and
+  simulated pre-push proof were green; its offline Linux proof was also green.
+- `REVIEW — Rejected:` independent Sol returned `FIX` for bracketed-severity
+  parser fail-open behavior and the nonliteral-Opus charter. Literal
+  `claude-opus-5` returned `NEEDS-WORK` because
+  `scripts/supplier-pricing-phase3-private-artifacts.mjs` was not itself a
+  risky path. Luna returned `FIX` for the already-known external bootstrap
+  trust boundary: the base lacks the checker/trusted target workflow, so a
+  candidate-controlled CI fallback cannot establish acceptance for its own
+  introducing PR.
+- `DISPOSITION:` `f1d9d22023611b3f376d1e97d2dd854a887156e7` remains rejected.
+  The bounded repair work after it is not reviewed evidence. PR #246 remains
+  `PARKED` pending a new exact-SHA proof/review cycle plus the external
+  trusted-workflow/ruleset activation and proof; this record authorizes no
+  merge, deploy, live mutation, Product classification, migration, or flag
+  change.

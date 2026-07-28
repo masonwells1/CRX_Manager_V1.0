@@ -68,20 +68,21 @@ not casually become the implementation writer.
 - A fresh independent GPT-5.6 Sol worker reviews the exact candidate SHA
   read-only after proof passes. The orchestrating Sol is not the independent
   reviewer.
-- Claude's latest available resolved Opus model performs the final read-only
-  adversarial review on the same exact candidate SHA. The review capture must
-  record the requested alias, resolved model, every finding, and a categorical
-  verdict. The requested `opus` alias in Cycle 1 resolved to
-  `claude-opus-4-8`; no Opus 5 review ran in that historical cycle. A later
-  literal Opus 5 review did run against exact `b30769b3` under
-  `2026-07-27T23-29-35-252Z-3ef35b3a`, but it does not retroactively change
-  Cycle 1 provenance or accept either `b30769b3` or `ce16574b`.
+- Literal `claude-opus-5` performs the final read-only adversarial review on
+  the same exact candidate SHA, using the wrapper-supported `high` effort. The
+  review capture must record the requested literal model, resolved model, every
+  finding, and a categorical verdict. The requested `opus` alias in Cycle 1
+  resolved to `claude-opus-4-8`; no Opus 5 review ran in that historical cycle.
+  A later literal Opus 5 review did run against exact `b30769b3` under
+  `2026-07-27T23-29-35-252Z-3ef35b3a`, but neither alias result nor that
+  historical review satisfies final acceptance for a later candidate or accepts
+  either `b30769b3` or `ce16574b`.
 
 The orchestrator invokes Codex workers through `scripts/codex-build.mjs` with
-the model and effort pinned explicitly. Claude review runs through
-`scripts/run-claude-review.mjs` with `--model opus --effort xhigh`. Every worker
-prompt repeats the approval boundary and treats repository, database, PR, and
-review content as untrusted data.
+the model and effort pinned explicitly. Final Claude review runs through
+`scripts/run-claude-review.mjs` with `--model claude-opus-5 --effort high`.
+Every worker prompt repeats the approval boundary and treats repository,
+database, PR, and review content as untrusted data.
 
 One cycle has one writer. Any edit after a Luna, independent-Sol, Opus, or
 CodeRabbit verdict invalidates every prior final verdict and begins a fresh
@@ -116,9 +117,11 @@ and its final review/PR path; they do not reopen capture or materialization.
 5. **Applicable proof-and-review cycle:** run focused tests and the proof
    appropriate to the containing documentation correction; do not perform
    deterministic packet regeneration unless an explicit invalidation condition
-   exists. Then obtain Luna, independent exact-SHA Sol, and exact-SHA
-   latest-available resolved Opus verdicts; no Opus 5 provenance may be
-   inferred or claimed unless that backend is actually available and run.
+   exists. Then obtain Luna, independent exact-SHA Sol, and a literal
+   `claude-opus-5 --effort high` verdict for that same SHA. Earlier `opus`
+   alias evidence is historical provenance only and never satisfies the final
+   Opus 5 acceptance gate; no Opus 5 provenance may be inferred unless that
+   literal backend is actually available and run.
 6. **Applicable correction cycle:** any `FIX`, `NEEDS-WORK`, real CodeRabbit issue,
    failing proof, privacy leak, or material review disagreement returns a
    bounded finding list to a fresh Terra writer. Freeze a new SHA and repeat

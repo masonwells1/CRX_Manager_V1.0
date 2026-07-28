@@ -136,6 +136,20 @@ assert.equal(
   "clean",
   "explicit zero/NONE/N/A stays clean and NIT remains nonblocking",
 );
+for (const [label, body, expected] of [
+  ["bracketed blocker", "[BLOCKER] authorization bypass", null],
+  ["nested markdown high", "> - **[HIGH]** authorization bypass", null],
+  ["bracketed medium count", "[MEDIUM (1)] proof binding is incorrect", null],
+  ["bracketed zero none", "- [LOW]\n  - [None]", "clean"],
+  ["bracketed count and NIT", "[LOW (0)] [None]\n[NIT] optional wording polish", "clean"],
+  ["benign bracketed prose", "This prose mentions a [HIGH] confidence check, not a finding.", "clean"],
+]) {
+  assert.equal(
+    codexReviewProofVerdict({ status: 0, stdout: `${body}\n${CODEX_VERDICT_TOKEN}: CLEAN` }),
+    expected,
+    `${label} must share the Claude proof parser's fail-closed bracket handling`,
+  );
+}
 // A partial/garbled token is not a verdict.
 assert.equal(codexReviewProofVerdict({ status: 0, stdout: "CODEX_PROOF_VERDICT: MAYBE" }), null, "unrecognized verdict word → null");
 assert.equal(codexReviewProofVerdict({ status: 0, stdout: "CODEX_PROOF_VERDICT:CLEANISH" }), null, "token must match exactly → null");

@@ -196,6 +196,7 @@ const RISKY_PATH_RES = [
   /(^|\/)\.github\/workflows\//i,
   /(^|\/)\.husky\//i,
   /(^|\/)scripts\/check-supplier-pricing-phase3-private-artifacts\.mjs$/i,
+  /(^|\/)scripts\/supplier-pricing-phase3-private-artifacts\.mjs$/i,
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
   // Reviewer charters are executable review instructions for the migration

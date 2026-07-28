@@ -21,15 +21,20 @@ export function defaultClaudeReviewOutputPath({ root = ROOT } = {}) {
   return path.join(root, ".claude", "session-state", "claude-review-latest.txt");
 }
 
+export function normalizeReviewOutputLine(line) {
+  const machine = String(line || "")
+    .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
+    .replace(/[*`\\]/gu, "")
+    .replace(/^_+|_+$/gu, "")
+    .trim();
+  // Reviewers commonly wrap headings, counts, and explicit empty markers in
+  // brackets. Classification must treat those as the same grammar as bare
+  // labels, while `machine` preserves the normalized text for verdict checks.
+  return { machine, classified: machine.replace(/[_\[\]]/gu, "") };
+}
+
 export function reviewOutputHasActionableFindings(stdout) {
-  const normalizedLines = String(stdout || "").split(/\r?\n/).map((line) => {
-    const machine = line
-      .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
-      .replace(/[*`\\]/gu, "")
-      .replace(/^_+|_+$/gu, "")
-      .trim();
-    return { machine, classified: machine.replace(/_/gu, "") };
-  });
+  const normalizedLines = String(stdout || "").split(/\r?\n/).map(normalizeReviewOutputLine);
   const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(value.trim());
   const severityPattern = "(BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)";
   const countPattern = "(?:\\s*\\(\\s*(\\d+)(?:\\s+findings?)?\\s*\\))?";
@@ -179,11 +184,7 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
   // winning a first-match regex and minting proof.
   if (matches.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(lines.at(-1) || "")) return null;
   if (matches[0][1].toUpperCase() !== "SHIP") return null;
-  const normalizedLines = lines.map((line) => line
-    .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
-    .replace(/[*`\\]/gu, "")
-    .replace(/^_+|_+$/gu, "")
-    .trim());
+  const normalizedLines = lines.map((line) => normalizeReviewOutputLine(line).machine);
   const machineVerdicts = normalizedLines
     .filter((line) => /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line));
   if (machineVerdicts.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(machineVerdicts[0])) return null;

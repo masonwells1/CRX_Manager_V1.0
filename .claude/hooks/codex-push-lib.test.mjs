@@ -108,6 +108,16 @@ assert.deepEqual(
   ["scripts/check-supplier-pricing-phase3-private-artifacts.mjs"],
   "the Phase 3C containment checker cannot self-weaken without independent review",
 );
+assert.deepEqual(
+  riskyFiles(["scripts/supplier-pricing-phase3-private-artifacts.mjs"]),
+  ["scripts/supplier-pricing-phase3-private-artifacts.mjs"],
+  "the Phase 3C private-artifact constants and writer cannot self-weaken without independent review",
+);
+assert.deepEqual(
+  riskyFiles(["scripts/supplier-pricing-phase3-private-artifacts-helper.mjs"]),
+  [],
+  "a near-lookalike private-artifact helper path is not treated as the guarded writer module",
+);
 // Codex round-8 (PR #142): the hook-registration surfaces — a PR that
 // de-registers a guard by editing only these must still require the verdict.
 assert.deepEqual(riskyFiles([".claude/settings.json"]), [".claude/settings.json"]);
