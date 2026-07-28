@@ -1,20 +1,36 @@
--- DRAFT ONLY — Supplier Pricing Phase 1a enforcement cutover.
+-- SUPERSEDED — HISTORICAL SOURCE ONLY. DO NOT APPLY. DO NOT PROMOTE.
 --
--- PARKED: do not copy to supabase/migrations or apply until ALL of the
--- following are true:
---   1. 20260717042803_supplier_pricing_phase1a.sql is live and verified.
---   2. The repository file 20260717112011_supplier_pricing_zero_cost_guard.sql
---      is live and verified (its live ledger identity is
---      20260717120500_supplier_pricing_zero_cost_guard).
---   3. The RPC-only ProductDetail/Products/worksheet frontend is deployed.
---   4. Its rollback window is closed or a forward database rollback is ready.
---   5. This exact file has fresh migration-review and apply-guard proof.
---   6. Before promotion, rename this file with a fresh timestamp strictly
---      greater than the verified live high-water `20260717171331`; never
---      reuse this parked file's `20260717121000` prefix as a ledger identity.
+-- This draft's job was done on 2026-07-18 by a different migration:
+--   supabase/migrations/20260718190000_supplier_pricing_phase1a_cutover.sql
+--   (live ledger version 20260718190000). See docs/manual/KNOWN_ISSUES.md.
 --
--- The additive bootstrap intentionally keeps the legacy frontend operational.
--- This second migration closes those temporary write paths after cutover.
+-- Verified live 2026-07-28 — every effect this file intends is already in place:
+--   * trigger_y_require_governed_product_pricing exists on public.products
+--   * public.products grants no table-level INSERT/UPDATE to authenticated
+--     (replaced by 54 column-level grants, as this file intended)
+--   * policy cost_history_insert is gone from public.cost_history
+--
+-- Applying it now would be actively harmful, in two independent ways:
+--   1. It cannot run. Its own fail-closed preflight pins the md5 of three
+--      pricing RPCs as they were on 2026-07-17. Two have since moved
+--      (create_pricing_workbook_export cd26cf7d -> 27de84e2,
+--      apply_product_pricing_change_set 82416909 -> ed143e0d), so it raises
+--      PHASE1A_CORRECTION_RPC_BASELINE_MISMATCH and aborts.
+--   2. If that guard were bypassed, its CREATE OR REPLACE bodies for
+--      _calculate_product_pricing, guard_and_version_product_pricing and
+--      require_governed_product_pricing would overwrite live functions with
+--      2026-07-17 versions, silently reverting the Phase 1b / Phase 2 /
+--      Phase 3 hardening applied between 2026-07-18 and 2026-07-22.
+--
+-- Kept in the tree as the historical pre-promotion source, and renamed to the
+-- SUPERSEDED- convention so the fleet counter stops listing it as a migration
+-- awaiting apply (see isParkedMigrationFile in
+-- .claude/hooks/worktree-awareness-lib.mjs).
+--
+-- The original parked header, for the record, read: "DRAFT ONLY — Supplier
+-- Pricing Phase 1a enforcement cutover. PARKED: do not copy to
+-- supabase/migrations or apply until ALL of the following are true: ..."
+-- Those preconditions are moot; the work shipped by another route.
 
 DO $preflight$
 BEGIN
