@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-28 — Phase 3C exact-review parser and containment follow-up
+
+The Phase 3C containment checker now recognizes reordered and superset Product
+CSV/TSV exports through bounded header-set parsing, and malformed extra Base64
+padding can no longer erase a previously decoded private prefix. Claude and
+Codex proof parsers reject contradictory actionable BLOCKER/HIGH/MED/LOW,
+counted severity, table, fix, and follow-up forms while preserving explicit
+zero/NONE/N/A and NIT-only results. The checker is now a risky self-protected
+path, VERIFIED Claude runs explain proof refusal in one line, proof prompts and
+the durable Phase 3C loop require terminal SHIP without actionable LOW
+findings, and migration apply proofs accept only the producer-emitted clean
+reviewer finding state.
+
 ## 2026-07-27 — Phase 3C containment decoding is bounded and fail-closed
 
 The exact-SHA Claude review proof parser now fails closed on numbered Markdown,

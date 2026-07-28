@@ -21,97 +21,182 @@ export function defaultClaudeReviewOutputPath({ root = ROOT } = {}) {
   return path.join(root, ".claude", "session-state", "claude-review-latest.txt");
 }
 
+export function reviewOutputHasActionableFindings(stdout) {
+  const normalizedLines = String(stdout || "").split(/\r?\n/).map((line) => {
+    const machine = line
+      .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
+      .replace(/[*`\\]/gu, "")
+      .replace(/^_+|_+$/gu, "")
+      .trim();
+    return { machine, classified: machine.replace(/_/gu, "") };
+  });
+  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(value.trim());
+  const severityPattern = "(BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)";
+  const countPattern = "(?:\\s*\\(\\s*(\\d+)(?:\\s+findings?)?\\s*\\))?";
+  const parseCount = value => {
+    const match = /^(?:COUNT\s*[:=]\s*)?(\d+)(?:\s+findings?)?$/i.exec(String(value || "").trim());
+    return match ? Number(match[1]) : null;
+  };
+  let blockingSection = null;
+  let severityContextActive = false;
+  for (const { classified: line, machine } of normalizedLines) {
+    if (!line) continue;
+    if (/^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT):/i.test(machine)) return true;
+    const tableCells = line.includes("|")
+      ? line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim())
+      : null;
+    const tableSeverity = tableCells?.map((cell) => new RegExp(`^${severityPattern}${countPattern}$`, "i").exec(cell))
+      .find((match) => match) ?? null;
+    if (tableSeverity) {
+      const tableSeverityIndex = tableCells.findIndex((cell) => new RegExp(`^${severityPattern}${countPattern}$`, "i").test(cell));
+      const isNit = /^NIT(?:PICK)?$/i.test(tableSeverity[1]);
+      if (isNit) {
+        if (blockingSection === "requires-empty") return true;
+        blockingSection = null;
+        severityContextActive = false;
+        continue;
+      }
+      const inlineCount = tableSeverity[2] === undefined ? null : Number(tableSeverity[2]);
+      let detailStart = tableSeverityIndex + 1;
+      const adjacentCount = parseCount(tableCells[detailStart]);
+      const count = inlineCount ?? adjacentCount;
+      if (adjacentCount !== null) detailStart += 1;
+      if (count !== null && count > 0) return true;
+      const details = tableCells.slice(detailStart).filter((cell) => cell && !/^:?-{3,}:?$/u.test(cell));
+      severityContextActive = true;
+      if (details.length === 0) {
+        blockingSection = count === 0 ? "declared-empty" : "requires-empty";
+      } else if (details.some((detail) => !noFinding(detail))) {
+        return true;
+      } else {
+        blockingSection = null;
+      }
+      continue;
+    }
+    const severityLabel = new RegExp(`^SEVERITY\\s*(?::|-|—|\\|)\\s*${severityPattern}${countPattern}(?:\\s*(?::|-|—|\\|)\\s*(.+))?$`, "i").exec(line);
+    if (severityLabel) {
+      const isNit = /^NIT(?:PICK)?$/i.test(severityLabel[1]);
+      const count = severityLabel[2] === undefined ? null : Number(severityLabel[2]);
+      const detail = severityLabel[3];
+      if (isNit) {
+        if (blockingSection === "requires-empty") return true;
+        blockingSection = null;
+        severityContextActive = false;
+      } else if (count !== null && count > 0) {
+        return true;
+      } else {
+        severityContextActive = true;
+        if (detail) {
+          if (!noFinding(detail)) return true;
+          blockingSection = null;
+        } else {
+          blockingSection = count === 0 ? "declared-empty" : "requires-empty";
+        }
+      }
+      continue;
+    }
+    const blockingHeading = new RegExp(`^${severityPattern}${countPattern}\\s*:?\\s*$`, "i").exec(line);
+    if (blockingHeading) {
+      if (/^NIT(?:PICK)?$/i.test(blockingHeading[1])) {
+        if (blockingSection === "requires-empty") return true;
+        blockingSection = null;
+        severityContextActive = false;
+      } else {
+        const count = blockingHeading[2] === undefined ? null : Number(blockingHeading[2]);
+        if (count !== null && count > 0) return true;
+        blockingSection = count === 0 ? "declared-empty" : "requires-empty";
+        severityContextActive = true;
+      }
+      continue;
+    }
+    const fixHeading = new RegExp(`^(?:FIX(?:ES)?|FOLLOW-?UPS?|FIX\\s*\\/\\s*FOLLOW-?UPS?)${countPattern}\\s*:?\\s*$`, "i").exec(line);
+    if (fixHeading) {
+      const count = fixHeading[1] === undefined ? null : Number(fixHeading[1]);
+      if (count !== null && count > 0) return true;
+      blockingSection = count === 0 ? "declared-empty" : "requires-empty";
+      severityContextActive = true;
+      continue;
+    }
+    const finding = new RegExp(`^(?:${severityPattern}|FIX(?:ES)?|FOLLOW-?UPS?|FIX\\s*\\/\\s*FOLLOW-?UPS?)${countPattern}(?:\\s*(?::|-|—)\\s*|\\s+)(.+)$`, "i").exec(line);
+    if (finding) {
+      const severity = finding[1];
+      const count = finding[2] === undefined ? null : Number(finding[2]);
+      const detail = finding[3];
+      if (/^NIT(?:PICK)?$/i.test(severity)) {
+        if (blockingSection === "requires-empty") return true;
+        blockingSection = null;
+        severityContextActive = false;
+        continue;
+      }
+      if (count !== null && count > 0) return true;
+      if (!noFinding(detail)) return true;
+      blockingSection = null;
+      severityContextActive = true;
+      continue;
+    }
+    if (/^SUMMARY\s*:?\s*$/i.test(line)) {
+      if (blockingSection === "requires-empty") return true;
+      blockingSection = null;
+      severityContextActive = false;
+      continue;
+    }
+    if (/^NIT(?:PICK)?\s*:?\s*$/i.test(line)) {
+      if (blockingSection === "requires-empty") return true;
+      blockingSection = null;
+      severityContextActive = false;
+      continue;
+    }
+    if (blockingSection) {
+      const sectionValue = /^(?:FINDING|DETAILS?)\s*:\s*(.+)$/i.exec(line)?.[1] ?? line;
+      if (noFinding(sectionValue)) {
+        blockingSection = null;
+        continue;
+      }
+      return true;
+    }
+    if (severityContextActive && noFinding(line)) continue;
+    if (severityContextActive) return true;
+  }
+  return blockingSection === "requires-empty";
+}
+
+export function claudePushProofRefusalDiagnostic({
+  executionState,
+  initialClean,
+  contextUnchanged,
+  proofVerdict,
+  headSha,
+  baseSha,
+} = {}) {
+  if (executionState !== "VERIFIED") return null;
+  let reason = "terminal SHIP contract or actionable-finding check failed";
+  if (!initialClean) reason = "the reviewed base-main scope started from a dirty worktree";
+  else if (!contextUnchanged) reason = "HEAD, origin/main, or the worktree changed during review";
+  else if (!/^[0-9a-f]{40}$/i.test(String(headSha || "")) || !/^[0-9a-f]{40}$/i.test(String(baseSha || ""))) reason = "HEAD or origin/main did not resolve to a full commit SHA";
+  else if (proofVerdict) reason = "the proof could not be bound to the verified commit context";
+  return `Claude review VERIFIED but no push proof was minted: ${reason}.`;
+}
+
 export function claudeReviewProofVerdict({ status, stdout } = {}) {
   if (status !== 0) return null;
   const lines = String(stdout || "").trim().split(/\r?\n/);
   const matches = lines
-    .map((line) => line.match(/^FINAL_VERDICT:\s*(SHIP-WITH-FOLLOWUPS|SHIP|NEEDS-WORK)\s*$/i))
+    .map((line) => line.match(/^FINAL_VERDICT:\s*(SHIP|NEEDS-WORK)\s*$/i))
     .filter(Boolean);
   // Exactly one terminal machine-readable verdict is required. This prevents
   // a quoted/injected `Verdict: SHIP` earlier in free-form review prose from
   // winning a first-match regex and minting proof.
   if (matches.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(lines.at(-1) || "")) return null;
   if (matches[0][1].toUpperCase() !== "SHIP") return null;
-  const normalizedLines = lines.map((line) => {
-    const isHeading = /^\s{0,3}#{1,6}(?:\s+|$)/u.test(line);
-    const machine = line
-      .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
-      .replace(/[*`\\]/gu, "")
-      .replace(/^_+|_+$/gu, "")
-      .trim();
-    return {
-      isHeading,
-      machine,
-      classified: machine.replace(/_/gu, ""),
-    };
-  });
+  const normalizedLines = lines.map((line) => line
+    .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
+    .replace(/[*`\\]/gu, "")
+    .replace(/^_+|_+$/gu, "")
+    .trim());
   const machineVerdicts = normalizedLines
-    .map(({ machine }) => machine)
     .filter((line) => /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line));
   if (machineVerdicts.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(machineVerdicts[0])) return null;
-  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(value.trim());
-  let blockingSection = null;
-  for (const { classified: line, isHeading, machine } of normalizedLines) {
-    if (/^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(machine)) {
-      if (blockingSection === "requires-empty") return null;
-      blockingSection = null;
-      continue;
-    }
-    const tableCells = line.startsWith("|") && line.endsWith("|")
-      ? line.slice(1, -1).split("|").map((cell) => cell.trim())
-      : null;
-    const tableSeverityIndex = tableCells?.findIndex((cell) => /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)$/i.test(cell)) ?? -1;
-    if (tableSeverityIndex >= 0) {
-      if (/^NIT(?:PICK)?$/i.test(tableCells[tableSeverityIndex])) continue;
-      const details = tableCells.slice(tableSeverityIndex + 1)
-        .filter((cell) => cell && !/^:?-{3,}:?$/u.test(cell));
-      if (details.length === 0 || details.some((detail) => !noFinding(detail))) return null;
-      blockingSection = null;
-      continue;
-    }
-    const severityLabel = /^SEVERITY\s*(?::|-|—|\|)\s*(BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)(?:\s*(?::|-|—|\|)\s*(.+))?$/i.exec(line);
-    if (severityLabel) {
-      if (/^NIT(?:PICK)?$/i.test(severityLabel[1])) {
-        blockingSection = null;
-      } else if (severityLabel[2]) {
-        if (!noFinding(severityLabel[2])) return null;
-        blockingSection = null;
-      } else {
-        blockingSection = "requires-empty";
-      }
-      continue;
-    }
-    const blockingHeading = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)(?:\s*\(\s*(\d+)\s*\))?\s*:?\s*$/i.exec(line);
-    if (blockingHeading) {
-      blockingSection = blockingHeading[1] === "0" ? "declared-empty" : "requires-empty";
-      continue;
-    }
-    if (/^(?:FIX(?:ES)?|FOLLOW-?UPS?)\s*:?\s*$/i.test(line)) {
-      blockingSection = "requires-empty";
-      continue;
-    }
-    const finding = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s*\(\s*\d+\s*\))?(?:\s*(?::|-|—)\s*|\s+)(.+)$/i.exec(line);
-    if (finding) {
-      if (!noFinding(finding[1])) return null;
-      blockingSection = null;
-      continue;
-    }
-    if (blockingSection && line) {
-      const sectionValue = /^(?:FINDING|DETAILS?)\s*:\s*(.+)$/i.exec(line)?.[1] ?? line;
-      if (noFinding(sectionValue)) {
-        blockingSection = null;
-        continue;
-      }
-      if (blockingSection === "declared-empty" && isHeading) {
-        blockingSection = null;
-      } else {
-        return null;
-      }
-    }
-    if (/^(?:NIT(?:PICK)?|SUMMARY)\s*:?\s*$/i.test(line)) {
-      blockingSection = null;
-    }
-  }
+  if (reviewOutputHasActionableFindings(lines.slice(0, -1).join("\n"))) return null;
   return "clean";
 }
 
@@ -446,12 +531,13 @@ export function buildClaudeReviewPrompt({
     "- Flag correctness / red-line / requirement-gap issues only; do not pad the report with style or defensive-coding nitpicks.",
     "",
     "Expected output:",
-    "- verdict: SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK",
+    "- verdict: SHIP / NEEDS-WORK",
     "- findings grouped as BLOCKER / HIGH / MED / LOW / NIT",
+    "- SHIP requires no actionable BLOCKER/HIGH/MED/LOW and no required FIX/follow-up; NIT-only polish is nonblocking",
     "- each finding must cite file:line evidence",
     "- explicitly say where you agree or disagree with Codex's position",
     "- exact next step for Mason in plain English",
-    "- end with exactly one final line: FINAL_VERDICT: SHIP, FINAL_VERDICT: SHIP-WITH-FOLLOWUPS, or FINAL_VERDICT: NEEDS-WORK",
+    "- end with exactly one final line: FINAL_VERDICT: SHIP or FINAL_VERDICT: NEEDS-WORK",
   ];
 
   if (scopeEvidence) {
@@ -725,6 +811,15 @@ export function runClaudeReview(options) {
       process.stdout.write(`Claude push proof written to ${proofPath}\n`);
     } else {
       clearClaudePushProof();
+      const diagnostic = claudePushProofRefusalDiagnostic({
+        executionState,
+        initialClean: !gitContext.status.trim(),
+        contextUnchanged,
+        proofVerdict,
+        headSha,
+        baseSha,
+      });
+      if (diagnostic) process.stderr.write(`${diagnostic}\n`);
     }
   }
   if (executionState === "BLOCKED") {

@@ -169,10 +169,23 @@ try {
   assert.equal(structuralPrivateArtifactReason(Buffer.from(`const format = ${JSON.stringify(POST_STAGE_A_SNAPSHOT_FORMAT)};\n`)), null);
   const canonicalOwnerHeader = OWNER_DECISION_HEADERS.join(',');
   const canonicalProductHeader = Object.keys(JSON.parse(REVIEWED_STRUCTURAL_SIGNATURE_SOURCE)).join(',');
+  const reorderedProductHeader = ['updated_at', 'product_name', 'id', 'pricing_version', 'sku'].join(',');
+  const fullProductExportHeader = Object.keys(product(id1)).join(',');
+  const reorderedProductSupersetHeader = ['container_type', 'updated_at', 'product_name', 'product_form', 'id', 'container_size', 'pricing_version', 'sku', 'inventory_unit', 'is_active'].join(',');
+  const lateRequiredProductHeader = `${Array.from({ length: 700 }, (_unused, index) => `extra_product_column_${index}`).join(',')},${reorderedProductSupersetHeader}`;
+  assert(lateRequiredProductHeader.length > 4096, 'late required-header fixture must exceed the old fixed whole-line cap');
   for (const header of [
     canonicalProductHeader,
     canonicalProductHeader.replaceAll(',', '\t'),
     canonicalProductHeader.split(',').map(value => ` \u2003"${value}"\u2003 `).join(' , '),
+    reorderedProductHeader,
+    reorderedProductHeader.replaceAll(',', '\t'),
+    fullProductExportHeader,
+    fullProductExportHeader.replaceAll(',', '\t'),
+    reorderedProductSupersetHeader,
+    reorderedProductSupersetHeader.replaceAll(',', '\t'),
+    lateRequiredProductHeader,
+    lateRequiredProductHeader.replaceAll(',', '\t'),
   ]) {
     assert.equal(structuralPrivateArtifactReason(Buffer.from(`${header}\n`)), 'private product CSV/TSV header structure');
     const split = Math.floor(header.length / 2);
@@ -185,12 +198,34 @@ try {
   }
   for (const split of [1, 3, Math.floor(canonicalOwnerHeader.length / 2), canonicalOwnerHeader.length - 1]) assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(canonicalOwnerHeader.slice(0, split)), Buffer.from(canonicalOwnerHeader.slice(split))]), 'owner decision sheet CSV header structure', 'canonical owner header must survive arbitrary stream splits');
   const base64Snapshot = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })).toString('base64');
+  const unpaddedBase64Snapshot = base64Snapshot.replace(/=+$/, '');
+  const overPaddedUnpaddedSnapshot = `${unpaddedBase64Snapshot}===`;
+  let exactUnpaddedPrivateJson = JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT });
+  while (Buffer.byteLength(exactUnpaddedPrivateJson) % 3 !== 0) exactUnpaddedPrivateJson = `${exactUnpaddedPrivateJson} `;
+  const exactUnpaddedPrivateBase64 = Buffer.from(exactUnpaddedPrivateJson).toString('base64');
+  assert.doesNotMatch(exactUnpaddedPrivateBase64, /=/, 'Sol Base64 fixture must be deliberately unpadded because its private JSON byte length is divisible by three');
   const phaseShiftedBase64Snapshot = `x${base64Snapshot}`;
   const base64OwnerSheet = Buffer.from(`${OWNER_DECISION_HEADERS.join(',')}\n`).toString('base64');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(base64Snapshot)), 'private JSON format marker in malformed candidate');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(phaseShiftedBase64Snapshot)), 'private JSON format marker in malformed candidate', 'Base64 detection must cover all quartet phases after an ordinary alphabet prefix');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(overPaddedUnpaddedSnapshot)), 'private JSON format marker in malformed candidate', 'extra padding after a valid unpadded packet must not erase its maximal decoded prefix');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(`x${overPaddedUnpaddedSnapshot}`)), 'private JSON format marker in malformed candidate', 'alignment lanes must retain a valid unpadded packet before extra padding');
+  for (const suffix of ['====', '=====', '==\n==', '= = = =']) {
+    const transfer = `${exactUnpaddedPrivateBase64}${suffix}`;
+    assert.equal(structuralPrivateArtifactReason(Buffer.from(transfer)), 'private JSON format marker in malformed candidate', `whole-transfer scanner must preserve the valid Base64 prefix before ${JSON.stringify(suffix)}`);
+    assert.equal(structuralPrivateArtifactReason(Buffer.from(`x${transfer}`)), 'private JSON format marker in malformed candidate', `embedded alignment scanner must preserve the valid Base64 prefix before ${JSON.stringify(suffix)}`);
+    const suffixSeam = exactUnpaddedPrivateBase64.length + Math.max(1, Math.floor(suffix.length / 2));
+    assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(transfer.slice(0, suffixSeam)), Buffer.from(transfer.slice(suffixSeam))]), 'private JSON format marker in malformed candidate', `Base64 suffix ${JSON.stringify(suffix)} must survive a chunk seam inside the malformed padding`);
+  }
   assert.equal(structuralPrivateArtifactReason(Buffer.from(base64OwnerSheet)), 'owner decision sheet CSV header structure');
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(base64Snapshot.slice(0, 7)), Buffer.from(base64Snapshot.slice(7))]), 'private JSON format marker in malformed candidate', 'Base64 packet detection must survive a quartet split');
+  for (const split of [1, Math.floor(unpaddedBase64Snapshot.length / 2), unpaddedBase64Snapshot.length, unpaddedBase64Snapshot.length + 1]) {
+    assert.equal(
+      structuralPrivateArtifactStreamReason([Buffer.from(overPaddedUnpaddedSnapshot.slice(0, split)), Buffer.from(overPaddedUnpaddedSnapshot.slice(split))]),
+      'private JSON format marker in malformed candidate',
+      'extra padding must preserve the maximal valid Base64 prefix across every relevant chunk boundary',
+    );
+  }
   const urlSafeBase64Snapshot = Buffer.concat([Buffer.from([0xfb, 0xff]), Buffer.from(`ordinary prefix\n${JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })}`)]).toString('base64').replaceAll('+', '-').replaceAll('/', '_');
   assert.match(urlSafeBase64Snapshot, /[-_]/, 'synthetic URL-safe packet must exercise the alternate alphabet');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(urlSafeBase64Snapshot)), 'private JSON format marker in malformed candidate');
@@ -989,6 +1024,11 @@ git() { return 0; }
   const modePullEvent = path.join(temp, 'mode-pull-request-event.json'); writeFileSync(modePullEvent, JSON.stringify({ pull_request: { base: { sha: modeBase }, head: { sha: modeHead } } })); await assert.rejects(() => checkGitHubEventPrivateArtifactContainment({ root: modeRepo, environment: { GITHUB_EVENT_NAME: 'pull_request', GITHUB_EVENT_PATH: modePullEvent } }), /private JSON format marker in malformed candidate/);
   const modePushEvent = path.join(temp, 'mode-push-event.json'); writeFileSync(modePushEvent, JSON.stringify({ before: modeBase, after: modeHead })); await assert.rejects(() => checkGitHubEventPrivateArtifactContainment({ root: modeRepo, environment: { GITHUB_EVENT_NAME: 'push', GITHUB_EVENT_PATH: modePushEvent } }), /private JSON format marker in malformed candidate/);
   const renameRepo = fixtureRepo('containment-raw-history-rename-destination'); const renameBase = git(renameRepo, ['rev-parse', 'HEAD']).trim(); writeFileSync(path.join(renameRepo, 'ordinary-old.txt'), 'ordinary old bytes\n'); git(renameRepo, ['add', 'ordinary-old.txt']); git(renameRepo, ['commit', '--quiet', '-m', 'ordinary old path']); git(renameRepo, ['mv', 'ordinary-old.txt', 'renamed-private.txt']); writeFileSync(path.join(renameRepo, 'renamed-private.txt'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); git(renameRepo, ['add', 'renamed-private.txt']); git(renameRepo, ['commit', '--quiet', '-m', 'rename destination private packet']); git(renameRepo, ['rm', '--quiet', 'renamed-private.txt']); git(renameRepo, ['commit', '--quiet', '-m', 'delete renamed packet']); const renameHead = git(renameRepo, ['rev-parse', 'HEAD']).trim(); await assert.rejects(() => checkPrivateArtifactContainment({ root: renameRepo, ranges: [`${renameBase}..${renameHead}`] }), /renamed-private\.txt .*private JSON format marker in malformed candidate/);
+  // In the raw diff-tree regex the old SHA is deliberately noncapturing, so
+  // match[3] is the destination SHA and match[4] is the status. A modified
+  // path whose old blob is benign and destination blob is private proves that
+  // exact group contract without changing the correct match[3] implementation.
+  const destinationShaRepo = fixtureRepo('containment-raw-history-destination-sha'); const destinationShaPath = 'modified-private.txt'; writeFileSync(path.join(destinationShaRepo, destinationShaPath), 'ordinary old bytes\n'); git(destinationShaRepo, ['add', destinationShaPath]); git(destinationShaRepo, ['commit', '--quiet', '-m', 'ordinary destination baseline']); const destinationShaBase = git(destinationShaRepo, ['rev-parse', 'HEAD']).trim(); writeFileSync(path.join(destinationShaRepo, destinationShaPath), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })); git(destinationShaRepo, ['add', destinationShaPath]); git(destinationShaRepo, ['commit', '--quiet', '-m', 'destination blob is private']); git(destinationShaRepo, ['rm', '--quiet', destinationShaPath]); git(destinationShaRepo, ['commit', '--quiet', '-m', 'delete destination blob']); const destinationShaHead = git(destinationShaRepo, ['rev-parse', 'HEAD']).trim(); await assert.rejects(() => checkPrivateArtifactContainment({ root: destinationShaRepo, ranges: [`${destinationShaBase}..${destinationShaHead}`] }), /modified-private\.txt .*private JSON format marker in malformed candidate/, 'raw-history match[3] must remain the destination SHA');
   const submoduleRepo = fixtureRepo('containment-raw-history-submodule'); const submoduleBase = git(submoduleRepo, ['rev-parse', 'HEAD']).trim(); git(submoduleRepo, ['update-index', '--add', '--cacheinfo', `160000,${submoduleBase},synthetic-submodule`]); await containmentFails(submoduleRepo, 'synthetic-submodule', 'non-regular Git mode'); git(submoduleRepo, ['commit', '--quiet', '-m', 'synthetic submodule entry']); git(submoduleRepo, ['rm', '--quiet', '--cached', 'synthetic-submodule']); git(submoduleRepo, ['commit', '--quiet', '-m', 'delete synthetic submodule entry']); const submoduleHead = git(submoduleRepo, ['rev-parse', 'HEAD']).trim(); await assert.rejects(() => checkPrivateArtifactContainment({ root: submoduleRepo, ranges: [`${submoduleBase}..${submoduleHead}`] }), /synthetic-submodule .*non-regular Git mode/);
   const worktreeTypeRepo = fixtureRepo('containment-worktree-type-change'); const worktreeTypePath = 'worktree-link.txt'; writeFileSync(path.join(worktreeTypeRepo, worktreeTypePath), 'ordinary regular entry\n'); git(worktreeTypeRepo, ['add', worktreeTypePath]); git(worktreeTypeRepo, ['commit', '--quiet', '-m', 'regular worktree type baseline']); try { rmSync(path.join(worktreeTypeRepo, worktreeTypePath)); symlinkSync('synthetic-link-target', path.join(worktreeTypeRepo, worktreeTypePath), 'file'); await assert.rejects(() => checkPrivateArtifactContainment({ root: worktreeTypeRepo }), /symlink or junction/); } catch (error) { if (!['EPERM', 'EACCES', 'UNKNOWN'].includes(error?.code)) throw error; }
 
@@ -1029,7 +1069,8 @@ git() { return 0; }
     'late-owner-header.csv': `# ordinary comment\n${OWNER_DECISION_HEADERS.join(',')}\n`,
     'phase-shifted-base64.txt': phaseShiftedBase64Snapshot,
     'phase-shifted-hex.txt': phaseShiftedHexSnapshot,
-    'private-product.tsv': canonicalProductHeader.replaceAll(',', '\t'),
+    'private-product-reordered.csv': reorderedProductSupersetHeader,
+    'private-product-late-superset.tsv': lateRequiredProductHeader.replaceAll(',', '\t'),
     'ordinary.bin': plausiblePack,
     'private.bundle': Buffer.concat([Buffer.from('ordinary bundle preamble\n'), plausiblePack]),
   };
@@ -1114,6 +1155,16 @@ git() { return 0; }
   const v1File = writeSnapshot(v1, PRE_STAGE_A_SNAPSHOT_NAME); assert.equal(makeManifest(loadSnapshot(v1File, null, fixturePrivateOptions)).manifest_sha256, '849757da67a2abdeb5e99683ebfc624822e23b08748987dacc69cc7ba52dd1c8');
   const preCommit = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-commit'), 'utf8'); const commitMsg = readFileSync(path.join(REPO_ROOT, '.husky', 'commit-msg'), 'utf8'); const prePush = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-push'), 'utf8'); const ci = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'); const packageScripts = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).scripts;
   const trustedTargetWorkflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'phase3-private-artifact-containment.yml'), 'utf8');
+  const phase3Loop = readFileSync(path.join(REPO_ROOT, 'docs', 'loops', 'supplier-pricing-phase3c-review-packet-loop-2026-07-26.md'), 'utf8');
+  const phase3Ledger = readFileSync(path.join(REPO_ROOT, 'docs', 'loops', 'supplier-pricing-phase3c-review-packet-ledger-2026-07-26.md'), 'utf8');
+  const loopDoneStart = phase3Loop.indexOf('The current loop completes only after');
+  const loopDoneEnd = phase3Loop.indexOf('If a condition cannot be proven', loopDoneStart);
+  assert(loopDoneStart >= 0 && loopDoneEnd > loopDoneStart, 'Phase 3C loop must retain a bounded current Definition of Done');
+  const currentDefinitionOfDone = phase3Loop.slice(loopDoneStart, loopDoneEnd);
+  assert.match(currentDefinitionOfDone, /FINAL_VERDICT: SHIP/);
+assert.match(currentDefinitionOfDone, /no\s+(?:open\s+|unresolved\s+|actionable\s+)?BLOCKER\/HIGH\/MED\/LOW/i);
+  assert.doesNotMatch(currentDefinitionOfDone, /SHIP-WITH-FOLLOWUPS/i, 'current Phase 3C Definition of Done must not advertise proof eligibility for SHIP-WITH-FOLLOWUPS');
+  assert.match(phase3Ledger, /Current exact review acceptance contract[\s\S]*FINAL_VERDICT: SHIP[\s\S]*BLOCKER\/HIGH\/MED\/LOW/i, 'ledger must preserve the current exact proof contract beside historical verdict records');
   assert(preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit') < preCommit.indexOf('validate-sql.sh'));
   const workflowMapStage = preCommit.indexOf('git add docs/app-workflow-map.html');
   const workflowMapContainment = preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit', workflowMapStage);

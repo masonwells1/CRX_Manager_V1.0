@@ -47,5 +47,5 @@ The proof unblocks `apply_migration`; it does not authorize it. Two authorizatio
 
 ## Hard rules
 - **Read-only review.** The workflow and this review step never edit code, apply migrations, or deploy.
-- **A proof file is only ever written after a genuinely clean (or blockers-fixed) verdict.** Never hand-write a proof to skip the review.
+- **A proof file is only ever written after a genuinely clean verdict.** Never hand-write a proof to skip the review.
 - **Plain English for Mason** — he has zero coding experience.

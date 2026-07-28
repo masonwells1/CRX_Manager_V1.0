@@ -32,6 +32,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync,
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { reviewOutputHasActionableFindings } from "./run-claude-review.mjs";
 
 const SCRIPT_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)));
 const FALLBACK_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -175,6 +176,7 @@ export function codexReviewProofVerdict({ status, stdout } = {}) {
   const lastLine = nonEmpty[nonEmpty.length - 1];
   const match = lastLine.match(VERDICT_LINE_RE);
   if (!match) return null;
+  if (reviewOutputHasActionableFindings(nonEmpty.slice(0, -1).join("\n"))) return null;
   return match[1].toUpperCase() === "CLEAN" ? "clean" : null;
 }
 
@@ -250,8 +252,9 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
     "",
     "Report your findings as usual. Then end your reply with EXACTLY ONE final line, and NOTHING",
     "after it, choosing based ONLY on your own judgement:",
-    `  ${CODEX_VERDICT_TOKEN}: CLEAN     — no blocker/high-severity problems (minor follow-ups are fine)`,
-    `  ${CODEX_VERDICT_TOKEN}: BLOCKERS  — at least one blocker/high-severity problem`,
+    `  ${CODEX_VERDICT_TOKEN}: CLEAN     — no actionable BLOCKER/HIGH/MED/LOW and no required FIX/follow-up`,
+    `  ${CODEX_VERDICT_TOKEN}: BLOCKERS  — any actionable BLOCKER/HIGH/MED/LOW or required FIX/follow-up`,
+    "Optional NIT-only polish is nonblocking; every other finding must use BLOCKERS.",
     `Output the ${CODEX_VERDICT_TOKEN} token exactly once, on the last line only.`,
   ].join("\n");
 }

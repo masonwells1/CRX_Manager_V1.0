@@ -20,6 +20,15 @@
 - Forbidden interpretation: neither this ledger nor an agent verdict approves
   Product classifications or authorizes a Stage C migration/live apply.
 
+## Current exact review acceptance contract
+
+Historical `SHIP-WITH-FOLLOWUPS` records below remain provenance only. The
+current candidate qualifies for proof only when the resolved Opus review ends
+with exactly `FINAL_VERDICT: SHIP` and contains no actionable
+BLOCKER/HIGH/MED/LOW finding or required fix/follow-up. NIT-only polish remains
+nonblocking. Any different terminal token or contradictory structured prose
+invalidates the proof and starts a new exact-SHA correction cycle.
+
 ## Owner-review packet closeout — 2026-07-27
 
 ### PR #246 containment correction — still PARKED

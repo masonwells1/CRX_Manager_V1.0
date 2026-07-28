@@ -9,7 +9,7 @@
 //   { "migration": "<filename or migration name>",
 //     "timestamp": "<ISO-8601>",
 //     "reviewers": ["rls-security-reviewer", "migration-drift-reviewer"],
-//     "findings": "clean" | "blockers-fixed" }
+//     "findings": "clean" }
 //
 // The file is written by Claude after subagents return clean. Without it, this
 // hook blocks the apply_migration call with explicit instructions.
@@ -136,7 +136,7 @@ try {
       (migName.includes(proofName) || proofName.includes(migName) || migName === proofName)
     ) {
       const findings = (data.findings || "").toString();
-      if (findings === "clean" || findings === "blockers-fixed") {
+      if (findings === "clean") {
         // Content-binding: if the proof recorded a queryHash, it must match the SQL
         // actually being applied. A mismatch means the migration was edited AFTER it
         // was reviewed, so the proof no longer attests to this content — skip it.
@@ -231,7 +231,7 @@ out("block",
   `       Agent: rls-security-reviewer    (scope: this migration)\n` +
   `       Agent: migration-drift-reviewer (scope: this migration)\n` +
   `  2. If either returns BLOCKER findings, FIX them and re-dispatch until clean.\n` +
-  `  3. Once both return clean (or "blockers-fixed"), stamp the proof with the wrapper\n` +
+  `  3. Once both return clean, stamp the proof with the wrapper\n` +
   `     (it computes the content hash itself — do not hand-write the JSON):\n` +
   `       node scripts/write-apply-proofs.mjs ${migName || "<migName>"}\n` +
   `     (The wrapper ALWAYS runs a real Codex review of the file and mints nothing\n` +

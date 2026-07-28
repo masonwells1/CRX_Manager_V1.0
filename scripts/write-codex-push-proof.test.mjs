@@ -45,6 +45,8 @@ assert.ok(
   prompt.includes(`${CODEX_VERDICT_TOKEN}: CLEAN`) && prompt.includes(`${CODEX_VERDICT_TOKEN}: BLOCKERS`),
   "prompt demands the machine verdict token in both forms",
 );
+assert.match(prompt, /no (?:actionable )?BLOCKER\/HIGH\/MED\/LOW/i, "CLEAN guidance rejects every actionable proof severity");
+assert.match(prompt, /FIX|follow-up/i, "CLEAN guidance rejects required fixes and follow-ups");
 
 const args = buildCodexExecArgs({ root: "/repo/root", prompt });
 assert.deepEqual(
@@ -105,6 +107,34 @@ assert.equal(
   codexReviewProofVerdict({ status: 0, stdout: "CODEX_PROOF_VERDICT: CLEAN\nfiller\nCODEX_PROOF_VERDICT: CLEAN" }),
   null,
   "duplicate CLEAN tokens are still ambiguous → fail closed",
+);
+for (const contradictory of [
+  "BLOCKER: authorization bypass",
+  "HIGH (1)\nNone.",
+  "MED - incorrect proof binding",
+  "LOW: actionable parser gap",
+  "Severity: LOW (1)\nFinding: proof parser bypass",
+  "File | Severity | Finding\n--- | --- | ---\nsrc/x.ts:12 | HIGH | authorization bypass",
+  "| File | Severity | Finding |\n| --- | --- | --- |\n| src/x.ts:12 | LOW | incorrect proof binding |",
+  "## HIGH (0)\n### Evidence\n- authorization bypass remains",
+  "HIGH\nNone.\nauthorization bug remains",
+  "FIX/FOLLOW-UP: repair proof parser",
+  "FIX/FOLLOW-UP (1): authorization defect",
+  "FOLLOW-UPS (1)\nNone.",
+]) {
+  assert.equal(
+    codexReviewProofVerdict({ status: 0, stdout: `${contradictory}\n${CODEX_VERDICT_TOKEN}: CLEAN` }),
+    null,
+    `terminal CLEAN cannot override contradictory review content: ${contradictory}`,
+  );
+}
+assert.equal(
+  codexReviewProofVerdict({
+    status: 0,
+    stdout: `HIGH | 0 | None\nLOW | 0 | N/A\nNIT | 1 | optional naming polish\n${CODEX_VERDICT_TOKEN}: CLEAN`,
+  }),
+  "clean",
+  "explicit zero/NONE/N/A stays clean and NIT remains nonblocking",
 );
 // A partial/garbled token is not a verdict.
 assert.equal(codexReviewProofVerdict({ status: 0, stdout: "CODEX_PROOF_VERDICT: MAYBE" }), null, "unrecognized verdict word → null");

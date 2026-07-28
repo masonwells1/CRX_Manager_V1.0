@@ -103,6 +103,11 @@ assert.deepEqual(riskyFiles(["src/pages/Home.tsx", "supabase/migrations/1.sql"])
 // gate machinery — editing them must itself require the second-model verdict.
 assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
+assert.deepEqual(
+  riskyFiles(["scripts/check-supplier-pricing-phase3-private-artifacts.mjs"]),
+  ["scripts/check-supplier-pricing-phase3-private-artifacts.mjs"],
+  "the Phase 3C containment checker cannot self-weaken without independent review",
+);
 // Codex round-8 (PR #142): the hook-registration surfaces — a PR that
 // de-registers a guard by editing only these must still require the verdict.
 assert.deepEqual(riskyFiles([".claude/settings.json"]), [".claude/settings.json"]);

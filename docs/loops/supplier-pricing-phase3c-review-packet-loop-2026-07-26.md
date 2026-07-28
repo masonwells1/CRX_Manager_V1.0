@@ -237,8 +237,10 @@ remains `PARKED` and all 604 decisions remain `PENDING`.
 - focused, full, build, workflow, privacy, and deterministic proof is green;
 - Luna returns `CLEAN`;
 - a fresh independent Sol returns `CLEAN` for the exact SHA;
-- Claude review records its exact latest-available resolved Opus model and returns `SHIP` or
-  `SHIP-WITH-FOLLOWUPS` with no unresolved BLOCKER/HIGH/MED;
+- Claude review records its exact latest-available resolved Opus model, ends
+  with exactly `FINAL_VERDICT: SHIP`, and reports no actionable
+  BLOCKER/HIGH/MED/LOW finding or required fix/follow-up; NIT-only polish is
+  nonblocking;
 - any CodeRabbit finding has been read and every real issue fixed, with all
   invalidated proof/reviews rerun;
 - one protected PR is open, green, and review-resolved;

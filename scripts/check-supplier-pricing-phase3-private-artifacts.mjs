@@ -697,9 +697,13 @@ function createOwnerHeaderStreamDetector() {
   };
 }
 function createProductHeaderStreamDetector() {
-  const canonicalHeader = PRODUCT_ROW_KEYS.join(',');
-  let line = '';
-  let discarded = false;
+  const requiredHeaders = new Set(PRODUCT_ROW_KEYS);
+  const maxRequiredHeaderChars = Math.max(...PRODUCT_ROW_KEYS.map(header => header.length));
+  const matchedHeaders = new Set();
+  let cell = '';
+  let discardedCell = false;
+  let delimiter = null;
+  let invalidLine = false;
   let found = false;
   const isPaddingWhitespace = character => {
     const code = character.codePointAt(0);
@@ -708,19 +712,31 @@ function createProductHeaderStreamDetector() {
     return code === 0x00a0 || code === 0x1680 || (code >= 0x2000 && code <= 0x200a)
       || code === 0x202f || code === 0x205f || code === 0x3000 || code === 0xfeff;
   };
+  const finishCell = () => {
+    if (!discardedCell && requiredHeaders.has(normalizeCsvHeaderCell(cell))) matchedHeaders.add(normalizeCsvHeaderCell(cell));
+    cell = '';
+    discardedCell = false;
+  };
   const finishLine = () => {
-    const normalized = line.includes('\t') && !line.includes(',') ? line.replaceAll('\t', ',') : line;
-    if (!discarded && normalized === canonicalHeader) found = true;
-    line = '';
-    discarded = false;
+    finishCell();
+    if (!invalidLine && delimiter !== null && [...requiredHeaders].every(header => matchedHeaders.has(header))) found = true;
+    matchedHeaders.clear();
+    delimiter = null;
+    invalidLine = false;
   };
   return {
     feed(text) {
       for (const character of text) {
         if (OWNER_HEADER_RECORD_DELIMITER_RE.test(character) && character !== '\t') { finishLine(); continue; }
+        if (character === ',' || character === '\t') {
+          if (delimiter === null) delimiter = character;
+          else if (delimiter !== character) invalidLine = true;
+          finishCell();
+          continue;
+        }
         if (character === '"' || isPaddingWhitespace(character)) continue;
-        if (line.length < canonicalHeader.length) line += character;
-        else discarded = true;
+        if (cell.length < maxRequiredHeaderChars) cell += character;
+        else discardedCell = true;
       }
     },
     finish() { finishLine(); return found; },
@@ -956,11 +972,24 @@ function createBase64TransferScanner({ checkArchives = true } = {}) {
     if (fullBodyLength) feedDecoded(Buffer.from(body.slice(0, fullBodyLength), 'base64'));
     quartet = input.slice(fullBodyLength);
     if (paddingOffset === -1) return;
-    if (quartet.length < 4) return;
-    if (!/^(?:[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/.test(quartet)) { active = false; return; }
-    feedDecoded(Buffer.from(quartet, 'base64'));
-    terminal = true;
+    const paddedResidual = /^([A-Za-z0-9+/]{0,3})(=*)$/.exec(quartet);
+    if (!paddedResidual) { preserveDecodedPrefix = decoded !== null; active = false; return; }
+    const residualBody = paddedResidual[1];
+    const suppliedPadding = paddedResidual[2].length;
+    if (residualBody.length === 0 || residualBody.length === 1) {
+      preserveDecodedPrefix = decoded !== null;
+      active = false;
+      return;
+    }
+    const requiredPadding = 4 - residualBody.length;
+    if (suppliedPadding < requiredPadding) return;
+    feedDecoded(Buffer.from(residualBody + '='.repeat(requiredPadding), 'base64'));
     quartet = '';
+    terminal = true;
+    if (suppliedPadding > requiredPadding) {
+      preserveDecodedPrefix = true;
+      active = false;
+    }
   };
   return {
     feed(bytes) {
@@ -1066,7 +1095,11 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
     }
     if (byte === 0x3d) {
       length += 1;
-      if (!active || terminal || quartet.length < 2) { preserveDecodedPrefix = terminal; active = false; return; }
+      if (!active || terminal || quartet.length < 2) {
+        preserveDecodedPrefix = terminal || length > 32 || decoded !== null || pendingQuartets.length > 0;
+        active = false;
+        return;
+      }
       quartet += '=';
       if (quartet.length < 4) return;
       if (!/^(?:[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/.test(quartet)) { active = false; return; }

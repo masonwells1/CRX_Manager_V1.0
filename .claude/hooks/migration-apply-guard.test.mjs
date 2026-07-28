@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
@@ -124,7 +124,14 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = runHook(call(BENIGN_SQL), tmp);
     ok(!isDeny(r), "valid proof + benign migration → allowed");
 
+    // 2b. The sanctioned producer emits only findings:"clean". Retired
+    //     blockers-fixed values must not remain an alternate acceptance path.
+    writeProof(stateDir, BENIGN_SQL, { findings: "blockers-fixed" });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "obsolete blockers-fixed reviewer proof → denied");
+
     // 3. Proof whose queryHash doesn't match the transmitted SQL → deny.
+    writeProof(stateDir, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL + " -- edited after review"), tmp);
     ok(isDeny(r), "edited-after-review SQL (hash mismatch) → denied");
 
@@ -250,5 +257,10 @@ function armAutopilot(stateDir, hoursFromNow) {
     rmSync(tmp, { recursive: true, force: true });
   }
 }
+
+const migrationApplyGuardSource = readFileSync(HOOK, "utf8");
+const migrationReviewCommandSource = readFileSync(path.join(__dirname, "..", "commands", "migration-review.md"), "utf8");
+eq(/blockers-fixed/i.test(migrationApplyGuardSource), false, "migration apply hook no longer documents or accepts blockers-fixed");
+eq(/blockers-fixed/i.test(migrationReviewCommandSource), false, "migration review command no longer advertises blockers-fixed proof eligibility");
 
 console.log(`migration-apply-guard: ${pass} assertions passed`);
