@@ -26,6 +26,13 @@ throughout, because it checked that the command *existed*, not that it *worked*.
 rejects any Windows hook command that interpolates a shell variable; it fails against the previous
 `hooks.json` (30 hooks) and passes against this one.
 
+The detector lives in `scripts/windows-hook-command.mjs` and rejects every PowerShell expansion form,
+not just the bare `$root` that caused this — `${root}`, `$env:FOO`, `$(...)` and `$_` are expanded by
+the same parent shell and would reintroduce the identical fail-open (CodeRabbit, PR #259).
+`scripts/windows-hook-command.test.mjs` pins each broken form as a failing fixture and the fixed form
+as passing, so the check cannot quietly stop detecting. Re-proved by poisoning the real manifest with
+`${root}`: both the check and the fixture test fail, and both pass again once restored.
+
 ## 2026-07-28 — A migration that shipped ten days ago was still counted as "awaiting apply"
 
 `/fleet` reported "2 parked migrations awaiting apply". One of them,
