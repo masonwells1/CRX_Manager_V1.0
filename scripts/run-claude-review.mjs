@@ -30,9 +30,111 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
   // Exactly one terminal machine-readable verdict is required. This prevents
   // a quoted/injected `Verdict: SHIP` earlier in free-form review prose from
   // winning a first-match regex and minting proof.
-  if (matches.length !== 1 || !/^FINAL_VERDICT:/i.test(lines.at(-1) || "")) return null;
-  if (matches[0][1].toUpperCase() === "NEEDS-WORK") return null;
+  if (matches.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(lines.at(-1) || "")) return null;
+  if (matches[0][1].toUpperCase() !== "SHIP") return null;
+  const normalizedLines = lines.map((line) => {
+    const isHeading = /^\s{0,3}#{1,6}(?:\s+|$)/u.test(line);
+    const machine = line
+      .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
+      .replace(/[*`\\]/gu, "")
+      .replace(/^_+|_+$/gu, "")
+      .trim();
+    return {
+      isHeading,
+      machine,
+      classified: machine.replace(/_/gu, ""),
+    };
+  });
+  const machineVerdicts = normalizedLines
+    .map(({ machine }) => machine)
+    .filter((line) => /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line));
+  if (machineVerdicts.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(machineVerdicts[0])) return null;
+  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(value.trim());
+  let blockingSection = null;
+  for (const { classified: line, isHeading, machine } of normalizedLines) {
+    if (/^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(machine)) {
+      if (blockingSection === "requires-empty") return null;
+      blockingSection = null;
+      continue;
+    }
+    const tableCells =
+      line.startsWith("|") && line.endsWith("|")
+        ? line
+            .slice(1, -1)
+            .split("|")
+            .map((cell) => cell.trim())
+        : [];
+    const severityCellIndex = tableCells.findIndex((cell) =>
+      /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)$/i.test(cell),
+    );
+    if (severityCellIndex !== -1) {
+      const nonSeverityCells = tableCells.filter((_, index) => index !== severityCellIndex);
+      if (!nonSeverityCells.every((cell) => /^(?:-|—)?$/u.test(cell) || noFinding(cell))) return null;
+      blockingSection = null;
+      continue;
+    }
+    if (/^SEVERITY\s*(?::|-|—|\|)\s*(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)\s*$/i.test(line)) {
+      blockingSection = "requires-empty";
+      continue;
+    }
+    const blockingHeading = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)(?:\s*\(\s*(\d+)\s*\))?\s*:?\s*$/i.exec(line);
+    if (blockingHeading) {
+      blockingSection = blockingHeading[1] === "0" ? "declared-empty" : "requires-empty";
+      continue;
+    }
+    if (/^(?:FIX(?:ES)?|FOLLOW-?UPS?)\s*:?\s*$/i.test(line)) {
+      blockingSection = "requires-empty";
+      continue;
+    }
+    const finding = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s*\(\s*\d+\s*\))?(?:\s*(?::|-|—)\s*|\s+)(.+)$/i.exec(line);
+    if (finding) {
+      if (!noFinding(finding[1])) return null;
+      blockingSection = null;
+      continue;
+    }
+    if (blockingSection && line) {
+      const findingField = /^FINDINGS?\s*:\s*(.+)$/i.exec(line);
+      if (noFinding(findingField?.[1] ?? line)) {
+        blockingSection = null;
+        continue;
+      }
+      if (blockingSection === "declared-empty" && isHeading) {
+        blockingSection = null;
+      } else {
+        return null;
+      }
+    }
+    if (/^(?:NIT(?:PICK)?|SUMMARY)\s*:?\s*$/i.test(line)) {
+      blockingSection = null;
+    }
+  }
   return "clean";
+}
+
+export function claudeReviewProofWithholdReason({
+  executionState,
+  initialStatus,
+  contextUnchanged,
+  proofVerdict,
+  headSha,
+  baseSha,
+} = {}) {
+  if (executionState !== "VERIFIED") {
+    return `review execution state is ${executionState || "unknown"}, not VERIFIED`;
+  }
+  if (String(initialStatus || "").trim()) {
+    return "the worktree or index was dirty when the review started";
+  }
+  if (!contextUnchanged) {
+    return "HEAD, origin/main, or worktree state changed while the review was running";
+  }
+  if (!/^[0-9a-f]{40}$/i.test(headSha || "") || !/^[0-9a-f]{40}$/i.test(baseSha || "")) {
+    return "HEAD or origin/main did not resolve to a full 40-character commit SHA";
+  }
+  if (!proofVerdict) {
+    return "review output did not satisfy the clean-proof contract: exactly one terminal FINAL_VERDICT: SHIP and no actionable BLOCKER, HIGH, MED, LOW, FIX, or FOLLOW-UP finding";
+  }
+  return null;
 }
 
 export function claudeExecutable({
@@ -94,7 +196,7 @@ function usage() {
     "  --output <path>       Output file (default .claude/session-state/claude-review-latest.txt)",
     "  --model <alias>       Claude model alias/id (default claude-opus-5)",
     "  --effort <level>      low|medium|high|xhigh|max (default high)",
-    "  --timeout-ms <ms>     Hard timeout; timeout is BLOCKED (default 300000)",
+    "  --timeout-ms <ms>     Hard timeout; timeout is BLOCKED (default 900000)",
     "  --dry-run             Print the prompt instead of calling Claude",
   ].join("\n");
 }
@@ -366,12 +468,16 @@ export function buildClaudeReviewPrompt({
     "- Flag correctness / red-line / requirement-gap issues only; do not pad the report with style or defensive-coding nitpicks.",
     "",
     "Expected output:",
-    "- verdict: SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK",
-    "- findings grouped as BLOCKER / HIGH / MED / LOW / NIT",
+    "- use separate BLOCKER, HIGH, MED, LOW, and NIT sections; never combine severity headings",
+    "- write `None.` in each BLOCKER, HIGH, MED, and LOW section that has no finding",
+    "- use FINAL_VERDICT: SHIP only when no actionable BLOCKER, HIGH, MED, or LOW finding remains",
+    "- use FINAL_VERDICT: NEEDS-WORK when any actionable BLOCKER, HIGH, MED, or LOW finding remains",
+    "- NIT items may accompany FINAL_VERDICT: SHIP only when they are optional polish, not required follow-up work",
     "- each finding must cite file:line evidence",
     "- explicitly say where you agree or disagree with Codex's position",
     "- exact next step for Mason in plain English",
-    "- end with exactly one final line: FINAL_VERDICT: SHIP, FINAL_VERDICT: SHIP-WITH-FOLLOWUPS, or FINAL_VERDICT: NEEDS-WORK",
+    "- do not emit any other VERDICT or OPUS5_VERDICT label",
+    "- end with exactly one final line: FINAL_VERDICT: SHIP or FINAL_VERDICT: NEEDS-WORK",
   ];
 
   if (scopeEvidence) {
@@ -640,11 +746,20 @@ export function runClaudeReview(options) {
       !gitContext.status.trim() && contextUnchanged
       ? claudeReviewProofVerdict({ status: result.status, stdout: parsed.result })
       : null;
-    if (proofVerdict && /^[0-9a-f]{40}$/i.test(headSha) && /^[0-9a-f]{40}$/i.test(baseSha)) {
+    const withholdReason = claudeReviewProofWithholdReason({
+      executionState,
+      initialStatus: gitContext.status,
+      contextUnchanged,
+      proofVerdict,
+      headSha,
+      baseSha,
+    });
+    if (!withholdReason) {
       const proofPath = writeClaudePushProof({ headSha, baseSha, verdict: proofVerdict });
       process.stdout.write(`Claude push proof written to ${proofPath}\n`);
     } else {
       clearClaudePushProof();
+      process.stdout.write(`Claude push proof withheld: ${withholdReason}.\n`);
     }
   }
   if (executionState === "BLOCKED") {

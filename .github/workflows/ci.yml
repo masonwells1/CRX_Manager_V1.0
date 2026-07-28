@@ -8,17 +8,109 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, reopened, synchronize, edited]
+
+# CI only reads repository content and artifacts. It never needs a writable
+# GitHub token, and checkout must not retain one in the local Git config.
+permissions:
+  contents: read
 
 jobs:
+  phase3-private-artifact-containment:
+    name: Phase 3C Candidate Containment (CI)
+    if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    # This is intentionally the first content-processing job. It uses only
+    # runner-bundled Node and Git: no candidate .nvmrc, package metadata, or
+    # dependencies are processed before containment.
+    steps:
+      - name: Checkout exact event history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Reject PR packet blobs with the exact trusted base checker
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          phase3_checker_rel='scripts/check-supplier-pricing-phase3-private-artifacts.mjs'
+          # Only this introducing PR may bootstrap from trusted main history
+          # that descends from this floor without already containing the
+          # checker. Once merged, every later PR uses the base revision's
+          # checker instead of this candidate fallback.
+          phase3_bootstrap_ancestor='d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c'
+          node --version
+          mapfile -t phase3_event_shas < <(node --input-type=commonjs -e '
+            const fs = require("node:fs");
+            const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+            const sha = value => typeof value === "string" && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
+            const base = sha(event?.pull_request?.base?.sha);
+            const head = sha(event?.pull_request?.head?.sha);
+            if (!base || !head) process.exit(2);
+            process.stdout.write(`${base}\n${head}\n`);
+          ')
+          test "${#phase3_event_shas[@]}" -eq 2
+          phase3_base="${phase3_event_shas[0]}"
+          phase3_head="${phase3_event_shas[1]}"
+          git -C "$GITHUB_WORKSPACE" cat-file -e "${phase3_base}^{commit}"
+          git -C "$GITHUB_WORKSPACE" cat-file -e "${phase3_head}^{commit}"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" = "$phase3_head"
+          phase3_expected_attestation="PHASE3_PRIVATE_ARTIFACT_HANDOFF protocol=phase3c-github-event-root-v2 event_head=$phase3_head"
+          if git -C "$GITHUB_WORKSPACE" cat-file -e "${phase3_base}:${phase3_checker_rel}" 2>/dev/null; then
+            phase3_trusted_root="$RUNNER_TEMP/phase3c-trusted-base-${phase3_base}"
+            git -C "$GITHUB_WORKSPACE" worktree add --detach "$phase3_trusted_root" "$phase3_base"
+            phase3_trusted_checker="$phase3_trusted_root/$phase3_checker_rel"
+            phase3_attestation="$(cd "$phase3_trusted_root" && node "$phase3_trusted_checker" --github-event --root "$GITHUB_WORKSPACE" --attest-github-handoff)"
+            test "$phase3_attestation" = "$phase3_expected_attestation" || { echo 'trusted base containment checker failed the candidate-root handoff protocol' >&2; exit 1; }
+          else
+            git -C "$GITHUB_WORKSPACE" merge-base --is-ancestor "$phase3_bootstrap_ancestor" "$phase3_base" || { echo "trusted base containment checker is missing outside the initial bootstrap ancestry; refusing candidate fallback: expected ancestor $phase3_bootstrap_ancestor, event base $phase3_base" >&2; exit 1; }
+            phase3_checker_history="$(git -C "$GITHUB_WORKSPACE" rev-list --full-history --max-count=1 "${phase3_bootstrap_ancestor}..${phase3_base}" -- "$phase3_checker_rel")" || { echo 'failed to inspect trusted containment checker history; refusing candidate fallback' >&2; exit 1; }
+            test -z "$phase3_checker_history" || { echo 'trusted base containment checker was previously present; refusing candidate fallback after removal' >&2; exit 1; }
+            git -C "$GITHUB_WORKSPACE" cat-file -e "${phase3_head}:${phase3_checker_rel}" 2>/dev/null || { echo 'PR branch predates the containment checker — update this branch from main' >&2; exit 1; }
+            phase3_candidate_entry="$(git -C "$GITHUB_WORKSPACE" ls-tree "$phase3_head" -- "$phase3_checker_rel")"
+            phase3_candidate_oid="$(git -C "$GITHUB_WORKSPACE" rev-parse "${phase3_head}:${phase3_checker_rel}")" || { echo 'PR branch predates the containment checker — update this branch from main' >&2; exit 1; }
+            case "$phase3_candidate_entry" in
+              "100644 blob ${phase3_candidate_oid}"$'\t'"${phase3_checker_rel}"|"100755 blob ${phase3_candidate_oid}"$'\t'"${phase3_checker_rel}") ;;
+              *) echo 'initial bootstrap containment checker is not an exact regular blob at the required path' >&2; exit 1 ;;
+            esac
+            test -f "$GITHUB_WORKSPACE/$phase3_checker_rel"
+            test "$(git -C "$GITHUB_WORKSPACE" hash-object -- "$phase3_checker_rel")" = "$phase3_candidate_oid"
+            git -C "$GITHUB_WORKSPACE" diff --no-ext-diff --quiet "$phase3_head" -- "$phase3_checker_rel"
+            git -C "$GITHUB_WORKSPACE" diff --cached --no-ext-diff --quiet "$phase3_head" -- "$phase3_checker_rel"
+            # Candidate-controlled coverage exists only to introduce this
+            # guard. The exact committed blob/path checks above make that
+            # bootstrap boundary explicit and auditable.
+            phase3_attestation="$(node "$GITHUB_WORKSPACE/$phase3_checker_rel" --github-event --root "$GITHUB_WORKSPACE" --attest-github-handoff)"
+            test "$phase3_attestation" = "$phase3_expected_attestation" || { echo 'initial bootstrap containment checker failed the candidate-root handoff protocol' >&2; exit 1; }
+          fi
+
+      - name: Reject pushed packet blobs with the exact trusted current checker
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --github-event --root "$GITHUB_WORKSPACE"
+
   sql-validation:
     name: SQL Migration Validation
     runs-on: ubuntu-latest
+    # Keep this dependency unconditional: a skipped containment job also skips
+    # SQL validation, so the containment job's event filter must stay tautological.
+    needs: phase3-private-artifact-containment
     # Fast (no node_modules); runs on every push and PR. Catches commits that
     # bypassed husky locally (e.g. via --no-verify or a non-husky environment)
     # by re-running the full migration audit at the PR/push gate.
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Make scripts executable
         run: chmod +x scripts/validate-sql.sh scripts/validate-sql-migrations.sh
@@ -42,11 +134,14 @@ jobs:
   lint-typecheck-test:
     name: Lint, Type Check, Test, Build
     runs-on: ubuntu-latest
-    needs: sql-validation
+    needs: [phase3-private-artifact-containment, sql-validation]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -77,6 +172,9 @@ jobs:
 
       - name: Guard-hook regression tests (safety net must not regress)
         run: npm run test:correction-guards
+
+      - name: Phase 3C private-artifact regression tests
+        run: npm run test:supplier-pricing-phase3c-packet
 
       - name: Agent workflow truth-state and sync tests
         run: npm run test:agent-workflows
@@ -128,6 +226,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v7

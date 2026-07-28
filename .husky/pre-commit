@@ -12,6 +12,18 @@ node scripts/check-ledger-update.mjs || {
   exit 1
 }
 
+# --- Phase 3C private-artifact containment (HARD) ---
+# Commits scan tracked, staged, modified, and untracked paths. When Git is
+# committing through an alternate GIT_INDEX_FILE, the checker preserves that
+# one authoritative redirect while stripping every other inherited GIT_* value.
+# The slower ignored-tool-output sweep remains mandatory at pre-push and in CI.
+echo "🔒 Checking Phase 3C private-artifact containment..."
+node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit || {
+  echo ""
+  echo "❌ PRIVATE ARTIFACT CONTAINMENT FAILED — move the artifact outside this repository."
+  exit 1
+}
+
 # --- SQL Migration Validation (prevents known anti-patterns) ---
 echo "🛡️ Validating SQL migrations..."
 bash scripts/validate-sql.sh
@@ -133,6 +145,12 @@ if [ $MAP_EXIT -ne 0 ]; then
 else
   # Stage the updated map so it's included in this commit automatically
   git add docs/app-workflow-map.html
+  echo "🔒 Rechecking containment after staging the generated workflow map..."
+  node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit || {
+    echo ""
+    echo "❌ GENERATED MAP CONTAINMENT FAILED — inspect docs/app-workflow-map.html before committing."
+    exit 1
+  }
 fi
 
 echo ""

@@ -59,6 +59,9 @@ backups/
 # Supplier Pricing Phase 3 private catalog artifacts (never publish)
 2026-07-22-supplier-pricing-phase3-product-snapshot.json
 2026-07-22-supplier-pricing-phase3-proposed-classification-manifest.json
+2026-07-26-supplier-pricing-phase3-post-stage-a-product-snapshot.json
+2026-07-26-supplier-pricing-phase3-post-stage-a-proposed-classification-manifest.json
+2026-07-26-supplier-pricing-phase3-owner-decision-sheet.csv
 
 # Vercel CLI working directory
 .vercel/

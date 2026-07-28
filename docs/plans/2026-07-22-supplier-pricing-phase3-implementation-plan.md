@@ -1,9 +1,11 @@
 # Supplier Pricing Phase 3 — Corrected Implementation Plan
 
 **Date:** 2026-07-22
-**Verdict:** SAFE TO BUILD AFTER PR #213 RECONCILIATION
+**Verdict:** PARKED — final exact review, protected PR acceptance, and Mason
+approval are required before any Stage C design.
 **Approved scope:** product families, structured policy/packaging metadata, exact-SKU picker clarity, and return/credit enforcement
 **Execution contract:** `docs/handoffs/2026-07-22-supplier-pricing-PHASE3-GOAL.md`
+**Current status:** Stage A/B1/B2 are landed. The remaining Stage C path is the regenerated-and-verified 604-row aggregate-only post-Stage-A packet, fresh exact review, protected PR acceptance, Mason's row/field/checksum approval, a separate guarded migration PR, and a separate live-apply gate.
 
 ## Outcome in Plain English
 
@@ -11,7 +13,11 @@ Every existing Product row remains the same sellable and inventory SKU. Phase 3 
 
 The safe default is `unknown`: an unclassified Product behaves as it does today. A row is blocked only after Mason approves an explicit `no_return` classification.
 
-Current discovery observed 604 Product rows (595 active), but those counts must be refreshed after #213. The older estimate of 163 variants is context, not an acceptance count. The classification packet must reconcile every current row.
+The current packet covers 604 Product rows and is regenerated and
+verified. Do not refresh or regenerate it merely because #213 has since landed;
+recapture is allowed only after an explicit invalidation condition. The older
+estimate of 163 variants is context, not an acceptance count. The verified
+classification packet reconciles every current row.
 
 ## Smallest Complete Architecture
 
@@ -56,7 +62,10 @@ No cost-basis selection logic changes. The global cost-basis flag remains false.
 
 ## All-Product Classification Packet
 
-Generate a proposed manifest from a fresh read-only Product snapshot. It must contain one row for every current Product with:
+The following was the construction contract for the post-Stage-A packet. That
+packet has since been regenerated and verified at 604 aggregate-only rows. Only
+an explicitly invalidated replacement packet must be generated from a fresh
+read-only Product snapshot, with one row for every current Product and:
 
 - immutable Product UUID and SKU;
 - current name, form, package/unit fields, active state, and current family/policy fields;
@@ -70,22 +79,40 @@ An agent may propose but may not approve. Uncertain rows remain `unresolved` and
 
 Mason's decision packet must require an approve/reject decision for every row's `family_assigned`, `standalone`, or `unresolved` disposition; every proposed family membership; every proposed packaging/tote-field change; every non-`unknown` policy; and explicit acknowledgment of every unresolved row. Approval is field-specific: an approved family assignment does not silently approve a package or policy change.
 
-The pre-Stage-A packet is provisional. After Stage A is live, regenerate it from the actual schema and a fresh live read-only snapshot, producing a new row count, old-value set, and checksum for owner review.
+The pre-Stage-A packet was provisional. After Stage A became live, it was
+superseded by the current regenerated-and-verified 604-row aggregate-only
+packet. Do not recapture or regenerate it unless an explicit invalidation
+condition occurs.
 
-After Mason approves that exact regenerated packet, generate a separate one-to-one data migration containing only individually approved fields and rows. The migration must bind to the exact owner-approval checksum and verify the manifest checksum, expected old values, and expected affected-row count before changing anything; any mismatch aborts the entire migration. Never merge Product rows or rewrite historical references.
+After Mason approves that exact verified packet, generate a separate one-to-one
+data migration containing only individually approved fields and rows. The
+migration must bind to the exact owner-approval checksum and verify the manifest
+checksum, expected old values, and expected affected-row count before changing
+anything; any mismatch aborts the entire migration. Never merge Product rows or
+rewrite historical references.
 
-## Product Selector Matrix
+## Historical Product Selector Matrix — completed Stage B context
 
-Every included surface uses one shared Product-option model/presentation: Product name and SKU, canonical family, package/unit, return-policy badge, and tote-only signal. Imports must refuse ambiguous sibling matches instead of silently choosing one.
+This is completed Stage B source context, retained for auditability only. It is
+not an instruction to reopen Stage B selectors or rerun the post-#213 scan in
+this PARKED Stage C lane.
 
-The matrix is a point-in-time Graphify/source inventory, not permission to skip the post-#213 scan. Before the first UI edit, rerun a repo-wide search for every selector, resolver, import matcher, and persistent `product_id` write; record each new hit as INCLUDE or EXCLUDE and obtain Fable approval of the refreshed matrix.
+Every included surface used one shared Product-option model/presentation:
+Product name and SKU, canonical family, package/unit, return-policy badge, and
+tote-only signal. Imports refused ambiguous sibling matches instead of silently
+choosing one.
 
-To keep each PR reviewable, split Stage B:
+The matrix was a point-in-time Graphify/source inventory. The post-#213 scan
+was completed for its historical Stage B work; do not rerun it from this plan.
+Any future separately approved UI scope must establish and approve its own
+current source inventory.
+
+To keep its PRs reviewable, historical Stage B was split as follows:
 
 - **Stage B1 core sales/returns/supplier:** QuoteBuilder, NewOrder, OrderDetail, QuickDeliveryModal, DeliveryDetail, Returns, SupplierPricing comparison/linking, InvoiceDetail, and FieldAppSplitInvoiceEditor. These own quote/order/delivery/return/invoice or supplier-link Product-ID writes.
 - **Stage B2 operational/procurement hardening:** ManualTicketCreate, BlendTicketDetail, FieldAppChemicalEntry, JobDetail, NewPurchaseOrder, PurchaseOrderDetail, QuickReceivePanel, the three bulk import/correction flows, both InventoryPage flows, and Rebates. These own inventory, production, applied-chemical, procurement, import-resolution, reservation, rebate-program, or rebate-claim Product-ID writes.
 
-Neither PR alone is the complete Phase 3 picker rollout.
+Neither historical PR alone represented the complete Phase 3 picker rollout.
 
 | Surface | Decision | Required Phase 3 behavior | Source evidence |
 |---|---|---|---|
@@ -128,7 +155,9 @@ Explicit exclusions:
 
 ## Expected Files and Systems
 
-Stage A is expected to touch only:
+The following Stage A/B file expectations are historical completed context and
+must not be rerun from this PARKED Stage C plan. Stage A was expected to touch
+only:
 
 - one new `supabase/migrations/<fresh_timestamp>_product_families_return_policy_foundation.sql`;
 - one new rollback-only proof such as `scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql`;
@@ -138,18 +167,33 @@ Stage A is expected to touch only:
 
 Do not touch `src/lib/db.ts`, `ProductDetail`, or `docs/reference/rpc-functions.md` unless refreshed source proves a concrete need and Fable approves the scope change.
 
-Stages B1/B2 are expected to add one small shared Product-option formatter/presentation component under `src/components/products/` or `src/lib/`, then adopt it in every included selector and its focused tests. The exact helper filename is chosen after the post-#213 source refresh; there must be one contract, not independently formatted variants.
+Historical Stages B1/B2 were expected to add one small shared Product-option
+formatter/presentation component under `src/components/products/` or `src/lib/`
+and adopt it in every included selector and focused test. The exact helper
+filename was chosen after the completed post-#213 source refresh; there was one
+contract, not independently formatted variants.
 
 Stage C adds only the owner-approved classification migration and its checksum/proof artifacts.
 
 ## Release Sequence and Gates
 
-1. **Reconcile #213.** Satisfy the exact gate in the Goal contract; otherwise remain read-only.
-2. **Stage A PR: schema/enforcement.** Build against a disposable database, prove compatibility with current UI, run Fable and exact-SHA Sol reviews, push/open the protected PR, wait for required checks and Vercel, read and resolve CodeRabbit, and rerun the owning proof plus fresh exact-commit reviews after any fix. Park only when the PR is green and review-resolved.
-3. **Explicit live schema gate.** Mason separately authorizes merge and live migration apply. Run migration guard, apply, and verify only in that authorized conversation.
-4. **Stage B1 PR: core UI.** Refresh from the applied schema, rerun the selector inventory, implement the core sales/returns/supplier surfaces, run authenticated desktop/phone proof, Fable, exact-SHA Sol, and the protected PR pipeline; stop before merge.
-5. **Stage B2 PR: operational/procurement UI.** Refresh from the B1 result, implement the remaining persistent Product-ID writers, rerun the same proof/review pipeline, and stop before merge.
-6. **Owner classification gate.** Regenerate the packet after Stage A is live. Mason approves/rejects every row disposition and every changed field, explicitly acknowledges unresolved rows, and approves the exact packet checksum.
+Steps 1–5 are historical completed context retained for the audit trail; they
+must not be rerun from this document. The current gate begins at step 6 and
+remains PARKED.
+
+1. **Historical — #213 reconciliation.** The exact Goal-contract gate was satisfied before the completed Stage A work.
+2. **Historical — Stage A PR: schema/enforcement.** The disposable proof, review, protected-PR, and review-resolution sequence was completed for that stage.
+3. **Historical — explicit live schema gate.** Mason's separate authorization and the stage's guarded live apply/verification occurred in its authorized context.
+4. **Historical — Stage B1 PR: core UI.** The applied-schema refresh, selector inventory, implementation, proof, review, and protected-PR sequence are completed context.
+5. **Historical — Stage B2 PR: operational/procurement UI.** The B1-refresh, remaining Product-ID writer implementation, proof, review, and protected-PR sequence are completed context.
+6. **Current owner classification gate.** The post-Stage-A packet is already
+   regenerated and verified at 604 aggregate-only rows; do not regenerate it
+   unless an explicit invalidation condition occurs. After a fresh `origin/main`
+   refetch, fresh exact review, and protected-PR acceptance with required
+   checks including Ubuntu PR CI, Mason approves/rejects every row disposition
+   and every changed field, explicitly acknowledges unresolved rows, and
+   approves the exact packet checksum. All 604 decisions remain `PENDING` until
+   that approval is complete.
 7. **Stage C PR: classification migration.** Generate one-to-one guarded SQL from only the approved fields/rows, prove it in a disposable database, review it, and stop before live apply.
 8. **Postflight.** After separate authorization and applies, verify repo/deploy/live ledger/schema/browser/data/flag state and write closeout evidence.
 
