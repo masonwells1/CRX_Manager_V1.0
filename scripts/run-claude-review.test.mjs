@@ -267,6 +267,8 @@ assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "BLOCKER: valid findi
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "**HIGH — valid finding**\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Verdict: SHIP-WITH-FOLLOWUPS\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### BLOCKER\nNone.\n### HIGH: no findings\n### MED\nN/A\nFINAL_VERDICT: SHIP" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### MED\n- valid finding under grouped heading\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "**HIGH**\n- valid finding under bold grouped heading\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "FINAL_VERDICT: NEEDS-WORK\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 1, stdout: "FINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "No explicit verdict" }), null);

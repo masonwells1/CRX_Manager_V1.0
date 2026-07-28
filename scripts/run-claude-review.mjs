@@ -39,10 +39,25 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
     .trim());
   const machineVerdicts = normalizedLines.filter((line) => /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line));
   if (machineVerdicts.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(machineVerdicts[0])) return null;
-  if (normalizedLines.some((line) => {
+  const noFinding = (value) => /^(?:none\b|no\b.*\bfindings?\b|0\b|n\/a\b)/i.test(value.trim());
+  let blockingSection = false;
+  for (const line of normalizedLines) {
+    if (/^(?:BLOCKER|HIGH|MED(?:IUM)?)$/i.test(line)) {
+      blockingSection = true;
+      continue;
+    }
+    if (/^(?:LOW|NIT(?:PICK)?)\b/i.test(line) || /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line)) {
+      blockingSection = false;
+      continue;
+    }
     const finding = /^(?:BLOCKER|HIGH|MED(?:IUM)?)\b(?:\s*(?::|-|—)\s*|\s+)(.+)$/i.exec(line);
-    return finding && !/^(?:none\b|no\b.*\bfindings?\b|0\b|n\/a\b)/i.test(finding[1].trim());
-  })) return null;
+    if (finding) {
+      blockingSection = false;
+      if (!noFinding(finding[1])) return null;
+      continue;
+    }
+    if (blockingSection && line && !noFinding(line)) return null;
+  }
   return "clean";
 }
 

@@ -161,8 +161,11 @@ tag inspection shares one scan budget with history traversal and supports both
 SHA-1 and SHA-256 object IDs. The Claude push-proof producer is stricter as
 well: only one terminal `FINAL_VERDICT: SHIP` with no contradictory verdict or
 BLOCKER/HIGH/MED finding can mint exact-head proof; `SHIP-WITH-FOLLOWUPS` is
-review evidence but no longer push authorization. Neither `c9ace302` nor its
-successor corrections are accepted without a fresh review of the current head.
+review evidence but no longer push authorization. Bare BLOCKER/HIGH/MED section
+headings carry forward to their following finding text, so a grouped Markdown
+review cannot hide a blocking bullet beneath a contradictory terminal `SHIP`.
+Neither `c9ace302` nor its successor corrections are accepted without a fresh
+review of the current head.
 
 Additional boundary review found two transfer-alignment cases and one allocation
 bound that were not yet explicit. Embedded Base64 now scans all four quartet
