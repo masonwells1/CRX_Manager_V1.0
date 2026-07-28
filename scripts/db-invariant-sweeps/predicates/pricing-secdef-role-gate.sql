@@ -14,25 +14,28 @@
 -- patterns: an admin-only helper, both role helpers, require_admin_or_sales_rep(),
 -- an active-profile role IN check, or a loaded active role rejected with NOT IN.
 
-SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS violation_key,
-       p.proname
-FROM pg_proc p
-WHERE p.pronamespace = 'public'::regnamespace
-  AND p.prosecdef
-  AND p.prokind = 'f'
-  AND p.prorettype <> 'pg_catalog.trigger'::regtype
-  AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
-  AND p.prosrc ~* '(quote_items|quote_versions|customer_application_rates|rebate_programs)'
-  AND NOT (
-    p.prosrc ~* 'is_admin[[:space:]]*\('
-    OR p.prosrc ~* 'require_admin_or_sales_rep[[:space:]]*\('
-    OR (
-      p.prosrc ~* 'is_active'
-      AND p.prosrc ~* 'role[[:space:]]+in[[:space:]]*\([[:space:]]*''admin''[[:space:]]*,[[:space:]]*''sales_rep''[[:space:]]*\)'
-    )
-    OR (
-      p.prosrc ~* 'is_active'
-      AND p.prosrc ~* '[a-z_]*role[[:space:]]+not[[:space:]]+in[[:space:]]*\([[:space:]]*''admin''[[:space:]]*,[[:space:]]*''sales_rep''[[:space:]]*\)'
-    )
+WITH candidates AS (
+  SELECT p.oid,
+         p.proname,
+         regexp_replace(p.prosrc, '--[^\n]*(\n|$)', E'\n', 'g') AS body
+  FROM pg_proc p
+  WHERE p.pronamespace = 'public'::regnamespace
+    AND p.prosecdef
+    AND p.prokind = 'f'
+    AND p.prorettype <> 'pg_catalog.trigger'::regtype
+    AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+    AND p.prosrc ~* '(quote_items|quote_versions|customer_application_rates|rebate_programs)'
+)
+SELECT c.proname || '(' || pg_get_function_identity_arguments(c.oid) || ')' AS violation_key,
+       c.proname
+FROM candidates c
+WHERE NOT (
+    c.body ~* 'if[[:space:]]+not[[:space:]]*\([[:space:]]*is_admin[[:space:]]*\([[:space:]]*\)[[:space:]]+or[[:space:]]+is_sales_rep[[:space:]]*\([[:space:]]*\)[[:space:]]*\)[[:space:]]+then'
+    OR c.body ~* 'if[[:space:]]+not[[:space:]]+is_admin[[:space:]]*\([[:space:]]*\)[[:space:]]+then'
+    OR c.body ~* 'perform[[:space:]]+require_admin_or_sales_rep[[:space:]]*\([[:space:]]*\)'
+    OR c.body ~* 'if[[:space:]]+not[[:space:]]+exists[[:space:]]*\([^;]*from[[:space:]]+profiles[^;]*where[^;]*role[[:space:]]+in[[:space:]]*\([[:space:]]*''admin''[[:space:]]*,[[:space:]]*''sales_rep''[[:space:]]*\)[^;]*is_active[[:space:]]*=[[:space:]]*true[^;]*\)[[:space:]]+then'
+    OR c.body ~* 'if[[:space:]]+not[[:space:]]+exists[[:space:]]*\([^;]*from[[:space:]]+profiles[^;]*where[^;]*is_active[[:space:]]*=[[:space:]]*true[^;]*role[[:space:]]+in[[:space:]]*\([[:space:]]*''admin''[[:space:]]*,[[:space:]]*''sales_rep''[[:space:]]*\)[^;]*\)[[:space:]]+then'
+    OR c.body ~* 'select[[:space:]]+role[[:space:]]+into[[:space:]]+([a-z_][a-z0-9_]*)[[:space:]]+from[[:space:]]+profiles[[:space:]]+where[^;]*is_active[[:space:]]*=[[:space:]]*true[^;]*;[[:space:]]*if[[:space:]]+\1[^;]*not[[:space:]]+in[[:space:]]*\([[:space:]]*''admin''[[:space:]]*,[[:space:]]*''sales_rep''[[:space:]]*\)[[:space:]]+then'
+    OR c.body ~* 'select[[:space:]]+role[[:space:]]*,[[:space:]]*is_active[[:space:]]+into[[:space:]]+([a-z_][a-z0-9_]*)[[:space:]]*,[[:space:]]*([a-z_][a-z0-9_]*)[[:space:]]+from[[:space:]]+profiles[^;]*;[[:space:]]*if[[:space:]]+\1[^;]*not[[:space:]]+in[[:space:]]*\([[:space:]]*''admin''[[:space:]]*,[[:space:]]*''sales_rep''[[:space:]]*\)[^;]*\2[[:space:]]+is[[:space:]]+not[[:space:]]+true[^;]*then'
   )
 ORDER BY violation_key;

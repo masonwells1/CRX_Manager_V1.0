@@ -64,6 +64,8 @@ are classified independently of unrelated co-patched docs, and fanout work is pa
 bounded so a large patch is denied before the PreToolUse timeout can turn the control fail-open.
 The fanout also mirrors the environment guard for frontend test files and enforces a 45-second
 internal deadline beneath the 60-second host hook timeout.
+The pricing role-gate sweep now strips SQL line comments and recognizes only executable guard
+shapes, and the immutable applied migration has a hash-bound caller-analysis sidecar.
 
 ## 2026-07-28 — A migration that shipped ten days ago was still counted as "awaiting apply"
 
