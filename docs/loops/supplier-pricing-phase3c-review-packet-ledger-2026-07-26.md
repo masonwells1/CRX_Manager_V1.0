@@ -10,7 +10,7 @@
 - Created from: `origin/main` /
   `052b2171821dc7ffd965b4edb4b6de4ef8fda511`
 - Current publication-reconciliation base and one-time CI bootstrap pin:
-  `3ca289c5c5b91c800a350ab828a6000bd3d399e6` (#250 after #249;
+  `26a5f88b960fe477b334ae4101c67dc0b21fca3c` (#252;
   confirmed to lack both the
   checker and trusted target workflow).
 - Final allowed state: `PARKED — PR #246 OPEN; ACCEPTANCE REQUIRES ITS CURRENT

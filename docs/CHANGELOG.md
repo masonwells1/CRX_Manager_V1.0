@@ -79,7 +79,8 @@ finalization, embedded whitespace state, gzip bound/overlap gaps, alternate
 index and commit-message coverage gaps, and lossy semantic UTF-8 parsing.
 
 The bounded successor finalizes an open PEM body at EOF; retains up to 4 KiB of
-embedded Base64 whitespace while decoding into a fixed 64 KiB byte batch;
+embedded Base64 whitespace while decoding into a fixed 64 KiB byte batch and
+fails closed when an encoded candidate exceeds that whitespace bound;
 decodes non-canonical padding bits so they cannot hide the same private bytes,
 without recursively decoding output; and
 uses tri-state gzip parsing so a recognized over-bound FNAME/FCOMMENT fails

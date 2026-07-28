@@ -64,7 +64,7 @@ const OWNER_HEADER_RECORD_DELIMITER_RE = /[\r\n\v\f\u0085\u2028\u2029\u001c-\u00
 const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
 const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
 const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
-for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
+for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\v\f\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
 const MAX_EMBEDDED_BASE64_WHITESPACE_BYTES = 4096;
 const MAX_EMBEDDED_HEX_WHITESPACE_BYTES = 4096;
 const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
@@ -893,7 +893,7 @@ function base64AlphabetValue(byte) {
   return null;
 }
 function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
-  let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = null; let used = 0; let length = 0; let whitespace = 0; let active = true; let terminal = false; let terminalTail = 0; let found = null;
+  let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = null; let used = 0; let length = 0; let whitespace = 0; let whitespaceOverbound = false; let active = true; let terminal = false; let terminalTail = 0; let found = null;
   const flushDecodedBytes = () => {
     if (used === 0) return;
     decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
@@ -946,13 +946,14 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
     if ((quartet.length === 2 || quartet.length === 3) && !feedDecoded(quartet.padEnd(4, '='))) return null;
     return finishDecoded();
   };
-  const reset = () => { quartet = ''; decoded = null; pendingQuartets = ''; batch = null; used = 0; length = 0; whitespace = 0; active = true; terminal = false; terminalTail = 0; };
+  const reset = () => { quartet = ''; decoded = null; pendingQuartets = ''; batch = null; used = 0; length = 0; whitespace = 0; whitespaceOverbound = false; active = true; terminal = false; terminalTail = 0; };
   const flush = () => { found ??= finishToken(); reset(); };
   const receive = byte => {
     const alphabet = base64AlphabetValue(byte);
     if (alphabet !== null) {
       whitespace = 0;
       length += 1;
+      if (whitespaceOverbound && length >= 32) { found ??= 'encoded transfer candidate exceeds bounded whitespace limit'; active = false; return; }
       if (terminal) { terminalTail += 1; if (terminalTail > 1) active = false; return; }
       if (!active || quartet.includes('=')) { active = false; return; }
       quartet += alphabet;
@@ -968,9 +969,12 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
       if (!feedDecoded(quartet)) { active = false; return; }
       quartet = ''; terminal = true; return;
     }
-    if ((byte === 0x09 || byte === 0x0a || byte === 0x0d || byte === 0x20) && length > 0 && active) {
-      whitespace += 1;
+    if ((byte === 0x09 || byte === 0x0a || byte === 0x0b || byte === 0x0c || byte === 0x0d || byte === 0x20) && length > 0 && active) {
+      whitespace = Math.min(whitespace + 1, MAX_EMBEDDED_BASE64_WHITESPACE_BYTES + 1);
       if (whitespace <= MAX_EMBEDDED_BASE64_WHITESPACE_BYTES) return;
+      whitespaceOverbound = true;
+      if (length >= 32) found ??= 'encoded transfer candidate exceeds bounded whitespace limit';
+      return;
     }
     flush();
   };
