@@ -44,18 +44,29 @@
 --
 -- Verified against live 2026-07-28: zero rows, both functions resolved.
 --
--- Mutation-tested against the live bodies the same date, so the zero above is not vacuous. Eleven
--- mutations, each fired the correct arm, and the unmutated control fired neither: null-session test
--- removed, office-role predicate weakened, SQLSTATE downgraded, error-label tokens retained while the
--- checks were deleted, guard moved after the read, `search_path=attacker, pg_temp`, a non-canonical
--- search_path spelling, proconfig dropped entirely, the whole gate line-commented with `--`, and the
--- whole gate wrapped in a `/* */` block comment.
+-- Mutation-tested against the live bodies the same date, so the zero above is not vacuous. Thirteen
+-- mutations, each fired the correct arm, and the unmutated control fired neither:
+--    1 null-session test removed          8 proconfig dropped entirely
+--    2 office-role predicate weakened     9 whole gate line-commented with `--`
+--    3 SQLSTATE downgraded               10 whole gate wrapped in a /* */ block comment
+--    4 error-label tokens kept, checks   11 gate DELETED, text parked in a single-quoted literal
+--      deleted                           12 gate DELETED, text parked in a dollar-quoted literal
+--    5 guard relocated after the read    13 SECURITY DEFINER dropped
+--    6 search_path=attacker, pg_temp
+--    7 non-canonical search_path spelling
+-- 11 and 12 are what motivated `code_src` below; 9 and 10 motivated `exec_src`.
+--
+-- When re-running this set, capture the gate with a regex whose FIRST quantifier is non-greedy
+-- (`'(IF auth\.uid\(\) IS NULL THEN.*?END IF;.*?END IF;)'`). A leading `\s+` silently makes the whole
+-- match greedy -- it swallowed 1625 of 2464 body chars including the protected read, which made the
+-- relocation mutation move the gate and the read TOGETHER and report a false clean. The bug was in the
+-- test harness, not the predicate, which is exactly the kind of green that means nothing.
 --
 -- KNOWN LIMIT -- this is a regression ALARM, not a proof of enforcement. It reads catalog text, so it
--- establishes that the guard is present, correctly shaped, un-commented, and positioned ahead of the
--- read; it cannot establish that the guard is REACHABLE. Commented-out guards ARE caught (the checks
--- run against comment-stripped text -- see `exec_src` below), but a body that satisfies every arm while
--- burying the checks in a branch that never executes -- inside `IF false THEN`, or after an
+-- establishes that the guard is present, correctly shaped, executable rather than inert, and positioned
+-- ahead of the read; it cannot establish that the guard is REACHABLE. Guards neutered into comments or
+-- into string literals ARE caught (see `exec_src` / `code_src` below), but a body that satisfies every
+-- arm while burying the checks in a branch that never executes -- inside `IF false THEN`, or after an
 -- unconditional RETURN -- would still pass. Static analysis cannot close that gap.
 -- So: a green sweep is necessary, never sufficient. Whenever either body is re-emitted, prove the
 -- gate the way the original fix was proven -- impersonate a real non-office JWT
@@ -92,18 +103,36 @@ WITH target(signature, needs_authenticated_exec, read_pattern) AS (
     ('get_program_completion(integer)', true,
      '(?:from|join)\s+(?:public\.)?quote_items')
 ),
--- Every body check below runs against `exec_src` -- prosrc with SQL comments stripped -- never against
--- raw prosrc. Without this, a later `CREATE OR REPLACE` that merely COMMENTS OUT the three guard
--- statements, leaving their text in place ahead of the protected read, satisfies every regex and every
--- position check while the leak is fully reopened. That is the cheapest possible way to disable the
--- gate ("just comment it out for a second"), so it is the one the alarm most needs to survive.
--- Block comments first, then line comments, so a `--` inside a /* */ span cannot leave a dangling tail.
+-- No body check below runs against raw prosrc. Text that LOOKS like the guard but cannot execute --
+-- because it sits in a comment, or inside a string literal -- would otherwise satisfy every regex and
+-- every position check while the leak is fully reopened. Both are cheap ways to disable the gate while
+-- leaving the alarm green, so two derived texts are computed instead, and each check reads the one that
+-- is correct for it:
 --
--- The strip is deliberately naive: it also blanks comment-like text inside string literals. That is the
--- safe direction to be wrong in. Over-stripping can only DELETE a guard match and make the predicate
--- fire; it can never manufacture a guard that is not there. A false alarm costs one investigation, a
--- missed leak costs customer pricing. Do not "fix" this by making the strip literal-aware unless the
--- replacement is proven to fail the same direction.
+--   exec_src -- comments stripped. Block comments first, then line comments, so a `--` inside a /* */
+--     span cannot leave a dangling tail. This is what the SQLSTATE check reads, and ONLY the SQLSTATE
+--     check, because 'insufficient_privilege' is itself a string literal: stripping literals would make
+--     that arm unsatisfiable and the predicate would false-alarm forever on a perfectly healthy body.
+--     Verified live -- literal-stripping turns the SQLSTATE arm false on both untouched functions.
+--
+--   code_src -- exec_src with dollar-quoted then single-quoted string literals also blanked. Everything
+--     structural reads this: the null-session test, the office-role predicate, and both positions. The
+--     guard's own code contains no string literals, so this costs the real gate nothing, while a body
+--     that deletes the gate and parks its text in a literal ahead of the read scores guard_pos = 0 and
+--     fires. Dollar-quoted first, since a `'` inside a $tag$ span would otherwise unbalance the pass.
+--     The tag quantifier is `*?`, not `*`, and that is load-bearing: Postgres POSIX regex decides
+--     greediness for the WHOLE expression from its FIRST quantifier, so a leading greedy `[A-Za-z_]*`
+--     would make the following `.*?` greedy too and the strip would run from the first `$tag$` to the
+--     LAST one, blanking unrelated code between two separate literals. Demonstrated live:
+--     'keep1 $a$ lit1 $a$ MIDDLE $b$ lit2 $b$ keep2' collapses to 'keep1 ~ keep2' with `*` and to
+--     'keep1 ~ MIDDLE ~ keep2' with `*?`. Same trap applies to the /* */ strip above, which is already
+--     safe because `.*?` is its first quantifier.
+--
+-- Both strips are deliberately naive and may over-blank. That is the safe direction: over-stripping can
+-- only DELETE a guard match and raise a false alarm, never manufacture a guard that is not there. A
+-- false alarm costs one investigation; a missed leak costs customer pricing. If either strip is ever
+-- refined, re-run the mutation set and keep that asymmetry -- and note that the SQLSTATE arm depends on
+-- exec_src RETAINING literals, so it is not a candidate for the same treatment.
 resolved_raw AS (
   SELECT t.signature,
          t.needs_authenticated_exec,
@@ -126,14 +155,20 @@ resolved AS (
          r.needs_authenticated_exec,
          r.oid,
          r.exec_src,
+         c.code_src,
          r.prosecdef,
          r.proconfig,
          r.overloads,
-         -- Position of the office-role call vs the first guarded-table read, both in executable text.
+         -- Position of the office-role call vs the first guarded-table read, both in executable code.
          -- regexp_instr returns 0 when there is no match; requires PG 15+ (live is 17.6).
-         strpos(r.exec_src, 'is_sales_rep()')                        AS guard_pos,
-         regexp_instr(r.exec_src, r.read_pattern, 1, 1, 0, 'i')      AS read_pos
+         strpos(c.code_src, 'is_sales_rep()')                        AS guard_pos,
+         regexp_instr(c.code_src, r.read_pattern, 1, 1, 0, 'i')      AS read_pos
   FROM resolved_raw r
+  CROSS JOIN LATERAL (
+    SELECT regexp_replace(
+             regexp_replace(r.exec_src, '\$[A-Za-z_]*?\$.*?\$[A-Za-z_]*?\$', ' ', 'gs'),
+             '''(?:[^'']|'''')*''', ' ', 'g') AS code_src
+  ) c
 ),
 violation AS (
   -- The function vanished or changed signature: every downstream check below would be
@@ -147,13 +182,15 @@ violation AS (
   -- 'AUTH_REQUIRED' / 'INSUFFICIENT_ROLE' is satisfied by a rewrite that keeps those tokens while
   -- deleting the real checks, so all four conditions below are structural: the null-session test, the
   -- office-role predicate, the SQLSTATE the callers see, and the guard's position ahead of the first
-  -- guarded-table read. All four read `exec_src`, so none of them can be satisfied by commented text.
+  -- guarded-table read. The three structural conditions and both positions read `code_src`, so none can
+  -- be satisfied by commented-out text or by guard text parked in a string literal; the SQLSTATE
+  -- condition reads `exec_src` because the value it matches IS a literal (see the note above).
   SELECT signature, 'missing_in_body_gate'
   FROM resolved
   WHERE oid IS NOT NULL
     AND (
-         exec_src !~* 'auth\.uid\(\)\s*IS\s+NULL'
-      OR exec_src !~* 'NOT\s*\(\s*(public\.)?is_admin\(\)\s*OR\s*(public\.)?is_sales_rep\(\)\s*\)'
+         code_src !~* 'auth\.uid\(\)\s*IS\s+NULL'
+      OR code_src !~* 'NOT\s*\(\s*(public\.)?is_admin\(\)\s*OR\s*(public\.)?is_sales_rep\(\)\s*\)'
       OR exec_src !~* 'ERRCODE\s*=\s*''insufficient_privilege'''
       OR guard_pos = 0
       OR (read_pos > 0 AND guard_pos > read_pos)
