@@ -56,10 +56,11 @@ because the two office pages call it.
 **Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
 `customer_application_rates` policies are untouched. Sales reps keep their access.
 
-**Known cosmetic leftover, not exploitable:** `enforce_quote_accepted_fully_drawn` is a trigger
+**Accepted cosmetic inconsistency, not exploitable and no action planned:**
+`enforce_quote_accepted_fully_drawn` is a trigger
 function (returns `trigger`, not RPC-callable) and is the only one in the set with EXECUTE to `anon`
-— inconsistent with `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`. Optional
-cleanup, deliberately not bundled here.
+— inconsistent with `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`. This is
+recorded for audit accuracy, not as open remediation work.
 
 ---
 
