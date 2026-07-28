@@ -127,7 +127,8 @@ $function$;
 -- active admin/sales_rep profile. Dropping the direct grant costs the field
 -- nothing and kills the direct-API route even if the in-body guard is ever
 -- weakened. Precedent: 20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql.
-REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer) FROM authenticated;
+REVOKE EXECUTE ON FUNCTION public.compute_application_service_fee(uuid, uuid, numeric, integer)
+  FROM PUBLIC, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 2. get_program_completion — in-body office-only gate
@@ -198,3 +199,9 @@ BEGIN
   RETURN v_result;
 END;
 $function$;
+
+-- Preserve the browser RPC for office users while making the ACL explicit.
+-- CREATE OR REPLACE normally retains the existing ACL, but restating it here
+-- prevents replay or default-privilege drift from exposing this SECDEF reader.
+REVOKE EXECUTE ON FUNCTION public.get_program_completion(integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_program_completion(integer) TO authenticated, service_role;
