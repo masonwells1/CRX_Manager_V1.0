@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, ftruncateSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -10,7 +10,7 @@ import { buildOwnerDecisionSheet, ownerDecisionSheetHash } from './generate-supp
 import { verifyManifest } from './verify-supplier-pricing-phase3-classification-manifest.mjs';
 import { verifyOwnerDecisionSheet } from './verify-supplier-pricing-phase3-owner-decision-sheet.mjs';
 import { checkCommitMessagePrivateArtifactContainment, checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, forbiddenArtifactReason, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, isStructuralSignatureExempt, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, parseCli, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason, STRUCTURAL_SIGNATURE_EXEMPTIONS, STRUCTURAL_SIGNATURE_REASON, validateStructuralSignatureExemptions } from './check-supplier-pricing-phase3-private-artifacts.mjs';
-import { assertExternalArtifactPath, assertExternalPrivateDirectory, CONTAINER_TYPE_ALLOWLIST, loadValidatedSnapshot, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRODUCT_FORM_ALLOWLIST, readValidatedPrivateArtifact, REPO_ROOT, validatePostStageASnapshot, without, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
+import { assertExternalArtifactPath, assertExternalPrivateDirectory, CONTAINER_TYPE_ALLOWLIST, loadValidatedSnapshot, MAX_PRIVATE_ARTIFACT_BYTES, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRODUCT_FORM_ALLOWLIST, readValidatedPrivateArtifact, REPO_ROOT, validatePostStageASnapshot, without, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const temp = mkdtempSync(path.join(os.tmpdir(), 'crx-phase3c-synthetic-'));
 const external = path.join(temp, 'external'); mkdirSync(external);
@@ -163,8 +163,10 @@ try {
   }
   for (const split of [1, 3, Math.floor(canonicalOwnerHeader.length / 2), canonicalOwnerHeader.length - 1]) assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(canonicalOwnerHeader.slice(0, split)), Buffer.from(canonicalOwnerHeader.slice(split))]), 'owner decision sheet CSV header structure', 'canonical owner header must survive arbitrary stream splits');
   const base64Snapshot = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })).toString('base64');
+  const phaseShiftedBase64Snapshot = `x${base64Snapshot}`;
   const base64OwnerSheet = Buffer.from(`${OWNER_DECISION_HEADERS.join(',')}\n`).toString('base64');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(base64Snapshot)), 'private JSON format marker in malformed candidate');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(phaseShiftedBase64Snapshot)), 'private JSON format marker in malformed candidate', 'Base64 detection must cover all quartet phases after an ordinary alphabet prefix');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(base64OwnerSheet)), 'owner decision sheet CSV header structure');
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(base64Snapshot.slice(0, 7)), Buffer.from(base64Snapshot.slice(7))]), 'private JSON format marker in malformed candidate', 'Base64 packet detection must survive a quartet split');
   const urlSafeBase64Snapshot = Buffer.concat([Buffer.from([0xfb, 0xff]), Buffer.from(`ordinary prefix\n${JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })}`)]).toString('base64').replaceAll('+', '-').replaceAll('/', '_');
@@ -236,7 +238,9 @@ try {
   }
   for (const [transfer, expected] of [[`${base64Snapshot}A`, 'private JSON format marker in malformed candidate'], [`${base64Snapshot}AA`, null], [`${base64Snapshot}===`, null]]) assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: transfer }))), expected, 'malformed embedded Base64 residual must retain only the valid prefix');
   const hexSnapshot = Buffer.from(JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT })).toString('hex');
+  const phaseShiftedHexSnapshot = `A${hexSnapshot}`;
   assert.equal(structuralPrivateArtifactReason(Buffer.from(hexSnapshot)), 'private JSON format marker in malformed candidate');
+  assert.equal(structuralPrivateArtifactReason(Buffer.from(phaseShiftedHexSnapshot)), 'private JSON format marker in malformed candidate', 'whitespace-tolerant hexadecimal detection must cover both nibble phases');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(JSON.stringify({ payload: hexSnapshot }))), 'private JSON format marker in malformed candidate', 'wrapped hexadecimal packets must be decoded');
   assert.equal(structuralPrivateArtifactReason(Buffer.from(hexSnapshot.toUpperCase().match(/.{1,18}/g).join(' \n'))), 'private JSON format marker in malformed candidate', 'spaced uppercase hexadecimal packets must be decoded');
   assert.equal(structuralPrivateArtifactStreamReason([Buffer.from(hexSnapshot.slice(0, 63)), Buffer.from(hexSnapshot.slice(63))]), 'private JSON format marker in malformed candidate', 'hexadecimal packets must survive a split nibble');
@@ -943,14 +947,21 @@ git() { return 0; }
     'prefixed-private-json.txt': `ordinary prefix\n{"format":"${POST_STAGE_A_SNAPSHOT_FORMAT}"}`,
     'later-private-row.json': JSON.stringify({ wrapper: [{ ordinary: true }, { nested: syntheticProductShape }] }),
     'late-owner-header.csv': `# ordinary comment\n${OWNER_DECISION_HEADERS.join(',')}\n`,
+    'phase-shifted-base64.txt': phaseShiftedBase64Snapshot,
+    'phase-shifted-hex.txt': phaseShiftedHexSnapshot,
   };
-  for (const [repoPath, contents] of Object.entries(positionHistoryFiles)) writeFileSync(path.join(positionHistoryRepo, repoPath), contents);
-  git(positionHistoryRepo, ['add', ...Object.keys(positionHistoryFiles)]); git(positionHistoryRepo, ['commit', '--quiet', '-m', 'synthetic position-sensitive artifacts']);
-  git(positionHistoryRepo, ['rm', '--quiet', ...Object.keys(positionHistoryFiles)]); git(positionHistoryRepo, ['commit', '--quiet', '-m', 'delete synthetic position-sensitive artifacts']); const positionHistoryHead = git(positionHistoryRepo, ['rev-parse', 'HEAD']).trim();
   const validatesEveryPositionClass = error => Object.keys(positionHistoryFiles).every(repoPath => error.message.includes(repoPath))
     && error.message.includes('private JSON format marker in malformed candidate')
     && error.message.includes('private snapshot or manifest key structure')
     && error.message.includes('owner decision sheet CSV header structure');
+  for (const [repoPath, contents] of Object.entries(positionHistoryFiles)) writeFileSync(path.join(positionHistoryRepo, repoPath), contents);
+  await assert.rejects(() => fixtureContainment(positionHistoryRepo), validatesEveryPositionClass);
+  git(positionHistoryRepo, ['add', ...Object.keys(positionHistoryFiles)]);
+  for (const repoPath of Object.keys(positionHistoryFiles)) rmSync(path.join(positionHistoryRepo, repoPath));
+  await assert.rejects(() => fixtureContainment(positionHistoryRepo), validatesEveryPositionClass);
+  for (const [repoPath, contents] of Object.entries(positionHistoryFiles)) writeFileSync(path.join(positionHistoryRepo, repoPath), contents);
+  git(positionHistoryRepo, ['commit', '--quiet', '-m', 'synthetic position-sensitive artifacts']);
+  git(positionHistoryRepo, ['rm', '--quiet', ...Object.keys(positionHistoryFiles)]); git(positionHistoryRepo, ['commit', '--quiet', '-m', 'delete synthetic position-sensitive artifacts']); const positionHistoryHead = git(positionHistoryRepo, ['rev-parse', 'HEAD']).trim();
   await assert.rejects(() => checkPrivateArtifactContainment({ root: positionHistoryRepo, ranges: [`${positionHistoryBase}..${positionHistoryHead}`] }), validatesEveryPositionClass);
   await assert.rejects(() => checkPrePushPrivateArtifactContainment({ root: positionHistoryRepo, remoteName: 'origin', stdin: `refs/heads/packet ${positionHistoryHead} refs/heads/packet ${'0'.repeat(40)}\n` }), validatesEveryPositionClass);
   const positionEventFile = path.join(temp, 'position-pull-request-event.json'); writeFileSync(positionEventFile, JSON.stringify({ pull_request: { base: { sha: positionHistoryBase }, head: { sha: positionHistoryHead } } }));
@@ -985,6 +996,10 @@ git() { return 0; }
   const privateDir = external; const cliSnapshot = writeSnapshot(snapshot, POST_STAGE_A_SNAPSHOT_NAME, privateDir);
   const cliBinding = binding(snapshot);
   assert.deepEqual(loadFixtureSnapshot(cliSnapshot, { snapshot_sha256: snapshot.snapshot_sha256, product_count: snapshot.products.length }), snapshot);
+  const oversizedDescriptor = openSync(cliSnapshot, 'w');
+  try { ftruncateSync(oversizedDescriptor, MAX_PRIVATE_ARTIFACT_BYTES + 1); } finally { closeSync(oversizedDescriptor); }
+  throws(() => readValidatedPrivateArtifact(cliSnapshot, POST_STAGE_A_SNAPSHOT_NAME, REPO_ROOT, fixturePrivateOptions), 'bounded semantic artifact byte limit');
+  writePrivateArtifactAtomic(cliSnapshot, POST_STAGE_A_SNAPSHOT_NAME, canonical(snapshot), { ...fixturePrivateOptions });
   writeFileSync(cliSnapshot, Buffer.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x80, 0x7d]));
   throws(() => loadFixtureSnapshot(cliSnapshot, { snapshot_sha256: snapshot.snapshot_sha256, product_count: snapshot.products.length }), 'invalid UTF-8');
   writePrivateArtifactAtomic(cliSnapshot, POST_STAGE_A_SNAPSHOT_NAME, canonical(snapshot), { ...fixturePrivateOptions });
@@ -1018,12 +1033,15 @@ git() { return 0; }
   assert(commitMsg.includes('check-supplier-pricing-phase3-private-artifacts.mjs --commit-msg "${1:-}"'));
   const benignMessageFile = path.join(temp, 'benign-commit-message.txt'); writeFileSync(benignMessageFile, 'ordinary synthetic commit message\n');
   assert.deepEqual(checkCommitMessagePrivateArtifactContainment(benignMessageFile), { scanned_logical_bytes: 34 });
-  const privateMessageFile = path.join(temp, 'private-commit-message.txt'); writeFileSync(privateMessageFile, JSON.stringify({ payload: base64Snapshot }));
-  assert.throws(() => checkCommitMessagePrivateArtifactContainment(privateMessageFile), /commit-message containment failure.*private JSON format marker in malformed candidate/);
+  const privateMessageFile = path.join(temp, 'private-commit-message.txt'); writeFileSync(privateMessageFile, phaseShiftedBase64Snapshot);
+  const privateHexMessageFile = path.join(temp, 'private-hex-commit-message.txt'); writeFileSync(privateHexMessageFile, phaseShiftedHexSnapshot);
+  for (const messageFile of [privateMessageFile, privateHexMessageFile]) assert.throws(() => checkCommitMessagePrivateArtifactContainment(messageFile), /commit-message containment failure.*private JSON format marker in malformed candidate/);
   if (fixtureBash()) {
-    const productionCommitMessageHook = spawnSync(fixtureBash(), [path.join(REPO_ROOT, '.husky', 'commit-msg'), privateMessageFile], { cwd: REPO_ROOT, encoding: 'utf8', env: sanitizedFixtureGitEnv() });
-    assert.equal(productionCommitMessageHook.status, 1, 'the real commit-msg hook must block a private packet');
-    assert.match(`${productionCommitMessageHook.stdout}${productionCommitMessageHook.stderr}`, /PRIVATE ARTIFACT COMMIT MESSAGE FAILED/);
+    for (const messageFile of [privateMessageFile, privateHexMessageFile]) {
+      const productionCommitMessageHook = spawnSync(fixtureBash(), [path.join(REPO_ROOT, '.husky', 'commit-msg'), messageFile], { cwd: REPO_ROOT, encoding: 'utf8', env: sanitizedFixtureGitEnv() });
+      assert.equal(productionCommitMessageHook.status, 1, 'the real commit-msg hook must block an alignment-shifted private packet');
+      assert.match(`${productionCommitMessageHook.stdout}${productionCommitMessageHook.stderr}`, /PRIVATE ARTIFACT COMMIT MESSAGE FAILED/);
+    }
   }
   const nodeForHook = process.execPath.replaceAll('\\', '/');
   const checkerForHook = path.join(REPO_ROOT, 'scripts', 'check-supplier-pricing-phase3-private-artifacts.mjs').replaceAll('\\', '/');
@@ -1031,10 +1049,10 @@ git() { return 0; }
   const benignMessageRepo = fixtureRepo('commit-message-benign'); writeFileSync(path.join(benignMessageRepo, 'benign.txt'), 'ordinary\n'); git(benignMessageRepo, ['add', 'benign.txt']); installCommitMessageHook(benignMessageRepo);
   assert.equal(gitResult(benignMessageRepo, ['commit', '--quiet', '-m', 'ordinary synthetic commit']).status, 0, 'a benign real git commit message must pass');
   const privateInlineMessageRepo = fixtureRepo('commit-message-private-inline'); writeFileSync(path.join(privateInlineMessageRepo, 'change.txt'), 'ordinary\n'); git(privateInlineMessageRepo, ['add', 'change.txt']); installCommitMessageHook(privateInlineMessageRepo); const inlineHead = git(privateInlineMessageRepo, ['rev-parse', 'HEAD']).trim();
-  const privateInlineCommit = gitResult(privateInlineMessageRepo, ['commit', '--quiet', '-m', JSON.stringify({ payload: base64Snapshot })]);
+  const privateInlineCommit = gitResult(privateInlineMessageRepo, ['commit', '--quiet', '-m', phaseShiftedBase64Snapshot]);
   assert.notEqual(privateInlineCommit.status, 0, 'git commit -m must block a private packet in the commit object'); assert.equal(git(privateInlineMessageRepo, ['rev-parse', 'HEAD']).trim(), inlineHead);
   const privateFileMessageRepo = fixtureRepo('commit-message-private-file'); writeFileSync(path.join(privateFileMessageRepo, 'change.txt'), 'ordinary\n'); git(privateFileMessageRepo, ['add', 'change.txt']); installCommitMessageHook(privateFileMessageRepo); const fileHead = git(privateFileMessageRepo, ['rev-parse', 'HEAD']).trim();
-  const privateFileCommit = gitResult(privateFileMessageRepo, ['commit', '--quiet', '-F', privateMessageFile]);
+  const privateFileCommit = gitResult(privateFileMessageRepo, ['commit', '--quiet', '-F', privateHexMessageFile]);
   assert.notEqual(privateFileCommit.status, 0, 'git commit -F must block a private packet in the commit object'); assert.equal(git(privateFileMessageRepo, ['rev-parse', 'HEAD']).trim(), fileHead);
   assert(prePush.includes('check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "${1:-}"'));
   assert.equal((prePush.match(/if ! node scripts\/check-supplier-pricing-phase3-private-artifacts\.mjs --pre-push/g) ?? []).length, 1, 'pre-push containment must retain one fail-closed shell guard');

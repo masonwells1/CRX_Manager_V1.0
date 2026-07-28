@@ -39,7 +39,11 @@ Current containment-correction provenance is fail-closed:
 - A later literal Opus 5 review of exact `b30769b3` ran as
   `2026-07-27T23-29-35-252Z-3ef35b3a`. Statements later in this append-only
   historical ledger that no Opus 5 review had run refer to their older cycles
-  and do not supersede this later exact-SHA provenance.
+  and do not supersede this later exact-SHA provenance. Literal Opus 5 later
+  reviewed exact `fa78c4f7` as `SHIP-WITH-FOLLOWUPS`; subsequent
+  transfer-alignment and bounded-read corrections superseded that head.
+  Acceptance always requires the current PR head to match a fresh exact-SHA
+  wrapper capture.
 - `49eb3f011da17d541bcd81cdd437da29db0c707e` contains the separately reviewed
   moving-main bootstrap/CI invariants only. It is an intermediate base, not an
   accepted containment candidate. The successor containing all bounded
@@ -649,7 +653,7 @@ live mutation, flag enablement, deploy, or merge.
 
 - `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, normal merges `a9817b05` of historical main `48bd1982`, `c6c5ea3` of historical #245 main `0e058804`, and `98969765` of historical #247 main `07a3d483`, and exact `d38d41f`/`a2002c3c`/`a7506a01`/`3c156065`/`a10bad90`/`80741157` review outcomes are recorded above; technical Sol returned `CLEAN` for published `bc305778`; `3c156065` was non-final, `a10bad90` is a correction-review source, and `80741157` is the publication-reconciliation source; older packet hashes are invalidated.
 - `NOW:` PR #246's current head must match a recorded exact-reviewed SHA. Before any future publication, re-fetch/recheck `origin/main` and current `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` bootstrap pin. Required checks, including Ubuntu PR CI, CodeRabbit resolution, and external trusted-workflow/ruleset activation plus post-activation proof remain mandatory. Mason must not begin private-sheet review.
-- `REMAINING:` protected PR #246 acceptance after all those gates, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet. Any future model alias must record its resolved model truthfully; no literal Opus 5 review is claimed.
+- `REMAINING:` protected PR #246 acceptance after all those gates, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet. Any future model alias must record its resolved model truthfully; the accepted review must remain bound to the current PR head.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
 - `NEEDS MASON:` no action until the external gates complete; afterward, row-by-row private-sheet review and explicit packet approval.
 - `VERDICT:` PARKED — PR #246 OPEN; CURRENT HEAD MUST MATCH A RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PLUS PROOF PENDING

@@ -19,9 +19,10 @@ accept those inherited gaps.
 A later literal Opus 5 review of exact `b30769b3` ran under wrapper run
 `2026-07-27T23-29-35-252Z-3ef35b3a`. References below saying no Opus 5 review
 had run remain truthful for their older historical cycles; they are not the
-current provenance for `b30769b3`. Acceptance is pending a fresh exact-SHA
-proof and full required reviews of the future commit containing all bounded
-successor corrections. This correction status does not reopen the private
+current provenance for `b30769b3`. Literal Opus 5 later reviewed exact
+`fa78c4f7` as `SHIP-WITH-FOLLOWUPS`; subsequent transfer-alignment and bounded
+read corrections superseded that head. Acceptance requires the current PR head
+to match a fresh exact-SHA proof and review capture. This correction status does not reopen the private
 packet, owner review, classification, migration, live-data, flag, deploy, or
 merge gates.
 

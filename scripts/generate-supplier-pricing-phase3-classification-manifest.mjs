@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /** Deterministic, proposal-only Phase 3 classification manifest generator. */
-import { readValidatedPrivateArtifact } from './supplier-pricing-phase3-private-artifacts.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assert, canonical, loadValidatedSnapshot, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME,
-  PRE_STAGE_A_MANIFEST_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_FORMAT, POST_STAGE_A_SNAPSHOT_FORMAT, REPO_ROOT, parseExpectedV2Binding, sha256, stable, without, writePrivateArtifactAtomic,
+  PRE_STAGE_A_MANIFEST_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_FORMAT, POST_STAGE_A_SNAPSHOT_FORMAT, REPO_ROOT, parseExpectedV2Binding, readValidatedPrivateArtifact, sha256, stable, without, writePrivateArtifactAtomic,
 } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const PRE_STAGE_A_MANIFEST_FORMAT = 'crx-supplier-pricing-phase3-proposed-classification-manifest-v1';

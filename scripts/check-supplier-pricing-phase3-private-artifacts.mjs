@@ -932,7 +932,9 @@ function base64AlphabetValue(byte) {
   if (byte === 0x5f) return '/';
   return null;
 }
-function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
+function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharacterSkip = 0 } = {}) {
+  if (!Number.isInteger(initialCharacterSkip) || initialCharacterSkip < 0 || initialCharacterSkip > 3) throw new Error('private Phase 3C Base64 alignment is invalid');
+  let characterSkip = initialCharacterSkip;
   let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = null; let used = 0; let length = 0; let whitespace = 0; let whitespaceOverbound = false; let active = true; let terminal = false; let terminalTail = 0; let found = null;
   const flushDecodedBytes = () => {
     if (used === 0) return;
@@ -986,7 +988,7 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
     if ((quartet.length === 2 || quartet.length === 3) && !feedDecoded(quartet.padEnd(4, '='))) return null;
     return finishDecoded();
   };
-  const reset = () => { quartet = ''; decoded = null; pendingQuartets = ''; batch = null; used = 0; length = 0; whitespace = 0; whitespaceOverbound = false; active = true; terminal = false; terminalTail = 0; };
+  const reset = () => { characterSkip = initialCharacterSkip; quartet = ''; decoded = null; pendingQuartets = ''; batch = null; used = 0; length = 0; whitespace = 0; whitespaceOverbound = false; active = true; terminal = false; terminalTail = 0; };
   const flush = () => { found ??= finishToken(); reset(); };
   const receive = byte => {
     const alphabet = base64AlphabetValue(byte);
@@ -994,6 +996,7 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
       whitespace = 0;
       length += 1;
       if (whitespaceOverbound && length >= 32) { found ??= 'encoded transfer candidate exceeds bounded whitespace limit'; active = false; return; }
+      if (characterSkip > 0) { characterSkip -= 1; return; }
       if (terminal) { terminalTail += 1; if (terminalTail > 1) active = false; return; }
       if (!active || quartet.includes('=')) { active = false; return; }
       quartet += alphabet;
@@ -1023,6 +1026,22 @@ function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
     finish() { flush(); return found; },
   };
 }
+function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
+  // Whitespace-tolerant source tokens can begin with ordinary Base64-alphabet
+  // prose (for example `x <encoded packet>`). Four fixed lanes cover every
+  // quartet alignment; longer prefixes differ only by complete quartets.
+  // Every lane retains the same bounded batch/state and never recursively
+  // re-enters transfer decoding.
+  const phases = [0, 1, 2, 3].map(initialCharacterSkip => createEmbeddedBase64PhaseScanner({ checkArchives, initialCharacterSkip }));
+  return {
+    feed(bytes) { for (const phase of phases) phase.feed(bytes); },
+    finish() {
+      let found = null;
+      for (const phase of phases) found ??= phase.finish();
+      return found;
+    },
+  };
+}
 function hexNibble(byte) {
   if (byte >= 0x30 && byte <= 0x39) return byte - 0x30;
   if (byte >= 0x41 && byte <= 0x46) return byte - 0x41 + 10;
@@ -1030,8 +1049,10 @@ function hexNibble(byte) {
   return -1;
 }
 function isHexTransferWhitespace(byte) { return byte === 0x09 || byte === 0x0a || byte === 0x0b || byte === 0x0c || byte === 0x0d || byte === 0x20; }
-function createHexTransferScanner({ checkArchives = true, wholeFile = false } = {}) {
-  let scanner = null; let high = -1; let length = 0; let active = true; let found = null; let prefix = ''; let decoding = false; let batch = null; let used = 0;
+function createHexTransferScanner({ checkArchives = true, wholeFile = false, initialNibbleSkip = 0 } = {}) {
+  if (!Number.isInteger(initialNibbleSkip) || initialNibbleSkip < 0 || initialNibbleSkip > 1) throw new Error('private Phase 3C hexadecimal alignment is invalid');
+  let nibbleSkip = initialNibbleSkip;
+  let scanner = null; let high = -1; let length = 0; let effectiveLength = 0; let active = true; let found = null; let prefix = ''; let decoding = false; let batch = null; let used = 0;
   const addByte = value => {
     batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
     batch[used++] = value;
@@ -1049,16 +1070,18 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false } = 
     feedBatch();
     return scanner?.finish() ?? null;
   };
-  const reset = () => { scanner = null; high = -1; length = 0; active = true; prefix = ''; decoding = false; batch = null; used = 0; };
+  const reset = () => { nibbleSkip = initialNibbleSkip; scanner = null; high = -1; length = 0; effectiveLength = 0; active = true; prefix = ''; decoding = false; batch = null; used = 0; };
   const flush = () => { if (length === 0) return; found ??= finishToken(); reset(); };
   const receive = byte => {
     if (wholeFile && !active) return;
     const nibble = hexNibble(byte);
     if (nibble !== -1) {
       length += 1;
+      if (nibbleSkip > 0) { nibbleSkip -= 1; return; }
+      effectiveLength += 1;
       if (!decoding) {
         prefix += String.fromCharCode(byte);
-        if (prefix.length < 64) return;
+        if (effectiveLength < 64) return;
         for (let index = 0; index < prefix.length; index += 2) addByte((hexNibble(prefix.charCodeAt(index)) << 4) | hexNibble(prefix.charCodeAt(index + 1)));
         prefix = ''; decoding = true;
         return;
@@ -1076,8 +1099,10 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false } = 
     finish() { if (wholeFile) return finishToken(); flush(); return found; },
   };
 }
-function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true } = {}) {
-  let scanner = null; let high = -1; let length = 0; let whitespace = 0; let prefix = ''; let batch = null; let used = 0; let found = null;
+function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, initialNibbleSkip = 0 } = {}) {
+  if (!Number.isInteger(initialNibbleSkip) || initialNibbleSkip < 0 || initialNibbleSkip > 1) throw new Error('private Phase 3C hexadecimal alignment is invalid');
+  let nibbleSkip = initialNibbleSkip;
+  let scanner = null; let high = -1; let length = 0; let effectiveLength = 0; let whitespace = 0; let prefix = ''; let batch = null; let used = 0; let found = null;
   const feedBatch = () => {
     if (used === 0) return;
     scanner ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
@@ -1089,23 +1114,25 @@ function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true } = {}) 
     if (used === batch.length) feedBatch();
   };
   const finishToken = () => {
-    if (length < 64) return null;
+    if (effectiveLength < 64) return null;
     // As above, discard at most one incomplete nibble while retaining every
     // decoded complete byte. This scanner never recursively re-enters the
     // Base64/hex transfer lanes.
     feedBatch();
     return scanner?.finish() ?? null;
   };
-  const reset = () => { scanner = null; high = -1; length = 0; whitespace = 0; prefix = ''; batch = null; used = 0; };
+  const reset = () => { nibbleSkip = initialNibbleSkip; scanner = null; high = -1; length = 0; effectiveLength = 0; whitespace = 0; prefix = ''; batch = null; used = 0; };
   const flush = () => { if (length > 0) found ??= finishToken(); reset(); };
   const receive = byte => {
     const nibble = hexNibble(byte);
     if (nibble !== -1) {
       whitespace = 0;
       length += 1;
-      if (length <= 64) {
+      if (nibbleSkip > 0) { nibbleSkip -= 1; return; }
+      effectiveLength += 1;
+      if (effectiveLength <= 64) {
         prefix += String.fromCharCode(byte);
-        if (length === 64) {
+        if (effectiveLength === 64) {
           for (let index = 0; index < prefix.length; index += 2) addByte((hexNibble(prefix.charCodeAt(index)) << 4) | hexNibble(prefix.charCodeAt(index + 1)));
           prefix = '';
         }
@@ -1124,6 +1151,19 @@ function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true } = {}) 
   return {
     feed(bytes) { for (const byte of Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)) receive(byte); },
     finish() { flush(); return found; },
+  };
+}
+function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true } = {}) {
+  // Two fixed lanes cover both nibble phases without retaining an unbounded
+  // token or recursively decoding the resulting bytes.
+  const phases = [0, 1].map(initialNibbleSkip => createEmbeddedWhitespaceHexPhaseScanner({ checkArchives, initialNibbleSkip }));
+  return {
+    feed(bytes) { for (const phase of phases) phase.feed(bytes); },
+    finish() {
+      let found = null;
+      for (const phase of phases) found ??= phase.finish();
+      return found;
+    },
   };
 }
 function createPemBase64Scanner({ checkArchives = true } = {}) {
@@ -1163,18 +1203,20 @@ function createAlternateEncodingScanner({ checkArchives = true } = {}) {
   // retains at most eight quartets and performs no decoded-byte allocation.
   const embeddedBase64 = createEmbeddedBase64TokenScanner({ checkArchives });
   const pemBase64 = createPemBase64Scanner({ checkArchives });
-  const wholeHex = createHexTransferScanner({ checkArchives, wholeFile: true });
+  const wholeHex = [0, 1].map(initialNibbleSkip => createHexTransferScanner({ checkArchives, wholeFile: true, initialNibbleSkip }));
   const embeddedHex = createEmbeddedWhitespaceHexTokenScanner({ checkArchives });
   return {
     feed(bytes) {
       const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
       embeddedBase64.feed(source);
       pemBase64.feed(source);
-      wholeHex.feed(source);
+      for (const phase of wholeHex) phase.feed(source);
       embeddedHex.feed(source);
     },
     finish() {
-      return pemBase64.finish() ?? embeddedBase64.finish() ?? wholeHex.finish() ?? embeddedHex.finish() ?? null;
+      let wholeHexReason = null;
+      for (const phase of wholeHex) wholeHexReason ??= phase.finish();
+      return pemBase64.finish() ?? embeddedBase64.finish() ?? wholeHexReason ?? embeddedHex.finish() ?? null;
     },
   };
 }
@@ -1490,10 +1532,6 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // reparse point cannot make a private packet Git-visible. A Phase 3C
     // filename/path remains a failure before this skip, so a packet symlink
     // or junction still fails closed without dereferencing its target.
-    if (source === 'ignored') {
-      // The lexical check above already protects ignored Git-administration
-      // and private-artifact paths without dereferencing their targets.
-    }
     // Git collapses both ignored and untracked embedded repositories to one
     // directory candidate. Detect their `.git` marker without walking nested
     // content; a benign ignored symlink remains non-regular and is skipped.

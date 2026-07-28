@@ -87,6 +87,10 @@ index and commit-message coverage gaps, and lossy semantic UTF-8 parsing.
 The bounded successor finalizes an open PEM body at EOF; retains up to 4 KiB of
 embedded Base64 whitespace while decoding into a fixed 64 KiB byte batch and
 fails closed when an encoded candidate exceeds that whitespace bound;
+checks all four Base64 quartet phases and both whitespace-tolerant hexadecimal
+nibble phases so a short alphabet prefix cannot shift a private packet out of
+alignment; rejects semantic private-artifact descriptors above 64 MiB before
+either exact identity-read allocation;
 decodes non-canonical padding bits so they cannot hide the same private bytes,
 without recursively decoding output; and
 uses tri-state gzip parsing so a recognized over-bound FNAME/FCOMMENT fails
@@ -99,7 +103,9 @@ with an exact byte round trip. Synthetic fixtures exercise each boundary with
 no private packet rows. The intermediate `49eb3f01` contains only the
 separately reviewed moving-main CI bootstrap invariants; acceptance belongs
 only to the future exact SHA containing this bounded successor after its fresh
-proof and reviews.
+proof and reviews. Historical `b30769b3` truly received the literal Opus 5 run
+recorded above; the current/final candidate has not yet received a literal Opus
+5 review.
 
 The introducing PR's bootstrap pin now follows the current `main` commit after
 PR #253 advanced the base without introducing the trusted checker. A regression
@@ -125,6 +131,16 @@ Finally, the candidate-controlled CI job is named
 job are named `Phase 3C Trusted Base Containment`. The owning suite rejects the
 old ambiguous name so the eventual ruleset cannot silently select the weaker
 check.
+
+Additional boundary review found two transfer-alignment cases and one allocation
+bound that were not yet explicit. Embedded Base64 now scans all four quartet
+phases after an ordinary alphabet prefix, and whitespace-tolerant hexadecimal
+scanning covers both nibble phases; direct, worktree, staged-index, history,
+pre-push, and PR-event fixtures prove those shifted packets remain blocked.
+Semantic private-artifact reads now reject descriptors larger than 64 MiB
+before allocating, with a sparse-file regression proving the bound. All five
+private packet basenames are also ignored locally while remaining forbidden by
+the containment checker.
 
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving

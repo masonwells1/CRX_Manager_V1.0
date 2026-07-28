@@ -31,6 +31,10 @@ export const OWNER_DECISION_HEADERS = [
 export const OWNER_DECISION_CSV_HEADER = OWNER_DECISION_HEADERS.join(',');
 /** The only production packet location. This is deliberately not configurable by environment. */
 export const APPROVED_PRIVATE_ARTIFACT_ROOT = path.resolve(homedir(), '.codex', 'private-artifacts', 'CRX_Manager', 'supplier-pricing-phase3');
+// Aggregate-only public evidence records the largest expected artifact at
+// roughly 1.6 MiB. Keep ample headroom for future packet growth while refusing
+// a corrupt/sparse descriptor before either identity read allocates its size.
+export const MAX_PRIVATE_ARTIFACT_BYTES = 64 * 1024 * 1024;
 
 export function assert(condition, message) { if (!condition) throw new Error(message); }
 export function stable(value) { if (Array.isArray(value)) return value.map(stable); if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key]) ])); return value; }
@@ -167,6 +171,7 @@ function assertOpenedArtifactMatchesPath(fd, resolved, expectedBasename, label, 
 }
 function readExactDescriptor(fd, size, label) {
   assert(Number.isSafeInteger(size) && size >= 0, `${label} has an invalid size`);
+  assert(size <= MAX_PRIVATE_ARTIFACT_BYTES, `${label} exceeds bounded semantic artifact byte limit`);
   const bytes = Buffer.alloc(size);
   let offset = 0;
   while (offset < size) {

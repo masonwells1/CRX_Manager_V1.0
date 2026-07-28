@@ -18,8 +18,10 @@ that exact SHA ran as `2026-07-27T23-29-35-252Z-3ef35b3a`. Older historical
 sections below accurately say no Opus 5 review had run in those earlier cycles;
 they do not describe this later review. `49eb3f01` contains only adopted
 moving-main CI invariants and remains an intermediate base. The bounded
-successor still requires a frozen exact SHA, full proof, and fresh required
-reviews before it can replace these rejected candidates.
+successor at `fa78c4f7` received a literal Opus 5 `SHIP-WITH-FOLLOWUPS`, but
+later transfer-alignment and bounded-read corrections superseded that head.
+The current candidate still requires a frozen exact SHA, full proof, and a
+matching fresh review capture before it can replace these rejected candidates.
 
 Capture and packet materialization are completed. An unattended agent must not
 recapture, regenerate, or materialize the private packet unless an explicit
