@@ -197,7 +197,7 @@ change the external trusted-workflow/ruleset gap: PR #246 remains `PARKED`.
 
 The published PR head `bc305778037fe064b272ebae0aca567ed5f2f8e3` received a
 technical Sol `CLEAN` review. That is technical evidence, not acceptance: PR
-#246 remains `PARKED` until its current head matches a recorded exact-reviewed
+PR #246 remains `PARKED` until its current head matches a recorded exact-reviewed
 SHA. Any later PR-head change invalidates prior head-bound evidence and
 requires a fresh exact proof/review cycle.
 

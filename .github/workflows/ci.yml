@@ -69,8 +69,9 @@ jobs:
             git -C "$GITHUB_WORKSPACE" merge-base --is-ancestor "$phase3_bootstrap_ancestor" "$phase3_base" || { echo "trusted base containment checker is missing outside the initial bootstrap ancestry; refusing candidate fallback: expected ancestor $phase3_bootstrap_ancestor, event base $phase3_base" >&2; exit 1; }
             phase3_checker_history="$(git -C "$GITHUB_WORKSPACE" rev-list --full-history --max-count=1 "${phase3_bootstrap_ancestor}..${phase3_base}" -- "$phase3_checker_rel")" || { echo 'failed to inspect trusted containment checker history; refusing candidate fallback' >&2; exit 1; }
             test -z "$phase3_checker_history" || { echo 'trusted base containment checker was previously present; refusing candidate fallback after removal' >&2; exit 1; }
+            git -C "$GITHUB_WORKSPACE" cat-file -e "${phase3_head}:${phase3_checker_rel}" 2>/dev/null || { echo 'PR branch predates the containment checker — update this branch from main' >&2; exit 1; }
             phase3_candidate_entry="$(git -C "$GITHUB_WORKSPACE" ls-tree "$phase3_head" -- "$phase3_checker_rel")"
-            phase3_candidate_oid="$(git -C "$GITHUB_WORKSPACE" rev-parse "${phase3_head}:${phase3_checker_rel}")"
+            phase3_candidate_oid="$(git -C "$GITHUB_WORKSPACE" rev-parse "${phase3_head}:${phase3_checker_rel}")" || { echo 'PR branch predates the containment checker — update this branch from main' >&2; exit 1; }
             case "$phase3_candidate_entry" in
               "100644 blob ${phase3_candidate_oid}"$'\t'"${phase3_checker_rel}"|"100755 blob ${phase3_candidate_oid}"$'\t'"${phase3_checker_rel}") ;;
               *) echo 'initial bootstrap containment checker is not an exact regular blob at the required path' >&2; exit 1 ;;

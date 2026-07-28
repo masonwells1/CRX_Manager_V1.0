@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-07-27 — Phase 3C containment decoding is bounded and fail-closed
 
+The exact-SHA Claude review proof parser now fails closed on numbered Markdown,
+colon-only and zero-count severity headings, underscore or split emphasis,
+grouped `FIX`/`FOLLOW-UPS` findings, and finding text that starts with
+`Low-level`. Regression coverage preserves legitimate empty severity sections
+while rejecting each reproduced proof-minting bypass. The Phase 3C CI bootstrap
+also emits deliberate update guidance when a candidate head predates the
+containment checker instead of exiting with an opaque Git error. The owning
+packet, agent-workflow, parser, and documentation checks pass with these guards.
+
 The private-artifact containment checker now keeps transfer decoding bounded in
 the hook/CI path. UTF-32 JSON and owner-decision CSV signals are decoded
 incrementally across all byte alignments after a BOM/NUL heuristic, with a

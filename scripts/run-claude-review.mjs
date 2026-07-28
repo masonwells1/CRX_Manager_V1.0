@@ -32,31 +32,55 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
   // winning a first-match regex and minting proof.
   if (matches.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(lines.at(-1) || "")) return null;
   if (matches[0][1].toUpperCase() !== "SHIP") return null;
-  const normalizedLines = lines.map((line) => line
-    .replace(/^\s*(?:[#>*-]+\s*)?/u, "")
-    .replace(/\*\*/gu, "")
-    .replace(/`/gu, "")
-    .trim());
-  const machineVerdicts = normalizedLines.filter((line) => /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line));
+  const normalizedLines = lines.map((line) => {
+    const isHeading = /^\s{0,3}#{1,6}(?:\s+|$)/u.test(line);
+    const machine = line
+      .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
+      .replace(/[*`\\]/gu, "")
+      .replace(/^_+|_+$/gu, "")
+      .trim();
+    return {
+      isHeading,
+      machine,
+      classified: machine.replace(/_/gu, ""),
+    };
+  });
+  const machineVerdicts = normalizedLines
+    .map(({ machine }) => machine)
+    .filter((line) => /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line));
   if (machineVerdicts.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(machineVerdicts[0])) return null;
-  const noFinding = (value) => /^(?:none\b|no\b.*\bfindings?\b|0\b|n\/a\b)/i.test(value.trim());
-  let blockingSection = false;
-  for (const line of normalizedLines) {
-    if (/^(?:BLOCKER|HIGH|MED(?:IUM)?)$/i.test(line)) {
-      blockingSection = true;
+  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(value.trim());
+  let blockingSection = null;
+  for (const { classified: line, isHeading } of normalizedLines) {
+    const blockingHeading = /^(?:BLOCKER|HIGH|MED(?:IUM)?)(?:\s*\(\s*(\d+)\s*\))?\s*:?\s*$/i.exec(line);
+    if (blockingHeading) {
+      blockingSection = blockingHeading[1] === "0" ? "declared-empty" : "requires-empty";
       continue;
     }
-    if (/^(?:LOW|NIT(?:PICK)?)\b/i.test(line) || /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line)) {
-      blockingSection = false;
+    if (/^(?:FIX(?:ES)?|FOLLOW-?UPS?)\s*:?\s*$/i.test(line)) {
+      blockingSection = "requires-empty";
       continue;
     }
-    const finding = /^(?:BLOCKER|HIGH|MED(?:IUM)?)\b(?:\s*(?::|-|—)\s*|\s+)(.+)$/i.exec(line);
+    const finding = /^(?:BLOCKER|HIGH|MED(?:IUM)?|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s*\(\s*\d+\s*\))?(?:\s*(?::|-|—)\s*|\s+)(.+)$/i.exec(line);
     if (finding) {
-      blockingSection = false;
       if (!noFinding(finding[1])) return null;
+      blockingSection = null;
       continue;
     }
-    if (blockingSection && line && !noFinding(line)) return null;
+    if (blockingSection && line) {
+      if (noFinding(line)) {
+        blockingSection = null;
+        continue;
+      }
+      if (blockingSection === "declared-empty" && isHeading) {
+        blockingSection = null;
+      } else {
+        return null;
+      }
+    }
+    if (/^(?:LOW|NIT(?:PICK)?|SUMMARY)\s*:?\s*$/i.test(line) || /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line)) {
+      blockingSection = null;
+    }
   }
   return "clean";
 }
