@@ -25,6 +25,16 @@ the trusted minter's `clean` verdict, the generated workflow map is rescanned
 after staging, and the candidate containment job has a 12-minute timeout.
 Focused regressions cover each behavior.
 
+The next exact-SHA Opus 5 review found that the default Claude review prompt
+still advertised `SHIP-WITH-FOLLOWUPS` and combined severity headings even
+though the hardened proof parser rejects both forms. The generated prompt now
+requires separate BLOCKER, HIGH, MED, LOW, and NIT sections, explicit empty
+sections, and exactly one terminal `FINAL_VERDICT: SHIP` or
+`FINAL_VERDICT: NEEDS-WORK`. A completed review that cannot mint proof now
+prints the exact withholding reason instead of reporting only `VERIFIED`.
+Timeout help and the remaining Codex push-proof comments now match the
+implemented 15-minute default and clean-only verdict contract.
+
 The private-artifact containment checker now keeps transfer decoding bounded in
 the hook/CI path. UTF-32 JSON and owner-decision CSV signals are decoded
 incrementally across all byte alignments after a BOM/NUL heuristic, with a
@@ -181,7 +191,7 @@ overlong whitespace-separated transfer candidates now fail closed. Outgoing
 tag inspection shares one scan budget with history traversal and supports both
 SHA-1 and SHA-256 object IDs. The Claude push-proof producer is stricter as
 well: only one terminal `FINAL_VERDICT: SHIP` with no contradictory verdict or
-BLOCKER/HIGH/MED finding can mint exact-head proof; `SHIP-WITH-FOLLOWUPS` is
+  BLOCKER/HIGH/MED/LOW finding can mint exact-head proof; `SHIP-WITH-FOLLOWUPS` is
 review evidence but no longer push authorization. Bare BLOCKER/HIGH/MED section
 headings carry forward to their following finding text, so a grouped Markdown
 review cannot hide a blocking bullet beneath a contradictory terminal `SHIP`.
@@ -272,7 +282,7 @@ merged it from the PR page.
 The new `proofSearchDirs()` (in `codex-push-lib.mjs`, shared with the Codex side) enumerates
 `git worktree list --porcelain` and scans every sibling checkout's session-state. **Widening the
 search does not widen what counts:** `proofValid()` still demands GitHub's exact head SHA, GitHub's
-exact `baseRefOid`, a clean/blockers-fixed verdict and an age inside 30 minutes, and
+ exact `baseRefOid`, a clean verdict and an age inside 30 minutes, and
 `review-proof-guard.mjs` still blocks hand-writing a proof in any directory. These are sibling
 checkouts of one repository — a proof rejected in the primary checkout is rejected in all of them.
 Enumeration failure falls back to the primary directory alone, which can only make the gate

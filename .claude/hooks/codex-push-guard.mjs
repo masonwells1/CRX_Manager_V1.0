@@ -5,7 +5,7 @@
 // these?" into a gate, not a hope. Non-risky pushes pass (auto-push stays intact).
 //
 // Proof: .claude/session-state/codex-review-<sha>.json with
-//   { "codex_ran": true, "verdict": "clean"|"blockers-fixed", "head_sha": "<HEAD>", "timestamp": "<ISO>" }
+//   { "codex_ran": true, "verdict": "clean", "head_sha": "<HEAD>", "timestamp": "<ISO>" }
 // written by the /codex-review skill after the headless codex CLI returns.
 //
 // Non-pushes and ordinary non-production pushes pass. Ambiguous push context,

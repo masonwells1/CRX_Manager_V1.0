@@ -277,7 +277,7 @@ export function claudeProofValid(data, headSha, nowMs, expectedBaseSha) {
 //
 // Widening the SEARCH does not widen what COUNTS. `proofValid()` still demands
 // the exact head SHA GitHub reports, the exact base GitHub will merge onto, a
-// clean/blockers-fixed verdict, and an age inside 30 minutes; and
+// clean verdict, and an age inside 30 minutes; and
 // `review-proof-guard.mjs` still blocks hand-writing a proof in ANY directory.
 // These are sibling checkouts of one repository, not arbitrary paths — a proof
 // that would be rejected in the primary checkout is rejected in every one.
