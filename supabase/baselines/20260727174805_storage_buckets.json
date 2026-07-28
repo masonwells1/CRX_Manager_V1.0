@@ -1,0 +1,120 @@
+[
+  {
+    "id": "blend-ticket-images",
+    "name": "blend-ticket-images",
+    "public": false,
+    "file_size_limit": 10485760,
+    "allowed_mime_types": [
+      "image/jpeg",
+      "image/png",
+      "image/webp"
+    ]
+  },
+  {
+    "id": "customer-documents",
+    "name": "customer-documents",
+    "public": false,
+    "file_size_limit": 20971520,
+    "allowed_mime_types": [
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+      "image/webp"
+    ]
+  },
+  {
+    "id": "delivery-photos",
+    "name": "delivery-photos",
+    "public": true,
+    "file_size_limit": 10485760,
+    "allowed_mime_types": [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/heic",
+      "image/heif",
+      "image/gif"
+    ]
+  },
+  {
+    "id": "delivery-signatures",
+    "name": "delivery-signatures",
+    "public": false,
+    "file_size_limit": 1048576,
+    "allowed_mime_types": [
+      "image/png",
+      "image/jpeg",
+      "image/webp"
+    ]
+  },
+  {
+    "id": "document-uploads",
+    "name": "document-uploads",
+    "public": false,
+    "file_size_limit": 10485760,
+    "allowed_mime_types": [
+      "application/pdf",
+      "image/jpeg",
+      "image/png",
+      "image/webp"
+    ]
+  },
+  {
+    "id": "job-attachments",
+    "name": "job-attachments",
+    "public": false,
+    "file_size_limit": 26214400,
+    "allowed_mime_types": [
+      "application/pdf",
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+      "text/csv",
+      "text/plain",
+      "text/xml",
+      "application/xml",
+      "application/vnd.google-earth.kml+xml",
+      "application/gpx+xml",
+      "application/octet-stream",
+      "application/zip"
+    ]
+  },
+  {
+    "id": "receiving-photos",
+    "name": "receiving-photos",
+    "public": true,
+    "file_size_limit": 10485760,
+    "allowed_mime_types": [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/heic",
+      "image/heif",
+      "image/gif"
+    ]
+  },
+  {
+    "id": "supplier-price-evidence",
+    "name": "supplier-price-evidence",
+    "public": false,
+    "file_size_limit": 26214400,
+    "allowed_mime_types": [
+      "application/pdf"
+    ]
+  },
+  {
+    "id": "team-note-attachments",
+    "name": "team-note-attachments",
+    "public": true,
+    "file_size_limit": 10485760,
+    "allowed_mime_types": [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/heic",
+      "image/heif",
+      "image/gif"
+    ]
+  }
+]
