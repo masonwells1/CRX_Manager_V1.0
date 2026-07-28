@@ -378,11 +378,11 @@ const APPEND_ONLY_TABLES = [
 /**
  * Tables a driver must not be able to read or write DIRECTLY.
  *
- * "Directly" is the honest scope: a few SECURITY DEFINER RPCs are granted to
- * `authenticated` with no role gate and return figures derived from these
- * tables (get_program_completion over quote_items,
- * compute_application_service_fee over customer rates). Closing those is
- * tracked separately — see the header of 20260727231652.
+ * "Directly" is the honest scope because SECURITY DEFINER functions bypass
+ * table RLS. Migration 20260728182141 closed the two known pricing readers:
+ * get_program_completion now enforces an office-role gate in-body, and
+ * compute_application_service_fee is no longer directly executable by
+ * authenticated browser clients.
  */
 const DRIVER_BLOCKED_TABLES = [
   'cost_history',
