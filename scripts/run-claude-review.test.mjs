@@ -298,9 +298,13 @@ assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Follow-ups:\nNone.\n
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### HIGH\nNone, but one real defect remains\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "### HIGH\n### Summary\nClean review.\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Severity | Finding |\n| --- | --- | --- |\n| src/x.ts:12 | HIGH | authorization bypass |\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| Severity | File | Finding |\n| --- | --- | --- |\n| HIGH | src/x.ts:12 | authorization bypass |\nFINAL_VERDICT: SHIP" }), null);
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Finding | Severity |\n| --- | --- | --- |\n| src/x.ts:12 | authorization bypass | HIGH |\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Severity: MED\nFinding: incorrect proof binding\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Severity | Finding |\n| --- | --- | --- |\n| src/x.ts:12 | LOW | incorrect proof binding |\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Severity | Finding |\n| --- | --- | --- |\n| - | LOW | N/A |\nFINAL_VERDICT: SHIP" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| Severity | File | Finding |\n| --- | --- | --- |\n| LOW | - | N/A |\nFINAL_VERDICT: SHIP" }), "clean");
+assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "| File | Finding | Severity |\n| --- | --- | --- |\n| - | N/A | LOW |\nFINAL_VERDICT: SHIP" }), "clean");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Severity: LOW\nFinding: incorrect proof binding\nFINAL_VERDICT: SHIP" }), null);
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "Severity: LOW\nFinding: None.\nFINAL_VERDICT: SHIP" }), "clean");
 assert.equal(claudeReviewProofVerdict({ status: 0, stdout: "FINAL_VERDICT: NEEDS-WORK\nFINAL_VERDICT: SHIP" }), null);

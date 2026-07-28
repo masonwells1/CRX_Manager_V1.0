@@ -57,9 +57,19 @@ export function claudeReviewProofVerdict({ status, stdout } = {}) {
       blockingSection = null;
       continue;
     }
-    const tableFinding = /^\|.*\|\s*(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)\s*\|\s*(.*?)\s*\|\s*$/i.exec(line);
-    if (tableFinding) {
-      if (!noFinding(tableFinding[1])) return null;
+    const tableCells =
+      line.startsWith("|") && line.endsWith("|")
+        ? line
+            .slice(1, -1)
+            .split("|")
+            .map((cell) => cell.trim())
+        : [];
+    const severityCellIndex = tableCells.findIndex((cell) =>
+      /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)$/i.test(cell),
+    );
+    if (severityCellIndex !== -1) {
+      const nonSeverityCells = tableCells.filter((_, index) => index !== severityCellIndex);
+      if (!nonSeverityCells.every((cell) => /^(?:-|—)?$/u.test(cell) || noFinding(cell))) return null;
       blockingSection = null;
       continue;
     }
