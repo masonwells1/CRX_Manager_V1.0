@@ -127,8 +127,8 @@ followed #249 and was incorporated through normal merge
 `dd33f162365913867ff3aefd0b7e540a531d102f` was incorporated through merge
 `8de484afe9eb4f4e2c50ce9611538535caf533d8`. Historical #251
 baseline-refresh base `2a9e9252a62642e51b71c248c8c2f149a9a434d9` was followed
-by #253. Current floor: #255 base
-`d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`, the sole current fixed trusted
+by #253. Fixed floor established 2026-07-26: #255 base
+`d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`, the sole fixed trusted
 bootstrap ancestry floor, also lacks both guard files.
 
 Published `f3b636590a784b2cf9bf4e03bc47da55adbc4e60` arrived concurrently as
