@@ -61,9 +61,17 @@
 -- here: `auth.uid()` is NULL for those, so both functions raise AUTH_REQUIRED for the wrong reason
 -- and look blocked even with the office-role check deleted.
 
--- Match on `oid::regprocedure::text`, NOT pg_get_function_identity_arguments -- the latter includes
--- parameter NAMES ('p_service_id uuid, ...'), so a signature-only comparison against it never
--- matches and every check below would report a spurious missing function.
+-- Resolve with `to_regprocedure('public.' || signature)`, NOT by comparing `oid::regprocedure::text`
+-- and NOT against pg_get_function_identity_arguments.
+--   pg_get_function_identity_arguments includes parameter NAMES ('p_service_id uuid, ...'), so a
+--   signature-only comparison against it never matches and every check below would report a
+--   spurious missing function.
+--   `oid::regprocedure::text` renders search_path-dependently: it drops the schema only when the
+--   function is visible on the current path, and schema-qualifies it otherwise. A sweep session that
+--   does not expose `public` (a hardened `SET search_path = pg_catalog` runner, for instance) would
+--   render 'public.compute_application_service_fee(...)', miss the comparison, and raise a false
+--   `function_missing_or_signature_changed`. Explicit qualification resolves the same OID on any
+--   path; verified live -- both signatures resolve to the identical OID either way.
 -- `read_pattern` locates the first read of the RLS-restricted table each body pulls pricing from. It
 -- exists so the gate can be checked for POSITION, not just presence: a rewrite that leaves the guard
 -- behind as a trailing comment or as dead code after the read would satisfy a presence-only check
@@ -95,8 +103,7 @@ resolved AS (
              AND p2.proname = split_part(t.signature, '(', 1)) AS overloads
   FROM target t
   LEFT JOIN pg_proc p
-         ON p.pronamespace = 'public'::regnamespace
-        AND p.oid::regprocedure::text = t.signature
+         ON p.oid = to_regprocedure('public.' || t.signature)
 ),
 violation AS (
   -- The function vanished or changed signature: every downstream check below would be
