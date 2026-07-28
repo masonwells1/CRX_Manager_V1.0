@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-28 (read-only Supabase `list_migrations` confirms **915 ledger rows** and live high-water `20260727231652`; the parked `20260728123224_secdef_pricing_reads_office_only.sql` migration is not applied live. The live July 27 hardening remains in place, including office-only table access for quote pricing, per-customer rates, and rebate terms. The pending July 28 migration closes the two remaining `SECURITY DEFINER` RPC bypasses only after a separately approved live apply; merging its PR does not apply it.)
+**Last verified:** 2026-07-28 (read-only Supabase `list_migrations` confirms **916 ledger rows** and live high-water `20260728182141`; `secdef_pricing_reads_office_only` is applied live. The live July 27 table hardening and July 28 RPC hardening now jointly restrict quote pricing, per-customer rates, rebate terms, and the two remaining `SECURITY DEFINER` pricing readers to the intended office roles.)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check
