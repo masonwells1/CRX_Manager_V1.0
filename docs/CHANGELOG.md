@@ -2,6 +2,37 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-28 — All 30 Codex guards ran on Windows without ever running a guard
+
+Every `commandWindows` entry in `.codex/hooks.json` located the adapter with `Join-Path $root
+'<path>'`. That string is itself launched through a PowerShell parent, and the parent expanded
+`$root` to nothing before the inner PowerShell parsed the line — so `Join-Path` was left holding one
+argument and bound the hook's own stdin JSON payload as the missing `ChildPath`. node was handed
+`...codex-hook-adapter.mjs\{}`, and the guard never ran. Silent on the deny path: a blocked action
+simply proceeded.
+
+Every Codex-side guard was affected — `sql-safety`, `money-safety`, `rls-on-new-tables`, `env-guard`,
+`grant-change-guard`, `migration-apply-guard` and the rest. Proof, run against the Codex worktree
+they execute from: an unguarded `CREATE TABLE public.widgets` in a migration returned a PowerShell
+parse error and no verdict under the old command, and `permissionDecision: "deny" — RLS VIOLATION`
+under the new one; a `.env` write carrying a service-role key is blocked by `env-guard` again. All 30
+commands now launch with zero launcher errors. The fix drops the variable and resolves the root
+inline with `(git rev-parse --show-toplevel)`, which no parent shell can expand away. The POSIX
+`command` entries were never affected — `$(...)` inside double quotes is fine there — and are
+untouched.
+
+`check-agent-guidance` asserted "every Codex command hook has POSIX and Windows commands" and passed
+throughout, because it checked that the command *existed*, not that it *worked*. A new check now
+rejects any Windows hook command that interpolates a shell variable; it fails against the previous
+`hooks.json` (30 hooks) and passes against this one.
+
+The detector lives in `scripts/windows-hook-command.mjs` and rejects every PowerShell expansion form,
+not just the bare `$root` that caused this — `${root}`, `$env:FOO`, `$(...)` and `$_` are expanded by
+the same parent shell and would reintroduce the identical fail-open (CodeRabbit, PR #259).
+`scripts/windows-hook-command.test.mjs` pins each broken form as a failing fixture and the fixed form
+as passing, so the check cannot quietly stop detecting. Re-proved by poisoning the real manifest with
+`${root}`: both the check and the fixture test fail, and both pass again once restored.
+
 ## 2026-07-28 — A migration that shipped ten days ago was still counted as "awaiting apply"
 
 `/fleet` reported "2 parked migrations awaiting apply". One of them,

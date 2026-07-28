@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findWindowsShellVariableHooks } from "./windows-hook-command.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const checks = [];
@@ -108,6 +109,11 @@ const allHooks = Object.values(codexHooks.hooks || {})
   .filter((hook) => hook.type === "command");
 record(!/C:\\\\CRX_Manager/i.test(codexHooksText), ".codex/hooks.json has no hard-coded checkout path");
 record(allHooks.length > 0 && allHooks.every((hook) => hook.command && hook.commandWindows), "every Codex command hook has POSIX and Windows commands", `${allHooks.length} hooks`);
+// A `commandWindows` string is run through a PowerShell parent, which expands
+// any `$…` before the inner PowerShell parses it — the 2026-07-28 fail-open.
+// Rationale and the full list of rejected forms: scripts/windows-hook-command.mjs.
+const windowsVarHooks = findWindowsShellVariableHooks(allHooks);
+record(windowsVarHooks.length === 0, "no Codex Windows hook command interpolates a shell variable", windowsVarHooks.length ? `${windowsVarHooks.length} hook(s) use a $variable` : `${allHooks.length} hooks clean`);
 record(codexHooksText.includes(".claude/hooks/sql-safety.mjs"), "Codex invokes shared Claude hook sources");
 record(codexHooksText.includes("production-action-guard.mjs"), "Codex production action guard is registered");
 record(codexHooksText.includes("review-proof-guard.mjs"), "Codex review proof guard is registered");
