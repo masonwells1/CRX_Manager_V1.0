@@ -1,18 +1,21 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-28** (live high-water re-read this date via the Supabase connector: **915 ledger rows, max version `20260727231652`** — four migrations applied live on 2026-07-27. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Section 0a now has nothing open**; it is retained for its proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-28** (live high-water re-read this date via the Supabase connector: **916 ledger rows, max version `20260728182141`** — that top row is `20260728123224_secdef_pricing_reads_office_only`, applied 2026-07-28 18:21:41 UTC by a parallel session under a server-assigned version; reconcile it on `name`, not `version`, and see section 0. Before it: **915 rows, max `20260727231652`** — four migrations applied live on 2026-07-27. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Section 0a now has nothing open**; it is retained for its proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 0. PARKED 2026-07-28 — two SECURITY DEFINER functions still leak pricing past the office-only reads
+## 0. RESOLVED 2026-07-28 — two SECURITY DEFINER functions leaked pricing past the office-only reads
 
-**Status: fix WRITTEN and PARKED — migration `20260728123224_secdef_pricing_reads_office_only`
-is NOT applied live.** Mason approved draft → Codex → PR only; he merges, and the live apply is a
-separate explicitly-gated step. Merging the PR deploys the frontend via Vercel; it does **not**
-apply the migration.
+**Status: CLOSED — migration `20260728123224_secdef_pricing_reads_office_only` is APPLIED LIVE**
+(2026-07-28 18:21:41 UTC). **Ledger identity — reconcile on `name`, not `version`:** it was applied
+by a parallel session, so the server assigned ledger version **`20260728182141`** while `name` stayed
+`20260728123224_secdef_pricing_reads_office_only`. A lookup by version `20260728123224` returns zero
+rows and reads as "never applied" — it is not. Earlier revisions of this section said PARKED / NOT
+applied live; that was true when written and is now stale. Verification, the residual exposure that
+is still open, and the standing regression guard are recorded at the end of this section.
 
 **Finding (audited and proven live 2026-07-27; full evidence in
 `docs/audits/2026-07-27-secdef-pricing-bypass-audit-handoff.md` — do not re-run the audit).**
@@ -38,7 +41,7 @@ Two were not:
 Exposure is 5 active non-office accounts (2 driver, 1 applicator, 2 `entity_recipient` — the last is
 customer-facing), not just field staff.
 
-**Fix as written.** Both functions get the house in-body gate copied from the PARKED-007 block in
+**Fix as shipped.** Both functions got the house in-body gate copied from the PARKED-007 block in
 `preview_field_app_invoice_split` — `AUTH_REQUIRED` when `auth.uid() IS NULL`, then
 `INSUFFICIENT_ROLE` unless `is_admin() OR is_sales_rep()`, both with ERRCODE
 `insufficient_privilege`. Both helpers were re-confirmed live to require `profiles.is_active = true`,

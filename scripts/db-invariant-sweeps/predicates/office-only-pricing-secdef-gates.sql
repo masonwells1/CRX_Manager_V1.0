@@ -23,30 +23,50 @@
 -- overlap-clobber class -- which a one-shot postflight cannot see. This predicate re-checks on every
 -- sweep run, so it catches the regression whenever it is introduced.
 --
--- Rows returned = violations. Five distinct failure modes, each with its own `reason`:
---   missing_in_body_gate  -- the body lost its AUTH_REQUIRED / INSUFFICIENT_ROLE pair
---   not_secdef_or_no_search_path -- SECURITY DEFINER or the pinned search_path was dropped
+-- Rows returned = violations. Seven distinct failure modes, each with its own `reason`:
+--   function_missing_or_signature_changed -- the pinned signature no longer resolves
+--   missing_in_body_gate  -- the body lost the null-session test, the office-role predicate, the
+--                            insufficient_privilege SQLSTATE, or the guard moved after the first read
+--   not_secdef_or_no_search_path -- SECURITY DEFINER dropped, or search_path is no longer exactly
+--                            `public, pg_temp`
 --   duplicate_overload    -- a second signature appeared; callers may bind to the ungated one
 --   authenticated_exec_restored -- the direct PostgREST route back into the fee calculator reopened
 --   office_rpc_grant_lost -- INVERSE check: get_program_completion must KEEP EXECUTE for
 --                            `authenticated`, or OfficeCockpit and ProgramTracker go offline for the
 --                            office. Losing it is a worse outcome than the leak that was closed, and
 --                            a sweep that only looked for excess access would never notice.
+--   anon_exec_present     -- either function became callable by the unauthenticated role
 --
 -- Contract: exact-name, not heuristic -- it pins two named functions and their expected end state,
 -- so a hit is a REAL regression. Do NOT allowlist a hit here. Re-apply the gate in a new,
 -- later-dated migration instead. If either function is ever intentionally retired, delete its rows
 -- from this predicate in the same change that retires it.
 --
--- Verified against live 2026-07-28: zero rows.
+-- Verified against live 2026-07-28: zero rows, both functions resolved.
+--
+-- Mutation-tested against the live bodies the same date, so the zero above is not vacuous. Nine
+-- mutations, each fired the correct arm, and the unmutated control fired neither: null-session test
+-- removed, office-role predicate weakened, SQLSTATE downgraded, error-label tokens retained while the
+-- checks were deleted, guard moved after the read, `search_path=attacker, pg_temp`, a non-canonical
+-- search_path spelling, and proconfig dropped entirely.
 
 -- Match on `oid::regprocedure::text`, NOT pg_get_function_identity_arguments -- the latter includes
 -- parameter NAMES ('p_service_id uuid, ...'), so a signature-only comparison against it never
 -- matches and every check below would report a spurious missing function.
-WITH target(signature, needs_authenticated_exec) AS (
+-- `read_pattern` locates the first read of the RLS-restricted table each body pulls pricing from. It
+-- exists so the gate can be checked for POSITION, not just presence: a rewrite that leaves the guard
+-- behind as a trailing comment or as dead code after the read would satisfy a presence-only check
+-- while leaking. The gate must appear BEFORE the first read.
+--
+-- It matches `FROM`/`JOIN <table>` rather than the bare table name on purpose. A bare-name strpos
+-- lands on the gate's OWN explanatory comment, which names the table it protects -- observed live,
+-- where that put the "read" at offset 293 and the guard at 574 and reported a false violation.
+WITH target(signature, needs_authenticated_exec, read_pattern) AS (
   VALUES
-    ('compute_application_service_fee(uuid,uuid,numeric,integer)', false),
-    ('get_program_completion(integer)',                            true)
+    ('compute_application_service_fee(uuid,uuid,numeric,integer)', false,
+     '(?:from|join)\s+(?:public\.)?customer_application_rates'),
+    ('get_program_completion(integer)', true,
+     '(?:from|join)\s+(?:public\.)?quote_items')
 ),
 resolved AS (
   SELECT t.signature,
@@ -54,7 +74,11 @@ resolved AS (
          p.oid,
          p.prosrc,
          p.prosecdef,
-         array_to_string(p.proconfig, ',') AS config,
+         p.proconfig,
+         -- Position of the office-role call vs the first guarded-table read.
+         -- regexp_instr returns 0 when there is no match; requires PG 15+ (live is 17.6).
+         strpos(p.prosrc, 'is_sales_rep()')                          AS guard_pos,
+         regexp_instr(p.prosrc, t.read_pattern, 1, 1, 0, 'i')        AS read_pos,
          (SELECT count(*) FROM pg_proc p2
            WHERE p2.pronamespace = 'public'::regnamespace
              AND p2.proname = split_part(t.signature, '(', 1)) AS overloads
@@ -71,16 +95,37 @@ violation AS (
   FROM resolved WHERE oid IS NULL
 
   UNION ALL
+  -- Checks the guard's SHAPE, not its error labels. A presence-only test for the strings
+  -- 'AUTH_REQUIRED' / 'INSUFFICIENT_ROLE' is satisfied by a rewrite that leaves those tokens in a
+  -- comment or in dead code while deleting the real checks, so all four conditions below are
+  -- structural: the null-session test, the office-role predicate, the SQLSTATE the callers see, and
+  -- the guard's position ahead of the first guarded-table read.
   SELECT signature, 'missing_in_body_gate'
   FROM resolved
   WHERE oid IS NOT NULL
-    AND (prosrc NOT LIKE '%AUTH_REQUIRED%' OR prosrc NOT LIKE '%INSUFFICIENT_ROLE%')
+    AND (
+         prosrc !~* 'auth\.uid\(\)\s*IS\s+NULL'
+      OR prosrc !~* 'NOT\s*\(\s*(public\.)?is_admin\(\)\s*OR\s*(public\.)?is_sales_rep\(\)\s*\)'
+      OR prosrc !~* 'ERRCODE\s*=\s*''insufficient_privilege'''
+      OR guard_pos = 0
+      OR (read_pos > 0 AND guard_pos > read_pos)
+    )
 
   UNION ALL
+  -- Exact search_path, not a substring match. '%pg_temp%' would also accept
+  -- 'search_path=attacker, pg_temp' -- an attacker-writable schema resolving BEFORE public, which is
+  -- the classic SECURITY DEFINER hijack. Only the approved value passes.
+  --
+  -- The exact string is safe to pin because Postgres normalizes proconfig itself: whatever spacing
+  -- the migration writes, a list GUC is stored joined with ', '. Confirmed live -- all 480 public
+  -- functions carrying a pg_temp search_path store the identical 'search_path=public, pg_temp',
+  -- with zero spacing variants. Do NOT relax this to a LIKE.
   SELECT signature, 'not_secdef_or_no_search_path'
   FROM resolved
   WHERE oid IS NOT NULL
-    AND (NOT prosecdef OR coalesce(config, '') NOT LIKE '%search_path=%pg_temp%')
+    AND (NOT prosecdef
+         OR proconfig IS NULL
+         OR NOT (proconfig @> ARRAY['search_path=public, pg_temp']))
 
   UNION ALL
   SELECT signature, 'duplicate_overload'
