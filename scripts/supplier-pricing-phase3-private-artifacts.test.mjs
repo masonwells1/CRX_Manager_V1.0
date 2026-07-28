@@ -994,7 +994,7 @@ git() { return 0; }
   const v1Product = { id: id1, sku: 'SYN-V1', product_name: 'Synthetic only', product_form: 'synthetic-form', container_size: '1', container_type: 'jug', container_unit: 'gal', unit_size: '1 gal', inventory_unit: 'gal', is_active: true, pricing_version: 7, updated_at: '2026-07-26T00:00:00.000Z', active_return_statuses: [] };
   const v1 = { format: 'crx-supplier-pricing-phase3-pre-stage-a-product-snapshot-v1', snapshot_timestamp_utc: '2026-07-23T00:00:00.000Z', migration_high_water: '20260722202622', expected_old_phase3_defaults: { product_family_id: null, return_policy: 'unknown', packaging_variant: null, is_full_tote_only: false }, products: [v1Product] }; v1.snapshot_sha256 = sha256(v1);
   const v1File = writeSnapshot(v1, PRE_STAGE_A_SNAPSHOT_NAME); assert.equal(makeManifest(loadSnapshot(v1File, null, fixturePrivateOptions)).manifest_sha256, '849757da67a2abdeb5e99683ebfc624822e23b08748987dacc69cc7ba52dd1c8');
-  const preCommit = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-commit'), 'utf8'); const commitMsg = readFileSync(path.join(REPO_ROOT, '.husky', 'commit-msg'), 'utf8'); const prePush = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-push'), 'utf8'); const ci = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const preCommit = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-commit'), 'utf8'); const commitMsg = readFileSync(path.join(REPO_ROOT, '.husky', 'commit-msg'), 'utf8'); const prePush = readFileSync(path.join(REPO_ROOT, '.husky', 'pre-push'), 'utf8'); const ci = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'); const packageScripts = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).scripts;
   const trustedTargetWorkflow = readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'phase3-private-artifact-containment.yml'), 'utf8');
   assert(preCommit.indexOf('check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit') < preCommit.indexOf('validate-sql.sh'));
   assert(commitMsg.includes('check-supplier-pricing-phase3-private-artifacts.mjs --commit-msg "${1:-}"'));
@@ -1020,13 +1020,18 @@ git() { return 0; }
   assert.notEqual(privateFileCommit.status, 0, 'git commit -F must block a private packet in the commit object'); assert.equal(git(privateFileMessageRepo, ['rev-parse', 'HEAD']).trim(), fileHead);
   assert(prePush.includes('check-supplier-pricing-phase3-private-artifacts.mjs --pre-push "${1:-}"'));
   assert.equal((prePush.match(/if ! node scripts\/check-supplier-pricing-phase3-private-artifacts\.mjs --pre-push/g) ?? []).length, 1, 'pre-push containment must retain one fail-closed shell guard');
+  assert.equal((prePush.match(/if ! npm run test:supplier-pricing-phase3c-packet/g) ?? []).length, 1, 'pre-push must retain one fail-closed packet regression gate');
   assert.equal((prePush.match(/if ! npm run typecheck/g) ?? []).length, 1, 'pre-push typecheck must retain one fail-closed shell guard');
   assert.equal((prePush.match(/if ! npm run build/g) ?? []).length, 1, 'pre-push build must retain one fail-closed shell guard');
+  assert(packageScripts['test:supplier-pricing-phase3c-packet'].includes('supplier-pricing-phase3-private-artifacts.test.mjs'));
+  assert(!packageScripts['test:correction-guards'].includes('supplier-pricing-phase3-private-artifacts.test.mjs'), 'the multi-minute packet suite must not run on every commit');
+  assert(ci.includes('- name: Phase 3C private-artifact regression tests\n        run: npm run test:supplier-pricing-phase3c-packet'), 'CI must run the packet suite explicitly');
   if (fixtureBash()) {
     const hookPath = path.join(REPO_ROOT, '.husky', 'pre-push');
     const runPrePushHook = (functions, args = [], input = '') => spawnSync(fixtureBash(), ['-c', `${functions}\nHOOK=$1; shift; source "$HOOK"`, 'synthetic-pre-push', hookPath, ...args], { cwd: REPO_ROOT, encoding: 'utf8', input, env: sanitizedFixtureGitEnv() });
     for (const [name, functions] of [
       ['containment', 'node() { return 42; }; npm() { return 0; };'],
+      ['packet-regression', 'node() { return 0; }; npm() { if [ "$2" = "test:supplier-pricing-phase3c-packet" ]; then return 42; fi; return 0; };'],
       ['typecheck', 'node() { return 0; }; npm() { if [ "$2" = "typecheck" ]; then return 42; fi; return 0; };'],
       ['build', 'node() { return 0; }; npm() { if [ "$2" = "build" ]; then return 42; fi; return 0; };'],
     ]) {
