@@ -67,6 +67,13 @@ manual byte decoder. The exact focused suite passes in both Windows and a clean
 `node:24-bookworm` Linux repository, including direct and split 64/128 KiB
 boundary packets.
 
+The introducing PR's bootstrap pin now follows the current `main` commit after
+PR #252 advanced the base without introducing the trusted checker. A regression
+assertion binds CI's pull-request trigger to `main`, preventing a future trigger
+expansion from silently skipping containment and its dependent jobs. The
+remaining post-merge ruleset step and the public-repository fetch dependency are
+recorded in the consolidated known-issues file.
+
 Archive rejection now validates bounded TAR/ustar checksum/header structure,
 ar/thin, CPIO, CAB, Zstandard, LZ4, and skippable-frame signatures, preserving
 a 4,121-byte stream overlap for bounded binary-CPIO pathnames. Binary CPIO
