@@ -44,16 +44,19 @@
 --
 -- Verified against live 2026-07-28: zero rows, both functions resolved.
 --
--- Mutation-tested against the live bodies the same date, so the zero above is not vacuous. Nine
+-- Mutation-tested against the live bodies the same date, so the zero above is not vacuous. Eleven
 -- mutations, each fired the correct arm, and the unmutated control fired neither: null-session test
 -- removed, office-role predicate weakened, SQLSTATE downgraded, error-label tokens retained while the
 -- checks were deleted, guard moved after the read, `search_path=attacker, pg_temp`, a non-canonical
--- search_path spelling, and proconfig dropped entirely.
+-- search_path spelling, proconfig dropped entirely, the whole gate line-commented with `--`, and the
+-- whole gate wrapped in a `/* */` block comment.
 --
 -- KNOWN LIMIT -- this is a regression ALARM, not a proof of enforcement. It reads catalog text, so it
--- establishes that the guard is present, correctly shaped, and positioned ahead of the read; it
--- cannot establish that the guard is REACHABLE. A body that satisfies every arm while burying the
--- checks in a branch that never executes would still pass. Static analysis cannot close that gap.
+-- establishes that the guard is present, correctly shaped, un-commented, and positioned ahead of the
+-- read; it cannot establish that the guard is REACHABLE. Commented-out guards ARE caught (the checks
+-- run against comment-stripped text -- see `exec_src` below), but a body that satisfies every arm while
+-- burying the checks in a branch that never executes -- inside `IF false THEN`, or after an
+-- unconditional RETURN -- would still pass. Static analysis cannot close that gap.
 -- So: a green sweep is necessary, never sufficient. Whenever either body is re-emitted, prove the
 -- gate the way the original fix was proven -- impersonate a real non-office JWT
 -- (`set_config('request.jwt.claims', ...)` + `SET LOCAL ROLE authenticated`) and confirm SQLSTATE
@@ -80,6 +83,8 @@
 -- It matches `FROM`/`JOIN <table>` rather than the bare table name on purpose. A bare-name strpos
 -- lands on the gate's OWN explanatory comment, which names the table it protects -- observed live,
 -- where that put the "read" at offset 293 and the guard at 574 and reported a false violation.
+-- Comment stripping now removes that particular collision on its own; the anchor stays anyway, because
+-- it also keeps the position check off table names appearing in string literals or column aliases.
 WITH target(signature, needs_authenticated_exec, read_pattern) AS (
   VALUES
     ('compute_application_service_fee(uuid,uuid,numeric,integer)', false,
@@ -87,23 +92,48 @@ WITH target(signature, needs_authenticated_exec, read_pattern) AS (
     ('get_program_completion(integer)', true,
      '(?:from|join)\s+(?:public\.)?quote_items')
 ),
-resolved AS (
+-- Every body check below runs against `exec_src` -- prosrc with SQL comments stripped -- never against
+-- raw prosrc. Without this, a later `CREATE OR REPLACE` that merely COMMENTS OUT the three guard
+-- statements, leaving their text in place ahead of the protected read, satisfies every regex and every
+-- position check while the leak is fully reopened. That is the cheapest possible way to disable the
+-- gate ("just comment it out for a second"), so it is the one the alarm most needs to survive.
+-- Block comments first, then line comments, so a `--` inside a /* */ span cannot leave a dangling tail.
+--
+-- The strip is deliberately naive: it also blanks comment-like text inside string literals. That is the
+-- safe direction to be wrong in. Over-stripping can only DELETE a guard match and make the predicate
+-- fire; it can never manufacture a guard that is not there. A false alarm costs one investigation, a
+-- missed leak costs customer pricing. Do not "fix" this by making the strip literal-aware unless the
+-- replacement is proven to fail the same direction.
+resolved_raw AS (
   SELECT t.signature,
          t.needs_authenticated_exec,
+         t.read_pattern,
          p.oid,
-         p.prosrc,
          p.prosecdef,
          p.proconfig,
-         -- Position of the office-role call vs the first guarded-table read.
-         -- regexp_instr returns 0 when there is no match; requires PG 15+ (live is 17.6).
-         strpos(p.prosrc, 'is_sales_rep()')                          AS guard_pos,
-         regexp_instr(p.prosrc, t.read_pattern, 1, 1, 0, 'i')        AS read_pos,
+         regexp_replace(
+           regexp_replace(coalesce(p.prosrc, ''), '/\*.*?\*/', ' ', 'gs'),
+           '--[^\n]*', ' ', 'g')                                     AS exec_src,
          (SELECT count(*) FROM pg_proc p2
            WHERE p2.pronamespace = 'public'::regnamespace
              AND p2.proname = split_part(t.signature, '(', 1)) AS overloads
   FROM target t
   LEFT JOIN pg_proc p
          ON p.oid = to_regprocedure('public.' || t.signature)
+),
+resolved AS (
+  SELECT r.signature,
+         r.needs_authenticated_exec,
+         r.oid,
+         r.exec_src,
+         r.prosecdef,
+         r.proconfig,
+         r.overloads,
+         -- Position of the office-role call vs the first guarded-table read, both in executable text.
+         -- regexp_instr returns 0 when there is no match; requires PG 15+ (live is 17.6).
+         strpos(r.exec_src, 'is_sales_rep()')                        AS guard_pos,
+         regexp_instr(r.exec_src, r.read_pattern, 1, 1, 0, 'i')      AS read_pos
+  FROM resolved_raw r
 ),
 violation AS (
   -- The function vanished or changed signature: every downstream check below would be
@@ -114,17 +144,17 @@ violation AS (
 
   UNION ALL
   -- Checks the guard's SHAPE, not its error labels. A presence-only test for the strings
-  -- 'AUTH_REQUIRED' / 'INSUFFICIENT_ROLE' is satisfied by a rewrite that leaves those tokens in a
-  -- comment or in dead code while deleting the real checks, so all four conditions below are
-  -- structural: the null-session test, the office-role predicate, the SQLSTATE the callers see, and
-  -- the guard's position ahead of the first guarded-table read.
+  -- 'AUTH_REQUIRED' / 'INSUFFICIENT_ROLE' is satisfied by a rewrite that keeps those tokens while
+  -- deleting the real checks, so all four conditions below are structural: the null-session test, the
+  -- office-role predicate, the SQLSTATE the callers see, and the guard's position ahead of the first
+  -- guarded-table read. All four read `exec_src`, so none of them can be satisfied by commented text.
   SELECT signature, 'missing_in_body_gate'
   FROM resolved
   WHERE oid IS NOT NULL
     AND (
-         prosrc !~* 'auth\.uid\(\)\s*IS\s+NULL'
-      OR prosrc !~* 'NOT\s*\(\s*(public\.)?is_admin\(\)\s*OR\s*(public\.)?is_sales_rep\(\)\s*\)'
-      OR prosrc !~* 'ERRCODE\s*=\s*''insufficient_privilege'''
+         exec_src !~* 'auth\.uid\(\)\s*IS\s+NULL'
+      OR exec_src !~* 'NOT\s*\(\s*(public\.)?is_admin\(\)\s*OR\s*(public\.)?is_sales_rep\(\)\s*\)'
+      OR exec_src !~* 'ERRCODE\s*=\s*''insufficient_privilege'''
       OR guard_pos = 0
       OR (read_pos > 0 AND guard_pos > read_pos)
     )

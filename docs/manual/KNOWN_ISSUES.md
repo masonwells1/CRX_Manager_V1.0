@@ -105,8 +105,22 @@ Red before, green after — not green either way.
 **Still open, reported separately:** `application_services.default_rate_per_acre_cents` and
 `cost_per_acre_cents` remain readable by any active profile through the `application_services_select`
 policy (`USING (is_active_profile())`). Live count of services with `cost_per_acre_cents > 0` is
-currently **0**, so nothing is leaking today, but the policy is the residual hole — the two SECDEF
+currently **0** of 4, so nothing is leaking today, but the policy is the residual hole — the two SECDEF
 functions were only one route to those columns.
+
+**No consumer justifies it (verified live 2026-07-28).** An earlier note in `src/lib/rlsContracts.test.ts`
+claimed the column stayed driver-readable "because Jobs/JobDetail need it". They do not. Every
+driver-facing read is column-narrow — `ApplicationServicePicker` takes `id, name,
+default_rate_per_acre_cents, is_active`; `Jobs.tsx`, `BlendTicketDetail.tsx` and
+`FieldAppSplitInvoiceEditor.tsx` take `id, name` (plus `vehicle_id`); `JobDetail.tsx` never references
+the table. The only readers of `cost_per_acre_cents` are `ApplicationServices.tsx` and
+`ApplicationServiceDetail.tsx`, both mounted behind `<ProtectedRoute allowedRoles={['admin']}>`. So this
+is the same shape as the leak just closed — a React route guard that is not in the data path — and
+closing it costs nothing in function. Postgres has no column-level RLS and every app user shares the
+`authenticated` role, so a column GRANT cannot discriminate by app role: the fix is to move
+`cost_per_acre_cents` onto an office-gated companion table (`is_admin() OR is_sales_rep()`), which is a
+zero-risk data move while the live count is still 0. Needs Mason's approval — it is a schema change
+plus two admin-page edits.
 
 **Deliberately out of scope, settled:** `quote_sections`, `rebate_programs` and
 `customer_application_rates` policies are untouched. Sales reps keep their access.
