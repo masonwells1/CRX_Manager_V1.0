@@ -44,17 +44,20 @@
 --
 -- Verified against live 2026-07-28: zero rows, both functions resolved.
 --
--- Mutation-tested against the live bodies the same date, so the zero above is not vacuous. Thirteen
+-- Mutation-tested against the live bodies the same date, so the zero above is not vacuous. Fifteen
 -- mutations, each fired the correct arm, and the unmutated control fired neither:
---    1 null-session test removed          8 proconfig dropped entirely
---    2 office-role predicate weakened     9 whole gate line-commented with `--`
---    3 SQLSTATE downgraded               10 whole gate wrapped in a /* */ block comment
---    4 error-label tokens kept, checks   11 gate DELETED, text parked in a single-quoted literal
---      deleted                           12 gate DELETED, text parked in a dollar-quoted literal
---    5 guard relocated after the read    13 SECURITY DEFINER dropped
---    6 search_path=attacker, pg_temp
+--    1 null-session test removed          9 whole gate line-commented with `--`
+--    2 office-role predicate weakened    10 whole gate wrapped in a /* */ block comment
+--    3 SQLSTATE downgraded               11 gate DELETED, text parked in a single-quoted literal
+--    4 error-label tokens kept, checks   12 gate DELETED, parked in `$lit$` (letters-only tag)
+--      deleted                           13 SECURITY DEFINER dropped
+--    5 guard relocated after the read    14 gate DELETED, parked in `$guard1$` (DIGIT in the tag)
+--    6 search_path=attacker, pg_temp     15 gate DELETED, parked in `$phase3_x$` (repo-style tag)
 --    7 non-canonical search_path spelling
--- 11 and 12 are what motivated `code_src` below; 9 and 10 motivated `exec_src`.
+--    8 proconfig dropped entirely
+-- 9 and 10 motivated `exec_src`; 11 and 12 motivated `code_src`; 14 and 15 forced the dollar-quote tag
+-- grammar to be widened -- both of them PASSED an earlier revision of this file that matched only
+-- letters-and-underscore tags.
 --
 -- When re-running this set, capture the gate with a regex whose FIRST quantifier is non-greedy
 -- (`'(IF auth\.uid\(\) IS NULL THEN.*?END IF;.*?END IF;)'`). A leading `\s+` silently makes the whole
@@ -120,13 +123,23 @@ WITH target(signature, needs_authenticated_exec, read_pattern) AS (
 --     guard's own code contains no string literals, so this costs the real gate nothing, while a body
 --     that deletes the gate and parks its text in a literal ahead of the read scores guard_pos = 0 and
 --     fires. Dollar-quoted first, since a `'` inside a $tag$ span would otherwise unbalance the pass.
---     The tag quantifier is `*?`, not `*`, and that is load-bearing: Postgres POSIX regex decides
---     greediness for the WHOLE expression from its FIRST quantifier, so a leading greedy `[A-Za-z_]*`
---     would make the following `.*?` greedy too and the strip would run from the first `$tag$` to the
---     LAST one, blanking unrelated code between two separate literals. Demonstrated live:
---     'keep1 $a$ lit1 $a$ MIDDLE $b$ lit2 $b$ keep2' collapses to 'keep1 ~ keep2' with `*` and to
---     'keep1 ~ MIDDLE ~ keep2' with `*?`. Same trap applies to the /* */ strip above, which is already
---     safe because `.*?` is its first quantifier.
+--
+--     Two details of `'\$([^$]*?)\$.*?\$\1\$'` are load-bearing, both learned the hard way:
+--       The tag class is `[^$]`, not `[A-Za-z_]`. A dollar-quote tag follows identifier rules, so it may
+--       contain DIGITS after the first character -- this repo already ships `$phase3_reversal_preflight$`
+--       -- and a letters-only class leaves `$guard1$ ...gate text... $guard1$` unstripped, reopening the
+--       exact bypass this CTE exists to close. Proven live: with the letters-only class, a gate parked in
+--       `$guard1$` or `$phase3_x$` passed every check; with `[^$]` both fire. The class is deliberately
+--       wider than the real grammar (over-stripping is the safe direction), and `\1` requiring the
+--       closing tag to EQUAL the opener is what keeps that width from running away -- verified live that
+--       `'mismatch $a$ x $b$ tail'` is left untouched, and that nesting collapses correctly.
+--
+--       The tag quantifier is `*?`, not `*`. Postgres POSIX regex decides greediness for the WHOLE
+--       expression from its FIRST quantifier, so a leading greedy tag class makes the following `.*?`
+--       greedy too and the strip runs from the first `$tag$` to the LAST one, blanking unrelated code
+--       between two separate literals. Demonstrated live: 'keep1 $a$ lit1 $a$ MIDDLE $b$ lit2 $b$ keep2'
+--       collapses to 'keep1 ~ keep2' with `*` and to 'keep1 ~ MIDDLE ~ keep2' with `*?`. The same trap
+--       applies to the /* */ strip above, which is already safe because `.*?` is its first quantifier.
 --
 -- Both strips are deliberately naive and may over-blank. That is the safe direction: over-stripping can
 -- only DELETE a guard match and raise a false alarm, never manufacture a guard that is not there. A
@@ -166,7 +179,7 @@ resolved AS (
   FROM resolved_raw r
   CROSS JOIN LATERAL (
     SELECT regexp_replace(
-             regexp_replace(r.exec_src, '\$[A-Za-z_]*?\$.*?\$[A-Za-z_]*?\$', ' ', 'gs'),
+             regexp_replace(r.exec_src, '\$([^$]*?)\$.*?\$\1\$', ' ', 'gs'),
              '''(?:[^'']|'''')*''', ' ', 'g') AS code_src
   ) c
 ),
