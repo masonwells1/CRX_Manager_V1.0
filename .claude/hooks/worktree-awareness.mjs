@@ -17,6 +17,7 @@ import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, fleetSummaryLine,
+  worktreeContributesParked,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -108,15 +109,49 @@ function listNamesRecursive(dir, depth = 4) {
   return out;
 }
 
+// Is origin/main already contained in this worktree's HEAD? Only such a checkout has
+// seen every retirement that landed on main, so only it can be trusted to say what is
+// still parked. Errors → false (fail toward the quieter, non-nagging answer).
+function hasAllOfOriginMain(sha) {
+  if (!hasOriginMain || !sha) return false;
+  const r = spawnSync("git", ["merge-base", "--is-ancestor", "origin/main", sha], {
+    encoding: "utf8", timeout: 5000, cwd: projectDir,
+  });
+  return r.status === 0;
+}
+
+// The mainline backlog, read straight from origin/main's tree rather than from any
+// checkout — so the count is right even when every worktree is stale.
+function mainlineParkedNames() {
+  const names = new Set();
+  let tree = "";
+  try {
+    tree = git(["ls-tree", "-r", "--name-only", "origin/main",
+      "scripts/.staging-migrations", "docs/audits"]);
+  } catch { return names; }
+  for (const line of tree.split("\n")) {
+    const p = line.trim();
+    if (!p) continue;
+    const base = p.slice(p.lastIndexOf("/") + 1);
+    const inStaging = p.startsWith("scripts/.staging-migrations/");
+    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) names.add(base.toLowerCase());
+  }
+  return names;
+}
+
 let fleetLine = "";
 try {
   const ledgerNames = new Set();
-  const parkedNames = new Set();
+  const parkedNames = hasOriginMain ? mainlineParkedNames() : new Set();
   for (const e of entries) {
     if (!e.path || !existsSync(e.path)) continue;
     for (const f of listDir(path.join(e.path, "docs", "loops"))) {
       if (isLedgerDoc(f)) ledgerNames.add(f.toLowerCase());
     }
+    // Frozen review snapshots and stale checkouts still hold long-retired drafts on
+    // disk; counting them made the banner permanently un-clearable. See the rationale
+    // on worktreeContributesParked().
+    if (!worktreeContributesParked(e, hasAllOfOriginMain(e.head))) continue;
     for (const f of listNamesRecursive(path.join(e.path, "scripts", ".staging-migrations"))) {
       if (isParkedMigrationFile(f)) parkedNames.add(f.toLowerCase());
     }

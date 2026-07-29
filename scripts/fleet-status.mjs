@@ -22,6 +22,7 @@ import {
   parseWorktreePorcelain, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine,
+  worktreeContributesParked,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
 
 // The repo root this script lives in (works no matter what cwd it's launched from).
@@ -118,6 +119,17 @@ function mergedLabel(sha) {
   return mergedLabelFromStatus(r.status, true);
 }
 
+// Does this checkout already contain origin/main? Only then has it seen every draft
+// retirement that landed on main, so only then can its on-disk drafts be trusted as
+// "still parked". See worktreeContributesParked() for why this matters.
+function hasAllOfOriginMain(sha) {
+  if (!hasOriginMain || !sha) return false;
+  const r = spawnSync("git", ["merge-base", "--is-ancestor", "origin/main", sha], {
+    encoding: "utf8", timeout: 5000, cwd: repoRoot,
+  });
+  return r.status === 0;
+}
+
 function dirtyCount(wtPath) {
   try {
     const out = git(["status", "--porcelain"], wtPath, 5000);
@@ -162,7 +174,9 @@ for (const e of entries) {
   if (mission) sub.push(`newest mission doc: ${mission.name}`);
 
   // Parked migrations in THIS worktree: staged drafts + audit drafts.
-  const parkedDirs = [
+  // Frozen review snapshots and checkouts behind origin/main still hold drafts that
+  // main has since retired; counting those made the fleet banner un-clearable.
+  const parkedDirs = !worktreeContributesParked(e, hasAllOfOriginMain(e.head)) ? [] : [
     { dir: path.join(e.path, "scripts", ".staging-migrations"), filter: isParkedMigrationFile },
     { dir: path.join(e.path, "docs", "audits"), filter: isDraftSqlName },
   ];
@@ -187,6 +201,31 @@ for (const e of entries) {
   }
 
   wtLines.push([head, ...sub.map((s) => `    ${s}`)].join("\n"));
+}
+
+// The mainline backlog, read straight from origin/main's tree. Without this, a fleet
+// where every checkout happens to be stale would report zero and hide real work.
+if (hasOriginMain) {
+  try {
+    const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--",
+      "scripts/.staging-migrations", "docs/audits"], repoRoot, 5000);
+    for (const line of tree.split("\n")) {
+      const p = line.trim();
+      if (!p) continue;
+      const name = p.slice(p.lastIndexOf("/") + 1);
+      if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
+      const inStaging = p.startsWith("scripts/.staging-migrations/");
+      if (!(inStaging ? isParkedMigrationFile(name) : isDraftSqlName(name))) continue;
+      const key = name.toLowerCase();
+      if (parked.has(key)) {
+        if (!parked.get(key).where.includes("origin/main")) parked.get(key).where.push("origin/main");
+        continue;
+      }
+      let comment = "";
+      try { comment = firstCommentLine(git(["show", `origin/main:${p}`], repoRoot, 5000), 120); } catch { comment = ""; }
+      parked.set(key, { name, where: ["origin/main"], mtime: 0, comment });
+    }
+  } catch { /* fail-open: worktree scan above still reported what it could */ }
 }
 
 // ── 4. Print the report ──

@@ -80,6 +80,27 @@ export function isDraftSqlName(name) {
   return isParkedMigrationFile(name) && /draft|^parked[-_]/i.test(String(name || ""));
 }
 
+// Should this worktree's ON-DISK drafts count toward "parked migrations awaiting apply"?
+//
+// 2026-07-29: the count was permanently wrong. It scanned the working tree of EVERY
+// checkout, and ~30 of Mason's worktrees are frozen review snapshots pinned to old
+// commits. Once a draft file has ever existed, those snapshots keep reporting it
+// forever — retiring it on main (the SUPERSEDED- rename) could never clear the count.
+// Proven: renaming the last dead draft left the banner reading "2" unchanged, because
+// 42 other checkouts still held the pre-rename filename.
+//
+// A checkout is only trustworthy about what is *still* pending if it has already
+// incorporated every retirement that landed on main — i.e. origin/main is an ancestor
+// of its HEAD. Detached snapshots are review artifacts by construction and never count,
+// which also lets the caller skip the ancestry check for the ~30 cheapest cases.
+//
+// Mainline drafts are seeded separately from origin/main's tree, so a fleet where NO
+// checkout is current still reports main's real backlog rather than zero.
+export function worktreeContributesParked(entry, originMainIsAncestorOfHead) {
+  if (!entry || entry.detached) return false;
+  return originMainIsAncestorOfHead === true;
+}
+
 function truncateLine(s, maxLen) {
   return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
 }

@@ -1,3 +1,18 @@
+-- SUPERSEDED 2026-07-29 — RETIRED, DO NOT APPLY. Kept for history only.
+--
+-- WHY RETIRED: the live sync triggers now cover every write path that could create a
+-- legacy row, so this backfill can never have work to do again. Verified read-only
+-- against live on 2026-07-29:
+--   * count check below returns 0 rows (same as when it was parked on 2026-07-10);
+--   * trg_sync_job_location_dispatch_on_applicator_change is live on public.jobs, and
+--     trg_sync_job_location_dispatch_on_field_insert is live on public.job_fields —
+--     between them, assigning an applicator or adding a field writes the dispatch row
+--     automatically, so no new legacy job can appear.
+-- Retiring it with the SUPERSEDED- prefix takes it out of the fleet "parked migrations
+-- awaiting apply" count, which was reporting work that does not exist.
+--
+-- Original header follows.
+--
 -- PARKED — DO NOT APPLY WITHOUT MASON'S EXPLICIT OK (Delivery-gate item: business-data write)
 -- Workflow-waves Sprint E (2026-07-10). One-time backfill: give LEGACY-assigned open jobs
 -- (jobs.applicator_id set the old way, no per-location dispatch rows) their

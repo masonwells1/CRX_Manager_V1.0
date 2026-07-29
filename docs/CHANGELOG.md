@@ -2,6 +2,37 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — The fleet's "parked migrations awaiting apply" count could never reach zero
+
+The SessionStart banner and `/fleet` both counted parked migration drafts by scanning the working
+tree of **every** checkout `git worktree list` reports. About thirty of those are frozen review
+snapshots pinned to old commits, and several more are branch checkouts far behind `main`. Once a
+draft file had ever existed, those stale checkouts kept reporting it forever — retiring it on `main`
+with the sanctioned `SUPERSEDED-` rename could not clear the count, because the old filename still
+sat on disk in 42 other places. The banner had been reading "2 parked migrations awaiting apply"
+while nothing was actually pending.
+
+Verified before changing anything: renaming the last live draft and re-running the real hook left the
+count at 2, unchanged. That is the proof the scan — not the drafts — was the defect.
+
+A checkout can only be trusted to say what is *still* parked if it has already absorbed every
+retirement that landed on `main`. `worktreeContributesParked()` now requires exactly that
+(`origin/main` is an ancestor of the checkout's HEAD), and excludes detached snapshots outright —
+they are review artifacts by construction, which also skips the ancestry check for the cheapest ~30
+cases. The mainline backlog is seeded separately from `origin/main`'s tree via `git ls-tree`, so a
+fleet in which no checkout happens to be current still reports main's real backlog instead of zero.
+
+Both readers were fixed together so they cannot disagree: the hook and `scripts/fleet-status.mjs` now
+report the same number. The count dropped 2 → 1, the remaining entry being the one draft still
+un-retired on `origin/main` — which this change also retires, taking it to 0.
+
+Also retired here: `PARKED-dispatch-backfill.sql`, a one-time backfill for jobs assigned before the
+per-field dispatch system existed. Confirmed dead against the live database — its own count query
+returns 0 rows, and the two sync triggers that supersede it
+(`trg_sync_job_location_dispatch_on_applicator_change` on `jobs`,
+`trg_sync_job_location_dispatch_on_field_insert` on `job_fields`) are live, so no new legacy row can
+appear. It was already a no-op when parked on 2026-07-10. No database change was made.
+
 ## 2026-07-29 — A migration built in a linked worktree could never be applied
 
 `migration-apply-guard.mjs` looked for apply-proofs in exactly one place: the `session-state`

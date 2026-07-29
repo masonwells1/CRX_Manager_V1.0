@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
-  lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
+  lastNonEmptyLine, firstCommentLine, fleetSummaryLine, worktreeContributesParked,
 } from "./worktree-awareness-lib.mjs";
 
 let pass = 0;
@@ -73,6 +73,18 @@ ok(!isParkedMigrationFile("SUPERSEDED-20260611080937_sweep.sql"), "SUPERSEDED dr
 ok(!isParkedMigrationFile("notes.md"), "non-sql file ignored");
 ok(isDraftSqlName("2026-07-01-per-acre-draft.sql"), "audits *draft*.sql counts as parked");
 ok(!isDraftSqlName("2026-07-01-review-final.sql"), "audits sql without 'draft' ignored");
+
+// Which worktrees may contribute on-disk drafts to the parked count (2026-07-29).
+// Frozen snapshots kept reporting long-retired drafts forever, so retiring one on main
+// could never clear the banner — it sat at 2 with nothing actually pending.
+const onBranch = { path: "C:/wt", branch: "feature", detached: false, head: "aaa" };
+const snapshot = { path: "C:/wt", branch: null, detached: true, head: "bbb" };
+ok(worktreeContributesParked(onBranch, true), "a checkout that already contains origin/main is trusted");
+ok(!worktreeContributesParked(onBranch, false), "a checkout BEHIND origin/main cannot say what is still parked");
+ok(!worktreeContributesParked(snapshot, true), "a detached review snapshot never contributes, even if current");
+ok(!worktreeContributesParked(snapshot, false), "a stale detached snapshot never contributes");
+ok(!worktreeContributesParked(null, true), "a missing entry contributes nothing");
+ok(!worktreeContributesParked(onBranch, undefined), "unknown ancestry is not treated as current");
 
 // last non-empty line (ledger tail) + truncation
 eq(lastNonEmptyLine("first\nsecond\n\n   \n"), "second", "skips trailing blank lines");
