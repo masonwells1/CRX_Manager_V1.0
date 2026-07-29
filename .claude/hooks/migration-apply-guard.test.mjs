@@ -309,6 +309,24 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = runHook({ tool_name: "mcp__supabase__apply_migration", tool_input: { name: "20990101000001_other_mig", query: BENIGN_SQL } }, primary);
     ok(isDeny(r), "worktree proof does NOT cover a different migration name");
 
+    // AUTOPILOT.on is the one search deliberately left UNwidened: it is
+    // authorization state for this project, not evidence about a migration.
+    // A malformed flag is the loudest observable signal — it forces flagState
+    // "stale", which parks every apply with a LAPSED message. Planted in the
+    // linked worktree it must change nothing; planted in the primary it must
+    // block. The second half proves the first is not passing vacuously.
+    const primaryState = path.join(primary, ".claude", "session-state");
+    mkdirSync(primaryState, { recursive: true });
+    writeFileSync(path.join(linkedState, "AUTOPILOT.on"), "not json at all");
+    r = runHook(call(BENIGN_SQL), primary);
+    ok(!isDeny(r), "a flag Mason never armed here, sitting in a sibling worktree, does not change the rule-set");
+    ok(!/LAPSED/i.test(r.stdout), "worktree AUTOPILOT.on is not read as this checkout's authorization state");
+
+    writeFileSync(path.join(primaryState, "AUTOPILOT.on"), "not json at all");
+    r = runHook(call(BENIGN_SQL), primary);
+    ok(isDeny(r) && /LAPSED/i.test(r.stdout), "the same flag in the PRIMARY checkout still parks the apply");
+    rmSync(path.join(primaryState, "AUTOPILOT.on"));
+
     git(["worktree", "remove", "--force", linked], primary);
   } finally {
     rmSync(tmp, { recursive: true, force: true });

@@ -23,10 +23,16 @@ candidate only wins by satisfying every criterion the single-directory version d
 evidence about a migration, and reading it from a sibling worktree would let a flag Mason never armed
 here change the rule-set.
 
-Proven by running the real hook binary against real `git worktree add` fixtures, not mocks — 61
-assertions, up from 57 — and mutation-tested both directions: reverting the fix fails the
-worktree-proof assertion, and deleting the `queryHash` binding fails the edited-after-review
-assertion.
+Proven by running the real hook binary against real `git worktree add` fixtures, not mocks — 64
+assertions, up from 57 — and mutation-tested three directions: reverting the fix fails the
+worktree-proof assertion, deleting the `queryHash` binding fails the edited-after-review assertion,
+and widening the `AUTOPILOT.on` lookup the same way as the proof lookup fails the non-widening
+assertions. That last case came from CodeRabbit's review of PR #273: the unwidened flag was the one
+behavior with no test pinning it, and so the one most likely to regress silently later. A malformed
+flag is the loudest signal available — it forces the `stale` state that parks every apply — so the
+test plants one in the linked worktree and asserts nothing changes, then plants the same flag in the
+primary checkout and asserts the apply is parked, which is what keeps the first assertion from
+passing vacuously.
 
 ## 2026-07-29 — Application-service costs preserve exact bigint cents
 
