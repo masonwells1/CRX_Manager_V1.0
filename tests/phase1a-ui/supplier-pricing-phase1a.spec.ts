@@ -45,6 +45,21 @@ const products = [
   },
 ];
 
+const supplierMarketEvidence = [
+  {
+    vendorId: SUPPLIER_ID, vendor: 'Supplier A', productSupplierLinkId: '66666666-6666-4666-8666-666666666666',
+    quotedPackageCostCents: '9100', normalizedCostCents: '3640',
+  },
+  {
+    vendorId: '77777777-7777-4777-8777-777777777777', vendor: 'Supplier B', productSupplierLinkId: '88888888-8888-4888-8888-888888888888',
+    quotedPackageCostCents: '6075', normalizedCostCents: '6075',
+  },
+  {
+    vendorId: '99999999-9999-4999-8999-999999999999', vendor: 'Supplier C', productSupplierLinkId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab',
+    quotedPackageCostCents: '4500', normalizedCostCents: '4500',
+  },
+] as const;
+
 function base64Url(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
 }
@@ -192,6 +207,35 @@ function productPriceHistoryResponse() {
   };
 }
 
+function supplierMarketEvidenceResponse() {
+  return products.map((product, index) => {
+    const evidence = supplierMarketEvidence[index]!;
+    return {
+      product_id: product.id,
+      supplier_quote_count: 1,
+      comparable_quote_count: 1,
+      replacement_cost_cents: evidence.normalizedCostCents,
+      replacement_cost_as_of: '2026-07-20',
+      best_supplier: evidence.vendor,
+      last_paid_cents: null,
+      last_paid_as_of: null,
+      recent_po_weighted_average_cents: null,
+      recent_po_window: 'trailing_12_months',
+      comparison_status: 'comparable',
+      suppliers: [{
+        vendor_id: evidence.vendorId,
+        vendor_name: evidence.vendor,
+        product_supplier_link_id: evidence.productSupplierLinkId,
+        quoted_package_cost_cents: evidence.quotedPackageCostCents,
+        normalized_cost_cents: evidence.normalizedCostCents,
+        effective_from: '2026-07-20',
+        comparison_status: 'comparable',
+        is_best_comparable: true,
+      }],
+    };
+  });
+}
+
 test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ page }) => {
   mkdirSync(OUTPUT_DIR, { recursive: true });
   const consoleErrors: string[] = [];
@@ -247,8 +291,18 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
     if (url.pathname === '/rest/v1/cost_history' || url.pathname === '/rest/v1/unit_conversions') return json([]);
     if (url.pathname === '/rest/v1/activity_feed') return json([]);
     if (url.pathname.endsWith('/rpc/create_pricing_workbook_export')) return json(exportResponse());
-    if (url.pathname.endsWith('/rpc/get_product_cost_basis_workspace')) return json(costBasisWorkspaceResponse());
-    if (url.pathname.endsWith('/rpc/get_product_price_history')) return json(productPriceHistoryResponse());
+    if (url.pathname.endsWith('/rpc/get_supplier_market_evidence')) {
+      expect(request.postDataJSON()).toEqual({ p_product_ids: products.map((product) => product.id) });
+      return json(supplierMarketEvidenceResponse());
+    }
+    if (url.pathname.endsWith('/rpc/get_product_cost_basis_workspace')) {
+      expect(request.postDataJSON().p_product_id).toBe(products[0].id);
+      return json(costBasisWorkspaceResponse());
+    }
+    if (url.pathname.endsWith('/rpc/get_product_price_history')) {
+      expect(request.postDataJSON().p_product_id).toBe(products[0].id);
+      return json(productPriceHistoryResponse());
+    }
     if (url.pathname.endsWith('/rpc/preview_product_cost_basis_changes')) {
       const body = request.postDataJSON();
       previewRequests.push(body);
@@ -257,6 +311,8 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
       if (source === 'pricing_worksheet') worksheetPreviewCount += 1;
 
       if (source === 'product_page') {
+        expect(submitted).toHaveLength(1);
+        expect(submitted[0].product_id).toBe(products[0].id);
         return json({
           change_set_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', request_fingerprint: 'quick-fingerprint',
           source, status: 'previewed', expires_at: '2026-07-16T23:00:00Z', submitted_row_count: 1,
@@ -315,6 +371,20 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
   expect(worksheet).toBeTruthy();
   const headers = new Map<string, number>();
   worksheet!.getRow(1).eachCell((cell, column) => headers.set(String(cell.value), column));
+  expect(products.map((_, index) => worksheet!.getCell(index + 2, headers.get('product_id')!).value))
+    .toEqual(products.map((product) => product.id));
+  expect(worksheet!.getCell(2, headers.get('best_supplier')!).value).toBe('Supplier A');
+  expect(worksheet!.getCell(2, headers.get('replacement_cost')!).value).toBe('$36.40');
+  expect(worksheet!.getCell(2, headers.get('supplier_comparison_status')!).value).toBe('comparable');
+
+  const supplierEvidenceSheet = workbook.getWorksheet('Supplier Evidence');
+  expect(supplierEvidenceSheet).toBeTruthy();
+  const supplierEvidenceHeaders = new Map<string, number>();
+  supplierEvidenceSheet!.getRow(1).eachCell((cell, column) => supplierEvidenceHeaders.set(String(cell.value), column));
+  expect(supplierEvidenceSheet!.getCell(2, supplierEvidenceHeaders.get('product_id')!).value).toBe(products[0].id);
+  expect(supplierEvidenceSheet!.getCell(2, supplierEvidenceHeaders.get('quoted_package_cost')!).value).toBe('$91.00');
+  expect(supplierEvidenceSheet!.getCell(2, supplierEvidenceHeaders.get('normalized_inventory_unit_cost')!).value).toBe('$36.40');
+  expect(supplierEvidenceSheet!.getCell(2, supplierEvidenceHeaders.get('comparison_status')!).value).toBe('comparable');
   const set = (row: number, header: string, value: string | number) => worksheet!.getCell(row, headers.get(header)!).value = value;
   set(2, 'pricing_mode', 'margin_driven'); set(2, 'new_cost', 0); set(2, 'tier1_margin_percent', 20); set(2, 'tier2_margin_percent', 25); set(2, 'tier3_margin_percent', 30); set(2, 'change_reason', 'Monthly margin update');
   set(3, 'pricing_mode', 'price_driven'); set(3, 'new_cost', 60); set(3, 'tier1_price', 70); set(3, 'tier2_price', 80); set(3, 'tier3_price', 90); set(3, 'change_reason', 'Monthly price update');
