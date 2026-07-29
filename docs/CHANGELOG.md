@@ -92,6 +92,101 @@ underlying defect now has its own OPEN row in `docs/manual/KNOWN_ISSUES.md`. Its
 re-run the count query and apply it with Mason's go-ahead, which would have resurrected a
 business-data write this change exists to retire.
 
+## 2026-07-29 — Branch/worktree cleanup: ten review documents recovered before the branches went away
+
+43 worktrees and 38 local branches had accumulated. Nine of those branches held review and design
+documents that **no PR had ever tracked** — deleting them would have destroyed the only copy of ten
+files, ~121 KB, including a 35 KB Section 9 reconciliation design. All ten were copied onto `main`
+first; the branches were only then deleted.
+
+Ancestry was not used to decide what was safe. `git merge-base --is-ancestor` reports a fully landed
+branch as unmerged whenever its PR was squash-merged, so every branch was classified by file content
+instead: for each file the branch adds, does that exact path exist in `origin/main`? The check must
+be `git ls-tree -r origin/main --name-only | grep -qxF`, not `git cat-file -e origin/main:<path>` —
+the latter false-negatives on dot-prefixed paths (`.github/`, `.claude/`) and manufactures phantom
+"unlanded work".
+
+Two branches holding unlanded *code* were deliberately kept. `codex/pricing-rpc-live-ledger-closeout`
+looked superseded because PR #265 landed similar work from a differently *named* branch, but content
+comparison found 8 files on it that `main` lacks — five of them `.claude/hooks/patch-*.mjs` — and
+`git ls-remote` shows it was never pushed, so those files exist only on Mason's machine. The other is
+`codex/section1-security-hardening-20260725`, carrying parked security migration `20260725234503`.
+
+Everything deleted is restorable from a real tag on `origin` (`archive/2026-07-29-cleanup/*`), and
+the restore path was **proven by running it** — branch recreated from a tag, content read back, drill
+branch deleted, tag confirmed still on `origin`. A SHA in a Markdown ledger preserves nothing; only a
+ref does. The two kept-but-unpushed branches carry `preserve/2026-07-29/*` tags as well. Untracked
+files cannot be saved by any tag, so four draft files were physically copied to
+`C:/Users/mason/CRX_Manager_archive/` before their worktree was removed.
+
+Four of the recovered documents are **superseded history, not current state** — PR #268 already
+landed newer 2026-07-28 reports for the same gauntlet sections — and a fifth ran on a checkout behind
+`origin/main` and says so itself, so gauntlet index row 4 still points at the 2026-07-22 report. The
+index was edited in the same change to say all of this, and to repoint two live references at a
+branch that this cleanup deleted. This project's recorded failure mode is exactly a stale audit
+report being read as current state.
+
+Full detail, including every tip SHA and the restore commands:
+[2026-07-29-branch-worktree-cleanup-restore-ledger.md](audits/2026-07-29-branch-worktree-cleanup-restore-ledger.md).
+
+A modified `docs/manual/CURRENT_STATE.md` found in one doomed worktree recorded a production Edge
+Function deploy (`process-document` v20 → v21 from PR #268) that appeared nowhere on `main`. Its
+claim was re-verified live — read-only `list_edge_functions` reports version **21**, `ACTIVE`,
+`verify_jwt=true` — and landed. The signed-in upload/OCR smoke test it flags is still outstanding.
+The other uncommitted find, a scratch rewrite of the CI containment gate's trusted base to a
+throwaway commit, was archived rather than landed; landing it would have broken the check.
+
+Result: worktrees 46 → 7, local branches 38 → 7. No remote branch was deleted; GitHub auto-deletes
+merged heads, and `origin` held only 13 refs. Live sessions were identified from `list_sessions`
+`isRunning` and the `"cwd"` field inside `~/.codex/sessions/*.jsonl` — **not** from worktree index
+timestamps, which the SessionStart worktree-awareness hook refreshes across every checkout, and
+**not** by grepping transcripts for worktree names, which matches every session that ran
+`git worktree list`. Codex spawned three new worktrees mid-cleanup (43 → 46), so the inventory was
+re-taken immediately before removal; all three were kept.
+
+**Corrections from this PR's own review.** The reviewers caught a real methodology hole: the first
+pass classified branches by **path presence** — does the path the branch touches also exist on
+`origin/main`? That clears a branch which uniquely *modifies* a file already on `main`. Every deleted
+branch was re-checked by content (what the branch changed against its own merge-base, then whether
+each blob appears anywhere in `main`'s history). Three showed real changes; all three proved
+**superseded, not unlanded**: `chore/migration-ledger-reconcile-20260729`'s three migrations landed
+renumbered (`20260729043000→125227`, `043100→125251`, `122730→125314`), every
+`codex/phase3c-bootstrap-reconcile` path is on `main`, and `wt`'s admin-only `cost_per_acre_cents`
+frontend is superseded by `main`'s version plus the atomic single-RPC save from `20260729035923`.
+**No work was lost.** A claim in the first ledger revision — that `git cat-file -e` false-negatives on
+dot-prefixed paths — was also **wrong and is retracted**; it was retested against `.github/` and
+`.claude/` paths and succeeds on both.
+
+Three findings in the recovered documents were resolved against live rather than left contradicting
+each other. The queue ledger's **"77 Main Warehouse `quantity_on_order` mismatches"** is unsupported:
+the canonical preflight re-run read-only on 2026-07-29 returns **0 mismatch rows** across 117 Main
+Warehouse rows, so the file now carries a correction pointing at the Section 9 design as
+authoritative. The Section 1 "review CLEAN" vs "review outstanding" conflict is not a conflict —
+clean at a SHA is not ready-to-publish once a rebase mints a new SHA — and both documents now say so.
+And a genuine unresolved defect was promoted out of a historical design into gauntlet index row 9:
+`create_vendor_bill`/`update_vendor_bill` check `check_period_open(bill_date)` without locking
+`accounting_periods`, and `close_accounting_period` takes no lock either, so a bill can commit dated
+inside a month that just closed. Its completeness gate also counts only unposted *invoices*, never
+vendor bills. Confirmed by live function-body reads; **exposure is currently zero** — no accounting
+period has ever been closed on live.
+
+**Second review round.** The most consequential fix: row 9's `quantity_on_order` wording described
+reconciliation as an open unimplemented gap, which could have pointed a future agent at a production
+data migration against data that is already correct. It is now explicitly labelled a **fail-closed
+contingency, not unfinished work** — the design's verdict is "DO NOT CREATE A RECONCILIATION
+MIGRATION," `20260726190515` already installs the recomputation function and triggers, and the live
+preflight returns 0 mismatches; the queue ledger's superseded "required future path" now says so too.
+Row 12 and the "Next Section" note were stale in the other direction, claiming the `process-document`
+Vision timeout was fixed only locally with deployment gated: PR #268 (`7c096444`) merged, and the
+deployed **v21** bundle was read back read-only and does contain `VISION_OCR_TOTAL_TIMEOUT_MS =
+120_000` with a shared `AbortSignal.timeout`, so it is live — the open item is a signed-in
+upload/OCR smoke test. Two recovered Section 10/12 documents also over-read their own evidence: an
+**empty** live table (0 `blend_tickets` rows) was described as "clean" when it proves nothing either
+way, and Section 12's "1 MEDIUM" excluded the `process-document` Vision timeout that Section 10
+counted as M1 — across both, the 2026-07-25 Edge Function MEDIUM count was 2. Finally, the
+`CURRENT_STATE.md` deploy note claimed an HTTP 200 verified **CORS**; it verifies reachability only,
+since no preflight was issued and no `Access-Control-Allow-*` headers were captured.
+
 ## 2026-07-29 — A migration built in a linked worktree could never be applied
 
 `migration-apply-guard.mjs` looked for apply-proofs in exactly one place: the `session-state`
