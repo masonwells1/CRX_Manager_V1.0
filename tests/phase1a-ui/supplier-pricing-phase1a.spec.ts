@@ -233,7 +233,7 @@ function supplierMarketEvidenceResponse() {
         is_best_comparable: true,
       }],
     };
-  });
+  }).reverse();
 }
 
 test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ page }) => {
@@ -322,11 +322,14 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
         });
       }
 
+      expect(source).toBe('pricing_worksheet');
+      expect(submitted.map((row) => row.product_id)).toEqual(products.map((product) => product.id));
       const effects = [
         effect(products[0], { cost: 90, prices: [112.5, 120, 128.57], margins: [0.2, 0.25, 0.3] }),
         effect(products[1], { cost: 60, prices: [70, 80, 90], margins: [0.14285714, 0.25, 0.33333333] }),
         effect(products[2], { cost: 45, prices: [56.25, 60, 64.29], margins: [0.2, 0.25, 0.3] }),
       ];
+      const effectsByProductId = new Map(effects.map((item) => [item.product_id, item]));
       const conflict = worksheetPreviewCount === 1;
       return json({
         change_set_id: conflict ? 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' : 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
@@ -335,10 +338,10 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
         ready_count: conflict ? 2 : 3, unchanged_count: 0, conflict_count: conflict ? 1 : 0, invalid_count: 0,
         apply_allowed: !conflict,
         rows: submitted.map((row, index) => ({
-          sequence: index + 1, product_id: products[index].id, submitted_row: row,
-          row_status: conflict && index === 1 ? 'conflict' : 'ready',
-          error_code: conflict && index === 1 ? 'PRICING_ROW_CONFLICT' : null,
-          effect: conflict && index === 1 ? null : effects[index],
+          sequence: index + 1, product_id: row.product_id, submitted_row: row,
+          row_status: conflict && row.product_id === products[1].id ? 'conflict' : 'ready',
+          error_code: conflict && row.product_id === products[1].id ? 'PRICING_ROW_CONFLICT' : null,
+          effect: conflict && row.product_id === products[1].id ? null : effectsByProductId.get(String(row.product_id)),
         })),
       });
     }
@@ -373,18 +376,42 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
   worksheet!.getRow(1).eachCell((cell, column) => headers.set(String(cell.value), column));
   expect(products.map((_, index) => worksheet!.getCell(index + 2, headers.get('product_id')!).value))
     .toEqual(products.map((product) => product.id));
-  expect(worksheet!.getCell(2, headers.get('best_supplier')!).value).toBe('Supplier A');
-  expect(worksheet!.getCell(2, headers.get('replacement_cost')!).value).toBe('$36.40');
-  expect(worksheet!.getCell(2, headers.get('supplier_comparison_status')!).value).toBe('comparable');
+  const pricingRowsByProductId = new Map(products.map((_, index) => [
+    String(worksheet!.getCell(index + 2, headers.get('product_id')!).value), index + 2,
+  ]));
+  expect(pricingRowsByProductId.size).toBe(products.length);
+  for (const [index, product] of products.entries()) {
+    const row = pricingRowsByProductId.get(product.id);
+    const evidence = supplierMarketEvidence[index]!;
+    expect(row, `Missing Pricing Update summary for ${product.id}`).toBeTruthy();
+    expect(worksheet!.getCell(row!, headers.get('best_supplier')!).value).toBe(evidence.vendor);
+    expect(worksheet!.getCell(row!, headers.get('replacement_cost')!).value)
+      .toBe(`$${(Number(evidence.normalizedCostCents) / 100).toFixed(2)}`);
+    expect(worksheet!.getCell(row!, headers.get('supplier_comparison_status')!).value).toBe('comparable');
+  }
 
   const supplierEvidenceSheet = workbook.getWorksheet('Supplier Evidence');
   expect(supplierEvidenceSheet).toBeTruthy();
   const supplierEvidenceHeaders = new Map<string, number>();
   supplierEvidenceSheet!.getRow(1).eachCell((cell, column) => supplierEvidenceHeaders.set(String(cell.value), column));
-  expect(supplierEvidenceSheet!.getCell(2, supplierEvidenceHeaders.get('product_id')!).value).toBe(products[0].id);
-  expect(supplierEvidenceSheet!.getCell(2, supplierEvidenceHeaders.get('quoted_package_cost')!).value).toBe('$91.00');
-  expect(supplierEvidenceSheet!.getCell(2, supplierEvidenceHeaders.get('normalized_inventory_unit_cost')!).value).toBe('$36.40');
-  expect(supplierEvidenceSheet!.getCell(2, supplierEvidenceHeaders.get('comparison_status')!).value).toBe('comparable');
+  const evidenceRowsByProductId = new Map<string, number>();
+  for (let row = 2; row <= supplierEvidenceSheet!.actualRowCount; row += 1) {
+    const productId = String(supplierEvidenceSheet!.getCell(row, supplierEvidenceHeaders.get('product_id')!).value);
+    expect(evidenceRowsByProductId.has(productId), `Duplicate Supplier Evidence row for ${productId}`).toBe(false);
+    evidenceRowsByProductId.set(productId, row);
+  }
+  expect([...evidenceRowsByProductId.keys()]).toEqual(products.map((product) => product.id));
+  for (const [index, product] of products.entries()) {
+    const row = evidenceRowsByProductId.get(product.id);
+    const evidence = supplierMarketEvidence[index]!;
+    expect(row, `Missing Supplier Evidence detail for ${product.id}`).toBeTruthy();
+    expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('supplier')!).value).toBe(evidence.vendor);
+    expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('quoted_package_cost')!).value)
+      .toBe(`$${(Number(evidence.quotedPackageCostCents) / 100).toFixed(2)}`);
+    expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('normalized_inventory_unit_cost')!).value)
+      .toBe(`$${(Number(evidence.normalizedCostCents) / 100).toFixed(2)}`);
+    expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('comparison_status')!).value).toBe('comparable');
+  }
   const set = (row: number, header: string, value: string | number) => worksheet!.getCell(row, headers.get(header)!).value = value;
   set(2, 'pricing_mode', 'margin_driven'); set(2, 'new_cost', 0); set(2, 'tier1_margin_percent', 20); set(2, 'tier2_margin_percent', 25); set(2, 'tier3_margin_percent', 30); set(2, 'change_reason', 'Monthly margin update');
   set(3, 'pricing_mode', 'price_driven'); set(3, 'new_cost', 60); set(3, 'tier1_price', 70); set(3, 'tier2_price', 80); set(3, 'tier3_price', 90); set(3, 'change_reason', 'Monthly price update');
