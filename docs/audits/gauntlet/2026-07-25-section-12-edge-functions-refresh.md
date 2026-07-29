@@ -3,7 +3,24 @@
 **Date:** 2026-07-25
 **Auditor:** Codex (read-only, report-only)
 **Base reviewed:** `25363345adeabb5b2b08a3772a0de3f0edcb3952` (`origin/main` at worktree creation)
+> **Superseded history — do not read as current state.** This file was recovered onto `origin/main`
+> on 2026-07-29 from the deleted branch `codex/section12-edge-functions-refresh-20260725` so the
+> intermediate findings are not lost. It is **superseded by the 2026-07-28 Section 12 report** linked
+> from row 12 of [live-foundation-gauntlet-index.md](live-foundation-gauntlet-index.md), which is
+> authoritative.
+
 **Verdict:** **NEEDS FOLLOW-UP — 0 BLOCKER, 0 HIGH, 1 MEDIUM, 0 LOW**
+
+**Count caveat — this MEDIUM total is not the whole Edge Function picture.** The single MEDIUM below
+is the `send-email` time-derived idempotency key. A **second** Edge Function MEDIUM existed at this
+same date and is *not* counted here: the unbounded Google Vision call in `process-document`, recorded
+as **M1** in
+[2026-07-25-section-10-blend-ticket-ocr-refresh.md](2026-07-25-section-10-blend-ticket-ocr-refresh.md).
+It landed under Section 10 because it surfaced through the OCR/blend-ticket path, even though
+`process-document` is an Edge Function inside this section's scope. Across both reports the
+2026-07-25 Edge Function MEDIUM count was therefore **2, not 1**. The `process-document` timeout is
+now **fixed and deployed live** (PR #268 / `7c096444`, deployed function v21, verified read-only
+2026-07-29).
 
 ## Scope and boundaries
 

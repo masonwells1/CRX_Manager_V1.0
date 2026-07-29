@@ -7,8 +7,11 @@
 
 - **2026-07-28:** `process-document` Edge Function deployed v20 → v21 from merged PR #268
   (`7c096444`). Re-verified live 2026-07-29 by read-only `list_edge_functions`: version **21**,
-  status `ACTIVE`, `verify_jwt=true`. The production CORS/boot path returned HTTP 200 for
-  `https://croprxsolutions.app`. **The signed-in document-upload/OCR path still needs one real-app
+  status `ACTIVE`, `verify_jwt=true`, and the deployed bundle read back with
+  `VISION_OCR_TOTAL_TIMEOUT_MS = 120_000` and a shared `AbortSignal.timeout`. The production **boot**
+  path returned HTTP 200 for `https://croprxsolutions.app` — that is a reachability check only and
+  says nothing about CORS, since no preflight was issued and no
+  `Access-Control-Allow-*` response headers were captured. **The signed-in document-upload/OCR path still needs one real-app
   smoke test** — that is the outstanding item, not the deploy itself.
 
 ## 1. Reality check

@@ -80,6 +80,23 @@ inside a month that just closed. Its completeness gate also counts only unposted
 vendor bills. Confirmed by live function-body reads; **exposure is currently zero** — no accounting
 period has ever been closed on live.
 
+**Second review round.** The most consequential fix: row 9's `quantity_on_order` wording described
+reconciliation as an open unimplemented gap, which could have pointed a future agent at a production
+data migration against data that is already correct. It is now explicitly labelled a **fail-closed
+contingency, not unfinished work** — the design's verdict is "DO NOT CREATE A RECONCILIATION
+MIGRATION," `20260726190515` already installs the recomputation function and triggers, and the live
+preflight returns 0 mismatches; the queue ledger's superseded "required future path" now says so too.
+Row 12 and the "Next Section" note were stale in the other direction, claiming the `process-document`
+Vision timeout was fixed only locally with deployment gated: PR #268 (`7c096444`) merged, and the
+deployed **v21** bundle was read back read-only and does contain `VISION_OCR_TOTAL_TIMEOUT_MS =
+120_000` with a shared `AbortSignal.timeout`, so it is live — the open item is a signed-in
+upload/OCR smoke test. Two recovered Section 10/12 documents also over-read their own evidence: an
+**empty** live table (0 `blend_tickets` rows) was described as "clean" when it proves nothing either
+way, and Section 12's "1 MEDIUM" excluded the `process-document` Vision timeout that Section 10
+counted as M1 — across both, the 2026-07-25 Edge Function MEDIUM count was 2. Finally, the
+`CURRENT_STATE.md` deploy note claimed an HTTP 200 verified **CORS**; it verifies reachability only,
+since no preflight was issued and no `Access-Control-Allow-*` headers were captured.
+
 ## 2026-07-29 — A migration built in a linked worktree could never be applied
 
 `migration-apply-guard.mjs` looked for apply-proofs in exactly one place: the `session-state`

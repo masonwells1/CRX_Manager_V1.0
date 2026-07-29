@@ -16,8 +16,12 @@
 >   mismatch would have been two-thirds of every row in that location.
 >
 > Where this ledger and the Section 9 design disagree, **the design and the live re-run are
-> authoritative.** The reconciliation work itself remains open and is tracked as item (a) on row 9
-> of `docs/audits/gauntlet/live-foundation-gauntlet-index.md`.
+> authoritative.** In particular, the "Required future path" for Section 9 listed below is
+> **superseded**: the design's verdict is **"DO NOT CREATE A RECONCILIATION MIGRATION,"**
+> `20260726190515` already installs the recomputation function and triggers, and the live preflight
+> returns 0 mismatch rows. Reconciliation is a **fail-closed contingency to use only if a future
+> preflight returns non-zero** — not unfinished work to go implement. See row 9 of
+> `docs/audits/gauntlet/live-foundation-gauntlet-index.md`.
 
 ## Objective and boundary
 

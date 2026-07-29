@@ -1,7 +1,14 @@
 # Section 10 refresh — Blend tickets, OCR, review/payment/order link, and Edge handoff
 
+> **Superseded history — do not read as current state.** This file was recovered onto `origin/main`
+> on 2026-07-29 from the deleted branch `codex/section10-blend-ocr-refresh-20260725` so the
+> intermediate findings are not lost. It is **superseded by the 2026-07-28 Section 10 report** linked
+> from row 10 of [live-foundation-gauntlet-index.md](live-foundation-gauntlet-index.md), which is
+> authoritative. Its MEDIUM finding (M1, the `process-document` Vision timeout) is **fixed and
+> deployed live** — PR #268 / `7c096444`, deployed function v21, verified read-only 2026-07-29.
+
 **Cycle:** 2026-07-25 (performed 2026-07-26)
-**Verdict:** **MEDIUM finding — repair the `process-document` Vision timeout before relying on it for bounded OCR completion.** The blend-ticket lifecycle, current link/unlink actor binding, idempotency, state guards, and current live data are otherwise clean in the evidence available below.
+**Verdict:** **MEDIUM finding — repair the `process-document` Vision timeout before relying on it for bounded OCR completion.** No defect was found in the blend-ticket lifecycle, link/unlink actor binding, idempotency, or state guards — but that is a **static/code-reading result, not a live-data result.** The live dataset held **0 non-deleted `blend_tickets` rows**, so no lifecycle transition could be exercised and the live evidence is *empty rather than clean*: it neither confirms nor contradicts correct runtime behavior. Read the non-findings below as "no defect visible in the code read," not as "proven correct against real data."
 **Scope:** audit only; no application, schema, Edge Function, test, hook, process-document, generated-type, plan, manual, or live-service changes were made. The normal pre-commit hook regenerated only the mandatory date stamp in `docs/app-workflow-map.html` (Jul 23 → Jul 26); that mechanical map churn is included with this report.
 
 ## Baseline, isolation, and collision check
@@ -36,7 +43,7 @@ Live `blend_tickets` CHECK constraints and `src/types/index.ts:1537-1541` agree 
 | `order_link_status` | `unlinked`, `linked` |
 | `payment_status` | `unbilled`, `billed`, `prepaid`, `no_charge` |
 
-`BlendTicketDetail` requires completed OCR, approved review, unbilled payment, unlinked status, matched active products, and no local dirty state before link/create-order actions (`:135-153`). It prevents direct invoice creation after an order link and protects unlinking when payment, an active invoice, or an application record makes the relationship immutable (`:155-173`, `:812-847`, `:1716-1732`). The current detail tests contain focused UI guards for these downstream locks; see limitations for execution status.
+`BlendTicketDetail` requires OCR to be completed, review to be approved, payment to be unbilled, unlinked status, matched active products, and no local dirty state before link/create-order actions (`:135-153`). It prevents direct invoice creation after an order link and protects unlinking when payment, an active invoice, or an application record makes the relationship immutable (`:155-173`, `:812-847`, `:1716-1732`). The current detail tests contain focused UI guards for these downstream locks; see limitations for execution status.
 
 ### Link/unlink/create-order actor and idempotency boundary
 
@@ -65,7 +72,7 @@ Before provider work, the function bounds request input to 52,000,000 bytes on t
 
 The query was read-only and made no RPC or Edge Function invocation.
 
-- `blend_tickets`: **0** non-deleted rows, so there are no current live status combinations to remediate and no lifecycle transition could be exercised safely.
+- `blend_tickets`: **0** non-deleted rows. There are no current live status combinations to remediate, but equally **no lifecycle transition could be exercised**, so this table yields *no live evidence either way* — an empty result is not a passing result.
 - `ocr_processing_queue`: **0** rows.
 - `blend-ticket-images` Storage: **1** object; this is not an orphan judgment and was not touched.
 - RLS is enabled on both `blend_tickets` and `ocr_processing_queue`.
