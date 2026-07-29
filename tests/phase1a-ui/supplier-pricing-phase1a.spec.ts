@@ -6,6 +6,8 @@ import { resolve } from 'node:path';
 const API = 'http://127.0.0.1:54321';
 const ACTOR_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OUTPUT_DIR = resolve('output/playwright');
+const SUPPLIER_PRICE_OBSERVATION_ID = '44444444-4444-4444-8444-444444444444';
+const SUPPLIER_ID = '55555555-5555-4555-8555-555555555555';
 
 const products = [
   {
@@ -122,6 +124,74 @@ function effect(product: typeof products[number], overrides: { cost: number; pri
   };
 }
 
+function costBasisWorkspaceResponse() {
+  return {
+    enabled: false,
+    product: {
+      id: products[0].id,
+      product_name: products[0].product_name,
+      sku: products[0].sku,
+      pricing_version: products[0].pricing_version,
+      current_cost_cents: '8000',
+      tier1_margin_percent: '20',
+      tier2_margin_percent: '25',
+      tier3_margin_percent: '30',
+    },
+    current_basis: null,
+    supplier_candidates: [{
+      supplier_price_observation_id: SUPPLIER_PRICE_OBSERVATION_ID,
+      vendor_id: SUPPLIER_ID,
+      vendor_name: 'Supplier A',
+      quoted_package_cost_cents: '9100',
+      normalized_cost_cents: '3640',
+      effective_from: '2026-07-20',
+      price_kind: 'quote',
+    }],
+    purchase_candidates: [],
+  };
+}
+
+function productPriceHistoryResponse() {
+  return {
+    product_id: products[0].id,
+    summary: {
+      product_id: products[0].id,
+      supplier_quote_count: 1,
+      comparable_quote_count: 1,
+      replacement_cost_cents: '3640',
+      replacement_cost_as_of: '2026-07-20',
+      best_supplier: 'Supplier A',
+      last_paid_cents: null,
+      last_paid_as_of: null,
+      recent_po_weighted_average_cents: null,
+      recent_po_window: 'trailing_12_months',
+      comparison_status: 'comparable',
+      suppliers: [{
+        vendor_id: SUPPLIER_ID,
+        vendor_name: 'Supplier A',
+        product_supplier_link_id: '66666666-6666-4666-8666-666666666666',
+        quoted_package_cost_cents: '9100',
+        normalized_cost_cents: '3640',
+        effective_from: '2026-07-20',
+        comparison_status: 'comparable',
+        is_best_comparable: true,
+      }],
+    },
+    suppliers: [{ id: SUPPLIER_ID, name: 'Supplier A' }],
+    points: [{
+      stream: 'supplier_observation',
+      source_id: SUPPLIER_PRICE_OBSERVATION_ID,
+      vendor_id: SUPPLIER_ID,
+      supplier_name: 'Supplier A',
+      cost_cents: '9100',
+      normalized_cost_cents: '3640',
+      occurred_at: '2026-07-20T00:00:00Z',
+      detail: 'supplier_quote',
+      provenance: { price_kind: 'quote' },
+    }],
+  };
+}
+
 test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ page }) => {
   mkdirSync(OUTPUT_DIR, { recursive: true });
   const consoleErrors: string[] = [];
@@ -177,7 +247,9 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
     if (url.pathname === '/rest/v1/cost_history' || url.pathname === '/rest/v1/unit_conversions') return json([]);
     if (url.pathname === '/rest/v1/activity_feed') return json([]);
     if (url.pathname.endsWith('/rpc/create_pricing_workbook_export')) return json(exportResponse());
-    if (url.pathname.endsWith('/rpc/preview_product_pricing_changes')) {
+    if (url.pathname.endsWith('/rpc/get_product_cost_basis_workspace')) return json(costBasisWorkspaceResponse());
+    if (url.pathname.endsWith('/rpc/get_product_price_history')) return json(productPriceHistoryResponse());
+    if (url.pathname.endsWith('/rpc/preview_product_cost_basis_changes')) {
       const body = request.postDataJSON();
       previewRequests.push(body);
       const source = body.p_source as string;
@@ -214,7 +286,7 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
         })),
       });
     }
-    if (url.pathname.endsWith('/rpc/apply_product_pricing_change_set')) {
+    if (url.pathname.endsWith('/rpc/apply_product_cost_basis_change_set')) {
       const body = request.postDataJSON();
       applyRequests.push(body);
       const quick = body.p_change_set_id === 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -280,6 +352,7 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
 
   await page.goto(`/products/${products[0].id}`);
   await expect(page.getByText('Grower Description')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Select as cost basis' })).toBeDisabled();
   await page.getByLabel('Pricing mode').selectOption('margin_driven');
   await page.getByRole('button', { name: 'Update' }).click();
   const previewCountBeforeZeroProduct = previewRequests.length;
