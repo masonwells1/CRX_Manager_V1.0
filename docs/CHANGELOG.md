@@ -55,10 +55,18 @@ un-retired on `origin/main` — which this change also retires, taking it to 0.
 
 Also retired here: `PARKED-dispatch-backfill.sql`, a one-time backfill for jobs assigned before the
 per-field dispatch system existed. Confirmed dead against the live database — its own count query
-returns 0 rows, and the two sync triggers that supersede it
-(`trg_sync_job_location_dispatch_on_applicator_change` on `jobs`,
-`trg_sync_job_location_dispatch_on_field_insert` on `job_fields`) are live, so no new legacy row can
-appear. It was already a no-op when parked on 2026-07-10. No database change was made. Its row in
+returns 0 rows, no open assigned job is missing a dispatch row at all, and the two sync triggers that
+supersede it (`trg_sync_job_location_dispatch_on_applicator_change` on `jobs`,
+`trg_sync_job_location_dispatch_on_field_insert` on `job_fields`) are live. It was already a no-op
+when parked on 2026-07-10. No database change was made.
+
+The cross-model review of this PR pushed back on the *reason* given for retiring it, correctly: both
+sync triggers silently skip a job whose assignee is not (`is_active` and `role = 'applicator'`),
+nothing in the database prevents that assignment, and no trigger re-syncs when a profile is later
+reactivated — so a gap can reopen, and 2 open jobs are assigned to an `admin`-role profile today.
+The retirement stands (the file is a no-op, and a bulk backfill is the wrong remedy for a
+trigger-coverage defect), but the claim that it "can never have work again" was withdrawn and the
+underlying defect now has its own OPEN row in `docs/manual/KNOWN_ISSUES.md`. Its retirement row in
 `docs/manual/KNOWN_ISSUES.md` was rewritten in the same change — it had still been telling agents to
 re-run the count query and apply it with Mason's go-ahead, which would have resurrected a
 business-data write this change exists to retire.
