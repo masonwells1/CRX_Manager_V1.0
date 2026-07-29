@@ -6,6 +6,22 @@ All significant development milestones, in reverse chronological order.
 
 Supplier Pricing Phase 3 Stage C: applied the owner-approved return-policy classification live (migration 20260729213733) — 21 products no_return (10 also full-tote-only), 2 returnable, remainder left unknown by owner decision. Activates the previously dormant assert_phase3_return_policy() guard across create_return/approve_return/receive_return/issue_return_credit. Rows keyed by primary key so no product names or SKUs enter the repo. Verified live: catalog 604 rows -> 21/2/581/0, tote=10 all inside no_return, and the guard raises RETURN_POLICY_NO_RETURN on a real classified product while both returnable overrides and an untouched unknown product pass. Landed via PR #282.
 
+The classification is a point-in-time snapshot, so a second change makes the relationship permanent
+(owner decision, same day): `scripts/db-invariant-sweeps/predicates/product-name-vs-return-policy.sql`
+flags any product whose **name** asserts it cannot be returned while its `return_policy` is not
+`no_return` — the state where the app accepts a return the supplier will refuse, because the
+`'unknown'` default does not trip `assert_phase3_return_policy()`. It is a detector, not a CHECK
+constraint, and deliberately so: the live governance trigger fires on
+`UPDATE OF product_family_id, return_policy, packaging_variant, is_full_tote_only`, so a CHECK tying
+name to policy would force `return_policy` into any rename `UPDATE`, raise
+`PRODUCT_PHASE3_METADATA_GOVERNED`, and make renaming a product to include "NO RETURN" impossible
+through the app. Only the unsafe direction is a violation; `no_return` on a product whose name says
+nothing is the expected shape once policies come from supplier sheets, and it fails safe. The
+predicate emits the product id and never the name or SKU, because the repo is public and the
+allowlist is tracked. Proven live: 0 violations across 604 products, and the same query with the
+classification stripped out returns all 21 — the alarm demonstrably fires rather than being a check
+that has only ever seen zero. Landed via PR #286.
+
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `1442ee92 feat(products): Supplier Pricing Phase 3 Stage C return-policy classification`
   - `149c8b00 docs(gauntlet): close inventory net position backlog (#280)`
