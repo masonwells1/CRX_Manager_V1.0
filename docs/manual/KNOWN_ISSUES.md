@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-28** (live high-water re-read this date via the Supabase connector: **916 ledger rows, max version `20260728182141`**. `secdef_pricing_reads_office_only` **RESOLVES section 0**: both remaining `SECURITY DEFINER` pricing readers now enforce active admin/sales-rep access in-body, with explicit execute grants. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Sections 0 and 0a now have nothing open**; they are retained for their proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-28** (live high-water re-read this date via the Supabase connector: **918 ledger rows, max version `20260728233459`**. Both halves of the anon-EXECUTE revoke **RESOLVE section 0c** and are applied live — `revoke_anon_execute_non_policy_functions` (ledger `20260728231350`) and `revoke_anon_execute_rls_role_helpers` (ledger `20260728233459`) — so logged-out callers no longer reach any of the 43 functions, and both raised the high-water above the `20260728182141` this stamp previously recorded. `secdef_pricing_reads_office_only` **RESOLVES section 0**: both remaining `SECURITY DEFINER` pricing readers now enforce active admin/sales-rep access in-body, with explicit execute grants. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Sections 0, 0a and 0c now have nothing open**; they are retained for their proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -154,19 +154,35 @@ recorded for audit accuracy, not as open remediation work.
 
 ---
 
-## 0c. PARKED 2026-07-28 — logged-out visitors can execute 43 database functions
+## 0c. RESOLVED 2026-07-28 — logged-out visitors could execute 43 database functions
 
-**Status: fix WRITTEN and PARKED in two halves, NEITHER applied live.** Deliberately split so the
-easy half can be approved without the risky half.
+**Status: BOTH halves APPLIED LIVE 2026-07-28** with Mason's in-chat approval, under the full proof
+gate (both reviewer charters CLEAN from gpt-5.6-terra, hash-bound proofs, live-ledger preflight
+recorded first). Deliberately split so the easy half could be approved without the risky half; in
+the end both were approved together.
 
-- **Half 1 — `20260728193000_revoke_anon_execute_non_policy_functions`** (this section's PR). 40
+Supabase stamps its own ledger version at apply time, so each file was B7-renamed to the version it
+came back with — bodies never edited. Half 1 authored `20260728193000` → **ledger
+`20260728231350`**; half 2 authored `20260728193100`, renamed to `20260728232500` to clear the
+high-water half 1 had just raised, then → **ledger `20260728233459`**. Live high-water is now
+`20260728233459` at 918 ledger rows.
+
+**Post-apply proof, read back independently from live.** Half 1: `anon` EXECUTE **false on 40 of
+40** targets, `authenticated` **true on 40 of 40**, `service_role` **true on 40 of 40**. Half 2:
+`anon` **false** on `is_admin()`, `is_applicator()` and `is_driver()`; `authenticated` and
+`service_role` **true on all three**. `handle_new_user()` remains anon-executable by design.
+Production loaded logged out immediately after: the sign-in page renders, zero console messages, no
+`42501`, all asset requests 200.
+
+- **Half 1 — `20260728231350_revoke_anon_execute_non_policy_functions`** (was `20260728193000`). 40
   functions that appear in **no** RLS policy, so nothing changes from "returns nothing" to "hard
   error". 20 are trigger-only (`RETURNS trigger`, no arguments) and PostgREST cannot expose them at
   all. 12 are SECURITY DEFINER callables that already gate internally. **The other 8 are the actual
   live exposure**: `calculate_billing_splits(bigint, numeric[])`, `check_period_open(date)` and the
-  six `next_*_number()` document-number allocators have no auth gate of any kind, and a logged-out
-  caller can invoke them today.
-- **Half 2 — `20260728193100_revoke_anon_execute_rls_role_helpers`** — `is_admin()`,
+  six `next_*_number()` document-number allocators had no auth gate of any kind, and before this
+  migration a logged-out caller could invoke them. Since the apply, `anon` has no EXECUTE on any of
+  the 40.
+- **Half 2 — `20260728233459_revoke_anon_execute_rls_role_helpers`** (was `20260728193100`) — `is_admin()`,
   `is_applicator()`, `is_driver()`. These are evaluated **inside** RLS policies as the querying
   role, so removing anon's EXECUTE turns a silent filter into `42501 permission denied for function
   is_admin`. Blast radius measured live: 30 tables / 70 PUBLIC-audience policies for `is_admin`, 6
@@ -174,7 +190,8 @@ easy half can be approved without the risky half.
   that state on 24 tables in production today and nothing is broken by it, the login route never
   reads those tables as anon (`src/App.tsx:185` — `login` is the only route outside
   `<ProtectedRoute>`), no edge function reads as anon, and the `authenticated` grant is retained and
-  positively asserted. Approve this one separately.
+  positively asserted. That judgment held: the post-apply reads above and the logged-out production
+  load confirm it.
 
 **Why this is not the blanket judgment it looks like.** The overnight Codex draft
 (`20260728185827_revoke_anon_security_definer_execute`) revoked **44** functions with the same

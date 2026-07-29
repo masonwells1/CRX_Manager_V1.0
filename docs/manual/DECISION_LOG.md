@@ -33,16 +33,19 @@ Read-only check against live `rhyzpcqhnizqbxphqdkr`:
 
 **What this forbids/implies:**
 
-- **Part 1** (`20260728193000`, PR #262) revokes the **40 functions that appear in no policy at
-  all**. Safe by construction — the grant cannot be load-bearing in a row rule that does not
-  reference it. Within it, GROUP 2 (8 ungated `SECURITY DEFINER` callables, including the six
-  `next_*_number()` allocators, `calculate_billing_splits` and `check_period_open`) is the actual
-  live exposure: a logged-out visitor can call those today.
-- **Part 2** (`20260728193100`, this PR) revokes only `is_admin()`, `is_applicator()`,
-  `is_driver()`. It carries the whole blast radius and merges on its own evidence, chiefly the
-  **`is_sales_rep()` precedent** — `anon` already lacks EXECUTE on it across 24 tables and
-  production is fine, which is the closest thing to a live experiment available without applying
-  anything.
+- **Part 1** (authored `20260728193000`, PR #262 — **applied live as ledger `20260728231350`**)
+  revokes the **40 functions that appear in no policy at all**. Safe by construction — the grant
+  cannot be load-bearing in a row rule that does not reference it. Within it, GROUP 2 (8 ungated
+  `SECURITY DEFINER` callables, including the six `next_*_number()` allocators,
+  `calculate_billing_splits` and `check_period_open`) was the actual live exposure: a logged-out
+  visitor could call those.
+- **Part 2** (authored `20260728193100`, PR #263 — **applied live as ledger `20260728233459`**)
+  revokes only `is_admin()`, `is_applicator()`, `is_driver()`. It carried the whole blast radius
+  and merged on its own evidence, chiefly the **`is_sales_rep()` precedent** — `anon` already
+  lacked EXECUTE on it across 24 tables and production was fine, which was the closest thing to a
+  live experiment available without applying anything. Borne out after the apply: `authenticated`
+  and `service_role` retained EXECUTE on all three, and a logged-out production load rendered the
+  sign-in page with no console errors and no `42501`.
 - **`handle_new_user()` is never revoked**, in either half. It runs as the signup trigger.
 - **Every REVOKE must name both `PUBLIC` and `anon`.** The two grants are independent, and
   removing either one alone leaves `anon` still able to execute. Supabase's `ALTER DEFAULT
