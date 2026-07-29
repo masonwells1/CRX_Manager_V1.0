@@ -62,9 +62,19 @@ was in review a concurrent session applied `application_service_cost_admin_only`
 live high-water to `20260729015706` (live runs UTC — the apply landed on 2026-07-29 UTC) and put
 those names back below it, forcing a second rename to `20260729020000` and `20260729020100`. Then,
 while CI ran on the security fix below, a *third* concurrent apply landed —
-`20260729035923_application_service_atomic_save` — and invalidated those names too. The final
-rename is to `20260729043000` and `20260729043100`, strictly above the `20260729035923` high-water,
+`20260729035923_application_service_atomic_save` — and invalidated those names too. That third
+rename was to `20260729043000` and `20260729043100`, strictly above the `20260729035923` high-water,
 relative order preserved.
+
+**A fourth and final rename followed the apply (2026-07-29).** Both migrations went live at
+12:52 UTC, and the Supabase MCP `apply_migration` channel stamps the ledger `version` from apply
+wall-clock rather than from the disk filename — so the ledger recorded `20260729125227` and
+`20260729125251`, not the `043000`/`043100` on disk. The files are now renamed to those
+server-assigned versions, so filename prefix equals ledger `version` and filename suffix equals
+ledger `name` on both. Rename only, bodies byte-identical (sha256
+`9720b2b0bb3cd6a152a0e1459bc5b9eb04cf6fc5cc3cc2172c2c58000ba6a697` and
+`89f68416302e6b0cd7bf52abcbe0a99b13da49bbaf04b782a08940f4b80e199c`). Full reconciliation record:
+`docs/reference/migration-history.md`.
 
 Renames only; no SQL body was touched by any of the three. The lesson is mechanical and worth
 repeating: on a repo with several concurrent sessions applying migrations, a disk timestamp is only
@@ -134,7 +144,8 @@ A schema-wide sweep for the identical pattern — auto-updatable, not `security_
 by `authenticated` — returns **exactly one row across all of `public`: this view.** It is not a class
 of problem elsewhere in the schema.
 
-`20260729043000` closes it two independent ways: the `REVOKE` now names `authenticated` and
+`secure_profile_public_directory` (on disk `20260729125227`, written here as `20260729043000` while
+this entry was drafted) closes it two independent ways: the `REVOKE` now names `authenticated` and
 `metabase_ro`, and the view is redefined `security_invoker = true` over `profile_public_directory`,
 where `authenticated` holds `SELECT` only. Either alone would be sufficient; both are asserted so
 neither silently carries the other.
@@ -158,8 +169,14 @@ difference rather than on a real regression. The pattern was checked against a l
 it discriminates rather than always matching: on `profiles_select`, `qual LIKE '%auth.uid()%'` is true
 and `qual LIKE '%is_active%'` is false.
 
-Neither migration has been applied to live — so this bypass is still open on production until
-`20260729043000` applies.
+*(Status at the time of writing: neither migration had been applied, so this bypass was still open on
+production.)* **Both applied live 2026-07-29 12:52 UTC** — ledger `20260729125227`
+(`secure_profile_public_directory`) and `20260729125251` (`pin_contact_sync_search_path`) — and the
+bypass is closed. Verified live after the apply:
+`has_table_privilege('authenticated','public.profile_public_view','INSERT')` is **false** and the
+view is `security_invoker = true` over `profile_public_directory`, where `authenticated` holds
+`SELECT` only. See `docs/manual/KNOWN_ISSUES.md` §0d and `docs/reference/migration-history.md`
+rows 834 and 835.
 
 ## 2026-07-28 — Split the 44-function anon-EXECUTE revoke into two migrations and took both live. Part 1 (40 functions in no RLS policy, incl. the 8 genuinely ungated ones: six next_*_number() allocators, calculate_billing_splits, check_period_open) applied as ledger 20260728231350 via PR #262; anon EXECUTE false on 40/40, authenticated true on 40/40. Part 2 (the RLS role helpers is_admin/is_applicator/is_driver) applied as ledger 20260728233459 via PR #263; anon false and authenticated/service_role true on all three. Both files B7-renamed to their server-assigned versions, bodies unedited. Production loaded logged out after the apply: sign-in page renders, no console errors, no 42501, assets 200. PR #266 carried the bookkeeping; PR #264 has since been renamed above the new high-water (see the entry above).
 
