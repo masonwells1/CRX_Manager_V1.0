@@ -19,8 +19,8 @@
 --   * product_family_id and packaging_variant are deliberately left untouched;
 --     family grouping is parked for separate work.
 --
--- Rows are addressed by primary key, not by SKU, for two reasons: SKU 9768NR is
--- duplicated across two rows that receive OPPOSITE policies, and keying on id
+-- Rows are addressed by primary key, not by SKU, for two reasons: one supplier
+-- SKU is duplicated across two rows that receive OPPOSITE policies, and keying on id
 -- keeps catalog names/SKUs out of version control per the Phase 3C containment
 -- rule. All 23 ids were read back with their names/SKUs and confirmed by Mason
 -- in the approving session before this file was written.
