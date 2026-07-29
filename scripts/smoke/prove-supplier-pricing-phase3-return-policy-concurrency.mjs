@@ -97,6 +97,13 @@ try {
   const hasStageA=present(`to_regclass('public.product_families') IS NOT NULL`);
   const hasSection9=present(`EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_po_items_recompute_on_order' AND NOT tgisinternal)`);
   console.log(`PHASE3_DUMP_STATE stage_a=${hasStageA?'present':'absent'} section09=${hasSection9?'present':'absent'} dump_is_repo_baseline=${dumpIsRepoBaseline}`);
+  // Only two input states are authenticated: the repository's hash-bound
+  // baseline (both migrations present) and a genuine pre-Stage-A dump (both
+  // absent). A mixed state is an unverified schema of unknown provenance, and
+  // it would otherwise slip past the baseline hash gate below -- which is
+  // reached only when both are present -- while still skipping Stage A on the
+  // strength of one table existing. Fail closed instead of proving less.
+  if(hasStageA!==hasSection9) throw new Error(`mixed schema state (stage_a=${hasStageA?'present':'absent'}, section09=${hasSection9?'present':'absent'}); this proof accepts only the repository baseline or a pre-Stage-A dump. Regenerate with \`node scripts/decompress-schema-baseline.mjs\`.`);
   if(hasStageA&&hasSection9){
     if(!dumpIsRepoBaseline) throw new Error('dump already contains Stage A and Section 09 but does not hash to this baseline generation; refusing to overwrite its privileges with a foreign ACL artifact. Regenerate the dump with `node scripts/decompress-schema-baseline.mjs`, or supply a pre-Stage-A dump.');
     // A current-baseline dump needs the companion ACL artifact. A schema dump
@@ -135,6 +142,41 @@ try {
     sql(terminalAssertionBlock(local));
     console.log(`PHASE3_MIGRATION_POSTFLIGHT_ASSERTIONS_PASS ${label}`);
   }
+  // Stage A's own terminal block checks product_families grants and that no
+  // policy targets anon, but it never asserts that RLS is still ENABLED. Every
+  // later check in this proof runs as `postgres`, which bypasses RLS, so a dump
+  // with `relrowsecurity` off would sail through undetected. The catalog is the
+  // only instrument that can see this: with a permissive `USING (true)` SELECT
+  // policy, an application role reads identically whether RLS is on or off.
+  sql(`DO $rls$
+DECLARE v_pol record; v_count integer;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname='public' AND c.relname='product_families' AND c.relrowsecurity
+  ) THEN
+    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_RLS_DISABLED';
+  END IF;
+  SELECT count(*) INTO v_count FROM pg_policies WHERE schemaname='public' AND tablename='product_families';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_POLICY_COUNT_UNEXPECTED: %', v_count;
+  END IF;
+  SELECT * INTO v_pol FROM pg_policies WHERE schemaname='public' AND tablename='product_families';
+  IF v_pol.policyname <> 'product_families_select'
+     OR v_pol.cmd <> 'SELECT'
+     OR v_pol.permissive <> 'PERMISSIVE'
+     OR v_pol.roles <> ARRAY['authenticated']::name[] THEN
+    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_POLICY_IDENTITY_DRIFTED: % / % / % / %',
+      v_pol.policyname, v_pol.cmd, v_pol.permissive, v_pol.roles;
+  END IF;
+END;
+$rls$;`);
+  // ...and confirm the table really is reachable by the intended application
+  // role and unreachable by anon, exercised as those roles rather than as the
+  // RLS-bypassing superuser every other statement here runs as.
+  sql(`BEGIN; SET LOCAL ROLE authenticated; SELECT count(*) FROM public.product_families; ROLLBACK;`);
+  assertExactFailure(sql(`BEGIN; SET LOCAL ROLE anon; SELECT count(*) FROM public.product_families; ROLLBACK;`,{fail:true}),'permission denied for table product_families','anon read of product_families');
+  console.log('PHASE3_PRODUCT_FAMILIES_RLS_IN_FORCE_PASS');
   sql(`INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a001'),('00000000-0000-0000-0000-00000000a002') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a001','phase3-admin@example.invalid','admin',true),('00000000-0000-0000-0000-00000000a002','phase3-sales@example.invalid','sales_rep',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=true;`);
   const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
   const source=readFileSync(files.stageA,'utf8'); for(const x of ['lock_phase3_product_policy_products','RETURN_POLICY_NO_RETURN','trigger_x_validate_phase3_return_item_policy'])assert.match(source,new RegExp(x));
