@@ -2,6 +2,15 @@
 /**
  * Real-schema, network-isolated Phase 3 proof.  The required schema dump is
  * read-only input; this runner never reads a DB URL or connects to Supabase.
+ *
+ *   node scripts/decompress-schema-baseline.mjs > public-schema.sql
+ *   node scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs \
+ *     --schema-dump public-schema.sql
+ *
+ * The repository's own committed baseline is the intended input: it is the only
+ * dump that hashes to the manifest generation whose companion ACL artifact this
+ * proof restores.  A genuine pre-Stage-A dump is also accepted, in which case
+ * both migrations are applied here instead of arriving with the dump.
  */
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -12,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..','..');
 const dump=process.argv[2]==='--schema-dump'?process.argv[3]:process.env.CRXP3_SCHEMA_DUMP;
-if(!dump||!existsSync(dump)) throw new Error('usage: node scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs --schema-dump <read-only-public-schema.sql>');
+if(!dump||!existsSync(dump)) throw new Error('usage: node scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs --schema-dump <read-only-public-schema.sql>\n  produce the dump with: node scripts/decompress-schema-baseline.mjs > public-schema.sql');
 const NAME=`crx-phase3-real-${process.pid}-${Date.now().toString(36)}`;
 const image='public.ecr.aws/supabase/postgres:17.6.1.141';
 // Resolve repository artifacts by suffix, never by timestamp prefix. Migration
