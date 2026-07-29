@@ -2198,6 +2198,9 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
+  // Trigger-only helpers whose migrations are now at or below the live registry
+  // high-water are absent from generated client types and this inventory. Keeping
+  // dead exemptions would silently pre-suppress any future RPC reusing a name.
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
