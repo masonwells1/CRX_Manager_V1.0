@@ -667,6 +667,7 @@
       "harden_commission_payment_creation",
       "harden_invoice_existing_customer_scope",
       "harden_maintenance_secdef_revoke_authenticated",
+      "harden_profile_directory_followups",
       "harden_sales_financial_scope",
       "harden_storage_buckets_mime_size",
       "high_priority_fixes",

@@ -2106,7 +2106,7 @@ function registryMigrationHighWater(): string {
 // 20260729125314, and 20260729163243) — none of those are pending.
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
