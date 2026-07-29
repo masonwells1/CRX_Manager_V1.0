@@ -2107,8 +2107,9 @@ function registryMigrationHighWater(): string {
 // The two below are PR #264's, B7-renamed above that high-water and verified
 // absent from the live ledger on 2026-07-29; empty this set again once they land.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
-  '20260728235500',
-  '20260728235600',
+  '20260729043000',
+  '20260729043100',
+  '20260729122730',
 ]);
 
 /**

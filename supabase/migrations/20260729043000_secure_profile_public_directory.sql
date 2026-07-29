@@ -4,10 +4,20 @@
 -- pointing a security-invoker view directly at profiles would therefore break
 -- every non-admin name/assignment picker.
 
+-- full_name/role/is_active are NOT NULL to match both the source columns and the
+-- `ProfilePublic` contract in src/types/index.ts, which declares all three non-null.
+-- Verified live 2026-07-29: all three are attnotnull on public.profiles with zero
+-- NULL rows, so the sync trigger below can never produce a NULL and be rejected.
+--
+-- Deliberately NOT mirroring `profiles_role_check` here.  `role` only ever arrives
+-- from public.profiles, which already enforces that CHECK, so a copy could never
+-- reject a value the source accepted -- it would add no protection while creating a
+-- drift hazard: widening the role list on profiles alone would make this table
+-- reject the sync and block every profile write.
 CREATE TABLE IF NOT EXISTS public.profile_public_directory (
   id uuid PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
-  full_name text,
-  role text,
+  full_name text NOT NULL,
+  role text NOT NULL,
   is_active boolean NOT NULL DEFAULT true
 );
 
@@ -45,9 +55,16 @@ CREATE POLICY profile_public_directory_authenticated_select
   );
 
 -- metabase_ro is NOBYPASSRLS and is a member of no role, so the policy above can
--- never apply to it.  This directory holds only id/full_name/role/is_active, and
--- metabase_ro already reads public.profiles itself, so a full read here grants it
--- nothing it did not already have.
+-- never apply to it.  This directory holds only id/full_name/role/is_active.
+--
+-- Be precise about where metabase_ro's current read actually comes from, because
+-- the obvious answer is wrong: it is NOT reading public.profiles directly.  It
+-- holds SELECT on profiles, but `profiles_select` has no TO clause, so it applies
+-- to metabase_ro too, and its `is_admin() OR id = auth.uid()` predicate matches
+-- nothing for a NOLOGIN role with no auth.uid() -- zero rows.  What metabase_ro
+-- reads today is this view, under the definer semantics this migration removes.
+-- So the policy below is not a convenience restating an existing privilege; it is
+-- what keeps Metabase working at all once the view becomes security_invoker.
 DROP POLICY IF EXISTS profile_public_directory_analytics_select
   ON public.profile_public_directory;
 CREATE POLICY profile_public_directory_analytics_select
@@ -108,7 +125,16 @@ FROM public.profile_public_directory;
 ALTER VIEW public.profile_public_view
   SET (security_invoker = true, security_barrier = false);
 
-REVOKE ALL ON public.profile_public_view FROM PUBLIC, anon;
+-- `authenticated` and `metabase_ro` are named here deliberately, not just PUBLIC
+-- and anon.  CREATE OR REPLACE VIEW keeps the existing ACL, and the live ACL on
+-- this view is `authenticated=arwdDxtm/postgres` -- INSERT, UPDATE, DELETE and
+-- TRUNCATE included, inherited from the ALTER DEFAULT PRIVILEGES ... ON TABLES
+-- grants in the ACL baseline (default privileges cover views, not just tables).
+-- Granting SELECT does not remove them, so a REVOKE that skips `authenticated`
+-- leaves a fully auto-updatable write path standing.  Verified live 2026-07-29
+-- before this change: has_table_privilege('authenticated', view, 'DELETE') was
+-- true and pg_relation_is_updatable returned 28 (UPDATE|INSERT|DELETE).
+REVOKE ALL ON public.profile_public_view FROM PUBLIC, anon, authenticated, metabase_ro;
 GRANT SELECT ON public.profile_public_view TO authenticated;
 -- Restated rather than relied upon: CREATE OR REPLACE VIEW keeps the existing ACL
 -- on live, but on a from-scratch replay this makes the analytics grant explicit
@@ -148,8 +174,81 @@ BEGIN
     RAISE EXCEPTION 'PROFILE_PUBLIC_DIRECTORY_AUTHENTICATED_WRITE_REMAINS: %', v_writes;
   END IF;
 
+  -- Same assertion for the view itself.  security_invoker = true already forces
+  -- base-table permission checks onto the caller, so the grants above are not
+  -- individually exploitable once both hold -- but the view is auto-updatable
+  -- (single table, no joins or aggregates), so a stale write grant here plus any
+  -- future loss of security_invoker re-opens an RLS-bypassing write path.  Assert
+  -- both independently rather than letting either one carry the other.
+  SELECT string_agg(p, ', ' ORDER BY p) INTO v_writes
+  FROM unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) AS p
+  WHERE has_table_privilege('authenticated', 'public.profile_public_view', p);
+
+  IF v_writes IS NOT NULL THEN
+    RAISE EXCEPTION 'PROFILE_PUBLIC_VIEW_AUTHENTICATED_WRITE_REMAINS: %', v_writes;
+  END IF;
+
+  -- Every read path here is RLS-filtered, so RLS being ON is what makes the
+  -- authenticated/metabase_ro split mean anything.  If a later rework drops it,
+  -- authenticated's SELECT grant silently becomes an unfiltered read available to
+  -- deactivated users -- exactly what broad_reads_require_active_profile and
+  -- deactivation_revokes_auth_access were written to prevent -- and every other
+  -- assertion in this block would still pass.  Assert it directly.
+  IF NOT (SELECT relrowsecurity FROM pg_class
+          WHERE oid = 'public.profile_public_directory'::regclass) THEN
+    RAISE EXCEPTION 'PROFILE_PUBLIC_DIRECTORY_RLS_DISABLED';
+  END IF;
+
+  -- The backfill is the whole directory; the view is the only source for every
+  -- staff picker in the app.  If the INSERT ... SELECT silently moved no rows, or
+  -- the authenticated read policy failed to create, all the privilege assertions
+  -- above still pass and the migration reports success while every picker in the
+  -- UI goes empty.  Assert the outcome, not just the permissions.
+  IF (SELECT count(*) FROM public.profile_public_directory)
+     <> (SELECT count(*) FROM public.profiles) THEN
+    RAISE EXCEPTION 'PROFILE_PUBLIC_DIRECTORY_BACKFILL_INCOMPLETE: % of % profiles',
+      (SELECT count(*) FROM public.profile_public_directory),
+      (SELECT count(*) FROM public.profiles);
+  END IF;
+
+  -- Reading needs BOTH a grant and a policy, so both are asserted.  The REVOKE ALL
+  -- above strips `authenticated` down to nothing before the GRANT SELECT re-adds it;
+  -- if that GRANT were ever dropped, the policy below would still exist and this
+  -- check would pass while every staff picker in the app silently went empty.  The
+  -- view is checked too -- it is the object the app actually selects from.
+  --
+  -- The USING predicate is asserted as well, not just the policy's name.  Name,
+  -- role, permissive and cmd can all still match after someone widens the
+  -- predicate to `true`, which would hand the directory to any signed-in account
+  -- including deactivated ones -- exactly the boundary this policy exists to
+  -- draw.  Checked by substring rather than exact text on purpose: pg_policies
+  -- .qual is Postgres's *reparsed* rendering, not the source above -- verified
+  -- live on this database, `(SELECT auth.uid())` comes back as
+  -- `( SELECT auth.uid() AS uid)` -- so pinning an exact string would fail the
+  -- apply on a formatting difference.  These two substrings are the load-bearing
+  -- halves: drop `is_active` and deactivated staff regain access; drop
+  -- `auth.uid()` and the per-caller identity check is gone.
+  IF NOT has_table_privilege('authenticated', 'public.profile_public_directory', 'SELECT')
+     OR NOT has_table_privilege('authenticated', 'public.profile_public_view', 'SELECT')
+     OR NOT EXISTS (
+          SELECT 1 FROM pg_policies
+          WHERE schemaname = 'public'
+            AND tablename = 'profile_public_directory'
+            AND policyname = 'profile_public_directory_authenticated_select'
+            AND permissive = 'PERMISSIVE'
+            AND cmd = 'SELECT'
+            AND 'authenticated' = ANY (roles)
+            AND qual LIKE '%is_active%'
+            AND qual LIKE '%auth.uid()%'
+        ) THEN
+    RAISE EXCEPTION 'PROFILE_PUBLIC_DIRECTORY_AUTHENTICATED_READ_LOST';
+  END IF;
+
   -- Analytics must still be able to read through the now-invoker view.  A grant
-  -- without a matching policy yields zero rows, so check the rows, not the ACL.
+  -- without a matching policy yields zero rows, so the policy is load-bearing and
+  -- checked alongside the ACL.  permissive/cmd are pinned too: a RESTRICTIVE
+  -- policy, or one scoped to the wrong command, would carry the same name while
+  -- metabase_ro still read nothing.
   IF NOT has_table_privilege('metabase_ro', 'public.profile_public_directory', 'SELECT')
      OR NOT has_table_privilege('metabase_ro', 'public.profile_public_view', 'SELECT')
      OR NOT EXISTS (
@@ -157,6 +256,8 @@ BEGIN
           WHERE schemaname = 'public'
             AND tablename = 'profile_public_directory'
             AND policyname = 'profile_public_directory_analytics_select'
+            AND permissive = 'PERMISSIVE'
+            AND cmd = 'SELECT'
             AND 'metabase_ro' = ANY (roles)
         ) THEN
     RAISE EXCEPTION 'PROFILE_PUBLIC_DIRECTORY_ANALYTICS_READ_LOST';

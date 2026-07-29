@@ -15,6 +15,10 @@ import { supabase, sanitizeError, checkMutationResult, assertRpcResult } from '.
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
+import {
+  formatApplicationServiceCostPerAcre,
+  parseApplicationServiceCostCents,
+} from '../lib/applicationServiceCosts';
 import type { ApplicationServiceWithCost } from '../types';
 
 // Every column of application_services EXCEPT cost_per_acre_cents. Migration
@@ -79,17 +83,17 @@ export default function ApplicationServices() {
     // The whole merge is inside try/catch because assertRpcResult THROWS on a
     // null payload. Uncaught, that throw would escape fetchServices, skip the
     // setLoading(false) below and leave the page spinning its skeleton forever.
-    const costById = new Map<string, number>();
+    const costById = new Map<string, bigint>();
     if (isAdmin) {
       // No p_service_id -> the RPC's DEFAULT NULL, meaning "every service".
       const { data: costRows, error: costError } = await supabase
         .rpc('admin_get_application_service_costs', {});
       try {
         if (costError) throw costError;
-        for (const row of assertRpcResult<{ service_id: string; cost_per_acre_cents: number }[]>(
+        for (const row of assertRpcResult<{ service_id: string; cost_per_acre_cents: unknown }[]>(
           costRows, 'admin_get_application_service_costs',
         )) {
-          costById.set(row.service_id, row.cost_per_acre_cents);
+          costById.set(row.service_id, parseApplicationServiceCostCents(row.cost_per_acre_cents));
         }
       } catch (costErr: unknown) {
         Sentry.captureException(costErr, { tags: { source: 'fetch', action: 'load_application_service_costs' } });
@@ -147,7 +151,7 @@ export default function ApplicationServices() {
           // Tested against null/undefined rather than truthiness: a real cost of
           // 0 is a fact worth printing, and an unread cost must never print as
           // a figure. `v ? … : '-'` would collapse both into '-'.
-          { header: 'Cost/Acre', key: 'cost_per_acre_cents', align: 'right', format: (v) => v === null || v === undefined ? '-' : formatCentsPerAcre(Number(v)) },
+          { header: 'Cost/Acre', key: 'cost_per_acre_cents', align: 'right', format: (v) => v === null || v === undefined ? '-' : formatApplicationServiceCostPerAcre(parseApplicationServiceCostCents(v)) },
           { header: 'Active', key: 'is_active', format: (v) => v ? 'Yes' : 'No' },
         ],
         data: selectedRows as unknown as Record<string, unknown>[],
@@ -221,7 +225,7 @@ export default function ApplicationServices() {
       sortable: true,
       render: (r) => (
         <span className="font-mono text-sm text-secondary">
-          {r.cost_per_acre_cents === null ? '-' : formatCentsPerAcre(r.cost_per_acre_cents)}
+          {r.cost_per_acre_cents === null ? '-' : formatApplicationServiceCostPerAcre(r.cost_per_acre_cents)}
         </span>
       ),
     },

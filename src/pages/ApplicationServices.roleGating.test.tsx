@@ -101,7 +101,7 @@ describe('ApplicationServices cost gating', () => {
   });
 
   it('calls the cost RPC for an admin and merges the cents into the table', async () => {
-    H.rpc.mockResolvedValue({ data: [{ service_id: 'svc-1', cost_per_acre_cents: 650 }], error: null });
+    H.rpc.mockResolvedValue({ data: [{ service_id: 'svc-1', cost_per_acre_cents: '650' }], error: null });
     await renderPage();
 
     expect(await screen.findByText('$6.50/ac')).toBeTruthy();

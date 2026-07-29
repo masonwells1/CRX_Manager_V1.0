@@ -11915,7 +11915,7 @@ export type Database = {
           p_service_id?: string
         }
         Returns: {
-          cost_per_acre_cents: number
+          cost_per_acre_cents: string
           service_id: string
         }[]
       }

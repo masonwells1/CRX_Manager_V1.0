@@ -15,6 +15,10 @@ import { logActivity } from '../lib/activityLogger';
 import { supabase, checkMutationResult, assertRpcResult, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { Sentry } from '../lib/sentry';
+import {
+  formatApplicationServiceCostDollars,
+  parseApplicationServiceCostCents,
+} from '../lib/applicationServiceCosts';
 import type { Vehicle, Customer, CustomerApplicationRate } from '../types';
 
 // Every column of application_services EXCEPT cost_per_acre_cents. That column is
@@ -95,15 +99,17 @@ export default function ApplicationServiceDetail() {
     // over the real value. The read is wrapped because assertRpcResult THROWS on
     // a null payload; uncaught, that throw would escape fetchService, skip the
     // setLoading(false) below and leave the form spinning its skeleton forever.
-    let costCents: number | null = null;
+    let costCents: bigint | null = null;
     if (isAdmin) {
       const { data: costRows, error: costError } = await supabase
         .rpc('admin_get_application_service_costs', { p_service_id: id! });
       try {
         if (costError) throw costError;
-        costCents = assertRpcResult<{ service_id: string; cost_per_acre_cents: number }[]>(
+        const rawCost = assertRpcResult<{ service_id: string; cost_per_acre_cents: unknown }[]>(
           costRows, 'admin_get_application_service_costs',
-        )[0]?.cost_per_acre_cents ?? 0;
+        )[0]?.cost_per_acre_cents;
+        if (rawCost === undefined) throw new Error('Application service cost RPC returned no row.');
+        costCents = parseApplicationServiceCostCents(rawCost);
       } catch (costErr: unknown) {
         costCents = null;
         Sentry.captureException(costErr, { extra: { context: 'fetch_application_service_cost' } });
@@ -111,7 +117,7 @@ export default function ApplicationServiceDetail() {
       }
     }
     setCostKnown(costCents !== null);
-    setForm({ name: data.name, vehicle_id: data.vehicle_id || '', default_rate_per_acre: formatCentsToDollars(data.default_rate_per_acre_cents), cost_per_acre: costCents === null ? '' : formatCentsToDollars(costCents), is_active: data.is_active, sort_order: String(data.sort_order) });
+    setForm({ name: data.name, vehicle_id: data.vehicle_id || '', default_rate_per_acre: formatCentsToDollars(data.default_rate_per_acre_cents), cost_per_acre: costCents === null ? '' : formatApplicationServiceCostDollars(costCents), is_active: data.is_active, sort_order: String(data.sort_order) });
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
   }, [id, toast, navigate, isAdmin]);

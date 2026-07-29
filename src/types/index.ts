@@ -24,8 +24,17 @@ export interface Profile {
 
 // Non-PII shape from `public.profile_public_view` (PR-07, 2026-05-10).
 // Use for assignment dropdowns, joined display names, and any read that
-// doesn't need email/phone/license/certificate. The view bypasses RLS via
-// `security_invoker = off`; underlying `profiles` table SELECT is admin/self.
+// doesn't need email/phone/license/certificate.
+//
+// As of migration 20260729043000 the view is `security_invoker = true` and reads
+// `public.profile_public_directory` -- a non-sensitive mirror of profiles kept in
+// sync by trigger -- NOT `public.profiles` directly. Any active signed-in user can
+// read it by policy, which is why the non-admin pickers still work even though
+// SELECT on `profiles` itself remains admin/self.
+//
+// Before that migration the view was `security_invoker = off`, so it ran as its
+// owner `postgres` (BYPASSRLS) and was a full RLS bypass onto `profiles`. See
+// docs/manual/KNOWN_ISSUES.md section 0d.
 export interface ProfilePublic {
   id: string;
   full_name: string;
@@ -2634,7 +2643,7 @@ export interface ApplicationService {
 // PDF, and on the detail page it would be written back over the real cost on the
 // next unrelated save. Render it as "-", never as a figure.
 export interface ApplicationServiceWithCost extends ApplicationService {
-  cost_per_acre_cents: number | null;
+  cost_per_acre_cents: bigint | null;
 }
 
 export interface CustomerApplicationRate {
