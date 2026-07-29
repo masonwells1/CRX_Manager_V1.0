@@ -163,7 +163,7 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
       sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Negotiated per-customer rates. Writes are admin-only. Office-only reads since 20260727231652. The row carries rate_per_acre_cents but NOT cost_per_acre_cents — cost lives on application_services, which stays driver-readable because Jobs/JobDetail need it. So this table alone is the negotiated price, not the margin; margin is the join of the two, and this migration breaks that join for drivers.',
+    notes: 'Negotiated per-customer rates. Writes are admin-only. Office-only reads since 20260727231652. The row carries rate_per_acre_cents but NOT cost_per_acre_cents — cost lives on application_services, which stays driver-readable at the row level. So this table alone is the negotiated price, not the margin; margin is the join of the two, and this migration breaks that join for drivers. CORRECTION (2026-07-28, verified live): an earlier revision justified that as "Jobs/JobDetail need it". They do not. No driver-facing surface selects cost_per_acre_cents — the field-app picker takes id/name/default_rate_per_acre_cents, Jobs and the split editors take id/name, and JobDetail never touches the table. The only readers of the cost column are ApplicationServices.tsx and ApplicationServiceDetail.tsx, both behind allowedRoles={[admin]} routes. So application_services_select USING (is_active_profile()) exposes internal cost to any active profile through the API with no legitimate consumer — same shape as the SECDEF leak 20260728182141 closed, since a React route guard is not in the data path. Harmless today only because 0 of 4 services have a non-zero cost_per_acre_cents. Tracked as the residual item in KNOWN_ISSUES §0.',
   },
   {
     table: 'rebate_programs',
@@ -378,11 +378,17 @@ const APPEND_ONLY_TABLES = [
 /**
  * Tables a driver must not be able to read or write DIRECTLY.
  *
- * "Directly" is the honest scope because SECURITY DEFINER functions bypass
- * table RLS. Migration 20260728182141 closed the two known pricing readers:
- * get_program_completion now enforces an office-role gate in-body, and
- * compute_application_service_fee is no longer directly executable by
- * authenticated browser clients.
+ * "Directly" is the honest scope: RLS on these tables does not reach a
+ * SECURITY DEFINER function, so a SECDEF RPC granted to `authenticated` with no
+ * role gate can still return figures derived from them. The two that did —
+ * get_program_completion over quote_items and compute_application_service_fee
+ * over customer rates — were closed by 20260728182141, which puts an
+ * is_admin()/is_sales_rep() gate in each body and revokes `authenticated`
+ * EXECUTE on compute_application_service_fee outright.
+ *
+ * The remaining gap is application_services itself: default_rate_per_acre_cents
+ * and cost_per_acre_cents are readable by any active profile via the
+ * application_services_select policy.
  */
 const DRIVER_BLOCKED_TABLES = [
   'cost_history',
