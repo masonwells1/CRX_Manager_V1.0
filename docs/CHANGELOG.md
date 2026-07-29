@@ -2,7 +2,85 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-07-28 — Split the 44-function anon-EXECUTE revoke into two migrations and took both live. Part 1 (40 functions in no RLS policy, incl. the 8 genuinely ungated ones: six next_*_number() allocators, calculate_billing_splits, check_period_open) applied as ledger 20260728231350 via PR #262; anon EXECUTE false on 40/40, authenticated true on 40/40. Part 2 (the RLS role helpers is_admin/is_applicator/is_driver) applied as ledger 20260728233459 via PR #263; anon false and authenticated/service_role true on all three. Both files B7-renamed to their server-assigned versions, bodies unedited. Production loaded logged out after the apply: sign-in page renders, no console errors, no 42501, assets 200. PR #266 carries the bookkeeping; PR #264 still pending a rename above the new high-water.
+## 2026-07-28 — The staff directory view read profiles as its owner; the contact-sync triggers had no pinned lookup path
+
+`profile_public_view` was a `SECURITY DEFINER` view over `profiles`. Every signed-in user reading it
+got the *view owner's* row visibility, not their own — so a picker that only needed a name and a role
+was served through a permission level that could see the whole profiles table. Pointing a
+`security_invoker` view straight at `profiles` was not an option: the live `profiles` policy lets an
+administrator, or a user themself, read a profile, so every non-admin name/assignment picker in the
+app would have gone empty.
+
+The fix is a deliberately non-sensitive directory table. `profile_public_directory` holds four
+columns — `id`, `full_name`, `role`, `is_active` — with RLS on, `SELECT` granted only to
+`authenticated`, and a policy that additionally requires the reader to be an *active* profile.
+`profile_public_view` is rebuilt over that table with `security_invoker = true`, so it can no longer
+bypass anything. A trigger on `profiles` keeps the directory in step, and the migration's own check
+block refuses to finish if the view is not `security_invoker` or if `anon` retains any access.
+
+Separately, `sync_customer_to_primary_contact()` and `sync_primary_contact_to_customer()` — the pair
+that mirrors a customer's contact details onto its primary contact row and back — ran with **no
+pinned `search_path`**, so a caller's session setting decided which `public` objects they resolved.
+Both are now pinned to `public, pg_temp`, asserted by a check block that raises
+`CONTACT_SYNC_SEARCH_PATH_NOT_PINNED`.
+
+The pre-push Codex gate then flagged those two replacements as losing `SECURITY DEFINER`, on the
+grounds that `CREATE OR REPLACE FUNCTION` re-derives every property the command does not state. The
+mechanism it described is exactly right; the premise was not. Both functions are **already
+`SECURITY INVOKER` on live** (`prosecdef = false`, read back from `rhyzpcqhnizqbxphqdkr`), so the
+migration preserves the existing context rather than downgrading it — and what Codex was actually
+reading was a wrong sentence in `docs/reference/migration-history.md` claiming "Both stay
+`SECURITY DEFINER`". That sentence was the defect, and it is corrected. Rather than leave the
+invariant resting on prose a second time, both replacements now state `SECURITY INVOKER`
+explicitly and the postflight block asserts `prosecdef = false` on both, raising
+`CONTACT_SYNC_SECURITY_CONTEXT_CHANGED` otherwise. Promoting these triggers to `SECURITY DEFINER`
+would widen what a mirror write may touch and is deliberately not done.
+
+All three functions are also classified in `src/lib/rpcContracts.test.ts`'s mutator inventory. They
+are exempt because they are **trigger-only**, with the mechanism recorded per function, not because
+an exemption made the test green: each `RETURNS trigger` with no arguments, which PostgREST cannot
+expose at all; the two contact mirrors short-circuit on `pg_trigger_depth() > 1` so the recursive
+partner trigger cannot loop; and each write carries an `IS DISTINCT FROM` guard, so a replay writes
+nothing. `sync_profile_public_directory()` additionally has EXECUTE revoked from `PUBLIC`, `anon` and
+`authenticated` in the same migration.
+
+Both files were B7-renamed before landing: authored `20260728185739` and `20260728185913`, they both
+sorted *below* the `20260728233459` high-water that the same-day anon-EXECUTE applies established, so
+they became `20260728235500` and `20260728235600` — strictly above it, relative order preserved.
+Renames only; neither SQL body was touched. Both are indexed in `docs/reference/migration-history.md`
+as rows 834 and 835 with `PENDING APPLY`.
+
+The Codex connector then filed three P2 findings on the directory migration, all three real and all
+three confirmed against live before fixing. They have **three separate causes** — worth stating
+plainly, because collapsing them into one story would send the next diagnosis down the wrong path.
+
+**(1) Default privileges — an ACL finding.** The ACL baseline
+(`supabase/baselines/20260727174805_acl_lockdown.sql`, lines 1656-1658) re-grants default privileges
+on every new table in `public`, so they land independently of anything a migration writes:
+`pg_default_acl` gives `authenticated` `arwdDxtm`. The `D` is TRUNCATE, which PostgreSQL does **not**
+subject to RLS, so the read-only policies could not have stopped a signed-in caller from emptying the
+staff directory and blanking every picker in the app. The `REVOKE` now names `authenticated` and
+`metabase_ro`, not just `PUBLIC` and `anon`.
+
+**(2) Role membership vs. policy audience — a role-policy finding, not an ACL one.** `metabase_ro` is
+`NOBYPASSRLS`, `canlogin=false` and a member of no role, so a policy scoped `TO authenticated` can
+never apply to it no matter what the grants say. Once the view became `security_invoker`, Metabase's
+existing queries would have returned zero rows *silently* rather than erroring — a grant without a
+matching policy yields an empty set, not a permission error. It now has an explicit `SELECT` grant on
+the table and the view **plus its own read policy**; the grant alone would not have fixed it.
+
+**(3) Statement ordering — a trigger-ordering finding, unrelated to privileges entirely.** The
+backfill ran before the trigger existed, so a profile written between the `INSERT ... SELECT`
+snapshot and the `CREATE TRIGGER` was captured stale and fired no trigger, serving an out-of-date
+name or role indefinitely. The trigger is now installed first, and `CREATE TRIGGER` holds SHARE ROW
+EXCLUSIVE on `profiles` to commit, which closes the window without an explicit `LOCK`.
+
+The migration's own postflight block now fails the apply if `authenticated` holds any write privilege
+on the directory or if the analytics read is lost.
+
+Neither migration has been applied to live.
+
+## 2026-07-28 — Split the 44-function anon-EXECUTE revoke into two migrations and took both live. Part 1 (40 functions in no RLS policy, incl. the 8 genuinely ungated ones: six next_*_number() allocators, calculate_billing_splits, check_period_open) applied as ledger 20260728231350 via PR #262; anon EXECUTE false on 40/40, authenticated true on 40/40. Part 2 (the RLS role helpers is_admin/is_applicator/is_driver) applied as ledger 20260728233459 via PR #263; anon false and authenticated/service_role true on all three. Both files B7-renamed to their server-assigned versions, bodies unedited. Production loaded logged out after the apply: sign-in page renders, no console errors, no 42501, assets 200. PR #266 carried the bookkeeping; PR #264 has since been renamed above the new high-water (see the entry above).
 
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `797b59a5 chore(db): record the part-2 apply and B7-rename it to its ledger version`
