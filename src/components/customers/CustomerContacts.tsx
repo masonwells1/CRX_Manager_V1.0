@@ -51,11 +51,16 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
   const loadContacts = useCallback(async () => {
     const seq = ++requestSeq.current;
     setLoading(true);
-    const { data, error } = await contactsTable().select('*').eq('customer_id', customerId).order('is_active', { ascending: false }).order('is_primary', { ascending: false }).order('name');
-    if (seq !== requestSeq.current) return;
-    if (error) toast('error', 'Failed to load contacts');
-    setContacts((data || []) as CustomerContact[]);
-    setLoading(false);
+    try {
+      const { data, error } = await contactsTable().select('*').eq('customer_id', customerId).order('is_active', { ascending: false }).order('is_primary', { ascending: false }).order('name');
+      if (seq !== requestSeq.current) return;
+      if (error) toast('error', 'Failed to load contacts');
+      setContacts((data || []) as CustomerContact[]);
+    } catch {
+      if (seq === requestSeq.current) toast('error', 'Failed to load contacts');
+    } finally {
+      if (seq === requestSeq.current) setLoading(false);
+    }
   }, [customerId, toast]);
 
   useEffect(() => { requestSeq.current += 1; setContacts([]); void loadContacts(); }, [loadContacts]);
