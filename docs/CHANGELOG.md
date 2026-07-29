@@ -31,6 +31,15 @@ worktree pinned behind main with a brand-new draft is reported by the new code a
 dropped by the old. For the same reason an unreadable branch point counts the draft rather than
 hiding it.
 
+"Is this draft inherited?" is decided on the file's full repo-relative **path**, not its filename —
+a second CodeRabbit finding on #279. Draft names repeat across hunts, so a filename-only test let a
+draft main had already retired mask a genuinely new one sitting in a different folder, and `/fleet`
+would again say nothing was waiting. The parked *count* still keys on the filename, which is what
+collapses the same draft checked out in 42 worktrees into one entry. Proven the same way: a scratch
+worktree pinned before the supplier-pricing cutover was retired, holding a brand-new draft of that
+same filename in a different folder, reads 1 under the old filename test and 2 under the new path
+test, with `/fleet` naming the new file.
+
 Both readers were fixed together so they cannot disagree: the hook and `scripts/fleet-status.mjs` now
 report the same number. The count dropped 2 → 1, the remaining entry being the one draft still
 un-retired on `origin/main` — which this change also retires, taking it to 0.

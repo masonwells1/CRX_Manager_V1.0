@@ -97,9 +97,19 @@ export function worktreeContributesParked(entry) {
   return !!entry && !entry.detached;
 }
 
+// Repo-relative path, normalized for comparison (forward slashes, no leading "./",
+// lowercased — Windows paths are case-insensitive and git reports forward slashes).
+export function normRepoPath(p) {
+  return String(p || "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^\/+/, "")
+    .toLowerCase();
+}
+
 // Is this on-disk draft this branch's own pending work, rather than history it inherited?
 //
-// `inheritedLowerNames` is the set of draft filenames already tracked at the worktree's
+// `inheritedLowerPaths` is the set of draft PATHS already tracked at the worktree's
 // merge-base with origin/main — i.e. what was there when the branch started. A draft in
 // that set is shared history: if main has since retired it, this checkout simply has not
 // pulled the rename yet, and counting it is what made the banner un-clearable.
@@ -109,11 +119,17 @@ export function worktreeContributesParked(entry) {
 // matters more: over-reporting is noise, but under-reporting hides a real pending
 // migration behind "Nothing waiting on you". For the same reason, an unknown merge-base
 // (null/missing set) counts the draft rather than silently dropping it.
-export function isNewDraftOnBranch(name, inheritedLowerNames) {
-  const n = String(name || "").toLowerCase();
-  if (!n) return false;
-  if (!inheritedLowerNames || typeof inheritedLowerNames.has !== "function") return true;
-  return !inheritedLowerNames.has(n);
+//
+// Identity here is the full path, NOT the basename: draft names repeat across hunts
+// (PARKED-01-…, …-draft.sql), so matching on filename alone would let a retired
+// scripts/.staging-migrations draft mask a brand-new docs/audits one. The parked COUNT
+// still dedupes by basename on purpose — that is what collapses the same draft checked
+// out in 42 worktrees into one entry.
+export function isNewDraftOnBranch(repoRelPath, inheritedLowerPaths) {
+  const p = normRepoPath(repoRelPath);
+  if (!p) return false;
+  if (!inheritedLowerPaths || typeof inheritedLowerPaths.has !== "function") return true;
+  return !inheritedLowerPaths.has(p);
 }
 
 function truncateLine(s, maxLen) {

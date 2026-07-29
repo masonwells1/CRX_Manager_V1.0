@@ -22,7 +22,7 @@ import {
   parseWorktreePorcelain, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine,
-  worktreeContributesParked, isNewDraftOnBranch,
+  worktreeContributesParked, isNewDraftOnBranch, normRepoPath,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
 
 // The repo root this script lives in (works no matter what cwd it's launched from).
@@ -119,9 +119,10 @@ function mergedLabel(sha) {
   return mergedLabelFromStatus(r.status, true);
 }
 
-// Lower-cased draft filenames tracked at a given commit (staged migrations + audit drafts).
-function draftNamesInTree(rev) {
-  const names = [];
+// Draft files tracked at a given commit (staged migrations + audit drafts), as
+// { name, path }. Inheritance is judged on the path; the parked count keys on the name.
+function draftEntriesInTree(rev) {
+  const out = [];
   const tree = git(["ls-tree", "-r", "--name-only", rev, "--",
     "scripts/.staging-migrations", "docs/audits"], repoRoot, 5000);
   for (const line of tree.split("\n")) {
@@ -129,16 +130,18 @@ function draftNamesInTree(rev) {
     if (!p) continue;
     const base = p.slice(p.lastIndexOf("/") + 1);
     const inStaging = p.startsWith("scripts/.staging-migrations/");
-    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) names.push(base.toLowerCase());
+    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) out.push({ name: base, path: p });
   }
-  return names;
+  return out;
 }
 
-// Draft filenames already tracked where this worktree's branch left origin/main — the
-// history it inherited, not its own pending work. Returns null when the merge-base can't
+// Draft PATHS already tracked where this worktree's branch left origin/main — the
+// history it inherited, not its own pending work. Paths, not filenames: draft names
+// repeat across hunts, and a basename match would hide a genuinely new draft that
+// happens to share a name with a retired one. Returns null when the branch point can't
 // be determined, which makes isNewDraftOnBranch() count the draft rather than hide it.
 const inheritedCache = new Map(); // sha → Set | null
-function inheritedDraftNames(sha) {
+function inheritedDraftPaths(sha) {
   if (!hasOriginMain || !sha) return null;
   if (inheritedCache.has(sha)) return inheritedCache.get(sha);
   let result = null;
@@ -147,7 +150,9 @@ function inheritedDraftNames(sha) {
   });
   const base = mb.status === 0 ? String(mb.stdout || "").trim() : "";
   if (base) {
-    try { result = new Set(draftNamesInTree(base)); } catch { result = null; }
+    try {
+      result = new Set(draftEntriesInTree(base).map((d) => normRepoPath(d.path)));
+    } catch { result = null; }
   }
   inheritedCache.set(sha, result);
   return result;
@@ -200,17 +205,20 @@ for (const e of entries) {
   // Frozen review snapshots hold drafts main has since retired; counting those made the
   // fleet banner un-clearable. A branch worktree still reports the drafts IT added, even
   // when it is behind main — otherwise a real pending migration would vanish.
-  const inherited = worktreeContributesParked(e) ? inheritedDraftNames(e.head) : null;
+  const inherited = worktreeContributesParked(e) ? inheritedDraftPaths(e.head) : null;
   const parkedDirs = !worktreeContributesParked(e) ? [] : [
-    { dir: path.join(e.path, "scripts", ".staging-migrations"), filter: isParkedMigrationFile },
-    { dir: path.join(e.path, "docs", "audits"), filter: isDraftSqlName },
+    { root: "scripts/.staging-migrations", filter: isParkedMigrationFile },
+    { root: "docs/audits", filter: isDraftSqlName },
   ];
-  for (const { dir, filter } of parkedDirs) {
+  for (const { root, filter } of parkedDirs) {
+    const dir = path.join(e.path, ...root.split("/"));
     for (const full of listFilesRecursive(dir)) {
       const name = path.basename(full);
       if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
       if (!filter(name)) continue;
-      if (!isNewDraftOnBranch(name, inherited)) continue;
+      // Repo-relative path, so "inherited?" compares like-for-like with the git tree.
+      const rel = `${root}/${normRepoPath(path.relative(dir, full))}`;
+      if (!isNewDraftOnBranch(rel, inherited)) continue;
       const key = name.toLowerCase();
       if (parked.has(key)) {
         // Same draft checked out in several worktrees — count it once.

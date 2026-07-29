@@ -17,7 +17,7 @@ import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, fleetSummaryLine,
-  worktreeContributesParked, isNewDraftOnBranch,
+  worktreeContributesParked, isNewDraftOnBranch, normRepoPath,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -97,25 +97,31 @@ function listDir(dir) {
 // Depth-limited recursive file listing — parked drafts live in NESTED audit
 // folders (docs/audits/<hunt>/PARKED-*.sql); a flat scan here would contradict
 // /fleet's recursive count (Codex 2026-07-05 P3).
-function listNamesRecursive(dir, depth = 4) {
+// Returns { name, rel } per file, `rel` being the path under `prefix` — the caller needs
+// the repo-relative path to tell a new draft from an unrelated one that merely shares a
+// filename (draft names repeat across hunts).
+function listDraftsRecursive(dir, prefix, depth = 4) {
   if (depth < 0) return [];
   let ents = [];
   try { ents = readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   let out = [];
   for (const ent of ents) {
-    if (ent.isDirectory()) out = out.concat(listNamesRecursive(path.join(dir, ent.name), depth - 1));
-    else out.push(ent.name);
+    if (ent.isDirectory()) {
+      out = out.concat(listDraftsRecursive(path.join(dir, ent.name), `${prefix}${ent.name}/`, depth - 1));
+    } else {
+      out.push({ name: ent.name, rel: `${prefix}${ent.name}` });
+    }
   }
   return out;
 }
 
-// Draft filenames already tracked where this worktree's branch left origin/main. Those
-// are inherited history — if main has since retired one, this checkout just hasn't pulled
-// the rename. Anything NOT in this set is genuinely new here and still counts. Returns
-// null when the merge-base can't be determined, which makes isNewDraftOnBranch() count
-// the draft rather than hide it.
+// Draft paths already tracked where this worktree's branch left origin/main. Those are
+// inherited history — if main has since retired one, this checkout just hasn't pulled the
+// rename. Anything NOT in this set is genuinely new here and still counts. Returns null
+// when the branch point can't be determined, which makes isNewDraftOnBranch() count the
+// draft rather than hide it.
 const inheritedCache = new Map(); // sha → Set | null
-function inheritedDraftNames(sha) {
+function inheritedDraftPaths(sha) {
   if (!hasOriginMain || !sha) return null;
   if (inheritedCache.has(sha)) return inheritedCache.get(sha);
   let result = null;
@@ -125,16 +131,17 @@ function inheritedDraftNames(sha) {
   const base = mb.status === 0 ? String(mb.stdout || "").trim() : "";
   if (base) {
     try {
-      result = new Set(draftNamesInTree(base));
+      result = new Set(draftEntriesInTree(base).map((d) => normRepoPath(d.path)));
     } catch { result = null; }
   }
   inheritedCache.set(sha, result);
   return result;
 }
 
-// Lower-cased draft filenames tracked at a given commit (staged migrations + audit drafts).
-function draftNamesInTree(rev) {
-  const names = [];
+// Draft files tracked at a given commit (staged migrations + audit drafts), as
+// { name, path }. Callers key the parked COUNT by name and inheritance by path.
+function draftEntriesInTree(rev) {
+  const out = [];
   const tree = git(["ls-tree", "-r", "--name-only", rev, "--",
     "scripts/.staging-migrations", "docs/audits"]);
   for (const line of tree.split("\n")) {
@@ -142,16 +149,16 @@ function draftNamesInTree(rev) {
     if (!p) continue;
     const base = p.slice(p.lastIndexOf("/") + 1);
     const inStaging = p.startsWith("scripts/.staging-migrations/");
-    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) names.push(base.toLowerCase());
+    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) out.push({ name: base, path: p });
   }
-  return names;
+  return out;
 }
 
 // The mainline backlog, read straight from origin/main's tree rather than from any
 // checkout — so the count is right even when every worktree is stale.
 function mainlineParkedNames() {
   try {
-    return new Set(draftNamesInTree("origin/main"));
+    return new Set(draftEntriesInTree("origin/main").map((d) => d.name.toLowerCase()));
   } catch { return new Set(); }
 }
 
@@ -169,12 +176,18 @@ try {
     // drafts they added since leaving main — see worktreeContributesParked() and
     // isNewDraftOnBranch().
     if (!worktreeContributesParked(e)) continue;
-    const inherited = inheritedDraftNames(e.head);
-    for (const f of listNamesRecursive(path.join(e.path, "scripts", ".staging-migrations"))) {
-      if (isParkedMigrationFile(f) && isNewDraftOnBranch(f, inherited)) parkedNames.add(f.toLowerCase());
-    }
-    for (const f of listNamesRecursive(path.join(e.path, "docs", "audits"))) {
-      if (isDraftSqlName(f) && isNewDraftOnBranch(f, inherited)) parkedNames.add(f.toLowerCase());
+    // "Is it inherited?" is decided on the repo-relative PATH — draft filenames repeat
+    // across hunts, so a basename match could hide a genuinely new draft. The COUNT is
+    // still keyed by filename, which is what collapses the same draft across 42 checkouts.
+    const inherited = inheritedDraftPaths(e.head);
+    const scans = [
+      { root: "scripts/.staging-migrations/", filter: isParkedMigrationFile },
+      { root: "docs/audits/", filter: isDraftSqlName },
+    ];
+    for (const { root, filter } of scans) {
+      for (const d of listDraftsRecursive(path.join(e.path, ...root.split("/").filter(Boolean)), root)) {
+        if (filter(d.name) && isNewDraftOnBranch(d.rel, inherited)) parkedNames.add(d.name.toLowerCase());
+      }
     }
   }
   fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedNames.size)}`;

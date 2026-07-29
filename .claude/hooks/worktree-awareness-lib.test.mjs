@@ -7,7 +7,7 @@ import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
-  worktreeContributesParked, isNewDraftOnBranch,
+  worktreeContributesParked, isNewDraftOnBranch, normRepoPath,
 } from "./worktree-awareness-lib.mjs";
 
 let pass = 0;
@@ -89,15 +89,32 @@ eq(worktreeContributesParked.length, 1, "the contributor test takes only the ent
 // Which of a branch worktree's on-disk drafts are ITS pending work vs inherited history.
 // A behind-main branch must still report a draft it just wrote (CodeRabbit P1 on #279:
 // dropping the whole worktree could report "Nothing waiting on you" over real work).
-const inherited = new Set(["parked-dispatch-backfill.sql", "2026-07-01-old-draft.sql"]);
-ok(!isNewDraftOnBranch("PARKED-dispatch-backfill.sql", inherited), "a draft present at the branch point is inherited history, not pending work");
-ok(isNewDraftOnBranch("PARKED-brand-new.sql", inherited), "a draft this branch added counts even though the branch is behind main");
-ok(!isNewDraftOnBranch("parked-DISPATCH-backfill.SQL", inherited), "inherited match is case-insensitive");
-ok(isNewDraftOnBranch("PARKED-brand-new.sql", null), "unknown merge-base counts the draft rather than hiding it");
-ok(isNewDraftOnBranch("PARKED-brand-new.sql", undefined), "missing inherited set counts the draft");
-ok(isNewDraftOnBranch("PARKED-brand-new.sql", {}), "a non-Set argument counts the draft rather than throwing");
-ok(!isNewDraftOnBranch("", inherited), "empty filename is not a pending draft");
-ok(isNewDraftOnBranch("PARKED-brand-new.sql", new Set()), "an empty branch point means every on-disk draft is new");
+// Identity is the repo-relative PATH, not the basename (CodeRabbit P2 on #279): draft
+// names repeat across hunts, so a filename match would let a retired staging draft mask a
+// brand-new audit draft that happens to share its name.
+const inherited = new Set([
+  "scripts/.staging-migrations/workflow-waves-parked/parked-dispatch-backfill.sql",
+  "docs/audits/old-hunt/2026-07-01-old-draft.sql",
+]);
+const DISPATCH = "scripts/.staging-migrations/workflow-waves-parked/PARKED-dispatch-backfill.sql";
+ok(!isNewDraftOnBranch(DISPATCH, inherited), "a draft present at the branch point is inherited history, not pending work");
+ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", inherited), "a draft this branch added counts even though the branch is behind main");
+ok(!isNewDraftOnBranch(DISPATCH.toUpperCase(), inherited), "inherited match is case-insensitive");
+ok(!isNewDraftOnBranch(`./${DISPATCH}`, inherited), "a './' prefix still matches the same inherited draft");
+ok(!isNewDraftOnBranch(DISPATCH.replace(/\//g, "\\"), inherited), "Windows backslashes still match the same inherited draft");
+// The exact collision CodeRabbit named: same filename, different directory.
+ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-dispatch-backfill.sql", inherited), "a same-named draft in another folder is new work, not the retired one");
+ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", null), "unknown merge-base counts the draft rather than hiding it");
+ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", undefined), "missing inherited set counts the draft");
+ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", {}), "a non-Set argument counts the draft rather than throwing");
+ok(!isNewDraftOnBranch("", inherited), "empty path is not a pending draft");
+ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", new Set()), "an empty branch point means every on-disk draft is new");
+
+// Path normalization the inherited comparison depends on.
+eq(normRepoPath("Docs\\Audits\\A.SQL"), "docs/audits/a.sql", "backslashes, case and separators normalize");
+eq(normRepoPath("./docs/audits/a.sql"), "docs/audits/a.sql", "leading './' is stripped");
+eq(normRepoPath("/docs/audits/a.sql"), "docs/audits/a.sql", "leading slashes are stripped");
+eq(normRepoPath(null), "", "a missing path normalizes to empty, not a crash");
 
 // last non-empty line (ledger tail) + truncation
 eq(lastNonEmptyLine("first\nsecond\n\n   \n"), "second", "skips trailing blank lines");
