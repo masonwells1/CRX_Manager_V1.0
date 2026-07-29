@@ -286,25 +286,30 @@ function armAutopilot(stateDir, hoursFromNow) {
     git(["add", "seed.txt"], primary);
     git(["commit", "-qm", "seed"], primary);
     const added = git(["worktree", "add", "-q", "-b", "wt", linked], primary);
+    // Asserted, never skipped. An `if (added.status === 0)` guard here would let
+    // the whole worktree regression disappear silently the day `git worktree add`
+    // stops working, and the suite would still print green.
+    ok(
+      added.status === 0,
+      `git worktree add succeeded (status=${added.status}): ${(added.stderr || "").trim()}`,
+    );
 
-    if (added.status === 0) {
-      const linkedState = path.join(linked, ".claude", "session-state");
-      mkdirSync(linkedState, { recursive: true });
-      // Proof exists ONLY in the linked worktree; the primary has none.
-      writeProof(linkedState, BENIGN_SQL);
-      const call = (query) => ({ tool_name: "mcp__supabase__apply_migration", tool_input: { name: MIG, query } });
+    const linkedState = path.join(linked, ".claude", "session-state");
+    mkdirSync(linkedState, { recursive: true });
+    // Proof exists ONLY in the linked worktree; the primary has none.
+    writeProof(linkedState, BENIGN_SQL);
+    const call = (query) => ({ tool_name: "mcp__supabase__apply_migration", tool_input: { name: MIG, query } });
 
-      let r = runHook(call(BENIGN_SQL), primary);
-      ok(!isDeny(r), "proof minted in a linked worktree satisfies the gate from the primary checkout");
+    let r = runHook(call(BENIGN_SQL), primary);
+    ok(!isDeny(r), "proof minted in a linked worktree satisfies the gate from the primary checkout");
 
-      r = runHook(call(BENIGN_SQL + " -- edited after review"), primary);
-      ok(isDeny(r), "worktree proof does NOT excuse a queryHash mismatch — content binding survives the widening");
+    r = runHook(call(BENIGN_SQL + " -- edited after review"), primary);
+    ok(isDeny(r), "worktree proof does NOT excuse a queryHash mismatch — content binding survives the widening");
 
-      r = runHook({ tool_name: "mcp__supabase__apply_migration", tool_input: { name: "20990101000001_other_mig", query: BENIGN_SQL } }, primary);
-      ok(isDeny(r), "worktree proof does NOT cover a different migration name");
+    r = runHook({ tool_name: "mcp__supabase__apply_migration", tool_input: { name: "20990101000001_other_mig", query: BENIGN_SQL } }, primary);
+    ok(isDeny(r), "worktree proof does NOT cover a different migration name");
 
-      git(["worktree", "remove", "--force", linked], primary);
-    }
+    git(["worktree", "remove", "--force", linked], primary);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

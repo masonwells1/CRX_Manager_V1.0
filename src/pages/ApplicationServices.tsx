@@ -17,9 +17,12 @@ import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { ApplicationServiceWithCost } from '../types';
 
-// Every column of application_services EXCEPT cost_per_acre_cents — see the same
-// constant in ApplicationServiceDetail.tsx. Migration 20260729015706 revoked that
-// column from `authenticated`, so `select('*')` here would now fail outright.
+// Every column of application_services EXCEPT cost_per_acre_cents. Migration
+// 20260729015706 revoked that column from `authenticated`, so `select('*')` here
+// would now fail outright. ApplicationServiceDetail.tsx holds a same-named
+// constant listing a NARROWER subset (it has no use for the audit columns) —
+// deliberately not shared, because the two pages read different things; the only
+// rule both must keep is that cost_per_acre_cents never appears in either.
 const SERVICE_COLUMNS = 'id, name, vehicle_id, default_rate_per_acre_cents, is_active, sort_order, created_by, created_at, updated_at';
 
 // Money: all pricing stored as bigint cents, displayed / 100
@@ -37,7 +40,8 @@ export default function ApplicationServices() {
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  const canBulkAction = role === 'admin';
+  const isAdmin = role === 'admin';
+  const canBulkAction = isAdmin;
 
   const fetchServices = useCallback(async () => {
     setLoading(true);
@@ -56,7 +60,12 @@ export default function ApplicationServices() {
     // cost_per_acre_cents is admin-only at the column-grant level (migration
     // 20260729015706) and never arrives on the table read. Merge it in from the
     // admin-gated RPC so the table, CSV and PDF keep showing it for admins.
-    // No p_service_id -> the RPC's DEFAULT NULL, meaning "every service".
+    //
+    // ADMINS ONLY. The RPC raises 42501 for every other role, so calling it
+    // unconditionally would fire a guaranteed-denied request on every driver and
+    // sales-rep page load, capture a Sentry exception and toast an error about a
+    // column they were never meant to see. Non-admins get cost = UNKNOWN (null),
+    // which the table below renders as '-'.
     //
     // A cost-fetch failure is reported but NOT fatal: the services list still
     // renders, with cost left UNKNOWN (null), not zero. Blanking the whole page
@@ -66,26 +75,34 @@ export default function ApplicationServices() {
     // to 0 instead would be worse than either: every row would read "$0.00/ac"
     // and the CSV and PDF exports below would carry that zero as though it were
     // real, handing an admin a margin report showing 100% margin on everything.
-    const { data: costRows, error: costError } = await supabase
-      .rpc('admin_get_application_service_costs', {});
-    if (costError) {
-      Sentry.captureException(costError, { tags: { source: 'fetch', action: 'load_application_service_costs' } });
-      toast('error', 'Failed to load application service costs');
+    //
+    // The whole merge is inside try/catch because assertRpcResult THROWS on a
+    // null payload. Uncaught, that throw would escape fetchServices, skip the
+    // setLoading(false) below and leave the page spinning its skeleton forever.
+    const costById = new Map<string, number>();
+    if (isAdmin) {
+      // No p_service_id -> the RPC's DEFAULT NULL, meaning "every service".
+      const { data: costRows, error: costError } = await supabase
+        .rpc('admin_get_application_service_costs', {});
+      try {
+        if (costError) throw costError;
+        for (const row of assertRpcResult<{ service_id: string; cost_per_acre_cents: number }[]>(
+          costRows, 'admin_get_application_service_costs',
+        )) {
+          costById.set(row.service_id, row.cost_per_acre_cents);
+        }
+      } catch (costErr: unknown) {
+        Sentry.captureException(costErr, { tags: { source: 'fetch', action: 'load_application_service_costs' } });
+        toast('error', 'Failed to load application service costs');
+      }
     }
-    const costById = new Map(
-      costError
-        ? []
-        : assertRpcResult<{ service_id: string; cost_per_acre_cents: number }[]>(
-            costRows, 'admin_get_application_service_costs',
-          ).map((r) => [r.service_id, r.cost_per_acre_cents] as const),
-    );
 
     setServices(((data || []) as unknown as ApplicationServiceWithCost[]).map((s) => ({
       ...s,
       cost_per_acre_cents: costById.get(s.id) ?? null,
     })));
     setLoading(false);
-  }, [toast]);
+  }, [toast, isAdmin]);
 
   useEffect(() => {
     fetchServices();
@@ -220,7 +237,13 @@ export default function ApplicationServices() {
     },
   ];
 
-  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+  // Non-admins never receive cost_per_acre_cents -- the column grant is revoked and
+  // the RPC above is not called for them -- so the column would be a wall of '-'.
+  // Drop it rather than advertise a figure they cannot see.
+  const visibleColumns = isAdmin
+    ? dataColumns
+    : dataColumns.filter((c) => c.key !== 'cost_per_acre_cents');
+  const columns = canBulkAction ? [checkboxCol, ...visibleColumns] : visibleColumns;
 
   return (
     <div className="space-y-6">

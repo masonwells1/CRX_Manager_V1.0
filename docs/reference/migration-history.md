@@ -6,17 +6,18 @@ count; one entry can index multiple reconstruction sources restored together.
 Sequence reflects entry/landing order, so a pending migration renamed above the
 live high-water can have a newer timestamp without changing its assigned sequence.
 
-**Live-ledger preflight — re-recorded 2026-07-28 evening Chicago, AFTER row 836 applied.** Read
-read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`. **Dates in this
-paragraph are LOCAL (America/Chicago).** The live DB and every ledger `version` run in UTC, which is
-five hours ahead — so a preflight taken on the evening of 2026-07-28 local carries UTC timestamps
-that already read 2026-07-29. A reviewer comparing a UTC-stamped preflight against its own local
-date will call it "future-dated"; that is the timezone skew, not stale evidence. Both clocks are
-recorded together below so the comparison is unambiguous.
-**Current live high-water: `20260729015706`** (919 ledger rows) — the version Supabase assigned to
-row 836 on apply. Earlier preflights in this file recorded `20260728182141`, `20260728231350` and
-then `20260728233459`; each stale value was replaced rather than left standing, because CHECK 6 of
-the migration-drift charter is only meaningful against the *current* high-water.
+**Live-ledger preflight — re-recorded 2026-07-29 00:12 America/Chicago = 2026-07-29 05:12 UTC,
+AFTER row 837 applied.** Read read-only from `supabase_migrations.schema_migrations` on
+`rhyzpcqhnizqbxphqdkr`, both clocks taken from the live server in the same statement. **Dates in
+this paragraph are LOCAL (America/Chicago) unless marked UTC.** The live DB and every ledger
+`version` run in UTC, which is five hours ahead — so a preflight taken on the evening of 2026-07-28
+local carries UTC timestamps that already read 2026-07-29. A reviewer comparing a UTC-stamped
+preflight against its own local date will call it "future-dated"; that is the timezone skew, not
+stale evidence. Both clocks are recorded together throughout so the comparison is unambiguous.
+**Current live high-water: `20260729035923`** (920 ledger rows) — the version Supabase assigned to
+row 837 on apply. Earlier preflights in this file recorded `20260728182141`, `20260728231350`,
+`20260728233459` and then `20260729015706`; each stale value was replaced rather than left standing,
+because CHECK 6 of the migration-drift charter is only meaningful against the *current* high-water.
 **Row 837 (`20260729035923_application_service_atomic_save.sql`, authored
 `20260729024500`) is APPLIED LIVE.** CHECK 6 was re-verified read-only immediately before its apply, at
 **2026-07-28 22:41:40 America/Chicago = 2026-07-29 03:41:40 UTC** (both clocks read from the live

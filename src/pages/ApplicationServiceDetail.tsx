@@ -82,26 +82,39 @@ export default function ApplicationServiceDetail() {
     // cost_per_acre_cents is admin-only at the column-grant level (migration
     // 20260729015706), so it never comes back on the table read — it is fetched
     // through the admin-gated RPC instead.
-    const { data: costRows, error: costError } = await supabase
-      .rpc('admin_get_application_service_costs', { p_service_id: id! });
-    // Reported but not fatal, and deliberately: returning here would leave the
-    // form stuck on its loading state over one admin-only field. The rest of the
-    // service still loads. The cost field is left BLANK and flagged unknown —
-    // never defaulted to 0.00 — so nothing can be saved back over the real value.
-    if (costError) {
-      Sentry.captureException(costError, { extra: { context: 'fetch_application_service_cost' } });
-      toast('error', 'Failed to load service cost — the cost field is locked until it loads');
-    }
-    setCostKnown(!costError);
-    const costCents = costError
-      ? null
-      : assertRpcResult<{ service_id: string; cost_per_acre_cents: number }[]>(
+    //
+    // ADMINS ONLY. The RPC raises 42501 for every other role, so calling it
+    // unconditionally would fire a guaranteed-denied request on every non-admin
+    // page load. A non-admin gets costKnown = false, which makes any save send
+    // NULL ("leave the cost alone"), and the field is not rendered for them.
+    //
+    // A cost failure is reported but not fatal, and deliberately: returning here
+    // would leave the form stuck on its loading state over one admin-only field.
+    // The rest of the service still loads. The cost field is left BLANK and
+    // flagged unknown — never defaulted to 0.00 — so nothing can be saved back
+    // over the real value. The read is wrapped because assertRpcResult THROWS on
+    // a null payload; uncaught, that throw would escape fetchService, skip the
+    // setLoading(false) below and leave the form spinning its skeleton forever.
+    let costCents: number | null = null;
+    if (isAdmin) {
+      const { data: costRows, error: costError } = await supabase
+        .rpc('admin_get_application_service_costs', { p_service_id: id! });
+      try {
+        if (costError) throw costError;
+        costCents = assertRpcResult<{ service_id: string; cost_per_acre_cents: number }[]>(
           costRows, 'admin_get_application_service_costs',
         )[0]?.cost_per_acre_cents ?? 0;
+      } catch (costErr: unknown) {
+        costCents = null;
+        Sentry.captureException(costErr, { extra: { context: 'fetch_application_service_cost' } });
+        toast('error', 'Failed to load service cost — the cost field is locked until it loads');
+      }
+    }
+    setCostKnown(costCents !== null);
     setForm({ name: data.name, vehicle_id: data.vehicle_id || '', default_rate_per_acre: formatCentsToDollars(data.default_rate_per_acre_cents), cost_per_acre: costCents === null ? '' : formatCentsToDollars(costCents), is_active: data.is_active, sort_order: String(data.sort_order) });
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [id, toast, navigate]);
+  }, [id, toast, navigate, isAdmin]);
 
   const fetchOverrides = useCallback(async () => {
     if (isNew || !id) return;
@@ -265,7 +278,10 @@ export default function ApplicationServiceDetail() {
         <Input label="Service Name" value={form.name} onChange={(e) => updateField('name', e.target.value)} required placeholder="e.g. Hagie Y-Drop Nitrogen" />
         <div><label className="block text-sm font-medium text-nav-dark mb-1">Vehicle (optional)</label><select value={form.vehicle_id} onChange={(e) => updateField('vehicle_id', e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"><option value="">No vehicle linked</option>{vehicles.map((v) => <option key={v.id} value={v.id}>{v.vehicle_name}</option>)}</select></div>
         <Input label="Default Rate / Acre ($)" type="number" step="0.01" min={0} value={form.default_rate_per_acre} onChange={(e) => updateField('default_rate_per_acre', e.target.value)} placeholder="e.g. 12.00" />
-        <Input label="Cost / Acre ($)" type="number" step="0.01" min={0} value={form.cost_per_acre} onChange={(e) => updateField('cost_per_acre', e.target.value)} placeholder={costKnown ? 'e.g. 6.50' : 'Unavailable'} disabled={!costKnown} error={costKnown ? undefined : 'Could not load the current cost — editing is locked so it cannot be overwritten. Reload to try again.'} />
+        {/* Admin-only: non-admins never load a cost, so the field would render
+            permanently blank with a "could not load" error that is not true for
+            them — the column is simply not theirs to see. */}
+        {isAdmin && <Input label="Cost / Acre ($)" type="number" step="0.01" min={0} value={form.cost_per_acre} onChange={(e) => updateField('cost_per_acre', e.target.value)} placeholder={costKnown ? 'e.g. 6.50' : 'Unavailable'} disabled={!costKnown} error={costKnown ? undefined : 'Could not load the current cost — editing is locked so it cannot be overwritten. Reload to try again.'} />}
         <Input label="Sort Order" type="number" value={form.sort_order} onChange={(e) => updateField('sort_order', e.target.value)} placeholder="0" />
         <div><label className="block text-sm font-medium text-nav-dark mb-1">Status</label><select value={form.is_active ? 'active' : 'inactive'} onChange={(e) => updateField('is_active', e.target.value === 'active')} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
       </div></Card>
