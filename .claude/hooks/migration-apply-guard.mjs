@@ -198,7 +198,11 @@ if (validProof) {
     // session — a fabricated file violates Mason's codex-gate rule and is the
     // documented self-attestation residual (KNOWN_ISSUES §4b).
     let codexProof = null;
-    try { codexProof = JSON.parse(readFileSync(path.join(stateDir, `codex-review-mig-${safeName}.json`), "utf8")); } catch { codexProof = null; }
+    try {
+      codexProof = JSON.parse(
+        readFileSync(path.join(stateDir, `codex-review-mig-${safeName}.json`), "utf8"),
+      );
+    } catch { codexProof = null; }
     const cvOk = codexProof && ["clean", "ship", "ship-with-followups"].includes(String(codexProof.verdict || "").toLowerCase());
     const cvHashOk = codexProof && currentHash && String(codexProof.queryHash || "") === currentHash;
     // Freshness = age inside [0, 30min]; a FUTURE-dated timestamp must not

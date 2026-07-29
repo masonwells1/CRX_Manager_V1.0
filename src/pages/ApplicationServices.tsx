@@ -11,11 +11,23 @@ import SplitHeading from '../components/ui/SplitHeading';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
-import type { ApplicationService } from '../types';
+import {
+  formatApplicationServiceCostPerAcre,
+  parseApplicationServiceCostCents,
+} from '../lib/applicationServiceCosts';
+import type { ApplicationServiceWithCost } from '../types';
+
+// Every column of application_services EXCEPT cost_per_acre_cents. Migration
+// 20260729015706 revoked that column from `authenticated`, so `select('*')` here
+// would now fail outright. ApplicationServiceDetail.tsx holds a same-named
+// constant listing a NARROWER subset (it has no use for the audit columns) —
+// deliberately not shared, because the two pages read different things; the only
+// rule both must keep is that cost_per_acre_cents never appears in either.
+const SERVICE_COLUMNS = 'id, name, vehicle_id, default_rate_per_acre_cents, is_active, sort_order, created_by, created_at, updated_at';
 
 // Money: all pricing stored as bigint cents, displayed / 100
 const formatCentsPerAcre = (cents: number) =>
@@ -25,20 +37,21 @@ export default function ApplicationServices() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { role } = useAuth();
-  const [services, setServices] = useState<ApplicationService[]>([]);
+  const [services, setServices] = useState<ApplicationServiceWithCost[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | ''>('');
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  const canBulkAction = role === 'admin';
+  const isAdmin = role === 'admin';
+  const canBulkAction = isAdmin;
 
   const fetchServices = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('application_services')
-      .select('*, vehicle:vehicles(vehicle_name)')
+      .select(`${SERVICE_COLUMNS}, vehicle:vehicles(vehicle_name)`)
       .order('sort_order');
 
     if (error) {
@@ -47,9 +60,53 @@ export default function ApplicationServices() {
       setLoading(false);
       return;
     }
-    setServices((data || []) as ApplicationService[]);
+
+    // cost_per_acre_cents is admin-only at the column-grant level (migration
+    // 20260729015706) and never arrives on the table read. Merge it in from the
+    // admin-gated RPC so the table, CSV and PDF keep showing it for admins.
+    //
+    // ADMINS ONLY. The RPC raises 42501 for every other role, so calling it
+    // unconditionally would fire a guaranteed-denied request on every driver and
+    // sales-rep page load, capture a Sentry exception and toast an error about a
+    // column they were never meant to see. Non-admins get cost = UNKNOWN (null),
+    // which the table below renders as '-'.
+    //
+    // A cost-fetch failure is reported but NOT fatal: the services list still
+    // renders, with cost left UNKNOWN (null), not zero. Blanking the whole page
+    // over the one admin-only column would be a worse outcome than showing the
+    // page without it -- and it is what makes the deploy order safe, since this
+    // build ships before the migration that creates the RPC exists. Falling back
+    // to 0 instead would be worse than either: every row would read "$0.00/ac"
+    // and the CSV and PDF exports below would carry that zero as though it were
+    // real, handing an admin a margin report showing 100% margin on everything.
+    //
+    // The whole merge is inside try/catch because assertRpcResult THROWS on a
+    // null payload. Uncaught, that throw would escape fetchServices, skip the
+    // setLoading(false) below and leave the page spinning its skeleton forever.
+    const costById = new Map<string, bigint>();
+    if (isAdmin) {
+      // No p_service_id -> the RPC's DEFAULT NULL, meaning "every service".
+      const { data: costRows, error: costError } = await supabase
+        .rpc('admin_get_application_service_costs', {});
+      try {
+        if (costError) throw costError;
+        for (const row of assertRpcResult<{ service_id: string; cost_per_acre_cents: unknown }[]>(
+          costRows, 'admin_get_application_service_costs',
+        )) {
+          costById.set(row.service_id, parseApplicationServiceCostCents(row.cost_per_acre_cents));
+        }
+      } catch (costErr: unknown) {
+        Sentry.captureException(costErr, { tags: { source: 'fetch', action: 'load_application_service_costs' } });
+        toast('error', 'Failed to load application service costs');
+      }
+    }
+
+    setServices(((data || []) as unknown as ApplicationServiceWithCost[]).map((s) => ({
+      ...s,
+      cost_per_acre_cents: costById.get(s.id) ?? null,
+    })));
     setLoading(false);
-  }, [toast]);
+  }, [toast, isAdmin]);
 
   useEffect(() => {
     fetchServices();
@@ -65,7 +122,7 @@ export default function ApplicationServices() {
     useRowSelection({ data: filtered, getId: (s) => s.id });
 
   const checkboxCol = useMemo(
-    () => createCheckboxColumn<ApplicationService>(selected, toggleSelect, (s) => s.id),
+    () => createCheckboxColumn<ApplicationServiceWithCost>(selected, toggleSelect, (s) => s.id),
     [selected, toggleSelect],
   );
 
@@ -73,6 +130,9 @@ export default function ApplicationServices() {
     exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
       { key: 'name', header: 'Service Name' },
       { key: 'default_rate_per_acre_cents', header: 'Rate (cents)' },
+      // A null cost (the RPC failed) exports as an EMPTY cell, not 0 --
+      // formatCSVCell maps null to "". Empty is what we want: a spreadsheet
+      // won't sum it or average it into a margin, whereas a 0 silently would.
       { key: 'cost_per_acre_cents', header: 'Cost (cents)' },
       { key: 'is_active', header: 'Active' },
     ], 'application_services');
@@ -88,7 +148,10 @@ export default function ApplicationServices() {
         columns: [
           { header: 'Service', key: 'name' },
           { header: 'Rate/Acre', key: 'default_rate_per_acre_cents', align: 'right', format: (v) => v ? formatCentsPerAcre(Number(v)) : '-' },
-          { header: 'Cost/Acre', key: 'cost_per_acre_cents', align: 'right', format: (v) => v ? formatCentsPerAcre(Number(v)) : '-' },
+          // Tested against null/undefined rather than truthiness: a real cost of
+          // 0 is a fact worth printing, and an unread cost must never print as
+          // a figure. `v ? … : '-'` would collapse both into '-'.
+          { header: 'Cost/Acre', key: 'cost_per_acre_cents', align: 'right', format: (v) => v === null || v === undefined ? '-' : formatApplicationServiceCostPerAcre(parseApplicationServiceCostCents(v)) },
           { header: 'Active', key: 'is_active', format: (v) => v ? 'Yes' : 'No' },
         ],
         data: selectedRows as unknown as Record<string, unknown>[],
@@ -105,7 +168,11 @@ export default function ApplicationServices() {
     setDeleting(true);
     try {
       const ids = selectedRows.map((s) => s.id);
-      const result = await supabase.from('application_services').delete().in('id', ids).select();
+      // .select() with no argument is select=* — which, after migration 20260729015706
+      // revoked cost_per_acre_cents from `authenticated`, makes the RETURNING clause
+      // demand a column this role no longer has and fails the whole delete. Name the
+      // one column checkMutationResult actually needs.
+      const result = await supabase.from('application_services').delete().in('id', ids).select('id');
       checkMutationResult(result, 'Delete application services');
       toast('success', `Deleted ${ids.length} service(s)`);
       clearSelection();
@@ -123,7 +190,7 @@ export default function ApplicationServices() {
     { key: 'delete', label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
   ];
 
-  const dataColumns: Column<ApplicationService>[] = [
+  const dataColumns: Column<ApplicationServiceWithCost>[] = [
     {
       key: 'name',
       header: 'Service',
@@ -139,7 +206,7 @@ export default function ApplicationServices() {
       ),
     },
     {
-      key: 'vehicle' as keyof ApplicationService,
+      key: 'vehicle' as keyof ApplicationServiceWithCost,
       header: 'Vehicle',
       sortable: false,
       render: (r) => r.vehicle?.vehicle_name || <span className="text-secondary">-</span>,
@@ -157,7 +224,9 @@ export default function ApplicationServices() {
       header: 'Cost/Acre',
       sortable: true,
       render: (r) => (
-        <span className="font-mono text-sm text-secondary">{formatCentsPerAcre(r.cost_per_acre_cents)}</span>
+        <span className="font-mono text-sm text-secondary">
+          {r.cost_per_acre_cents === null ? '-' : formatApplicationServiceCostPerAcre(r.cost_per_acre_cents)}
+        </span>
       ),
     },
     {
@@ -172,7 +241,13 @@ export default function ApplicationServices() {
     },
   ];
 
-  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+  // Non-admins never receive cost_per_acre_cents -- the column grant is revoked and
+  // the RPC above is not called for them -- so the column would be a wall of '-'.
+  // Drop it rather than advertise a figure they cannot see.
+  const visibleColumns = isAdmin
+    ? dataColumns
+    : dataColumns.filter((c) => c.key !== 'cost_per_acre_cents');
+  const columns = canBulkAction ? [checkboxCol, ...visibleColumns] : visibleColumns;
 
   return (
     <div className="space-y-6">
@@ -217,7 +292,7 @@ export default function ApplicationServices() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable<ApplicationService>
+          <DataTable<ApplicationServiceWithCost>
             data={filtered}
             columns={columns}
             searchable

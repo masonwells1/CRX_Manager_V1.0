@@ -226,6 +226,52 @@ Two corollaries:
 
 ---
 
+## Hiding ONE column needs a GRANT, not a policy — and it makes the next `ADD COLUMN` a trap (2026-07-29)
+
+PostgreSQL has **no column-level RLS**, and every signed-in user of this app shares the single
+`authenticated` DB role. So "drivers may read the row but not this one column" is not expressible as
+a policy. The only mechanism is a **column-privilege carve-out**, and it has two counter-intuitive
+halves:
+
+```sql
+-- 1. A table-level grant implies EVERY column, and REVOKE (col) does NOT subtract from it.
+--    You must revoke the whole privilege, then re-grant an explicit list.
+REVOKE SELECT, INSERT, UPDATE, REFERENCES ON public.t FROM authenticated;
+
+-- 2. A column list binds to the privilege it DIRECTLY FOLLOWS. Repeat the list per privilege.
+GRANT
+  SELECT     (a, b, c),
+  INSERT     (a, b, c),
+  UPDATE     (a, b, c),
+  REFERENCES (a, b, c)
+ON public.t TO authenticated;
+```
+
+The tempting short form `GRANT SELECT, INSERT, UPDATE, REFERENCES (a, b, c) ON t TO authenticated`
+grants the first three **table-wide** and column-scopes only `REFERENCES` — i.e. it silently leaves
+the secret column fully readable while looking like it locked it down. Proven on this database with a
+rolled-back temp-table probe: short form → `has_column_privilege(…, 'SELECT')` **true**; per-privilege
+form → **false**. Live example: `application_services.cost_per_acre_cents`, migration
+`20260729015706`.
+
+**The trap this leaves behind:** once the grant is an explicit list, every column added later is
+invisible and unwritable to `authenticated` until someone adds it to that list. It surfaces as
+PostgREST `permission denied for column …` on a field that plainly exists — reads like an app bug,
+is actually a missing grant. **Any `ALTER TABLE … ADD COLUMN` on a column-carved table must ship a
+`GRANT` for the new column in the same migration.** Tables in this state today:
+`public.application_services`.
+
+Two more consequences worth knowing before you carve a column out:
+
+- `.select()` with no argument is `select=*`, and `Prefer: return=representation` makes a mutation's
+  `RETURNING` clause `*` too. Both then demand the revoked column and fail the **whole** statement —
+  including deletes. Name columns explicitly (`.select('id')`) on any carved table.
+- A `SECURITY DEFINER` function owned by `postgres` reads the column **as postgres**, so revoking
+  from `authenticated` does not reach it. That is what keeps the money engine working — and equally,
+  it means a SECDEF function is a live bypass of the carve-out unless it gates internally.
+
+---
+
 ## Source
 
 This file consolidates lessons from `~/.claude/projects/.../memory/feedback.md` and historical debugging sessions. Add new entries here whenever a non-obvious quirk causes a bug.

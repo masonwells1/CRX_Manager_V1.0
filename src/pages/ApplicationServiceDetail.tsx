@@ -10,11 +10,25 @@ import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, sanitizeError, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { Sentry } from '../lib/sentry';
+import {
+  formatApplicationServiceCostDollars,
+  parseApplicationServiceCostCents,
+} from '../lib/applicationServiceCosts';
 import type { Vehicle, Customer, CustomerApplicationRate } from '../types';
+
+// Every column of application_services EXCEPT cost_per_acre_cents. That column is
+// our internal per-acre cost — margin, once subtracted from the customer rate —
+// and migration 20260729015706 revoked it from `authenticated` at the column-grant
+// level, because PostgreSQL has no column-level RLS and every app user shares the
+// one `authenticated` DB role. A `select('*')` here would now fail outright with
+// "permission denied for column"; admins reach the cost through the two
+// admin-gated RPCs below instead.
+const SERVICE_COLUMNS = 'id, name, vehicle_id, default_rate_per_acre_cents, is_active, sort_order';
 
 // Money safety: all pricing stored as bigint cents, display divided by 100.
 // parseDollarsToCents now comes from the hardened canonical lib/parseCents
@@ -45,9 +59,15 @@ export default function ApplicationServiceDetail() {
   const [customers, setCustomers] = useState<Pick<Customer, 'id' | 'farm_name'>[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
+  // "We could not read the cost" is NOT the same fact as "the cost is $0.00", and
+  // conflating them loses money: the form would show 0.00, and saving any other
+  // field would then push that 0 back through saveCost and destroy the real cost.
+  // A new service has nothing to read, so its cost is known by construction.
+  const [costKnown, setCostKnown] = useState(true);
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
+  const saveIdem = useIdempotencyKey('admin_save_application_service', profile?.id || '');
   const [newOverride, setNewOverride] = useState({ customer_id: '', rate: '', season: currentSeason().toString(), notes: '' });
   const [deleteOverrideId, setDeleteOverrideId] = useState<string | null>(null);
 
@@ -61,12 +81,46 @@ export default function ApplicationServiceDetail() {
   }, []);
 
   const fetchService = useCallback(async () => {
-    const { data, error } = await supabase.from('application_services').select('*').eq('id', id!).single();
+    const { data, error } = await supabase.from('application_services').select(SERVICE_COLUMNS).eq('id', id!).single();
     if (error || !data) { toast('error', 'Service not found'); navigate('/application-services'); return; }
-    setForm({ name: data.name, vehicle_id: data.vehicle_id || '', default_rate_per_acre: formatCentsToDollars(data.default_rate_per_acre_cents), cost_per_acre: formatCentsToDollars(data.cost_per_acre_cents), is_active: data.is_active, sort_order: String(data.sort_order) });
+    // cost_per_acre_cents is admin-only at the column-grant level (migration
+    // 20260729015706), so it never comes back on the table read — it is fetched
+    // through the admin-gated RPC instead.
+    //
+    // ADMINS ONLY. The RPC raises 42501 for every other role, so calling it
+    // unconditionally would fire a guaranteed-denied request on every non-admin
+    // page load. A non-admin gets costKnown = false, which makes any save send
+    // NULL ("leave the cost alone"), and the field is not rendered for them.
+    //
+    // A cost failure is reported but not fatal, and deliberately: returning here
+    // would leave the form stuck on its loading state over one admin-only field.
+    // The rest of the service still loads. The cost field is left BLANK and
+    // flagged unknown — never defaulted to 0.00 — so nothing can be saved back
+    // over the real value. The read is wrapped because assertRpcResult THROWS on
+    // a null payload; uncaught, that throw would escape fetchService, skip the
+    // setLoading(false) below and leave the form spinning its skeleton forever.
+    let costCents: bigint | null = null;
+    if (isAdmin) {
+      const { data: costRows, error: costError } = await supabase
+        .rpc('admin_get_application_service_costs', { p_service_id: id! });
+      try {
+        if (costError) throw costError;
+        const rawCost = assertRpcResult<{ service_id: string; cost_per_acre_cents: unknown }[]>(
+          costRows, 'admin_get_application_service_costs',
+        )[0]?.cost_per_acre_cents;
+        if (rawCost === undefined) throw new Error('Application service cost RPC returned no row.');
+        costCents = parseApplicationServiceCostCents(rawCost);
+      } catch (costErr: unknown) {
+        costCents = null;
+        Sentry.captureException(costErr, { extra: { context: 'fetch_application_service_cost' } });
+        toast('error', 'Failed to load service cost — the cost field is locked until it loads');
+      }
+    }
+    setCostKnown(costCents !== null);
+    setForm({ name: data.name, vehicle_id: data.vehicle_id || '', default_rate_per_acre: formatCentsToDollars(data.default_rate_per_acre_cents), cost_per_acre: costCents === null ? '' : formatApplicationServiceCostDollars(costCents), is_active: data.is_active, sort_order: String(data.sort_order) });
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [id, toast, navigate]);
+  }, [id, toast, navigate, isAdmin]);
 
   const fetchOverrides = useCallback(async () => {
     if (isNew || !id) return;
@@ -79,22 +133,101 @@ export default function ApplicationServiceDetail() {
     else { setTimeout(() => { initialLoadDone.current = true; }, 0); }
   }, [id, isNew, fetchService, fetchOverrides]);
 
+  // ONE call writes the whole service, cost_per_acre_cents included, inside a
+  // single database transaction. This used to be a PostgREST insert/update
+  // followed by a separate cost RPC, because `authenticated` holds no write grant
+  // on that column — but two calls are two transactions with no rollback between
+  // them: if the second failed, a brand-new service stayed committed at cost 0
+  // (zero cost reads as infinite margin), and the admin's natural retry created a
+  // DUPLICATE service, since idx_application_services_active_name is not unique.
+  // Migration 20260729035923 collapsed both writes into
+  // admin_save_application_service so they land together or not at all.
+  const saveService = async (args: {
+    p_name: string;
+    p_default_rate_per_acre_cents: number;
+    p_is_active: boolean;
+    p_sort_order: number;
+    p_vehicle_id: string | null;
+    p_cost_per_acre_cents: number | null;
+    p_service_id: string | null;
+  }) => {
+    const attempt = async () => {
+      const { data, error } = await supabase.rpc('admin_save_application_service', {
+        ...args,
+        // The Supabase type generator never emits `| null` for an RPC argument,
+        // but these three take SQL NULL by design: p_service_id NULL means
+        // "create", p_cost_per_acre_cents NULL means "leave the cost alone", and
+        // p_vehicle_id NULL means "no vehicle". Same cast the other
+        // null-accepting RPC callers use (BlendRecipes.tsx, JobDetail.tsx).
+        p_service_id: args.p_service_id as unknown as string,
+        p_vehicle_id: args.p_vehicle_id as unknown as string,
+        p_cost_per_acre_cents: args.p_cost_per_acre_cents as unknown as number,
+        p_idempotency_key: saveIdem.getKey(),
+      });
+      if (error) throw error;
+      return assertRpcResult<{ success: boolean; service_id: string; created: boolean }>(
+        data, 'admin_save_application_service',
+      );
+    };
+    let result: { success: boolean; service_id: string; created: boolean };
+    try {
+      result = await attempt();
+    } catch (err: unknown) {
+      if (!hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_CROSS_OP_KEY_REUSE)) throw err;
+      // ROTATE ONLY ON THE EDIT PATH. This asymmetry mirrors the RPC's, which
+      // scopes the two paths differently on purpose — see the long comment in
+      // migration 20260729035923. The two halves are a pair; changing one alone
+      // reintroduces a bug.
+      //
+      // EDIT — the RPC hashes the whole payload, so a *corrected* form retried
+      // under the same key is a different operation and is rejected. That loud
+      // rejection is deliberate (it beats silently discarding a corrected money
+      // figure), but useIdempotencyKey only clears its key on success, so without
+      // a rotation here the admin would hit the same rejection on every further
+      // attempt and stay wedged until a page reload. Rotating once is safe: the
+      // service already exists, the write is an absolute SET rather than a delta,
+      // and the end state we want is simply the form just submitted.
+      //
+      // CREATE — rotating is the exact step that manufactures a duplicate service,
+      // so we must not. The RPC's create scope is a constant, which makes one key
+      // create at most one service; a fresh key defeats that and nothing in the
+      // schema would stop the second row (idx_application_services_active_name is
+      // not unique). Reaching this branch on a create would mean the key had
+      // already been spent on some other operation, which cannot happen for a
+      // freshly mounted new-service form — so surface it rather than paper over it.
+      if (args.p_service_id === null) throw err;
+      saveIdem.resetKey();
+      result = await attempt();
+    }
+    saveIdem.resetKey();
+    return result;
+  };
+
   const handleSave = async () => {
     if (!form.name.trim()) { toast('error', 'Service name is required'); return; }
     if (!isAdmin) { toast('error', 'Only admins can manage application services'); return; }
     setSaving(true);
-    const payload = { name: form.name.trim(), vehicle_id: form.vehicle_id || null, default_rate_per_acre_cents: parseDollarsToCents(form.default_rate_per_acre), cost_per_acre_cents: parseDollarsToCents(form.cost_per_acre), is_active: form.is_active, sort_order: parseInt(form.sort_order) || 0, ...(isNew ? { created_by: profile?.id } : {}) };
     try {
+      const saved = await saveService({
+        p_name: form.name.trim(),
+        p_default_rate_per_acre_cents: parseDollarsToCents(form.default_rate_per_acre),
+        p_is_active: form.is_active,
+        p_sort_order: parseInt(form.sort_order) || 0,
+        p_vehicle_id: form.vehicle_id || null,
+        // NULL means "leave the cost alone" — it is NOT a synonym for zero. If the
+        // cost RPC failed on load, form.cost_per_acre is blank and would parse to
+        // 0, which would silently replace the real cost. Sending NULL carries the
+        // costKnown write-lock into the database instead of relying on the client
+        // to skip a second call.
+        p_cost_per_acre_cents: costKnown ? parseDollarsToCents(form.cost_per_acre) : null,
+        p_service_id: isNew ? null : id!,
+      });
       if (isNew) {
-        const result = await supabase.from('application_services').insert(payload).select().single();
-        checkMutationResult(result, 'Create application service');
-        if (profile) logActivity({ event: 'app_service_created', description: `Application service "${form.name}" created`, performedBy: profile.id, entityType: 'application_service', entityId: result.data!.id });
-        toast('success', 'Application service created'); setIsDirty(false); navigate(`/application-services/${result.data!.id}`);
+        if (profile) logActivity({ event: 'app_service_created', description: `Application service "${form.name}" created`, performedBy: profile.id, entityType: 'application_service', entityId: saved.service_id });
+        toast('success', 'Application service created'); setIsDirty(false); navigate(`/application-services/${saved.service_id}`);
       } else {
-        const result = await supabase.from('application_services').update(payload).eq('id', id!).select().single();
-        checkMutationResult(result, 'Update application service');
         if (profile) logActivity({ event: 'app_service_updated', description: `Application service "${form.name}" updated`, performedBy: profile.id, entityType: 'application_service', entityId: id! });
-        toast('success', 'Service saved'); setIsDirty(false);
+        toast('success', costKnown ? 'Service saved' : 'Service saved — cost/acre left unchanged (it could not be loaded)'); setIsDirty(false);
       }
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_application_service' } });
@@ -151,7 +284,10 @@ export default function ApplicationServiceDetail() {
         <Input label="Service Name" value={form.name} onChange={(e) => updateField('name', e.target.value)} required placeholder="e.g. Hagie Y-Drop Nitrogen" />
         <div><label className="block text-sm font-medium text-nav-dark mb-1">Vehicle (optional)</label><select value={form.vehicle_id} onChange={(e) => updateField('vehicle_id', e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"><option value="">No vehicle linked</option>{vehicles.map((v) => <option key={v.id} value={v.id}>{v.vehicle_name}</option>)}</select></div>
         <Input label="Default Rate / Acre ($)" type="number" step="0.01" min={0} value={form.default_rate_per_acre} onChange={(e) => updateField('default_rate_per_acre', e.target.value)} placeholder="e.g. 12.00" />
-        <Input label="Cost / Acre ($)" type="number" step="0.01" min={0} value={form.cost_per_acre} onChange={(e) => updateField('cost_per_acre', e.target.value)} placeholder="e.g. 6.50" />
+        {/* Admin-only: non-admins never load a cost, so the field would render
+            permanently blank with a "could not load" error that is not true for
+            them — the column is simply not theirs to see. */}
+        {isAdmin && <Input label="Cost / Acre ($)" type="number" step="0.01" min={0} value={form.cost_per_acre} onChange={(e) => updateField('cost_per_acre', e.target.value)} placeholder={costKnown ? 'e.g. 6.50' : 'Unavailable'} disabled={!costKnown} error={costKnown ? undefined : 'Could not load the current cost — editing is locked so it cannot be overwritten. Reload to try again.'} />}
         <Input label="Sort Order" type="number" value={form.sort_order} onChange={(e) => updateField('sort_order', e.target.value)} placeholder="0" />
         <div><label className="block text-sm font-medium text-nav-dark mb-1">Status</label><select value={form.is_active ? 'active' : 'inactive'} onChange={(e) => updateField('is_active', e.target.value === 'active')} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
       </div></Card>

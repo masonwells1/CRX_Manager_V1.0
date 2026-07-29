@@ -2,6 +2,14 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — Application-service costs preserve exact bigint cents
+
+The admin-only application-service cost getter now returns cents as text instead of a JSON number,
+preventing values above JavaScript's safe-integer limit from being rounded. The admin list, detail,
+CSV, and PDF paths normalize the value to `bigint`, retain compatibility with safe numeric responses
+during deployment, and fail closed on unsafe values. The migration changes no business rows and must
+apply after the two earlier pending security migrations.
+
 ## 2026-07-28 — The staff directory view read profiles as its owner; the contact-sync triggers had no pinned lookup path
 
 `profile_public_view` ran with its **owner's** privileges over `profiles`. A PostgreSQL view has no

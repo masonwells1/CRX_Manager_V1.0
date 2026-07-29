@@ -77,11 +77,24 @@ eq(destructiveMigrationCheck("").destructive, false, "empty SQL is not destructi
 
 // ── live hook: proof gate + armed-run destructive carve-out ─────────────────
 const HOOK = path.join(__dirname, "migration-apply-guard.mjs");
+// Git exports GIT_DIR/GIT_INDEX_FILE to every hook it runs, and this suite runs
+// inside pre-commit. Inheriting those redirects every fixture git command at the
+// REAL repository: `git init` on an inherited GIT_DIR rewrites the shared config
+// to `bare = true`, which breaks every worktree in the checkout until repaired.
+// Strip the whole GIT_* namespace so fixtures only ever touch their own temp dir.
+function hermeticEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase().startsWith("GIT_")) delete env[key];
+  }
+  return env;
+}
 function runHook(payload, projectDir) {
   return spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(payload),
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+    cwd: projectDir,
+    env: hermeticEnv({ CLAUDE_PROJECT_DIR: projectDir }),
   });
 }
 const isDeny = (r) => r.stdout.includes('"permissionDecision":"deny"');

@@ -2101,12 +2101,15 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// Both halves of the anon-EXECUTE revoke are applied live (20260728231350 and
-// 20260728233459) and no longer pending. The two below are PR #264's, B7-renamed
-// above that high-water and awaiting apply; empty this set again once they land.
+// Both application-service migrations applied live 2026-07-29 under their
+// server-assigned ledger versions (20260729015706 and 20260729035923), as did
+// both halves of the anon-EXECUTE revoke before them — none of those are pending.
+// The two below are PR #264's, B7-renamed above that high-water and verified
+// absent from the live ledger on 2026-07-29; empty this set again once they land.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
   '20260729043000',
   '20260729043100',
+  '20260729122730',
 ]);
 
 /**
