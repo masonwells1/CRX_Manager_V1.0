@@ -7,10 +7,10 @@
  *   node scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs \
  *     --schema-dump public-schema.sql
  *
- * The repository's own committed baseline is the intended input: it is the only
- * dump that hashes to the manifest generation whose companion ACL artifact this
- * proof restores.  A genuine pre-Stage-A dump is also accepted, in which case
- * both migrations are applied here instead of arriving with the dump.
+ * The repository's own committed baseline is the only accepted input: it is the
+ * one dump whose provenance is establishable here, because the manifest records
+ * its digest and the ACL artifact this proof restores belongs to that same
+ * generation.  Any other dump is refused rather than proven against.
  */
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -49,17 +49,23 @@ function resolveBaseline(suffix){
   if(got!==want) throw new Error(`baseline artifact ${hits[0]} does not match manifest sha256 (manifest ${want}, on disk ${got})`);
   return local;
 }
-// Bind the caller-supplied dump to this exact baseline generation. Only a dump
-// that hashes to the manifest's recorded decoded digest may take the
-// current-baseline path below, because that path overwrites privileges with
-// this generation's companion ACL artifact. Letting an arbitrary dump through
-// would let the ACL restore normalize away the very grant drift the postflight
-// assertions exist to catch.
+// Bind the caller-supplied dump to this exact baseline generation, and accept
+// nothing else. The repository's committed baseline is the only schema whose
+// provenance this proof can establish: the manifest records its digest, and the
+// companion ACL artifact restored below belongs to that same generation.
+//
+// An unbound dump cannot be proven against, even one predating Stage A. Every
+// success marker this script prints would look identical, while the schema
+// underneath could carry stale or crafted definitions of the very helpers the
+// assertions lean on -- `check_idempotency`, `_issue_return_credit_impl`, the
+// return implementations -- so the run would certify behavior that is not the
+// repository's. There is no second trusted input, so there is no second path.
 const schemaArtifact=Object.keys(manifest.artifacts??{}).find(f=>f.endsWith('_public_schema.sql.br'));
 const baselineDumpSha=schemaArtifact&&manifest.artifacts[schemaArtifact].decoded_sha256;
 if(!baselineDumpSha) throw new Error('manifest.json has no *_public_schema.sql.br decoded_sha256 to bind the dump against');
-const dumpIsRepoBaseline=sha256(path.resolve(dump))===baselineDumpSha;
-const files={ extensions:resolveBaseline('_extensions.sql'), aclLockdown:resolveBaseline('_acl_lockdown.sql'), dump:path.resolve(dump), liveUnapply:path.join(ROOT,'scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql'), section9:resolveMigration('_section9_po_ap_high_remediation.sql'), stageA:resolveMigration('_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
+const dumpSha=sha256(path.resolve(dump));
+if(dumpSha!==baselineDumpSha) throw new Error(`refusing to prove against an unbound schema dump: ${path.resolve(dump)} hashes to ${dumpSha}, but this baseline generation (${schemaArtifact}) requires ${baselineDumpSha}. Produce the accepted dump with \`node scripts/decompress-schema-baseline.mjs > public-schema.sql\`.`);
+const files={ extensions:resolveBaseline('_extensions.sql'), aclLockdown:resolveBaseline('_acl_lockdown.sql'), dump:path.resolve(dump), section9:resolveMigration('_section9_po_ap_high_remediation.sql'), stageA:resolveMigration('_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
 for(const [k,v] of Object.entries(files)) if(!existsSync(v)) throw new Error(`missing ${k}: ${v}`);
 function run(args,o={}){const r=spawnSync('docker',args,{cwd:ROOT,encoding:'utf8',input:o.input,maxBuffer:50*1024*1024});if(r.error||(!o.fail&&r.status!==0))throw new Error(`${r.error?.message||''}\n${r.stderr||r.stdout}`);return r}
 function psqlArgs(){return ['exec','-i',NAME,'psql','-U','postgres','-d','postgres','-X','-q','-A','-t','-v','ON_ERROR_STOP=1']}
@@ -69,12 +75,6 @@ function file(local,name){run(['cp',local,`${NAME}:/tmp/${name}`])}
 function apply(name){return sql(`BEGIN;
 \\i /tmp/${name}
 COMMIT;`)}
-function applyNormalized(local){
-  const source=readFileSync(local,'utf8').replace(/\r\n/g,'\n');
-  return sql(`BEGIN;
-${source}
-COMMIT;`);
-}
 function session(s,marker){const c=spawn('docker',psqlArgs(),{cwd:ROOT,stdio:['pipe','pipe','pipe']});let out='',err='',timer,settled=false;let resolve,reject;const ready=new Promise((r,j)=>{resolve=r;reject=j;timer=setTimeout(()=>{if(!settled){settled=true;j(new Error(`timeout waiting for ${marker}: ${err||out}`))}},20000)});c.stdout.on('data',x=>{out+=x;if(!settled&&out.includes(marker)){settled=true;clearTimeout(timer);resolve()}});c.stderr.on('data',x=>err+=x);c.stdin.end(s);const done=new Promise(r=>c.on('close',code=>{if(!settled){settled=true;clearTimeout(timer);reject(new Error(`session ended before ${marker}: ${err||out}`))}r({code,out,err})}));return {ready,done,output:()=>out} }
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function scalar(statement){const out=sql(statement).stdout.trim(); if(!out)throw new Error(`expected scalar output: ${statement}`); return out.split(/\r?\n/).at(-1)}
@@ -89,56 +89,39 @@ try {
   for(const [k,v] of Object.entries(files)) file(v,`${k}.sql`);
   adminSql('CREATE SCHEMA IF NOT EXISTS auth; CREATE TABLE IF NOT EXISTS auth.users(id uuid PRIMARY KEY);');
   apply('extensions.sql'); apply('dump.sql');
-  // A dump captured before Stage A shipped must be brought up to the live
-  // schema: restore the read-only pg_get_functiondef fixture, then Section 09,
-  // so Stage A sees the exact live bodies it deliberately hash-pins. Each
-  // boundary is a separate transaction and therefore fails independently.
-  // Normalize the captured pg_get_functiondef fixture before psql sees it.
-  // PostgreSQL hashes the function body byte-for-byte, so a Windows CRLF
-  // checkout must reconstruct the same LF body captured from production.
-  //
-  // Both migrations are non-idempotent (CREATE TABLE / CREATE FUNCTION / DROP
-  // CONSTRAINT), and both are now live, so a dump taken at or after the current
-  // high-water already contains them. Probe the restored schema and re-apply
-  // only what is genuinely absent; otherwise this proof can only ever run
-  // against an archived pre-Stage-A dump that the repository does not keep.
+  // The dump is hash-bound to the current baseline generation, which is at or
+  // past both migrations' high-water, so both must already be in the restored
+  // schema. Neither is re-applied here -- both are non-idempotent (CREATE TABLE
+  // / CREATE UNIQUE INDEX / CREATE POLICY / DROP CONSTRAINT) and would abort.
+  // Assert their arrival anyway: if a future baseline is regenerated from a
+  // database missing them, that is a schema-provenance failure, and it must
+  // surface here rather than as a confusing error deep in the matrix below.
   const present=probe=>scalar(`SELECT (${probe})::text;`)==='true';
   const hasStageA=present(`to_regclass('public.product_families') IS NOT NULL`);
   const hasSection9=present(`EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_po_items_recompute_on_order' AND NOT tgisinternal)`);
-  console.log(`PHASE3_DUMP_STATE stage_a=${hasStageA?'present':'absent'} section09=${hasSection9?'present':'absent'} dump_is_repo_baseline=${dumpIsRepoBaseline}`);
-  // Only two input states are authenticated: the repository's hash-bound
-  // baseline (both migrations present) and a genuine pre-Stage-A dump (both
-  // absent). A mixed state is an unverified schema of unknown provenance, and
-  // it would otherwise slip past the baseline hash gate below -- which is
-  // reached only when both are present -- while still skipping Stage A on the
-  // strength of one table existing. Fail closed instead of proving less.
-  if(hasStageA!==hasSection9) throw new Error(`mixed schema state (stage_a=${hasStageA?'present':'absent'}, section09=${hasSection9?'present':'absent'}); this proof accepts only the repository baseline or a pre-Stage-A dump. Regenerate with \`node scripts/decompress-schema-baseline.mjs\`.`);
-  if(hasStageA&&hasSection9){
-    if(!dumpIsRepoBaseline) throw new Error('dump already contains Stage A and Section 09 but does not hash to this baseline generation; refusing to overwrite its privileges with a foreign ACL artifact. Regenerate the dump with `node scripts/decompress-schema-baseline.mjs`, or supply a pre-Stage-A dump.');
-    // A current-baseline dump needs the companion ACL artifact. A schema dump
-    // can only GRANT, and this image's ALTER DEFAULT PRIVILEGES re-grants
-    // EXECUTE to anon/authenticated as each function is created, which
-    // `REVOKE ... FROM PUBLIC` does not strip. Without this step the smoke
-    // matrix correctly fails its app-role privilege assertion. The artifact
-    // owns its own transaction, so it is applied without the BEGIN/COMMIT
-    // wrapper, and it self-verifies via BASELINE_ACL_ANON_EXECUTE_DRIFTED.
-    // Only safe for a dump at the baseline high-water: its 1617 GRANTs name
-    // objects that an older dump would not contain.
-    sql('\\i /tmp/aclLockdown.sql');
-    console.log('PHASE3_BASELINE_ACL_LOCKDOWN_APPLIED');
-  }
-  if(!hasStageA) applyNormalized(files.liveUnapply);
-  if(!hasSection9) apply('section9.sql');
-  if(!hasStageA) apply('stageA.sql');
-  // Skipping an already-present migration must never skip that migration's own
-  // postflight security assertions. The probes above only establish that one
-  // table and one trigger name exist; they say nothing about SECURITY DEFINER,
-  // `search_path`, trigger relation/binding identity, function-body hashes,
-  // grants, deferred-constraint timing, or AP overload counts. Each migration
-  // ends with exactly one terminal assertion block that checks all of that, and
-  // those blocks are pure reads, so run them unconditionally on both paths.
-  // Without this, a dump carrying an unsafe function definition, a wrongly bound
-  // trigger, or an extra AP overload would still print every success marker.
+  console.log(`PHASE3_DUMP_STATE stage_a=${hasStageA?'present':'absent'} section09=${hasSection9?'present':'absent'} dump_sha256=${dumpSha}`);
+  if(!hasStageA||!hasSection9) throw new Error(`the hash-bound baseline dump is missing schema this proof asserts against (stage_a=${hasStageA?'present':'absent'}, section09=${hasSection9?'present':'absent'}); regenerate supabase/baselines from a database at or past both migrations`);
+  // The baseline dump needs its companion ACL artifact. A schema dump can only
+  // GRANT, and this image's ALTER DEFAULT PRIVILEGES re-grants EXECUTE to
+  // anon/authenticated as each function is created, which `REVOKE ... FROM
+  // PUBLIC` does not strip. Without this step the smoke matrix correctly fails
+  // its app-role privilege assertion. The artifact owns its own transaction, so
+  // it is applied without the BEGIN/COMMIT wrapper, and it self-verifies via
+  // BASELINE_ACL_ANON_EXECUTE_DRIFTED. Safe here precisely because the dump is
+  // pinned to this generation: its GRANTs name objects that an older dump would
+  // not contain, and it cannot mask drift in a schema it did not come from.
+  sql('\\i /tmp/aclLockdown.sql');
+  console.log('PHASE3_BASELINE_ACL_LOCKDOWN_APPLIED');
+  // Both migrations arrive inside the dump, so neither one's postflight security
+  // assertions have run in this container. The probes above only establish that
+  // one table and one trigger name exist; they say nothing about SECURITY
+  // DEFINER, `search_path`, trigger relation/binding identity, function-body
+  // hashes, grants, deferred-constraint timing, or AP overload counts. Each
+  // migration ends with exactly one terminal assertion block that checks all of
+  // that, and those blocks are pure reads, so replay both here. Without this, a
+  // baseline regenerated from a drifted database -- an unsafe function
+  // definition, a wrongly bound trigger, an extra AP overload -- would still
+  // print every success marker below.
   function terminalAssertionBlock(local){
     const source=readFileSync(local,'utf8').replace(/\r\n/g,'\n');
     const opener=[...source.matchAll(/^DO \$([A-Za-z0-9_]+)\$$/gm)].at(-1);
