@@ -4,7 +4,7 @@
  * read-only input; this runner never reads a DB URL or connects to Supabase.
  */
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,23 @@ const dump=process.argv[2]==='--schema-dump'?process.argv[3]:process.env.CRXP3_S
 if(!dump||!existsSync(dump)) throw new Error('usage: node scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs --schema-dump <read-only-public-schema.sql>');
 const NAME=`crx-phase3-real-${process.pid}-${Date.now().toString(36)}`;
 const image='public.ecr.aws/supabase/postgres:17.6.1.141';
-const files={ extensions:path.join(ROOT,'supabase/baselines/20260719092832_extensions.sql'), dump:path.resolve(dump), liveUnapply:path.join(ROOT,'scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql'), section9:path.join(ROOT,'supabase/migrations/20260726190515_section9_po_ap_high_remediation.sql'), stageA:path.join(ROOT,'supabase/migrations/20260722222743_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
+// Resolve repository artifacts by suffix, never by timestamp prefix. Migration
+// files get renumbered before they land and the schema baseline is regenerated
+// under a fresh timestamp, so a pinned prefix silently rots into a hard
+// `missing <k>` abort that stops this proof before it runs.
+function resolveMigration(suffix){
+  const dir=path.join(ROOT,'supabase/migrations');
+  const hits=readdirSync(dir).filter(f=>f.endsWith(suffix)).sort();
+  if(hits.length!==1) throw new Error(`expected exactly one supabase/migrations/*${suffix}, found ${hits.length}${hits.length?`: ${hits.join(', ')}`:''}`);
+  return path.join(dir,hits[0]);
+}
+function resolveBaseline(suffix){
+  const dir=path.join(ROOT,'supabase/baselines');
+  const hits=readdirSync(dir).filter(f=>f.endsWith(suffix)).sort();
+  if(!hits.length) throw new Error(`no supabase/baselines/*${suffix} artifact found`);
+  return path.join(dir,hits.at(-1));
+}
+const files={ extensions:resolveBaseline('_extensions.sql'), aclLockdown:resolveBaseline('_acl_lockdown.sql'), dump:path.resolve(dump), liveUnapply:path.join(ROOT,'scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql'), section9:resolveMigration('_section9_po_ap_high_remediation.sql'), stageA:resolveMigration('_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
 for(const [k,v] of Object.entries(files)) if(!existsSync(v)) throw new Error(`missing ${k}: ${v}`);
 function run(args,o={}){const r=spawnSync('docker',args,{cwd:ROOT,encoding:'utf8',input:o.input,maxBuffer:50*1024*1024});if(r.error||(!o.fail&&r.status!==0))throw new Error(`${r.error?.message||''}\n${r.stderr||r.stdout}`);return r}
 function psqlArgs(){return ['exec','-i',NAME,'psql','-U','postgres','-d','postgres','-X','-q','-A','-t','-v','ON_ERROR_STOP=1']}
@@ -44,14 +60,39 @@ try {
   for(const [k,v] of Object.entries(files)) file(v,`${k}.sql`);
   adminSql('CREATE SCHEMA IF NOT EXISTS auth; CREATE TABLE IF NOT EXISTS auth.users(id uuid PRIMARY KEY);');
   apply('extensions.sql'); apply('dump.sql');
-  // The approved real dump predates the current live unapply body and Section
-  // 09. Restore the read-only pg_get_functiondef fixture, then Section 09, so
-  // Stage A sees the exact live bodies it deliberately hash-pins. Each boundary
-  // is a separate transaction and therefore fails independently.
+  // A dump captured before Stage A shipped must be brought up to the live
+  // schema: restore the read-only pg_get_functiondef fixture, then Section 09,
+  // so Stage A sees the exact live bodies it deliberately hash-pins. Each
+  // boundary is a separate transaction and therefore fails independently.
   // Normalize the captured pg_get_functiondef fixture before psql sees it.
   // PostgreSQL hashes the function body byte-for-byte, so a Windows CRLF
   // checkout must reconstruct the same LF body captured from production.
-  applyNormalized(files.liveUnapply); apply('section9.sql'); apply('stageA.sql');
+  //
+  // Both migrations are non-idempotent (CREATE TABLE / CREATE FUNCTION / DROP
+  // CONSTRAINT), and both are now live, so a dump taken at or after the current
+  // high-water already contains them. Probe the restored schema and re-apply
+  // only what is genuinely absent; otherwise this proof can only ever run
+  // against an archived pre-Stage-A dump that the repository does not keep.
+  const present=probe=>scalar(`SELECT (${probe})::text;`)==='true';
+  const hasStageA=present(`to_regclass('public.product_families') IS NOT NULL`);
+  const hasSection9=present(`EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_po_items_recompute_on_order' AND NOT tgisinternal)`);
+  console.log(`PHASE3_DUMP_STATE stage_a=${hasStageA?'present':'absent'} section09=${hasSection9?'present':'absent'}`);
+  if(hasStageA&&hasSection9){
+    // A current-baseline dump needs the companion ACL artifact. A schema dump
+    // can only GRANT, and this image's ALTER DEFAULT PRIVILEGES re-grants
+    // EXECUTE to anon/authenticated as each function is created, which
+    // `REVOKE ... FROM PUBLIC` does not strip. Without this step the smoke
+    // matrix correctly fails its app-role privilege assertion. The artifact
+    // owns its own transaction, so it is applied without the BEGIN/COMMIT
+    // wrapper, and it self-verifies via BASELINE_ACL_ANON_EXECUTE_DRIFTED.
+    // Only safe for a dump at the baseline high-water: its 1617 GRANTs name
+    // objects that an older dump would not contain.
+    sql('\\i /tmp/aclLockdown.sql');
+    console.log('PHASE3_BASELINE_ACL_LOCKDOWN_APPLIED');
+  }
+  if(!hasStageA) applyNormalized(files.liveUnapply);
+  if(!hasSection9) apply('section9.sql');
+  if(!hasStageA) apply('stageA.sql');
   sql(`INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a001'),('00000000-0000-0000-0000-00000000a002') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a001','phase3-admin@example.invalid','admin',true),('00000000-0000-0000-0000-00000000a002','phase3-sales@example.invalid','sales_rep',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=true;`);
   const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
   const source=readFileSync(files.stageA,'utf8'); for(const x of ['lock_phase3_product_policy_products','RETURN_POLICY_NO_RETURN','trigger_x_validate_phase3_return_item_policy'])assert.match(source,new RegExp(x));
