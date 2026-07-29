@@ -7,6 +7,42 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## 0d. OPEN ON LIVE 2026-07-29 — `profile_public_view` is an RLS bypass onto `profiles` for any signed-in user
+
+**Status: fix written and reviewed, NOT yet applied.** Closed by `supabase/migrations/20260729020000_secure_profile_public_directory.sql` (PR #269), which is `PENDING APPLY`. Until it applies, this is open on production.
+
+Found by CodeRabbit on PR #269 and confirmed by reading live catalog state, not inferred. Three facts compose:
+
+| fact | live value (re-read 2026-07-29) |
+|---|---|
+| ACL on `public.profile_public_view` | `authenticated=arwdDxtm/postgres` — INSERT, UPDATE, DELETE, TRUNCATE |
+| `pg_relation_is_updatable(view, true)` | `28` = UPDATE\|INSERT\|DELETE — single-table view, no joins/aggregates, fully auto-updatable |
+| `reloptions` | `NULL` — **not** `security_invoker`, so base-table access runs as owner `postgres`, which owns `profiles` (not `FORCE ROW LEVEL SECURITY`) and is `BYPASSRLS` |
+
+Root cause is the same default-privilege trap that produced finding (1) on the directory table: `ALTER DEFAULT PRIVILEGES ... ON TABLES` in the ACL baseline covers **views as well as tables**, and `CREATE OR REPLACE VIEW` preserves the existing ACL, so a `REVOKE` naming only `PUBLIC` and `anon` leaves the write grants standing.
+
+**Actual blast radius — this composes into privilege escalation to `admin`.** Each link verified live 2026-07-29:
+
+1. `anon` cannot reach it (`anon=m`, MAINTAIN only), so the attacker must be **signed in**. Direct PostgREST access with their own token is required; nothing in the CRX UI does this.
+2. `UPDATE` through the view is contained — `trg_guard_profile_role_lock` raises `42501` unless `is_admin()` whenever `role`, `is_active`, `full_name` or `denied_pages` change. That covers three of the view's four columns, so **a user cannot simply UPDATE themselves to admin.**
+3. But `DELETE` is not guarded at all: `public.profiles` has **zero BEFORE DELETE triggers**, and normally has no DELETE policy either — so RLS would deny it outright. The view bypasses RLS, so the delete proceeds. The only remaining limit is referential integrity: of the 108 FKs referencing `profiles`, 81 are `NO ACTION` (block), 10 `SET NULL` (silently drop attribution), 4 `CASCADE`. **An established user's row will not delete; a new or lightly-used account's will.**
+4. Once their own row is gone, `profiles_insert` — `TO authenticated WITH CHECK (auth.uid() = id OR is_admin())` — lets them insert it back **with any role they like**. `profiles_role_check` permits `'admin'`, and `_guard_profile_role_lock` is `BEFORE UPDATE` only, so it never fires on INSERT.
+5. `is_admin()` is `EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin' AND is_active)` — which is now true. **Full admin.**
+
+So the realistic threat is a new or low-activity account, acting deliberately through the API, escalating itself to admin. Not something a user trips into, and not reachable logged out — but it is a genuine escalation path, not merely a data-deletion nuisance. That is why `20260729020000` should not sit unapplied.
+
+**Follow-ups this exposed, out of scope for that migration** (each pre-existing, none introduced by it):
+
+- `profiles_insert` has no role guard. `_guard_profile_role_lock` should have an INSERT arm, or the INSERT policy should pin `role`. Closing the view does not close this; it only removes the DELETE that makes it reachable.
+- `authenticated` holds `TRUNCATE` and `TRIGGER` directly on `public.profiles` (ACL baseline line 456). After this migration a plain `TRUNCATE` fails on the new FK and `TRUNCATE ... CASCADE` fails because `authenticated` no longer holds TRUNCATE on the directory — but that is an accident of the FK, not an asserted control.
+- `TRUNCATE` on `profiles` does not fire the row-level sync trigger, so it would leave the directory permanently stale. A statement-level trigger would close that.
+
+**Not a wider class:** a schema-wide sweep for the same pattern — auto-updatable, not `security_invoker`, writable by `authenticated` — returns **exactly one row across all of `public`**, this view.
+
+The fix closes it two independent ways (the `REVOKE` now names `authenticated` and `metabase_ro`, *and* the view becomes `security_invoker = true` over `profile_public_directory` where `authenticated` holds `SELECT` only), and the migration's postflight asserts both rather than letting either carry the other.
+
+---
+
 ## 0. RESOLVED 2026-07-28 — two SECURITY DEFINER functions leaked pricing past the office-only reads
 
 **Status: FIXED LIVE by migration `20260728182141_secdef_pricing_reads_office_only`**

@@ -79,10 +79,53 @@ snapshot and the `CREATE TRIGGER` was captured stale and fired no trigger, servi
 name or role indefinitely. The trigger is now installed first, and `CREATE TRIGGER` holds SHARE ROW
 EXCLUSIVE on `profiles` to commit, which closes the window without an explicit `LOCK`.
 
-The migration's own postflight block now fails the apply if `authenticated` holds any write privilege
-on the directory or if the analytics read is lost.
+**(4) The same default-privilege trap on the *view* — found by CodeRabbit on PR #269, and the most
+serious of the four.** Cause (1) was fixed on the directory table but the `REVOKE` on
+`public.profile_public_view` still named only `PUBLIC` and `anon`. `ALTER DEFAULT PRIVILEGES ... ON
+TABLES` covers **views as well as tables**, and `CREATE OR REPLACE VIEW` preserves the existing ACL,
+so the write grants survived. Read back from live before fixing:
 
-Neither migration has been applied to live.
+- `profile_public_view` ACL is `authenticated=arwdDxtm/postgres` — INSERT, UPDATE, DELETE, TRUNCATE.
+- `pg_relation_is_updatable` returns **28** (UPDATE|INSERT|DELETE): a single-table view with no joins
+  or aggregates is fully auto-updatable.
+- `reloptions` is NULL — the live view is **not** `security_invoker`, so base-table access runs as the
+  owner, `postgres`, which both owns `profiles` (not `FORCE ROW LEVEL SECURITY`) and is `BYPASSRLS`.
+
+Those three facts compose into a live RLS bypass on `public.profiles` for any signed-in user, through
+the view — and following it through, into **privilege escalation to `admin`**. Every link read back
+from live: `anon` cannot reach it (`anon=m`, MAINTAIN only), so sign-in is required. `UPDATE` is
+contained, because `trg_guard_profile_role_lock` raises `42501` unless `is_admin()` whenever `role`,
+`is_active`, `full_name` or `denied_pages` change — three of the view's four columns. But `profiles`
+has **zero BEFORE DELETE triggers** and normally no DELETE policy at all, so RLS is the only thing
+that would stop a delete, and the view bypasses it. The sole remaining limit is referential
+integrity: of the 108 FKs referencing `profiles`, 81 are `NO ACTION` (block), 10 `SET NULL` and 4
+`CASCADE` — so an established user's row will not delete, but a new or lightly-used account's will.
+Once it is gone, `profiles_insert` (`TO authenticated WITH CHECK (auth.uid() = id OR is_admin())`)
+lets that user insert their row back with `role = 'admin'`: `profiles_role_check` permits the value,
+and `_guard_profile_role_lock` is `BEFORE UPDATE` only, so it never fires on the INSERT. `is_admin()`
+is `EXISTS (… id = auth.uid() AND role = 'admin' AND is_active)`, which is now true.
+
+Realistically that is a new or low-activity account, acting deliberately through the API, escalating
+itself to admin — not something a user trips into, and not reachable logged out. It is still an
+escalation path rather than a deletion nuisance, which is why this migration should not sit unapplied.
+Three pre-existing follow-ups it exposed — an INSERT arm for the role-lock trigger, `authenticated`'s
+direct TRUNCATE/TRIGGER grants on `profiles`, and TRUNCATE not firing the row-level sync trigger —
+are recorded in `docs/manual/KNOWN_ISSUES.md` §0d and are **not** fixed here.
+
+A schema-wide sweep for the identical pattern — auto-updatable, not `security_invoker`, and writable
+by `authenticated` — returns **exactly one row across all of `public`: this view.** It is not a class
+of problem elsewhere in the schema.
+
+`20260729020000` closes it two independent ways: the `REVOKE` now names `authenticated` and
+`metabase_ro`, and the view is redefined `security_invoker = true` over `profile_public_directory`,
+where `authenticated` holds `SELECT` only. Either alone would be sufficient; both are asserted so
+neither silently carries the other.
+
+The migration's own postflight block now fails the apply if `authenticated` holds any write privilege
+on the directory **or on the view**, or if the analytics read is lost.
+
+Neither migration has been applied to live — so this bypass is still open on production until
+`20260729020000` applies.
 
 ## 2026-07-28 — Split the 44-function anon-EXECUTE revoke into two migrations and took both live. Part 1 (40 functions in no RLS policy, incl. the 8 genuinely ungated ones: six next_*_number() allocators, calculate_billing_splits, check_period_open) applied as ledger 20260728231350 via PR #262; anon EXECUTE false on 40/40, authenticated true on 40/40. Part 2 (the RLS role helpers is_admin/is_applicator/is_driver) applied as ledger 20260728233459 via PR #263; anon false and authenticated/service_role true on all three. Both files B7-renamed to their server-assigned versions, bodies unedited. Production loaded logged out after the apply: sign-in page renders, no console errors, no 42501, assets 200. PR #266 carried the bookkeeping; PR #264 has since been renamed above the new high-water (see the entry above).
 
