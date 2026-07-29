@@ -17,6 +17,7 @@ import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, fleetSummaryLine,
+  draftPathspec, normRepoPath, createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -68,14 +69,21 @@ function mergedLabel(sha) {
   return mergedLabelFromStatus(r.status, true);
 }
 
+// Memoized: the sibling list and the parked scan both ask, and this is one git spawn.
+const dirtyCache = new Map(); // wt path → count | null
 function dirtyCount(wtPath) {
+  if (dirtyCache.has(wtPath)) return dirtyCache.get(wtPath);
+  let result = null;
   try {
-    if (!existsSync(wtPath)) return null; // stale worktree entry
-    const out = git(["status", "--porcelain"], wtPath);
-    return out.split("\n").filter((l) => l.trim()).length;
-  } catch {
-    return null;
-  }
+    if (existsSync(wtPath)) {
+      // -uall, not the default: a repo with status.showUntrackedFiles=no would report
+      // an unwritten draft's checkout as CLEAN, and the clean path skips the untracked
+      // scan — silently hiding pending work, the exact defect this file exists to fix.
+      result = git(["status", "--porcelain", "-uall"], wtPath).split("\n").filter((l) => l.trim()).length;
+    }
+  } catch { result = null; }
+  dirtyCache.set(wtPath, result);
+  return result;
 }
 
 const lines = siblings.map((s) => {
@@ -96,35 +104,92 @@ function listDir(dir) {
 // Depth-limited recursive file listing — parked drafts live in NESTED audit
 // folders (docs/audits/<hunt>/PARKED-*.sql); a flat scan here would contradict
 // /fleet's recursive count (Codex 2026-07-05 P3).
-function listNamesRecursive(dir, depth = 4) {
+// Returns { name, rel } per file, `rel` being the repo-relative path — the count is keyed
+// by path, never by filename, because draft names repeat across hunts and two distinct
+// pending drafts must not collapse into one. Used only for the fallback scan.
+function listDraftsRecursive(dir, prefix, depth = 4) {
   if (depth < 0) return [];
   let ents = [];
   try { ents = readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   let out = [];
   for (const ent of ents) {
-    if (ent.isDirectory()) out = out.concat(listNamesRecursive(path.join(dir, ent.name), depth - 1));
-    else out.push(ent.name);
+    if (ent.isDirectory()) {
+      out = out.concat(listDraftsRecursive(path.join(dir, ent.name), `${prefix}${ent.name}/`, depth - 1));
+    } else {
+      out.push({ name: ent.name, rel: `${prefix}${ent.name}` });
+    }
   }
   return out;
+}
+
+// The draft paths a worktree is actually pending: what it changed since its branch point
+// (committed or not) plus anything still untracked. Returns null when the branch point is
+// unknown, and the caller then falls back to the full on-disk scan rather than hide work.
+// The rule itself lives in the shared lib so this and /fleet cannot drift apart.
+const ownDraftPaths = createOwnDraftPathsReader({
+  repoRoot: projectDir,
+  hasOriginMain,
+  dirtyCount,
+  exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
+  run: (args, cwd) => {
+    const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
+    return r.status === 0 ? String(r.stdout || "").split("\n") : null;
+  },
+});
+
+// Draft files tracked at a given commit (staged migrations + audit drafts), by
+// repo-relative path.
+function draftPathsInTree(rev) {
+  const out = [];
+  const tree = git(["ls-tree", "-r", "--name-only", rev, "--", ...draftPathspec()]);
+  for (const line of tree.split("\n")) {
+    const p = line.trim();
+    if (!p) continue;
+    const base = p.slice(p.lastIndexOf("/") + 1);
+    const inStaging = p.startsWith("scripts/.staging-migrations/");
+    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) out.push(p);
+  }
+  return out;
+}
+
+// The mainline backlog, read straight from origin/main's tree rather than from any
+// checkout — so the count is right even when every worktree is stale.
+function mainlineParkedPaths() {
+  try {
+    return new Set(draftPathsInTree("origin/main").map((p) => normRepoPath(p)));
+  } catch { return new Set(); }
 }
 
 let fleetLine = "";
 try {
   const ledgerNames = new Set();
-  const parkedNames = new Set();
+  const parkedPaths = hasOriginMain ? mainlineParkedPaths() : new Set();
   for (const e of entries) {
     if (!e.path || !existsSync(e.path)) continue;
     for (const f of listDir(path.join(e.path, "docs", "loops"))) {
       if (isLedgerDoc(f)) ledgerNames.add(f.toLowerCase());
     }
-    for (const f of listNamesRecursive(path.join(e.path, "scripts", ".staging-migrations"))) {
-      if (isParkedMigrationFile(f)) parkedNames.add(f.toLowerCase());
+    // A worktree contributes only the drafts IT is pending — what it changed since its
+    // branch point, plus untracked files. Frozen review snapshots changed nothing, so
+    // they add nothing, which is what makes the SUPERSEDED- retirement clearable; a draft
+    // genuinely being written in one still shows up as untracked. When the branch point
+    // can't be read, fall back to the full on-disk scan rather than hide pending work.
+    const own = ownDraftPaths(e);
+    if (own) {
+      for (const key of own.keys()) parkedPaths.add(key);
+      continue;
     }
-    for (const f of listNamesRecursive(path.join(e.path, "docs", "audits"))) {
-      if (isDraftSqlName(f)) parkedNames.add(f.toLowerCase());
+    const scans = [
+      { root: "scripts/.staging-migrations/", filter: isParkedMigrationFile },
+      { root: "docs/audits/", filter: isDraftSqlName },
+    ];
+    for (const { root, filter } of scans) {
+      for (const d of listDraftsRecursive(path.join(e.path, ...root.split("/").filter(Boolean)), root)) {
+        if (filter(d.name)) parkedPaths.add(normRepoPath(d.rel));
+      }
     }
   }
-  fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedNames.size)}`;
+  fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedPaths.size)}`;
 } catch { fleetLine = ""; }
 
 emit(

@@ -1,3 +1,33 @@
+-- SUPERSEDED 2026-07-29 — RETIRED, DO NOT APPLY. Kept for history only.
+--
+-- WHY RETIRED: the legacy population this was written for is gone, and the live sync
+-- triggers cover the ordinary assignment paths. Verified read-only against live on
+-- 2026-07-29:
+--   * count check below returns 0 rows (same as when it was parked on 2026-07-10);
+--   * no open assigned job is missing a dispatch row at all (0 across every assignee,
+--     not just currently-qualifying ones);
+--   * trg_sync_job_location_dispatch_on_applicator_change is live on public.jobs, and
+--     trg_sync_job_location_dispatch_on_field_insert is live on public.job_fields —
+--     between them, assigning an active applicator or adding a field to such a job
+--     writes the dispatch row automatically.
+--
+-- NOT a claim that a gap can never reopen (cross-model review, 2026-07-29). Both sync
+-- triggers silently skip when the assignee is not (is_active AND role = 'applicator'),
+-- nothing in the database stops a job being assigned to such a profile
+-- (_enforce_applicator_license only checks license expiry; assign_job_applicator checks
+-- the CALLER's role, not the assignee's), and no trigger on public.profiles re-syncs
+-- dispatches when a profile is later reactivated or made an applicator. Confirmed live:
+-- 2 open jobs are assigned to an admin-role profile today. So a
+-- deactivate/assign/reactivate sequence could leave a job off the dispatch board.
+-- That is a trigger-coverage defect, tracked in docs/manual/KNOWN_ISSUES.md — the fix
+-- belongs at the write path, NOT in a bulk backfill run after the fact. This file stays
+-- retired either way: it is a no-op today, and resurrecting it would paper over the
+-- defect instead of closing it.
+-- Retiring it with the SUPERSEDED- prefix takes it out of the fleet "parked migrations
+-- awaiting apply" count, which was reporting work that does not exist.
+--
+-- Original header follows.
+--
 -- PARKED — DO NOT APPLY WITHOUT MASON'S EXPLICIT OK (Delivery-gate item: business-data write)
 -- Workflow-waves Sprint E (2026-07-10). One-time backfill: give LEGACY-assigned open jobs
 -- (jobs.applicator_id set the old way, no per-location dispatch rows) their

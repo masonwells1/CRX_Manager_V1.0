@@ -112,8 +112,9 @@ PROOF — Ran: wrapper self-test (terra), live introspection Q1–Q5 + count cro
   3. **U8 parked follow-ups** (blend-ticket-path commission mint; `jobs.commission_split` RLS visibility) — both documented in the U8 ledger; the mint is a lifecycle change (NOT additive-trivial) → needs its own focused session.
 - PROOF — Ran: n/a (no code) · Not verified: n/a. Honest state: unstarted, deliberately.
 
-### Sprint E — dispatch backfill → PARKED as mandated (drafted + validated)
-- `scripts/.staging-migrations/workflow-waves-parked/PARKED-dispatch-backfill.sql` — plain-English header, live row-count check (**currently 0 jobs / 0 rows — a NO-OP today**; the count query is embedded to re-run before applying), trigger-mirroring guards (active applicator role, ON CONFLICT DO NOTHING, attribution via updated_by/created_by).
+### Sprint E — dispatch backfill → RETIRED 2026-07-29 (was PARKED; drafted + validated, never applied)
+- **RETIRED 2026-07-29 — DO NOT APPLY.** The file is now `scripts/.staging-migrations/workflow-waves-parked/SUPERSEDED-dispatch-backfill.sql`. The legacy population is gone (0 rows, and no open assigned job is missing a dispatch row at all as of 2026-07-29), and the live sync triggers (`trg_sync_job_location_dispatch_on_applicator_change` on `jobs`, `trg_sync_job_location_dispatch_on_field_insert` on `job_fields`) cover the ordinary assignment paths. This is **not** a claim that a gap can never reopen — both triggers skip a job whose assignee is not an active applicator, and that trigger-coverage defect has its own OPEN row in `docs/manual/KNOWN_ISSUES.md`. The fix for it belongs at the write path, not in this backfill.
+- As drafted (historical): plain-English header, live row-count check (**0 jobs / 0 rows — a NO-OP**; the count query is embedded), trigger-mirroring guards (active applicator role, ON CONFLICT DO NOTHING, attribution via updated_by/created_by).
 - PROOF — Ran: live count (0/0) · rolled-back `BEGIN;INSERT…;ROLLBACK` executed clean against live · Saw: parses + executes, 0 rows · Not verified: a real apply (Delivery-gate: NEVER without Mason's OK — and pointless today at 0 rows).
 
 ### U19 — Nav blueprint → SHIPPED (frontend-only)
