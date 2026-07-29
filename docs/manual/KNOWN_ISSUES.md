@@ -1,11 +1,48 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-29** (live re-read this date via the Supabase connector: **919 ledger rows, max version `20260729015706`**, and every claim below re-checked against it. `20260729015706_application_service_cost_admin_only` is **APPLIED LIVE** — an earlier revision of this stamp said it was "on disk, not applied" at 918 rows, which was already wrong when written: `20260729015706` is the *server-assigned* version from that apply (the file was authored `20260729003600`), so a file bearing it cannot be unapplied. The `application_services.cost_per_acre_cents` leak in section 0 is therefore **CLOSED**. One follow-up is open and tracked in section 0d below. Prior stamp, still accurate: **2026-07-28** — live high-water re-read that date via the Supabase connector: **918 ledger rows, max version `20260728233459`**. Both halves of the anon-EXECUTE revoke **RESOLVE section 0c** and are applied live — `revoke_anon_execute_non_policy_functions` (ledger `20260728231350`) and `revoke_anon_execute_rls_role_helpers` (ledger `20260728233459`) — so logged-out callers no longer reach any of the 43 functions, and both raised the high-water above the `20260728182141` this stamp previously recorded. `secdef_pricing_reads_office_only` **RESOLVES section 0**: both remaining `SECURITY DEFINER` pricing readers now enforce active admin/sales-rep access in-body, with explicit execute grants. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Sections 0, 0a and 0c now have nothing open**; they are retained for their proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-29** (live re-read this date via the Supabase connector: **920 ledger rows, max version `20260729035923`**, and every claim below re-checked against it. `20260729015706_application_service_cost_admin_only` is **APPLIED LIVE** — an earlier revision of this stamp said it was "on disk, not applied" at 918 rows, which was already wrong when written: `20260729015706` is the *server-assigned* version from that apply (the file was authored `20260729003600`), so a file bearing it cannot be unapplied. The `application_services.cost_per_acre_cents` leak in section 0 is therefore **CLOSED**. Row 837, `20260729035923_application_service_atomic_save`, is **also APPLIED LIVE** and makes the admin save one transaction; its two open follow-ups are tracked in section **0e** below. A separate finding that arrived on `main` from PR #269 — `profile_public_view` is an RLS bypass onto `profiles` for any signed-in user — is **OPEN ON LIVE**, with its fix written but not yet applied; it is tracked in section **0d** below. Prior stamp, still accurate: **2026-07-28** — live high-water re-read that date via the Supabase connector: **918 ledger rows, max version `20260728233459`**. Both halves of the anon-EXECUTE revoke **RESOLVE section 0c** and are applied live — `revoke_anon_execute_non_policy_functions` (ledger `20260728231350`) and `revoke_anon_execute_rls_role_helpers` (ledger `20260728233459`) — so logged-out callers no longer reach any of the 43 functions, and both raised the high-water above the `20260728182141` this stamp previously recorded. `secdef_pricing_reads_office_only` **RESOLVES section 0**: both remaining `SECURITY DEFINER` pricing readers now enforce active admin/sales-rep access in-body, with explicit execute grants. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Sections 0, 0a and 0c now have nothing open**; they are retained for their proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## 0d. OPEN ON LIVE 2026-07-29 — `profile_public_view` is an RLS bypass onto `profiles` for any signed-in user
+
+**Status: fix written and reviewed, NOT yet applied.** Closed by `supabase/migrations/20260729043000_secure_profile_public_directory.sql` (PR #269), which is `PENDING APPLY`. Until it applies, this is open on production.
+
+Found by CodeRabbit on PR #269 and confirmed by reading live catalog state, not inferred. Three facts compose:
+
+| fact | live value (re-read 2026-07-29) |
+|---|---|
+| ACL on `public.profile_public_view` | `authenticated=arwdDxtm/postgres` — INSERT, UPDATE, DELETE, TRUNCATE |
+| `pg_relation_is_updatable(view, true)` | `28` = UPDATE\|INSERT\|DELETE — single-table view, no joins/aggregates, fully auto-updatable |
+| `reloptions` | `NULL` — **not** `security_invoker`, so base-table access runs as owner `postgres`, which owns `profiles` (not `FORCE ROW LEVEL SECURITY`) and is `BYPASSRLS` |
+
+Root cause is the same default-privilege trap that produced finding (1) on the directory table: `ALTER DEFAULT PRIVILEGES ... ON TABLES` in the ACL baseline covers **views as well as tables**, and `CREATE OR REPLACE VIEW` preserves the existing ACL, so a `REVOKE` naming only `PUBLIC` and `anon` leaves the write grants standing.
+
+**Actual blast radius — this composes into privilege escalation to `admin`.** Each link verified live 2026-07-29:
+
+1. `anon` cannot reach it (`anon=m`, MAINTAIN only), so the attacker must be **signed in**. Direct PostgREST access with their own token is required; nothing in the CRX UI does this.
+2. `UPDATE` through the view is contained — `trg_guard_profile_role_lock` raises `42501` unless `is_admin()` whenever `role`, `is_active`, `full_name` or `denied_pages` change. That covers three of the view's four columns, so **a user cannot simply UPDATE themselves to admin.**
+3. But `DELETE` is not guarded at all: `public.profiles` has **zero BEFORE DELETE triggers**, and normally has no DELETE policy either — so RLS would deny it outright. The view bypasses RLS, so the delete proceeds. The only remaining limit is referential integrity: of the 108 FKs referencing `profiles`, 81 are `NO ACTION` (block), 10 `SET NULL` (silently drop attribution), 4 `CASCADE`. **An established user's row will not delete; a new or lightly-used account's will.**
+4. Once their own row is gone, `profiles_insert` — `TO authenticated WITH CHECK (auth.uid() = id OR is_admin())` — lets them insert it back **with any role they like**. `profiles_role_check` permits `'admin'`, and `_guard_profile_role_lock` is `BEFORE UPDATE` only, so it never fires on INSERT.
+5. `is_admin()` is `EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin' AND is_active)` — which is now true. **Full admin.**
+
+So the realistic threat is a new or low-activity account, acting deliberately through the API, escalating itself to admin. Not something a user trips into, and not reachable logged out — but it is a genuine escalation path, not merely a data-deletion nuisance. That is why `20260729043000` should not sit unapplied.
+
+**Follow-ups this exposed, out of scope for that migration** (each pre-existing, none introduced by it):
+
+- `profiles_insert` has no role guard. `_guard_profile_role_lock` should have an INSERT arm, or the INSERT policy should pin `role`. Closing the view does not close this; it only removes the DELETE that makes it reachable.
+- `authenticated` holds `TRUNCATE` and `TRIGGER` directly on `public.profiles` (ACL baseline line 456). After this migration a plain `TRUNCATE` fails on the new FK and `TRUNCATE ... CASCADE` fails because `authenticated` no longer holds TRUNCATE on the directory — but that is an accident of the FK, not an asserted control.
+- `TRUNCATE` on `profiles` does not fire the row-level sync trigger, so it would leave the directory permanently stale. A statement-level trigger would close that.
+
+**Not a wider class:** a schema-wide sweep for the same pattern — auto-updatable, not `security_invoker`, writable by `authenticated` — returns **exactly one row across all of `public`**, this view.
+
+The fix closes it two independent ways (the `REVOKE` now names `authenticated` and `metabase_ro`, *and* the view becomes `security_invoker = true` over `profile_public_directory` where `authenticated` holds `SELECT` only), and the migration's postflight asserts both rather than letting either carry the other.
+
+---
+
 
 ## 0. RESOLVED 2026-07-28 — two SECURITY DEFINER functions leaked pricing past the office-only reads
 
@@ -138,7 +175,7 @@ from `authenticated` does not affect it. The migration therefore revokes `SELECT
 REFERENCES` on the table from `authenticated`, re-grants on the explicit nine-column list that omits
 the cost, and re-admits admins through two gated RPCs
 (`admin_get_application_service_costs` / `admin_set_application_service_cost`; a third,
-`admin_save_application_service`, supersedes the setter — see section 0d). Note the revoke-then-regrant
+`admin_save_application_service`, supersedes the setter — see section 0e). Note the revoke-then-regrant
 shape is required: a table-level grant implies every column and `REVOKE … (col)` does not subtract from
 it. All five functions that touch `application_services` were verified live to be SECDEF owned by
 `postgres`, so the money engine is untouched — including `preview_field_app_invoice_split`, which reads
@@ -169,7 +206,7 @@ recorded for audit accuracy, not as open remediation work.
 
 ---
 
-## 0d. 2026-07-29 — the admin application-service save is now atomic (APPLIED LIVE; two follow-ups still OPEN)
+## 0e. 2026-07-29 — the admin application-service save is now atomic (APPLIED LIVE; two follow-ups still OPEN)
 
 **Status: migration `20260729035923_application_service_atomic_save.sql` APPLIED LIVE 2026-07-29** (authored
 `20260729024500`, B7-renamed to the server-assigned ledger version; body unchanged). Proven live on rolled-back

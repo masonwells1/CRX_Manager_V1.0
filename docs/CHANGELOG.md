@@ -4,9 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-07-28 — The staff directory view read profiles as its owner; the contact-sync triggers had no pinned lookup path
 
-`profile_public_view` was a `SECURITY DEFINER` view over `profiles`. Every signed-in user reading it
-got the *view owner's* row visibility, not their own — so a picker that only needed a name and a role
-was served through a permission level that could see the whole profiles table. Pointing a
+`profile_public_view` ran with its **owner's** privileges over `profiles`. A PostgreSQL view has no
+`SECURITY DEFINER` property — the accurate description is that the view had `security_invoker = false`
+(the default), so base-table access ran as the view owner `postgres`, which owns `profiles` without
+`FORCE ROW LEVEL SECURITY` and is `BYPASSRLS`. Every signed-in user reading it therefore got the
+*view owner's* row visibility, not their own — so a picker that only needed a name and a role was
+served through a permission level that could see the whole profiles table. Pointing a
 `security_invoker` view straight at `profiles` was not an option: the live `profiles` policy lets an
 administrator, or a user themself, read a profile, so every non-admin name/assignment picker in the
 app would have gone empty.
@@ -44,11 +47,22 @@ partner trigger cannot loop; and each write carries an `IS DISTINCT FROM` guard,
 nothing. `sync_profile_public_directory()` additionally has EXECUTE revoked from `PUBLIC`, `anon` and
 `authenticated` in the same migration.
 
-Both files were B7-renamed before landing: authored `20260728185739` and `20260728185913`, they both
-sorted *below* the `20260728233459` high-water that the same-day anon-EXECUTE applies established, so
-they became `20260728235500` and `20260728235600` — strictly above it, relative order preserved.
-Renames only; neither SQL body was touched. Both are indexed in `docs/reference/migration-history.md`
-as rows 834 and 835 with `PENDING APPLY`.
+Both files were B7-renamed **three times** before landing. Authored `20260728185739` and
+`20260728185913`, they sorted *below* the `20260728233459` high-water that the same-day anon-EXECUTE
+applies established, so they were renamed to `20260728235500` and `20260728235600`. While this PR
+was in review a concurrent session applied `application_service_cost_admin_only`, which pushed the
+live high-water to `20260729015706` (live runs UTC — the apply landed on 2026-07-29 UTC) and put
+those names back below it, forcing a second rename to `20260729020000` and `20260729020100`. Then,
+while CI ran on the security fix below, a *third* concurrent apply landed —
+`20260729035923_application_service_atomic_save` — and invalidated those names too. The final
+rename is to `20260729043000` and `20260729043100`, strictly above the `20260729035923` high-water,
+relative order preserved.
+
+Renames only; no SQL body was touched by any of the three. The lesson is mechanical and worth
+repeating: on a repo with several concurrent sessions applying migrations, a disk timestamp is only
+valid for as long as it takes someone else to apply. **Re-read the live high-water immediately
+before minting apply proofs, not once at the start of the work.** Both files are indexed in
+`docs/reference/migration-history.md` as rows 834 and 835 with `PENDING APPLY`.
 
 The Codex connector then filed three P2 findings on the directory migration, all three real and all
 three confirmed against live before fixing. They have **three separate causes** — worth stating
@@ -75,10 +89,69 @@ snapshot and the `CREATE TRIGGER` was captured stale and fired no trigger, servi
 name or role indefinitely. The trigger is now installed first, and `CREATE TRIGGER` holds SHARE ROW
 EXCLUSIVE on `profiles` to commit, which closes the window without an explicit `LOCK`.
 
-The migration's own postflight block now fails the apply if `authenticated` holds any write privilege
-on the directory or if the analytics read is lost.
+**(4) The same default-privilege trap on the *view* — found by CodeRabbit on PR #269, and the most
+serious of the four.** Cause (1) was fixed on the directory table but the `REVOKE` on
+`public.profile_public_view` still named only `PUBLIC` and `anon`. `ALTER DEFAULT PRIVILEGES ... ON
+TABLES` covers **views as well as tables**, and `CREATE OR REPLACE VIEW` preserves the existing ACL,
+so the write grants survived. Read back from live before fixing:
 
-Neither migration has been applied to live.
+- `profile_public_view` ACL is `authenticated=arwdDxtm/postgres` — INSERT, UPDATE, DELETE, TRUNCATE.
+- `pg_relation_is_updatable` returns **28** (UPDATE|INSERT|DELETE): a single-table view with no joins
+  or aggregates is fully auto-updatable.
+- `reloptions` is NULL — the live view is **not** `security_invoker`, so base-table access runs as the
+  owner, `postgres`, which both owns `profiles` (not `FORCE ROW LEVEL SECURITY`) and is `BYPASSRLS`.
+
+Those three facts compose into a live RLS bypass on `public.profiles` for any signed-in user, through
+the view — and following it through, into **privilege escalation to `admin`**. Every link read back
+from live: `anon` cannot reach it (`anon=m`, MAINTAIN only), so sign-in is required. `UPDATE` is
+contained, because `trg_guard_profile_role_lock` raises `42501` unless `is_admin()` whenever `role`,
+`is_active`, `full_name` or `denied_pages` change — three of the view's four columns. But `profiles`
+has **zero BEFORE DELETE triggers** and normally no DELETE policy at all, so RLS is the only thing
+that would stop a delete, and the view bypasses it. The sole remaining limit is referential
+integrity: of the 108 FKs referencing `profiles`, 81 are `NO ACTION` (block), 10 `SET NULL` and 4
+`CASCADE` — so an established user's row will not delete, but a new or lightly-used account's will.
+Once it is gone, `profiles_insert` (`TO authenticated WITH CHECK (auth.uid() = id OR is_admin())`)
+lets that user insert their row back with `role = 'admin'`: `profiles_role_check` permits the value,
+and `_guard_profile_role_lock` is `BEFORE UPDATE` only, so it never fires on the INSERT. `is_admin()`
+is `EXISTS (… id = auth.uid() AND role = 'admin' AND is_active)`, which is now true.
+
+Realistically that is a new or low-activity account, acting deliberately through the API, escalating
+itself to admin — not something a user trips into, and not reachable logged out. It is still an
+escalation path rather than a deletion nuisance, which is why this migration should not sit unapplied.
+Three pre-existing follow-ups it exposed — an INSERT arm for the role-lock trigger, `authenticated`'s
+direct TRUNCATE/TRIGGER grants on `profiles`, and TRUNCATE not firing the row-level sync trigger —
+are recorded in `docs/manual/KNOWN_ISSUES.md` §0d and are **not** fixed here.
+
+A schema-wide sweep for the identical pattern — auto-updatable, not `security_invoker`, and writable
+by `authenticated` — returns **exactly one row across all of `public`: this view.** It is not a class
+of problem elsewhere in the schema.
+
+`20260729043000` closes it two independent ways: the `REVOKE` now names `authenticated` and
+`metabase_ro`, and the view is redefined `security_invoker = true` over `profile_public_directory`,
+where `authenticated` holds `SELECT` only. Either alone would be sufficient; both are asserted so
+neither silently carries the other.
+
+The migration's own postflight block now fails the apply if `authenticated` holds any write privilege
+on the directory **or on the view**, or if the analytics read is lost.
+
+**(5) The read-policy assertion checked the policy's name but not its predicate — CodeRabbit, full
+review of PR #269.** `PROFILE_PUBLIC_DIRECTORY_AUTHENTICATED_READ_LOST` matched the authenticated
+`SELECT` policy on name, role, `permissive` and `cmd`. All four still match after someone widens the
+`USING` predicate to `true` — which would hand the staff directory to any signed-in account
+*including deactivated ones*, the exact boundary the policy exists to draw. The guard now also
+requires the predicate to mention `is_active` and `auth.uid()`: drop the first and deactivated staff
+regain access, drop the second and the per-caller identity check is gone.
+
+Asserted by substring, not exact text, and the reason matters for anyone tempted to tighten it:
+`pg_policies.qual` is Postgres's **reparsed** rendering of the predicate, not the source in the
+migration. Verified live on this database — `(SELECT auth.uid())` reads back as
+`( SELECT auth.uid() AS uid)`. Pinning an exact string would fail the apply on a whitespace-and-alias
+difference rather than on a real regression. The pattern was checked against a live policy to confirm
+it discriminates rather than always matching: on `profiles_select`, `qual LIKE '%auth.uid()%'` is true
+and `qual LIKE '%is_active%'` is false.
+
+Neither migration has been applied to live — so this bypass is still open on production until
+`20260729043000` applies.
 
 ## 2026-07-28 — Split the 44-function anon-EXECUTE revoke into two migrations and took both live. Part 1 (40 functions in no RLS policy, incl. the 8 genuinely ungated ones: six next_*_number() allocators, calculate_billing_splits, check_period_open) applied as ledger 20260728231350 via PR #262; anon EXECUTE false on 40/40, authenticated true on 40/40. Part 2 (the RLS role helpers is_admin/is_applicator/is_driver) applied as ledger 20260728233459 via PR #263; anon false and authenticated/service_role true on all three. Both files B7-renamed to their server-assigned versions, bodies unedited. Production loaded logged out after the apply: sign-in page renders, no console errors, no 42501, assets 200. PR #266 carried the bookkeeping; PR #264 has since been renamed above the new high-water (see the entry above).
 
