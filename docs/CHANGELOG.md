@@ -20,7 +20,13 @@ nothing is the expected shape once policies come from supplier sheets, and it fa
 predicate emits the product id and never the name or SKU, because the repo is public and the
 allowlist is tracked. Proven live: 0 violations across 604 products, and the same query with the
 classification stripped out returns all 21 — the alarm demonstrably fires rather than being a check
-that has only ever seen zero. Landed via PR #286.
+that has only ever seen zero. Cross-model review caught the first pattern matching "no" mid-word
+(so "MONO RETURN" would false-flag) while missing "ALL SALES FINAL" and a space-separated
+"NON RETURN"; every alternative is now word-anchored, and
+`src/__tests__/predicate-product-name-vs-return-policy.test.ts` pins the phrase set plus the
+near-miss false positives, reading the pattern out of the `.sql` file so the two cannot drift.
+The broadened pattern is behavior-identical on live data — still 0 violations, still all 21 under
+the mutation. Landed via PR #286.
 
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `1442ee92 feat(products): Supplier Pricing Phase 3 Stage C return-policy classification`
