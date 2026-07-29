@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — `/fleet` can now tell a stalled loop from a finished one
+
+`/fleet` reported what *exists* — worktrees, branches, ledgers, counts — but never whether anything
+that claims to be running still is. That is Mason's most common fleet worry: a loop or a Codex run
+that died quietly hours ago and looks identical, in the report, to one that is working. Step 2b adds
+a liveness probe per loop: ledger last-write time, plus a `Get-CimInstance Win32_Process` scan judged
+by **CommandLine**, because `Get-Process`'s `.Path` omits the arguments that say which worktree or
+loop a `node.exe` belongs to. Each loop gets a stated verdict — RUNNING, IDLE, or STALLED — along
+with the evidence that produced it. Invoked from Git Bash the whole `-Command` string must be
+single-quoted or the parent shell consumes `$_` and the probe fails *open*, reporting "nothing
+running" when plenty is; so a zero-row result is treated as a probe fault to sanity-check (match
+`powershell` — something must appear) before it is reported as a finding. A stalled Codex run is
+reported and never auto-restarted: restarting it is Mason's call once he can see what it was doing.
+Step 2c routes "keep an eye on it" / "ping me every N minutes" to `/loop <N>m /fleet` instead of
+hand-rolled reminders. Proven by running the probe: it returned the live `codex.exe`, several
+`node.exe` rows, and the `powershell` self-check row.
+
+Landed alongside it: the 2026-07-26 PR #231 post-mortem, archived under `docs/audits/` and stamped
+with its resolved status so it reads as history rather than an open action list. Both files were
+carried off `claude/schema-baseline-refresh-20260727` in the main checkout, a dead branch 39 commits
+behind `main`. Everything else uncommitted there was checked file by file against `main` and left
+behind deliberately — it is either byte-identical to `main` already or *older* than `main`, and
+carrying it over wholesale would have reverted roughly a thousand lines of merged work, including
+the `/fleet` counter fix below and the session-scoped apply-proof decision from #273.
+
 ## 2026-07-29 — The fleet's "parked migrations awaiting apply" count could never reach zero
 
 The SessionStart banner and `/fleet` both counted parked migration drafts by scanning the working
