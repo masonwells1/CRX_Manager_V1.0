@@ -38,6 +38,24 @@ they became `20260728235500` and `20260728235600` — strictly above it, relativ
 Renames only; neither SQL body was touched. Both are indexed in `docs/reference/migration-history.md`
 as rows 834 and 835 with `PENDING APPLY`.
 
+The Codex connector then filed three P2 findings on the directory migration, all three real and all
+three confirmed against live before fixing. They share one root cause: the ACL baseline
+(`supabase/baselines/20260727174805_acl_lockdown.sql`, lines 1656-1658) re-grants default privileges
+on every new table in `public`, so grants land on a new table independently of anything the migration
+writes. (1) `pg_default_acl` gives `authenticated` `arwdDxtm` — the `D` is TRUNCATE, which PostgreSQL
+does **not** subject to RLS, so the read-only policies could not have stopped a signed-in caller from
+emptying the staff directory and blanking every picker in the app; the `REVOKE` now names
+`authenticated` and `metabase_ro`, not just `PUBLIC` and `anon`. (2) `metabase_ro` is `NOBYPASSRLS`,
+`canlogin=false` and a member of no role, so a policy scoped `TO authenticated` can never apply to
+it — once the view became `security_invoker`, Metabase's existing queries would have returned zero
+rows silently rather than erroring; it now has an explicit `SELECT` grant on the table and the view
+plus its own read policy. (3) The backfill ran before the trigger existed, so a profile written in
+between was captured stale and fired no trigger, serving an out-of-date name or role indefinitely;
+the trigger is now installed first, and `CREATE TRIGGER` holds SHARE ROW EXCLUSIVE on `profiles` to
+commit, which closes the window without an explicit `LOCK`. The migration's own postflight block now
+fails the apply if `authenticated` holds any write privilege on the directory or if the analytics
+read is lost.
+
 Neither migration has been applied to live.
 
 ## 2026-07-28 — Split the 44-function anon-EXECUTE revoke into two migrations and took both live. Part 1 (40 functions in no RLS policy, incl. the 8 genuinely ungated ones: six next_*_number() allocators, calculate_billing_splits, check_period_open) applied as ledger 20260728231350 via PR #262; anon EXECUTE false on 40/40, authenticated true on 40/40. Part 2 (the RLS role helpers is_admin/is_applicator/is_driver) applied as ledger 20260728233459 via PR #263; anon false and authenticated/service_role true on all three. Both files B7-renamed to their server-assigned versions, bodies unedited. Production loaded logged out after the apply: sign-in page renders, no console errors, no 42501, assets 200. PR #266 carried the bookkeeping; PR #264 has since been renamed above the new high-water (see the entry above).
