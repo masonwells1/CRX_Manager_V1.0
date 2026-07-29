@@ -9,17 +9,39 @@ import {
   PRICING_WORKBOOK_SHEET,
 } from '../../src/lib/productPricingWorkbook';
 
-const [inputPath, payloadPath, exportPath, editedPath] = process.argv.slice(2);
+const [inputPath, payloadPath, exportPath, editedPath, mode] = process.argv.slice(2);
 if (!inputPath || !payloadPath || !exportPath || !editedPath) {
-  throw new Error('Usage: vite-node roundtrip-supplier-pricing-phase1a-workbook.ts <export.json> <payload.json> <export.xlsx> <edited.xlsx>');
+  throw new Error('Usage: vite-node roundtrip-supplier-pricing-phase1a-workbook.ts <export.json> <payload.json> <export.xlsx> <edited.xlsx> [supplier-evidence]');
 }
+if (mode !== undefined && mode !== 'supplier-evidence') {
+  throw new Error(`Unsupported workbook roundtrip mode: ${mode}`);
+}
+const supplierEvidenceMode = mode === 'supplier-evidence';
+if (supplierEvidenceMode) {
+  const storage = new Map<string, string>();
+  Object.assign(globalThis, {
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    },
+  });
+}
+const supplierEvidenceWorkbook = supplierEvidenceMode
+  ? await import(process.env.CRX_SUPPLIER_EVIDENCE_WORKBOOK_MODULE ?? '')
+  : null;
 
 const pricingExport = JSON.parse(await readFile(inputPath, 'utf8')) as PricingWorkbookExport;
 if (!Array.isArray(pricingExport.rows) || pricingExport.rows.length !== 3) {
   throw new Error(`Expected exactly 3 exported Product rows, received ${pricingExport.rows?.length ?? 'none'}`);
 }
 
-const exportedBlob = await generateProductPricingWorkbook(pricingExport);
+const exportedBlob = supplierEvidenceMode
+  ? await supplierEvidenceWorkbook!.generateProductPricingWorkbookWithSupplierEvidence(
+    pricingExport,
+    [],
+  )
+  : await generateProductPricingWorkbook(pricingExport);
 const exportedBytes = Buffer.from(await exportedBlob.arrayBuffer());
 await writeFile(exportPath, exportedBytes);
 
@@ -74,7 +96,9 @@ const editedArrayBuffer = editedBytes.buffer.slice(
   editedBytes.byteOffset,
   editedBytes.byteOffset + editedBytes.byteLength,
 ) as ArrayBuffer;
-const parsed = await parseProductPricingWorkbook(editedArrayBuffer);
+const parsed = supplierEvidenceMode
+  ? await supplierEvidenceWorkbook!.parseProductPricingWorkbookWithSupplierEvidence(editedArrayBuffer)
+  : await parseProductPricingWorkbook(editedArrayBuffer);
 
 if (parsed.exportId !== pricingExport.export_id || parsed.rowCount !== 3) {
   throw new Error('Parsed workbook manifest did not round-trip the server export');
@@ -104,5 +128,14 @@ for (const [productId, expected] of Object.entries(exactMoneyEdits)) {
   }
 }
 
-await writeFile(payloadPath, JSON.stringify(parsed));
+const normalizedRows = supplierEvidenceMode
+  ? (await import(process.env.CRX_COST_BASIS_ROWS_MODULE ?? '')).costBasisRows(
+    parsed.rows,
+    'pricing_worksheet',
+  )
+  : parsed.rows;
+await writeFile(payloadPath, JSON.stringify({
+  ...parsed,
+  rows: normalizedRows,
+}));
 process.stdout.write('PHASE1A_XLSX_PARSE_PASS\n');
