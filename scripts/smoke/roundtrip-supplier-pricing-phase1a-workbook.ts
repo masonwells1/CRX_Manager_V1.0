@@ -115,10 +115,14 @@ if (supplierEvidenceMode) {
   if (!fixtureRow || fixtureRowNumber === 0) {
     throw new Error(`Supplier-evidence fixture Product ${fixture.product_id} was not exported`);
   }
+  if (!worksheet.sheetProtection) {
+    throw new Error('Supplier-evidence Pricing Update worksheet was not protected');
+  }
   for (const [index, header] of evidenceHeaders.entries()) {
     const column = headers.get(header);
-    if (!column || worksheet.getCell(fixtureRowNumber, column).value !== expectedSummary[index]) {
-      throw new Error(`Supplier-evidence Pricing Update column ${header} did not preserve the fixture`);
+    const cell = column ? worksheet.getCell(fixtureRowNumber, column) : undefined;
+    if (cell?.value !== expectedSummary[index] || cell.protection?.locked === false) {
+      throw new Error(`Supplier-evidence Pricing Update column ${header} did not preserve the fixture as a locked cell on a protected worksheet`);
     }
   }
 
