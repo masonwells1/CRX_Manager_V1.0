@@ -40,18 +40,26 @@ Read-only catalog inspection on 2026-07-29 found:
 - Authentication and mismatch checks occur before replay lookup or writes.
 - Existing callers that pass `NULL` remain compatible and are attributed to
   the authenticated user.
+- Passing `NULL` now intentionally records the signed-in user instead of a
+  nullable caller value; that attribution correction is the only write-output
+  delta.
+- The existing `service_role` EXECUTE grant is retained for ACL compatibility,
+  but a direct service-role call without a user JWT now fails `AUTH_REQUIRED`;
+  no current application caller uses that unsupported shape.
 - A replay returns the original field and does not duplicate field/activity
   rows.
 - Any drift from the independently reviewed function body fails the standing
-  database predicate.
+  database predicate, and a Docker-free correction guard keeps the shipped
+  migration body synchronized with that predicate in ordinary CI.
 
 ## Proof ledger
 
 | Proof | Result |
 |---|---|
 | Graphify refresh + targeted `save_field` queries | PASS — historical migration edge found; current UI call sites verified directly |
+| Automatic body-fingerprint correction guard | PASS — checked-in migration body matches the standing predicate; cosmetic drift fails closed without Docker |
 | Disposable PostgreSQL 17 body-fingerprint predicate | PASS — unsafe and altered bodies fail; exact migration returns zero violations |
-| Disposable PostgreSQL 17 rollback behavior smoke | PASS — `SAVE_FIELD_ACTOR_BINDING_PROOF_PASS` |
+| Disposable PostgreSQL 17 rollback behavior smoke | PASS — production same-actor call and replay, NULL compatibility, rejection paths, and truthful attribution; `SAVE_FIELD_ACTOR_BINDING_PROOF_PASS` |
 | Changed-only SQL audit | PASS — 0 violations, 0 warnings |
 | Repository verification | PASS — docs, 229 drift tests, typecheck, lint, 4,009 full tests, production build, and agent workflow guards |
 | Live invariant sweep | PASS WITH EXPECTED FAIL-FIRST — 19 predicates clean after documented allowlists; only `save-field-actor-binding` returns the intended pre-fix violation |

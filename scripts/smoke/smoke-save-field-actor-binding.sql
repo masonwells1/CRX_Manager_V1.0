@@ -1,9 +1,10 @@
 -- Rollback-only save_field actor-binding smoke.
 -- Run after migration 20260729222311. It proves no-auth and forged actors are
--- rejected with the expected contract errors and leave no field rows, NULL
--- compatibility remains safe, replay is idempotent, attribution is truthful,
--- and the function contract is exact. Guard ordering is pinned separately by
--- the migration body fingerprint predicate.
+-- rejected with the expected contract errors and leave no field rows, the
+-- production call shape (p_performed_by = auth.uid()) succeeds and replays
+-- idempotently, NULL compatibility remains safe, attribution is truthful, and
+-- the function contract is exact. Guard ordering is pinned separately by the
+-- migration body fingerprint predicate.
 
 DO $smoke$
 DECLARE
@@ -83,19 +84,26 @@ BEGIN
   END IF;
 
   v_field := public.save_field(
-    NULL, v_payload, '[]'::jsonb, NULL, 'smk-field-ok-' || v_suffix
+    NULL, v_payload, '[]'::jsonb, v_admin, 'smk-field-self-' || v_suffix
   );
   v_replay := public.save_field(
-    NULL, v_payload, '[]'::jsonb, NULL, 'smk-field-ok-' || v_suffix
+    NULL, v_payload, '[]'::jsonb, v_admin, 'smk-field-self-' || v_suffix
   );
 
   IF v_field IS NULL OR v_replay IS DISTINCT FROM v_field THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: nullable-actor replay changed result';
+    RAISE EXCEPTION 'SMOKE_FAIL: same-actor replay changed result';
   END IF;
 
   SELECT count(*) INTO v_count FROM fields WHERE id = v_field;
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one saved field, got %', v_count;
+  END IF;
+
+  v_replay := public.save_field(
+    v_field, v_payload, '[]'::jsonb, NULL, 'smk-field-null-' || v_suffix
+  );
+  IF v_replay IS DISTINCT FROM v_field THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: nullable-actor update changed result';
   END IF;
 
   SELECT count(*) INTO v_count
@@ -104,8 +112,8 @@ BEGIN
     AND related_entity_id = v_field
     AND event_type = 'field_saved'
     AND performed_by = v_admin;
-  IF v_count <> 1 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: expected one truthful field activity by %, got %',
+  IF v_count <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: expected two truthful field activities by %, got %',
       v_admin, v_count;
   END IF;
 

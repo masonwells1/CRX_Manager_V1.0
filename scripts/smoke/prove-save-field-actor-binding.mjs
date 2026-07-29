@@ -58,8 +58,9 @@ function assertInputs() {
   for (const marker of [
     PASS_TOKEN,
     'accepted forged actor',
-    'nullable-actor replay',
-    'truthful field activity',
+    'same-actor replay',
+    'nullable-actor update',
+    'truthful field activities',
   ]) {
     assert.ok(smoke.includes(marker), `smoke marker missing: ${marker}`);
   }

@@ -5,7 +5,13 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn().mockReturnValue({}),
 }));
 
-import { checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from './db';
+import {
+  checkMutationResult,
+  assertRpcResult,
+  hasRpcCode,
+  rpcAuthErrorMessage,
+  RpcErrorCodes,
+} from './db';
 
 describe('checkMutationResult', () => {
   it('does nothing when result has data and no error', () => {
@@ -111,5 +117,19 @@ describe('hasRpcCode', () => {
     expect(hasRpcCode(null, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
     expect(hasRpcCode(undefined, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
     expect(hasRpcCode(42, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
+  });
+});
+
+describe('rpcAuthErrorMessage', () => {
+  const friendlyMessage = 'Your sign-in could not be verified. Refresh the page and try again.';
+
+  it('maps authentication and actor-binding failures to a friendly recovery message', () => {
+    expect(rpcAuthErrorMessage(new Error('AUTH_REQUIRED'))).toBe(friendlyMessage);
+    expect(rpcAuthErrorMessage({ code: 'P0001', message: 'ACTOR_MISMATCH' })).toBe(friendlyMessage);
+  });
+
+  it('leaves unrelated RPC failures available for their normal handling', () => {
+    expect(rpcAuthErrorMessage({ message: 'Billing splits must total 100%' })).toBeNull();
+    expect(rpcAuthErrorMessage(null)).toBeNull();
   });
 });

@@ -291,6 +291,21 @@ export function hasRpcCode(err: unknown, code: RpcErrorCode): boolean {
 }
 
 /**
+ * Converts save-RPC session/identity failures into a safe, useful message for
+ * end users. Raw database tokens remain available to logs and tests through
+ * `hasRpcCode`, but should not be shown directly in field workflows.
+ */
+export function rpcAuthErrorMessage(err: unknown): string | null {
+  if (
+    hasRpcCode(err, RpcErrorCodes.AUTH_REQUIRED)
+    || hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)
+  ) {
+    return 'Your sign-in could not be verified. Refresh the page and try again.';
+  }
+  return null;
+}
+
+/**
  * Untyped Supabase client alias for tables/RPCs not yet in the generated
  * `src/types/supabase.ts` (e.g., newly migrated tables applied only locally).
  * Cast to the plain SupabaseClient to bypass the Database type constraints
