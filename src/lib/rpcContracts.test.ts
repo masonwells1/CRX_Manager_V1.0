@@ -2105,8 +2105,8 @@ function registryMigrationHighWater(): string {
 // 20260728233459) and no longer pending. The two below are PR #264's, B7-renamed
 // above that high-water and awaiting apply; empty this set again once they land.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
-  '20260729020000',
-  '20260729020100',
+  '20260729043000',
+  '20260729043100',
 ]);
 
 /**

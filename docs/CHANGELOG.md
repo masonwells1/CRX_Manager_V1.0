@@ -44,15 +44,22 @@ partner trigger cannot loop; and each write carries an `IS DISTINCT FROM` guard,
 nothing. `sync_profile_public_directory()` additionally has EXECUTE revoked from `PUBLIC`, `anon` and
 `authenticated` in the same migration.
 
-Both files were B7-renamed **twice** before landing. Authored `20260728185739` and `20260728185913`,
-they sorted *below* the `20260728233459` high-water that the same-day anon-EXECUTE applies
-established, so they were renamed to `20260728235500` and `20260728235600`. While this PR was in
-review a concurrent session applied `application_service_cost_admin_only`, which pushed the live
-high-water to `20260729015706` (live runs UTC — the apply landed on 2026-07-29 UTC) and put those
-names back below it. They were renamed a second time to `20260729020000` and `20260729020100` —
-strictly above the current high-water, relative order preserved. Renames only; neither SQL body was
-touched by either rename. Both are indexed in `docs/reference/migration-history.md` as rows 834 and
-835 with `PENDING APPLY`.
+Both files were B7-renamed **three times** before landing. Authored `20260728185739` and
+`20260728185913`, they sorted *below* the `20260728233459` high-water that the same-day anon-EXECUTE
+applies established, so they were renamed to `20260728235500` and `20260728235600`. While this PR
+was in review a concurrent session applied `application_service_cost_admin_only`, which pushed the
+live high-water to `20260729015706` (live runs UTC — the apply landed on 2026-07-29 UTC) and put
+those names back below it, forcing a second rename to `20260729020000` and `20260729020100`. Then,
+while CI ran on the security fix below, a *third* concurrent apply landed —
+`20260729035923_application_service_atomic_save` — and invalidated those names too. The final
+rename is to `20260729043000` and `20260729043100`, strictly above the `20260729035923` high-water,
+relative order preserved.
+
+Renames only; no SQL body was touched by any of the three. The lesson is mechanical and worth
+repeating: on a repo with several concurrent sessions applying migrations, a disk timestamp is only
+valid for as long as it takes someone else to apply. **Re-read the live high-water immediately
+before minting apply proofs, not once at the start of the work.** Both files are indexed in
+`docs/reference/migration-history.md` as rows 834 and 835 with `PENDING APPLY`.
 
 The Codex connector then filed three P2 findings on the directory migration, all three real and all
 three confirmed against live before fixing. They have **three separate causes** — worth stating
@@ -116,7 +123,7 @@ A schema-wide sweep for the identical pattern — auto-updatable, not `security_
 by `authenticated` — returns **exactly one row across all of `public`: this view.** It is not a class
 of problem elsewhere in the schema.
 
-`20260729020000` closes it two independent ways: the `REVOKE` now names `authenticated` and
+`20260729043000` closes it two independent ways: the `REVOKE` now names `authenticated` and
 `metabase_ro`, and the view is redefined `security_invoker = true` over `profile_public_directory`,
 where `authenticated` holds `SELECT` only. Either alone would be sufficient; both are asserted so
 neither silently carries the other.
@@ -125,7 +132,7 @@ The migration's own postflight block now fails the apply if `authenticated` hold
 on the directory **or on the view**, or if the analytics read is lost.
 
 Neither migration has been applied to live — so this bypass is still open on production until
-`20260729020000` applies.
+`20260729043000` applies.
 
 ## 2026-07-28 — Split the 44-function anon-EXECUTE revoke into two migrations and took both live. Part 1 (40 functions in no RLS policy, incl. the 8 genuinely ungated ones: six next_*_number() allocators, calculate_billing_splits, check_period_open) applied as ledger 20260728231350 via PR #262; anon EXECUTE false on 40/40, authenticated true on 40/40. Part 2 (the RLS role helpers is_admin/is_applicator/is_driver) applied as ledger 20260728233459 via PR #263; anon false and authenticated/service_role true on all three. Both files B7-renamed to their server-assigned versions, bodies unedited. Production loaded logged out after the apply: sign-in page renders, no console errors, no 42501, assets 200. PR #266 carried the bookkeeping; PR #264 has since been renamed above the new high-water (see the entry above).
 

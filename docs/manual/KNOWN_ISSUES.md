@@ -9,7 +9,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## 0d. OPEN ON LIVE 2026-07-29 — `profile_public_view` is an RLS bypass onto `profiles` for any signed-in user
 
-**Status: fix written and reviewed, NOT yet applied.** Closed by `supabase/migrations/20260729020000_secure_profile_public_directory.sql` (PR #269), which is `PENDING APPLY`. Until it applies, this is open on production.
+**Status: fix written and reviewed, NOT yet applied.** Closed by `supabase/migrations/20260729043000_secure_profile_public_directory.sql` (PR #269), which is `PENDING APPLY`. Until it applies, this is open on production.
 
 Found by CodeRabbit on PR #269 and confirmed by reading live catalog state, not inferred. Three facts compose:
 
@@ -29,7 +29,7 @@ Root cause is the same default-privilege trap that produced finding (1) on the d
 4. Once their own row is gone, `profiles_insert` — `TO authenticated WITH CHECK (auth.uid() = id OR is_admin())` — lets them insert it back **with any role they like**. `profiles_role_check` permits `'admin'`, and `_guard_profile_role_lock` is `BEFORE UPDATE` only, so it never fires on INSERT.
 5. `is_admin()` is `EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin' AND is_active)` — which is now true. **Full admin.**
 
-So the realistic threat is a new or low-activity account, acting deliberately through the API, escalating itself to admin. Not something a user trips into, and not reachable logged out — but it is a genuine escalation path, not merely a data-deletion nuisance. That is why `20260729020000` should not sit unapplied.
+So the realistic threat is a new or low-activity account, acting deliberately through the API, escalating itself to admin. Not something a user trips into, and not reachable logged out — but it is a genuine escalation path, not merely a data-deletion nuisance. That is why `20260729043000` should not sit unapplied.
 
 **Follow-ups this exposed, out of scope for that migration** (each pre-existing, none introduced by it):
 
