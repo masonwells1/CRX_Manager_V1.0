@@ -37,6 +37,7 @@
     "smoke": "node scripts/smoke/run-smoke.mjs",
     "proof:pricing-phase1a": "node scripts/smoke/prove-supplier-pricing-phase1a.mjs",
     "proof:pricing-phase2": "node scripts/smoke/prove-supplier-cost-basis-phase2.mjs",
+    "proof:save-field-actor": "node scripts/db-invariant-sweeps/save-field-actor-binding-predicate.test.mjs && node scripts/smoke/prove-save-field-actor-binding.mjs",
     "verify:deps": "node scripts/verify-deps.mjs",
     "check:docs": "node scripts/check-doc-drift.mjs",
     "check:agent-guidance": "node scripts/check-agent-guidance.mjs",

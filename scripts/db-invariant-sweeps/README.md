@@ -43,6 +43,11 @@ This runner makes those queries **standing executable gates** that run **before*
 | `returns-lifecycle-rpc-owned.sql` | return lifecycle fields, creation, and line mutations stay behind canonical RPCs/triggers | **zero** (catches direct `returns` INSERT policy/grant drift and direct `return_items` mutation policy/grant drift) |
 | `save-field-actor-binding.sql` | exact reviewed `save_field(uuid,jsonb,jsonb,uuid,text)` actor-binding body | **zero** (missing signature or any body drift fails closed) |
 
+The `save_field` predicate also has a disposable mutation proof that deliberately installs unsafe,
+late-guard, comment-only, and altered bodies and requires the predicate to fail closed. Run both
+that guard-of-the-guard and the rollback behavior smoke with
+`npm run proof:save-field-actor`.
+
 ## When it runs
 
 1. **Post-apply in `/ship`** — right after a reviewed migration is applied live, before the commit.

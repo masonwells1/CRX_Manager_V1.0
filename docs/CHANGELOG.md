@@ -19,6 +19,7 @@ This closes one of the two Section 1 MED findings. The anon-executable SECURITY 
 generators remain open. The older parked branch `codex/section1-security-hardening-20260725`
 contains a superseded duplicate `save_field` replacement; it must be narrowed before rebase or
 apply, or it would replace the live function body and intentionally trip the hash-pinned invariant.
+
 ## 2026-07-29 — Supplier Pricing Phase 3 Stage C: the return-policy guard finally fires
 
 Supplier Pricing Phase 3 Stage C: applied the owner-approved return-policy classification live (migration 20260729213733) — 21 products no_return (10 also full-tote-only), 2 returnable, remainder left unknown by owner decision. Activates the previously dormant assert_phase3_return_policy() guard across create_return/approve_return/receive_return/issue_return_credit. Rows keyed by primary key so no product names or SKUs enter the repo. Verified live: catalog 604 rows -> 21/2/581/0, tote=10 all inside no_return, and the guard raises RETURN_POLICY_NO_RETURN on a real classified product while both returnable overrides and an untouched unknown product pass. Landed via PR #282.
