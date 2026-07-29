@@ -2,6 +2,32 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — A migration built in a linked worktree could never be applied
+
+`migration-apply-guard.mjs` looked for apply-proofs in exactly one place: the `session-state`
+directory under `CLAUDE_PROJECT_DIR`. The harness pins that variable to the **primary checkout**
+even when the session's cwd is a linked worktree, while `scripts/write-apply-proofs.mjs` writes its
+output under `process.cwd()` — the worktree that actually holds the migration file. Every proof
+therefore landed somewhere the guard never looked, and the apply was denied no matter how many clean
+reviews ran. `pr-merge-guard` hit the same bug in PR #252/#255; this is the same fix through the same
+helper, `proofSearchDirs()` from `codex-push-lib.mjs`.
+
+Widening **where** proofs are found does not widen **what** counts. The name match, the
+clean/blockers-fixed verdict, the `[0, 30min]` freshness window, and the `queryHash` content-binding
+are unchanged, and `review-proof-guard.mjs` still blocks hand-writing a proof in any directory. These
+are sibling checkouts of one repository, not arbitrary paths. The Codex-proof lookup is widened the
+same way and now **scores every candidate** rather than trusting the first parseable file — a
+candidate only wins by satisfying every criterion the single-directory version demanded.
+
+`AUTOPILOT.on` is deliberately **not** widened: it is authorization state for this project, not
+evidence about a migration, and reading it from a sibling worktree would let a flag Mason never armed
+here change the rule-set.
+
+Proven by running the real hook binary against real `git worktree add` fixtures, not mocks — 61
+assertions, up from 57 — and mutation-tested both directions: reverting the fix fails the
+worktree-proof assertion, and deleting the `queryHash` binding fails the edited-after-review
+assertion.
+
 ## 2026-07-29 — Application-service costs preserve exact bigint cents
 
 The admin-only application-service cost getter now returns cents as text instead of a JSON number,
