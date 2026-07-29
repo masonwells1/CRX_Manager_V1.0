@@ -5,6 +5,7 @@ import { requireActiveProfile } from "../_shared/auth.ts";
 import { corsHeaders, preflightResponse } from "../_shared/cors.ts";
 import { validateDocumentType, type DocumentType } from "./documentTypes.ts";
 import { ocrSupportedDocument, type PageInput } from "./ocrBoundary.ts";
+import { ocrAllPages } from "./visionApi.ts";
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -70,57 +71,6 @@ type ParsedData =
   | ParsedPurchaseOrder
   | ParsedCustomerList
   | ParsedQuoteList;
-
-// ─── Google Vision API ───────────────────────────────────────────────────────
-
-async function callVisionAPI(
-  imageBase64: string,
-  apiKey: string,
-): Promise<string> {
-  const response = await fetch(
-    `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        requests: [
-          {
-            image: { content: imageBase64 },
-            features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
-          },
-        ],
-      }),
-    },
-  );
-
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`Vision API error (${response.status}): ${errBody}`);
-  }
-
-  const data = await response.json();
-  const annotation = data.responses?.[0]?.fullTextAnnotation;
-  return annotation?.text || "";
-}
-
-async function ocrAllPages(
-  pages: PageInput[],
-  apiKey: string,
-): Promise<string> {
-  // Process pages in parallel (max 5 concurrent)
-  const BATCH_SIZE = 5;
-  const allTexts: string[] = [];
-
-  for (let i = 0; i < pages.length; i += BATCH_SIZE) {
-    const batch = pages.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(
-      batch.map((p) => callVisionAPI(p.base64, apiKey)),
-    );
-    allTexts.push(...results);
-  }
-
-  return allTexts.join("\n\n--- PAGE BREAK ---\n\n");
-}
 
 // ─── Shared Parsing Helpers ──────────────────────────────────────────────────
 
