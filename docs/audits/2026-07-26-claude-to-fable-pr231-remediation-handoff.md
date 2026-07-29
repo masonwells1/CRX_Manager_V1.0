@@ -14,7 +14,7 @@
 
 ## 1. Verdict
 
-**PR #231 should be closed.** Of its 13 files, two are byte-identical to `origin/main`, three are superseded by newer versions already live, one breaks the test suite on merge, and one would roll the gauntlet ledger backwards by four sections. Three documents are genuinely new and worth lifting onto a clean branch.
+**PR #231 should be closed.** Highlights from its 13 files — this list is not an exhaustive tally, the full per-file disposition of all 13 is in §4: two are byte-identical to `origin/main`, three are superseded by newer versions already live, one breaks the test suite on merge, and one would roll the gauntlet ledger backwards by four sections. Three documents are genuinely new and worth lifting onto a clean branch.
 
 I opened this PR. The core mistake was mine: I committed and PR'd work rescued off a stale detached HEAD **without first checking whether it had already landed in `origin/main`.** It had.
 
@@ -32,7 +32,7 @@ I opened this PR. The core mistake was mine: I committed and PR'd work rescued o
 
 | Thing | Value |
 |---|---|
-| PR | `#231`, currently **draft**, `mergeable: CONFLICTING` |
+| PR | `#231` — **closed unmerged 2026-07-26T16:11:35Z**; draft and `mergeable: CONFLICTING` when inspected below |
 | Branch | `claude/gauntlet-s3-s4-and-phase3-artifacts-2026-07-26` |
 | Head commit | `29486b5e` |
 | Branch base | `bf2a60ef` — **28 commits behind `origin/main`** when cut |
@@ -43,7 +43,10 @@ I opened this PR. The core mistake was mine: I committed and PR'd work rescued o
 
 ---
 
-## 4. File-by-file disposition (all verified against `origin/main` this session)
+## 4. File-by-file disposition (verified against `origin/main` this session — with one stated exception)
+
+The one exception is `live-foundation-gauntlet-index.md`: it was confirmed *different* from `main` but
+never compared line by line, and its row says so. Do not read that row as confirmed evidence.
 
 | File | Finding | Evidence |
 |---|---|---|
@@ -85,7 +88,11 @@ My Section 4 audit ran from the 28-commits-behind checkout and **its own text re
 
 ---
 
-## 6. Open — could not resolve
+## 6. Open *at the time of writing* (2026-07-26) — could not resolve then
+
+These are preserved as the uncertainty this session actually had. They are **not** current remediation
+guidance: three days of work landed after this was written. Re-derive each against current `main`
+before acting on it.
 
 1. **Does Stage B2 fix the HIGH inventory-location bypass?** B2 touches `src/pages/InventoryPage.tsx`, the exact file behind the finding *"inline edit writes `inventory.location` directly, bypassing the transfer ledger; live triggers neither record nor block it."* I did **not** read B2's diff to confirm. Check before queueing that as separate work — it currently sits at position 6 in `main`'s fix queue.
 2. **Does my 818-line migration contain anything `main`'s 1,271-line version dropped?** I compared filenames, line counts, and diff size — **not** semantics. Near-certainly a superset, but if anyone wants to be sure that nothing was lost rather than superseded, that diff has to be read. Low priority; the live version is authoritative.

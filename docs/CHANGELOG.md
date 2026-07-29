@@ -12,12 +12,19 @@ by **CommandLine**, because `Get-Process`'s `.Path` omits the arguments that say
 loop a `node.exe` belongs to. Each loop gets a stated verdict — RUNNING, IDLE, or STALLED — along
 with the evidence that produced it. Invoked from Git Bash the whole `-Command` string must be
 single-quoted or the parent shell consumes `$_` and the probe fails *open*, reporting "nothing
-running" when plenty is; so a zero-row result is treated as a probe fault to sanity-check (match
-`powershell` — something must appear) before it is reported as a finding. A stalled Codex run is
-reported and never auto-restarted: restarting it is Mason's call once he can see what it was doing.
-Step 2c routes "keep an eye on it" / "ping me every N minutes" to `/loop <N>m /fleet` instead of
-hand-rolled reminders. Proven by running the probe: it returned the live `codex.exe`, several
-`node.exe` rows, and the `powershell` self-check row.
+running" when plenty is. The scan therefore matches `powershell.exe` as its **own self-check** — the
+probe is itself a `powershell.exe`, so at least one row must always return, and zero rows means the
+probe broke rather than that nothing is running. It also matches `claude.exe`, not just
+`codex`/`node`: a Claude-owned loop sitting in a long step would otherwise show no process at all and
+be mislabelled STALLED (CodeRabbit on #283). A stalled Codex run is reported and never auto-restarted:
+restarting it is Mason's call once he can see what it was doing. Step 2c routes "keep an eye on it" /
+"ping me every N minutes" to `/loop <N>m /fleet` instead of hand-rolled reminders.
+
+Proven by running the documented command verbatim: 4 `codex.exe`, 23 `claude.exe`, 47 `node.exe`, and
+6 `powershell.exe` self-check rows. The first version of this entry claimed that proof while the
+command as written excluded `powershell.exe` — the run behind it had quietly used a different regex,
+so the self-check it prescribed could not have fired. Caught in review, and worth recording: proving a
+*variant* of the command you shipped is not proving the command you shipped.
 
 Landed alongside it: the 2026-07-26 PR #231 post-mortem, archived under `docs/audits/` and stamped
 with its resolved status so it reads as history rather than an open action list. Both files were

@@ -15,10 +15,10 @@ Use this when Mason asks anything like: "where are we", "status", "progress", "c
 2b. **Liveness probe — answer "is anything stalled?", not just "what exists?"** Mason's most common fleet worry is a loop or Codex run that silently died. For each loop/agent that claims to be running:
    - **Ledger freshness:** check the last-modified time of its ledger/output file (PowerShell: `(Get-Item <ledger>).LastWriteTime`). An "active" loop whose ledger hasn't moved in ~30+ minutes is suspect.
    - **Process check** (proven form 2026-07-29 — from Git Bash, single-quote the whole `-Command` or the parent shell eats `$_` and the probe fails open reporting "nothing running"):
+     ```powershell
+     powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^(codex|claude|node|powershell)\.exe$" } | Select-Object ProcessId, Name, CommandLine'
      ```
-     powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -match "^(codex|node)\.exe$" } | Select-Object ProcessId, CommandLine'
-     ```
-     Judge by **CommandLine** (Get-Process's `.Path` misses the arguments that tell you which worktree/loop a process belongs to). If this returns zero rows, sanity-check the probe itself first (match `powershell` — something must appear) before reporting "nothing running".
+     Judge by **CommandLine** (Get-Process's `.Path` misses the arguments that tell you which worktree/loop a process belongs to). `claude.exe` is in the match on purpose — a Claude-owned loop sitting in a long step would otherwise show no process and get mislabelled STALLED (CodeRabbit on #283). `powershell.exe` is in it as the probe's **own self-check**: the probe is itself a `powershell.exe`, so at least one such row must always come back. Zero rows means the probe broke, not that nothing is running — fix the probe before reporting a finding. Judge loops only by the `codex`/`claude`/`node` rows.
    - Verdict per loop: **RUNNING** (fresh ledger or matching process), **IDLE** (finished, nothing claims to be running), or **STALLED** (claims running, stale ledger, no matching process). Say which evidence produced the verdict.
    - A stalled Codex run is reported, never auto-restarted — restarting is Mason's call after he sees what it was doing.
 
