@@ -80,7 +80,7 @@ export function isDraftSqlName(name) {
   return isParkedMigrationFile(name) && /draft|^parked[-_]/i.test(String(name || ""));
 }
 
-// Should this worktree's ON-DISK drafts count toward "parked migrations awaiting apply"?
+// Should this worktree's ON-DISK drafts be looked at for "parked migrations awaiting apply"?
 //
 // 2026-07-29: the count was permanently wrong. It scanned the working tree of EVERY
 // checkout, and ~30 of Mason's worktrees are frozen review snapshots pinned to old
@@ -89,16 +89,31 @@ export function isDraftSqlName(name) {
 // Proven: renaming the last dead draft left the banner reading "2" unchanged, because
 // 42 other checkouts still held the pre-rename filename.
 //
-// A checkout is only trustworthy about what is *still* pending if it has already
-// incorporated every retirement that landed on main — i.e. origin/main is an ancestor
-// of its HEAD. Detached snapshots are review artifacts by construction and never count,
-// which also lets the caller skip the ancestry check for the ~30 cheapest cases.
+// Detached checkouts are frozen review artifacts by construction — nobody is authoring a
+// migration in one — so they never contribute. This is deliberately a cheap pure test with
+// no git call, so the ~30 snapshots are skipped for free; which drafts a *branch* worktree
+// contributes is then decided per-file by isNewDraftOnBranch().
+export function worktreeContributesParked(entry) {
+  return !!entry && !entry.detached;
+}
+
+// Is this on-disk draft this branch's own pending work, rather than history it inherited?
 //
-// Mainline drafts are seeded separately from origin/main's tree, so a fleet where NO
-// checkout is current still reports main's real backlog rather than zero.
-export function worktreeContributesParked(entry, originMainIsAncestorOfHead) {
-  if (!entry || entry.detached) return false;
-  return originMainIsAncestorOfHead === true;
+// `inheritedLowerNames` is the set of draft filenames already tracked at the worktree's
+// merge-base with origin/main — i.e. what was there when the branch started. A draft in
+// that set is shared history: if main has since retired it, this checkout simply has not
+// pulled the rename yet, and counting it is what made the banner un-clearable.
+//
+// Anything NOT in that set is new here — freshly committed on the branch or still
+// untracked — so it counts even when the worktree is far behind main. That direction
+// matters more: over-reporting is noise, but under-reporting hides a real pending
+// migration behind "Nothing waiting on you". For the same reason, an unknown merge-base
+// (null/missing set) counts the draft rather than silently dropping it.
+export function isNewDraftOnBranch(name, inheritedLowerNames) {
+  const n = String(name || "").toLowerCase();
+  if (!n) return false;
+  if (!inheritedLowerNames || typeof inheritedLowerNames.has !== "function") return true;
+  return !inheritedLowerNames.has(n);
 }
 
 function truncateLine(s, maxLen) {

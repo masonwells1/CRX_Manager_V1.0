@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
-  lastNonEmptyLine, firstCommentLine, fleetSummaryLine, worktreeContributesParked,
+  lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
+  worktreeContributesParked, isNewDraftOnBranch,
 } from "./worktree-awareness-lib.mjs";
 
 let pass = 0;
@@ -79,12 +80,24 @@ ok(!isDraftSqlName("2026-07-01-review-final.sql"), "audits sql without 'draft' i
 // could never clear the banner — it sat at 2 with nothing actually pending.
 const onBranch = { path: "C:/wt", branch: "feature", detached: false, head: "aaa" };
 const snapshot = { path: "C:/wt", branch: null, detached: true, head: "bbb" };
-ok(worktreeContributesParked(onBranch, true), "a checkout that already contains origin/main is trusted");
-ok(!worktreeContributesParked(onBranch, false), "a checkout BEHIND origin/main cannot say what is still parked");
-ok(!worktreeContributesParked(snapshot, true), "a detached review snapshot never contributes, even if current");
-ok(!worktreeContributesParked(snapshot, false), "a stale detached snapshot never contributes");
-ok(!worktreeContributesParked(null, true), "a missing entry contributes nothing");
-ok(!worktreeContributesParked(onBranch, undefined), "unknown ancestry is not treated as current");
+ok(worktreeContributesParked(onBranch), "a branch checkout can hold its own pending drafts");
+ok(!worktreeContributesParked(snapshot), "a detached review snapshot never contributes");
+ok(!worktreeContributesParked(null), "a missing entry contributes nothing");
+// Cheap by design: no git ancestry argument, so the ~30 snapshots cost nothing to skip.
+eq(worktreeContributesParked.length, 1, "the contributor test takes only the entry — no ancestry probe");
+
+// Which of a branch worktree's on-disk drafts are ITS pending work vs inherited history.
+// A behind-main branch must still report a draft it just wrote (CodeRabbit P1 on #279:
+// dropping the whole worktree could report "Nothing waiting on you" over real work).
+const inherited = new Set(["parked-dispatch-backfill.sql", "2026-07-01-old-draft.sql"]);
+ok(!isNewDraftOnBranch("PARKED-dispatch-backfill.sql", inherited), "a draft present at the branch point is inherited history, not pending work");
+ok(isNewDraftOnBranch("PARKED-brand-new.sql", inherited), "a draft this branch added counts even though the branch is behind main");
+ok(!isNewDraftOnBranch("parked-DISPATCH-backfill.SQL", inherited), "inherited match is case-insensitive");
+ok(isNewDraftOnBranch("PARKED-brand-new.sql", null), "unknown merge-base counts the draft rather than hiding it");
+ok(isNewDraftOnBranch("PARKED-brand-new.sql", undefined), "missing inherited set counts the draft");
+ok(isNewDraftOnBranch("PARKED-brand-new.sql", {}), "a non-Set argument counts the draft rather than throwing");
+ok(!isNewDraftOnBranch("", inherited), "empty filename is not a pending draft");
+ok(isNewDraftOnBranch("PARKED-brand-new.sql", new Set()), "an empty branch point means every on-disk draft is new");
 
 // last non-empty line (ledger tail) + truncation
 eq(lastNonEmptyLine("first\nsecond\n\n   \n"), "second", "skips trailing blank lines");

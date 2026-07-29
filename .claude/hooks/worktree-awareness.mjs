@@ -17,7 +17,7 @@ import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, fleetSummaryLine,
-  worktreeContributesParked,
+  worktreeContributesParked, isNewDraftOnBranch,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -109,34 +109,50 @@ function listNamesRecursive(dir, depth = 4) {
   return out;
 }
 
-// Is origin/main already contained in this worktree's HEAD? Only such a checkout has
-// seen every retirement that landed on main, so only it can be trusted to say what is
-// still parked. Errors → false (fail toward the quieter, non-nagging answer).
-function hasAllOfOriginMain(sha) {
-  if (!hasOriginMain || !sha) return false;
-  const r = spawnSync("git", ["merge-base", "--is-ancestor", "origin/main", sha], {
+// Draft filenames already tracked where this worktree's branch left origin/main. Those
+// are inherited history — if main has since retired one, this checkout just hasn't pulled
+// the rename. Anything NOT in this set is genuinely new here and still counts. Returns
+// null when the merge-base can't be determined, which makes isNewDraftOnBranch() count
+// the draft rather than hide it.
+const inheritedCache = new Map(); // sha → Set | null
+function inheritedDraftNames(sha) {
+  if (!hasOriginMain || !sha) return null;
+  if (inheritedCache.has(sha)) return inheritedCache.get(sha);
+  let result = null;
+  const mb = spawnSync("git", ["merge-base", "origin/main", sha], {
     encoding: "utf8", timeout: 5000, cwd: projectDir,
   });
-  return r.status === 0;
+  const base = mb.status === 0 ? String(mb.stdout || "").trim() : "";
+  if (base) {
+    try {
+      result = new Set(draftNamesInTree(base));
+    } catch { result = null; }
+  }
+  inheritedCache.set(sha, result);
+  return result;
 }
 
-// The mainline backlog, read straight from origin/main's tree rather than from any
-// checkout — so the count is right even when every worktree is stale.
-function mainlineParkedNames() {
-  const names = new Set();
-  let tree = "";
-  try {
-    tree = git(["ls-tree", "-r", "--name-only", "origin/main",
-      "scripts/.staging-migrations", "docs/audits"]);
-  } catch { return names; }
+// Lower-cased draft filenames tracked at a given commit (staged migrations + audit drafts).
+function draftNamesInTree(rev) {
+  const names = [];
+  const tree = git(["ls-tree", "-r", "--name-only", rev, "--",
+    "scripts/.staging-migrations", "docs/audits"]);
   for (const line of tree.split("\n")) {
     const p = line.trim();
     if (!p) continue;
     const base = p.slice(p.lastIndexOf("/") + 1);
     const inStaging = p.startsWith("scripts/.staging-migrations/");
-    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) names.add(base.toLowerCase());
+    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) names.push(base.toLowerCase());
   }
   return names;
+}
+
+// The mainline backlog, read straight from origin/main's tree rather than from any
+// checkout — so the count is right even when every worktree is stale.
+function mainlineParkedNames() {
+  try {
+    return new Set(draftNamesInTree("origin/main"));
+  } catch { return new Set(); }
 }
 
 let fleetLine = "";
@@ -148,15 +164,17 @@ try {
     for (const f of listDir(path.join(e.path, "docs", "loops"))) {
       if (isLedgerDoc(f)) ledgerNames.add(f.toLowerCase());
     }
-    // Frozen review snapshots and stale checkouts still hold long-retired drafts on
-    // disk; counting them made the banner permanently un-clearable. See the rationale
-    // on worktreeContributesParked().
-    if (!worktreeContributesParked(e, hasAllOfOriginMain(e.head))) continue;
+    // Frozen review snapshots still hold long-retired drafts on disk; counting them made
+    // the banner permanently un-clearable. Branch worktrees DO contribute, but only the
+    // drafts they added since leaving main — see worktreeContributesParked() and
+    // isNewDraftOnBranch().
+    if (!worktreeContributesParked(e)) continue;
+    const inherited = inheritedDraftNames(e.head);
     for (const f of listNamesRecursive(path.join(e.path, "scripts", ".staging-migrations"))) {
-      if (isParkedMigrationFile(f)) parkedNames.add(f.toLowerCase());
+      if (isParkedMigrationFile(f) && isNewDraftOnBranch(f, inherited)) parkedNames.add(f.toLowerCase());
     }
     for (const f of listNamesRecursive(path.join(e.path, "docs", "audits"))) {
-      if (isDraftSqlName(f)) parkedNames.add(f.toLowerCase());
+      if (isDraftSqlName(f) && isNewDraftOnBranch(f, inherited)) parkedNames.add(f.toLowerCase());
     }
   }
   fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedNames.size)}`;

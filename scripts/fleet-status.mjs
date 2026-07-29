@@ -22,7 +22,7 @@ import {
   parseWorktreePorcelain, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine,
-  worktreeContributesParked,
+  worktreeContributesParked, isNewDraftOnBranch,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
 
 // The repo root this script lives in (works no matter what cwd it's launched from).
@@ -119,15 +119,38 @@ function mergedLabel(sha) {
   return mergedLabelFromStatus(r.status, true);
 }
 
-// Does this checkout already contain origin/main? Only then has it seen every draft
-// retirement that landed on main, so only then can its on-disk drafts be trusted as
-// "still parked". See worktreeContributesParked() for why this matters.
-function hasAllOfOriginMain(sha) {
-  if (!hasOriginMain || !sha) return false;
-  const r = spawnSync("git", ["merge-base", "--is-ancestor", "origin/main", sha], {
+// Lower-cased draft filenames tracked at a given commit (staged migrations + audit drafts).
+function draftNamesInTree(rev) {
+  const names = [];
+  const tree = git(["ls-tree", "-r", "--name-only", rev, "--",
+    "scripts/.staging-migrations", "docs/audits"], repoRoot, 5000);
+  for (const line of tree.split("\n")) {
+    const p = line.trim();
+    if (!p) continue;
+    const base = p.slice(p.lastIndexOf("/") + 1);
+    const inStaging = p.startsWith("scripts/.staging-migrations/");
+    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) names.push(base.toLowerCase());
+  }
+  return names;
+}
+
+// Draft filenames already tracked where this worktree's branch left origin/main — the
+// history it inherited, not its own pending work. Returns null when the merge-base can't
+// be determined, which makes isNewDraftOnBranch() count the draft rather than hide it.
+const inheritedCache = new Map(); // sha → Set | null
+function inheritedDraftNames(sha) {
+  if (!hasOriginMain || !sha) return null;
+  if (inheritedCache.has(sha)) return inheritedCache.get(sha);
+  let result = null;
+  const mb = spawnSync("git", ["merge-base", "origin/main", sha], {
     encoding: "utf8", timeout: 5000, cwd: repoRoot,
   });
-  return r.status === 0;
+  const base = mb.status === 0 ? String(mb.stdout || "").trim() : "";
+  if (base) {
+    try { result = new Set(draftNamesInTree(base)); } catch { result = null; }
+  }
+  inheritedCache.set(sha, result);
+  return result;
 }
 
 function dirtyCount(wtPath) {
@@ -174,9 +197,11 @@ for (const e of entries) {
   if (mission) sub.push(`newest mission doc: ${mission.name}`);
 
   // Parked migrations in THIS worktree: staged drafts + audit drafts.
-  // Frozen review snapshots and checkouts behind origin/main still hold drafts that
-  // main has since retired; counting those made the fleet banner un-clearable.
-  const parkedDirs = !worktreeContributesParked(e, hasAllOfOriginMain(e.head)) ? [] : [
+  // Frozen review snapshots hold drafts main has since retired; counting those made the
+  // fleet banner un-clearable. A branch worktree still reports the drafts IT added, even
+  // when it is behind main — otherwise a real pending migration would vanish.
+  const inherited = worktreeContributesParked(e) ? inheritedDraftNames(e.head) : null;
+  const parkedDirs = !worktreeContributesParked(e) ? [] : [
     { dir: path.join(e.path, "scripts", ".staging-migrations"), filter: isParkedMigrationFile },
     { dir: path.join(e.path, "docs", "audits"), filter: isDraftSqlName },
   ];
@@ -185,6 +210,7 @@ for (const e of entries) {
       const name = path.basename(full);
       if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
       if (!filter(name)) continue;
+      if (!isNewDraftOnBranch(name, inherited)) continue;
       const key = name.toLowerCase();
       if (parked.has(key)) {
         // Same draft checked out in several worktrees — count it once.

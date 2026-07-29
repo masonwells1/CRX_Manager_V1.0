@@ -15,12 +15,21 @@ while nothing was actually pending.
 Verified before changing anything: renaming the last live draft and re-running the real hook left the
 count at 2, unchanged. That is the proof the scan — not the drafts — was the defect.
 
-A checkout can only be trusted to say what is *still* parked if it has already absorbed every
-retirement that landed on `main`. `worktreeContributesParked()` now requires exactly that
-(`origin/main` is an ancestor of the checkout's HEAD), and excludes detached snapshots outright —
-they are review artifacts by construction, which also skips the ancestry check for the cheapest ~30
-cases. The mainline backlog is seeded separately from `origin/main`'s tree via `git ls-tree`, so a
+The rule is now per-draft rather than per-checkout. A draft counts only if it is **not** already
+tracked at that worktree's branch point with `origin/main` (`isNewDraftOnBranch()`): anything present
+at the branch point is inherited history, so a checkout that simply hasn't pulled main's retirement
+stops re-reporting it, while a draft the branch actually added still counts even when that branch is
+far behind main. Detached checkouts never contribute at all (`worktreeContributesParked()`) — they
+are frozen review artifacts and nobody authors a migration in one — which also skips ~30 checkouts
+for free. The mainline backlog is seeded separately from `origin/main`'s tree via `git ls-tree`, so a
 fleet in which no checkout happens to be current still reports main's real backlog instead of zero.
+
+The per-draft rule replaced a first cut that dropped every behind-main worktree wholesale; CodeRabbit
+flagged on PR #279 that this trades noise for something worse — a genuinely new migration sitting on
+a behind-main branch would vanish behind "Nothing waiting on you". Proven both ways: a scratch
+worktree pinned behind main with a brand-new draft is reported by the new code and was silently
+dropped by the old. For the same reason an unreadable branch point counts the draft rather than
+hiding it.
 
 Both readers were fixed together so they cannot disagree: the hook and `scripts/fleet-status.mjs` now
 report the same number. The count dropped 2 → 1, the remaining entry being the one draft still
@@ -31,7 +40,10 @@ per-field dispatch system existed. Confirmed dead against the live database — 
 returns 0 rows, and the two sync triggers that supersede it
 (`trg_sync_job_location_dispatch_on_applicator_change` on `jobs`,
 `trg_sync_job_location_dispatch_on_field_insert` on `job_fields`) are live, so no new legacy row can
-appear. It was already a no-op when parked on 2026-07-10. No database change was made.
+appear. It was already a no-op when parked on 2026-07-10. No database change was made. Its row in
+`docs/manual/KNOWN_ISSUES.md` was rewritten in the same change — it had still been telling agents to
+re-run the count query and apply it with Mason's go-ahead, which would have resurrected a
+business-data write this change exists to retire.
 
 ## 2026-07-29 — A migration built in a linked worktree could never be applied
 
