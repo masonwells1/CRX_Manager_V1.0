@@ -3,6 +3,17 @@
 **Last verified:** 2026-07-29 (live post-apply read: **924 ledger rows**, high-water `20260729163243_harden_profile_directory_followups`. Four approved migrations are live: profile-directory security at `20260729125227`, contact-sync search-path pins at `20260729125251`, exact-text application-service cost at `20260729125314`, and the profile-directory hardening follow-ups at `20260729163243` (#276). Live postflights passed: all 11 profile rows are represented in the RLS-protected, security-invoker directory view; both contact-sync functions remain invoker functions with fixed search paths; admins receive exact text cents; and a sales rep is denied with SQLSTATE 42501. The directory policy now delegates to `is_active_profile()`, `service_role` is SELECT-only on the directory table and view, and `sync_profile_public_directory()` is callable only by `postgres`.)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
+## Recent production deployments
+
+- **2026-07-28:** `process-document` Edge Function deployed v20 → v21 from merged PR #268
+  (`7c096444`). Re-verified live 2026-07-29 by read-only `list_edge_functions`: version **21**,
+  status `ACTIVE`, `verify_jwt=true`, and the deployed bundle read back with
+  `VISION_OCR_TOTAL_TIMEOUT_MS = 120_000` and a shared `AbortSignal.timeout`. The production **boot**
+  path returned HTTP 200 for `https://croprxsolutions.app` — that is a reachability check only and
+  says nothing about CORS, since no preflight was issued and no
+  `Access-Control-Allow-*` response headers were captured. **The signed-in document-upload/OCR path still needs one real-app
+  smoke test** — that is the outstanding item, not the deploy itself.
+
 ## 1. Reality check
 
 CRX Manager is the live production operations app for Crop RX Solutions at
