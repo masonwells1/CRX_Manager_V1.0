@@ -96,11 +96,13 @@ The gauntlet index also carried two live pointers at `codex/section9-mismatch-de
 a branch deleted here. Both were repointed at the now-landed file in the same change; had they been
 left, the index would instruct a future run to read a branch that no longer exists.
 
-## Untracked files copied out (no tag can save these)
+## Uncommitted work copied out (no tag can save this)
 
-Tags preserve commits. **Untracked files are in no commit**, so removing a worktree destroys them
-permanently. Four files from `C:/CRX_Manager/.codex/worktrees/overnight-20260728` were copied to
-`C:/Users/mason/CRX_Manager_archive/2026-07-29-cleanup/overnight-20260728-untracked/` first:
+Tags preserve commits. **Uncommitted work is in no commit**, so removing a worktree destroys it
+permanently. Only 3 of the 39 removed worktrees had anything uncommitted at all; all three were
+copied to `C:/Users/mason/CRX_Manager_archive/2026-07-29-cleanup/` before removal.
+
+### `overnight-20260728` → `overnight-20260728-untracked/`
 
 | File | Bytes | Status |
 |---|---|---|
@@ -111,6 +113,25 @@ permanently. Four files from `C:/CRX_Manager/.codex/worktrees/overnight-20260728
 
 All three SQL drafts were verified against the live migration ledger as already applied under their
 renamed filenames before the worktree was removed.
+
+### `gauntlet-10-15-refresh-20260728` → `gauntlet-10-15-refresh-uncommitted/`
+
+One modified file, `docs/manual/CURRENT_STATE.md`, adding a 7-line "Recent production deployments"
+section that existed nowhere on `main`. It records that PR #268 deployed the `process-document` Edge
+Function v20 → v21 and that the signed-in upload/OCR path still needs a real-app smoke test.
+
+**This one was landed, not just archived.** Its claim was re-verified live before landing — read-only
+`list_edge_functions` reports `process-document` at version **21**, status `ACTIVE`,
+`verify_jwt=true` — so the section is now on `main` with that verification noted inline. The
+outstanding smoke test is real and still open.
+
+### `phase3c-bootstrap-reconcile` → `phase3c-bootstrap-reconcile-uncommitted/`
+
+Five modified files (patch + full copies archived), **deliberately not landed**. The edits rewrite
+`phase3_bootstrap_base` in `.github/workflows/ci.yml` from `d3bac970…` to `3ca289c5…`, which is that
+worktree's *own* commit — a self-referential scratch experiment from the abandoned bootstrap-reconcile
+attempt. Landing it would point the CI containment gate's trusted base at a throwaway commit and
+break the check. Archived for the record only.
 
 ## Branches deleted (31)
 
@@ -208,14 +229,25 @@ one look superseded, but content comparison found 8 files on it that `main` does
 including five `.claude/hooks/patch-*.mjs`. `git ls-remote origin` confirms it has **never been
 pushed**, so those files exist only on this machine. That is why it carries a `preserve/` tag.
 
-**Worktrees kept (4):**
+**Worktrees kept (7):**
 
 | Path | Why |
 |---|---|
 | `C:/CRX_Manager` | primary checkout — live Claude session **and** live Codex session, 31 dirty files |
 | `C:/CRX_Manager/.claude/worktrees/session-prompt-file-5368af` | live Claude session (roadmap planning) |
-| `C:/Users/mason/.claude/worktrees/secdef-pricing-guard/CRX_Manager` | serves open PR #279 |
 | `C:/CRX_Manager/.claude/worktrees/cleanup-branches-worktrees-d14686` | this session |
+| `C:/Users/mason/.claude/worktrees/secdef-pricing-guard/CRX_Manager` | open PR #279 **and** a live Codex cwd |
+| `C:/Users/mason/.codex/worktrees/6354/CRX_Manager` | **live Codex cwd** — appeared mid-cleanup |
+| `C:/Users/mason/.codex/worktrees/2cb6/CRX_Manager` | appeared mid-cleanup alongside `6354`, same fleet |
+| `C:/Users/mason/.codex/worktrees/supplier-pricing-operational-20260729/CRX_Manager` | appeared mid-cleanup, new branch |
+
+The last three did not exist when this sweep's inventory was taken — Codex created them while the
+cleanup was in progress, which is why the inventory grew from 43 worktrees to 46 mid-run. All three
+sit at the then-current `main` tip. Only `6354` is provably a live cwd; `2cb6` and
+`supplier-pricing-operational-20260729` were kept anyway on the principle that removing an in-flight
+Codex worktree can break a running job, and keeping three cheap directories costs nothing. **Re-take
+the worktree inventory immediately before removing anything** — a list minutes old can already be
+wrong while Codex is running.
 
 ## Remote needed no cleanup
 
@@ -232,7 +264,14 @@ stale indexes, so dozens of dormant checkouts share a recent timestamp. The auth
 - **Claude:** `mcp__ccd_session_mgmt__list_sessions`, field `isRunning`.
 - **Codex:** `~/.codex/sessions/**/*.jsonl` file mtime plus the `"cwd"` recorded inside.
 
-Two sessions were live during this cleanup and neither was touched.
+For Codex, only the `"cwd"` field counts. **Grepping session transcripts for a worktree name proves
+nothing** — every session that runs `git worktree list` records all 46 names in its transcript, so a
+substring match makes every dormant checkout look busy. Extract `"cwd"` from each transcript and
+dedupe by newest mtime; across all of 2026-07-29 that yielded just six distinct working directories,
+four of them touched in the final ten minutes.
+
+Live during this cleanup and untouched: two Claude sessions and four Codex working directories (one
+of them `C:\FarmRx`, a different repository).
 
 ## Operational notes for the next sweep
 

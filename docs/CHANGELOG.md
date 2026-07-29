@@ -39,12 +39,20 @@ report being read as current state.
 Full detail, including every tip SHA and the restore commands:
 [2026-07-29-branch-worktree-cleanup-restore-ledger.md](audits/2026-07-29-branch-worktree-cleanup-restore-ledger.md).
 
-Result: worktrees 43 → 4, local branches 38 → 7. No remote branch was deleted; GitHub auto-deletes
-merged heads, and `origin` held only 13 refs. Two live sessions (one Claude, one Codex) were running
-throughout and neither was touched — identified from `list_sessions` `isRunning` and
-`~/.codex/sessions/*.jsonl` mtimes, **not** from worktree index timestamps, which the SessionStart
-worktree-awareness hook refreshes across every checkout and therefore cannot be trusted as an
-activity signal.
+A modified `docs/manual/CURRENT_STATE.md` found in one doomed worktree recorded a production Edge
+Function deploy (`process-document` v20 → v21 from PR #268) that appeared nowhere on `main`. Its
+claim was re-verified live — read-only `list_edge_functions` reports version **21**, `ACTIVE`,
+`verify_jwt=true` — and landed. The signed-in upload/OCR smoke test it flags is still outstanding.
+The other uncommitted find, a scratch rewrite of the CI containment gate's trusted base to a
+throwaway commit, was archived rather than landed; landing it would have broken the check.
+
+Result: worktrees 46 → 7, local branches 38 → 7. No remote branch was deleted; GitHub auto-deletes
+merged heads, and `origin` held only 13 refs. Live sessions were identified from `list_sessions`
+`isRunning` and the `"cwd"` field inside `~/.codex/sessions/*.jsonl` — **not** from worktree index
+timestamps, which the SessionStart worktree-awareness hook refreshes across every checkout, and
+**not** by grepping transcripts for worktree names, which matches every session that ran
+`git worktree list`. Codex spawned three new worktrees mid-cleanup (43 → 46), so the inventory was
+re-taken immediately before removal; all three were kept.
 
 ## 2026-07-29 — A migration built in a linked worktree could never be applied
 
