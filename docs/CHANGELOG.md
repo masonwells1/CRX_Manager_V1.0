@@ -54,6 +54,32 @@ timestamps, which the SessionStart worktree-awareness hook refreshes across ever
 `git worktree list`. Codex spawned three new worktrees mid-cleanup (43 → 46), so the inventory was
 re-taken immediately before removal; all three were kept.
 
+**Corrections from this PR's own review.** The reviewers caught a real methodology hole: the first
+pass classified branches by **path presence** — does the path the branch touches also exist on
+`origin/main`? That clears a branch which uniquely *modifies* a file already on `main`. Every deleted
+branch was re-checked by content (what the branch changed against its own merge-base, then whether
+each blob appears anywhere in `main`'s history). Three showed real changes; all three proved
+**superseded, not unlanded**: `chore/migration-ledger-reconcile-20260729`'s three migrations landed
+renumbered (`20260729043000→125227`, `043100→125251`, `122730→125314`), every
+`codex/phase3c-bootstrap-reconcile` path is on `main`, and `wt`'s admin-only `cost_per_acre_cents`
+frontend is superseded by `main`'s version plus the atomic single-RPC save from `20260729035923`.
+**No work was lost.** A claim in the first ledger revision — that `git cat-file -e` false-negatives on
+dot-prefixed paths — was also **wrong and is retracted**; it was retested against `.github/` and
+`.claude/` paths and succeeds on both.
+
+Three findings in the recovered documents were resolved against live rather than left contradicting
+each other. The queue ledger's **"77 Main Warehouse `quantity_on_order` mismatches"** is unsupported:
+the canonical preflight re-run read-only on 2026-07-29 returns **0 mismatch rows** across 117 Main
+Warehouse rows, so the file now carries a correction pointing at the Section 9 design as
+authoritative. The Section 1 "review CLEAN" vs "review outstanding" conflict is not a conflict —
+clean at a SHA is not ready-to-publish once a rebase mints a new SHA — and both documents now say so.
+And a genuine unresolved defect was promoted out of a historical design into gauntlet index row 9:
+`create_vendor_bill`/`update_vendor_bill` check `check_period_open(bill_date)` without locking
+`accounting_periods`, and `close_accounting_period` takes no lock either, so a bill can commit dated
+inside a month that just closed. Its completeness gate also counts only unposted *invoices*, never
+vendor bills. Confirmed by live function-body reads; **exposure is currently zero** — no accounting
+period has ever been closed on live.
+
 ## 2026-07-29 — A migration built in a linked worktree could never be applied
 
 `migration-apply-guard.mjs` looked for apply-proofs in exactly one place: the `session-state`

@@ -9,7 +9,7 @@ Two prefixes, with different meanings:
 
 ```text
 archive/2026-07-29-cleanup/<branch-name>     # 31 deleted branches
-archive/2026-07-29-cleanup/detached-<sha7>   # 16 distinct detached worktree HEADs
+archive/2026-07-29-cleanup/detached-<sha8>   # 16 distinct detached worktree HEADs
 preserve/2026-07-29/<branch-name>            # 2 KEPT branches holding unlanded code
 ```
 
@@ -52,17 +52,45 @@ dropping `--dry-run`.
 ## Why ancestry was not used to decide what was safe to delete
 
 `git merge-base --is-ancestor` reports a **fully landed** branch as unmerged whenever its PR was
-squash-merged, because the squash commit shares no ancestry with the branch tip. Every branch below
-was therefore classified by **file content**, not ancestry — for each file the branch adds, does an
-identical path exist in `origin/main`?
+squash-merged, because the squash commit shares no ancestry with the branch tip. Branches were
+therefore classified by **file content**, not ancestry.
+
+**Correction, added after this PR was reviewed.** The first pass compared **path presence** only —
+does the path the branch touches also exist on `origin/main`? That test is too weak: it clears a
+branch that uniquely *modifies* a file already on `main`. The reviewer caught it, and every deleted
+branch was re-checked by content:
 
 ```bash
-git ls-tree -r origin/main --name-only | grep -qxF "$f"     # correct
-git cat-file -e "origin/main:$f"                            # DO NOT USE
+mb=$(git merge-base "$tag" origin/main)     # 1. what the BRANCH changed,
+git diff --name-status "$mb" "$tag"         #    not what main changed since
+# 2. then per file: is the branch's exact blob anywhere in main's history?
+for c in $(git rev-list origin/main -- "$f"); do
+  MSYS_NO_PATHCONV=1 git rev-parse "$c:$f"  #    compare each against the branch blob
+done
 ```
 
-`git cat-file -e origin/main:<path>` false-negatives on dot-prefixed paths (`.github/`, `.claude/`),
-which manufactures fake "unlanded work" and would have blocked this cleanup on phantom findings.
+Diffing the branch tip against `origin/main` directly is **not** the test. These branches are behind
+`main`, so most of that diff is `main` moving forward, not branch work — it conflates the two. The
+three-way comparison above separates them.
+
+Three branches showed real changes against their own merge-base. All three proved **superseded**,
+not unlanded:
+
+| Branch | What it held | Why nothing was lost |
+|---|---|---|
+| `chore/migration-ledger-reconcile-20260729` | 3 migration SQL files | All three landed on `main` **renumbered** — `20260729043000→125227`, `043100→125251`, `122730→125314`. Same names, same work, higher versions. |
+| `codex/phase3c-bootstrap-reconcile` | phase3 containment workflow + scripts | Every path is on `main`. Only its *uncommitted* patch was unique, and that was archived rather than landed — see [Uncommitted work](#uncommitted-work-copied-out-no-tag-can-save-this). |
+| `wt` | admin-only `cost_per_acre_cents` frontend | `main` carries the same `SERVICE_COLUMNS` design **plus** the atomic single-RPC save from migration `20260729035923`, superseding `wt`'s two-step insert-then-save. `main` is strictly ahead. |
+
+Every other deleted branch either had a merged PR or an empty diff against its own merge-base.
+
+**Retraction.** An earlier revision of this ledger said
+`git cat-file -e origin/main:<path>` false-negatives on dot-prefixed paths (`.github/`, `.claude/`)
+and must not be used. That was **wrong** — it was tested on 2026-07-29 against
+`.github/workflows/ci.yml` and `.claude/hooks/pr-merge-guard.mjs` and succeeds on both.
+`MSYS_NO_PATHCONV=1` is what colon paths need on Windows/Git Bash; the dot prefix is irrelevant.
+Either `cat-file -e` or `ls-tree | grep -qxF` tests path presence correctly — but path presence is
+the wrong question, per the correction above.
 
 ## Documents recovered onto `main` before deletion (PR for this cleanup)
 
@@ -82,8 +110,9 @@ destroyed the only working copy, so all ten files were copied onto `main` first:
 | `docs/audits/gauntlet/2026-07-25-section-12-edge-functions-refresh.md` | 7,579 | `codex/section12-edge-functions-refresh-20260725` |
 | `docs/audits/gauntlet/2026-07-25-section-14-testing-prevention-refresh.md` | 10,222 | `codex/section14-testing-prevention-refresh-20260725` |
 
-**Two of these are history, not current state**, and `docs/audits/gauntlet/live-foundation-gauntlet-index.md`
-was edited in the same change to say so:
+**Five of these are history, not current state** — the four `2026-07-25` section refreshes plus the
+`2026-07-26` Section 4 refresh. `docs/audits/gauntlet/live-foundation-gauntlet-index.md` was edited
+in the same change to say so:
 
 - The four `2026-07-25` section refreshes (10, 11, 12, 14) are **superseded** by the 2026-07-28
   reports already on `main` from PR #268. They are committed so the intermediate findings survive,

@@ -1,5 +1,24 @@
 # Governed non-interference queue ledger — July 25, 2026
 
+> **Recovered history — read with the correction below.** This file was rescued on 2026-07-29 from
+> the deleted branch `codex/noninterference-queue-ledger-20260725` (see
+> `docs/audits/2026-07-29-branch-worktree-cleanup-restore-ledger.md`). It is committed so the
+> intermediate reasoning survives; it is **not** a statement about current state.
+>
+> **The "77 Main Warehouse `quantity_on_order` mismatches" figure below is not supported and should
+> not be relied on.** Two independent checks contradict it:
+> - `docs/audits/2026-07-25-section9-quantity-on-order-reconciliation-design.md` records that no
+>   archived SQL or output backs the 77-row number, and that the checked-in canonical preflight
+>   returns 0 rows.
+> - The canonical preflight in `scripts/db-invariant-sweeps/predicates/section9-po-ap-controls.sql`
+>   was re-run read-only against live on **2026-07-29: 0 mismatch rows**, across 117 Main Warehouse
+>   inventory rows, 18 with a non-zero cached `quantity_on_order`, and 10 open POs. A 77-row
+>   mismatch would have been two-thirds of every row in that location.
+>
+> Where this ledger and the Section 9 design disagree, **the design and the live re-run are
+> authoritative.** The reconciliation work itself remains open and is tracked as item (a) on row 9
+> of `docs/audits/gauntlet/live-foundation-gauntlet-index.md`.
+
 ## Objective and boundary
 
 This ledger records the governed queue without changing the application, a

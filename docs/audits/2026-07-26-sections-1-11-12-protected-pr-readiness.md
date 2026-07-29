@@ -1,5 +1,23 @@
 # Protected-PR Readiness Packet — Sections 1, 11, and 12
 
+> **Recovered history — read with the note below.** Rescued on 2026-07-29 from the deleted branch
+> `codex/protected-pr-readiness-20260726` (see
+> `docs/audits/2026-07-29-branch-worktree-cleanup-restore-ledger.md`). It records readiness as of
+> 2026-07-26 and is **not** a statement about current state.
+>
+> **On Section 1 at `53f6177e`, this packet and the queue ledger do not actually conflict.**
+> `docs/audits/2026-07-25-governed-noninterference-queue-ledger.md` records "fresh independent Sol
+> round 7: **CLEAN**" — a code review that came back clean *at that exact SHA*. This packet marks
+> Section 1 **PARKED** because a rebase mints a new SHA, which invalidates SHA-bound review
+> evidence, and because the candidate carries a pending migration that still needs the guarded
+> live-apply gate. Clean review at a SHA is not the same as ready to publish; both statements hold.
+>
+> **Current status, verified 2026-07-29:** Section 1 is still **not landed and not live** — row 1 of
+> `docs/audits/gauntlet/live-foundation-gauntlet-index.md` still carries both MEDs (anon-executable
+> SECDEF number generators; `save_field` activity actor spoofing). The candidate is safe: branch
+> `codex/section1-security-hardening-20260725` exists locally **and on `origin`**, and is
+> additionally pinned by tag `preserve/2026-07-29/codex-section1-security-hardening-20260725`.
+
 **Date:** 2026-07-26
 **Mode:** Report-only; no candidate branch was rebased, changed, pushed, PR-opened, merged, deployed, or applied to the live database.
 **Fresh base:** `origin/main` = `31d8e4d3ed25832d4d63206488fdf4a910222c91` (`Complete Supplier Pricing Phase 3 Stage B1 (#229)`).
