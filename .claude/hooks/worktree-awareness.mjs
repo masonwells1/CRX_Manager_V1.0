@@ -17,7 +17,7 @@ import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, fleetSummaryLine,
-  parkedDraftPathsFrom, draftPathspec, normRepoPath,
+  draftPathspec, normRepoPath, createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -122,52 +122,20 @@ function listDraftsRecursive(dir, prefix, depth = 4) {
   return out;
 }
 
-// Where this worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
-// snapshots share a handful of shas between them. null = undeterminable.
-const baseCache = new Map(); // sha → base sha | null
-function branchPoint(sha) {
-  if (!hasOriginMain || !sha) return null;
-  if (baseCache.has(sha)) return baseCache.get(sha);
-  const mb = spawnSync("git", ["merge-base", "origin/main", sha], {
-    encoding: "utf8", timeout: 5000, cwd: projectDir,
-  });
-  const base = mb.status === 0 ? String(mb.stdout || "").trim() : "";
-  const result = base || null;
-  baseCache.set(sha, result);
-  return result;
-}
-
 // The draft paths a worktree is actually pending: what it changed since its branch point
 // (committed or not) plus anything still untracked. Returns null when the branch point is
 // unknown, and the caller then falls back to the full on-disk scan rather than hide work.
-const cleanCache = new Map(); // head sha → changed paths | null
-function ownDraftPaths(entry) {
-  const base = branchPoint(entry.head);
-  if (!base) return null;
-  const spec = draftPathspec();
-  const run = (args, cwd) => {
+// The rule itself lives in the shared lib so this and /fleet cannot drift apart.
+const ownDraftPaths = createOwnDraftPathsReader({
+  repoRoot: projectDir,
+  hasOriginMain,
+  dirtyCount,
+  exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
+  run: (args, cwd) => {
     const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
     return r.status === 0 ? String(r.stdout || "").split("\n") : null;
-  };
-  const exists = (p) => existsSync(path.join(entry.path, ...p.split("/")));
-
-  // A CLEAN checkout has nothing but its commits, so its pending set is fully determined
-  // by base..HEAD — computable once per sha in the main repo instead of spawning git
-  // inside all 42 checkouts. The snapshots share only a handful of shas between them, so
-  // this is what keeps the hook fast.
-  if (dirtyCount(entry.path) === 0) {
-    if (!cleanCache.has(entry.head)) {
-      cleanCache.set(entry.head, run(["diff", "--name-only", base, entry.head, "--", ...spec], projectDir));
-    }
-    const changed = cleanCache.get(entry.head);
-    return changed === null ? null : parkedDraftPathsFrom(changed, exists);
-  }
-
-  const changed = run(["diff", "--name-only", base, "--", ...spec], entry.path);
-  const untracked = run(["ls-files", "--others", "--exclude-standard", "--", ...spec], entry.path);
-  if (changed === null || untracked === null) return null;
-  return parkedDraftPathsFrom([...changed, ...untracked], exists);
-}
+  },
+});
 
 // Draft files tracked at a given commit (staged migrations + audit drafts), by
 // repo-relative path.

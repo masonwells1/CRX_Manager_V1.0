@@ -34,6 +34,13 @@ change exists to prevent (Codex MEDIUM on #279). Proven in a scratch repo with t
 `git status --porcelain` returns empty where `--porcelain -uall` lists the draft. The setting is
 unset in this repo, so behaviour here is unchanged.
 
+The rule itself lives in one place — `createOwnDraftPathsReader()` in
+`.claude/hooks/worktree-awareness-lib.mjs` — and both readers call it, injecting only their own
+git runner and repo root. The two started as near-identical copies differing in a single variable
+name, which would have drifted the moment either was touched, defeating the point of the fix
+(CodeRabbit on #279). `/fleet`'s fallback scan also stopped lower-casing the filename it prints:
+the de-duplication key is normalized, the displayed name now keeps the real on-disk casing.
+
 Three earlier cuts were killed by review, each for under-reporting:
 
 - dropping every behind-main worktree wholesale (CodeRabbit P1) — a genuinely new migration on a

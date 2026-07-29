@@ -155,6 +155,61 @@ export function draftPathspec() {
   return DRAFT_ROOTS.map((r) => r.root.replace(/\/$/, ""));
 }
 
+// Builds the "what is THIS worktree pending?" reader that both the SessionStart hook and
+// scripts/fleet-status.mjs use. It lives here, not in each reader, because the whole point
+// of the 2026-07-29 fix is that the two report the same number — two copies differing only
+// in a cwd variable would drift the moment either is touched (CodeRabbit on #279).
+//
+// Injected, so this file stays free of node:fs / node:child_process and stays unit-testable:
+//   run(args, cwd)   → array of stdout lines, or null if git failed
+//   repoRoot         → the main checkout; a clean worktree's diff is computed HERE
+//   dirtyCount(path) → number of changed files, or null if unreadable
+//   exists(wtPath, repoRelPath) → is the file still on disk in that worktree?
+//   hasOriginMain    → false short-circuits everything to the caller's fallback scan
+//
+// Returns ownDraftPaths(entry) → Map(normalized path → git-spelled path), or null when the
+// branch point cannot be read. null means "I don't know", and every caller must then scan
+// the whole checkout rather than report nothing — under-reporting hides real pending work.
+export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, hasOriginMain = true }) {
+  // Where a worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
+  // snapshots share a handful of shas between them.
+  const baseCache = new Map(); // sha → base sha | null
+  function branchPoint(sha) {
+    if (!hasOriginMain || !sha) return null;
+    if (baseCache.has(sha)) return baseCache.get(sha);
+    const out = run(["merge-base", "origin/main", sha], repoRoot);
+    const base = out === null ? "" : String(out[0] || "").trim();
+    const result = base || null;
+    baseCache.set(sha, result);
+    return result;
+  }
+
+  const cleanCache = new Map(); // head sha → changed paths | null
+
+  return function ownDraftPaths(entry) {
+    const base = branchPoint(entry.head);
+    if (!base) return null;
+    const spec = draftPathspec();
+    const onDisk = (p) => exists(entry.path, p);
+
+    // A CLEAN checkout holds nothing but its commits, so its pending set is fully
+    // determined by base..HEAD — computable once per sha in the MAIN repo instead of
+    // spawning git inside all 42 checkouts. That is what keeps the hook fast.
+    if (dirtyCount(entry.path) === 0) {
+      if (!cleanCache.has(entry.head)) {
+        cleanCache.set(entry.head, run(["diff", "--name-only", base, entry.head, "--", ...spec], repoRoot));
+      }
+      const changed = cleanCache.get(entry.head);
+      return changed === null ? null : parkedDraftPathsFrom(changed, onDisk);
+    }
+
+    const changed = run(["diff", "--name-only", base, "--", ...spec], entry.path);
+    const untracked = run(["ls-files", "--others", "--exclude-standard", "--", ...spec], entry.path);
+    if (changed === null || untracked === null) return null;
+    return parkedDraftPathsFrom([...changed, ...untracked], onDisk);
+  };
+}
+
 function truncateLine(s, maxLen) {
   return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
 }
