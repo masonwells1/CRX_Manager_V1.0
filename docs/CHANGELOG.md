@@ -41,6 +41,13 @@ name, which would have drifted the moment either was touched, defeating the poin
 (CodeRabbit on #279). `/fleet`'s fallback scan also stopped lower-casing the filename it prints:
 the de-duplication key is normalized, the displayed name now keeps the real on-disk casing.
 
+That shared reader has its own tests — 17 assertions covering the clean/dirty split, both
+per-sha caches, and all six ways it must answer "I don't know" so the caller falls back to a full
+scan instead of a confident zero (Codex low on #279). It is fully injected, so they run without a
+real git or filesystem. Mutation-proven six directions: pointing the clean diff at the worktree
+instead of the main repo, returning an empty map instead of `null`, dropping the still-on-disk
+filter, disabling either cache, and ignoring an untracked-scan failure each turn the suite red.
+
 Three earlier cuts were killed by review, each for under-reporting:
 
 - dropping every behind-main worktree wholesale (CodeRabbit P1) — a genuinely new migration on a

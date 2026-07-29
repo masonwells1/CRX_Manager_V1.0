@@ -8,6 +8,7 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
   isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
+  createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
 let pass = 0;
@@ -147,5 +148,107 @@ eq(
   "Fleet: 3 loop ledgers active · 0 parked migrations awaiting apply — run /fleet for the full picture",
   "fleet line plural + zero"
 );
+
+// ── createOwnDraftPathsReader: the decision tree both readers now share ──
+//
+// This factory IS the parked count. Everything above tests how a path is classified;
+// these test which paths git is even asked for — the clean/dirty split, the caching that
+// keeps the hook fast, and the four ways it must answer "I don't know" (null) so the
+// caller falls back to a full scan instead of silently reporting nothing.
+// Fully injected: no real git, no filesystem (Codex low on #279).
+
+const DRAFT_A = "scripts/.staging-migrations/PARKED-a.sql";
+const DRAFT_B = "docs/audits/hunt/PARKED-b.sql";
+
+// Builds a reader over a fake git. `responses` maps a git subcommand to its output lines;
+// a value of null means that git call failed. Records every call for assertions.
+function fakeReader(responses, opts = {}) {
+  const calls = [];
+  const reader = createOwnDraftPathsReader({
+    repoRoot: "C:/main",
+    hasOriginMain: opts.hasOriginMain !== false,
+    dirtyCount: opts.dirtyCount || (() => 0),
+    exists: opts.exists || (() => true),
+    run: (args, cwd) => {
+      calls.push({ cmd: args[0], args, cwd });
+      const hit = responses[args[0]];
+      return hit === undefined ? [] : hit;
+    },
+  });
+  return { reader, calls };
+}
+
+const CLEAN_ENTRY = { path: "C:/wt-clean", head: "a".repeat(40) };
+const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
+
+// A clean checkout: its pending set is base..HEAD, and that diff must run in the MAIN
+// repo — spawning git inside 42 checkouts is what made the hook 10s instead of 3s.
+{
+  const { reader, calls } = fakeReader({ "merge-base": ["base1"], diff: [DRAFT_A] });
+  const got = reader(CLEAN_ENTRY);
+  eq([...got.values()], [DRAFT_A], "clean checkout reports the draft its branch added");
+  const diffCall = calls.find((c) => c.cmd === "diff");
+  eq(diffCall.cwd, "C:/main", "a clean checkout's diff is computed in the main repo, not in it");
+  ok(diffCall.args.includes(CLEAN_ENTRY.head), "clean diff is base..HEAD, not base..worktree");
+  ok(!calls.some((c) => c.cmd === "ls-files"), "clean checkout skips the untracked scan");
+}
+
+// A dirty checkout must be asked in place, and its untracked files count too — that is
+// how a draft someone is writing right now shows up before it is ever committed.
+{
+  const { reader, calls } = fakeReader(
+    { "merge-base": ["base1"], diff: [DRAFT_A], "ls-files": [DRAFT_B] },
+    { dirtyCount: () => 3 }
+  );
+  const got = reader(DIRTY_ENTRY);
+  eq([...got.values()].sort(), [DRAFT_B, DRAFT_A].sort(), "dirty checkout reports committed + untracked drafts");
+  eq(calls.find((c) => c.cmd === "diff").cwd, DIRTY_ENTRY.path, "a dirty checkout is diffed in place");
+  eq(calls.find((c) => c.cmd === "ls-files").cwd, DIRTY_ENTRY.path, "untracked scan runs in the checkout");
+}
+
+// Every "I don't know" path returns null. null makes the caller scan the whole checkout;
+// returning an empty Map instead would hide real pending work — the defect this fixes.
+{
+  const noBase = fakeReader({ "merge-base": [""] });
+  eq(noBase.reader(CLEAN_ENTRY), null, "unreadable branch point → null (caller falls back)");
+
+  const gitDown = fakeReader({ "merge-base": null });
+  eq(gitDown.reader(CLEAN_ENTRY), null, "merge-base failure → null");
+
+  const noMain = fakeReader({ "merge-base": ["base1"] }, { hasOriginMain: false });
+  eq(noMain.reader(CLEAN_ENTRY), null, "no origin/main → null, never a confident zero");
+  eq(noMain.calls.length, 0, "without origin/main it does not even shell out");
+
+  const diffFailed = fakeReader({ "merge-base": ["base1"], diff: null });
+  eq(diffFailed.reader(CLEAN_ENTRY), null, "clean-path diff failure → null");
+
+  const lsFailed = fakeReader(
+    { "merge-base": ["base1"], diff: [DRAFT_A], "ls-files": null },
+    { dirtyCount: () => 2 }
+  );
+  eq(lsFailed.reader(DIRTY_ENTRY), null, "dirty-path untracked-scan failure → null");
+
+  const headless = fakeReader({ "merge-base": ["base1"] });
+  eq(headless.reader({ path: "C:/wt", head: "" }), null, "worktree with no HEAD sha → null");
+}
+
+// A retired draft (the SUPERSEDED- rename) shows in the diff under its OLD path. Counting
+// that would re-report the very file the rename retired, so gone-from-disk means gone.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [DRAFT_A, DRAFT_B] },
+    { exists: (_wtPath, rel) => rel !== DRAFT_A }
+  );
+  eq([...reader(CLEAN_ENTRY).values()], [DRAFT_B], "a draft no longer on disk is not pending work");
+}
+
+// The caches are the reason the hook stayed fast across ~42 checkouts sharing a few shas.
+{
+  const { reader, calls } = fakeReader({ "merge-base": ["base1"], diff: [DRAFT_A] });
+  reader(CLEAN_ENTRY);
+  reader({ ...CLEAN_ENTRY, path: "C:/wt-other-same-sha" });
+  eq(calls.filter((c) => c.cmd === "merge-base").length, 1, "branch point is resolved once per sha");
+  eq(calls.filter((c) => c.cmd === "diff").length, 1, "clean diff is computed once per sha");
+}
 
 console.log(`worktree-awareness-lib: ${pass} assertions passed`);
