@@ -2104,9 +2104,11 @@ function registryMigrationHighWater(): string {
 // The three latest approved migrations applied live 2026-07-29 under their
 // server-assigned ledger versions (20260729125227, 20260729125251, and
 // 20260729125314) — none of those are pending.
-// Keep this set empty while the repository has no approved migrations awaiting
-// production application.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
+// Keep this set aligned with rows explicitly marked PENDING APPLY in
+// docs/reference/migration-history.md.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+  '20260729151850',
+]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
