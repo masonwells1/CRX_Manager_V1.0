@@ -4,9 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-07-28 — The staff directory view read profiles as its owner; the contact-sync triggers had no pinned lookup path
 
-`profile_public_view` was a `SECURITY DEFINER` view over `profiles`. Every signed-in user reading it
-got the *view owner's* row visibility, not their own — so a picker that only needed a name and a role
-was served through a permission level that could see the whole profiles table. Pointing a
+`profile_public_view` ran with its **owner's** privileges over `profiles`. A PostgreSQL view has no
+`SECURITY DEFINER` property — the accurate description is that the view had `security_invoker = false`
+(the default), so base-table access ran as the view owner `postgres`, which owns `profiles` without
+`FORCE ROW LEVEL SECURITY` and is `BYPASSRLS`. Every signed-in user reading it therefore got the
+*view owner's* row visibility, not their own — so a picker that only needed a name and a role was
+served through a permission level that could see the whole profiles table. Pointing a
 `security_invoker` view straight at `profiles` was not an option: the live `profiles` policy lets an
 administrator, or a user themself, read a profile, so every non-admin name/assignment picker in the
 app would have gone empty.
