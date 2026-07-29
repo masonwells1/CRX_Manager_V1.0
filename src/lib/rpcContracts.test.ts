@@ -2101,10 +2101,13 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// Empty as of 2026-07-28: both halves of the anon-EXECUTE revoke are applied
-// live (20260728231350 and 20260728233459) and their rows carry the
-// server-assigned ledger versions, so neither is pending any more.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
+// Both halves of the anon-EXECUTE revoke are applied live (20260728231350 and
+// 20260728233459) and no longer pending. The two below are PR #264's, B7-renamed
+// above that high-water and awaiting apply; empty this set again once they land.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+  '20260728235500',
+  '20260728235600',
+]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2219,6 +2222,12 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  sync_customer_to_primary_contact:
+    'trigger-only contact mirror on customers: copies contact_name/phone/email onto the customer primary contact row. Not reachable from a client at all -- it RETURNS trigger with no arguments, so PostgREST cannot expose it, and pg_trigger_depth() > 1 short-circuits the recursive partner trigger. Convergent by construction: the UPSERT carries an IS DISTINCT FROM guard, so a replay writes nothing',
+  sync_primary_contact_to_customer:
+    'trigger-only contact mirror on customer_contacts: copies the primary contact name/phone/email back onto customers. Not reachable from a client at all -- it RETURNS trigger with no arguments, so PostgREST cannot expose it, and pg_trigger_depth() > 1 short-circuits the recursive partner trigger. Convergent by construction: the UPDATE carries an IS DISTINCT FROM guard, so a replay writes nothing',
+  sync_profile_public_directory:
+    'trigger-only staff-directory mirror on profiles: keeps profile_public_directory holding the four non-sensitive fields (id, full_name, role, is_active) and deletes the row on profile delete. Convergent (the UPSERT and the DELETE settle to the same state on replay) and EXECUTE is revoked from PUBLIC, anon, and authenticated in the same migration',
 };
 
 
