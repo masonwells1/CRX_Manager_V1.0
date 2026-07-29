@@ -36,6 +36,8 @@ So the realistic threat was a new or low-activity account, acting deliberately t
 - `profiles_insert` has no role guard. `_guard_profile_role_lock` should have an INSERT arm, or the INSERT policy should pin `role`. Closing the view does not close this; it only removes the DELETE that makes it reachable.
 - `authenticated` holds `TRUNCATE` and `TRIGGER` directly on `public.profiles` (ACL baseline line 456). After this migration a plain `TRUNCATE` fails on the new FK and `TRUNCATE ... CASCADE` fails because `authenticated` no longer holds TRUNCATE on the directory — but that is an accident of the FK, not an asserted control.
 - `TRUNCATE` on `profiles` does not fire the row-level sync trigger, so it would leave the directory permanently stale. A statement-level trigger would close that.
+- The directory table's RLS policy duplicates the active-profile predicate inline instead of calling `public.is_active_profile()`. It is correct today, but a later helper change could drift away from this copy; replace it with the shared helper in a forward-only migration.
+- `service_role` retains INSERT, UPDATE, DELETE, and TRUNCATE on both `profile_public_directory` and `profile_public_view` because the migration's REVOKEs did not name that role. This is not an end-user bypass, but the excess grants should be removed in a forward-only migration after confirming no trusted backend path depends on them.
 - The separate application-service compatibility follow-up previously pointed here; its current owner-decision record is section 0e.
 
 **Not a wider class:** a schema-wide sweep for the same pattern — auto-updatable, not `security_invoker`, writable by `authenticated` — returns **exactly one row across all of `public`**, this view.
