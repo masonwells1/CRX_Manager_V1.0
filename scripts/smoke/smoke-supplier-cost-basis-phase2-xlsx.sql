@@ -14,16 +14,16 @@ VALUES ('payload', pg_read_file('/tmp/phase2-workbook-payload.json')::jsonb);
 DO $proof$
 DECLARE v_payload jsonb := (SELECT value FROM phase2_xlsx_proof WHERE key = 'payload');
 BEGIN
-  IF v_payload->>'formatVersion' <> 'crx-product-pricing-phase2-v2'
-     OR (v_payload->>'rowCount')::integer <> 3
-     OR jsonb_array_length(v_payload->'rows') <> 3
+  IF v_payload->>'formatVersion' IS DISTINCT FROM 'crx-product-pricing-phase2-v2'
+     OR (v_payload->>'rowCount')::integer IS DISTINCT FROM 3
+     OR jsonb_array_length(v_payload->'rows') IS DISTINCT FROM 3
      OR (SELECT count(*) FROM jsonb_array_elements(v_payload->'rows') row_value
          WHERE row_value->>'pricing_mode' = 'margin_driven') <> 2
      OR (SELECT count(*) FROM jsonb_array_elements(v_payload->'rows') row_value
          WHERE row_value->>'pricing_mode' = 'price_driven') <> 1
      OR EXISTS (SELECT 1 FROM jsonb_array_elements(v_payload->'rows') row_value
-                WHERE (row_value->>'has_formula')::boolean
-                   OR jsonb_array_length(row_value->'formula_cells') <> 0) THEN
+                WHERE (row_value->>'has_formula')::boolean IS DISTINCT FROM false
+                   OR jsonb_array_length(row_value->'formula_cells') IS DISTINCT FROM 0) THEN
     RAISE EXCEPTION 'PHASE2_XLSX_FAIL: parsed supplier-evidence workbook contract drifted: %', v_payload;
   END IF;
 END;
@@ -44,11 +44,15 @@ SELECT 'preview', public.preview_product_cost_basis_changes(
 DO $proof$
 DECLARE v_preview jsonb := (SELECT value FROM phase2_xlsx_proof WHERE key = 'preview');
 BEGIN
-  IF v_preview->>'status' <> 'previewed'
-     OR (v_preview->>'submitted_row_count')::integer <> 3
-     OR (v_preview->>'ready_count')::integer <> 3
-     OR (v_preview->>'pricing_change_count')::integer <> 3
-     OR (v_preview->>'basis_change_count')::integer <> 3
+  IF v_preview->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_preview->>'submitted_row_count')::integer IS DISTINCT FROM 3
+     OR (v_preview->>'ready_count')::integer IS DISTINCT FROM 3
+     OR (v_preview->>'unchanged_count')::integer IS DISTINCT FROM 0
+     OR (v_preview->>'conflict_count')::integer IS DISTINCT FROM 0
+     OR (v_preview->>'invalid_count')::integer IS DISTINCT FROM 0
+     OR (v_preview->>'pricing_change_count')::integer IS DISTINCT FROM 3
+     OR (v_preview->>'product_info_change_count')::integer IS DISTINCT FROM 0
+     OR (v_preview->>'basis_change_count')::integer IS DISTINCT FROM 3
      OR (v_preview->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'PHASE2_XLSX_FAIL: current wrapper preview drifted: %', v_preview;
   END IF;
@@ -74,7 +78,10 @@ DECLARE
   v_change_set_id uuid := (v_preview->>'change_set_id')::uuid;
   v_export_id uuid := ((SELECT value FROM phase2_xlsx_proof WHERE key = 'payload')->>'exportId')::uuid;
 BEGIN
-  IF v_apply->>'status' <> 'applied' OR (v_apply->>'applied_count')::integer <> 3 THEN
+  IF v_apply->>'status' IS DISTINCT FROM 'applied'
+     OR (v_apply->>'applied_count')::integer IS DISTINCT FROM 3
+     OR jsonb_array_length(v_apply->'rows') IS DISTINCT FROM 3
+     OR jsonb_array_length(v_apply->'cost_basis_rows') IS DISTINCT FROM 3 THEN
     RAISE EXCEPTION 'PHASE2_XLSX_FAIL: current wrapper apply drifted: %', v_apply;
   END IF;
   IF NOT EXISTS (
