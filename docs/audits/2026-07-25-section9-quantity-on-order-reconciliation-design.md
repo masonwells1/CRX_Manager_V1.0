@@ -1,0 +1,792 @@
+# Section 9 `quantity_on_order` Reconciliation Design
+
+**Date:** 2026-07-25 (America/Chicago)
+
+**Scope:** design and read-only evidence only
+
+**Verdict:** **DO NOT CREATE A RECONCILIATION MIGRATION.** The reported 77
+rows are a query-null-semantics false positive, not 77 incorrect cached
+quantities. The current production mismatch count is zero.
+
+**INDEPENDENT P1 APPLY BLOCKER:** **THE CANONICAL SECTION 9 MIGRATION MUST NOT
+APPLY IN ITS CURRENT FORM.** Its replacements for both `create_vendor_bill`
+and `update_vendor_bill` check that an accounting month is open without taking
+a lock shared with `close_accounting_period`. The live close routine takes no
+advisory lock, table lock, or `FOR UPDATE` lock, so a month can close after
+either bill RPC's period check but before its write commits. This blocker is
+independent of, and does not reverse, the no-reconciliation verdict.
+
+## Owner summary
+
+`inventory.quantity_on_order` is a cache: its authoritative source is the
+remaining quantity on Purchase Order lines whose Purchase Order is
+`submitted` or `partially_received`.
+
+The reported count of 77 is exactly reproducible when the diagnostic compares:
+
+```text
+stored zero  versus  no aggregate row
+```
+
+as `0 IS DISTINCT FROM NULL`. In business terms, an absent open-PO aggregate
+means zero, so that comparison is wrong. All 77 reported rows have:
+
+- a Main Warehouse inventory row;
+- stored `quantity_on_order = 0`; and
+- no Purchase Order product group in an open on-order status.
+
+The canonical pending Section 9 migration already uses the correct rule:
+`COALESCE(expected, 0)`. On the final read-only production recheck at
+`2026-07-26 03:31:24 UTC` (`2026-07-25 22:31:24 America/Chicago`):
+
+- canonical migration preflight mismatches: **0**;
+- standing invariant mismatches: **0**;
+- total stored Main Warehouse on-order quantity: **14,715**;
+- total authoritative open-PO remainder: **14,715**.
+
+Writing 77 rows would therefore replace correct zeros with the same zeros and
+create needless production-data risk. However, the canonical migration is not
+safe to apply yet: both vendor-bill create and update can race an
+accounting-period close, and 29 other live callers require classification. The
+correct next database action is to fix that P1 with a new forward/corrective
+migration, or rigorously refute it, then obtain fresh exact-content review and
+checked-in two-session concurrency proof. If a fresh true quantity mismatch
+appears before any later apply, stop and use the contingency design in this
+packet; do not convert this point-in-time zero result into standing authority
+to write.
+
+## Scope boundaries and provenance
+
+This packet's design branch was created from:
+
+- exact then-current `origin/main`
+  `25363345adeabb5b2b08a3772a0de3f0edcb3952`;
+- reviewed design correction `098687c5cbe22738de1c8e0f6b3741961a738747`;
+- current `origin/main`
+  `31d8e4d3ed25832d4d63206488fdf4a910222c91`, one mainline commit ahead
+  of the branch base. That intervening Supplier/UI commit does not overlap
+  this report. This report-only correction intentionally does not rebase or
+  rewrite the reviewed design history.
+
+Evidence used:
+
+- refreshed Graphify at build commit `098687c5` from
+  `graphify-out/GRAPH_REPORT.md`;
+- used exact Graphify queries:
+  - `graphify explain "public._recompute_po_on_order_for_products()"`;
+  - `graphify affected "public._recompute_po_on_order_for_products()" --depth 3`;
+  - `graphify query "which purchase order and receiving routines change inventory.quantity_on_order and how does migration 20260722222742 replace delta maintenance?" --budget 1600`;
+  - `graphify query "which functions and triggers call public.check_period_open and how do create_vendor_bill update_vendor_bill and close_accounting_period synchronize?" --budget 1400`;
+- verified material behavior in current source and read-only production SQL;
+- inspected the canonical migration, its rollback-only smoke, standing
+  invariant, network-isolated concurrency proof, contract tests, migration
+  history, original Section 9 audit, and PR #218 review history.
+- independently rechecked the live function lock shapes and PR #218's commit
+  lineage on 2026-07-26.
+
+No migration or implementation was created or edited. No application/shared
+registry, migration history, smoke registry, Supplier/Product/Phase 3 file,
+live row, live function, live trigger, grant, or policy was changed. The
+cumulative branch diff from `25363345` does include the original report commit's
+mandatory date-only `docs/app-workflow-map.html` regeneration; this correction
+does not claim otherwise and does not add workflow-map content changes.
+
+The active Supplier worktrees and other lanes had no tracked overlap with this
+packet or the Section 9 remediation files at the start of this work.
+
+## Authoritative definition
+
+For each Product, the authoritative Main Warehouse on-order value is:
+
+```sql
+SUM(
+  GREATEST(
+    purchase_order_items.quantity_ordered
+      - COALESCE(purchase_order_items.quantity_received, 0),
+    0
+  )
+)
+```
+
+over Purchase Orders in:
+
+```sql
+('submitted', 'partially_received')
+```
+
+An absent aggregate row means zero. Over-received lines contribute zero, never
+a negative remainder. Only the `Main Warehouse` inventory row is this cache;
+other inventory locations must not be included or modified.
+
+This is the same formula in:
+
+- `supabase/migrations/20260722222742_section9_po_ap_high_remediation.sql`;
+- `scripts/db-invariant-sweeps/predicates/section9-po-ap-controls.sql`;
+- `scripts/smoke/smoke-section9-po-ap-high-remediation.sql`.
+
+## Exact current mismatch query
+
+This is the canonical migration-preflight comparison, isolated as a read-only
+query. It deliberately preserves `actual IS DISTINCT FROM expected` so a
+missing Main Warehouse row with a positive expected value fails closed, while
+coalescing a missing open-PO aggregate to business zero.
+
+```sql
+WITH expected AS (
+  SELECT
+    poi.product_id,
+    SUM(GREATEST(
+      poi.quantity_ordered - COALESCE(poi.quantity_received, 0),
+      0
+    ))::numeric AS quantity_on_order
+  FROM public.purchase_order_items poi
+  JOIN public.purchase_orders po
+    ON po.id = poi.purchase_order_id
+  WHERE po.status IN ('submitted', 'partially_received')
+  GROUP BY poi.product_id
+),
+comparison AS (
+  SELECT
+    COALESCE(i.product_id, expected.product_id) AS product_id,
+    i.quantity_on_order::numeric AS actual,
+    COALESCE(expected.quantity_on_order, 0)::numeric AS expected
+  FROM expected
+  FULL JOIN (
+    SELECT product_id, quantity_on_order
+    FROM public.inventory
+    WHERE location = 'Main Warehouse'
+  ) i ON i.product_id = expected.product_id
+)
+SELECT
+  COUNT(*) AS mismatch_count,
+  COUNT(*) FILTER (WHERE actual IS NULL) AS missing_main_row_count,
+  COUNT(*) FILTER (WHERE COALESCE(actual, 0) > expected)
+    AS actual_above_expected_count,
+  COUNT(*) FILTER (WHERE COALESCE(actual, 0) < expected)
+    AS actual_below_expected_count,
+  COALESCE(SUM(COALESCE(actual, 0) - expected), 0)
+    AS signed_delta,
+  COALESCE(SUM(ABS(COALESCE(actual, 0) - expected)), 0)
+    AS absolute_delta
+FROM comparison
+WHERE actual IS DISTINCT FROM expected;
+```
+
+Current bounded result:
+
+| Measure | Result |
+| --- | ---: |
+| `mismatch_count` | 0 |
+| Missing Main Warehouse rows among mismatches | 0 |
+| Actual above expected | 0 |
+| Actual below expected | 0 |
+| Signed delta | 0 |
+| Absolute delta | 0 |
+
+The standing invariant uses an equally valid cache-equivalence comparison:
+
+```sql
+COALESCE(actual, 0) IS DISTINCT FROM COALESCE(expected, 0)
+```
+
+It also returned zero.
+
+## Exact 77-row reproducer
+
+The following read-only diagnostic reproduces 77 by intentionally retaining
+NULL on the expected side:
+
+```sql
+WITH expected AS (
+  SELECT
+    poi.product_id,
+    SUM(GREATEST(
+      poi.quantity_ordered - COALESCE(poi.quantity_received, 0),
+      0
+    ))::numeric AS expected
+  FROM public.purchase_order_items poi
+  JOIN public.purchase_orders po
+    ON po.id = poi.purchase_order_id
+  WHERE po.status IN ('submitted', 'partially_received')
+  GROUP BY poi.product_id
+),
+actual AS (
+  SELECT product_id, quantity_on_order::numeric AS actual
+  FROM public.inventory
+  WHERE location = 'Main Warehouse'
+),
+comparison AS (
+  SELECT
+    COALESCE(actual.product_id, expected.product_id) AS product_id,
+    actual.actual,
+    expected.expected
+  FROM expected
+  FULL JOIN actual ON actual.product_id = expected.product_id
+)
+SELECT
+  COUNT(*) FILTER (WHERE actual IS DISTINCT FROM expected)
+    AS raw_null_sensitive_mismatch_count,
+  COUNT(*) FILTER (WHERE actual = 0 AND expected IS NULL)
+    AS zero_actual_without_open_po_count,
+  COUNT(*) FILTER (
+    WHERE COALESCE(actual, 0) IS DISTINCT FROM COALESCE(expected, 0)
+  ) AS business_truth_mismatch_count
+FROM comparison;
+```
+
+Current result:
+
+```text
+raw_null_sensitive_mismatch_count = 77
+zero_actual_without_open_po_count = 77
+business_truth_mismatch_count = 0
+```
+
+The 77 value is therefore the number of correct zero cache rows whose Products
+have no matching open-PO aggregate row. It is not a quantity discrepancy count.
+
+## Bounded production result summary
+
+No Product names, business contacts, payment identifiers, vendor details, or
+row identifiers were selected.
+
+| Measure | Result |
+| --- | ---: |
+| Main Warehouse inventory rows | 117 |
+| Product groups on submitted/partially-received POs | 40 |
+| Groups with a positive remainder | 18 |
+| Groups with a zero remainder | 22 |
+| Zero cache rows with no open-PO group | 77 |
+| Positive cache rows with no open-PO group | 0 |
+| Open-PO groups missing a Main Warehouse row | 0 |
+| Stored Main Warehouse on-order total | 14,715 |
+| Authoritative open-PO remainder total | 14,715 |
+| Canonical preflight mismatch count | 0 |
+| Standing invariant mismatch count | 0 |
+
+Production catalog state at the same pass:
+
+- migration `20260722222742_section9_po_ap_high_remediation` has **0** applied
+  ledger rows;
+- the new `_recompute_po_on_order_for_products`,
+  `trg_po_items_recompute_on_order`, and
+  `trg_po_status_recompute_on_order` functions are absent live;
+- legacy `trg_po_submitted_on_order` remains enabled;
+- live migration high-water is `20260723193312`,
+  `20260722222743_product_families_return_policy_foundation`.
+
+The zero mismatch result does **not** mean all Section 9 work is live. The
+bounded aggregate form of the registered Section 9 predicate still returned
+one current violation in each of these control classes:
+
+- authenticated browser role retains direct vendor mutation privilege;
+- a vendor browser-write policy remains;
+- `create_vendor_bill` lacks the reviewed PO lock/status serialization;
+- `get_ap_aging` lacks the reviewed current-only fail-closed behavior;
+- `update_vendor_bill` lacks the reviewed lock-before-both-period-check shape.
+
+Those are reasons to finish and harden Section 9, but they do not make the
+current canonical file safe to apply and are not reasons to write a quantity
+reconciliation migration.
+
+## Root-cause classification
+
+### Confirmed cause of the reported 77
+
+**Diagnostic false positive — NULL was treated as a value instead of business
+zero.**
+
+An aggregate grouped by Product has no row when a Product has no qualifying
+Purchase Order. A `FULL JOIN` exposes that absence as NULL. Comparing the
+stored zero directly with NULL reports a difference even though both mean
+"nothing is on order."
+
+The evidence is exact, not approximate:
+
+- `117 Main rows - 40 aggregate groups = 77 absent aggregate matches`;
+- all 77 stored values are zero;
+- none of the 77 stored values is positive;
+- coalescing both sides reduces 77 to zero;
+- aggregate quantity totals already tie exactly.
+
+### True mismatch classes (none currently present)
+
+If the canonical query later returns rows, classify them before any write:
+
+| Class | Observable shape | Likely cause | Safe disposition |
+| --- | --- | --- | --- |
+| Stale positive | `actual > 0`, `expected = 0` | cancellation, full receipt, deletion, or edit did not zero a delta-maintained cache | Absolute recompute to zero |
+| Overstated cache | `actual > expected > 0` | missed receive/decrease or duplicate positive delta | Absolute recompute to expected |
+| Understated cache | `0 <= actual < expected` | missed submit/increase, excessive decrement, or product reassignment | Absolute recompute to expected |
+| Missing cache row | `actual IS NULL`, `expected > 0` | open PO exists without Main Warehouse inventory row | Insert safe zero row, then set absolute expected |
+| Invalid source | negative/null/non-finite source inputs or an unsupported PO status | source data does not satisfy the formula's assumptions | **Park for owner/source evidence; do not reconcile** |
+
+No current row falls into these classes.
+
+## Decision: park the data migration; block the canonical control migration
+
+The three candidate dispositions are:
+
+1. **Absolute recomputation of all Main Warehouse rows:** rejected now because
+   all values already tie and it would write 117 rows without benefit.
+2. **Targeted forward reconciliation migration:** rejected now because there
+   are zero true target rows.
+3. **Park for evidence:** selected for the reconciliation lane. Preserve this
+   design as the contingency, rerun the exact canonical query immediately
+   before apply, and create a forward migration only if true mismatches appear.
+
+The no-reconciliation decision does not certify canonical migration
+`20260722222742_section9_po_ap_high_remediation.sql`. That file supplies
+needed going-forward controls, but its apply is independently blocked by the
+accounting-period-close race below. Because the file is already merged, correct
+it only with a new forward migration; never rewrite the merged file.
+
+## Invariants
+
+Any implementation or apply must preserve all of these:
+
+1. **Single source:** open PO remainder is derived only from
+   `purchase_order_items` joined to qualifying `purchase_orders`.
+2. **Status scope:** only `submitted` and `partially_received` contribute.
+3. **Nonnegative line remainder:**
+   `GREATEST(quantity_ordered - COALESCE(quantity_received, 0), 0)`.
+4. **Business zero:** a Product absent from the aggregate has expected value
+   zero.
+5. **Location scope:** only `inventory.location = 'Main Warehouse'` is the
+   on-order cache authority.
+6. **No location bleed:** alternate locations are never read as cache truth
+   and never updated by reconciliation.
+7. **Absolute values:** write the recomputed expected value, never apply a
+   compensating delta.
+8. **Missing-row behavior:** create a Main Warehouse row only when expected is
+   positive; do not manufacture zero-only inventory rows.
+9. **Transactional equality:** before commit, the canonical query returns zero
+   and total actual equals total expected.
+10. **No source mutation:** reconciliation must not change POs, PO lines,
+    receiving records, quantities ordered/received, statuses, or physical
+    stock.
+11. **No negative cache:** a reconciliation result is never negative.
+12. **Forward authority:** after canonical Section 9 applies, line/status
+    triggers plus the governed wrapper lock are the only maintenance design.
+
+## Fail-closed preconditions
+
+If a future true mismatch forces a targeted migration, the migration must
+abort before writing unless all conditions hold:
+
+1. The exact canonical mismatch query is positive and returns a bounded,
+   reviewed aggregate summary.
+2. Every mismatch maps to one of the four safe cache-shape classes above; any
+   source-data anomaly parks the migration.
+3. `inventory.quantity_on_order`,
+   `purchase_order_items.quantity_ordered`, and
+   `purchase_order_items.quantity_received` retain compatible numeric types.
+4. The inventory uniqueness boundary still supports one
+   `(product_id, location)` row.
+5. The qualifying PO status constraint still contains the exact reviewed
+   values.
+6. Canonical Section 9 is still unapplied and its file hash/body is unchanged.
+7. No sibling migration or active lane also writes the same PO/inventory
+   authority.
+8. The live migration ledger contains neither the canonical migration nor a
+   prior reconciliation with equivalent purpose.
+9. The transaction can acquire the required table locks and advisory lock
+   within a bounded timeout; timeout or deadlock aborts.
+10. The candidate target count after locks equals the reviewed preflight count,
+    or the migration aborts for fresh investigation.
+11. The post-update canonical query returns exactly zero before commit.
+12. Same-session migration-review and independent SQL/money review proofs bind
+    to the exact migration content.
+
+## Contingency forward-migration algorithm (not authorized or needed now)
+
+If a future preflight finds true mismatches, use a **targeted absolute
+recomputation**, not a compensating delta and not a blanket update.
+
+Pseudocode:
+
+```sql
+-- One migration-runner transaction.
+SET LOCAL lock_timeout = '<reviewed bounded duration>';
+SET LOCAL statement_timeout = '<reviewed bounded duration>';
+
+-- Legacy write paths do not yet take the Section 9 advisory lock. Block their
+-- table writes before deriving a repair snapshot.
+LOCK TABLE public.purchase_orders
+  IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.purchase_order_items
+  IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.inventory
+  IN SHARE ROW EXCLUSIVE MODE;
+
+-- Match the canonical future authority.
+SELECT pg_advisory_xact_lock(73492009);
+
+CREATE TEMP TABLE pg_temp.section9_expected ON COMMIT DROP AS
+SELECT
+  poi.product_id,
+  SUM(GREATEST(
+    poi.quantity_ordered - COALESCE(poi.quantity_received, 0),
+    0
+  ))::numeric AS expected
+FROM public.purchase_order_items poi
+JOIN public.purchase_orders po ON po.id = poi.purchase_order_id
+WHERE po.status IN ('submitted', 'partially_received')
+GROUP BY poi.product_id;
+
+CREATE TEMP TABLE pg_temp.section9_targets ON COMMIT DROP AS
+SELECT
+  COALESCE(i.product_id, e.product_id) AS product_id,
+  i.quantity_on_order::numeric AS actual,
+  COALESCE(e.expected, 0)::numeric AS expected
+FROM pg_temp.section9_expected e
+FULL JOIN (
+  SELECT product_id, quantity_on_order
+  FROM public.inventory
+  WHERE location = 'Main Warehouse'
+) i ON i.product_id = e.product_id
+WHERE i.quantity_on_order IS DISTINCT FROM COALESCE(e.expected, 0);
+
+-- Abort if target count or shape differs from the reviewed precondition.
+-- Abort on invalid source data or any unexpected location/uniqueness state.
+
+INSERT INTO public.inventory (
+  product_id,
+  location,
+  quantity_available,
+  quantity_prebooked,
+  quantity_on_order
+)
+SELECT product_id, 'Main Warehouse', 0, 0, 0
+FROM pg_temp.section9_targets
+WHERE actual IS NULL AND expected > 0
+ON CONFLICT (product_id, location) DO NOTHING;
+
+UPDATE public.inventory i
+SET quantity_on_order = t.expected,
+    updated_at = now()
+FROM pg_temp.section9_targets t
+WHERE i.product_id = t.product_id
+  AND i.location = 'Main Warehouse'
+  AND i.quantity_on_order IS DISTINCT FROM t.expected;
+
+-- Re-run the canonical query. RAISE if mismatch_count <> 0.
+-- Re-run aggregate total equality. RAISE if totals differ.
+```
+
+The target table must contain only true canonical mismatches. It must not use
+the raw `actual IS DISTINCT FROM expected` comparison with an uncoalesced
+expected value.
+
+## Concurrency and lock order
+
+The canonical migration uses transaction advisory lock `73492009` before any
+governed PO mutation reaches its mature implementation or the recomputation
+trigger. Its recompute function then reads open PO truth and updates the Main
+Warehouse row. The network-isolated proof covers:
+
+- create-vendor-bill wins versus cancel-PO;
+- cancel-PO wins versus create-vendor-bill;
+- simultaneous updates for the same Product do not lose an on-order update;
+- opposite Product update order does not deadlock.
+
+A pre-canonical reconciliation has an extra problem: legacy PO/receiving
+functions do not yet acquire advisory lock `73492009`. The contingency
+migration therefore must acquire write-conflicting table locks first. The
+required order is:
+
+1. `purchase_orders`;
+2. `purchase_order_items`;
+3. `inventory`;
+4. advisory transaction lock `73492009`;
+5. derive targets;
+6. insert missing positive-target rows;
+7. update target cache rows;
+8. verify zero;
+9. commit.
+
+The same order must be used in the disposable proof. Failure to acquire any
+lock within the reviewed timeout is a normal fail-closed abort, not a reason to
+weaken locks or retry variants against production.
+
+There is still a transaction boundary between a hypothetical reconciliation
+migration and the canonical migration. The canonical migration's own
+fail-closed preflight is the guard against drift in that window: if a legacy
+write reintroduces a true mismatch, canonical apply aborts and nothing from
+that migration commits.
+
+### P1: accounting period can close during bill create or update
+
+The canonical replacement `create_vendor_bill` checks
+`check_period_open(p_bill_date)` before its optional Purchase Order row lock
+and eventual insert. Its replacement `update_vendor_bill` takes `FOR UPDATE`
+only on its `vendor_bills` row, checks the old and new bill dates, then updates.
+The live `close_accounting_period` checks the month and inserts/updates
+`accounting_periods`, but takes no lock shared with either bill RPC. Under
+PostgreSQL's normal `READ COMMITTED` behavior, both interleavings are possible:
+
+1. Transaction A passes the create check, or locks the existing bill and
+   passes both update checks.
+2. Transaction B closes that month and commits.
+3. Transaction A inserts or updates a bill and commits into the now-closed
+   month.
+
+The update's bill-row lock serializes competing edits to that bill; it does not
+reserve the accounting month's open state. Create has no bill row to lock
+before insertion. A plain read in `check_period_open` reserves neither case.
+
+Conceptual reproductions (not currently checked-in runnable proofs):
+
+1. **Create versus close:** pause transaction A after create's period check;
+   close and commit the month in transaction B; resume A. Current failure
+   marker: the bill insert succeeds.
+2. **Update versus close:** lock an unpaid bill and pause transaction A after
+   both period checks; close and commit the month in B; resume A. Current
+   failure marker: the bill update succeeds.
+
+The existing checked-in `prove-section9-po-ap-concurrency.mjs` does not run
+either schedule. A future reviewer must not treat this conceptual sequence, or
+that existing proof's pass marker, as executable evidence that the P1 is fixed.
+
+Required canonical lock protocol for a corrective design:
+
+1. Add one internal helper, for example
+   `public._lock_accounting_months(p_dates date[])`, as the only authority for
+   accounting-period serialization. Revoke public/browser execution.
+2. For every non-null input date, derive the month key exactly as
+   `extract(year from date)::integer * 12
+   + extract(month from date)::integer - 1`.
+3. Deduplicate keys, sort them numerically ascending, and acquire
+   `pg_advisory_xact_lock(73492010, month_key)` in that order. `73492010` is
+   the dedicated accounting-period namespace; it is distinct from Section 9's
+   PO lock `73492009`.
+4. Use the same helper in `close_accounting_period`, `create_vendor_bill`,
+   `update_vendor_bill`, and every other confirmed mutating caller after its
+   transaction shape is audited.
+5. Global order is: authenticate/idempotency replay; acquire required
+   business-row locks in each workflow's documented stable order; acquire all
+   affected accounting-month keys through the helper in ascending order;
+   re-read locked business dates and fail closed if the intended date set
+   changed; call `check_period_open` while holding the month locks; mutate;
+   commit. Close has no business row, so it starts at the month-lock step.
+6. Create must move its optional PO row lock before the month lock/check.
+   Update must keep its bill-row lock first, then acquire the deduplicated,
+   sorted old/new month keys before both checks. Any cross-domain caller that
+   cannot obey this global order requires a separately proven design, not a
+   one-off lock inversion.
+
+A durable accounting-calendar row locked by all paths could be equivalent only
+if a row is guaranteed to exist for every open month. The current
+close-on-demand shape does not establish that guarantee. A table lock would be
+broader than necessary and is not the preferred fix.
+
+### Live `check_period_open` caller inventory and risk boundary
+
+The 2026-07-26 live read-only inventory found **31 public-schema callers: 29
+routines and 2 trigger functions**:
+
+- AP/vendor: `create_vendor_bill`, `update_vendor_bill`,
+  `record_vendor_payment`, `void_vendor_bill`, `void_vendor_payment`;
+- customer payments/credits: `_batch_apply_prepayments_impl`,
+  `allocate_payment`, `apply_credit_memo_to_invoice`,
+  `apply_prepay_to_invoice`, `apply_remaining_prepayments`,
+  `apply_write_off`, `batch_apply_prepayments`,
+  `reverse_credit_memo_application`, `reverse_write_off`,
+  `unapply_credit_memo`, `void_payment`;
+- invoice/delivery/return: `_issue_return_credit_impl`,
+  `_post_deleted_delivery_recovery_invoice_20260719`,
+  `_post_invoice_group_customer_scope_impl`,
+  `_post_invoice_impl_20260714`, `_save_invoice_scoped_impl`,
+  `_void_invoice_split_provenance_impl_20260719`, `complete_delivery`,
+  `unpost_invoice`;
+- finance/commission: `_generate_finance_charges_idem_impl_20260721`,
+  `create_commission_payment`, `post_commission_payment`,
+  `preview_finance_charges`, `void_commission_payment`;
+- trigger functions: `enforce_delivery_accounting_period`,
+  `enforce_invoice_draft_on_insert`.
+
+This inventory proves caller breadth, not that all 31 are independently
+exploitable races. Create/update are confirmed from their checked-in statement
+order. The other 29 must be classified as read-only preview, wrapper/delegate,
+trigger, or mutator and have their row locks, date sources, delegates, and
+write timing traced before the corrective scope can be called complete.
+Because the shared close routine currently serializes with none of them, every
+mutating caller is conservatively at risk until audited and either adopts the
+canonical helper or is rigorously shown not to need it.
+
+### Required checked-in concurrency proof
+
+The correction must add a deterministic, repository-registered, runnable
+two-session proof against a disposable real-schema database—not only prose.
+It must:
+
+1. provide explicit barriers that pause create and update after their
+   month-lock acquisition/check point;
+2. test create-first/close-second and close-first/create-second;
+3. test update-first/close-second and close-first/update-second, including an
+   old-to-new-month move with reverse input order to prove sorted acquisition;
+4. assert the blocked session actually waits on the expected advisory key;
+5. require: writer-first completes before close; close-first causes the writer
+   to fail closed after waiting; no bill is inserted or changed in a closed
+   month; no partial idempotency or notification side effect remains;
+6. include bounded lock timeouts and fail if a deadlock, unexpected timeout, or
+   unobserved barrier occurs; and
+7. be wired into the owning smoke/test registry and produce an exact,
+   review-bound pass marker.
+
+### Review provenance mismatch
+
+PR #218's owner readiness comment bound the exact-SHA review and concurrency
+claim to `9ae7db4d1a883775597b12af4ceda5b748b29014`. The PR then received three
+more commits, ending at final head
+`c48f1abecab47d0117e0895958b46a45b5ecf6fd`, and merged as
+`34baf4eb38dc1432edf8e889b2456b64cad256ac`. Therefore the prior readiness
+statement is not exact-content review evidence for the final merged migration.
+
+**Apply rule:** the current canonical file **MUST NOT APPLY** until this P1 is
+fixed by a new forward/corrective migration or rigorously refuted. Either path
+requires fresh review bound to the final exact content and a real two-session
+close-versus-update concurrency proof.
+
+## Rollback and forward-fix posture
+
+- **Current design:** no data write, so no rollback is needed.
+- **Migration failure:** the migration runner transaction must roll back every
+  target-row write and temporary object.
+- **After a successful true reconciliation:** do not restore known-stale cache
+  values. A later defect is corrected by another forward absolute
+  recomputation from then-current PO truth.
+- **Canonical migration failure:** it is transactional; fix the cause, rerun
+  review on exact content as required, and reapply through the guard. Never
+  edit an applied migration.
+- **Historical source ambiguity:** if PO quantities/statuses themselves are
+  disputed, cache reconciliation is forbidden. Park for owner/receiving
+  evidence because recomputation cannot decide which source row is true.
+
+## Proof plan
+
+### Required before canonical Section 9 apply
+
+1. Resolve the P1 with a new forward/corrective migration, or rigorously refute
+   it; never edit the merged canonical migration.
+2. Run the checked-in two-session create-versus-close and update-versus-close
+   proofs in both acquisition orders, including the multi-month deadlock case.
+3. Fetch current `origin/main` and verify the canonical and corrective exact
+   content and live-ledger state.
+4. Rerun the exact canonical mismatch query and bounded summary.
+5. Require:
+   - canonical mismatch count `0`;
+   - standing invariant mismatch count `0`;
+   - stored total equals expected total;
+   - no positive cache row without qualifying PO truth;
+   - no positive expected remainder without a Main Warehouse row.
+6. Rerun focused static contracts:
+   `src/lib/section9PoApRemediation.test.ts` and RPC contracts.
+7. Rerun the network-isolated concurrency proof to
+   `SECTION9_PO_AP_CONCURRENCY_PASS`.
+8. Rerun the registered linked rollback-only smoke and require
+   `SMOKE_PASS_ROLLBACK`.
+9. Run the registered Section 9 predicate and full invariant sweep.
+10. Produce fresh exact-content migration-review and independent Codex proof
+    covering the final canonical-plus-corrective apply packet.
+
+### Required after apply
+
+1. Verify live migration-ledger identity and any required B7 disk rename.
+2. Verify the legacy delta trigger is absent and both new recomputation
+   triggers are enabled.
+3. Verify the recompute/helper/wrapper functions, search paths, grants, and
+   revoked internal execute boundaries.
+4. Run the exact mismatch query: zero rows.
+5. Run `section9-po-ap-controls`: zero rows.
+6. Run the full invariant sweep: zero unallowlisted findings.
+7. Run the rollback-only business smoke: `SMOKE_PASS_ROLLBACK`.
+8. Run the concurrency proof again against the final checked-in source
+   markers.
+9. Refresh live-derived schema/registry/history artifacts only through their
+   owning governed workflow.
+
+### Additional proof if a contingency reconciliation becomes necessary
+
+1. Disposable real-schema proof with fixtures for all four true mismatch
+   shapes.
+2. Negative control showing 77-style zero/NULL pairs produce zero targets.
+3. Two-session proof that a legacy PO/receive write cannot interleave after
+   table locks are acquired.
+4. Lock-timeout proof: migration aborts without partial mutation.
+5. Post-update zero-query and total-equality assertions inside the same
+   transaction.
+6. A rollback-only live smoke of the exact reconciliation SQL before any
+   permanent apply.
+
+## Apply order and approval gates
+
+### Current evidence: recommended order
+
+1. **No reconciliation migration.**
+2. **Do not apply the current canonical migration.**
+3. Fix the period-close race in a new forward/corrective migration, or
+   rigorously refute the P1.
+4. Run fresh exact-content independent review and the required two-session
+   concurrency proof against the final apply packet.
+5. Run the fresh read-only zero-mismatch preflight immediately before apply.
+6. Obtain the authorization required by `AGENTS.md`:
+   - ordinary interactive run: Mason's explicit in-chat approval;
+   - pre-authorized hands-free run: only the documented armed-autopilot
+     exception with every proof gate satisfied;
+   - any destructive/data-deleting expansion: always stop for fresh approval.
+7. Only after every blocker and gate is cleared, apply the explicitly reviewed
+   canonical-plus-corrective sequence.
+8. Perform the post-apply proof plan before declaring Section 9 live.
+
+### If a future true mismatch appears
+
+1. Stop canonical apply.
+2. Prepare a new forward-only targeted reconciliation migration from the
+   contingency design; never edit canonical migration `20260722222742`.
+3. Independently review and prove that exact new file.
+4. Obtain explicit live-apply authorization.
+5. Apply the reconciliation migration first.
+6. Immediately rerun the canonical preflight.
+7. Apply canonical Section 9 only if the count remains zero.
+8. Complete both migrations' postflight and ledger closeout.
+
+The explicit application sequence is authoritative even if the new forward
+migration's filename timestamp sorts after the older pending canonical file.
+Migration history already distinguishes ledger entry order from filename
+timestamp order. Never use a bulk push that applies unreviewed pending files.
+
+## Honest blocked questions and residual risk
+
+- The prior readiness ledger describes 77 as output from the canonical
+  fail-closed preflight, but no archived exact SQL/output for that run was found
+  in `origin/main`. Current production reproduces 77 only when expected NULL is
+  left uncoalesced; the checked-in canonical preflight returns zero. Treat the
+  old wording as contradicted, not as current apply evidence.
+- Live data can change after this packet. Zero is point-in-time evidence, so
+  the immediate pre-apply recheck is mandatory.
+- The other Section 9 controls remain absent live. This packet clears only the
+  alleged need for a 77-row data repair; it does not certify the pending
+  canonical migration as applied or the whole Section 9 lane as live.
+- The live lock-shape check found no advisory/table/row lock in
+  `close_accounting_period`; Section 9 remains absent from the live ledger.
+  This supports the P1 rather than clearing it.
+- Existing Section 9 concurrency proof covers PO/bill and Product-order races,
+  not the required create-versus-close or update-versus-close interleavings.
+- The live 31-caller inventory is a scope warning, not proof that all callers
+  race. The corrective review must classify all 31 and prove coverage of every
+  mutating path before apply.
+- No owner/business evidence is needed for the current 77 because no true
+  quantity discrepancy exists. Owner evidence becomes mandatory only if a
+  future source-data anomaly makes the PO rows themselves disputable.
+
+## Final design verdict
+
+**PARK THE RECONCILIATION MIGRATION AS UNNECESSARY.**
+
+The 77 figure is a NULL-versus-zero query artifact. Current production cache
+truth is exact: zero canonical mismatches and equal totals. Preserve the
+fail-closed contingency design. Separately, **BLOCK CANONICAL SECTION 9 APPLY**
+until the accounting-period-close P1 is corrected by a new forward migration
+or rigorously refuted, with fresh exact-content review and the missing
+two-session concurrency proof. No preceding quantity data rewrite is needed.
