@@ -1,9 +1,19 @@
 -- These are trigger-only synchronizers. Pin their lookup path so a caller's
 -- session setting cannot change which public objects they resolve.
+--
+-- SECURITY INVOKER is stated explicitly on both, not left to the default.
+-- CREATE OR REPLACE FUNCTION keeps only ownership and permissions; every other
+-- property is re-derived from this command, so an unstated security context
+-- silently becomes INVOKER.  Both functions are already INVOKER on live
+-- (prosecdef = false, checked against rhyzpcqhnizqbxphqdkr), so this preserves
+-- the current behavior rather than changing it -- promoting them to DEFINER
+-- would widen what a trigger may write and is deliberately not done here.
+-- Saying it out loud means a future edit cannot flip the context by omission.
 
 CREATE OR REPLACE FUNCTION public.sync_customer_to_primary_contact()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
@@ -45,6 +55,7 @@ $$;
 CREATE OR REPLACE FUNCTION public.sync_primary_contact_to_customer()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
@@ -69,6 +80,7 @@ $$;
 DO $$
 DECLARE
   v_unpinned text;
+  v_definer text;
 BEGIN
   SELECT string_agg(p.oid::regprocedure::text, ', ')
   INTO v_unpinned
@@ -81,6 +93,24 @@ BEGIN
 
   IF v_unpinned IS NOT NULL THEN
     RAISE EXCEPTION 'CONTACT_SYNC_SEARCH_PATH_NOT_PINNED: %', v_unpinned;
+  END IF;
+
+  -- Both were SECURITY INVOKER before this migration and must still be after it.
+  -- CREATE OR REPLACE re-derives every unstated property, so a future edit that
+  -- drops the explicit SECURITY INVOKER above -- or adds SECURITY DEFINER to a
+  -- trigger that writes customers and customer_contacts -- fails here instead of
+  -- silently changing whose permissions the mirror writes run under.
+  SELECT string_agg(p.oid::regprocedure::text, ', ')
+  INTO v_definer
+  FROM pg_proc p
+  WHERE p.oid IN (
+    'public.sync_customer_to_primary_contact()'::regprocedure,
+    'public.sync_primary_contact_to_customer()'::regprocedure
+  )
+  AND p.prosecdef;
+
+  IF v_definer IS NOT NULL THEN
+    RAISE EXCEPTION 'CONTACT_SYNC_SECURITY_CONTEXT_CHANGED: %', v_definer;
   END IF;
 END;
 $$;

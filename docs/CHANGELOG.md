@@ -24,6 +24,18 @@ pinned `search_path`**, so a caller's session setting decided which `public` obj
 Both are now pinned to `public, pg_temp`, asserted by a check block that raises
 `CONTACT_SYNC_SEARCH_PATH_NOT_PINNED`.
 
+The pre-push Codex gate then flagged those two replacements as losing `SECURITY DEFINER`, on the
+grounds that `CREATE OR REPLACE FUNCTION` re-derives every property the command does not state. The
+mechanism it described is exactly right; the premise was not. Both functions are **already
+`SECURITY INVOKER` on live** (`prosecdef = false`, read back from `rhyzpcqhnizqbxphqdkr`), so the
+migration preserves the existing context rather than downgrading it — and what Codex was actually
+reading was a wrong sentence in `docs/reference/migration-history.md` claiming "Both stay
+`SECURITY DEFINER`". That sentence was the defect, and it is corrected. Rather than leave the
+invariant resting on prose a second time, both replacements now state `SECURITY INVOKER`
+explicitly and the postflight block asserts `prosecdef = false` on both, raising
+`CONTACT_SYNC_SECURITY_CONTEXT_CHANGED` otherwise. Promoting these triggers to `SECURITY DEFINER`
+would widen what a mirror write may touch and is deliberately not done.
+
 All three functions are also classified in `src/lib/rpcContracts.test.ts`'s mutator inventory. They
 are exempt because they are **trigger-only**, with the mechanism recorded per function, not because
 an exemption made the test green: each `RETURNS trigger` with no arguments, which PostgREST cannot
