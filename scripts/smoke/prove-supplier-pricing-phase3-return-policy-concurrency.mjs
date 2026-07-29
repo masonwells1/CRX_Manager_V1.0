@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,12 +25,31 @@ function resolveMigration(suffix){
   if(hits.length!==1) throw new Error(`expected exactly one supabase/migrations/*${suffix}, found ${hits.length}${hits.length?`: ${hits.join(', ')}`:''}`);
   return path.join(dir,hits[0]);
 }
+// The baseline manifest -- not the directory listing -- is the authority for
+// which generation's artifacts to use and what each must hash to. Picking the
+// lexically-last file per suffix would happily pair a stale extensions dump
+// with a fresh ACL file, and would apply an artifact that had been edited.
+const manifest=JSON.parse(readFileSync(path.join(ROOT,'supabase/baselines/manifest.json'),'utf8'));
+const sha256=local=>createHash('sha256').update(readFileSync(local)).digest('hex').toUpperCase();
 function resolveBaseline(suffix){
-  const dir=path.join(ROOT,'supabase/baselines');
-  const hits=readdirSync(dir).filter(f=>f.endsWith(suffix)).sort();
-  if(!hits.length) throw new Error(`no supabase/baselines/*${suffix} artifact found`);
-  return path.join(dir,hits.at(-1));
+  const hits=Object.keys(manifest.artifacts??{}).filter(f=>f.endsWith(suffix));
+  if(hits.length!==1) throw new Error(`expected exactly one baseline artifact *${suffix} in manifest.json, found ${hits.length}${hits.length?`: ${hits.join(', ')}`:''}`);
+  const local=path.join(ROOT,'supabase/baselines',hits[0]);
+  if(!existsSync(local)) throw new Error(`manifest names ${hits[0]} but the file is missing`);
+  const want=manifest.artifacts[hits[0]].sha256, got=sha256(local);
+  if(got!==want) throw new Error(`baseline artifact ${hits[0]} does not match manifest sha256 (manifest ${want}, on disk ${got})`);
+  return local;
 }
+// Bind the caller-supplied dump to this exact baseline generation. Only a dump
+// that hashes to the manifest's recorded decoded digest may take the
+// current-baseline path below, because that path overwrites privileges with
+// this generation's companion ACL artifact. Letting an arbitrary dump through
+// would let the ACL restore normalize away the very grant drift the postflight
+// assertions exist to catch.
+const schemaArtifact=Object.keys(manifest.artifacts??{}).find(f=>f.endsWith('_public_schema.sql.br'));
+const baselineDumpSha=schemaArtifact&&manifest.artifacts[schemaArtifact].decoded_sha256;
+if(!baselineDumpSha) throw new Error('manifest.json has no *_public_schema.sql.br decoded_sha256 to bind the dump against');
+const dumpIsRepoBaseline=sha256(path.resolve(dump))===baselineDumpSha;
 const files={ extensions:resolveBaseline('_extensions.sql'), aclLockdown:resolveBaseline('_acl_lockdown.sql'), dump:path.resolve(dump), liveUnapply:path.join(ROOT,'scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql'), section9:resolveMigration('_section9_po_ap_high_remediation.sql'), stageA:resolveMigration('_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
 for(const [k,v] of Object.entries(files)) if(!existsSync(v)) throw new Error(`missing ${k}: ${v}`);
 function run(args,o={}){const r=spawnSync('docker',args,{cwd:ROOT,encoding:'utf8',input:o.input,maxBuffer:50*1024*1024});if(r.error||(!o.fail&&r.status!==0))throw new Error(`${r.error?.message||''}\n${r.stderr||r.stdout}`);return r}
@@ -76,8 +96,9 @@ try {
   const present=probe=>scalar(`SELECT (${probe})::text;`)==='true';
   const hasStageA=present(`to_regclass('public.product_families') IS NOT NULL`);
   const hasSection9=present(`EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_po_items_recompute_on_order' AND NOT tgisinternal)`);
-  console.log(`PHASE3_DUMP_STATE stage_a=${hasStageA?'present':'absent'} section09=${hasSection9?'present':'absent'}`);
+  console.log(`PHASE3_DUMP_STATE stage_a=${hasStageA?'present':'absent'} section09=${hasSection9?'present':'absent'} dump_is_repo_baseline=${dumpIsRepoBaseline}`);
   if(hasStageA&&hasSection9){
+    if(!dumpIsRepoBaseline) throw new Error('dump already contains Stage A and Section 09 but does not hash to this baseline generation; refusing to overwrite its privileges with a foreign ACL artifact. Regenerate the dump with `node scripts/decompress-schema-baseline.mjs`, or supply a pre-Stage-A dump.');
     // A current-baseline dump needs the companion ACL artifact. A schema dump
     // can only GRANT, and this image's ALTER DEFAULT PRIVILEGES re-grants
     // EXECUTE to anon/authenticated as each function is created, which
@@ -93,6 +114,27 @@ try {
   if(!hasStageA) applyNormalized(files.liveUnapply);
   if(!hasSection9) apply('section9.sql');
   if(!hasStageA) apply('stageA.sql');
+  // Skipping an already-present migration must never skip that migration's own
+  // postflight security assertions. The probes above only establish that one
+  // table and one trigger name exist; they say nothing about SECURITY DEFINER,
+  // `search_path`, trigger relation/binding identity, function-body hashes,
+  // grants, deferred-constraint timing, or AP overload counts. Each migration
+  // ends with exactly one terminal assertion block that checks all of that, and
+  // those blocks are pure reads, so run them unconditionally on both paths.
+  // Without this, a dump carrying an unsafe function definition, a wrongly bound
+  // trigger, or an extra AP overload would still print every success marker.
+  function terminalAssertionBlock(local){
+    const source=readFileSync(local,'utf8').replace(/\r\n/g,'\n');
+    const opener=[...source.matchAll(/^DO \$([A-Za-z0-9_]+)\$$/gm)].at(-1);
+    if(!opener) throw new Error(`no terminal DO block found in ${path.basename(local)}`);
+    const tag=`$${opener[1]}$`, block=source.slice(opener.index).trimEnd();
+    if(!block.endsWith(`${tag};`)) throw new Error(`terminal ${tag} block in ${path.basename(local)} is not the final statement; postflight assertions cannot be replayed safely`);
+    return block;
+  }
+  for(const [label,local] of [['section09',files.section9],['stage_a',files.stageA]]){
+    sql(terminalAssertionBlock(local));
+    console.log(`PHASE3_MIGRATION_POSTFLIGHT_ASSERTIONS_PASS ${label}`);
+  }
   sql(`INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a001'),('00000000-0000-0000-0000-00000000a002') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a001','phase3-admin@example.invalid','admin',true),('00000000-0000-0000-0000-00000000a002','phase3-sales@example.invalid','sales_rep',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=true;`);
   const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
   const source=readFileSync(files.stageA,'utf8'); for(const x of ['lock_phase3_product_policy_products','RETURN_POLICY_NO_RETURN','trigger_x_validate_phase3_return_item_policy'])assert.match(source,new RegExp(x));
