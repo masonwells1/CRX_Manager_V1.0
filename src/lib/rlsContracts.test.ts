@@ -163,7 +163,7 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
       sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Negotiated per-customer rates. Writes are admin-only. Office-only reads since 20260727231652. The row carries rate_per_acre_cents but NOT cost_per_acre_cents — cost lives on application_services, which stays driver-readable at the row level. So this table alone is the negotiated price, not the margin; margin is the join of the two, and this migration breaks that join for drivers. CORRECTION (2026-07-28, verified live): an earlier revision justified that as "Jobs/JobDetail need it". They do not. No driver-facing surface selects cost_per_acre_cents — the field-app picker takes id/name/default_rate_per_acre_cents, Jobs and the split editors take id/name, and JobDetail never touches the table. The only readers of the cost column are ApplicationServices.tsx and ApplicationServiceDetail.tsx, both behind allowedRoles={[admin]} routes. So application_services_select USING (is_active_profile()) exposes internal cost to any active profile through the API with no legitimate consumer — same shape as the SECDEF leak 20260728182141 closed, since a React route guard is not in the data path. Harmless today only because 0 of 4 services have a non-zero cost_per_acre_cents. Tracked as the residual item in KNOWN_ISSUES §0.',
+    notes: 'Negotiated per-customer rates. Writes are admin-only. Office-only reads since 20260727231652. The row carries rate_per_acre_cents but NOT cost_per_acre_cents — cost lives on application_services, which stays driver-readable at the row level. So this table alone is the negotiated price, not the margin; margin is the join of the two, and this migration breaks that join for drivers. CORRECTION (2026-07-28, verified live): an earlier revision justified that as "Jobs/JobDetail need it". They do not. No driver-facing surface selects cost_per_acre_cents — the field-app picker takes id/name/default_rate_per_acre_cents, Jobs and the split editors take id/name, and JobDetail never touches the table. The only readers of the cost column are ApplicationServices.tsx and ApplicationServiceDetail.tsx, both behind allowedRoles={[admin]} routes. So application_services_select USING (is_active_profile()) exposes internal cost to any active profile through the API with no legitimate consumer — same shape as the SECDEF leak 20260728182141 closed, since a React route guard is not in the data path. Harmless today only because 0 of 4 services have a non-zero cost_per_acre_cents. CLOSED by 20260729015706 — not with a policy (PostgreSQL has no column-level RLS and every app user shares the one `authenticated` grantee) but with a COLUMN-PRIVILEGE carve-out: SELECT/INSERT/UPDATE/REFERENCES are revoked from `authenticated` on the whole table and re-granted on the nine other columns only, so cost_per_acre_cents never arrives on any ordinary read. Admins reach it through admin_get_application_service_costs / admin_set_application_service_cost. That control is INVISIBLE to this matrix, which models row policies and not grants — application_services still reads "all" for a driver here and that is correct, because the driver still gets the row, just without the one column.',
   },
   {
     table: 'rebate_programs',
@@ -386,9 +386,18 @@ const APPEND_ONLY_TABLES = [
  * is_admin()/is_sales_rep() gate in each body and revokes `authenticated`
  * EXECUTE on compute_application_service_fee outright.
  *
- * The remaining gap is application_services itself: default_rate_per_acre_cents
- * and cost_per_acre_cents are readable by any active profile via the
- * application_services_select policy.
+ * application_services itself was the last gap, and 20260729015706 closes the
+ * cost half of it at the GRANT layer rather than the policy layer: `authenticated`
+ * holds SELECT on nine named columns and cost_per_acre_cents is not among them.
+ * default_rate_per_acre_cents stays readable by any active profile on purpose —
+ * it is the customer-facing price, which drivers and applicators legitimately
+ * see, not internal cost.
+ *
+ * Note for anyone extending this file: that control cannot be expressed in the
+ * matrix below. Every entry here is about WHICH ROWS a role sees; a column grant
+ * is about which COLUMNS come back on a row the role already sees. Do not add
+ * application_services to DRIVER_BLOCKED_TABLES — drivers must keep reading the
+ * row for QuickDeliveryModal and Jobs to work.
  */
 const DRIVER_BLOCKED_TABLES = [
   'cost_history',

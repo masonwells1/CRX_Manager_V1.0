@@ -2605,18 +2605,36 @@ export interface Vehicle {
 
 // Application Services (custom application pricing per vehicle/service)
 
+// cost_per_acre_cents is NOT on this interface. Migration 20260729015706 revoked
+// that column from the `authenticated` DB role, so it never arrives on an ordinary
+// table read or on an embedded `application_service` relation — only admins can
+// reach it, and only through admin_get_application_service_costs. A type that
+// promised the field would be lying to every one of those call sites.
 export interface ApplicationService {
   id: string;
   name: string;
   vehicle_id: string | null;
   default_rate_per_acre_cents: number;
-  cost_per_acre_cents: number;
   is_active: boolean;
   sort_order: number;
   created_by: string | null;
   created_at: string;
   updated_at: string;
   vehicle?: Vehicle;
+}
+
+// The admin-only shape: a service row with the internal cost merged back in from
+// admin_get_application_service_costs. Use this ONLY where that RPC was called.
+//
+// `null` means "the cost could not be read" — the table read and the cost RPC are
+// two separate calls and the second can fail on its own (a non-admin, or a build
+// deployed before the migration that creates the RPC). That is NOT the same fact
+// as a cost of zero, and the difference is expensive: rendering or exporting an
+// unread cost as $0.00 puts a fabricated 100%-margin number in an admin's CSV or
+// PDF, and on the detail page it would be written back over the real cost on the
+// next unrelated save. Render it as "-", never as a figure.
+export interface ApplicationServiceWithCost extends ApplicationService {
+  cost_per_acre_cents: number | null;
 }
 
 export interface CustomerApplicationRate {

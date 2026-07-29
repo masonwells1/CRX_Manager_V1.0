@@ -64,11 +64,15 @@ test.describe('Field App Phase 1 — multi-customer split via RPC', () => {
 
     // Create a Phase 1 application service ([E2E] prefixed for cleanup discipline,
     // even though application_services isn't in the global teardown — afterAll handles it)
+    // cost_per_acre_cents is deliberately NOT set here: migration 20260729015706
+    // revoked that column from `authenticated`, and this helper runs on the logged-in
+    // user's JWT. It is NOT NULL DEFAULT 0, and nothing below asserts on it.
+    // `select=id` is also required — supabaseRest sends Prefer: return=representation,
+    // which without an explicit select means RETURNING *, i.e. the revoked column.
     const svcRes = asArray<{ id: string }>(
-      await supabaseRest(page, 'POST', 'application_services', {
+      await supabaseRest(page, 'POST', 'application_services?select=id', {
         name: APP_SVC_NAME,
         default_rate_per_acre_cents: 1500,
-        cost_per_acre_cents: 800,
         is_active: true,
         sort_order: 100,
       }),
@@ -136,7 +140,9 @@ test.describe('Field App Phase 1 — multi-customer split via RPC', () => {
       await supabaseRest(page, 'DELETE', `fields?id=eq.${splitFieldId}`).catch(() => {});
     }
     if (appServiceId) {
-      await supabaseRest(page, 'DELETE', `application_services?id=eq.${appServiceId}`).catch(() => {});
+      // select=id for the same reason as the insert above — return=representation
+      // would otherwise RETURN *, including the now-revoked cost column.
+      await supabaseRest(page, 'DELETE', `application_services?id=eq.${appServiceId}&select=id`).catch(() => {});
     }
     await ctx.close();
   });

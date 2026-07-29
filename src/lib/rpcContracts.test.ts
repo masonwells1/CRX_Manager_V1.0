@@ -2101,10 +2101,11 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// Empty as of 2026-07-28: both halves of the anon-EXECUTE revoke are applied
-// live (20260728231350 and 20260728233459) and their rows carry the
-// server-assigned ledger versions, so neither is pending any more.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
+// Empty as of 2026-07-29: application_service_cost_admin_only applied live and
+// its row carries the server-assigned ledger version 20260729015706 (authored
+// 20260729003600), so it is no longer pending — as with both halves of the
+// anon-EXECUTE revoke (20260728231350 and 20260728233459) before it.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even

@@ -14,7 +14,7 @@
 - `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
 - `field_polygons` - Multi-polygon support per field (field_id, polygon_geojson jsonb, label, acres, sort_order). Sibling to `fields.parent_field_id` grouping; migration 20260334900000 (Field Management V3)
 - `vehicles` - Ground/air application equipment (type, capacity, registration, FAA N-number or DOT#, status)
-- `application_services` - Named application services with per-acre pricing (name, vehicle_id, default_rate_per_acre_cents, cost_per_acre_cents, is_active). Services like "Hagie Y-Drop Nitrogen" or "Rogator Application"
+- `application_services` - Named application services with per-acre pricing (name, vehicle_id, default_rate_per_acre_cents, cost_per_acre_cents, is_active). Services like "Hagie Y-Drop Nitrogen" or "Rogator Application". **`cost_per_acre_cents` is admin-only at the column-grant level** (migration `20260729015706`): `authenticated` holds SELECT/INSERT/UPDATE on the other nine columns only, so an ordinary table read never returns cost and `select('*')` on this table fails outright. Admins read and write it through `admin_get_application_service_costs` / `admin_set_application_service_cost`. RLS is untouched — every active profile still reads the row, because drivers need the service name and customer-facing rate. Adding a column to this table means adding it to that grant, or `authenticated` will not see it.
 - `customer_application_rates` - Per-customer rate overrides for application services (~5% of customers). UNIQUE(customer_id, application_service_id, season)
 
 ## Quotes & Orders
