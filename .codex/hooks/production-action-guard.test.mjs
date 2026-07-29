@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
+import { scratchHookEnvironment } from "../../.claude/hooks/git-test-env.mjs";
 
 const projectRoot = process.cwd();
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
@@ -14,8 +15,7 @@ const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-g
 const tempRoots = [];
 
 function git(cwd, args) {
-  const env = { ...process.env };
-  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
+  const env = scratchHookEnvironment(cwd);
   return execFileSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
@@ -62,8 +62,7 @@ function evaluatePush(repo, nowMs = Date.now(), command = "git push origin HEAD:
 }
 
 function runClaudePushGuard(command, projectDir, payloadCwd = "") {
-  const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
-  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
+  const env = scratchHookEnvironment(projectDir, { ...process.env, CLAUDE_PROJECT_DIR: projectDir });
   return spawnSync(process.execPath, [claudeGuardPath], {
     cwd: projectRoot,
     env,

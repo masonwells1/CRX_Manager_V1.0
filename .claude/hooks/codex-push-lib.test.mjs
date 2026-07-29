@@ -103,6 +103,21 @@ assert.deepEqual(riskyFiles(["src/pages/Home.tsx", "supabase/migrations/1.sql"])
 // gate machinery — editing them must itself require the second-model verdict.
 assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
+assert.deepEqual(
+  riskyFiles(["scripts/check-supplier-pricing-phase3-private-artifacts.mjs"]),
+  ["scripts/check-supplier-pricing-phase3-private-artifacts.mjs"],
+  "the Phase 3C containment checker cannot self-weaken without independent review",
+);
+assert.deepEqual(
+  riskyFiles(["scripts/supplier-pricing-phase3-private-artifacts.mjs"]),
+  ["scripts/supplier-pricing-phase3-private-artifacts.mjs"],
+  "the Phase 3C private-artifact constants and writer cannot self-weaken without independent review",
+);
+assert.deepEqual(
+  riskyFiles(["scripts/supplier-pricing-phase3-private-artifacts-helper.mjs"]),
+  [],
+  "a near-lookalike private-artifact helper path is not treated as the guarded writer module",
+);
 // Codex round-8 (PR #142): the hook-registration surfaces — a PR that
 // de-registers a guard by editing only these must still require the verdict.
 assert.deepEqual(riskyFiles([".claude/settings.json"]), [".claude/settings.json"]);
@@ -140,11 +155,7 @@ assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 100
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now + 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, head_sha: "" }, sha, now), false);
-assert.equal(
-  proofValid({ ...codexProof, verdict: "blockers-fixed" }, sha, now),
-  false,
-  "obsolete blockers-fixed Codex proof is rejected",
-);
+assert.equal(proofValid({ ...codexProof, verdict: "blockers-fixed" }, sha, now), false, "obsolete blockers-fixed Codex proof is rejected");
 
 // Base-SHA binding (2026-07-14): when the guard supplies the origin/main it is
 // gating against, the proof's base_sha must match. A moved base — origin/main
@@ -164,11 +175,7 @@ assert.equal(proofValid({ ...codexProof, base_sha: undefined }, sha, now), true,
 const claudeProof = { claude_ran: true, verdict: "clean", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };
 assert.equal(claudeProofValid(claudeProof, sha, now), true);
 assert.equal(claudeProofValid({ ...claudeProof, claude_ran: false }, sha, now), false);
-assert.equal(
-  claudeProofValid({ ...claudeProof, verdict: "blockers-fixed" }, sha, now),
-  false,
-  "obsolete blockers-fixed Claude proof is rejected",
-);
+assert.equal(claudeProofValid({ ...claudeProof, verdict: "blockers-fixed" }, sha, now), false, "obsolete blockers-fixed Claude proof is rejected");
 assert.equal(claudeProofValid({ ...claudeProof, verdict: "ship" }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, head_sha: "b".repeat(40) }, sha, now), false);
 assert.equal(claudeProofValid({ ...claudeProof, timestamp: new Date(now + 60_000).toISOString() }, sha, now), false);

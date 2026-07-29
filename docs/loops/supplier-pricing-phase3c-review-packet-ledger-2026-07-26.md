@@ -5,20 +5,84 @@
 - Mission doc:
   `docs/loops/supplier-pricing-phase3c-review-packet-loop-2026-07-26.md`
 - Worktree:
-  `C:\Users\mason\.codex\worktrees\phase3c-overnight-20260726\CRX_Manager`
-- Branch: `codex/phase3c-overnight-20260726`
-- Created from: `origin/main` /
-  `052b2171821dc7ffd965b4edb4b6de4ef8fda511`
+  `C:\Users\mason\.codex\worktrees\phase3c-cleanroom-20260728\CRX_Manager`
+- Active branch: `codex/phase3c-containment-followup-v9-20260729`
+- Worktree relocation record: the mission originally named
+  `C:\Users\mason\.codex\worktrees\phase3c-overnight-20260726\CRX_Manager`.
+  Its Phase 3C lineage was integrated into the isolated cleanroom branch, and
+  that original path is now attached to the unrelated
+  `codex/pricing-rpc-live-ledger-closeout` lane. Recovery therefore continues
+  only in the cleanroom so the two writers cannot overlap and the original
+  lane's work remains untouched.
+- v9 launch base and current local `origin/main` snapshot:
+  `fd677ff573f14e126ef3f6b2fd7e29c01629e8ec`; launch divergence is `0/0`.
+  No fetch occurred in this SAFE PREP reconciliation cycle.
+- Rejected/reconciliation source v5:
+  `0229c0004dfc0cdab060bac49e027d0ecf9d4728`, parent
+  `2ef9ab4bbf61e281f4b60c6424fe4974d84ec9c2`. Its normal hook passed; exact
+  packet proof passed exit `0` in `309855` ms with matching start/end SHA; and
+  ignored-inclusive proof passed exit `0` in `1199401` ms with counters
+  `51819/0/51819/783040279` and matching clean start/end SHA. The object-range
+  wrapper timed out exit `124` at `604041` ms; its one CPU-active child ended
+  naturally around 20 minutes with no recoverable terminal output, so no
+  object-range proof exists. Trusted-event proof and all reviews never ran.
+- `origin/main` advanced to `1b2d9062` during v5 proof, rejecting v5 as the
+  final-current candidate. Its five-file delta overlaps Phase 3C only in
+  `docs/CHANGELOG.md`; v6 preserves the current-main known-issues, migration
+  history, RPC-contract test, and forward migration changes. An external merge,
+  PR, push, or live action is neither acceptance nor authority for this v6 work.
+- Historical source base: `7c096444fe98df8283f95e3076ec433c6422c506`.
+  The v3 freeze artifact `7696c9116c9a02b332529c7d43d5ff50f3dd88ee`
+  is rejected because its author and committer were both polluted to
+  `test <test@example.com>`. Its patch is source material only, never
+  acceptance evidence.
+- v9 clean-history squash preserves the approved Phase 3C hardening delta as a
+  local SAFE PREP candidate, not acceptance. Its rejected clean-history v8
+  source is `0a771268e905f7a6452f317d1c94718133a0dd5e`; v9 starts directly from
+  current `origin/main` after the linked-worktree apply-proof and documentation
+  refresh advances. Its only Phase 3C/main overlap is
+  `.claude/hooks/codex-push-lib.mjs`: v9 preserves main's `sessionProofDirs`
+  lookup while retaining the two exact Phase 3C risky-path registrations.
+  Its completion path requires a normal-hook local freeze with command-scoped
+  Mason author and committer identity; the commit object must then prove both
+  identities exactly before exact-SHA proof and review begin.
+- Boundary incident: a collaboration editor briefly added exactly two Phase 3C
+  risky-path lines to the shared-root `.claude/hooks/codex-push-lib.mjs`.
+  The orchestrator stopped that writer and removed only those two lines,
+  preserving all pre-existing root work. The cleanroom remained unchanged.
+- Self-improvement correction: v4 adds a fail-closed local Git identity guard
+  at pre-commit start/end and commit-msg start, plus full repository-local Git
+  environment sanitization for scratch fixtures. This prevents the observed
+  wrong-author class without claiming that the historical shared-config
+  mutation's exact initiating process is conclusively proven.
+- v9 reconciliation proof is pending. The rejected v5/v6/v7/v8 evidence above does
+  not substitute for v9 proof or review; all final reviewers remain pending, and
+  literal `claude-opus-5 --effort high` is still required.
 - Fixed trusted CI bootstrap ancestry floor:
   `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c` (#255 after #251/#253;
   confirmed to lack both the
   checker and trusted target workflow; protected `main` descendants remain
   eligible without repinning).
-- Final allowed state: `PARKED — PR #246 OPEN; ACCEPTANCE REQUIRES ITS CURRENT
-  HEAD TO MATCH A RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND
-  EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PLUS PROOF`
+- Final allowed state: `PARKED — PR #246 WAS MERGED EXTERNALLY WHILE THE LATER
+  REPAIR WAS UNACCEPTED; A SEPARATE FOLLOW-UP PR REQUIRES AN EXACT-REVIEWED
+  HEAD, REQUIRED CHECKS/CODERABBIT, AND ANY STILL-MISSING EXTERNAL ENFORCEMENT
+  PROOF`
+- Current proof boundary: the clean follow-up must first be frozen at a new
+  exact head, then receive fresh complete containment proof and independent
+  Sol, Luna, and literal Opus 5 reviews before the normal required-check,
+  CodeRabbit, and external-enforcement gates can be considered. The branch
+  remains `PARKED` until every listed gate is satisfied.
 - Forbidden interpretation: neither this ledger nor an agent verdict approves
   Product classifications or authorizes a Stage C migration/live apply.
+
+## Current exact review acceptance contract
+
+Historical `SHIP-WITH-FOLLOWUPS` records below remain provenance only. The
+current candidate qualifies for proof only when the resolved Opus review ends
+with exactly `FINAL_VERDICT: SHIP` and contains no actionable
+BLOCKER/HIGH/MED/LOW finding or required fix/follow-up. NIT-only polish remains
+nonblocking. Any different terminal token or contradictory structured prose
+invalidates the proof and starts a new exact-SHA correction cycle.
 
 ## Owner-review packet closeout — 2026-07-27
 
@@ -637,9 +701,10 @@ recorded elsewhere in this historical ledger.
 ## Owner gate after this mission
 
 The packet has been regenerated and verified. Mason must not review any private
-row yet: PR #246's current head must match a recorded exact-reviewed SHA, and
-any later head change invalidates prior head-bound evidence. Before any future
-publication, freshly refetch `origin/main` and verify it descends from
+row yet. PR #246 was merged externally while its later repair was unaccepted;
+that merge does not accept the rejected SHA. A separate follow-up PR's current
+head must match a recorded exact-reviewed SHA, and any later head change
+invalidates prior head-bound evidence. Before publication, freshly refetch `origin/main` and verify it descends from
 bootstrap floor `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`. Required checks,
 including Ubuntu PR CI, must be green, any real CodeRabbit finding resolved,
 and external trusted-workflow/ruleset activation plus post-activation proof
@@ -654,8 +719,422 @@ live mutation, flag enablement, deploy, or merge.
 ## Closeout
 
 - `DONE:` exact `07813f69` engineering proof, aggregate-only capture, manifest reproducibility, owner-sheet verification, normal merges `a9817b05` of historical main `48bd1982`, `c6c5ea3` of historical #245 main `0e058804`, and `98969765` of historical #247 main `07a3d483`, and exact `d38d41f`/`a2002c3c`/`a7506a01`/`3c156065`/`a10bad90`/`80741157` review outcomes are recorded above; technical Sol returned `CLEAN` for published `bc305778`; `3c156065` was non-final, `a10bad90` is a correction-review source, and `80741157` is the publication-reconciliation source; older packet hashes are invalidated.
-- `NOW:` PR #246's current head must match a recorded exact-reviewed SHA. Before publication, re-fetch `origin/main` and verify it descends from bootstrap floor `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`. Required PR checks and CodeRabbit resolution are pre-merge gates. Trusted-workflow/ruleset activation and post-activation proof are immediate post-merge gates before any later PR or private-sheet review. Mason must not begin private-sheet review.
-- `REMAINING:` protected PR #246 acceptance after all those gates, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet. Any future model alias must record its resolved model truthfully; the accepted review must remain bound to the current PR head.
+- `NOW:` freeze the reconciled repair SHA, run exact proof and fresh Luna/independent-Sol/literal-Opus-5 reviews, then publish a separate follow-up PR. Before publication, re-fetch `origin/main` and verify it descends from bootstrap floor `d787b7e0e1c9cb5eb85c86b448e68b1ca43fce9c`. Required PR checks and CodeRabbit resolution are pre-merge gates. Any still-missing trusted-workflow/ruleset proof remains an explicit external prerequisite before private-sheet review. Mason must not begin private-sheet review.
+- `REMAINING:` park the separate follow-up PR at an exact-reviewed green head, then Mason's row-by-row private-sheet review and explicit approval of the exact aggregate-bound packet after every external prerequisite. Any future model alias must record its resolved model truthfully; the accepted review must remain bound to the follow-up PR head.
 - `GUARD:` no Stage C SQL/migration/apply, live mutation, flag enablement, deploy, or merge is authorized by this packet record.
 - `NEEDS MASON:` no action until the external gates complete; afterward, row-by-row private-sheet review and explicit packet approval.
-- `VERDICT:` PARKED — PR #246 OPEN; CURRENT HEAD MUST MATCH A RECORDED EXACT-REVIEWED SHA, REQUIRED CHECKS/CODERABBIT, AND EXTERNAL TRUSTED-WORKFLOW/RULESET ACTIVATION PLUS PROOF PENDING
+- `VERDICT:` PARKED — PR #246 WAS MERGED EXTERNALLY; SEPARATE FOLLOW-UP PR EXACT-SHA PROOF/REVIEWS, REQUIRED CHECKS/CODERABBIT, AND ANY STILL-MISSING EXTERNAL ENFORCEMENT PROOF PENDING
+
+### Current external enforcement evidence — 2026-07-28
+
+- `CONFIRMED:` `origin/main` contains
+  `.github/workflows/phase3-private-artifact-containment.yml` and
+  `scripts/check-supplier-pricing-phase3-private-artifacts.mjs`. The workflow
+  runs as `Phase 3C Trusted Base Containment` on `pull_request_target` without
+  checking out or executing candidate code.
+- `MISSING:` active ruleset `protect-main` (`18904218`) requires only `Vercel`,
+  `Lint, Type Check, Test, Build`, and `SQL Migration Validation`; it does not
+  require `Phase 3C Trusted Base Containment`.
+- `DISPOSITION:` the follow-up PR may prove the trusted check runs, but it
+  remains `PARKED` until the exact check is externally required and enforcement
+  is proven. This mission does not authorize a ruleset or repository-setting
+  change.
+
+## Integrated cleanroom review cycle — 2026-07-28
+
+- Integrated lineage: `68907fd1c4c8b3b50397ad6e62a009c83d2e0680`,
+  `ef9eb2780647b83dad7906eb09f412dbfacd376a`,
+  `68aebbd597f95e4ecb23ac20019a3ee33f8ba227`,
+  `c8a7e12a72736f72c0df3c51e0b6594246c93fb9`, and rejected exact candidate
+  `f1d9d22023611b3f376d1e97d2dd854a887156e7`.
+- `PROOF — Ran/Saw:` the exact candidate's Windows Phase 3C packet and
+  simulated pre-push proof were green; its offline Linux proof was also green.
+- `REVIEW — Rejected:` independent Sol returned `FIX` for bracketed-severity
+  parser fail-open behavior and the nonliteral-Opus charter. Literal
+  `claude-opus-5` returned `NEEDS-WORK` because
+  `scripts/supplier-pricing-phase3-private-artifacts.mjs` was not itself a
+  risky path. Luna returned `FIX` for the already-known external bootstrap
+  trust boundary: the base lacks the checker/trusted target workflow, so a
+  candidate-controlled CI fallback cannot establish acceptance for its own
+  introducing PR.
+- `DISPOSITION:` `f1d9d22023611b3f376d1e97d2dd854a887156e7` remains rejected.
+  The bounded repair work after it is not reviewed evidence. PR #246 remains
+  `PARKED` pending a new exact-SHA proof/review cycle plus the external
+  trusted-workflow/ruleset activation and proof; this record authorizes no
+  merge, deploy, live mutation, Product classification, migration, or flag
+  change.
+
+## Rejected exact candidate — `a5a66753` (2026-07-28)
+
+- `PROOF — Ran/Saw:` Windows and offline Linux Phase 3C proof packets were
+  green for `a5a6675312971904a16a475ee1efef89df9f072b`.
+- `REVIEW — Rejected:` Sol returned `FIX` for the shared proof parser and
+  quote-aware Product CSV/TSV header detection. Luna returned `FIX` for the
+  wider wrapper grammar. Its external-bootstrap trust-boundary observation is
+  the already-known `PARKED` limitation, not a candidate defect. Literal
+  `claude-opus-5` returned `SHIP-for-PARK`, but that clean verdict was
+  overruled by the reproducible Sol/Luna defects.
+- `DISPOSITION:` bounded repair work after `a5a66753` is unreviewed evidence.
+  PR #246 remains `PARKED`; no merge, deploy, live mutation, Product
+  classification, migration, or flag authorization is granted here.
+
+## Rejected exact candidate — `12f19cb5` (2026-07-28)
+
+- `PROOF — Ran/Saw:` the exact Windows Phase 3C packet, simulated pre-push
+  containment, and network-disabled Linux exact-SHA packet were green for
+  `12f19cb583343bd890f5d8e65f6c9b204954c2be`.
+- `REVIEW — Rejected:` Luna returned actionable findings for confusable
+  Unicode/format characters in leading review labels, inconsistent
+  machine-verdict separator normalization, wrapped zero/`None` details, and
+  non-atomic `FIX/FOLLOW-UP (0)` parsing. Fresh independent Sol also reproduced
+  actionable punctuation-only headings, common paired quote wrappers,
+  CSV/TSV opposite-delimiter handling, and escaped-quote header manufacture.
+  Literal Opus's nonblocking parser nits and verdict are non-accepting for this
+  cycle because any actionable reviewer rejection invalidates the candidate.
+- `DISPOSITION:` `12f19cb583343bd890f5d8e65f6c9b204954c2be` remains rejected.
+  The bounded parser and regression repair after it was then-uncommitted and
+  remained unreviewed evidence until committed as `523d4412`. PR #246 remains
+  `PARKED`; no merge, deploy, live mutation, Product classification, migration,
+  flag, permission, or external-trust-setting authorization is granted here.
+
+## Rejected exact candidate — `523d4412` (2026-07-28)
+
+- `PROOF — Ran/Saw:` the exact Windows Phase 3C packet, simulated pre-push
+  containment, and network-disabled Linux exact-SHA packet were green for
+  `523d4412c7ca7f6c739297eb62a4e9de7e5da696`. The containment proof checked
+  51,770 paths, 7 commits, 51,855 candidates, and 777,197,147 logical bytes.
+- `OPUS 5 — Non-accepting after rejection:` literal `claude-opus-5 --effort
+  high` run `2026-07-28T12-23-58-050Z-690963cc` completed with no permission
+  denials and `FINAL_VERDICT: SHIP`. The later reproducible Sol rejection
+  overrules that otherwise clean exact-SHA verdict.
+- `REVIEW — Rejected:` fresh independent Sol reproduced two leading
+  format-character bypasses in both proof consumers:
+  `\u200b### HIGH` and `-\u200b HIGH` survived because Markdown stripping ran
+  before security folding. The same review found the missing straight
+  apostrophe paired wrapper and unmapped letter-L confusables U+04CF Cyrillic
+  small palochka and U+13DE Cherokee LE, including `BLOCKER`/adjacent action
+  token variants.
+- `LUNA — Rejected:` Luna independently proved that exhausting each bounded
+  normalization lane silently stopped instead of invalidating proof. The exact
+  false-clean classes were 193 leading U+200B characters, 13 leading Markdown
+  quote markers, and 24 balanced square-bracket wrapper layers before a HIGH
+  finding. Luna found no additional candidate defect outside this shared
+  parser.
+- `BASELINE FOLLOW-UP — Outside this Phase 3C repair:` Luna separately observed
+  that `.codex/hooks/production-action-guard.mjs` does not recognize the
+  `gh -R owner/repo api -X PUT .../pulls/246/merge` argument order. That gap was
+  not introduced by this candidate and must receive its own bounded guard
+  repair; it is not authorization to merge, change settings, or widen this
+  parser correction.
+- `DISPOSITION:` `523d4412c7ca7f6c739297eb62a4e9de7e5da696` remains rejected.
+  The commit containing the bounded Terra correction becomes the current
+  candidate when the orchestrator records its actual `git rev-parse HEAD`
+  after commit; this append-only ledger does not predict its own commit SHA.
+  PR #246 remains `PARKED`; no merge, deploy, live mutation, Product
+  classification, migration, flag, permission, or external-trust-setting
+  authorization is granted here.
+
+## Rejected exact candidate — `b2d55f77` (2026-07-28)
+
+- `REVIEW — Rejected:` fresh independent Sol returned `FIX` for seven
+  reproducible classes: required-work text in NIT inline/table lanes;
+  quoted-printable and percent/form transfer wrappers; SQLite headers;
+  Product `INSERT`/`COPY` column-list exports; one additional bounded nested
+  transfer layer; valid pre-push deletion records; and broad ignored backup
+  roots. The no-longer-current broad ignored-root behavior was local worktree
+  scope, not an outgoing-Git exemption.
+- `DISPOSITION:` `b2d55f77` remains rejected. The current bounded repair is
+  deliberately uncommitted and therefore cannot be review or acceptance
+  evidence for a later candidate.
+- `PROOF — Ran/Saw:` `node scripts/run-claude-review.test.mjs` and
+  `node scripts/write-codex-push-proof.test.mjs` passed. The full
+  `node scripts/supplier-pricing-phase3-private-artifacts.test.mjs` synthetic
+  suite passed in about 303 seconds, including every new transfer seam,
+  containment shape, deletion fixture, and canonical-path fixture.
+- `NOT VERIFIED:` no exact-SHA Phase 3C packet, fresh Luna, fresh independent
+  Sol, literal `claude-opus-5 --effort high`, PR checks, CodeRabbit resolution,
+  live state, deployment, migration, or private packet data was touched.
+- `NEXT SAFE CYCLE:` stage and commit the bounded repair; bind a new exact SHA;
+  rerun the full packet; then obtain fresh required reviews. PR #246 remains
+  `PARKED`; this ledger grants no merge, deploy, live mutation, Product
+  classification, migration/apply, flag change, permission change, deletion,
+  or force-push.
+
+## Rejected exact candidate — `7334639c` (2026-07-28)
+
+- `REVIEW — Rejected:`
+  `7334639cfa0dd1a3801ccbaec544120048beb2d7` is superseded. Luna reported
+  the HIGH same-day dated-backup filename exemption: arbitrary files such as
+  `backups/2026-07-28/supplier_pricing_phase3.json` skipped containment.
+  Independent Sol reported HIGH bypasses in proof-section hierarchy, bounded
+  line folding, late single percent/quoted-printable escapes, and SQL comments
+  around Product structures; Sol also reported LOW CSV internal-whitespace and
+  mixed SHA-1/SHA-256 deletion-record defects. Opus reported the MED
+  depth-zero transfer-decoder construction gap that made fourth-layer rejection
+  unreachable.
+- `DISPOSITION:` the bounded Terra repair began as local, uncommitted work in
+  `C:\Users\mason\.codex\worktrees\phase3c-cleanroom-20260728\CRX_Manager`.
+  It is not exact-SHA evidence and no acceptance, review verdict, external
+  gate, PR state, or production authority is inferred from it.
+- `EXTERNAL STATE CHANGE:` while the repair was still unaccepted, PR #246 was
+  merged externally as `1cba5b0f`. This loop did not authorize or perform that
+  merge. The external merge does not retroactively accept `7334639c` or the
+  unreviewed repair; the repair now requires a separate follow-up PR.
+- `REQUIRED NEXT PROOF:` freeze a new SHA, run the full packet and exact-SHA
+  proof, then obtain fresh Luna, independent Sol, and literal Opus 5 review.
+  No follow-up PR may merge under this loop; no deployment, migration/apply,
+  live data action, Product classification, flag change, permission change,
+  deletion, or force-push is authorized.
+
+## Rejected exact candidate — `ccbca683` (2026-07-28)
+
+- `REVIEW — Rejected:` exact candidate
+  `ccbca683fd34e70f96b88f6cb28d5bae2f9fcf53` had a HIGH containment
+  fail-open. Its depth-zero transfer target could distinguish a fourth wrapper
+  containing direct private structure from public content, but disabling
+  transfer inspection there let fifth, sixth, and seventh wrappers conceal the
+  same private format marker.
+- `FIX — Local bounded Terra correction:` retain three normal transfer layers,
+  then use a seven-layer iterative whole-wrapper overflow lane with 256 unique
+  states and four per-file scan budgets. It recognizes only syntactically
+  delimited assignment values, JSON-array strings, data-URI Base64 payloads,
+  and PEM at that boundary; it never tokenizes arbitrary source identifiers.
+  Public Base64 depths 4–10 remain allowed and depth 11 fails closed. The
+  superseded 48-layer/12-layer and broad-token prototypes are not evidence:
+  they either exceeded the corpus budget or falsely flagged legitimate SQL.
+- `PROOF — Ran/Saw:` the current synthetic packet passed in 433.5 seconds. It
+  covers deep/mixed wrappers, direct and seam controls, whitespace and escaped
+  whitespace, real migration controls, hex owner/Product CSV/SQL payloads,
+  maximal Base64 prefixes with hostile suffixes, data URIs, and JSON arrays.
+  The tracked/untracked worktree scan passed in 81.6 seconds: 2,497 paths,
+  2,505 candidates, and 83,995,714 logical bytes.
+- `PROOF — Rejected performance run:` root ran
+  `npm run check:phase3-private-artifacts` against the final dirty source with
+  a 1,500-second ceiling. It recorded exit `124` at 1,504 seconds without a
+  terminal checker result; the verified timed-out child was then stopped. This
+  is not a containment pass and the repair may not freeze until a later
+  ignored-inclusive run exits `0` inside the established corpus budget.
+- `NOT VERIFIED:` this local repair has no frozen exact SHA, complete
+  follow-up proof packet, independent Sol/Luna/literal Opus 5 verdict, PR
+  checks, CodeRabbit resolution, or live-service verification. Final full
+  ignored-file and exact object-range containment proofs remain pending. No
+  private packet data was accessed.
+- `EXTERNAL STATE CHANGE:` PR #246 was merged externally as `1cba5b0f` while
+  the repair remained unaccepted. This loop did not authorize or perform that
+  merge; it does not accept `ccbca683` or this local correction. A separate
+  follow-up PR remains `PARKED`.
+- `GUARD:` this record authorizes no follow-up merge, deploy, migration/apply,
+  live mutation, Product classification, flag/permission change, deletion,
+  force-push, or external enforcement-setting change.
+
+## SAFE PREP performance correction — full ignored-worktree PASS, reconciliation still gated (2026-07-28)
+
+- `REVIEW — Rejected performance evidence:` the root authoritative
+  `npm run check:phase3-private-artifacts` run recorded exit `124` at
+  1,504 seconds with no terminal checker result. A later code-only diagnostic
+  run recorded exit `1` at 877.775 seconds: ordinary public
+  `vendor-mapbox`, `axe.min`, and `mapbox-gl-dev` bundles exhausted the
+  overflow candidate cap. Neither run is a containment pass.
+- `FIX — Bounded relevance gate:` before an embedded overflow decode consumes
+  a finite candidate slot, it must contain direct private/container structure,
+  a supported whole next wrapper, or another syntactically delimited supported
+  transfer. Opaque binary decodes cannot create another supported syntactic
+  transfer and are not charged. Any relevant cap, state, byte, whitespace, or
+  depth exhaustion still rejects fail-closed. No ignored root, filename,
+  extension, packet pattern, archive, reparse point, symlink, double-read
+  identity check, or byte/candidate cap was exempted or relaxed.
+- `PROOF — Ran/Saw:`
+  `npm run test:supplier-pricing-phase3c-packet` passed with exit `0` in
+  401.056 seconds; it includes four real migration false controls and the new
+  dense-opaque/late-private overflow regression. `node
+  scripts/check-supplier-pricing-phase3-private-artifacts.mjs --pre-commit`
+  passed with exit `0` in 54.369 seconds: 2,497 paths, 2,505 candidates, and
+  84,002,780 logical bytes. Syntax checks and `git diff --check` passed; no
+  `PHASE3_DEBUG_OVERFLOW` or `PHASE3_OVERFLOW_TRACE` instrumentation remains.
+- `PROOF — Final ignored-worktree run:` `npm run
+  check:phase3-private-artifacts` passed with exit `0` in 849.080 seconds
+  (14m09s): `checked_paths=51774`, `scanned_candidates=51782`, and
+  `scanned_logical_bytes=772273786`. The frozen start/end SHA-256 hashes,
+  lengths, mtimes, and five-file `git diff --stat` were identical; no scanned
+  file changed during the authoritative run.
+- `DISPOSITION:` this pre-reconciliation proof is accepted for the local
+  performance repair. It is not current exact-head or release acceptance:
+  reconcile against current `origin/main`, freeze that exact head, and rerun
+  the exact-head proof before any review/PR acceptance. No deployment,
+  migration/apply, live-data action, Product classification,
+  flag/permission change, or merge is authorized by this SAFE PREP correction.
+
+## Rejected `ab5d2aa7` v3 correction intake — SAFE PREP only (2026-07-29)
+
+- `OWNER:` fresh Terra writer in
+  `C:\Users\mason\.codex\worktrees\phase3c-cleanroom-20260728\CRX_Manager`;
+  Sol remains the orchestrator. The original `phase3c-overnight-20260726`
+  worktree was repurposed by the unrelated pricing live-ledger closeout lane,
+  so Phase 3C relocated to the cleanroom to avoid writer overlap.
+- `CANDIDATE:` rejected `ab5d2aa7db3d514e1c7ed4d9d60d67df7f5f83d8`; merge-base
+  `7c096444fe98df8283f95e3076ec433c6422c506`; active branch
+  `codex/phase3c-containment-followup-v3-20260728`.
+- `RECONCILIATION:` pre-writer fetched record: `bedfe3f6` behind 2 / ahead 2
+  with no overlap against the 14-file lane. The shared ref then advanced to
+  `69d60b8b` (behind 3 / ahead 2) and overlaps `docs/CHANGELOG.md`; this is
+  `PARKED` pending later reconciliation before freeze/publication. No fetch,
+  rebase, merge, branch switch, PR action, acceptance, or current-main claim
+  occurred in this cycle.
+
+| Finding | Source / severity | Disposition / owner | Focused proof |
+|---|---|---|---|
+| Nested/bracketed and alternate-separator actionable labels, including `Required FIX`, minted clean proof. | Independent Sol HIGH | Bounded shared-parser repair — Terra. | Claude and Codex proof-consumer regressions. |
+| U+026A small-capital I escaped the security fold. | Sol HIGH; Luna LOW | Add the bounded `ɪ` to the shared fold — Terra. | Confusable `FɪX` regression in both consumers. |
+| A bold severity parent lost heading hierarchy before a subordinate Markdown heading. | Opus LOW | Give exact bold severity/action labels a virtual level matching `##` — Terra. | `**HIGH (0)**` then `### NIT` regression. |
+| Long NIT-only detail was refused by the short proof-token cap. | Opus LOW | Separate finite NIT required-work scan from label normalization — Terra. | Long NIT control plus explicit cap-refusal diagnostic. |
+| Imperative NIT prose could be mistaken for a FIX marker. | Opus NIT | Block only syntactic action labels or explicit required work — Terra. | `NIT: Fix the comment wording` control. |
+| Four Base64 wrappers around a contextual JSON-Unicode escaped payload bypassed overflow traversal. | Sol HIGH | Decode bounded transfer-safe JSON escapes in contextual values — Terra. | Four-wrapper escaped-Base64 direct and seam regression. |
+| Deep contextual Base64 alignment/prefix offsets bypassed detection. | Luna HIGH | Try only four legal contextual offsets; retain the no-bare-token rule — Terra. | Offsets 0–3 with seams. |
+| Opaque Base64 values could consume the finite overflow candidate budget before a later private value. | Luna MED | Preserve relevance-only charging; no cap weakening — Terra. | Dense opaque values followed by a private control. |
+| Product SQL recognition treated comment/literal text as executable SQL. | Luna MED | Skip bounded comments and quoted literals before command recognition — Terra. | Comment and string false controls plus executable controls. |
+| Overflow detection reported generic transfer depth after it had already found private structure. | Opus NIT | Return the structural reason first — Terra. | Deep direct-structure regression asserts the specific reason. |
+| Historical range inspection could be suspected of scanning an old/source blob. | Luna HIGH | Current source selects the raw diff destination object; retain the destination-blob regression — Terra. | `modified-private.txt` old-benign/new-private history fixture. |
+| Initial Claude bootstrap `git status` failure could be read as clean. | Luna HIGH | Make the initial status acquisition required and block with its Git diagnostic — Terra. | Simulated `git status --short` failure. |
+| Branch/base ownership and worktree provenance were contradictory. | All reviewers MED | Record relocation and both main snapshots without reconciling them — Terra / Sol. | This mission and ledger entry; reconciliation remains pending. |
+| Findings lacked a single durable intake record. | All reviewers MED | This table is the one intake record; do not duplicate acceptance claims. | Focused tests remain required before a future exact-SHA cycle. |
+
+- `GUARD:` PR #246 remains external non-acceptance provenance. This intake
+  authorizes no Product classification, flag enablement, permission/secret
+  change, private-packet access, migration/apply, live query or mutation,
+  deployment, deletion, push, PR action, merge, or force-push.
+
+## v5 cleanroom reconciliation — pre-freeze record (2026-07-29)
+
+- `OWNER/WORKTREE:` this bounded replay belongs only to
+  `C:\Users\mason\.codex\worktrees\phase3c-cleanroom-20260728\CRX_Manager`
+  on `codex/phase3c-containment-followup-v5-20260729`. The mission-named
+  overnight worktree belongs to the unrelated pricing-closeout lane and was not
+  accessed.
+- `BASE/OVERLAP:` local `origin/main` and HEAD are
+  `2ef9ab4bbf61e281f4b60c6424fe4974d84ec9c2`, with launch divergence `0/0`.
+  Moving-main commits `cf2d8a82` and `2ef9ab4b` overlap the replay only in
+  `docs/CHANGELOG.md`; their schema/generated/current-state/RPC and migration
+  renames are retained.
+- `SOURCE/PROOF:` v4 source
+  `54c4c80b15c40ee1e97957cc5b3e3f2e3be4dcd6` (parent
+  `c1e4ce40382b76d8bdb8912e60aebb61c4fe3e1a`) has exact Mason author and
+  committer identity and its exact packet passed exit `0` in `719007` ms. The
+  interrupted ignored-inclusive run is not proof; object-range/trusted-event
+  proof and Luna, independent-Sol, and literal Opus reviews never ran.
+- `STATE/GUARD:` this is the pre-freeze v5 record. Its completion path requires
+  a normal-hook freeze; no external merge, PR, push, or live action is
+  acceptance or authority. Final review still requires literal
+  `claude-opus-5 --effort high`; no Product classification, Stage C migration,
+  live action, flag/permission change, deploy, merge, deletion, or force-push
+  is authorized.
+
+## v6 moving-main reconciliation — local SAFE PREP candidate (2026-07-29)
+
+- `SOURCE/PROOF:` v5 `0229c0004dfc0cdab060bac49e027d0ecf9d4728` (parent
+  `2ef9ab4bbf61e281f4b60c6424fe4974d84ec9c2`) passed its normal hook. Its exact
+  packet passed exit `0` in `309855` ms with matching start/end SHA, and its
+  ignored-inclusive packet passed exit `0` in `1199401` ms with counters
+  `51819/0/51819/783040279` and matching clean start/end SHA. The object-range
+  wrapper timed out exit `124` at `604041` ms; its one CPU-active child ended
+  naturally around 20 minutes without recoverable terminal output. That is not
+  object-range proof. Trusted-event proof and all reviews never ran.
+- `RECONCILIATION:` `origin/main` advanced during v5 proof to
+  `1b2d90622fc66e7aaaa9ec2014ca87da6cfdf393`, so v5 is rejected as the
+  final-current candidate. v6 is the complete local replay on that base, on
+  `codex/phase3c-containment-followup-v6-20260729`; launch divergence is `0/0`.
+  The five-file main advance overlaps Phase 3C only in `docs/CHANGELOG.md`;
+  current-main known-issues, migration history, RPC-contract test, and forward
+  migration changes are retained.
+- `STATE/GUARD:` no current exact-SHA acceptance evidence exists for v6. A
+  normal-hook freeze, complete proof including object-range and trusted-event,
+  then fresh Luna, independent-Sol, and literal `claude-opus-5 --effort high`
+  reviews remain mandatory. No external merge, PR, push, or live action is
+  acceptance or authority; no Product classification, Stage C migration, live
+  action, flag/permission change, deploy, merge, deletion, or force-push is
+  authorized.
+
+## v9 moving-main overlap mapping — pre-freeze (2026-07-29)
+
+- `DIAGNOSTIC/STOP:` exact v6
+  `ad94317095b8aaac945dfb96007fbb105fe77724` passed a packet diagnostic exit
+  `0` in `342550` ms with the same start/end SHA. It is non-accepting because
+  the supervisory per-file course-control mapping became mandatory during that
+  run. No further v6 proof, trusted-event proof, or review ran.
+- `V7 PROOF/REJECTION:` exact v7
+  `9e89e837f14de2a950950e5f490a90bbe53344f5` passed its exact packet exit `0`
+  in `308663` ms with the same start/end SHA, and its ignored-inclusive packet
+  exit `0` in `1233604` ms with counters `51824/0/51824/783435326` and the same
+  clean start/end SHA. During that scan remote main advanced from `1b2d9062` to
+  `1e6c0426` through profile closeout, with Phase 3C overlap only in
+  `docs/CHANGELOG.md`. Therefore object-range/trusted-event proof and all
+  reviews did not run, and v7 is rejected as final-current.
+- `V8 PROOF/REJECTION:` exact v8
+  `0a771268e905f7a6452f317d1c94718133a0dd5e` passed its exact packet exit `0`
+  in `321338` ms with the same start/end SHA, and its ignored-inclusive packet
+  exit `0` in `1150855` ms with counters `51824/0/51824/783433680` and the same
+  clean start/end SHA. Main advanced during that scan from `1e6c0426` to
+  `fd677ff5` through `6b191b3f` linked-worktree apply-proof lookup and the
+  `fd677ff5` documentation refresh. Therefore object-range/trusted-event proof
+  and all reviews did not run, and v8 is rejected as final-current.
+- `OVERLAP/COMBINED-BEHAVIOR:` v9 begins directly at
+  `fd677ff573f14e126ef3f6b2fd7e29c01629e8ec` and squash-replays v8
+  `0a771268e905f7a6452f317d1c94718133a0dd5e`. The sole overlap is
+  `.claude/hooks/codex-push-lib.mjs`. The resulting file preserves main's
+  `sessionProofDirs` lookup, consumed by `migration-apply-guard`, and retains
+  Phase 3C's two exact `RISKY_PATH_RES` registrations. Focused local syntax,
+  `codex-push-lib`, and linked-worktree `migration-apply-guard` (`68`
+  assertions) checks pass. This is preservation of existing main behavior, not
+  a migration change or Phase 3C scope expansion.
+- `MAPPING RULE:` every non-document shared guard file below is retained only
+  for the named reproduced Phase 3C containment/review-proof finding. A table
+  row naming a historical candidate is evidence provenance, not acceptance of
+  that candidate. The three documents record status/evidence only and close no
+  guard finding. Supervisory review found three generic live-migration
+  proof-eligibility paths are not needed in Phase 3C SAFE PREP; they are
+  `PARKED/REMOVED` below. The active v9 net scope is 15 files: 13 shared guards
+  plus this loop and the ledger; changelog is an evidence-only collision surface
+  and is not in the active range.
+- `PRESERVATION/EXTRACTION:` immutable source remains locally reachable at
+  `codex/parked-migration-clean-proof-hardening-20260729` →
+  `ad94317095b8aaac945dfb96007fbb105fe77724`. Extract only
+  `.claude/commands/migration-review.md`,
+  `.claude/hooks/migration-apply-guard.mjs`, and
+  `.claude/hooks/migration-apply-guard.test.mjs` for a future separate
+  migration-hardening lane; it must isolate, review, and prove those files.
+  This preservation ref is source provenance, not acceptance or authority.
+- `CLEAN-HISTORY SPLIT:` rejected source
+  `0a771268e905f7a6452f317d1c94718133a0dd5e` remains preserved on v8. Active
+  `codex/phase3c-containment-followup-v9-20260729` starts directly from
+  `origin/main` `fd677ff573f14e126ef3f6b2fd7e29c01629e8ec`; its squash-staged
+  net range is exactly 15 approved files. `docs/CHANGELOG.md` remains exactly
+  new main and `PARKED/REMOVED` from this range, while remaining source
+  provenance at v8 SHA. The three generic migration paths are absent from v9
+  history/range. This split is scope control, not acceptance or authority.
+
+| Candidate file | Direct reproduced finding/evidence it closes |
+|---|---|
+| `.claude/commands/migration-review.md` | **PARKED/REMOVED** — generic live-migration proof eligibility, not required for Phase 3C SAFE PREP; preserved only at the named ref/SHA for separate isolation/review/proof. |
+| `.claude/hooks/codex-push-lib.mjs` | `f1d9d220` literal-Opus review: the Phase 3C checker itself was not a risky path and could self-weaken without independent review. v9 also preserves (without claiming as Phase 3C work) main's `6b191b3f` `sessionProofDirs` linked-worktree apply-proof lookup. |
+| `.claude/hooks/codex-push-lib.test.mjs` | Same `f1d9d220` risky-path finding; exact checker/writer and near-lookalike regressions prove the path boundary. The focused `migration-apply-guard` suite separately proves retained linked-worktree apply-proof behavior. |
+| `.claude/hooks/migration-apply-guard.mjs` | **PARKED/REMOVED** — generic live-migration proof eligibility, not required for Phase 3C SAFE PREP; preserved only at the named ref/SHA for separate isolation/review/proof. |
+| `.claude/hooks/migration-apply-guard.test.mjs` | **PARKED/REMOVED** — generic live-migration proof eligibility, not required for Phase 3C SAFE PREP; preserved only at the named ref/SHA for separate isolation/review/proof. |
+| `.codex/hooks/production-action-guard.test.mjs` | `C4-SELF-1`: inherited `GIT_*` redirection could mutate shared Git state; fixture now uses the complete sanitizer. |
+| `.husky/commit-msg` | `C4-SELF-1` wrong-author/shared-Git-state class; identity is checked before message acceptance. |
+| `.husky/pre-commit` | `C4-SELF-1` wrong-author/shared-Git-state class; identity is checked before and after the hook pipeline. |
+| `scripts/check-local-git-identity.mjs` | `C4-SELF-1`: resolve exact author, committer, and `core.bare=false` rather than trusting polluted config. |
+| `scripts/check-local-git-identity.test.mjs` | `C4-SELF-1`: hostile full `GIT_*` fixture proves the sacrificial parent remains untouched and bad identities fail. |
+| `scripts/check-supplier-pricing-phase3-private-artifacts.mjs` | `C4-SOL-1/2`; `b2d55f77`; `7334639c`; `ccbca683`; and `ab5d2aa7`: replacement/renamed-payload, wrapper/SQL/deletion/ignored-root, deep-transfer, and history-destination fail-opens. |
+| `scripts/supplier-pricing-phase3-private-artifacts.test.mjs` | Regression evidence for the same `C4-SOL-1/2`, `b2d55f77`, `7334639c`, `ccbca683`, and `ab5d2aa7` checker findings, including seams and false controls. |
+| `scripts/run-claude-review.mjs` | `12f19cb5`/`523d4412` parser bypasses plus `b2d55f77` and `ab5d2aa7` required-work, nested/padded severity, and confusable-label fail-opens. |
+| `scripts/run-claude-review.test.mjs` | Regression evidence for those `12f19cb5`, `523d4412`, `b2d55f77`, and `ab5d2aa7` proof-parser findings. |
+| `scripts/write-codex-push-proof.mjs` | `b2d55f77` required-work-in-NIT clean-proof bypass and the clean-only exact review acceptance contract. |
+| `scripts/write-codex-push-proof.test.mjs` | Regression evidence for `b2d55f77` required FIX/FOLLOW-UP and contradictory actionable findings before terminal `CLEAN`. |
+| `docs/CHANGELOG.md` | **PARKED/REMOVED** — evidence-only recurring collision surface, restored exactly to new main; source provenance remains at rejected v8 `0a771268…`. |
+| `docs/loops/supplier-pricing-phase3c-review-packet-ledger-2026-07-26.md` | Evidence/status only: v9 overlap mapping, exact proof limits, and parked gates. |
+| `docs/loops/supplier-pricing-phase3c-review-packet-loop-2026-07-26.md` | Evidence/status only: v9 pre-proof gate and SAFE PREP boundary. |
+
+- `STATE/GUARD:` v9 is not frozen and has no current exact-SHA acceptance
+  evidence. Do not start another proof or review until Sol accepts this mapping
+  and freezes the next candidate through the normal hook. Literal
+  `claude-opus-5 --effort high`, the SAFE PREP deny set, and all owner/external
+  gates remain mandatory.

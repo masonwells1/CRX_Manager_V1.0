@@ -1,5 +1,11 @@
 #!/usr/bin/env sh
 
+node scripts/check-local-git-identity.mjs || {
+  echo ""
+  echo "❌ GIT IDENTITY GUARD FAILED — commits must resolve to Mason <mason@croprxsolutions.com> with core.bare=false."
+  exit 1
+}
+
 # Commit messages are Git objects too. Reject a renamed/encoded private packet
 # before Git creates the commit; diagnostics never print message contents.
 node scripts/check-supplier-pricing-phase3-private-artifacts.mjs --commit-msg "${1:-}" || {

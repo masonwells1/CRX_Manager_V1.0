@@ -1,5 +1,15 @@
 #!/usr/bin/env sh
 
+# --- Local Git identity (HARD) ---
+# Resolve both identities Git will write, plus the repository's bare state,
+# before any other commit work. This blocks polluted shared configuration.
+echo "🪪 Checking local Git identity..."
+node scripts/check-local-git-identity.mjs || {
+  echo ""
+  echo "❌ GIT IDENTITY GUARD FAILED — commits must resolve to Mason <mason@croprxsolutions.com> with core.bare=false."
+  exit 1
+}
+
 # --- Ledger guard (HARD, Mason 2026-07-13): an agent-surface/policy change must
 # carry a ledger update (CHANGELOG / DECISION_LOG / KNOWN_ISSUES / manual doc /
 # loop ledger) in the SAME commit. Cheap check, so it runs FIRST — fail fast
@@ -152,6 +162,13 @@ else
     exit 1
   }
 fi
+
+echo "🪪 Rechecking local Git identity before commit..."
+node scripts/check-local-git-identity.mjs || {
+  echo ""
+  echo "❌ GIT IDENTITY GUARD FAILED — commit state changed after validation."
+  exit 1
+}
 
 echo ""
 echo "✅ Lint, build, tests, and map passed — committing."

@@ -64,13 +64,52 @@ export const PRODUCT_HEADER_REASON = 'private product CSV/TSV header structure';
 const STREAM_TAIL_CHARS = Math.max(4096, OWNER_DECISION_HEADERS.join(',').length * 4);
 const OWNER_HEADER_RECORD_DELIMITER_RE = /[\r\n\v\f\u0085\u2028\u2029\u001c-\u001f]/u;
 const BASE64_TRANSFER_CHUNK_BYTES = 64 * 1024;
+// Transfer decoding is intentionally shallow. Three layers cover the realistic
+// wrappers reviewers reproduced (for example Base64(hex(packet))) without an
+// unbounded recursive decoder that can amplify attacker-controlled nesting.
+const MAX_TRANSFER_DECODE_DEPTH = 3;
+// Once the normal three-layer budget is spent, retain a separate seven-layer
+// overflow probe. It is deliberately an iterative whole-wrapper traversal,
+// rather than another copy of the general streaming decoder at every level:
+// that general decoder has several legitimate format lanes and recursively
+// composing it made an untrusted deep public token multiply scanner work.
+// Seven additional layers cover the required public depth-ten controls and
+// leave a deliberately narrow fail-closed limit before an attacker can turn nesting
+// into unbounded runtime. A deeper syntactically valid chain is rejected,
+// regardless of whether its eventual payload is private or public.
+const MAX_TRANSFER_OVERFLOW_DECODE_DEPTH = 7;
+const MAX_TRANSFER_OVERFLOW_STATES = 256;
+const MAX_TRANSFER_OVERFLOW_TOTAL_BYTES = MAX_STRUCTURAL_SCAN_BYTES * 4;
+const MIN_EMBEDDED_TRANSFER_TOKEN_CHARS = 32;
+const MAX_TRANSFER_OVERFLOW_EMBEDDED_CANDIDATES = 32;
+const TRANSFER_DECODE_DEPTH_REASON = 'nested encoded transfer candidate exceeds bounded decode depth';
 const BASE64_TRANSFER_CHARACTERS_RE = /^[A-Za-z0-9+/_=-]*$/;
 const BASE64_TRANSFER_BYTE_ALLOWED = new Uint8Array(256);
 for (const character of 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_=-\t\n\v\f\r ') BASE64_TRANSFER_BYTE_ALLOWED[character.charCodeAt(0)] = 1;
 const MAX_EMBEDDED_BASE64_WHITESPACE_BYTES = 4096;
 const MAX_EMBEDDED_HEX_WHITESPACE_BYTES = 4096;
-const TOOL_OWNED_IGNORED_PREFIXES = new Set(['node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/', '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/', 'output/playwright/', 'output/phase1a-db/']);
-const OPERATOR_OWNED_IGNORED_PREFIXES = new Set(['backups/', '.perf-sweep-data/', '.epa-data-quality/', '.vercel/']);
+// Broad ignored roots are not a containment exemption. Only canonical local
+// backup output and named tool metadata can skip a read while Git still marks
+// them ignored; every other file under those roots remains a packet candidate.
+const OPERATOR_OWNED_IGNORED_ROOTS = new Set(['backups/', '.perf-sweep-data/', '.epa-data-quality/', '.vercel/']);
+const OPERATOR_OWNED_IGNORED_METADATA_PATHS = new Set([
+  'backups/LATEST-OK.json',
+  '.epa-data-quality/manifest.json', '.epa-data-quality/report.md',
+  '.vercel/project.json',
+]);
+const BACKUP_DATE_RE = /^\d{4}-\d{2}-\d{2}$/u;
+const BACKUP_MANIFEST_PATH_RE = /^backups\/(\d{4}-\d{2}-\d{2})\/manifest\.json$/u;
+const BACKUP_TABLE_NAME_RE = /^[a-z_][a-z0-9_]*$/u;
+const MAX_BACKUP_MANIFEST_BYTES = 1024 * 1024;
+const MAX_PRODUCT_SQL_COLUMN_LIST_CHARS = 2048;
+const MAX_SQL_TRIVIA_CHARS = 2048;
+const MAX_SQL_IDENTIFIER_CHARS = 256;
+const MAX_PRODUCT_HEADER_CELL_CHARS = 256;
+const TOOL_OWNED_IGNORED_PREFIXES = new Set([
+  'node_modules/', 'dist/', 'dist-ssr/', 'coverage/', 'playwright-report/',
+  '.playwright-mcp/', '.playwright-cli/', 'graphify-out/', 'test-results/',
+  'output/playwright/', 'output/phase1a-db/',
+]);
 
 function unsafeStructuralSignatureExemptionPath(repoPath) {
   if (typeof repoPath !== 'string' || repoPath.length === 0 || repoPath.includes('\\') || repoPath.includes('\0')) return 'path must be a non-empty normalized POSIX path';
@@ -79,7 +118,7 @@ function unsafeStructuralSignatureExemptionPath(repoPath) {
   const segments = repoPath.split('/');
   if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) return 'path must not contain empty or traversal segments';
   if (segments.some(segment => segment.toLowerCase() === 'private-artifacts' || segment.toLowerCase() === '.git')) return 'path must not be inside a private-artifact or Git administration path';
-  if ([...TOOL_OWNED_IGNORED_PREFIXES, ...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => repoPath.startsWith(prefix))) return 'path must not use a tool-owned or ignored prefix';
+  if ([...TOOL_OWNED_IGNORED_PREFIXES, ...OPERATOR_OWNED_IGNORED_ROOTS].some(prefix => repoPath.startsWith(prefix))) return 'path must not use a tool-owned or ignored prefix';
   return null;
 }
 
@@ -100,33 +139,49 @@ export function validateStructuralSignatureExemptions(exemptions) {
   return Object.freeze(validated);
 }
 
-export function validateStructuralSignatureHistoryExemptions(exemptions) {
-  if (!exemptions || typeof exemptions !== 'object' || Array.isArray(exemptions)) throw new Error('private Phase 3C historical structural-signature exemptions must be an object');
-  const validated = {};
-  for (const [identity, reason] of Object.entries(exemptions)) {
-    const match = /^([0-9a-f]{40,64}):(.+)$/u.exec(identity);
-    if (!match) throw new Error('private Phase 3C historical structural-signature exemption requires an exact commit:path identity');
-    const pathError = unsafeStructuralSignatureExemptionPath(match[2]);
+export const STRUCTURAL_SIGNATURE_EXEMPTIONS = validateStructuralSignatureExemptions({
+});
+const STRUCTURAL_SIGNATURE_EXEMPTION_PATHS = new Set(Object.keys(STRUCTURAL_SIGNATURE_EXEMPTIONS));
+
+export function validateHistoricalStructuralSignatureExemptions(exemptions) {
+  if (!Array.isArray(exemptions)) throw new Error('private Phase 3C historical structural-signature exemptions must be an array');
+  const identities = new Set();
+  const validated = [];
+  for (const exemption of exemptions) {
+    if (!exemption || typeof exemption !== 'object' || Array.isArray(exemption)) throw new Error('private Phase 3C historical structural-signature exemption must be an object');
+    const commit = String(exemption.commit || '').toLowerCase();
+    const repoPath = String(exemption.repoPath || '');
+    if (!/^[0-9a-f]{40}$/u.test(commit)) throw new Error('private Phase 3C historical structural-signature exemption requires an exact SHA-1 commit');
+    const pathError = unsafeStructuralSignatureExemptionPath(repoPath);
     if (pathError) throw new Error(`private Phase 3C historical structural-signature exemption rejected: ${pathError}`);
-    if (typeof reason !== 'string' || reason.trim().length < 25) throw new Error(`private Phase 3C historical structural-signature exemption for ${identity} requires a concrete review reason`);
-    validated[identity] = reason.trim();
+    if (exemption.reason !== STRUCTURAL_SIGNATURE_REASON) throw new Error('private Phase 3C historical structural-signature exemption requires the exact structural-signature reason');
+    if (typeof exemption.rationale !== 'string' || exemption.rationale.trim().length < 25) throw new Error('private Phase 3C historical structural-signature exemption requires a concrete review rationale');
+    const identity = `${commit}\0${repoPath}\0${exemption.reason}`;
+    if (identities.has(identity)) throw new Error('private Phase 3C historical structural-signature exemption is duplicated');
+    identities.add(identity);
+    validated.push(Object.freeze({
+      commit,
+      repoPath,
+      reason: exemption.reason,
+      rationale: exemption.rationale.trim(),
+    }));
   }
   return Object.freeze(validated);
 }
 
-export const STRUCTURAL_SIGNATURE_EXEMPTIONS = validateStructuralSignatureExemptions({
-});
-const STRUCTURAL_SIGNATURE_EXEMPTION_PATHS = new Set(Object.keys(STRUCTURAL_SIGNATURE_EXEMPTIONS));
-const REVIEWED_SYNTHETIC_HISTORY_REASON = 'Reviewed synthetic scanner test source predating split-key fixture construction; contains no private packet rows.';
-export const STRUCTURAL_SIGNATURE_HISTORY_EXEMPTIONS = validateStructuralSignatureHistoryExemptions({
-  'fa78c4f76808159897b5bd3d9d29fd04ffa24341:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
-  '5e3bb07fa835928c951ee2b6dbd42315821bb7c9:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
-  '075d47e9eec1970935ed1da2e85b90fd7d0c0540:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
-  'dc6d4d47ad33dfe64b31295fffac39c980e15f2f:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
-  '84f0302d6c1ff5b1f7e4a858197381cea48fbff0:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
-  'c9ace3027bb4afcddb76adc128156e97eb63a12e:scripts/supplier-pricing-phase3-private-artifacts.test.mjs': REVIEWED_SYNTHETIC_HISTORY_REASON,
-});
-const STRUCTURAL_SIGNATURE_HISTORY_EXEMPTION_IDENTITIES = new Set(Object.keys(STRUCTURAL_SIGNATURE_HISTORY_EXEMPTIONS));
+const REVIEWED_HISTORICAL_FIXTURE_PATH = 'scripts/supplier-pricing-phase3-private-artifacts.test.mjs';
+const REVIEWED_HISTORICAL_FIXTURE_RATIONALE = 'Reviewed immutable synthetic scanner-test fixture revision; contains no private packet data.';
+export const HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS = validateHistoricalStructuralSignatureExemptions([
+  { commit: 'fa78c4f76808159897b5bd3d9d29fd04ffa24341', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: '5e3bb07fa835928c951ee2b6dbd42315821bb7c9', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: '075d47e9eec1970935ed1da2e85b90fd7d0c0540', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: 'dc6d4d47ad33dfe64b31295fffac39c980e15f2f', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: '84f0302d6c1ff5b1f7e4a858197381cea48fbff0', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+  { commit: 'c9ace3027bb4afcddb76adc128156e97eb63a12e', repoPath: REVIEWED_HISTORICAL_FIXTURE_PATH, reason: STRUCTURAL_SIGNATURE_REASON, rationale: REVIEWED_HISTORICAL_FIXTURE_RATIONALE },
+]);
+const HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTION_IDENTITIES = new Set(
+  HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTIONS.map(({ commit, repoPath, reason }) => `${commit}\0${repoPath}\0${reason}`),
+);
 
 /**
  * Husky and Git can export GIT_DIR/GIT_INDEX_FILE/etc. Those variables would
@@ -205,18 +260,15 @@ export function forbiddenArtifactReason(repoPath) {
 export function findForbiddenPrivateArtifactPaths(paths) {
   return paths.map(repoPath => ({ repoPath, reason: forbiddenArtifactReason(repoPath) })).filter(item => item.reason);
 }
-export function isStructuralSignatureExempt(repoPath, reason, historyIdentity = null) {
-  if (reason !== STRUCTURAL_SIGNATURE_REASON) return false;
+export function isStructuralSignatureExempt(repoPath, reason, historyCommit = null) {
   const normalizedPath = String(repoPath);
+  if (reason !== STRUCTURAL_SIGNATURE_REASON) return false;
   if (STRUCTURAL_SIGNATURE_EXEMPTION_PATHS.has(normalizedPath)) return true;
-  const identity = String(historyIdentity || '');
-  const separator = identity.indexOf(':');
-  return separator > 0 &&
-    identity.slice(separator + 1) === normalizedPath &&
-    STRUCTURAL_SIGNATURE_HISTORY_EXEMPTION_IDENTITIES.has(identity);
+  if (typeof historyCommit !== 'string') return false;
+  return HISTORICAL_STRUCTURAL_SIGNATURE_EXEMPTION_IDENTITIES.has(`${historyCommit.toLowerCase()}\0${normalizedPath}\0${reason}`);
 }
-function acceptedStructuralReason(repoPath, reason, historyIdentity = null) {
-  return reason && !isStructuralSignatureExempt(repoPath, reason, historyIdentity) ? reason : null;
+function acceptedStructuralReason(repoPath, reason, historyCommit = null) {
+  return reason && !isStructuralSignatureExempt(repoPath, reason, historyCommit) ? reason : null;
 }
 function bareRepositoryObjectRoot(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
@@ -239,7 +291,41 @@ function isToolOwnedIgnoredPath(repoPath) {
 }
 function isOperatorOwnedIgnoredPath(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
-  return [...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
+  return OPERATOR_OWNED_IGNORED_METADATA_PATHS.has(normalized);
+}
+function validDatedBackupManifest(value, date) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (value.backup_dir !== date || !Number.isSafeInteger(value.expected_tables) || value.expected_tables < 0
+    || !Number.isSafeInteger(value.table_count) || value.table_count < 0
+    || !value.tables || typeof value.tables !== 'object' || Array.isArray(value.tables)) return false;
+  const tables = Object.entries(value.tables);
+  if (value.expected_tables !== tables.length || value.table_count !== tables.length) return false;
+  return tables.every(([table, metadata]) => BACKUP_TABLE_NAME_RE.test(table)
+    && metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    && Number.isSafeInteger(metadata.rows) && metadata.rows >= 0
+    && Number.isSafeInteger(metadata.bytes) && metadata.bytes >= 0);
+}
+function verifiedDatedBackupIgnoredPaths(root, ignored, cache) {
+  const approved = new Set();
+  for (const repoPath of ignored) {
+    const match = BACKUP_MANIFEST_PATH_RE.exec(repoPath.replaceAll('\\', '/'));
+    if (!match || !BACKUP_DATE_RE.test(match[1])) continue;
+    let candidate;
+    try {
+      candidate = readWorktreeCandidate(root, repoPath, { maxBytes: MAX_BACKUP_MANIFEST_BYTES, cache });
+    } catch (_error) {
+      // An unreadable, non-regular, over-bound, or racing manifest never
+      // authorizes its siblings. The ordinary candidate scan remains the
+      // fail-closed fallback for every dated-backup file.
+      continue;
+    }
+    let manifest;
+    try { manifest = JSON.parse(candidate.bytes.toString('utf8')); } catch (_error) { continue; }
+    if (!validDatedBackupManifest(manifest, match[1])) continue;
+    approved.add(repoPath);
+    for (const table of Object.keys(manifest.tables)) approved.add(`backups/${match[1]}/${table}.json`);
+  }
+  return approved;
 }
 function bareRepositoryRoots(paths) {
   const pathSet = new Set(paths.map(repoPath => repoPath.replaceAll('\\', '/')));
@@ -365,6 +451,213 @@ function isOwnerDecisionHeaderLine(line) {
 function ownerDecisionHeaderReason(text) {
   return text.split(OWNER_HEADER_RECORD_DELIMITER_RE).some(isOwnerDecisionHeaderLine) ? 'owner decision sheet CSV header structure' : null;
 }
+function normalizeSqlColumnName(value) {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith('`') && trimmed.endsWith('`'))
+    || (trimmed.startsWith('[') && trimmed.endsWith(']'))) return trimmed.slice(1, -1).toLowerCase();
+  return trimmed.toLowerCase();
+}
+function sqlTrivia(text, offset, { final = true } = {}) {
+  let cursor = offset;
+  let consumed = 0;
+  const admit = amount => {
+    consumed += amount;
+    return consumed <= MAX_SQL_TRIVIA_CHARS;
+  };
+  while (cursor < text.length) {
+    const whitespace = /^[\t\n\v\f\r ]+/u.exec(text.slice(cursor));
+    if (whitespace) {
+      if (!admit(whitespace[0].length)) return { error: true };
+      cursor += whitespace[0].length;
+      continue;
+    }
+    if (text.startsWith('--', cursor)) {
+      const end = text.indexOf('\n', cursor + 2);
+      if (end < 0) {
+        if (!admit(text.length - cursor)) return { error: true };
+        return final ? { error: true } : { incomplete: true };
+      }
+      if (!admit(end + 1 - cursor)) return { error: true };
+      cursor = end + 1;
+      continue;
+    }
+    if (text.startsWith('/*', cursor)) {
+      const end = text.indexOf('*/', cursor + 2);
+      if (end < 0) {
+        if (!admit(text.length - cursor)) return { error: true };
+        return final ? { error: true } : { incomplete: true };
+      }
+      if (!admit(end + 2 - cursor)) return { error: true };
+      cursor = end + 2;
+      continue;
+    }
+    break;
+  }
+  return { index: cursor };
+}
+function sqlIdentifier(text, offset, { final = true } = {}) {
+  if (offset >= text.length) return final ? { none: true } : { incomplete: true };
+  const opening = text[offset];
+  const closing = opening === '"' ? '"' : opening === '`' ? '`' : opening === '[' ? ']' : null;
+  if (!closing) {
+    const match = /^[A-Za-z_][A-Za-z0-9_$]*/u.exec(text.slice(offset));
+    return match ? { value: match[0].toLowerCase(), index: offset + match[0].length } : { none: true };
+  }
+  let value = '';
+  let cursor = offset + 1;
+  while (cursor < text.length) {
+    if (text[cursor] !== closing) {
+      if (value.length >= MAX_SQL_IDENTIFIER_CHARS) return { error: true };
+      value += text[cursor++];
+      continue;
+    }
+    if (closing !== ']' && text[cursor + 1] === closing) {
+      if (value.length >= MAX_SQL_IDENTIFIER_CHARS) return { error: true };
+      value += closing; cursor += 2;
+      continue;
+    }
+    return { value: value.toLowerCase(), index: cursor + 1 };
+  }
+  return final ? { error: true } : { incomplete: true };
+}
+function sqlKeywordAt(text, offset, keyword) {
+  const candidate = text.slice(offset, offset + keyword.length);
+  if (candidate.toUpperCase() !== keyword) return false;
+  return !/[A-Za-z0-9_$]/u.test(text[offset - 1] ?? '') && !/[A-Za-z0-9_$]/u.test(text[offset + keyword.length] ?? '');
+}
+function hasProductSqlColumnHints(value) {
+  const normalized = String(value || '').toLowerCase();
+  return PRODUCT_ROW_KEYS.every(key => new RegExp(`\\b${key}\\b`, 'u').test(normalized));
+}
+function sqlNonCodeSpanEnd(text, offset) {
+  if (text.startsWith('--', offset)) {
+    const end = text.indexOf('\n', offset + 2);
+    return end === -1 ? text.length : end + 1;
+  }
+  if (text.startsWith('/*', offset)) {
+    const end = text.indexOf('*/', offset + 2);
+    return end === -1 ? text.length : end + 2;
+  }
+  const quote = text[offset];
+  if (quote === "'" || quote === '"') {
+    let cursor = offset + 1;
+    while (cursor < text.length) {
+      if (text[cursor] !== quote) { cursor += 1; continue; }
+      if (text[cursor + 1] === quote) { cursor += 2; continue; }
+      return cursor + 1;
+    }
+    return text.length;
+  }
+  if (quote === '$') {
+    const delimiter = /^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/u.exec(text.slice(offset))?.[0];
+    if (delimiter) {
+      const end = text.indexOf(delimiter, offset + delimiter.length);
+      return end === -1 ? text.length : end + delimiter.length;
+    }
+  }
+  return null;
+}
+function productSqlColumnListReason(text, { final = true } = {}) {
+  // A deliberately small SQL reader accepts only the relation/column shape we
+  // need. SQL comments are trivia, not text: regex whitespace could let a
+  // comment hide `INSERT INTO public.products` or a Product column. Every
+  // relevant unterminated or over-bound trivia run refuses proof instead.
+  const source = String(text || '');
+  for (let commandOffset = 0; commandOffset < source.length;) {
+    const nonCodeEnd = sqlNonCodeSpanEnd(source, commandOffset);
+    if (nonCodeEnd !== null) { commandOffset = nonCodeEnd; continue; }
+    const commandName = sqlKeywordAt(source, commandOffset, 'INSERT')
+      ? 'INSERT'
+      : sqlKeywordAt(source, commandOffset, 'COPY')
+        ? 'COPY'
+        : null;
+    if (!commandName) { commandOffset += 1; continue; }
+    commandOffset += commandName.length;
+    let cursor = commandOffset;
+    let trivia = sqlTrivia(source, cursor, { final });
+    // Before the Product relation is known, an over-bound comment is merely
+    // an unrelated INSERT/COPY lookalike. Small comments still parse through
+    // to the relation; fail-closed bounds begin once `products` is established.
+    if (trivia.error) continue;
+    if (trivia.incomplete) continue;
+    cursor = trivia.index;
+    if (commandName === 'INSERT') {
+      if (!sqlKeywordAt(source, cursor, 'INTO')) continue;
+      cursor += 4;
+      trivia = sqlTrivia(source, cursor, { final });
+      if (trivia.error) continue;
+      if (trivia.incomplete) continue;
+      cursor = trivia.index;
+    }
+    let relation = sqlIdentifier(source, cursor, { final });
+    if (relation.error) continue;
+    if (relation.incomplete || relation.none) continue;
+    cursor = relation.index;
+    trivia = sqlTrivia(source, cursor, { final });
+    if (trivia.error) {
+      if (relation.value === 'products' && hasProductSqlColumnHints(source.slice(cursor))) return 'private product SQL candidate has unterminated or overbound trivia';
+      continue;
+    }
+    if (trivia.incomplete) continue;
+    cursor = trivia.index;
+    if (source[cursor] === '.') {
+      cursor += 1;
+      trivia = sqlTrivia(source, cursor, { final });
+      if (trivia.error) continue;
+      if (trivia.incomplete) continue;
+      if (relation.value !== 'public') continue;
+      relation = sqlIdentifier(source, trivia.index, { final });
+      if (relation.error) continue;
+      if (relation.incomplete || relation.none) continue;
+      cursor = relation.index;
+      trivia = sqlTrivia(source, cursor, { final });
+      if (trivia.error) {
+        if (relation.value === 'products' && hasProductSqlColumnHints(source.slice(cursor))) return 'private product SQL candidate has unterminated or overbound trivia';
+        continue;
+      }
+      if (trivia.incomplete) continue;
+      cursor = trivia.index;
+    }
+    if (relation.value !== 'products') continue;
+    if (source[cursor] !== '(') continue;
+    const listStart = cursor;
+    cursor += 1;
+    const columns = new Set();
+    for (;;) {
+      if (cursor - listStart > MAX_PRODUCT_SQL_COLUMN_LIST_CHARS) return 'private product SQL candidate exceeds bounded column-list limit';
+      trivia = sqlTrivia(source, cursor, { final });
+      if (trivia.error) {
+        if (hasProductSqlColumnHints(source.slice(listStart))) return 'private product SQL candidate has unterminated or overbound trivia';
+        break;
+      }
+      if (trivia.incomplete) break;
+      cursor = trivia.index;
+      const column = sqlIdentifier(source, cursor, { final });
+      if (column.error) {
+        if (hasProductSqlColumnHints(source.slice(listStart))) return 'private product SQL candidate has unterminated or overbound trivia';
+        break;
+      }
+      if (column.incomplete || column.none) break;
+      columns.add(normalizeSqlColumnName(column.value));
+      cursor = column.index;
+      trivia = sqlTrivia(source, cursor, { final });
+      if (trivia.error) {
+        if (hasProductSqlColumnHints(source.slice(listStart))) return 'private product SQL candidate has unterminated or overbound trivia';
+        break;
+      }
+      if (trivia.incomplete) break;
+      cursor = trivia.index;
+      if (source[cursor] === ')') {
+        if (PRODUCT_ROW_KEYS.every(key => columns.has(key))) return 'private product SQL INSERT/COPY column structure';
+        break;
+      }
+      if (source[cursor] !== ',') break;
+      cursor += 1;
+    }
+  }
+  return null;
+}
 function decodedTextCandidateReason(candidates) {
   for (const text of candidates) {
     const trimmed = text.trimStart();
@@ -376,7 +669,7 @@ function decodedTextCandidateReason(candidates) {
     }
   }
   for (const text of candidates) {
-    const textualReason = textualJsonStructureReason(text) ?? ownerDecisionHeaderReason(text);
+    const textualReason = textualJsonStructureReason(text) ?? ownerDecisionHeaderReason(text) ?? productSqlColumnListReason(text);
     if (textualReason) return textualReason;
   }
   return null;
@@ -511,6 +804,15 @@ function hasPlausibleGitPackHeader(source, offset) {
   const objectCount = source.readUInt32BE(offset + 8);
   return (version === 2 || version === 3) && objectCount <= 100_000_000;
 }
+function hasPlausibleSqliteHeader(source, offset) {
+  if (!bytesAt(source, offset, [0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00])
+    || offset + 24 > source.length) return false;
+  const pageSize = source.readUInt16BE(offset + 16);
+  return (pageSize === 1 || (pageSize >= 512 && pageSize <= 32768 && (pageSize & (pageSize - 1)) === 0))
+    && (source[offset + 18] === 1 || source[offset + 18] === 2)
+    && (source[offset + 19] === 1 || source[offset + 19] === 2)
+    && source[offset + 21] === 64 && source[offset + 22] === 32 && source[offset + 23] === 32;
+}
 function hasSkippableFrame(source, offset) {
   if (offset < 0 || offset + 8 > source.length || source[offset] < 0x50 || source[offset] > 0x5f
     || !bytesAt(source, offset + 1, [0x2a, 0x4d, 0x18])) return false;
@@ -539,6 +841,7 @@ function compressedArchiveReason(bytes) {
     for (let index = source.indexOf(prefix); index !== -1; index = source.indexOf(prefix, index + 1)) if (validator(index)) return true;
     return false;
   };
+  if (findValidated(Buffer.from([0x53, 0x51, 0x4c, 0x69]), index => hasPlausibleSqliteHeader(source, index))) return 'database container cannot be inspected';
   if (findValidated(Buffer.from([0x50, 0x4b, 0x03, 0x04]), index => hasPlausibleZipLocalHeader(source, index))
     || findValidated(Buffer.from([0x50, 0x4b, 0x05, 0x06]), index => hasPlausibleZipEocd(source, index))) return 'compressed archive container cannot be inspected';
   const gzipPrefix = Buffer.from([0x1f, 0x8b, 0x08]);
@@ -651,7 +954,7 @@ function canonicalWorktreeCandidate(root, repoPath, cache = null) {
   if (!parentEntry.isDirectory() || parentEntry.isSymbolicLink()) throw new Error('private Phase 3C worktree candidate parent is a symlink, junction, or escapes the repository');
   const cachedParent = cache?.parents.get(parent);
   let canonicalParent;
-  if (cachedParent && sameFileIdentity(cachedParent, parentEntry)) canonicalParent = parent;
+  if (cachedParent && sameWorktreeStatIdentity(cachedParent, parentEntry)) canonicalParent = parent;
   else {
     canonicalParent = realpathSync(parent);
     cache?.parents.set(parent, parentEntry);
@@ -719,10 +1022,23 @@ function createOwnerHeaderStreamDetector() {
     finish() { finishLine(); return found; },
   };
 }
-function createProductHeaderStreamDetector() {
-  const canonicalHeader = PRODUCT_ROW_KEYS.join(',');
-  let line = '';
-  let discarded = false;
+function createProductHeaderDialectStreamDetector(dialectDelimiter) {
+  const requiredHeaders = new Set(PRODUCT_ROW_KEYS);
+  const matchedHeaders = new Set();
+  let cell = '';
+  let discardedCell = false;
+  let sawDelimiter = false;
+  let invalidLine = false;
+  let inQuotes = false;
+  let pendingQuote = false;
+  let afterQuote = false;
+  // If a quoted cell is still open at EOF, its commas/tabs are ambiguous. Keep
+  // only bounded header-sized fragments so an unterminated quote cannot hide a
+  // complete Product header while a valid quoted extra remains ordinary data.
+  const unclosedQuoteHeaders = new Set();
+  let unclosedQuoteCell = '';
+  let discardedUnclosedQuoteCell = false;
+  let sawUnclosedQuoteDelimiter = false;
   let found = false;
   const isPaddingWhitespace = character => {
     const code = character.codePointAt(0);
@@ -731,22 +1047,174 @@ function createProductHeaderStreamDetector() {
     return code === 0x00a0 || code === 0x1680 || (code >= 0x2000 && code <= 0x200a)
       || code === 0x202f || code === 0x205f || code === 0x3000 || code === 0xfeff;
   };
+  const addHeader = (target, value, discarded) => {
+    const normalized = normalizeCsvHeaderCell(value);
+    if (!discarded && requiredHeaders.has(normalized)) target.add(normalized);
+  };
+  const appendCellCharacter = character => {
+    // `trim()` in normalizeCsvHeaderCell removes exterior padding. Keep every
+    // interior byte here: compacting whitespace would turn product_ name (or
+    // a quoted product_\nname) into the private product_name header.
+    if (cell.length < MAX_PRODUCT_HEADER_CELL_CHARS) cell += character;
+    else discardedCell = true;
+  };
+  const appendEscapedQuote = () => {
+    if (cell.length < MAX_PRODUCT_HEADER_CELL_CHARS) cell += '"';
+    else discardedCell = true;
+    if (unclosedQuoteCell.length < MAX_PRODUCT_HEADER_CELL_CHARS) unclosedQuoteCell += '"';
+    else discardedUnclosedQuoteCell = true;
+  };
+  const appendUnclosedQuoteCharacter = character => {
+    if (unclosedQuoteCell.length < MAX_PRODUCT_HEADER_CELL_CHARS) unclosedQuoteCell += character;
+    else discardedUnclosedQuoteCell = true;
+  };
+  const finishUnclosedQuoteCell = () => {
+    addHeader(unclosedQuoteHeaders, unclosedQuoteCell, discardedUnclosedQuoteCell);
+    unclosedQuoteCell = '';
+    discardedUnclosedQuoteCell = false;
+  };
+  const resetUnclosedQuoteState = () => {
+    unclosedQuoteHeaders.clear();
+    unclosedQuoteCell = '';
+    discardedUnclosedQuoteCell = false;
+    sawUnclosedQuoteDelimiter = false;
+  };
+  const feedUnclosedQuoteCharacter = character => {
+    if (character === dialectDelimiter || (OWNER_HEADER_RECORD_DELIMITER_RE.test(character) && character !== '\t')) {
+      finishUnclosedQuoteCell();
+      if (character === dialectDelimiter) sawUnclosedQuoteDelimiter = true;
+      return;
+    }
+    appendUnclosedQuoteCharacter(character);
+  };
+  const finishCell = () => {
+    addHeader(matchedHeaders, cell, discardedCell);
+    cell = '';
+    discardedCell = false;
+  };
   const finishLine = () => {
-    const normalized = line.includes('\t') && !line.includes(',') ? line.replaceAll('\t', ',') : line;
-    if (!discarded && normalized === canonicalHeader) found = true;
-    line = '';
-    discarded = false;
+    finishCell();
+    if (!invalidLine && sawDelimiter && [...requiredHeaders].every(header => matchedHeaders.has(header))) found = true;
+    matchedHeaders.clear();
+    sawDelimiter = false;
+    invalidLine = false;
+    inQuotes = false;
+    pendingQuote = false;
+    afterQuote = false;
+    resetUnclosedQuoteState();
+  };
+  const beginQuotedCell = () => {
+    inQuotes = true;
+    pendingQuote = false;
+    afterQuote = false;
+    resetUnclosedQuoteState();
   };
   return {
     feed(text) {
       for (const character of text) {
-        if (OWNER_HEADER_RECORD_DELIMITER_RE.test(character) && character !== '\t') { finishLine(); continue; }
-        if (character === '"' || isPaddingWhitespace(character)) continue;
-        if (line.length < canonicalHeader.length) line += character;
-        else discarded = true;
+        let current = character;
+        let reprocess = true;
+        while (reprocess) {
+          reprocess = false;
+          if (inQuotes) {
+            if (pendingQuote) {
+              if (current === '"') {
+                // RFC4180 escaped quote. It remains inside the quoted cell.
+                pendingQuote = false;
+                appendEscapedQuote();
+                continue;
+              }
+              // The previous quote closed the cell. Consume the current byte
+              // with the ordinary delimiter/record grammar instead.
+              inQuotes = false;
+              pendingQuote = false;
+              afterQuote = true;
+              resetUnclosedQuoteState();
+              reprocess = true;
+              continue;
+            }
+            if (current === '"') {
+              pendingQuote = true;
+              continue;
+            }
+            appendCellCharacter(current);
+            feedUnclosedQuoteCharacter(current);
+            continue;
+          }
+          if (afterQuote) {
+            if (OWNER_HEADER_RECORD_DELIMITER_RE.test(current) && current !== '\t') {
+              afterQuote = false;
+              reprocess = true;
+              continue;
+            }
+            if (current === dialectDelimiter) {
+              afterQuote = false;
+              reprocess = true;
+              continue;
+            }
+            if (isPaddingWhitespace(current)) continue;
+            // Text after a closing quote is malformed, but preserving the
+            // existing mixed-delimiter rejection is safer than reclassifying
+            // it as a valid Product header.
+            afterQuote = false;
+            invalidLine = true;
+            reprocess = true;
+            continue;
+          }
+          if (OWNER_HEADER_RECORD_DELIMITER_RE.test(current) && current !== '\t') { finishLine(); continue; }
+          if (current === dialectDelimiter) {
+            sawDelimiter = true;
+            finishCell();
+            continue;
+          }
+          // Exterior padding before an RFC4180 quoted cell is not cell data.
+          // Preserve whitespace once the quote opens, where it is meaningful.
+          if (current === '"' && cell.trim().length === 0 && !discardedCell) {
+            cell = '';
+            beginQuotedCell();
+            continue;
+          }
+          if (current === '"') {
+            invalidLine = true;
+            continue;
+          }
+          appendCellCharacter(current);
+        }
       }
     },
-    finish() { finishLine(); return found; },
+    finish() {
+      if (inQuotes) {
+        if (pendingQuote) {
+          // A quote at EOF closes a valid final quoted cell.
+          inQuotes = false;
+          pendingQuote = false;
+          afterQuote = false;
+          resetUnclosedQuoteState();
+        } else {
+          // Fail closed only for this malformed EOF case: replay the bounded
+          // comma/tab-separated fragments from the still-open quoted cell so
+          // an opening quote cannot conceal every remaining Product key.
+          finishUnclosedQuoteCell();
+          for (const header of unclosedQuoteHeaders) matchedHeaders.add(header);
+          if (sawUnclosedQuoteDelimiter) sawDelimiter = true;
+          inQuotes = false;
+        }
+      }
+      finishLine();
+      return found;
+    },
+  };
+}
+function createProductHeaderStreamDetector() {
+  const detectors = [createProductHeaderDialectStreamDetector(','), createProductHeaderDialectStreamDetector('\t')];
+  return {
+    feed(text) {
+      for (const detector of detectors) detector.feed(text);
+    },
+    finish() {
+      const results = detectors.map(detector => detector.finish());
+      return results.some(Boolean);
+    },
   };
 }
 function createStructuralTextStreamScanner() {
@@ -762,6 +1230,7 @@ function createStructuralTextStreamScanner() {
   const formatValuePattern = new RegExp(`"(${[...JSON_FORMATS].map(escapedRegex).join('|')})(?:"|(?=\\s*[,}\\]]|$))`, 'g');
   const ownerHeader = createOwnerHeaderStreamDetector();
   const productHeader = createProductHeaderStreamDetector();
+  let productSqlReason = null;
   let pendingProperty = null;
   const signalProperty = key => {
     if (key === 'format') formatPropertySignal = true;
@@ -779,6 +1248,7 @@ function createStructuralTextStreamScanner() {
       const window = tail + decoded;
       ownerHeader.feed(decoded);
       productHeader.feed(decoded);
+      productSqlReason ??= productSqlColumnListReason(window, { final: false });
       if (pendingProperty) {
         const next = decoded.match(/\S/u)?.[0];
         if (next) {
@@ -802,6 +1272,8 @@ function createStructuralTextStreamScanner() {
       if (structuralSignal) return 'private snapshot or manifest key structure';
       if (ownerSignal) return 'owner decision sheet CSV header structure';
       if (productHeaderSignal) return PRODUCT_HEADER_REASON;
+      productSqlReason ??= productSqlColumnListReason(tail, { final: true });
+      if (productSqlReason) return productSqlReason;
       return null;
     },
   };
@@ -949,11 +1421,457 @@ function createOffsetStreamDecoder(decoder, initialSkip) {
   };
 }
 
-function createBase64TransferScanner({ checkArchives = true } = {}) {
+function strictWholeBase64Decode(bytes) {
+  const text = Buffer.isBuffer(bytes) ? bytes.toString('latin1') : Buffer.from(bytes).toString('latin1');
+  const normalized = text.replace(/[\t\n\v\f\r ]/g, '').replaceAll('-', '+').replaceAll('_', '/');
+  if (!BASE64_TRANSFER_CHARACTERS_RE.test(normalized)) return null;
+  if (normalized.length < 2 || normalized.length % 4 === 1) return null;
+  const paddingOffset = normalized.indexOf('=');
+  if (paddingOffset !== -1 && !/^[A-Za-z0-9+/]+={1,2}$/.test(normalized)) return null;
+  const body = paddingOffset === -1 ? normalized : normalized.slice(0, paddingOffset);
+  if (body.length < 2) return null;
+  return Buffer.from(body.padEnd(Math.ceil(body.length / 4) * 4, '='), 'base64');
+}
+
+function maximalStrictWholeBase64Decode(bytes) {
+  const direct = strictWholeBase64Decode(bytes);
+  if (direct !== null) return direct;
+  const text = (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).toString('latin1');
+  const normalized = text.replace(/[\t\n\v\f\r ]/g, '').replaceAll('-', '+').replaceAll('_', '/');
+  const paddingOffset = normalized.indexOf('=');
+  if (paddingOffset < 2 || !/^[A-Za-z0-9+/]+/.test(normalized)) return null;
+  const body = normalized.slice(0, paddingOffset);
+  // Once a syntactically complete padded transfer has appeared, a malformed
+  // residual cannot erase its already-decoded bytes. Mirror the streaming
+  // decoder's maximal-prefix behavior so a contextual value cannot hide an
+  // encoded packet with `=A`, `===`, or another hostile padded suffix.
+  if (body.length % 4 === 1 || !/^[A-Za-z0-9+/]+$/.test(body)) return null;
+  return Buffer.from(body.padEnd(Math.ceil(body.length / 4) * 4, '='), 'base64');
+}
+
+function strictWholeHexDecode(bytes) {
+  const text = (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).toString('latin1').replace(/[\t\n\v\f\r ]/g, '');
+  if (text.length < 2 || text.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(text)) return null;
+  return Buffer.from(text, 'hex');
+}
+
+function plausibleEmbeddedHexTransferDecode(bytes) {
+  const decoded = strictWholeHexDecode(bytes);
+  if (decoded === null || decoded.length === 0) return null;
+  // Repository source regularly contains harmless long hex digests. Decode an
+  // embedded hexadecimal token only when it can begin a private structural
+  // payload or is itself a valid next transfer wrapper; whole-file hex remains
+  // fully inspected above. This keeps SHA-like prose from consuming the finite
+  // overflow state budget while preserving hex(JSON) and hex(Base64(packet)).
+  if (decoded[0] === 0x7b || decoded[0] === 0x5b || decoded[0] === 0xff || decoded[0] === 0xfe) return decoded;
+  return strictWholeBase64Decode(decoded) === null ? null : decoded;
+}
+
+function strictWholePemDecode(bytes) {
+  const text = (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes)).toString('latin1');
+  const match = /^-----BEGIN [A-Z0-9 _-]+-----[\t ]*\r?\n([\s\S]*?)\r?\n-----END [A-Z0-9 _-]+-----[\t ]*\r?\n?$/u.exec(text);
+  return match ? strictWholeBase64Decode(Buffer.from(match[1], 'latin1')) : null;
+}
+
+function wholeQuotedPrintableDecode(bytes) {
+  const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const output = Buffer.allocUnsafe(source.length);
+  let used = 0;
+  let decoded = false;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === 0x3d) {
+      if (source[index + 1] === 0x0d && source[index + 2] === 0x0a) { decoded = true; index += 2; continue; }
+      if (source[index + 1] === 0x0a) { decoded = true; index += 1; continue; }
+      const high = hexNibble(source[index + 1]); const low = hexNibble(source[index + 2]);
+      if (high >= 0 && low >= 0) { output[used++] = (high << 4) | low; decoded = true; index += 2; continue; }
+    }
+    output[used++] = source[index];
+  }
+  return decoded ? output.subarray(0, used) : null;
+}
+
+function wholePercentFormDecode(bytes) {
+  const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const output = Buffer.allocUnsafe(source.length);
+  let used = 0;
+  let decoded = false;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === 0x25) {
+      const high = hexNibble(source[index + 1]); const low = hexNibble(source[index + 2]);
+      if (high >= 0 && low >= 0) { output[used++] = (high << 4) | low; decoded = true; index += 2; continue; }
+    }
+    output[used++] = source[index] === 0x2b ? 0x20 : source[index];
+  }
+  return decoded ? output.subarray(0, used) : null;
+}
+
+function isTransferWhitespace(byte) { return byte === 0x09 || byte === 0x0a || byte === 0x0b || byte === 0x0c || byte === 0x0d || byte === 0x20; }
+
+function isBase64TransferByte(byte) {
+  return (byte >= 0x41 && byte <= 0x5a)
+    || (byte >= 0x61 && byte <= 0x7a)
+    || (byte >= 0x30 && byte <= 0x39)
+    || byte === 0x2b || byte === 0x2f || byte === 0x2d || byte === 0x5f || byte === 0x3d;
+}
+
+function isContextualValueTerminator(byte) {
+  return byte === 0x3b || byte === 0x2c || byte === 0x7d || byte === 0x5d || byte === 0x29;
+}
+
+function contextualQuotedValueEnd(source, start, quote) {
+  let slashRun = 0;
+  for (let index = start; index < source.length; index += 1) {
+    const byte = source[index];
+    if (byte === quote && slashRun % 2 === 0) return index;
+    slashRun = byte === 0x5c ? slashRun + 1 : 0;
+  }
+  return source.length;
+}
+
+function contextualBareValueEnd(source, start) {
+  for (let index = start; index < source.length; index += 1) {
+    if (isContextualValueTerminator(source[index])) return index;
+  }
+  return source.length;
+}
+
+function asciiAtIgnoreCase(source, start, text) {
+  if (start + text.length > source.length) return false;
+  for (let offset = 0; offset < text.length; offset += 1) {
+    let byte = source[start + offset];
+    if (byte >= 0x41 && byte <= 0x5a) byte += 0x20;
+    if (byte !== text.charCodeAt(offset)) return false;
+  }
+  return true;
+}
+
+function contextualDataUriBase64PayloadStart(source) {
+  if (!asciiAtIgnoreCase(source, 0, 'data:')) return -1;
+  let base64 = false;
+  for (let index = 5; index < source.length; index += 1) {
+    const byte = source[index];
+    if (byte === 0x2c) return base64 ? index + 1 : -1;
+    if (isTransferWhitespace(byte)) return -1;
+    if (byte === 0x3b && asciiAtIgnoreCase(source, index + 1, 'base64')) {
+      const end = index + 7;
+      if (end < source.length && (source[end] === 0x2c || source[end] === 0x3b)) {
+        base64 = true;
+        index = end - 1;
+      }
+    }
+  }
+  return -1;
+}
+
+function contextualQuotedArrayValue(source, index) {
+  let before = index - 1;
+  while (before >= 0 && isTransferWhitespace(source[before])) before -= 1;
+  return before >= 0 && (source[before] === 0x5b || source[before] === 0x2c);
+}
+
+// The overflow lane runs only after the normal streaming decoders have spent
+// their three-layer budget. At that point it must still find encoded values
+// hidden inside a decoded text container, but it must not reinterpret every
+// long identifier in source code as a transfer token. Only explicit
+// `name: value` / `name = value` spans (including their quoted JSON/JS string
+// values) are candidates.
+function appendContextualTransferTokens(bytes, append) {
+  const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const inspectToken = raw => {
+    if (raw.length === 0) return true;
+    let hasBackslash = false;
+    for (const byte of raw) {
+      if (byte === 0x5c) { hasBackslash = true; break; }
+    }
+    const normalized = hasBackslash ? (normalizeEscapedTransferCharacters(raw) ?? raw) : raw;
+    let hexEnd = 0;
+    while (hexEnd < normalized.length && (hexNibble(normalized[hexEnd]) >= 0 || isTransferWhitespace(normalized[hexEnd]))) hexEnd += 1;
+    const inspectPrefix = (start, end, decode) => {
+      if (end === 0) return null;
+      const prefix = normalized.subarray(start, end);
+      let dataLength = 0;
+      let whitespace = 0;
+      for (const byte of prefix) {
+        if (isTransferWhitespace(byte)) whitespace += 1;
+        else dataLength += 1;
+      }
+      if (dataLength < MIN_EMBEDDED_TRANSFER_TOKEN_CHARS) return null;
+      return { candidate: decode(prefix), whitespace };
+    };
+    // Contextual assignment/array/data-URI values alone are permitted through
+    // this overflow lane. Within that bounded grammar, try every legal Base64
+    // quantum alignment and a prefix offset of at most three bytes: a small
+    // wrapper prefix must not make the true payload undecodable, but arbitrary
+    // bare source tokens are still never considered.
+    for (let start = 0; start < Math.min(4, normalized.length); start += 1) {
+      let base64End = start;
+      while (base64End < normalized.length && (isBase64TransferByte(normalized[base64End]) || isTransferWhitespace(normalized[base64End]))) base64End += 1;
+      const base64 = inspectPrefix(start, base64End, maximalStrictWholeBase64Decode);
+      const decodedBase64 = base64?.candidate ?? null;
+      if (decodedBase64 === null) continue;
+      if (base64.whitespace > MAX_EMBEDDED_BASE64_WHITESPACE_BYTES) return false;
+      if (!append(decodedBase64)) return false;
+    }
+    const hex = inspectPrefix(0, hexEnd, strictWholeHexDecode);
+    const decodedHex = hex?.candidate ?? null;
+    if (decodedHex !== null) {
+      if (hex.whitespace > MAX_EMBEDDED_HEX_WHITESPACE_BYTES) return false;
+      if (!append(decodedHex)) return false;
+    }
+    return true;
+  };
+  const inspect = raw => {
+    if (!inspectToken(raw)) return false;
+    const dataStart = contextualDataUriBase64PayloadStart(raw);
+    return dataStart === -1 || inspectToken(raw.subarray(dataStart));
+  };
+  for (let index = 0; index < source.length; index += 1) {
+    const byte = source[index];
+    if ((byte === 0x22 || byte === 0x27) && contextualQuotedArrayValue(source, index)) {
+      const end = contextualQuotedValueEnd(source, index + 1, byte);
+      if (!inspect(source.subarray(index + 1, end))) return false;
+      index = end;
+      continue;
+    }
+    if (byte !== 0x3a && byte !== 0x3d) continue;
+    let start = index + 1;
+    while (start < source.length && isTransferWhitespace(source[start])) start += 1;
+    if (start >= source.length) continue;
+    if (source[start] === 0x22 || source[start] === 0x27) {
+      const end = contextualQuotedValueEnd(source, start + 1, source[start]);
+      if (!inspect(source.subarray(start + 1, end))) return false;
+      index = end;
+      continue;
+    }
+    const dataPayload = contextualDataUriBase64PayloadStart(source.subarray(start));
+    const end = dataPayload === -1
+      ? contextualBareValueEnd(source, start)
+      : contextualBareValueEnd(source, start + dataPayload);
+    if (!inspect(source.subarray(start, end))) return false;
+    index = end;
+  }
+  return true;
+}
+
+function hexNibbleValue(byte) {
+  if (byte >= 0x30 && byte <= 0x39) return byte - 0x30;
+  if (byte >= 0x41 && byte <= 0x46) return byte - 0x41 + 10;
+  if (byte >= 0x61 && byte <= 0x66) return byte - 0x61 + 10;
+  return -1;
+}
+
+const ESCAPED_TRANSFER_SHORT_WHITESPACE = new Map([[0x74, 0x09], [0x6e, 0x0a], [0x76, 0x0b], [0x66, 0x0c], [0x72, 0x0d]]);
+
+function escapedTransferCharacterAt(source, index, precedingSlashes = 0) {
+  if (source[index] !== 0x5c) return null;
+  // A backslash preceded by an odd run is itself escaped (for example the
+  // second slash in `\\u0009`) and must remain literal rather than creating a
+  // synthetic transfer separator.
+  if (precedingSlashes % 2 === 1) return null;
+  const short = ESCAPED_TRANSFER_SHORT_WHITESPACE.get(source[index + 1]);
+  if (short !== undefined) return { byte: short, skip: 2 };
+  const kind = source[index + 1];
+  const digitCount = kind === 0x75 ? 4 : kind === 0x78 ? 2 : 0;
+  if (digitCount === 0) return null;
+  let value = 0;
+  for (let offset = 0; offset < digitCount; offset += 1) {
+    const digit = hexNibbleValue(source[index + 2 + offset]);
+    if (digit < 0) return null;
+    value = (value << 4) | digit;
+  }
+  return isTransferWhitespace(value) || isBase64TransferByte(value)
+    ? { byte: value, skip: digitCount + 2 }
+    : null;
+}
+
+function normalizeEscapedTransferCharacters(bytes) {
+  const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  let first = -1;
+  let slashRun = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (escapedTransferCharacterAt(source, index, slashRun) !== null) { first = index; break; }
+    slashRun = source[index] === 0x5c ? slashRun + 1 : 0;
+  }
+  if (first === -1) return null;
+  const output = Buffer.allocUnsafe(source.length);
+  source.copy(output, 0, 0, first);
+  let used = first;
+  slashRun = 0;
+  for (let index = first; index < source.length; index += 1) {
+    const escaped = escapedTransferCharacterAt(source, index, slashRun);
+    if (escaped !== null) { output[used++] = escaped.byte; index += escaped.skip - 1; slashRun = 0; continue; }
+    output[used++] = source[index];
+    slashRun = source[index] === 0x5c ? slashRun + 1 : 0;
+  }
+  return output.subarray(0, used);
+}
+
+function appendEmbeddedPemTransferTokens(bytes, append) {
+  const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+  const begin = Buffer.from('-----BEGIN ', 'ascii');
+  const end = Buffer.from('\n-----END ', 'ascii');
+  let from = 0;
+  while (from < source.length) {
+    const beginAt = source.indexOf(begin, from);
+    if (beginAt === -1) return true;
+    const headerEnd = source.indexOf(0x0a, beginAt + begin.length);
+    if (headerEnd === -1) return true;
+    const endAt = source.indexOf(end, headerEnd + 1);
+    if (endAt === -1) return true;
+    if (!append(strictWholeBase64Decode(source.subarray(headerEnd + 1, endAt)))) return false;
+    from = endAt + end.length;
+  }
+  return true;
+}
+
+function directStructuralReason(bytes, checkArchives) {
+  const scanner = createStructuralByteStreamScanner({ checkArchives, inspectTransfers: false });
+  scanner.feed(bytes);
+  return scanner.finish();
+}
+
+// At the overflow boundary an ordinary decoded bundle can contain many short,
+// syntactically Base64-looking assignment values. Preserve fail-closed limits
+// for values that can actually carry a supported next wrapper or direct
+// structure, but do not charge opaque binary decodes toward that limit: the
+// narrow boundary parser cannot derive another supported transfer from them.
+function overflowEmbeddedCandidateDisposition(candidate, checkArchives) {
+  if (directStructuralReason(candidate, checkArchives)) return { relevant: true, exhausted: false };
+  if ([
+    strictWholeBase64Decode(candidate),
+    strictWholeHexDecode(candidate),
+    strictWholePemDecode(candidate),
+    wholeQuotedPrintableDecode(candidate),
+    wholePercentFormDecode(candidate),
+  ].some(value => value !== null)) return { relevant: true, exhausted: false };
+  let found = false;
+  const stopAtFirst = value => { if (value !== null && value.length > 0) found = true; return false; };
+  const contextualComplete = appendContextualTransferTokens(candidate, stopAtFirst);
+  if (!contextualComplete && !found) return { relevant: false, exhausted: true };
+  if (found) return { relevant: true, exhausted: false };
+  const pemComplete = appendEmbeddedPemTransferTokens(candidate, stopAtFirst);
+  if (!pemComplete && !found) return { relevant: false, exhausted: true };
+  return { relevant: found, exhausted: false };
+}
+
+function overflowTransferDecodes(bytes, checkArchives) {
+  const unique = new Map();
+  let embeddedAttempts = 0;
+  let exhausted = false;
+  const append = candidate => {
+    if (candidate === null || candidate.length === 0) return;
+    const identity = `${candidate.length}:${createHash('sha256').update(candidate).digest('hex')}`;
+    unique.set(identity, candidate);
+  };
+  for (const candidate of [
+    strictWholeBase64Decode(bytes),
+    strictWholeHexDecode(bytes),
+    strictWholePemDecode(bytes),
+    wholeQuotedPrintableDecode(bytes),
+    wholePercentFormDecode(bytes),
+  ]) append(candidate);
+  const appendEmbedded = candidate => {
+    if (candidate === null || candidate.length === 0) return true;
+    const identity = `${candidate.length}:${createHash('sha256').update(candidate).digest('hex')}`;
+    if (unique.has(identity)) return true;
+    const disposition = overflowEmbeddedCandidateDisposition(candidate, checkArchives);
+    if (disposition.exhausted) { exhausted = true; return false; }
+    if (!disposition.relevant) return true;
+    if (embeddedAttempts >= MAX_TRANSFER_OVERFLOW_EMBEDDED_CANDIDATES) { exhausted = true; return false; }
+    embeddedAttempts += 1;
+    unique.set(identity, candidate);
+    return true;
+  };
+  if (!appendContextualTransferTokens(bytes, appendEmbedded)) exhausted = true;
+  if (!exhausted && !appendEmbeddedPemTransferTokens(bytes, appendEmbedded)) exhausted = true;
+  return {
+    exhausted,
+    candidates: [...unique.entries()].map(([identity, value]) => ({ identity, value })),
+  };
+}
+
+function wholeOverflowTransferDecodes(bytes, checkArchives) {
+  return overflowTransferDecodes(bytes, checkArchives);
+}
+
+function overflowTransferReason(initial, checkArchives) {
+  const seen = new Set();
+  let totalBytes = initial.length;
+  const initialDecodes = wholeOverflowTransferDecodes(initial, checkArchives);
+  if (initialDecodes.exhausted) return TRANSFER_DECODE_DEPTH_REASON;
+  const states = [];
+  for (const candidate of initialDecodes.candidates) {
+    if (seen.has(candidate.identity)) continue;
+    totalBytes += candidate.value.length;
+    if (seen.size >= MAX_TRANSFER_OVERFLOW_STATES || totalBytes > MAX_TRANSFER_OVERFLOW_TOTAL_BYTES) return TRANSFER_DECODE_DEPTH_REASON;
+    seen.add(candidate.identity);
+    states.push(candidate);
+  }
+  let current = states;
+  for (let depth = 0; current.length > 0; depth += 1) {
+    if (depth >= MAX_TRANSFER_OVERFLOW_DECODE_DEPTH) return TRANSFER_DECODE_DEPTH_REASON;
+    const next = [];
+    for (const { value } of current) {
+      const structuralReason = directStructuralReason(value, checkArchives);
+      // The depth limit is a refusal only when the traversal actually reaches
+      // it. If a bounded decoded state already proves private structure, retain
+      // that more useful structural reason for the operator and the regression.
+      if (structuralReason) return structuralReason;
+      const decoded = wholeOverflowTransferDecodes(value, checkArchives);
+      if (decoded.exhausted) return TRANSFER_DECODE_DEPTH_REASON;
+      for (const candidate of decoded.candidates) {
+        if (seen.has(candidate.identity)) continue;
+        totalBytes += candidate.value.length;
+        if (seen.size >= MAX_TRANSFER_OVERFLOW_STATES || totalBytes > MAX_TRANSFER_OVERFLOW_TOTAL_BYTES) return TRANSFER_DECODE_DEPTH_REASON;
+        seen.add(candidate.identity);
+        next.push(candidate);
+      }
+    }
+    current = next;
+  }
+  return null;
+}
+
+function createOverflowTransferTarget({ checkArchives }) {
+  const direct = createStructuralByteStreamScanner({ checkArchives, inspectTransfers: false });
+  const chunks = [];
+  let length = 0;
+  let overbound = false;
+  return {
+    feed(bytes) {
+      const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+      direct.feed(source);
+      if (overbound) return;
+      if (source.length > MAX_STRUCTURAL_SCAN_BYTES - length) { overbound = true; chunks.length = 0; return; }
+      chunks.push(Buffer.from(source));
+      length += source.length;
+    },
+    finish() {
+      const structuralReason = direct.finish();
+      if (structuralReason) return structuralReason;
+      if (overbound) return TRANSFER_DECODE_DEPTH_REASON;
+      return overflowTransferReason(Buffer.concat(chunks, length), checkArchives);
+    },
+  };
+}
+
+function createDecodedTransferTarget({ checkArchives, transferDecodeDepth }) {
+  if (transferDecodeDepth === 0) return createOverflowTransferTarget({ checkArchives });
+  const scanner = createStructuralByteStreamScanner({
+    checkArchives,
+    transferDecodeDepth: transferDecodeDepth - 1,
+  });
+  return {
+    feed(bytes) { scanner.feed(bytes); },
+    finish() { return scanner.finish(); },
+  };
+}
+
+function createBase64TransferScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
   let decoded = null;
   let quartet = ''; let active = true; let saw = false; let terminal = false; let preserveDecodedPrefix = false;
   const feedDecoded = bytes => {
-    decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+    decoded ??= createDecodedTransferTarget({ checkArchives, transferDecodeDepth });
     decoded.feed(bytes);
   };
   const consumeChunk = bytes => {
@@ -979,11 +1897,24 @@ function createBase64TransferScanner({ checkArchives = true } = {}) {
     if (fullBodyLength) feedDecoded(Buffer.from(body.slice(0, fullBodyLength), 'base64'));
     quartet = input.slice(fullBodyLength);
     if (paddingOffset === -1) return;
-    if (quartet.length < 4) return;
-    if (!/^(?:[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/.test(quartet)) { active = false; return; }
-    feedDecoded(Buffer.from(quartet, 'base64'));
-    terminal = true;
+    const paddedResidual = /^([A-Za-z0-9+/]{0,3})(=*)$/.exec(quartet);
+    if (!paddedResidual) { preserveDecodedPrefix = decoded !== null; active = false; return; }
+    const residualBody = paddedResidual[1];
+    const suppliedPadding = paddedResidual[2].length;
+    if (residualBody.length === 0 || residualBody.length === 1) {
+      preserveDecodedPrefix = decoded !== null;
+      active = false;
+      return;
+    }
+    const requiredPadding = 4 - residualBody.length;
+    if (suppliedPadding < requiredPadding) return;
+    feedDecoded(Buffer.from(residualBody + '='.repeat(requiredPadding), 'base64'));
     quartet = '';
+    terminal = true;
+    if (suppliedPadding > requiredPadding) {
+      preserveDecodedPrefix = true;
+      active = false;
+    }
   };
   return {
     feed(bytes) {
@@ -1015,13 +1946,13 @@ function base64AlphabetValue(byte) {
   if (byte === 0x5f) return '/';
   return null;
 }
-function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharacterSkip = 0 } = {}) {
+function createEmbeddedBase64PhaseScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH, initialCharacterSkip = 0 } = {}) {
   if (!Number.isInteger(initialCharacterSkip) || initialCharacterSkip < 0 || initialCharacterSkip > 3) throw new Error('private Phase 3C Base64 alignment is invalid');
   let characterSkip = initialCharacterSkip;
   let quartet = ''; let decoded = null; let pendingQuartets = ''; let batch = null; let used = 0; let length = 0; let whitespace = 0; let whitespaceOverbound = false; let active = true; let preserveDecodedPrefix = false; let terminal = false; let terminalTail = 0; let found = null;
   const flushDecodedBytes = () => {
     if (used === 0) return;
-    decoded ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+    decoded ??= createDecodedTransferTarget({ checkArchives, transferDecodeDepth });
     decoded.feed(batch.subarray(0, used));
     used = 0;
   };
@@ -1089,7 +2020,11 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
     }
     if (byte === 0x3d) {
       length += 1;
-      if (!active || terminal || quartet.length < 2) { preserveDecodedPrefix = terminal; active = false; return; }
+      if (!active || terminal || quartet.length < 2) {
+        preserveDecodedPrefix = terminal || length > 32 || decoded !== null || pendingQuartets.length > 0;
+        active = false;
+        return;
+      }
       quartet += '=';
       if (quartet.length < 4) return;
       if (!/^(?:[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$/.test(quartet)) { active = false; return; }
@@ -1110,13 +2045,13 @@ function createEmbeddedBase64PhaseScanner({ checkArchives = true, initialCharact
     finish() { flush(); return found; },
   };
 }
-function createEmbeddedBase64TokenScanner({ checkArchives = true } = {}) {
+function createEmbeddedBase64TokenScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
   // Whitespace-tolerant source tokens can begin with ordinary Base64-alphabet
   // prose (for example `x <encoded packet>`). Four fixed lanes cover every
   // quartet alignment; longer prefixes differ only by complete quartets.
   // Every lane retains the same bounded batch/state and never recursively
   // re-enters transfer decoding.
-  const phases = [0, 1, 2, 3].map(initialCharacterSkip => createEmbeddedBase64PhaseScanner({ checkArchives, initialCharacterSkip }));
+  const phases = [0, 1, 2, 3].map(initialCharacterSkip => createEmbeddedBase64PhaseScanner({ checkArchives, transferDecodeDepth, initialCharacterSkip }));
   return {
     feed(bytes) { for (const phase of phases) phase.feed(bytes); },
     finish() {
@@ -1133,7 +2068,7 @@ function hexNibble(byte) {
   return -1;
 }
 function isHexTransferWhitespace(byte) { return byte === 0x09 || byte === 0x0a || byte === 0x0b || byte === 0x0c || byte === 0x0d || byte === 0x20; }
-function createHexTransferScanner({ checkArchives = true, wholeFile = false, initialNibbleSkip = 0 } = {}) {
+function createHexTransferScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH, wholeFile = false, initialNibbleSkip = 0 } = {}) {
   if (!Number.isInteger(initialNibbleSkip) || initialNibbleSkip < 0 || initialNibbleSkip > 1) throw new Error('private Phase 3C hexadecimal alignment is invalid');
   let nibbleSkip = initialNibbleSkip;
   let scanner = null; let high = -1; let length = 0; let effectiveLength = 0; let active = true; let found = null; let prefix = ''; let decoding = false; let batch = null; let used = 0;
@@ -1144,7 +2079,7 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false, ini
   };
   const feedBatch = () => {
     if (used === 0) return;
-    scanner ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+    scanner ??= createDecodedTransferTarget({ checkArchives, transferDecodeDepth });
     scanner.feed(batch.subarray(0, used)); used = 0;
   };
   const finishToken = () => {
@@ -1183,13 +2118,13 @@ function createHexTransferScanner({ checkArchives = true, wholeFile = false, ini
     finish() { if (wholeFile) return finishToken(); flush(); return found; },
   };
 }
-function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, initialNibbleSkip = 0 } = {}) {
+function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH, initialNibbleSkip = 0 } = {}) {
   if (!Number.isInteger(initialNibbleSkip) || initialNibbleSkip < 0 || initialNibbleSkip > 1) throw new Error('private Phase 3C hexadecimal alignment is invalid');
   let nibbleSkip = initialNibbleSkip;
   let scanner = null; let high = -1; let length = 0; let effectiveLength = 0; let whitespace = 0; let whitespaceOverbound = false; let prefix = ''; let batch = null; let used = 0; let found = null;
   const feedBatch = () => {
     if (used === 0) return;
-    scanner ??= createStructuralByteStreamScanner({ checkArchives, checkBase64: false });
+    scanner ??= createDecodedTransferTarget({ checkArchives, transferDecodeDepth });
     scanner.feed(batch.subarray(0, used)); used = 0;
   };
   const addByte = value => {
@@ -1241,10 +2176,10 @@ function createEmbeddedWhitespaceHexPhaseScanner({ checkArchives = true, initial
     finish() { flush(); return found; },
   };
 }
-function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true } = {}) {
+function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
   // Two fixed lanes cover both nibble phases without retaining an unbounded
   // token or recursively decoding the resulting bytes.
-  const phases = [0, 1].map(initialNibbleSkip => createEmbeddedWhitespaceHexPhaseScanner({ checkArchives, initialNibbleSkip }));
+  const phases = [0, 1].map(initialNibbleSkip => createEmbeddedWhitespaceHexPhaseScanner({ checkArchives, transferDecodeDepth, initialNibbleSkip }));
   return {
     feed(bytes) { for (const phase of phases) phase.feed(bytes); },
     finish() {
@@ -1254,14 +2189,14 @@ function createEmbeddedWhitespaceHexTokenScanner({ checkArchives = true } = {}) 
     },
   };
 }
-function createPemBase64Scanner({ checkArchives = true } = {}) {
+function createPemBase64Scanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
   let line = ''; let overflow = false; let body = null; let found = null;
   const isBegin = value => /^-----BEGIN [A-Z0-9 _-]+-----[\t ]*$/.test(value);
   const isEnd = value => /^-----END [A-Z0-9 _-]+-----[\t ]*$/.test(value);
   const finishLine = () => {
     const normalizedLine = line.endsWith('\r') ? line.slice(0, -1) : line;
     if (body === null) {
-      if (!overflow && isBegin(normalizedLine)) body = createBase64TransferScanner({ checkArchives });
+      if (!overflow && isBegin(normalizedLine)) body = createBase64TransferScanner({ checkArchives, transferDecodeDepth });
     } else if (!overflow && isEnd(normalizedLine)) {
       found ??= body.finish(); body = null;
     } else if (!overflow) body.feed(Buffer.from(`${normalizedLine}\n`, 'latin1'));
@@ -1285,14 +2220,195 @@ function createPemBase64Scanner({ checkArchives = true } = {}) {
     },
   };
 }
-function createAlternateEncodingScanner({ checkArchives = true } = {}) {
+
+// Before a valid quoted-printable or percent escape appears, preserve only the
+// bounded raw tail that could provide structural context for that escape. A
+// string tail previously sliced once per source byte whenever an ordinary
+// dependency chunk contained one malformed '=' or '%'. Keep the identical
+// suffix in a fixed byte ring instead: bulk append the spans between markers,
+// and materialize it only when a real escape activates the decoder.
+function createBoundedRawByteTail(limit) {
+  const storage = Buffer.allocUnsafe(limit);
+  let start = 0;
+  let length = 0;
+  const appendBuffer = bytes => {
+    const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    if (source.length === 0) return;
+    if (source.length >= limit) {
+      source.copy(storage, 0, source.length - limit);
+      start = 0;
+      length = limit;
+      return;
+    }
+    const overflow = Math.max(0, length + source.length - limit);
+    if (overflow > 0) { start = (start + overflow) % limit; length -= overflow; }
+    const writeAt = (start + length) % limit;
+    const firstLength = Math.min(source.length, limit - writeAt);
+    source.copy(storage, writeAt, 0, firstLength);
+    if (firstLength < source.length) source.copy(storage, 0, firstLength);
+    length += source.length;
+  };
+  return {
+    appendByte(byte) {
+      storage[(start + length) % limit] = byte;
+      if (length < limit) length += 1;
+      else start = (start + 1) % limit;
+    },
+    append(bytes) { appendBuffer(bytes); },
+    take() {
+      if (length === 0) return Buffer.alloc(0);
+      if (start + length <= limit) return storage.subarray(start, start + length);
+      const result = Buffer.allocUnsafe(length);
+      const firstLength = limit - start;
+      storage.copy(result, 0, start);
+      storage.copy(result, firstLength, 0, length - firstLength);
+      return result;
+    },
+  };
+}
+
+function createQuotedPrintableTransferScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
+  let scanner = null; let state = 0; let high = -1; let highByte = 0; const prefix = createBoundedRawByteTail(STREAM_TAIL_CHARS); let batch = null; let used = 0; let found = null;
+  const flush = () => {
+    if (used === 0 || !scanner) return;
+    scanner.feed(batch.subarray(0, used)); used = 0;
+  };
+  const activate = () => {
+    if (scanner || found) return Boolean(scanner);
+    scanner = createDecodedTransferTarget({ checkArchives, transferDecodeDepth });
+    // Keep a bounded sliding tail rather than discarding the whole prefix. A
+    // single valid late escape can be the opening quote in `{=22format...}`;
+    // the preceding `{` is structural evidence and must survive the cap.
+    const retained = prefix.take();
+    if (retained.length) scanner.feed(retained);
+    return true;
+  };
+  const emit = byte => {
+    if (!scanner) { prefix.appendByte(byte); return; }
+    batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
+    batch[used++] = byte;
+    if (used === batch.length) flush();
+  };
+  const receive = byte => {
+    if (found) return;
+    if (state === 0) {
+      if (byte === 0x3d) { state = 1; return; }
+      emit(byte); return;
+    }
+    if (state === 1) {
+      if (byte === 0x0d) { state = 2; return; }
+      if (byte === 0x0a) { activate(); state = 0; return; }
+      const nibble = hexNibble(byte);
+      if (nibble !== -1) { high = nibble; highByte = byte; state = 3; return; }
+      emit(0x3d); state = 0; receive(byte); return;
+    }
+    if (state === 2) {
+      if (byte === 0x0a) { activate(); state = 0; return; }
+      emit(0x3d); emit(0x0d); state = 0; receive(byte); return;
+    }
+    const nibble = hexNibble(byte);
+    if (nibble !== -1) { if (activate()) emit((high << 4) | nibble); state = 0; return; }
+    emit(0x3d); emit(highByte); state = 0; receive(byte);
+  };
+  return {
+    feed(bytes) {
+      const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+      let offset = 0;
+      while (offset < source.length) {
+        if (state === 0 && !scanner) {
+          const marker = source.indexOf(0x3d, offset);
+          if (marker === -1) { prefix.append(source.subarray(offset)); return; }
+          prefix.append(source.subarray(offset, marker));
+          receive(0x3d);
+          offset = marker + 1;
+          continue;
+        }
+        receive(source[offset]);
+        offset += 1;
+      }
+    },
+    finish() {
+      if (!found && state === 1) emit(0x3d);
+      if (!found && state === 2) { emit(0x3d); emit(0x0d); }
+      if (!found && state === 3) { emit(0x3d); emit(highByte); }
+      flush();
+      return found ?? scanner?.finish() ?? null;
+    },
+  };
+}
+function createPercentFormTransferScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
+  let scanner = null; let state = 0; let high = -1; let highByte = 0; const prefix = createBoundedRawByteTail(STREAM_TAIL_CHARS); let batch = null; let used = 0; let found = null;
+  const flush = () => {
+    if (used === 0 || !scanner) return;
+    scanner.feed(batch.subarray(0, used)); used = 0;
+  };
+  const activate = () => {
+    if (scanner || found) return Boolean(scanner);
+    scanner = createDecodedTransferTarget({ checkArchives, transferDecodeDepth });
+    // A late `%22` can be the only encoded byte before a private JSON
+    // structure. Retain only a bounded sliding tail, then inspect that suffix
+    // on the first valid escape instead of requiring a second escape.
+    const retained = prefix.take();
+    for (let index = 0; index < retained.length; index += 1) if (retained[index] === 0x2b) retained[index] = 0x20;
+    if (retained.length) scanner.feed(retained);
+    return true;
+  };
+  const emit = byte => {
+    if (!scanner) { prefix.appendByte(byte); return; }
+    batch ??= Buffer.allocUnsafe(TRANSFER_DECODE_CHUNK_BYTES);
+    batch[used++] = byte;
+    if (used === batch.length) flush();
+  };
+  const receive = byte => {
+    if (found) return;
+    if (state === 0) {
+      if (byte === 0x25) { state = 1; return; }
+      emit(scanner && byte === 0x2b ? 0x20 : byte); return;
+    }
+    if (state === 1) {
+      const nibble = hexNibble(byte);
+      if (nibble !== -1) { high = nibble; highByte = byte; state = 2; return; }
+      emit(0x25); state = 0; receive(byte); return;
+    }
+    const nibble = hexNibble(byte);
+    if (nibble !== -1) { if (activate()) emit((high << 4) | nibble); state = 0; return; }
+    emit(0x25); emit(highByte); state = 0; receive(byte);
+  };
+  return {
+    feed(bytes) {
+      const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+      let offset = 0;
+      while (offset < source.length) {
+        if (state === 0 && !scanner) {
+          const marker = source.indexOf(0x25, offset);
+          if (marker === -1) { prefix.append(source.subarray(offset)); return; }
+          prefix.append(source.subarray(offset, marker));
+          receive(0x25);
+          offset = marker + 1;
+          continue;
+        }
+        receive(source[offset]);
+        offset += 1;
+      }
+    },
+    finish() {
+      if (!found && state === 1) emit(0x25);
+      if (!found && state === 2) { emit(0x25); emit(highByte); }
+      flush();
+      return found ?? scanner?.finish() ?? null;
+    },
+  };
+}
+function createAlternateEncodingScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH } = {}) {
   // Keep this scanner live from byte zero so MIME-style line wrapping can
   // cross the 32-character activation threshold. Before that threshold it
   // retains at most eight quartets and performs no decoded-byte allocation.
-  const embeddedBase64 = createEmbeddedBase64TokenScanner({ checkArchives });
-  const pemBase64 = createPemBase64Scanner({ checkArchives });
-  const wholeHex = [0, 1].map(initialNibbleSkip => createHexTransferScanner({ checkArchives, wholeFile: true, initialNibbleSkip }));
-  const embeddedHex = createEmbeddedWhitespaceHexTokenScanner({ checkArchives });
+  const embeddedBase64 = createEmbeddedBase64TokenScanner({ checkArchives, transferDecodeDepth });
+  const pemBase64 = createPemBase64Scanner({ checkArchives, transferDecodeDepth });
+  const wholeHex = [0, 1].map(initialNibbleSkip => createHexTransferScanner({ checkArchives, transferDecodeDepth, wholeFile: true, initialNibbleSkip }));
+  const embeddedHex = createEmbeddedWhitespaceHexTokenScanner({ checkArchives, transferDecodeDepth });
+  const quotedPrintable = createQuotedPrintableTransferScanner({ checkArchives, transferDecodeDepth });
+  const percentForm = createPercentFormTransferScanner({ checkArchives, transferDecodeDepth });
   return {
     feed(bytes) {
       const source = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
@@ -1300,23 +2416,32 @@ function createAlternateEncodingScanner({ checkArchives = true } = {}) {
       pemBase64.feed(source);
       for (const phase of wholeHex) phase.feed(source);
       embeddedHex.feed(source);
+      quotedPrintable.feed(source);
+      percentForm.feed(source);
     },
     finish() {
       let wholeHexReason = null;
       for (const phase of wholeHex) wholeHexReason ??= phase.finish();
-      return pemBase64.finish() ?? embeddedBase64.finish() ?? wholeHexReason ?? embeddedHex.finish() ?? null;
+      return pemBase64.finish() ?? embeddedBase64.finish() ?? wholeHexReason ?? embeddedHex.finish() ?? quotedPrintable.finish() ?? percentForm.finish() ?? null;
     },
   };
 }
-function createStructuralByteStreamScanner({ checkArchives = true, checkBase64 = true } = {}) {
+function createStructuralByteStreamScanner({ checkArchives = true, transferDecodeDepth = MAX_TRANSFER_DECODE_DEPTH, inspectTransfers = true } = {}) {
+  if (!Number.isInteger(transferDecodeDepth)
+    || transferDecodeDepth < 0
+    || transferDecodeDepth > MAX_TRANSFER_DECODE_DEPTH) throw new Error('private Phase 3C transfer decode depth is invalid');
   const utf8Decoder = new StringDecoder('utf8');
   const utf8Scanner = createStructuralTextStreamScanner();
   const utf32Scanner = createUtf32StructuralStreamScanner();
   let utf16Decoders = null;
   let utf16Scanners = null;
   let rawTail = Buffer.alloc(0);
-  const base64 = checkBase64 ? createBase64TransferScanner({ checkArchives }) : null;
-  const wrappedBase64 = checkBase64 ? createAlternateEncodingScanner({ checkArchives }) : null;
+  // The depth-boundary target switches to the finite whole-wrapper overflow
+  // traversal above. This scanner itself never carries negative/overflow
+  // depths, which prevents each overflow layer from multiplying these general
+  // source-token lanes.
+  const base64 = inspectTransfers ? createBase64TransferScanner({ checkArchives, transferDecodeDepth }) : null;
+  const wrappedBase64 = inspectTransfers ? createAlternateEncodingScanner({ checkArchives, transferDecodeDepth }) : null;
   const archiveScanner = checkArchives ? createArchiveStreamScanner() : null;
   const shouldActivateUtf16 = bytes => {
     const hasNull = bytes.indexOf(0) !== -1;
@@ -1389,7 +2514,6 @@ function assertStableWorktreeCandidate(root, repoPath, file, baseline, fd, cache
     || !sameWorktreeStatIdentity(baseline, entry)
     || !sameWorktreeStatIdentity(baseline, followed)
     || !sameWorktreeStatIdentity(baseline, descriptor)
-    || realpathSync(file) !== file
     || canonicalWorktreeCandidate(root, repoPath, cache) === null) {
     throw new Error('private Phase 3C worktree candidate changed during scan');
   }
@@ -1402,7 +2526,13 @@ function scanWorktreeCandidate(root, repoPath, { afterFirstPass, cache = null, b
   if (entry.isSymbolicLink()) throw new Error('private Phase 3C worktree candidate is a symlink or junction');
   if (!entry.isFile()) return null;
   const followed = statSync(file);
-  if (!sameWorktreeStatIdentity(entry, followed) || realpathSync(file) !== file) throw new Error('private Phase 3C worktree candidate changed during scan');
+  // `canonicalWorktreeCandidate` has already proven that every parent resolves
+  // beneath the canonical worktree without a link/reparse point. The final
+  // component is rejected by lstat above, so repeating realpath(file) before
+  // and after each pass only repeats that same proof for every ignored tool
+  // file. Preserve the race closure with lstat/stat/fstat identities and a
+  // fresh canonical-parent check after each pass.
+  if (!sameWorktreeStatIdentity(entry, followed)) throw new Error('private Phase 3C worktree candidate changed during scan');
   budget.admit(entry.size, repoPath);
   const fd = openSync(file, 'r');
   try {
@@ -1606,6 +2736,11 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
   for (const repoPath of ignored) if (!candidates.has(repoPath)) candidates.set(repoPath, 'ignored');
   const started = performance.now();
   const cache = { roots: new Map(), parents: new Map() };
+  // A dated backup is exempt only when its own same-day manifest, read through
+  // the identity-safe worktree reader, names that exact table dump. This keeps
+  // dynamic public-table backups usable without treating arbitrary snake-case
+  // JSON under backups/YYYY-MM-DD as safe.
+  const verifiedDatedBackups = verifiedDatedBackupIgnoredPaths(root, ignored, cache);
   const bareRoots = bareRepositoryRoots([...candidates.keys()]);
   const bareRootList = [...bareRoots];
   for (const bareRoot of bareRoots) violations.push({ repoPath: bareRoot, reason: 'bare Git repository' });
@@ -1633,11 +2768,12 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // Other ignored paths remain operator-controlled packet candidates, so an
     // ignored archive at the repository root or in an ordinary folder fails
     // closed just like tracked and untracked archives.
-    // These exact top-level roots are generated locally and ignored by Git.
-    // Skipping them at the ignored-source boundary prevents backups and tool
-    // caches from blocking every push. If a file is force-added, its source is
-    // staged/tracked instead and it receives the full structural/archive scan.
-    if (source === 'ignored' && isOperatorOwnedIgnoredPath(repoPath)) continue;
+    // These exact top-level metadata files, plus the manifest-bound dated
+    // backup files above, are generated locally and ignored by Git. This is a
+    // source-boundary exemption: force-added files are staged/tracked and
+    // receive the full structural/archive scan. Keep this single skip after
+    // entry-kind checks so non-regular ignored entries are never dereferenced.
+    if (source === 'ignored' && (isOperatorOwnedIgnoredPath(repoPath) || verifiedDatedBackups.has(repoPath))) continue;
     const checkArchives = source !== 'ignored' || !isToolOwnedIgnoredPath(repoPath);
     const result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
     const acceptedReason = acceptedStructuralReason(repoPath, result?.reason);
@@ -1724,13 +2860,13 @@ async function historyViolations(commits, root, execute, budget, historyBudget) 
       const bareRoot = commitContainsBareRepository(commit, repoPath, root, execute);
       if (bareRoot) violations.push({ repoPath: `${commit}:${bareRoot}`, reason: 'bare Git repository' });
       if (!REGULAR_GIT_MODES.has(tree.mode) || tree.type !== 'blob') { violations.push({ repoPath: `${commit}:${repoPath}`, reason: 'non-regular Git mode' }); continue; }
-      entries.push({ repoPath: `${commit}:${repoPath}`, exemptionPath: repoPath, spec: tree.object, key: `history:${commit}:${repoPath}` });
+      entries.push({ repoPath: `${commit}:${repoPath}`, exemptionPath: repoPath, commit, spec: tree.object, key: `history:${commit}:${repoPath}` });
     }
   }
   const reasons = await scanGitObjectEntries(entries, root, budget);
   for (const entry of entries) {
     const reason = reasons.get(entry.key);
-    const acceptedReason = acceptedStructuralReason(entry.exemptionPath, reason, entry.repoPath);
+    const acceptedReason = acceptedStructuralReason(entry.exemptionPath, reason, entry.commit);
     if (acceptedReason) violations.push({ repoPath: entry.repoPath, reason: acceptedReason });
   }
   return violations;
@@ -1847,8 +2983,20 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     const fields = update.trim().split(/\s+/);
     if (fields.length !== 4) throw new Error('private Phase 3C pre-push containment received malformed ref update');
     const [localRef, localSha, remoteRef, remoteSha] = fields;
+    // Git represents a deletion with the literal local-ref sentinel. Validate
+    // that special record before ordinary local-ref syntax, otherwise every
+    // valid deletion is rejected as though it were an attacker-controlled ref.
+    if (localRef === '(delete)' && isZeroSha(localSha)) {
+      if (!remoteRef.startsWith('refs/') || isZeroSha(remoteSha)) throw new Error('private Phase 3C pre-push containment received malformed ref update');
+      // A single Git transport has one object format. Accept SHA-1 deletions
+      // and SHA-256 deletions, but never a mixed-width record whose zero local
+      // sentinel and remote OID came from different object formats.
+      if (localSha.length !== remoteSha.length) throw new Error('private Phase 3C pre-push containment received malformed ref update');
+      assertCommitSha(remoteSha, 'remote');
+      continue; // deletion exports no new blob
+    }
     if (!localRef.startsWith('refs/') || !remoteRef.startsWith('refs/')) throw new Error('private Phase 3C pre-push containment received malformed ref update');
-    if (isZeroSha(localSha)) continue; // deletion exports no new blob
+    if (isZeroSha(localSha)) throw new Error('private Phase 3C pre-push containment received malformed ref update');
     assertCommitSha(localSha, 'local');
     const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });
     objectViolations.push(...inspected.violations);

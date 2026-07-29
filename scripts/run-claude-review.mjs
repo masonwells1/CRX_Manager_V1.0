@@ -21,93 +21,558 @@ export function defaultClaudeReviewOutputPath({ root = ROOT } = {}) {
   return path.join(root, ".claude", "session-state", "claude-review-latest.txt");
 }
 
+// Keep presentation normalization bounded and deliberately narrower than a
+// Markdown parser. Review output is untrusted proof input: common line-start
+// wrappers must not hide a finding, but we must never synthesize a machine
+// verdict by deleting meaningful characters from an arbitrary line.
+const REVIEW_WRAPPER_PAIRS = new Map([
+  ["[", "]"], ["(", ")"], ["{", "}"], ["<", ">"],
+  ["【", "】"], ["〔", "〕"], ["（", "）"], ["［", "］"], ["｛", "｝"],
+  ["〈", "〉"], ["《", "》"], ["「", "」"], ["『", "』"],
+  ["“", "”"], ["‘", "’"], ["«", "»"], ["‹", "›"], ['"', '"'], ["'", "'"],
+]);
+const REVIEW_SEVERITY_TOKEN_RE = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?)(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?$/i;
+const REVIEW_ACTION_TOKEN_RE = /^(?:REQUIRED\s+)?(?:FIX\s*\/\s*FOLLOW-?UPS?|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?$/i;
+const REVIEW_MACHINE_VERDICT_RE = /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT)\s*:/i;
+const REVIEW_WRAPPER_DEPTH_LIMIT = 12;
+const REVIEW_SECURITY_PREFIX_LIMIT = 256;
+const REVIEW_SECURITY_TOKEN_LIMIT = 256;
+// NIT detail is nonblocking unless it carries an explicit required-work marker.
+// Keep that inspection finite, but large enough that a normal prose/table cell
+// is not silently refused merely because it is longer than a proof label.
+const REVIEW_REQUIRED_WORK_SCAN_LIMIT = 16 * 1024;
+const REVIEW_CONFUSABLE_ASCII = new Map([
+  ["Α", "A"], ["А", "A"], ["а", "a"],
+  ["Β", "B"], ["В", "B"],
+  ["Ϲ", "C"], ["С", "C"], ["с", "c"],
+  ["Ԁ", "D"],
+  ["Ε", "E"], ["Е", "E"], ["е", "e"],
+  ["Ϝ", "F"], ["Ғ", "F"],
+  ["Ꮐ", "G"], ["ɢ", "g"],
+  ["Η", "H"], ["Н", "H"], ["н", "h"],
+  ["Ι", "I"], ["І", "I"], ["Ӏ", "I"], ["ɪ", "I"], ["і", "i"], ["ι", "i"],
+  ["Ј", "J"], ["ј", "j"],
+  ["Κ", "K"], ["К", "K"], ["κ", "k"], ["к", "k"],
+  ["ӏ", "L"], ["Ꮮ", "L"],
+  ["Μ", "M"], ["М", "M"], ["м", "m"],
+  ["Ν", "N"],
+  ["Ο", "O"], ["О", "O"], ["ο", "o"], ["о", "o"],
+  ["Ρ", "P"], ["Р", "P"], ["ρ", "p"], ["р", "p"],
+  ["Ԛ", "Q"],
+  ["Ѕ", "S"], ["ѕ", "s"],
+  ["Τ", "T"], ["Т", "T"], ["τ", "t"],
+  ["Ѵ", "V"], ["ν", "v"],
+  ["Ԝ", "W"], ["ԝ", "w"],
+  ["Χ", "X"], ["Х", "X"], ["χ", "x"], ["х", "x"],
+  ["Υ", "Y"], ["У", "Y"], ["у", "y"],
+  ["Ζ", "Z"],
+]);
+
+function foldLeadingReviewSecurityTextOnce(value) {
+  const characters = Array.from(String(value || ""));
+  const prefix = characters.slice(0, REVIEW_SECURITY_PREFIX_LIMIT).join("")
+    .normalize("NFKC")
+    .replace(/[\p{Cf}\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu, "")
+    .replace(/[∶꞉ː⁝︰﹕]/gu, ":")
+    .replace(/./gu, character => REVIEW_CONFUSABLE_ASCII.get(character) ?? character);
+  return prefix + characters.slice(REVIEW_SECURITY_PREFIX_LIMIT).join("");
+}
+
+function foldLeadingReviewSecurityText(value, state = null) {
+  let folded = String(value || "");
+  // Two bounded passes let removal of an invisible prefix expose the next
+  // bounded prefix without ever scanning an unbounded reviewer line.
+  for (let depth = 0; depth < 2; depth += 1) {
+    folded = foldLeadingReviewSecurityTextOnce(folded);
+  }
+  if (foldLeadingReviewSecurityTextOnce(folded) !== folded && state) state.invalid = true;
+  return folded;
+}
+
+function foldReviewSecurityToken(value, state = null) {
+  const characters = Array.from(String(value || ""));
+  if (characters.length > REVIEW_SECURITY_TOKEN_LIMIT) {
+    // This helper is used only after a line/cell has entered the proof grammar.
+    // Refusing an over-bound token is safer than silently leaving a confusable
+    // `FIX`/machine marker beyond the normalization window.
+    if (state) state.invalid = true;
+    return characters.slice(0, REVIEW_SECURITY_TOKEN_LIMIT).join("");
+  }
+  return characters.join("")
+    .normalize("NFKC")
+    .replace(/[\p{Cf}\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu, "")
+    .replace(/[∶꞉ː⁝︰﹕]/gu, ":")
+    .replace(/./gu, character => REVIEW_CONFUSABLE_ASCII.get(character) ?? character);
+}
+
+function foldReviewSecurityTextBounded(value, limit, state = null) {
+  const characters = Array.from(String(value || ""));
+  if (characters.length > limit) {
+    if (state) state.invalid = true;
+    return characters.slice(0, limit).join("");
+  }
+  return characters.join("")
+    .normalize("NFKC")
+    .replace(/[\p{Cf}\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu, "")
+    .replace(/[∶꞉ː⁝︰﹕]/gu, ":")
+    .replace(/./gu, character => REVIEW_CONFUSABLE_ASCII.get(character) ?? character);
+}
+
+const REVIEW_MARKDOWN_PREFIX_RE = /^\s*(?:>\s*|#{1,6}(?=\s|$)\s*|(?:[-*+]\s+|\d+[.)]\s+)(?:\[(?:\s|x|X)\]\s+)?|\[(?:\s|x|X)\]\s+)/u;
+
+function stripReviewMarkdownPrefixes(value, state = null) {
+  let remaining = String(value || "");
+  for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
+    const match = REVIEW_MARKDOWN_PREFIX_RE.exec(remaining);
+    if (!match || match[0].length === 0) break;
+    remaining = remaining.slice(match[0].length);
+  }
+  const exhausted = REVIEW_MARKDOWN_PREFIX_RE.exec(remaining);
+  if (exhausted?.[0]?.length && state) state.invalid = true;
+  return remaining;
+}
+
+function reviewMarkdownHeadingDepth(value, state = null) {
+  let remaining = foldLeadingReviewSecurityText(value, state);
+  for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
+    const wrapper = /^\s*(?:>\s*|(?:[-*+]\s+|\d+[.)]\s+)(?:\[(?:\s|x|X)\]\s+)?|\[(?:\s|x|X)\]\s+)/u.exec(remaining);
+    if (!wrapper?.[0]) break;
+    remaining = remaining.slice(wrapper[0].length);
+  }
+  // A heading has to begin after the bounded, already-recognized Markdown
+  // wrapper grammar above. An unanchored match lets ordinary prose such as
+  // "ticket # note" impersonate a peer heading and clear an active severity
+  // section before its finding is seen.
+  const markdownDepth = /^\s*(#{1,6})(?=\s|$)/u.exec(remaining)?.[1].length;
+  if (markdownDepth !== undefined) return markdownDepth;
+  // Reviewers also use bold severity labels as section parents. Give an exact
+  // bold severity/action label the same virtual level as `## HIGH`, so a later
+  // `###` heading cannot silently reset its hierarchy context.
+  const bold = /^\s*(\*\*|__)(.+)\1\s*$/u.exec(remaining);
+  if (!bold) return null;
+  const token = unwrapBalancedReviewPunctuation(foldReviewSecurityToken(bold[2], state), state).replace(/_/gu, "");
+  return REVIEW_SEVERITY_TOKEN_RE.test(token) || REVIEW_ACTION_TOKEN_RE.test(token) ? 2 : null;
+}
+
+function isBalancedOuterReviewWrapper(value, opening, closing) {
+  if (!value.startsWith(opening) || !value.endsWith(closing)) return false;
+  if (opening === closing) return value.length >= 2 && !value.slice(1, -1).includes(opening);
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === opening) depth += 1;
+    else if (character === closing) {
+      depth -= 1;
+      if (depth < 0 || (depth === 0 && index !== value.length - 1)) return false;
+    }
+  }
+  return depth === 0;
+}
+
+function unwrapBalancedReviewPunctuation(value, state = null) {
+  let unwrapped = String(value || "").trim();
+  for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
+    const opening = unwrapped[0];
+    const closing = REVIEW_WRAPPER_PAIRS.get(opening);
+    if (!closing || !isBalancedOuterReviewWrapper(unwrapped, opening, closing)) break;
+    unwrapped = unwrapped.slice(1, -1).trim();
+  }
+  const opening = unwrapped[0];
+  const closing = REVIEW_WRAPPER_PAIRS.get(opening);
+  if (closing && isBalancedOuterReviewWrapper(unwrapped, opening, closing) && state) state.invalid = true;
+  return unwrapped;
+}
+
+function leadingBalancedReviewWrapper(value, state = null) {
+  const source = String(value || "").trimStart();
+  const opening = source[0];
+  const closing = REVIEW_WRAPPER_PAIRS.get(opening);
+  if (!closing) return null;
+  if (opening === closing) {
+    const closingIndex = source.indexOf(closing, 1);
+    return closingIndex < 0
+      ? null
+      : { token: source.slice(1, closingIndex).trim(), rest: source.slice(closingIndex + 1) };
+  }
+  let depth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === opening) depth += 1;
+    else if (character === closing) {
+      depth -= 1;
+      if (depth === 0) return { token: unwrapBalancedReviewPunctuation(source.slice(1, index), state), rest: source.slice(index + 1) };
+      if (depth < 0) return null;
+    }
+  }
+  return null;
+}
+
+function stripLeadingReviewSeparatorPunctuation(value) {
+  const source = String(value || "");
+  let separatorLength = 0;
+  for (const character of source) {
+    if (REVIEW_WRAPPER_PAIRS.has(character) || !/[\p{P}\p{S}]/u.test(character)) break;
+    separatorLength += character.length;
+  }
+  return source.slice(separatorLength).trimStart();
+}
+
+function normalizeWrappedReviewClassification(value, state = null) {
+  const source = String(value || "").trim();
+  const wrapped = leadingBalancedReviewWrapper(source, state);
+  if (!wrapped) return source;
+  const token = unwrapBalancedReviewPunctuation(foldReviewSecurityToken(wrapped.token, state), state);
+  // A reviewer can wrap the whole `Severity: HIGH` label rather than just the
+  // severity word. Preserve that recognized prefix so the anchored severity
+  // parser below sees the detail; otherwise `[Severity: HIGH] finding` can
+  // evade both proof consumers.
+  const wrappedSeverity = /^(severity\s*:\s*)(.+)$/i.exec(token);
+  const classificationToken = wrappedSeverity
+    ? `Severity: ${wrappedSeverity[2].trim()}`
+    : token;
+  const compactToken = (wrappedSeverity ? wrappedSeverity[2] : token).replace(/_/gu, "");
+  if (!REVIEW_SEVERITY_TOKEN_RE.test(compactToken) && !REVIEW_ACTION_TOKEN_RE.test(compactToken) && !REVIEW_MACHINE_VERDICT_RE.test(token)) return source;
+  const suffix = unwrapBalancedReviewPunctuation(wrapped.rest.trimStart(), state);
+  if (!suffix) return classificationToken;
+  const detail = stripLeadingReviewSeparatorPunctuation(suffix);
+  if (detail !== suffix) return `${classificationToken}: ${detail}`;
+  return `${classificationToken} ${suffix}`;
+}
+
+function canonicalReviewMachineLine(value, state = null) {
+  const candidate = foldLeadingReviewSecurityText(String(value || "").trim(), state);
+  const label = /^(FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT)(.*)$/i.exec(candidate);
+  if (!label) return null;
+  const separatorAndValue = /^(\s*[\p{P}\p{S}]*):([\p{P}\p{S}]*\s*)(\S.*)$/u.exec(label[2]);
+  if (!separatorAndValue || separatorAndValue[1].includes("_") || separatorAndValue[2].includes("_")) return null;
+  return `${label[1].toUpperCase()}: ${separatorAndValue[3].trim()}`;
+}
+
+function normalizeReviewMachineLine(value, state = null) {
+  const unwrapped = unwrapBalancedReviewPunctuation(foldLeadingReviewSecurityText(value, state), state);
+  const direct = canonicalReviewMachineLine(unwrapped, state);
+  if (direct) return direct;
+  const wrapped = leadingBalancedReviewWrapper(unwrapped, state);
+  const wrappedMachine = wrapped ? canonicalReviewMachineLine(wrapped.token, state) : null;
+  if (wrappedMachine && /^[\s\p{P}\p{S}]*$/u.test(wrapped.rest)) return wrappedMachine;
+  return unwrapped;
+}
+
+function normalizeReviewClassificationLine(value, state = null) {
+  let classified = normalizeWrappedReviewClassification(value, state);
+  const severityPrefix = /^(severity\s*:\s*)(.+)$/i.exec(classified);
+  if (severityPrefix) classified = `Severity: ${normalizeWrappedReviewClassification(severityPrefix[2], state)}`;
+  // Underscores are removed only from the presentation-only classification
+  // channel so `_H_I_G_H_` remains a severity label. `machine` below keeps
+  // `FINAL_VERDICT` and the other true machine identities byte-for-byte.
+  return classified.replace(/^_+|_+$/gu, "").replace(/_/gu, "").trim();
+}
+
+export function normalizeReviewOutputLine(line) {
+  const state = { invalid: false };
+  // Fold format/variation characters before stripping Markdown so invisible
+  // characters cannot split a heading or list marker (for example,
+  // "\u200b### HIGH" or "-\u200b HIGH"). Fold the newly exposed prefix once
+  // more; each pass remains capped at REVIEW_SECURITY_PREFIX_LIMIT.
+  const securityFolded = foldLeadingReviewSecurityText(line, state);
+  const headingDepth = reviewMarkdownHeadingDepth(securityFolded, state);
+  const presentation = foldLeadingReviewSecurityText(stripReviewMarkdownPrefixes(securityFolded, state)
+    .replace(/[*`\\]/gu, "")
+    .trim(), state);
+  // A recognized proof label may have a large padding run before its separator
+  // or detail. Do not let that move a confusable marker outside the bounded
+  // normalizer; this is intentionally limited to line-start proof grammar so
+  // ordinary long prose remains ordinary prose.
+  if (/^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT|BLOCKER|HIGH|MED(?:IUM)?|LOW|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s|[\p{P}\p{S}]|$)/iu.test(presentation)
+    && Array.from(presentation).length > REVIEW_SECURITY_TOKEN_LIMIT) state.invalid = true;
+  const machine = normalizeReviewMachineLine(presentation, state);
+  return { machine, classified: normalizeReviewClassificationLine(machine, state), headingDepth, invalid: state.invalid };
+}
+
+// This is deliberately narrower than the actionable-finding classifier: it
+// reports only genuine bounded-parser refusal, never reviewer prose. Callers
+// can surface this one categorical diagnostic without treating untrusted review
+// text as an instruction or pretending an ordinary long NIT was a finding.
+export function reviewOutputBoundedRefusalDiagnostic(stdout) {
+  const lines = String(stdout || "").split(/\r?\n/);
+  if (lines.map(normalizeReviewOutputLine).some(({ invalid }) => invalid)) {
+    return "review output exceeded a bounded proof-label normalization limit";
+  }
+  for (const line of lines) {
+    const cells = line.includes("|") ? line.replace(/^\|/, "").replace(/\|$/, "").split("|") : [line];
+    const isNitLane = cells.some(cell => /^\s*NIT(?:PICK)?(?:\s*\(\s*\d+(?:\s+findings?)?\s*\))?\s*(?::|$)/i.test(cell));
+    if (isNitLane && cells.some(cell => Array.from(cell).length > REVIEW_REQUIRED_WORK_SCAN_LIMIT)) {
+      return "review output exceeded the bounded NIT required-work scan limit";
+    }
+  }
+  return null;
+}
+
+export function reviewOutputHasActionableFindings(stdout) {
+  const normalizedLines = String(stdout || "").split(/\r?\n/).map(normalizeReviewOutputLine);
+  let blockingSection = null;
+  let severityContextActive = false;
+  let severityContextHeadingDepth = null;
+  let nitDetailContextActive = false;
+  let nitDetailHeadingDepth = null;
+  const clearSeverityContext = () => {
+    blockingSection = null;
+    severityContextActive = false;
+    severityContextHeadingDepth = null;
+  };
+  const activateSeverityContext = headingDepth => {
+    severityContextActive = true;
+    severityContextHeadingDepth = headingDepth;
+    nitDetailContextActive = false;
+    nitDetailHeadingDepth = null;
+  };
+  const activateNitDetailContext = headingDepth => {
+    clearSeverityContext();
+    nitDetailContextActive = true;
+    nitDetailHeadingDepth = headingDepth;
+  };
+  const isSubordinateToActiveSeverity = headingDepth =>
+    headingDepth !== null
+    && severityContextActive
+    && severityContextHeadingDepth !== null
+    && headingDepth > severityContextHeadingDepth;
+  const noFinding = (value) => {
+    const state = { invalid: false };
+    let candidate = stripLeadingReviewSeparatorPunctuation(foldReviewSecurityToken(String(value || "").trim(), state));
+    for (let depth = 0; depth < REVIEW_WRAPPER_DEPTH_LIMIT; depth += 1) {
+      const next = unwrapBalancedReviewPunctuation(candidate.replace(/[.!?…;:。！？]+$/u, "").trim(), state);
+      if (state.invalid) return false;
+      if (next === candidate) break;
+      candidate = next;
+    }
+    return /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)$/i.test(candidate);
+  };
+  const severityTokenPattern = "BLOCKER|HIGH|MED(?:IUM)?|LOW|NIT(?:PICK)?";
+  const actionTokenPattern = "(?:REQUIRED\\s+)?(?:FIX\\s*\\/\\s*FOLLOW-?UPS?|FIX(?:ES)?|FOLLOW-?UPS?)";
+  const severityPattern = `(${severityTokenPattern})`;
+  const actionPattern = `(${actionTokenPattern})`;
+  const findingLabelPattern = `(${severityTokenPattern}|${actionTokenPattern})`;
+  const countPattern = "(?:\\s*\\(\\s*(\\d+)(?:\\s+findings?)?\\s*\\))?";
+  // Once an exact severity/action label begins the line, punctuation or a
+  // symbol before nonempty detail is a finding separator. This is intentionally
+  // broader than a hand-maintained colon/dash list, while mid-sentence prose
+  // never reaches these anchored classifiers.
+  const detailSeparator = "(?:\\s+|\\s*[\\p{P}\\p{S}]+\\s*)";
+  const parseCount = value => {
+    const match = /^(?:COUNT\s*[:=]\s*)?(\d+)(?:\s+findings?)?$/i.exec(String(value || "").trim());
+    return match ? Number(match[1]) : null;
+  };
+  const hasRequiredWorkMarker = value => {
+    const state = { invalid: false };
+    const normalized = foldReviewSecurityTextBounded(value, REVIEW_REQUIRED_WORK_SCAN_LIMIT, state);
+    return state.invalid || /\brequired\s+(?:fix(?:es)?|follow-?ups?|repair(?:s)?)\b|\b(?:fix(?:es)?|follow-?ups?|repair(?:s)?)\s+required\b/iu.test(normalized);
+  };
+  const explicitCleanReviewSummary = value => {
+    const state = { invalid: false };
+    const normalized = foldReviewSecurityToken(value, state).replace(/[.!?…。！？]+$/gu, "").trim();
+    return !state.invalid && /^(?:clean review|review clean)$/i.test(normalized);
+  };
+  const longActionableTableCell = value => {
+    const prefix = foldLeadingReviewSecurityText(String(value || "").slice(0, REVIEW_SECURITY_TOKEN_LIMIT));
+    return /^(?:SEVERITY\s*:\s*)?(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|(?:REQUIRED\s+)?(?:FIX\s*\/\s*FOLLOW-?UPS?|FIX(?:ES)?|FOLLOW-?UPS?))(?:\s|\(|[\p{P}\p{S}]|$)/iu.test(prefix);
+  };
+  for (const { classified: line, machine, headingDepth, invalid } of normalizedLines) {
+    if (invalid) return true;
+    if (!line) continue;
+    // Headings carry hierarchy. A subordinate heading is still inside the
+    // active severity/NIT section; only a peer or ancestor can close it.
+    if (headingDepth !== null && severityContextActive && severityContextHeadingDepth !== null && headingDepth <= severityContextHeadingDepth) {
+      // A peer/ancestor heading may end a completed section, but it cannot
+      // erase an uncounted severity that never supplied its required None/N/A.
+      if (blockingSection === "requires-empty") return true;
+      clearSeverityContext();
+    }
+    if (headingDepth !== null && nitDetailContextActive && nitDetailHeadingDepth !== null && headingDepth <= nitDetailHeadingDepth) {
+      nitDetailContextActive = false;
+      nitDetailHeadingDepth = null;
+    }
+    if (/^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT|CODEX_PROOF_VERDICT):/i.test(machine)) return true;
+    let tableNormalizationInvalid = false;
+    const rawTableCells = line.includes("|")
+      ? line.replace(/^\|/, "").replace(/\|$/, "").split("|")
+      : null;
+    const tableCells = rawTableCells
+      ? rawTableCells.map((cell) => {
+        if (Array.from(cell).length > REVIEW_SECURITY_TOKEN_LIMIT) {
+          // A long ordinary table detail is not a proof label. Do not silently
+          // refuse a NIT-only review for it; explicit required work is checked
+          // below with its own finite detail budget. A long actionable label is
+          // ambiguous and therefore fails closed.
+          if (longActionableTableCell(cell)) tableNormalizationInvalid = true;
+          return null;
+        }
+        const state = { invalid: false };
+        const normalized = normalizeReviewClassificationLine(foldReviewSecurityToken(cell, state), state);
+        if (state.invalid) tableNormalizationInvalid = true;
+        return normalized;
+      })
+      : null;
+    if (tableNormalizationInvalid) return true;
+    const tableSeverityEntries = tableCells?.map((cell, index) => ({
+      index,
+      match: new RegExp(`^${severityPattern}${countPattern}$`, "i").exec(cell),
+    })).filter(({ match }) => match) ?? [];
+    if (tableSeverityEntries.length) {
+      const actionableSeverityEntries = tableSeverityEntries.filter(({ match }) => !/^NIT(?:PICK)?$/i.test(match[1]));
+      if (actionableSeverityEntries.length > 1) return true;
+      const tableSeverity = actionableSeverityEntries[0]?.match ?? tableSeverityEntries[0].match;
+      const tableSeverityIndex = actionableSeverityEntries[0]?.index ?? tableSeverityEntries[0].index;
+      const isNit = /^NIT(?:PICK)?$/i.test(tableSeverity[1]);
+      if (isNit) {
+        if (isSubordinateToActiveSeverity(headingDepth)) return true;
+        if (rawTableCells.some(hasRequiredWorkMarker)) return true;
+        if (blockingSection === "requires-empty") return true;
+        activateNitDetailContext(headingDepth);
+        continue;
+      }
+      const inlineCount = tableSeverity[2] === undefined ? null : Number(tableSeverity[2]);
+      // A reviewer may put the severity at any table position. Every other
+      // cell must therefore be an explicit empty value; inspecting only the
+      // cells to the right would let a finding before the severity disappear.
+      const nonSeverityCells = tableCells.filter((_, index) => index !== tableSeverityIndex);
+      const tableCounts = nonSeverityCells.map(parseCount).filter((count) => count !== null);
+      if (inlineCount !== null && inlineCount > 0) return true;
+      if (tableCounts.some((count) => count > 0)) return true;
+      activateSeverityContext(headingDepth);
+      if (nonSeverityCells.length === 0) {
+        blockingSection = inlineCount === 0 ? "declared-empty" : "requires-empty";
+      } else if (nonSeverityCells.some((cell) =>
+        !/^(?:-|—)?$/u.test(cell) && !/^:?-{3,}:?$/u.test(cell) && parseCount(cell) !== 0 && !noFinding(cell))) {
+        return true;
+      } else {
+        blockingSection = null;
+      }
+      continue;
+    }
+    const severityLabel = new RegExp(`^SEVERITY\\s*:\\s*${severityPattern}${countPattern}(?:${detailSeparator}(.+))?$`, "iu").exec(line);
+    if (severityLabel) {
+      const isNit = /^NIT(?:PICK)?$/i.test(severityLabel[1]);
+      const count = severityLabel[2] === undefined ? null : Number(severityLabel[2]);
+      const detail = severityLabel[3];
+      if (isNit) {
+        if (isSubordinateToActiveSeverity(headingDepth)) return true;
+        if (hasRequiredWorkMarker(detail)) return true;
+        if (blockingSection === "requires-empty") return true;
+        activateNitDetailContext(headingDepth);
+      } else if (count !== null && count > 0) {
+        return true;
+      } else {
+        activateSeverityContext(headingDepth);
+        if (detail) {
+          if (!noFinding(detail)) return true;
+          blockingSection = null;
+        } else {
+          blockingSection = count === 0 ? "declared-empty" : "requires-empty";
+        }
+      }
+      continue;
+    }
+    const blockingHeading = new RegExp(`^${severityPattern}${countPattern}\\s*[\\p{P}\\p{S}]*\\s*$`, "iu").exec(line);
+    if (blockingHeading) {
+      if (/^NIT(?:PICK)?$/i.test(blockingHeading[1])) {
+        // A nested NIT heading cannot downgrade or close its parent blocking
+        // section. The hierarchy is contradictory, so fail closed rather than
+        // allowing ordinary detail text to escape the parent severity.
+        if (isSubordinateToActiveSeverity(headingDepth)) return true;
+        if (blockingSection === "requires-empty") return true;
+        activateNitDetailContext(headingDepth);
+      } else {
+        const count = blockingHeading[2] === undefined ? null : Number(blockingHeading[2]);
+        if (count !== null && count > 0) return true;
+        blockingSection = count === 0 ? "declared-empty" : "requires-empty";
+        activateSeverityContext(headingDepth);
+      }
+      continue;
+    }
+    const fixHeading = new RegExp(`^${actionPattern}${countPattern}\\s*[\\p{P}\\p{S}]*\\s*$`, "iu").exec(line);
+    if (fixHeading) {
+      const count = fixHeading[2] === undefined ? null : Number(fixHeading[2]);
+      if (count !== null && count > 0) return true;
+      blockingSection = count === 0 ? "declared-empty" : "requires-empty";
+      activateSeverityContext(headingDepth);
+      continue;
+    }
+    const finding = new RegExp(`^${findingLabelPattern}${countPattern}${detailSeparator}(.+)$`, "iu").exec(line);
+    if (finding) {
+      const severity = finding[1];
+      const count = finding[2] === undefined ? null : Number(finding[2]);
+      const detail = finding[3];
+      if (/^NIT(?:PICK)?$/i.test(severity)) {
+        if (isSubordinateToActiveSeverity(headingDepth)) return true;
+        if (hasRequiredWorkMarker(detail)) return true;
+        if (blockingSection === "requires-empty") return true;
+        activateNitDetailContext(headingDepth);
+        continue;
+      }
+      if (count !== null && count > 0) return true;
+      if (!noFinding(detail)) return true;
+      blockingSection = null;
+      activateSeverityContext(headingDepth);
+      continue;
+    }
+    if (/^SUMMARY\s*:?\s*$/i.test(line)) {
+      if (blockingSection === "requires-empty") return true;
+      if (severityContextHeadingDepth === null) clearSeverityContext();
+      if (nitDetailHeadingDepth === null) { nitDetailContextActive = false; nitDetailHeadingDepth = null; }
+      continue;
+    }
+    if (/^NIT(?:PICK)?\s*:?\s*$/i.test(line)) {
+      if (isSubordinateToActiveSeverity(headingDepth)) return true;
+      if (blockingSection === "requires-empty") return true;
+      activateNitDetailContext(headingDepth);
+      continue;
+    }
+    if (nitDetailContextActive && hasRequiredWorkMarker(line)) return true;
+    if (blockingSection) {
+      const sectionValue = /^(?:FINDING|DETAILS?)\s*:\s*(.+)$/i.exec(line)?.[1] ?? line;
+      if (noFinding(sectionValue)) {
+        blockingSection = null;
+        continue;
+      }
+      // A counted-zero section may include a subordinate summary saying only
+      // "Clean review."; it is not a hidden finding. An uncounted section
+      // still requires an explicit None/N/A line before it can be clean.
+      if (blockingSection === "declared-empty" && explicitCleanReviewSummary(sectionValue)) {
+        blockingSection = null;
+        continue;
+      }
+      return true;
+    }
+    if (severityContextActive && noFinding(line)) continue;
+    if (severityContextActive) return true;
+  }
+  return blockingSection === "requires-empty";
+}
+
+export function claudePushProofRefusalDiagnostic({
+  executionState,
+  withholdReason,
+} = {}) {
+  if (executionState !== "VERIFIED" || typeof withholdReason !== "string" || !withholdReason.trim()) return null;
+  return `Claude review VERIFIED but no push proof was minted: ${withholdReason.trim()}.`;
+}
+
 export function claudeReviewProofVerdict({ status, stdout } = {}) {
   if (status !== 0) return null;
   const lines = String(stdout || "").trim().split(/\r?\n/);
   const matches = lines
-    .map((line) => line.match(/^FINAL_VERDICT:\s*(SHIP-WITH-FOLLOWUPS|SHIP|NEEDS-WORK)\s*$/i))
+    .map((line) => line.match(/^FINAL_VERDICT:\s*(SHIP|NEEDS-WORK)\s*$/i))
     .filter(Boolean);
   // Exactly one terminal machine-readable verdict is required. This prevents
   // a quoted/injected `Verdict: SHIP` earlier in free-form review prose from
   // winning a first-match regex and minting proof.
   if (matches.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(lines.at(-1) || "")) return null;
   if (matches[0][1].toUpperCase() !== "SHIP") return null;
-  const normalizedLines = lines.map((line) => {
-    const isHeading = /^\s{0,3}#{1,6}(?:\s+|$)/u.test(line);
-    const machine = line
-      .replace(/^\s*(?:(?:>\s*)|(?:#{1,6}\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))*/u, "")
-      .replace(/[*`\\]/gu, "")
-      .replace(/^_+|_+$/gu, "")
-      .trim();
-    return {
-      isHeading,
-      machine,
-      classified: machine.replace(/_/gu, ""),
-    };
-  });
+  const normalizedLines = lines.map((line) => normalizeReviewOutputLine(line).machine);
   const machineVerdicts = normalizedLines
-    .map(({ machine }) => machine)
     .filter((line) => /^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(line));
   if (machineVerdicts.length !== 1 || !/^FINAL_VERDICT:\s*SHIP\s*$/i.test(machineVerdicts[0])) return null;
-  const noFinding = (value) => /^(?:none|no\s+(?:(?:blocker|high|med(?:ium)?|low|required|actionable)\s+)?findings?|0(?:\s+findings?)?|n\/a)\s*[.!]?$/i.test(value.trim());
-  let blockingSection = null;
-  for (const { classified: line, isHeading, machine } of normalizedLines) {
-    if (/^(?:FINAL_VERDICT|OPUS5_VERDICT|VERDICT):/i.test(machine)) {
-      if (blockingSection === "requires-empty") return null;
-      blockingSection = null;
-      continue;
-    }
-    const tableCells =
-      line.startsWith("|") && line.endsWith("|")
-        ? line
-            .slice(1, -1)
-            .split("|")
-            .map((cell) => cell.trim())
-        : [];
-    const severityCellIndex = tableCells.findIndex((cell) =>
-      /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)$/i.test(cell),
-    );
-    if (severityCellIndex !== -1) {
-      const nonSeverityCells = tableCells.filter((_, index) => index !== severityCellIndex);
-      if (!nonSeverityCells.every((cell) => /^(?:-|—)?$/u.test(cell) || noFinding(cell))) return null;
-      blockingSection = null;
-      continue;
-    }
-    if (/^SEVERITY\s*(?::|-|—|\|)\s*(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)\s*$/i.test(line)) {
-      blockingSection = "requires-empty";
-      continue;
-    }
-    const blockingHeading = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW)(?:\s*\(\s*(\d+)\s*\))?\s*:?\s*$/i.exec(line);
-    if (blockingHeading) {
-      blockingSection = blockingHeading[1] === "0" ? "declared-empty" : "requires-empty";
-      continue;
-    }
-    if (/^(?:FIX(?:ES)?|FOLLOW-?UPS?)\s*:?\s*$/i.test(line)) {
-      blockingSection = "requires-empty";
-      continue;
-    }
-    const finding = /^(?:BLOCKER|HIGH|MED(?:IUM)?|LOW|FIX(?:ES)?|FOLLOW-?UPS?)(?:\s*\(\s*\d+\s*\))?(?:\s*(?::|-|—)\s*|\s+)(.+)$/i.exec(line);
-    if (finding) {
-      if (!noFinding(finding[1])) return null;
-      blockingSection = null;
-      continue;
-    }
-    if (blockingSection && line) {
-      const findingField = /^FINDINGS?\s*:\s*(.+)$/i.exec(line);
-      if (noFinding(findingField?.[1] ?? line)) {
-        blockingSection = null;
-        continue;
-      }
-      if (blockingSection === "declared-empty" && isHeading) {
-        blockingSection = null;
-      } else {
-        return null;
-      }
-    }
-    if (/^(?:NIT(?:PICK)?|SUMMARY)\s*:?\s*$/i.test(line)) {
-      blockingSection = null;
-    }
-  }
+  if (reviewOutputHasActionableFindings(lines.slice(0, -1).join("\n"))) return null;
   return "clean";
 }
 
@@ -118,6 +583,7 @@ export function claudeReviewProofWithholdReason({
   proofVerdict,
   headSha,
   baseSha,
+  reviewOutputDiagnostic = null,
 } = {}) {
   if (executionState !== "VERIFIED") {
     return `review execution state is ${executionState || "unknown"}, not VERIFIED`;
@@ -132,6 +598,7 @@ export function claudeReviewProofWithholdReason({
     return "HEAD or origin/main did not resolve to a full 40-character commit SHA";
   }
   if (!proofVerdict) {
+    if (typeof reviewOutputDiagnostic === "string" && reviewOutputDiagnostic.trim()) return reviewOutputDiagnostic.trim();
     return "review output did not satisfy the clean-proof contract: exactly one terminal FINAL_VERDICT: SHIP and no actionable BLOCKER, HIGH, MED, LOW, FIX, or FOLLOW-UP finding";
   }
   return null;
@@ -375,7 +842,10 @@ export function getGitContext(scope, commit, executeGit = execFileSync) {
   return {
     branch: optionalGit(["branch", "--show-current"], "unknown"),
     head: optionalGit(["rev-parse", "HEAD"], "unknown"),
-    status: optionalGit(["status", "--short"]),
+    // Initial cleanliness is part of the proof boundary, not display-only
+    // prompt context. A failed status command must block before Claude runs;
+    // treating its empty fallback as a clean worktree would mint unbound proof.
+    status: requiredGit(["status", "--short"]),
     // Captured BEFORE the review runs — the proof must bind to what was
     // actually reviewed, not whatever HEAD is afterwards (Codex round-4 TOCTOU).
     headSha: requiredGit(["rev-parse", "HEAD"]),
@@ -470,9 +940,7 @@ export function buildClaudeReviewPrompt({
     "Expected output:",
     "- use separate BLOCKER, HIGH, MED, LOW, and NIT sections; never combine severity headings",
     "- write `None.` in each BLOCKER, HIGH, MED, and LOW section that has no finding",
-    "- use FINAL_VERDICT: SHIP only when no actionable BLOCKER, HIGH, MED, or LOW finding remains",
-    "- use FINAL_VERDICT: NEEDS-WORK when any actionable BLOCKER, HIGH, MED, or LOW finding remains",
-    "- NIT items may accompany FINAL_VERDICT: SHIP only when they are optional polish, not required follow-up work",
+    "- SHIP requires no actionable BLOCKER/HIGH/MED/LOW and no required FIX/follow-up; NIT-only polish is nonblocking",
     "- each finding must cite file:line evidence",
     "- explicitly say where you agree or disagree with Codex's position",
     "- exact next step for Mason in plain English",
@@ -753,13 +1221,18 @@ export function runClaudeReview(options) {
       proofVerdict,
       headSha,
       baseSha,
+      reviewOutputDiagnostic: reviewOutputBoundedRefusalDiagnostic(parsed.result),
     });
     if (!withholdReason) {
       const proofPath = writeClaudePushProof({ headSha, baseSha, verdict: proofVerdict });
       process.stdout.write(`Claude push proof written to ${proofPath}\n`);
     } else {
       clearClaudePushProof();
-      process.stdout.write(`Claude push proof withheld: ${withholdReason}.\n`);
+      const diagnostic = claudePushProofRefusalDiagnostic({
+        executionState,
+        withholdReason,
+      });
+      if (diagnostic) process.stderr.write(`${diagnostic}\n`);
     }
   }
   if (executionState === "BLOCKED") {
