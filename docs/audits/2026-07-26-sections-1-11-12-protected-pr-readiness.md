@@ -12,11 +12,16 @@
 > evidence, and because the candidate carries a pending migration that still needs the guarded
 > live-apply gate. Clean review at a SHA is not the same as ready to publish; both statements hold.
 >
-> **Current status, verified 2026-07-29:** Section 1 is still **not landed and not live** — row 1 of
-> `docs/audits/gauntlet/live-foundation-gauntlet-index.md` still carries both MEDs (anon-executable
-> SECDEF number generators; `save_field` activity actor spoofing). The candidate is safe: branch
-> `codex/section1-security-hardening-20260725` exists locally **and on `origin`**, and is
-> additionally pinned by tag `preserve/2026-07-29/codex-section1-security-hardening-20260725`.
+> **Current status, verified 2026-07-29:** Section 1 is partly resolved. The `save_field`
+> activity-actor spoofing MED is fixed live by
+> `20260729222311_bind_save_field_actor`; only the anon-executable SECDEF number-generator MED
+> remains open. Branch `codex/section1-security-hardening-20260725` still exists locally **and on
+> `origin`**, and is additionally pinned by tag
+> `preserve/2026-07-29/codex-section1-security-hardening-20260725`, but it must not be applied
+> as-is. When rebasing it, drop the `save_field` half of
+> `20260725234503_harden_section1_number_and_field_actor.sql` and the duplicate
+> `save-field-actor-binding` predicate and predicate-test files. Reapplying its older function
+> body would replace the live definition and make the hash-pinned standing invariant fail closed.
 
 **Date:** 2026-07-26
 **Mode:** Report-only; no candidate branch was rebased, changed, pushed, PR-opened, merged, deployed, or applied to the live database.
@@ -29,7 +34,7 @@ None of these immutable accepted SHAs is publish-ready: each forks from the pre-
 
 | Section | Accepted local SHA | Classification | Why |
 | --- | --- | --- | --- |
-| 1 — Security remediation | `53f6177eb6afe628c5de437ac27f4a9cd8fbb7cf` | **PARKED** | The merge itself is mechanically clean, but the accepted ledger still requires fresh independent Sol review and a fresh read-only live predicate proof at the future rebased SHA. It also contains a pending migration and therefore cannot be treated as accepted or applied without the later guarded live-apply gate. |
+| 1 — Security remediation | `53f6177eb6afe628c5de437ac27f4a9cd8fbb7cf` | **PARKED — REWORK REQUIRED** | The `save_field` half is superseded live by `20260729222311` and must be removed, together with the duplicate predicate files, before rebase or apply. Only the number-generator hardening remains. That narrowed future diff still requires fresh independent Sol review, fresh read-only live proof, and the guarded live-apply gate at its new SHA. |
 | 11 — PDFs/compliance audit | `b754bf8db85c1ed163dd3d7af17f678ace32e30f` | **READY FOR REBASE/REPROOF** | Report-only diff, no collision with Supplier B1/B2. Rebase, check the report's historical facts still hold at the new base, and rerun the normal PR proof. |
 | 12 — Edge-function audit | `a94ef7f1e8050667314d9c7bddc1ea36be3a46ba` | **READY FOR REBASE/REPROOF** | Report-only diff, no collision with Supplier B1/B2. Rebase, refresh any time-sensitive live metadata/report assertions, and rerun the normal PR proof. |
 
@@ -119,7 +124,7 @@ When a future rebase is committed, the normal pre-commit hook will regenerate an
 1. Start from a new clean worktree at freshly fetched `origin/main`; rebase one candidate only. Do not reuse Supplier B2's dirty worktree. Record the new HEAD SHA, the current base SHA, merge-base, exact changed-file list, `git diff --check`, and a fresh merge-tree result.
 2. Re-read the candidate's accepted artifact against that new base. For Section 11, preserve its two coverage follow-ups and blocked browser proof unless newly disproved. For Section 12, refresh the time-sensitive live inventory before repeating it as a current assertion. For Section 1, do not carry forward the old exact-SHA proof as valid.
 3. Run the normal local pipeline appropriate to the rebased content: at minimum `npm run typecheck`, `npm run lint`, `npm run test`, `npm run build`, `npm run test:agent-workflows`, `npm run test:schema-baseline`, and `npm run check:docs`; Section 1 additionally reruns its changed-SQL audit, security/rpc-contract coverage, disposable PostgreSQL proof, and registered smoke/predicate evidence described in its ledger.
-4. Section 1 remains parked until an independent fresh Sol adversarial review accepts the **new** SHA and the current read-only live `save_field` predicate is run. The migration must not be live-applied in this packet or as part of ordinary PR work. A later live apply needs the owner approval and migration-apply guard required by the accepted ledger (or the documented armed hands-free exception), then its rollback-only smoke and live invariant sweep.
+4. Section 1 remains parked. Before any rebase or apply, remove the now-superseded `save_field` replacement from `20260725234503_harden_section1_number_and_field_actor.sql`, remove its duplicate `save-field-actor-binding` predicate and predicate-test files, and narrow the smoke/proof artifacts to the still-open number generators. Applying the old combined migration would overwrite the live `20260729222311` function body and fail the standing hash-pinned invariant closed. The narrowed candidate then needs an independent fresh Sol adversarial review at the **new** SHA and the normal guarded live-apply path (owner approval or the documented armed hands-free exception), followed by rollback-only smoke and the full live invariant sweep.
 5. Only after the branch is stable and clean, push the rebased branch and open a PR. Wait for all checks, including the required Vercel check; read CodeRabbit's review, fix every real issue, and briefly document any dismissed nit.
 6. Section 1 is a risky diff because it changes `supabase/migrations/`. Immediately before merge, fetch so `origin/main` matches the PR's actual GitHub base and run `node scripts/write-codex-push-proof.mjs`. It must produce a clean, machine-generated proof bound to both the PR HEAD and base; it expires after 30 minutes, and a moved base or changed HEAD requires another run. For this risky PR, do not use `gh pr merge --auto`; after checks and proof are green, merge immediately without auto-merge. Sections 11 and 12 are documentation-only PRs, but still require the full green pipeline and CodeRabbit/Vercel process.
 

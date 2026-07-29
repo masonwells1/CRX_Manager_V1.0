@@ -2,6 +2,24 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — `save_field` activity attribution is bound to the authenticated actor
+
+Live migration `20260729222311_bind_save_field_actor` now derives the field activity actor from
+`auth.uid()`, rejects a conflicting caller-supplied `p_performed_by` before idempotency replay or
+business writes, and records `activity_feed.performed_by` from that authenticated identity. The
+function remains `SECURITY DEFINER` with `search_path = public, pg_temp`; `anon` cannot execute it,
+while authenticated callers retain the existing signature and compatible frontend contract.
+
+The live apply was followed by an exact rollback-only smoke (`SMOKE_PASS_ROLLBACK`), a zero-row
+`save-field-actor-binding` invariant result, and a clean run of all 20 standing live predicates.
+The smoke left zero fixture customers, fields, or activity rows. The migration and live
+`pg_proc.prosrc` body hashes match the reviewed definition.
+
+This closes one of the two Section 1 MED findings. The anon-executable SECURITY DEFINER number
+generators remain open. The older parked branch `codex/section1-security-hardening-20260725`
+contains a superseded duplicate `save_field` replacement; it must be narrowed before rebase or
+apply, or it would replace the live function body and intentionally trip the hash-pinned invariant.
+
 ## 2026-07-29 — The fleet's "parked migrations awaiting apply" count could never reach zero
 
 The SessionStart banner and `/fleet` both counted parked migration drafts by scanning the working

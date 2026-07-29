@@ -9,6 +9,15 @@ five-argument `public.save_field` body and its explicit grants. It does not
 change the signature, frontend call sites, field or billing-default schema,
 idempotency operation, return type, or Supplier Pricing files.
 
+This migration supersedes only the `save_field` half of the older parked
+Section 1 branch `codex/section1-security-hardening-20260725`. That branch's
+combined `20260725234503_harden_section1_number_and_field_actor.sql` and
+duplicate actor-binding predicate files must be narrowed before rebase or
+apply; only its number-generator hardening remains open. Applying the old
+combined function replacement would overwrite the reviewed live body and make
+the standing hash-pinned invariant fail closed. The gauntlet index, protected-
+PR readiness packet, and changelog record that reconciliation.
+
 ## Live preflight
 
 Read-only catalog inspection on 2026-07-29 found:
