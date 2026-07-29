@@ -216,6 +216,18 @@ BEGIN
   -- if that GRANT were ever dropped, the policy below would still exist and this
   -- check would pass while every staff picker in the app silently went empty.  The
   -- view is checked too -- it is the object the app actually selects from.
+  --
+  -- The USING predicate is asserted as well, not just the policy's name.  Name,
+  -- role, permissive and cmd can all still match after someone widens the
+  -- predicate to `true`, which would hand the directory to any signed-in account
+  -- including deactivated ones -- exactly the boundary this policy exists to
+  -- draw.  Checked by substring rather than exact text on purpose: pg_policies
+  -- .qual is Postgres's *reparsed* rendering, not the source above -- verified
+  -- live on this database, `(SELECT auth.uid())` comes back as
+  -- `( SELECT auth.uid() AS uid)` -- so pinning an exact string would fail the
+  -- apply on a formatting difference.  These two substrings are the load-bearing
+  -- halves: drop `is_active` and deactivated staff regain access; drop
+  -- `auth.uid()` and the per-caller identity check is gone.
   IF NOT has_table_privilege('authenticated', 'public.profile_public_directory', 'SELECT')
      OR NOT has_table_privilege('authenticated', 'public.profile_public_view', 'SELECT')
      OR NOT EXISTS (
@@ -226,6 +238,8 @@ BEGIN
             AND permissive = 'PERMISSIVE'
             AND cmd = 'SELECT'
             AND 'authenticated' = ANY (roles)
+            AND qual LIKE '%is_active%'
+            AND qual LIKE '%auth.uid()%'
         ) THEN
     RAISE EXCEPTION 'PROFILE_PUBLIC_DIRECTORY_AUTHENTICATED_READ_LOST';
   END IF;

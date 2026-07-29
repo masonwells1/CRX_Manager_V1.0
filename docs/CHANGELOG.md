@@ -134,6 +134,22 @@ neither silently carries the other.
 The migration's own postflight block now fails the apply if `authenticated` holds any write privilege
 on the directory **or on the view**, or if the analytics read is lost.
 
+**(5) The read-policy assertion checked the policy's name but not its predicate — CodeRabbit, full
+review of PR #269.** `PROFILE_PUBLIC_DIRECTORY_AUTHENTICATED_READ_LOST` matched the authenticated
+`SELECT` policy on name, role, `permissive` and `cmd`. All four still match after someone widens the
+`USING` predicate to `true` — which would hand the staff directory to any signed-in account
+*including deactivated ones*, the exact boundary the policy exists to draw. The guard now also
+requires the predicate to mention `is_active` and `auth.uid()`: drop the first and deactivated staff
+regain access, drop the second and the per-caller identity check is gone.
+
+Asserted by substring, not exact text, and the reason matters for anyone tempted to tighten it:
+`pg_policies.qual` is Postgres's **reparsed** rendering of the predicate, not the source in the
+migration. Verified live on this database — `(SELECT auth.uid())` reads back as
+`( SELECT auth.uid() AS uid)`. Pinning an exact string would fail the apply on a whitespace-and-alias
+difference rather than on a real regression. The pattern was checked against a live policy to confirm
+it discriminates rather than always matching: on `profiles_select`, `qual LIKE '%auth.uid()%'` is true
+and `qual LIKE '%is_active%'` is false.
+
 Neither migration has been applied to live — so this bypass is still open on production until
 `20260729043000` applies.
 
