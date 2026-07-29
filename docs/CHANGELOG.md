@@ -2,6 +2,50 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — Branch/worktree cleanup: ten review documents recovered before the branches went away
+
+43 worktrees and 38 local branches had accumulated. Nine of those branches held review and design
+documents that **no PR had ever tracked** — deleting them would have destroyed the only copy of ten
+files, ~121 KB, including a 35 KB Section 9 reconciliation design. All ten were copied onto `main`
+first; the branches were only then deleted.
+
+Ancestry was not used to decide what was safe. `git merge-base --is-ancestor` reports a fully landed
+branch as unmerged whenever its PR was squash-merged, so every branch was classified by file content
+instead: for each file the branch adds, does that exact path exist in `origin/main`? The check must
+be `git ls-tree -r origin/main --name-only | grep -qxF`, not `git cat-file -e origin/main:<path>` —
+the latter false-negatives on dot-prefixed paths (`.github/`, `.claude/`) and manufactures phantom
+"unlanded work".
+
+Two branches holding unlanded *code* were deliberately kept. `codex/pricing-rpc-live-ledger-closeout`
+looked superseded because PR #265 landed similar work from a differently *named* branch, but content
+comparison found 8 files on it that `main` lacks — five of them `.claude/hooks/patch-*.mjs` — and
+`git ls-remote` shows it was never pushed, so those files exist only on Mason's machine. The other is
+`codex/section1-security-hardening-20260725`, carrying parked security migration `20260725234503`.
+
+Everything deleted is restorable from a real tag on `origin` (`archive/2026-07-29-cleanup/*`), and
+the restore path was **proven by running it** — branch recreated from a tag, content read back, drill
+branch deleted, tag confirmed still on `origin`. A SHA in a Markdown ledger preserves nothing; only a
+ref does. The two kept-but-unpushed branches carry `preserve/2026-07-29/*` tags as well. Untracked
+files cannot be saved by any tag, so four draft files were physically copied to
+`C:/Users/mason/CRX_Manager_archive/` before their worktree was removed.
+
+Four of the recovered documents are **superseded history, not current state** — PR #268 already
+landed newer 2026-07-28 reports for the same gauntlet sections — and a fifth ran on a checkout behind
+`origin/main` and says so itself, so gauntlet index row 4 still points at the 2026-07-22 report. The
+index was edited in the same change to say all of this, and to repoint two live references at a
+branch that this cleanup deleted. This project's recorded failure mode is exactly a stale audit
+report being read as current state.
+
+Full detail, including every tip SHA and the restore commands:
+[2026-07-29-branch-worktree-cleanup-restore-ledger.md](audits/2026-07-29-branch-worktree-cleanup-restore-ledger.md).
+
+Result: worktrees 43 → 4, local branches 38 → 7. No remote branch was deleted; GitHub auto-deletes
+merged heads, and `origin` held only 13 refs. Two live sessions (one Claude, one Codex) were running
+throughout and neither was touched — identified from `list_sessions` `isRunning` and
+`~/.codex/sessions/*.jsonl` mtimes, **not** from worktree index timestamps, which the SessionStart
+worktree-awareness hook refreshes across every checkout and therefore cannot be trusted as an
+activity signal.
+
 ## 2026-07-29 — A migration built in a linked worktree could never be applied
 
 `migration-apply-guard.mjs` looked for apply-proofs in exactly one place: the `session-state`
