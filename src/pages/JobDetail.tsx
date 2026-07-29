@@ -1426,7 +1426,7 @@ export default function JobDetail() {
     setIsDirty(snap !== baselineRef.current);
   }, [formSnapshot, loading, baselineSettleTick]);
 
-  const loadLookups = async () => {
+  const loadLookups = useCallback(async () => {
     setFieldsLookupReady(false);
     const [custResult, fieldResult, prodResult, vehicleResult, appResult, recipeResult] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
@@ -1477,7 +1477,7 @@ export default function JobDetail() {
       (byProfile[l.profile_id] ||= []).push({ expiry_date: l.expiry_date, is_active: l.is_active });
     });
     setLicensesByProfile(byProfile);
-  };
+  }, [toast]);
 
   const fetchJob = useCallback(async () => {
     // Drop the baseline so the freshly-loaded form is re-adopted as clean once it
@@ -1695,7 +1695,7 @@ export default function JobDetail() {
         // initialLoadDone after the first committed frame.
       }
     })();
-  }, [id, fetchJob, isNew, searchParams]);
+  }, [id, fetchJob, isNew, loadLookups, searchParams]);
 
   // U12 Codex R3 #2: does the current APPLICATOR hold an active ('dispatched')
   // job_location_dispatches row on this job? The assignment-unification migration
