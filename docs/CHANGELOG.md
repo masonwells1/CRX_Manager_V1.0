@@ -51,22 +51,32 @@ Renames only; neither SQL body was touched. Both are indexed in `docs/reference/
 as rows 834 and 835 with `PENDING APPLY`.
 
 The Codex connector then filed three P2 findings on the directory migration, all three real and all
-three confirmed against live before fixing. They share one root cause: the ACL baseline
+three confirmed against live before fixing. They have **three separate causes** — worth stating
+plainly, because collapsing them into one story would send the next diagnosis down the wrong path.
+
+**(1) Default privileges — an ACL finding.** The ACL baseline
 (`supabase/baselines/20260727174805_acl_lockdown.sql`, lines 1656-1658) re-grants default privileges
-on every new table in `public`, so grants land on a new table independently of anything the migration
-writes. (1) `pg_default_acl` gives `authenticated` `arwdDxtm` — the `D` is TRUNCATE, which PostgreSQL
-does **not** subject to RLS, so the read-only policies could not have stopped a signed-in caller from
-emptying the staff directory and blanking every picker in the app; the `REVOKE` now names
-`authenticated` and `metabase_ro`, not just `PUBLIC` and `anon`. (2) `metabase_ro` is `NOBYPASSRLS`,
-`canlogin=false` and a member of no role, so a policy scoped `TO authenticated` can never apply to
-it — once the view became `security_invoker`, Metabase's existing queries would have returned zero
-rows silently rather than erroring; it now has an explicit `SELECT` grant on the table and the view
-plus its own read policy. (3) The backfill ran before the trigger existed, so a profile written in
-between was captured stale and fired no trigger, serving an out-of-date name or role indefinitely;
-the trigger is now installed first, and `CREATE TRIGGER` holds SHARE ROW EXCLUSIVE on `profiles` to
-commit, which closes the window without an explicit `LOCK`. The migration's own postflight block now
-fails the apply if `authenticated` holds any write privilege on the directory or if the analytics
-read is lost.
+on every new table in `public`, so they land independently of anything a migration writes:
+`pg_default_acl` gives `authenticated` `arwdDxtm`. The `D` is TRUNCATE, which PostgreSQL does **not**
+subject to RLS, so the read-only policies could not have stopped a signed-in caller from emptying the
+staff directory and blanking every picker in the app. The `REVOKE` now names `authenticated` and
+`metabase_ro`, not just `PUBLIC` and `anon`.
+
+**(2) Role membership vs. policy audience — a role-policy finding, not an ACL one.** `metabase_ro` is
+`NOBYPASSRLS`, `canlogin=false` and a member of no role, so a policy scoped `TO authenticated` can
+never apply to it no matter what the grants say. Once the view became `security_invoker`, Metabase's
+existing queries would have returned zero rows *silently* rather than erroring — a grant without a
+matching policy yields an empty set, not a permission error. It now has an explicit `SELECT` grant on
+the table and the view **plus its own read policy**; the grant alone would not have fixed it.
+
+**(3) Statement ordering — a trigger-ordering finding, unrelated to privileges entirely.** The
+backfill ran before the trigger existed, so a profile written between the `INSERT ... SELECT`
+snapshot and the `CREATE TRIGGER` was captured stale and fired no trigger, serving an out-of-date
+name or role indefinitely. The trigger is now installed first, and `CREATE TRIGGER` holds SHARE ROW
+EXCLUSIVE on `profiles` to commit, which closes the window without an explicit `LOCK`.
+
+The migration's own postflight block now fails the apply if `authenticated` holds any write privilege
+on the directory or if the analytics read is lost.
 
 Neither migration has been applied to live.
 
