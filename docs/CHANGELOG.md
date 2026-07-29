@@ -32,7 +32,35 @@ partner trigger cannot loop; and each write carries an `IS DISTINCT FROM` guard,
 nothing. `sync_profile_public_directory()` additionally has EXECUTE revoked from `PUBLIC`, `anon` and
 `authenticated` in the same migration.
 
+Both files were B7-renamed before landing: authored `20260728185739` and `20260728185913`, they both
+sorted *below* the `20260728233459` high-water that the same-day anon-EXECUTE applies established, so
+they became `20260728235500` and `20260728235600` — strictly above it, relative order preserved.
+Renames only; neither SQL body was touched. Both are indexed in `docs/reference/migration-history.md`
+as rows 834 and 835 with `PENDING APPLY`.
+
 Neither migration has been applied to live.
+
+## 2026-07-28 — Split the 44-function anon-EXECUTE revoke into two migrations and took both live. Part 1 (40 functions in no RLS policy, incl. the 8 genuinely ungated ones: six next_*_number() allocators, calculate_billing_splits, check_period_open) applied as ledger 20260728231350 via PR #262; anon EXECUTE false on 40/40, authenticated true on 40/40. Part 2 (the RLS role helpers is_admin/is_applicator/is_driver) applied as ledger 20260728233459 via PR #263; anon false and authenticated/service_role true on all three. Both files B7-renamed to their server-assigned versions, bodies unedited. Production loaded logged out after the apply: sign-in page renders, no console errors, no 42501, assets 200. PR #266 carried the bookkeeping; PR #264 has since been renamed above the new high-water (see the entry above).
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `797b59a5 chore(db): record the part-2 apply and B7-rename it to its ledger version`
+  - `9dae94fd chore(db): B7-rename the anon-revoke migrations and record the part-1 apply`
+  - `d64c6926 fix(security): stop logged-out visitors executing the 3 RLS role helpers (part 2 of 2 — RISKY HALF) (#263)`
+  - `bf0cbced fix(security): stop logged-out visitors executing 40 internal functions (#262)`
+  - `eb11de45 Merge pull request #265 from masonwells1/codex/pricing-live-closeout-clean`
+  - `ed614b9f docs(security): close pricing RPC references`
+  - `8fe7007d docs(db): record pricing RPC migration apply`
+  - `eaa2c45e fix(guards): Codex's 30 Windows hook commands ran, but never ran the guard (#259)`
+  - `d863af96 Merge pull request #260 from masonwells1/codex/pricing-rpc-acl-followup`
+  - `3bc89716 fix(security): pin pricing RPC execute grants`
+  - `1cba5b0f Harden Supplier Pricing Phase 3C owner-review packet (#246)`
+  - `9088335d fix(security): office-only gate on the 2 SECDEF pricing readers (parked migration) (#257)`
+  - `4cf5b718 Merge pull request #258 from masonwells1/claude/retire-parked-cutover-20260728`
+  - `1bdd4e90 Merge branch 'main' into claude/retire-parked-cutover-20260728`
+  - `1ea40343 Merge pull request #254 from masonwells1/dependabot/npm_and_yarn/minor-and-patch-9923429a56`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260728231350_revoke_anon_execute_non_policy_functions.sql`
+  - `supabase/migrations/20260728233459_revoke_anon_execute_rls_role_helpers.sql`
 
 ## 2026-07-28 — All 30 Codex guards ran on Windows without ever running a guard
 

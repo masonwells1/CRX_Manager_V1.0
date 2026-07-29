@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-07-25
+Last verified: 2026-07-28
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -8,6 +8,58 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 ---
+
+## 2026-07-28 — SETTLED: revoking anon EXECUTE ships in two halves, and the RLS role helpers are the risky half
+
+**Decision (Mason, in-chat — "ok continue and make it all live please", after the two-half split and
+the blast radius of part 2 were put to him explicitly):** Codex's draft
+`20260728185827_revoke_anon_security_definer_execute.sql` revoked anon EXECUTE on 43 functions in
+one file with one justification sentence copy-pasted 43 times. It is **split into two migrations
+and two PRs** rather than shipped as one.
+
+**Why:** the 43 are not one risk class. A `REVOKE EXECUTE` does not make a function quietly return
+"no rows" — a caller that lacks the grant gets a hard `42501 permission denied for function`. RLS
+policy expressions are evaluated **as the querying role**, so revoking a function that a policy
+calls turns every affected table into an error for that role, not an empty result.
+
+Read-only check against live `rhyzpcqhnizqbxphqdkr`:
+
+- 30 anon-reachable tables carry **70 policies with audience `{public}`** — i.e. evaluated by
+  `anon` — that call `is_admin()` (30 tables), `is_applicator()` (6) or `is_driver()` (1).
+- `require_admin` and `require_admin_or_sales_rep` appear in **zero** table policies. The
+  original worry that they were load-bearing in row rules is not borne out.
+- The login page is **not** the victim: `src/App.tsx:185` puts every route except `login` inside
+  `<ProtectedRoute>`, and the login page reads no RLS-protected table.
+
+**What this forbids/implies:**
+
+- **Part 1** (authored `20260728193000`, PR #262 — **applied live as ledger `20260728231350`**)
+  revokes the **40 functions that appear in no policy at all**. Safe by construction — the grant
+  cannot be load-bearing in a row rule that does not reference it. Within it, GROUP 2 (8 ungated
+  `SECURITY DEFINER` callables, including the six `next_*_number()` allocators,
+  `calculate_billing_splits` and `check_period_open`) was the actual live exposure: a logged-out
+  visitor could call those.
+- **Part 2** (authored `20260728193100`, PR #263 — **applied live as ledger `20260728233459`**)
+  revokes only `is_admin()`, `is_applicator()`, `is_driver()`. It carried the whole blast radius
+  and merged on its own evidence, chiefly the **`is_sales_rep()` precedent** — `anon` already
+  lacked EXECUTE on it across 24 tables and production was fine, which was the closest thing to a
+  live experiment available without applying anything. Borne out after the apply: `authenticated`
+  and `service_role` retained EXECUTE on all three, and a logged-out production load rendered the
+  sign-in page with no console errors and no `42501`.
+- **`handle_new_user()` is never revoked**, in either half. It runs as the signup trigger.
+- **Every REVOKE must name both `PUBLIC` and `anon`.** The two grants are independent, and
+  removing either one alone leaves `anon` still able to execute. Supabase's `ALTER DEFAULT
+  PRIVILEGES` grants `anon` EXECUTE *directly* on each new public function, so revoking only
+  `PUBLIC` leaves that direct grant standing; revoking only `anon` leaves the access it inherits
+  through `PUBLIC`. (Revoking `PUBLIC` on its own is not useless — it does remove the inherited
+  access for roles that hold no direct grant — it simply does not achieve the goal here.) Only
+  revoking both removes `anon`'s effective access.
+- **Prove a revoke with `has_function_privilege(...)`, never a `proacl` scan.** `proacl` is NULL
+  for default privileges, so a scan reports "no anon grant" on a function anon can call.
+- The safe default when in doubt is to revoke **fewer** functions, not more.
+
+Source: `docs/manual/KNOWN_ISSUES.md` §0c; proof in PR #262 and this PR (whole schema rebuilt
+from zero in a throwaway container, all six post-baseline migrations replayed, 43/43 verified).
 
 ## 2026-07-25 — SETTLED: Opus 5 harness tuning; Hermes not adopted; Claude/Codex hook asymmetry is by design
 

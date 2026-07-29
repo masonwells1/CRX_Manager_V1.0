@@ -2101,7 +2101,13 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
+// Both halves of the anon-EXECUTE revoke are applied live (20260728231350 and
+// 20260728233459) and no longer pending. The two below are PR #264's, B7-renamed
+// above that high-water and awaiting apply; empty this set again once they land.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+  '20260728235500',
+  '20260728235600',
+]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
