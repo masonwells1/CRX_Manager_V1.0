@@ -17,7 +17,7 @@ import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, fleetSummaryLine,
-  worktreeContributesParked, isNewDraftOnBranch, normRepoPath,
+  parkedDraftPathsFrom, draftPathspec, normRepoPath,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -69,14 +69,18 @@ function mergedLabel(sha) {
   return mergedLabelFromStatus(r.status, true);
 }
 
+// Memoized: the sibling list and the parked scan both ask, and this is one git spawn.
+const dirtyCache = new Map(); // wt path → count | null
 function dirtyCount(wtPath) {
+  if (dirtyCache.has(wtPath)) return dirtyCache.get(wtPath);
+  let result = null;
   try {
-    if (!existsSync(wtPath)) return null; // stale worktree entry
-    const out = git(["status", "--porcelain"], wtPath);
-    return out.split("\n").filter((l) => l.trim()).length;
-  } catch {
-    return null;
-  }
+    if (existsSync(wtPath)) {
+      result = git(["status", "--porcelain"], wtPath).split("\n").filter((l) => l.trim()).length;
+    }
+  } catch { result = null; }
+  dirtyCache.set(wtPath, result);
+  return result;
 }
 
 const lines = siblings.map((s) => {
@@ -97,9 +101,9 @@ function listDir(dir) {
 // Depth-limited recursive file listing — parked drafts live in NESTED audit
 // folders (docs/audits/<hunt>/PARKED-*.sql); a flat scan here would contradict
 // /fleet's recursive count (Codex 2026-07-05 P3).
-// Returns { name, rel } per file, `rel` being the path under `prefix` — the caller needs
-// the repo-relative path to tell a new draft from an unrelated one that merely shares a
-// filename (draft names repeat across hunts).
+// Returns { name, rel } per file, `rel` being the repo-relative path — the count is keyed
+// by path, never by filename, because draft names repeat across hunts and two distinct
+// pending drafts must not collapse into one. Used only for the fallback scan.
 function listDraftsRecursive(dir, prefix, depth = 4) {
   if (depth < 0) return [];
   let ents = [];
@@ -115,82 +119,106 @@ function listDraftsRecursive(dir, prefix, depth = 4) {
   return out;
 }
 
-// Draft paths already tracked where this worktree's branch left origin/main. Those are
-// inherited history — if main has since retired one, this checkout just hasn't pulled the
-// rename. Anything NOT in this set is genuinely new here and still counts. Returns null
-// when the branch point can't be determined, which makes isNewDraftOnBranch() count the
-// draft rather than hide it.
-const inheritedCache = new Map(); // sha → Set | null
-function inheritedDraftPaths(sha) {
+// Where this worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
+// snapshots share a handful of shas between them. null = undeterminable.
+const baseCache = new Map(); // sha → base sha | null
+function branchPoint(sha) {
   if (!hasOriginMain || !sha) return null;
-  if (inheritedCache.has(sha)) return inheritedCache.get(sha);
-  let result = null;
+  if (baseCache.has(sha)) return baseCache.get(sha);
   const mb = spawnSync("git", ["merge-base", "origin/main", sha], {
     encoding: "utf8", timeout: 5000, cwd: projectDir,
   });
   const base = mb.status === 0 ? String(mb.stdout || "").trim() : "";
-  if (base) {
-    try {
-      result = new Set(draftEntriesInTree(base).map((d) => normRepoPath(d.path)));
-    } catch { result = null; }
-  }
-  inheritedCache.set(sha, result);
+  const result = base || null;
+  baseCache.set(sha, result);
   return result;
 }
 
-// Draft files tracked at a given commit (staged migrations + audit drafts), as
-// { name, path }. Callers key the parked COUNT by name and inheritance by path.
-function draftEntriesInTree(rev) {
+// The draft paths a worktree is actually pending: what it changed since its branch point
+// (committed or not) plus anything still untracked. Returns null when the branch point is
+// unknown, and the caller then falls back to the full on-disk scan rather than hide work.
+const cleanCache = new Map(); // head sha → changed paths | null
+function ownDraftPaths(entry) {
+  const base = branchPoint(entry.head);
+  if (!base) return null;
+  const spec = draftPathspec();
+  const run = (args, cwd) => {
+    const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
+    return r.status === 0 ? String(r.stdout || "").split("\n") : null;
+  };
+  const exists = (p) => existsSync(path.join(entry.path, ...p.split("/")));
+
+  // A CLEAN checkout has nothing but its commits, so its pending set is fully determined
+  // by base..HEAD — computable once per sha in the main repo instead of spawning git
+  // inside all 42 checkouts. The snapshots share only a handful of shas between them, so
+  // this is what keeps the hook fast.
+  if (dirtyCount(entry.path) === 0) {
+    if (!cleanCache.has(entry.head)) {
+      cleanCache.set(entry.head, run(["diff", "--name-only", base, entry.head, "--", ...spec], projectDir));
+    }
+    const changed = cleanCache.get(entry.head);
+    return changed === null ? null : parkedDraftPathsFrom(changed, exists);
+  }
+
+  const changed = run(["diff", "--name-only", base, "--", ...spec], entry.path);
+  const untracked = run(["ls-files", "--others", "--exclude-standard", "--", ...spec], entry.path);
+  if (changed === null || untracked === null) return null;
+  return parkedDraftPathsFrom([...changed, ...untracked], exists);
+}
+
+// Draft files tracked at a given commit (staged migrations + audit drafts), by
+// repo-relative path.
+function draftPathsInTree(rev) {
   const out = [];
-  const tree = git(["ls-tree", "-r", "--name-only", rev, "--",
-    "scripts/.staging-migrations", "docs/audits"]);
+  const tree = git(["ls-tree", "-r", "--name-only", rev, "--", ...draftPathspec()]);
   for (const line of tree.split("\n")) {
     const p = line.trim();
     if (!p) continue;
     const base = p.slice(p.lastIndexOf("/") + 1);
     const inStaging = p.startsWith("scripts/.staging-migrations/");
-    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) out.push({ name: base, path: p });
+    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) out.push(p);
   }
   return out;
 }
 
 // The mainline backlog, read straight from origin/main's tree rather than from any
 // checkout — so the count is right even when every worktree is stale.
-function mainlineParkedNames() {
+function mainlineParkedPaths() {
   try {
-    return new Set(draftEntriesInTree("origin/main").map((d) => d.name.toLowerCase()));
+    return new Set(draftPathsInTree("origin/main").map((p) => normRepoPath(p)));
   } catch { return new Set(); }
 }
 
 let fleetLine = "";
 try {
   const ledgerNames = new Set();
-  const parkedNames = hasOriginMain ? mainlineParkedNames() : new Set();
+  const parkedPaths = hasOriginMain ? mainlineParkedPaths() : new Set();
   for (const e of entries) {
     if (!e.path || !existsSync(e.path)) continue;
     for (const f of listDir(path.join(e.path, "docs", "loops"))) {
       if (isLedgerDoc(f)) ledgerNames.add(f.toLowerCase());
     }
-    // Frozen review snapshots still hold long-retired drafts on disk; counting them made
-    // the banner permanently un-clearable. Branch worktrees DO contribute, but only the
-    // drafts they added since leaving main — see worktreeContributesParked() and
-    // isNewDraftOnBranch().
-    if (!worktreeContributesParked(e)) continue;
-    // "Is it inherited?" is decided on the repo-relative PATH — draft filenames repeat
-    // across hunts, so a basename match could hide a genuinely new draft. The COUNT is
-    // still keyed by filename, which is what collapses the same draft across 42 checkouts.
-    const inherited = inheritedDraftPaths(e.head);
+    // A worktree contributes only the drafts IT is pending — what it changed since its
+    // branch point, plus untracked files. Frozen review snapshots changed nothing, so
+    // they add nothing, which is what makes the SUPERSEDED- retirement clearable; a draft
+    // genuinely being written in one still shows up as untracked. When the branch point
+    // can't be read, fall back to the full on-disk scan rather than hide pending work.
+    const own = ownDraftPaths(e);
+    if (own) {
+      for (const key of own.keys()) parkedPaths.add(key);
+      continue;
+    }
     const scans = [
       { root: "scripts/.staging-migrations/", filter: isParkedMigrationFile },
       { root: "docs/audits/", filter: isDraftSqlName },
     ];
     for (const { root, filter } of scans) {
       for (const d of listDraftsRecursive(path.join(e.path, ...root.split("/").filter(Boolean)), root)) {
-        if (filter(d.name) && isNewDraftOnBranch(d.rel, inherited)) parkedNames.add(d.name.toLowerCase());
+        if (filter(d.name)) parkedPaths.add(normRepoPath(d.rel));
       }
     }
   }
-  fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedNames.size)}`;
+  fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedPaths.size)}`;
 } catch { fleetLine = ""; }
 
 emit(

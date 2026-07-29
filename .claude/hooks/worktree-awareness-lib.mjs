@@ -80,23 +80,6 @@ export function isDraftSqlName(name) {
   return isParkedMigrationFile(name) && /draft|^parked[-_]/i.test(String(name || ""));
 }
 
-// Should this worktree's ON-DISK drafts be looked at for "parked migrations awaiting apply"?
-//
-// 2026-07-29: the count was permanently wrong. It scanned the working tree of EVERY
-// checkout, and ~30 of Mason's worktrees are frozen review snapshots pinned to old
-// commits. Once a draft file has ever existed, those snapshots keep reporting it
-// forever — retiring it on main (the SUPERSEDED- rename) could never clear the count.
-// Proven: renaming the last dead draft left the banner reading "2" unchanged, because
-// 42 other checkouts still held the pre-rename filename.
-//
-// Detached checkouts are frozen review artifacts by construction — nobody is authoring a
-// migration in one — so they never contribute. This is deliberately a cheap pure test with
-// no git call, so the ~30 snapshots are skipped for free; which drafts a *branch* worktree
-// contributes is then decided per-file by isNewDraftOnBranch().
-export function worktreeContributesParked(entry) {
-  return !!entry && !entry.detached;
-}
-
 // Repo-relative path, normalized for comparison (forward slashes, no leading "./",
 // lowercased — Windows paths are case-insensitive and git reports forward slashes).
 export function normRepoPath(p) {
@@ -107,29 +90,69 @@ export function normRepoPath(p) {
     .toLowerCase();
 }
 
-// Is this on-disk draft this branch's own pending work, rather than history it inherited?
-//
-// `inheritedLowerPaths` is the set of draft PATHS already tracked at the worktree's
-// merge-base with origin/main — i.e. what was there when the branch started. A draft in
-// that set is shared history: if main has since retired it, this checkout simply has not
-// pulled the rename yet, and counting it is what made the banner un-clearable.
-//
-// Anything NOT in that set is new here — freshly committed on the branch or still
-// untracked — so it counts even when the worktree is far behind main. That direction
-// matters more: over-reporting is noise, but under-reporting hides a real pending
-// migration behind "Nothing waiting on you". For the same reason, an unknown merge-base
-// (null/missing set) counts the draft rather than silently dropping it.
-//
-// Identity here is the full path, NOT the basename: draft names repeat across hunts
-// (PARKED-01-…, …-draft.sql), so matching on filename alone would let a retired
-// scripts/.staging-migrations draft mask a brand-new docs/audits one. The parked COUNT
-// still dedupes by basename on purpose — that is what collapses the same draft checked
-// out in 42 worktrees into one entry.
-export function isNewDraftOnBranch(repoRelPath, inheritedLowerPaths) {
+// The two folders a parked draft can live in, and the filename rule for each.
+// scripts/.staging-migrations holds only migrations, so any .sql there is a draft;
+// docs/audits holds ordinary audit prose too, so a .sql there must look like a draft.
+const DRAFT_ROOTS = [
+  { root: "scripts/.staging-migrations/", isDraft: isParkedMigrationFile },
+  { root: "docs/audits/", isDraft: isDraftSqlName },
+];
+
+// Is this repo-relative path a parked migration draft?
+export function isParkedDraftPath(repoRelPath) {
   const p = normRepoPath(repoRelPath);
   if (!p) return false;
-  if (!inheritedLowerPaths || typeof inheritedLowerPaths.has !== "function") return true;
-  return !inheritedLowerPaths.has(p);
+  const base = p.slice(p.lastIndexOf("/") + 1);
+  const root = DRAFT_ROOTS.find((r) => p.startsWith(r.root));
+  return root ? root.isDraft(base) : false;
+}
+
+// Which of the paths a worktree CHANGED since its branch point are parked drafts?
+//
+// 2026-07-29: the count was permanently wrong. It scanned the working tree of EVERY
+// checkout, and ~30 of Mason's worktrees are frozen review snapshots pinned to old
+// commits. Once a draft file had ever existed, those snapshots kept reporting it forever —
+// retiring it on main (the SUPERSEDED- rename) could never clear the count. Proven:
+// renaming the last dead draft left the banner reading "2", unchanged, because 42 other
+// checkouts still held the pre-rename filename.
+//
+// So a worktree now contributes only what IT changed since leaving origin/main, which the
+// caller reads straight out of git:
+//   `git diff --name-only <merge-base>`      — drafts this branch added OR edited, and
+//   `git ls-files --others --exclude-standard` — drafts not yet under version control.
+// Everything else in the checkout is inherited history: if main has since retired one,
+// this checkout simply has not pulled the rename. Asking git also means an in-place EDIT
+// of an inherited draft still counts (Codex HIGH on #279 — a path-existence test alone
+// suppressed it), and eol/filemode normalization is git's problem, not ours.
+//
+// Detached checkouts go through the same test rather than being skipped wholesale: their
+// frozen trees change nothing, so they contribute nothing, but a genuinely new draft
+// written inside one is still surfaced (Codex MEDIUM on #279).
+//
+// Identity is the full path, never the basename — draft names repeat across hunts
+// (PARKED-01-…, …-draft.sql), so a filename test would let a retired staging draft mask a
+// brand-new audit one, and would also collapse two distinct pending drafts into one entry.
+// `existsOnDisk(repoRelPath)` keeps deletions out: retiring a draft (the SUPERSEDED-
+// rename) shows up in the diff as a change to the OLD path, and counting that would
+// re-report the very file the rename retired.
+//
+// Returns a Map of normalized path → the path as git spelled it, so the count dedupes
+// case-insensitively while /fleet still shows Mason the real filename.
+export function parkedDraftPathsFrom(changedPaths, existsOnDisk = () => true) {
+  const out = new Map();
+  for (const raw of changedPaths || []) {
+    const p = String(raw || "").trim();
+    if (!isParkedDraftPath(p)) continue;
+    if (!existsOnDisk(p)) continue;
+    const key = normRepoPath(p);
+    if (!out.has(key)) out.set(key, p);
+  }
+  return out;
+}
+
+// The pathspec restricting git's diff/ls-files to the two draft folders.
+export function draftPathspec() {
+  return DRAFT_ROOTS.map((r) => r.root.replace(/\/$/, ""));
 }
 
 function truncateLine(s, maxLen) {

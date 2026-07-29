@@ -15,30 +15,39 @@ while nothing was actually pending.
 Verified before changing anything: renaming the last live draft and re-running the real hook left the
 count at 2, unchanged. That is the proof the scan — not the drafts — was the defect.
 
-The rule is now per-draft rather than per-checkout. A draft counts only if it is **not** already
-tracked at that worktree's branch point with `origin/main` (`isNewDraftOnBranch()`): anything present
-at the branch point is inherited history, so a checkout that simply hasn't pulled main's retirement
-stops re-reporting it, while a draft the branch actually added still counts even when that branch is
-far behind main. Detached checkouts never contribute at all (`worktreeContributesParked()`) — they
-are frozen review artifacts and nobody authors a migration in one — which also skips ~30 checkouts
-for free. The mainline backlog is seeded separately from `origin/main`'s tree via `git ls-tree`, so a
-fleet in which no checkout happens to be current still reports main's real backlog instead of zero.
+The rule is now per-draft rather than per-checkout, and it is read out of git instead of inferred
+from what is lying on disk. A worktree contributes exactly what **it** changed since its branch point
+with `origin/main` — `git diff --name-only <merge-base>` for drafts it added or edited, committed or
+not, plus `git ls-files --others --exclude-standard` for ones not yet under version control. Anything
+else in the checkout is inherited history, so a stale copy of a draft main has since retired stops
+being re-reported. A draft the branch actually wrote still counts even when the branch is far behind
+main, and a draft the branch *deleted* does not, which is what finally lets the `SUPERSEDED-` rename
+clear the number. The mainline backlog is seeded separately from `origin/main`'s tree via
+`git ls-tree`, so a fleet in which no checkout happens to be current still reports main's real
+backlog instead of zero. When the branch point cannot be read at all, the reader falls back to
+scanning the whole checkout rather than risk hiding pending work, and `/fleet` says so in its notes.
 
-The per-draft rule replaced a first cut that dropped every behind-main worktree wholesale; CodeRabbit
-flagged on PR #279 that this trades noise for something worse — a genuinely new migration sitting on
-a behind-main branch would vanish behind "Nothing waiting on you". Proven both ways: a scratch
-worktree pinned behind main with a brand-new draft is reported by the new code and was silently
-dropped by the old. For the same reason an unreadable branch point counts the draft rather than
-hiding it.
+Three earlier cuts were killed by review, each for under-reporting:
 
-"Is this draft inherited?" is decided on the file's full repo-relative **path**, not its filename —
-a second CodeRabbit finding on #279. Draft names repeat across hunts, so a filename-only test let a
-draft main had already retired mask a genuinely new one sitting in a different folder, and `/fleet`
-would again say nothing was waiting. The parked *count* still keys on the filename, which is what
-collapses the same draft checked out in 42 worktrees into one entry. Proven the same way: a scratch
-worktree pinned before the supplier-pricing cutover was retired, holding a brand-new draft of that
-same filename in a different folder, reads 1 under the old filename test and 2 under the new path
-test, with `/fleet` naming the new file.
+- dropping every behind-main worktree wholesale (CodeRabbit P1) — a genuinely new migration on a
+  behind-main branch vanished behind "Nothing waiting on you";
+- treating a draft as inherited whenever its filename existed at the branch point (CodeRabbit P2) —
+  draft names repeat across hunts, so a retired draft masked a brand-new one in another folder;
+- deciding inheritance by path *existence* alone (Codex HIGH on #279) — a branch that materially
+  edited an inherited draft in place was still classified as inherited and suppressed. Asking git
+  what changed also handles the CRLF-on-disk / LF-in-git difference, which a raw content-hash
+  comparison would have gotten wrong in the other direction, marking every draft modified.
+
+Two further Codex findings on #279 are fixed by the same rewrite: detached checkouts are no longer
+skipped wholesale (their frozen trees change nothing, so they still contribute nothing, but a draft
+genuinely being written in one now shows up as untracked), and the count is keyed by repo-relative
+path rather than filename, so two distinct pending drafts that share a name stay two entries.
+
+Proven by experiment, old reader against new, using scratch worktrees pinned behind main: baseline 1
+and 1; a branch editing an inherited draft in place → old 1, new 2; a new draft written in a detached
+snapshot → old 1, new 3; a second draft sharing that filename → old 1, new 4; teardown → 1 and 1.
+`/fleet` reported the same 4 and named each file by its full path. The ~30 frozen snapshots
+contribute nothing at every stage, so the original defect stays fixed.
 
 Both readers were fixed together so they cannot disagree: the hook and `scripts/fleet-status.mjs` now
 report the same number. The count dropped 2 → 1, the remaining entry being the one draft still

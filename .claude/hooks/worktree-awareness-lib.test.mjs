@@ -7,7 +7,7 @@ import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
-  worktreeContributesParked, isNewDraftOnBranch, normRepoPath,
+  isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
 } from "./worktree-awareness-lib.mjs";
 
 let pass = 0;
@@ -75,42 +75,50 @@ ok(!isParkedMigrationFile("notes.md"), "non-sql file ignored");
 ok(isDraftSqlName("2026-07-01-per-acre-draft.sql"), "audits *draft*.sql counts as parked");
 ok(!isDraftSqlName("2026-07-01-review-final.sql"), "audits sql without 'draft' ignored");
 
-// Which worktrees may contribute on-disk drafts to the parked count (2026-07-29).
-// Frozen snapshots kept reporting long-retired drafts forever, so retiring one on main
-// could never clear the banner — it sat at 2 with nothing actually pending.
-const onBranch = { path: "C:/wt", branch: "feature", detached: false, head: "aaa" };
-const snapshot = { path: "C:/wt", branch: null, detached: true, head: "bbb" };
-ok(worktreeContributesParked(onBranch), "a branch checkout can hold its own pending drafts");
-ok(!worktreeContributesParked(snapshot), "a detached review snapshot never contributes");
-ok(!worktreeContributesParked(null), "a missing entry contributes nothing");
-// Cheap by design: no git ancestry argument, so the ~30 snapshots cost nothing to skip.
-eq(worktreeContributesParked.length, 1, "the contributor test takes only the entry — no ancestry probe");
-
-// Which of a branch worktree's on-disk drafts are ITS pending work vs inherited history.
-// A behind-main branch must still report a draft it just wrote (CodeRabbit P1 on #279:
-// dropping the whole worktree could report "Nothing waiting on you" over real work).
-// Identity is the repo-relative PATH, not the basename (CodeRabbit P2 on #279): draft
-// names repeat across hunts, so a filename match would let a retired staging draft mask a
-// brand-new audit draft that happens to share its name.
-const inherited = new Set([
-  "scripts/.staging-migrations/workflow-waves-parked/parked-dispatch-backfill.sql",
-  "docs/audits/old-hunt/2026-07-01-old-draft.sql",
-]);
+// Which repo-relative paths are parked drafts at all (2026-07-29). Frozen snapshots kept
+// reporting long-retired drafts forever, so retiring one on main could never clear the
+// banner — it sat at 2 with nothing actually pending. The count is now fed from what a
+// worktree CHANGED since its branch point, so this decides which of those paths qualify.
 const DISPATCH = "scripts/.staging-migrations/workflow-waves-parked/PARKED-dispatch-backfill.sql";
-ok(!isNewDraftOnBranch(DISPATCH, inherited), "a draft present at the branch point is inherited history, not pending work");
-ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", inherited), "a draft this branch added counts even though the branch is behind main");
-ok(!isNewDraftOnBranch(DISPATCH.toUpperCase(), inherited), "inherited match is case-insensitive");
-ok(!isNewDraftOnBranch(`./${DISPATCH}`, inherited), "a './' prefix still matches the same inherited draft");
-ok(!isNewDraftOnBranch(DISPATCH.replace(/\//g, "\\"), inherited), "Windows backslashes still match the same inherited draft");
-// The exact collision CodeRabbit named: same filename, different directory.
-ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-dispatch-backfill.sql", inherited), "a same-named draft in another folder is new work, not the retired one");
-ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", null), "unknown merge-base counts the draft rather than hiding it");
-ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", undefined), "missing inherited set counts the draft");
-ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", {}), "a non-Set argument counts the draft rather than throwing");
-ok(!isNewDraftOnBranch("", inherited), "empty path is not a pending draft");
-ok(isNewDraftOnBranch("docs/audits/new-hunt/PARKED-brand-new.sql", new Set()), "an empty branch point means every on-disk draft is new");
+ok(isParkedDraftPath(DISPATCH), "a staged .sql draft is a parked draft");
+ok(isParkedDraftPath("docs/audits/new-hunt/PARKED-brand-new.sql"), "an audits PARKED-*.sql is a parked draft");
+ok(isParkedDraftPath("docs/audits/2026-07-01-per-acre-draft.sql"), "an audits *draft*.sql is a parked draft");
+ok(!isParkedDraftPath("docs/audits/2026-07-01-review-final.sql"), "an audits .sql that is not a draft does not count");
+ok(!isParkedDraftPath("scripts/.staging-migrations/SUPERSEDED-old.sql"), "a SUPERSEDED draft is retired, not pending");
+ok(!isParkedDraftPath("supabase/migrations/20260101000000_real.sql"), "an applied migration is not a parked draft");
+ok(!isParkedDraftPath("docs/audits/notes.md"), "a non-sql audit file is not a draft");
+ok(!isParkedDraftPath(""), "an empty path is not a draft");
+ok(!isParkedDraftPath(null), "a missing path is not a draft, and does not throw");
+ok(isParkedDraftPath(DISPATCH.replace(/\//g, "\\")), "Windows backslashes still classify");
 
-// Path normalization the inherited comparison depends on.
+// Turning git's changed-path list into the set the count is keyed by. Identity is the
+// repo-relative PATH, never the basename (CodeRabbit P2 + Codex MED on #279): draft names
+// repeat across hunts, so a filename key would merge two distinct pending drafts into one.
+const changed = parkedDraftPathsFrom([
+  DISPATCH,
+  "docs/audits/new-hunt/PARKED-dispatch-backfill.sql", // same filename, different folder
+  "docs/audits/new-hunt/notes.md",
+  "src/pages/Invoices.tsx",
+  "",
+]);
+eq(changed.size, 2, "two same-named drafts in different folders stay two entries");
+ok(changed.has(normRepoPath(DISPATCH)), "the staged draft is keyed by its full path");
+ok(changed.has("docs/audits/new-hunt/parked-dispatch-backfill.sql"), "the audits draft is keyed separately");
+// Keyed lower-case for dedupe, but /fleet must show Mason the real filename.
+eq(changed.get(normRepoPath(DISPATCH)), DISPATCH, "the path is reported as git spelled it, not lower-cased");
+// The same draft checked out in 42 worktrees sits at the same relative path in each.
+eq(parkedDraftPathsFrom([DISPATCH, DISPATCH.toUpperCase()]).size, 1, "the same draft in many checkouts collapses to one");
+eq(parkedDraftPathsFrom([]).size, 0, "a worktree that changed nothing contributes nothing");
+eq(parkedDraftPathsFrom(null).size, 0, "a missing change list contributes nothing rather than throwing");
+// Retiring a draft shows up in the diff as a change to the OLD path — counting that would
+// re-report the very file the SUPERSEDED- rename retired.
+eq(parkedDraftPathsFrom([DISPATCH], () => false).size, 0, "a draft the branch deleted is not pending work");
+eq(parkedDraftPathsFrom([DISPATCH], (p) => p === DISPATCH).size, 1, "the existence check sees the raw path, not the lower-cased key");
+
+// The pathspec both readers hand to git — it must cover exactly the two draft folders.
+eq(draftPathspec(), ["scripts/.staging-migrations", "docs/audits"], "git is restricted to the two draft folders");
+
+// Path normalization the count key depends on.
 eq(normRepoPath("Docs\\Audits\\A.SQL"), "docs/audits/a.sql", "backslashes, case and separators normalize");
 eq(normRepoPath("./docs/audits/a.sql"), "docs/audits/a.sql", "leading './' is stripped");
 eq(normRepoPath("/docs/audits/a.sql"), "docs/audits/a.sql", "leading slashes are stripped");
