@@ -23,7 +23,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
-import { proofSearchDirs } from "./codex-push-lib.mjs";
+import { sessionProofDirs } from "./codex-push-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -50,8 +50,8 @@ const stateDir = path.join(projectDir, ".claude", "session-state");
 // Make sure the directory exists so future writes work.
 try { mkdirSync(stateDir, { recursive: true }); } catch { /* ignore */ }
 
-// Every session-state directory belonging to THIS repository — the primary
-// checkout plus each linked worktree.
+// The session-state directories this apply may draw evidence from: THIS
+// session's own checkout, plus the primary one. Nothing else.
 //
 // Why (2026-07-29): the harness pins CLAUDE_PROJECT_DIR to the PRIMARY checkout
 // even when the session's cwd is a linked worktree, while
@@ -59,18 +59,30 @@ try { mkdirSync(stateDir, { recursive: true }); } catch { /* ignore */ }
 // worktree that actually holds the migration file. A migration built in a
 // worktree therefore minted perfectly valid proofs somewhere this guard never
 // looked, and the apply was denied no matter how many clean reviews ran. Same
-// bug pr-merge-guard hit in PR #252/#255, same fix, same helper.
+// root cause pr-merge-guard hit in PR #252/#255.
 //
-// Widening the SEARCH does not widen what COUNTS: the name match, the
-// clean/blockers-fixed verdict, the [0, 30min] freshness window, and the
-// queryHash content-binding below are all unchanged, and review-proof-guard.mjs
-// still blocks hand-writing a proof in ANY directory. These are sibling
-// checkouts of one repository, not arbitrary paths.
+// The merge guard's answer — scan every sibling checkout — is NOT safe here, and
+// Codex blocked the first version of this fix for taking it. Its proof is bound
+// to the exact head and base SHAs GitHub reports, so a sibling's proof can only
+// authorize the identical merge. This proof is weaker: interactively `queryHash`
+// is enforced only when the proof carries one, and migration names match by
+// substring. Scanning all worktrees would therefore let a proof minted by a
+// DIFFERENT concurrent session authorize a live apply this session never
+// reviewed — against the settled "proof from THIS session" rule
+// (docs/manual/DECISION_LOG.md, 2026-07-13) and squarely in Mason's way of
+// working, where dozens of worktrees run at once.
 //
-// The AUTOPILOT.on flag above is deliberately NOT widened. It is authorization
-// state for this project, not evidence about a migration; reading it from a
-// sibling worktree would let a flag Mason never armed here change the rule-set.
-const proofDirs = proofSearchDirs(projectDir, () => execFileSync(
+// So the lookup follows the session's actual working directory, honoured only
+// after `git worktree list` confirms it is a checkout of this repository. An
+// unrecognised cwd falls back to the primary directory alone — the old
+// behaviour, which fails closed.
+//
+// The AUTOPILOT.on flag above is deliberately narrower still: it stays pinned to
+// the primary checkout. It is authorization state for this project, not evidence
+// about a migration; reading it from any other checkout would let a flag Mason
+// never armed here change the rule-set.
+const hookCwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
+const proofDirs = sessionProofDirs(projectDir, hookCwd, () => execFileSync(
   "git",
   ["worktree", "list", "--porcelain"],
   { cwd: projectDir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] },
@@ -228,8 +240,8 @@ if (validProof) {
     // Write it ONLY after an ACTUAL /codex-review run on this migration this
     // session — a fabricated file violates Mason's codex-gate rule and is the
     // documented self-attestation residual (KNOWN_ISSUES §4b).
-    // Searched across the same sibling-checkout directories as the reviewer
-    // proof above, for the same reason. A candidate only WINS by satisfying
+    // Searched across the same session-scoped directories as the reviewer proof
+    // above, for the same reason. A candidate only WINS by satisfying
     // every criterion the single-directory version demanded — clean verdict,
     // exact queryHash, age inside [0, 30min]; the first parseable file is kept
     // only so the block message below can say which criterion failed.

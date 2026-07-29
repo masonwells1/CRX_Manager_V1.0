@@ -9,30 +9,43 @@ directory under `CLAUDE_PROJECT_DIR`. The harness pins that variable to the **pr
 even when the session's cwd is a linked worktree, while `scripts/write-apply-proofs.mjs` writes its
 output under `process.cwd()` — the worktree that actually holds the migration file. Every proof
 therefore landed somewhere the guard never looked, and the apply was denied no matter how many clean
-reviews ran. `pr-merge-guard` hit the same bug in PR #252/#255; this is the same fix through the same
-helper, `proofSearchDirs()` from `codex-push-lib.mjs`.
+reviews ran. `pr-merge-guard` hit the same root cause in PR #252/#255.
 
-Widening **where** proofs are found does not widen **what** counts. The name match, the
-clean/blockers-fixed verdict, the `[0, 30min]` freshness window, and the `queryHash` content-binding
-are unchanged, and `review-proof-guard.mjs` still blocks hand-writing a proof in any directory. These
-are sibling checkouts of one repository, not arbitrary paths. The Codex-proof lookup is widened the
-same way and now **scores every candidate** rather than trusting the first parseable file — a
-candidate only wins by satisfying every criterion the single-directory version demanded.
+The first version of this fix reused that guard's answer — `proofSearchDirs()`, which scans every
+sibling checkout — and **Codex blocked it**, correctly. A merge proof is bound to the exact head and
+base SHAs GitHub reports, so a sibling's copy can only ever authorize the identical merge. An apply
+proof is weaker: interactively `queryHash` is enforced only when the proof carries one, and migration
+names match by substring. Scanning all worktrees would therefore have let a proof minted by one of
+Mason's dozens of concurrent sessions unlock a live apply that the applying session never reviewed —
+against the settled "proof from THIS session" rule (`docs/manual/DECISION_LOG.md`, 2026-07-13).
 
-`AUTOPILOT.on` is deliberately **not** widened: it is authorization state for this project, not
-evidence about a migration, and reading it from a sibling worktree would let a flag Mason never armed
-here change the rule-set.
+The shipped lookup is instead **narrower than the merge gate and never broader than the original**:
+a new `sessionProofDirs()` helper searches this session's own checkout plus the primary one, and
+nothing else. The session's checkout comes from the working directory the harness reports for the
+tool call — the field `codex-push-guard.mjs` and `pr-merge-guard.mjs` already trust — and is honoured
+only after `git worktree list` confirms it belongs to this repository. An unrecognised cwd falls back
+to the primary directory alone, which is the old behaviour. Because Mason's worktrees are *nested*
+inside the primary checkout and `git worktree list` prints the primary first, the helper resolves a
+cwd to the **longest** containing checkout; taking the first would have re-created the original bug
+for exactly the layout he uses. What counts is unchanged throughout — name match, clean/blockers-fixed
+verdict, `[0, 30min]` freshness, `queryHash` content-binding — and `review-proof-guard.mjs` still
+blocks hand-writing a proof in any directory. `pr-merge-guard` keeps `proofSearchDirs()` untouched.
 
-Proven by running the real hook binary against real `git worktree add` fixtures, not mocks — 64
-assertions, up from 57 — and mutation-tested three directions: reverting the fix fails the
-worktree-proof assertion, deleting the `queryHash` binding fails the edited-after-review assertion,
-and widening the `AUTOPILOT.on` lookup the same way as the proof lookup fails the non-widening
-assertions. That last case came from CodeRabbit's review of PR #273: the unwidened flag was the one
+`AUTOPILOT.on` is narrower still: pinned to the primary checkout even when proofs are read from the
+session's worktree. It is authorization state for this project, not evidence about a migration, and
+reading it from another checkout would let a flag Mason never armed here change the rule-set.
+
+Proven by running the real hook binary against real `git worktree add` fixtures, not mocks — 68
+assertions, up from 57 — including a nested-worktree fixture that reproduces Mason's actual layout.
+Mutation-tested three directions, each failing its own assertion: scanning every worktree fails the
+sibling-rejection assertion, ignoring the reported cwd fails the own-worktree assertion, and taking
+the first containing checkout instead of the most specific fails the nested-worktree assertion. The
+`AUTOPILOT.on` assertions came from CodeRabbit's review of PR #273 — the unwidened flag was the one
 behavior with no test pinning it, and so the one most likely to regress silently later. A malformed
-flag is the loudest signal available — it forces the `stale` state that parks every apply — so the
-test plants one in the linked worktree and asserts nothing changes, then plants the same flag in the
-primary checkout and asserts the apply is parked, which is what keeps the first assertion from
-passing vacuously.
+flag is the loudest signal available, since it forces the `stale` state that parks every apply, so
+the test plants one in the session's worktree and asserts nothing changes, then plants the same flag
+in the primary checkout and asserts the apply is parked, which keeps the first from passing
+vacuously.
 
 ## 2026-07-29 — Profile-directory follow-up hardening prepared
 
