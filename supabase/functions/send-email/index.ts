@@ -369,6 +369,7 @@ Deno.serve(async (req: Request) => {
       const preMigrationMissingColumn =
         !!invErr && (invErr.code === "42703" || invErr.code === "PGRST204");
       if (invErr && !preMigrationMissingColumn) {
+        // eslint-disable-next-line no-console -- This fail-closed production error must remain error-level in Edge logs.
         console.error("send-email: invoice suppression lookup failed — refusing send", {
           resource_id,
           code: invErr.code,

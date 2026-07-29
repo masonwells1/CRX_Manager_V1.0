@@ -21,6 +21,7 @@ vi.mock('../ui/Toast', () => ({
 type Recorded = { method: string; args: unknown[] };
 type Chain = Record<string, unknown> & { recorded: Recorded[]; table: string };
 const chains: Chain[] = [];
+let rejectNextContactsLoad = false;
 
 function makeChain(table: string): Chain {
   const chain = { recorded: [], table } as unknown as Chain;
@@ -31,8 +32,13 @@ function makeChain(table: string): Chain {
   for (const method of ['select', 'update', 'insert', 'eq', 'is', 'order', 'limit']) {
     chain[method] = record(method);
   }
-  chain.then = (resolve: (v: unknown) => unknown) =>
-    resolve({ data: table === 'customer_contacts' ? [PRIMARY_CONTACT, SECONDARY_CONTACT] : [], error: null, count: null });
+  chain.then = (resolve: (v: unknown) => unknown, reject: (reason: unknown) => unknown) => {
+    if (table === 'customer_contacts' && rejectNextContactsLoad) {
+      rejectNextContactsLoad = false;
+      return reject(new Error('network unavailable'));
+    }
+    return resolve({ data: table === 'customer_contacts' ? [PRIMARY_CONTACT, SECONDARY_CONTACT] : [], error: null, count: null });
+  };
   chains.push(chain);
   return chain;
 }
@@ -60,8 +66,15 @@ const SECONDARY_CONTACT = { ...PRIMARY_CONTACT, id: 'contact-secondary', name: '
 import CustomerContacts from './CustomerContacts';
 
 describe('CustomerContacts primary-protection guards', () => {
-  beforeEach(() => { chains.length = 0; toastSpy.mockClear(); });
+  beforeEach(() => { chains.length = 0; rejectNextContactsLoad = false; toastSpy.mockClear(); });
   afterEach(cleanup);
+
+  it('clears loading and reports an error when the contacts request rejects', async () => {
+    rejectNextContactsLoad = true;
+    render(<CustomerContacts customerId="customer-1" performedBy="user-1" />);
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith('error', 'Failed to load contacts'));
+    expect(await screen.findByText('No contacts yet.')).toBeInTheDocument();
+  });
 
   it('blocks deactivating the primary contact before any confirm dialog', async () => {
     render(<CustomerContacts customerId="customer-1" performedBy="user-1" />);
