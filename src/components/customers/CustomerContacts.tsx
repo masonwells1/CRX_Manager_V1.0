@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Edit3, MessageCircle, Phone, Plus, Star, UserX } from 'lucide-react';
 import { assertRpcResult, checkMutationResult, supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
@@ -48,7 +48,7 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
   // response for the previous customer must never render under this one.
   const requestSeq = useRef(0);
 
-  const loadContacts = async () => {
+  const loadContacts = useCallback(async () => {
     const seq = ++requestSeq.current;
     setLoading(true);
     const { data, error } = await contactsTable().select('*').eq('customer_id', customerId).order('is_active', { ascending: false }).order('is_primary', { ascending: false }).order('name');
@@ -56,9 +56,9 @@ export default function CustomerContacts({ customerId, performedBy }: CustomerCo
     if (error) toast('error', 'Failed to load contacts');
     setContacts((data || []) as CustomerContact[]);
     setLoading(false);
-  };
+  }, [customerId, toast]);
 
-  useEffect(() => { requestSeq.current += 1; setContacts([]); void loadContacts(); }, [customerId]);
+  useEffect(() => { requestSeq.current += 1; setContacts([]); void loadContacts(); }, [loadContacts]);
 
   const begin = (contact?: CustomerContact) => {
     setEditing(contact || null);
@@ -198,7 +198,7 @@ export function CustomerInteractionsHistory({ customerId }: CustomerInteractions
     const ownerIds = [...new Set(loadedInteractions.map((item) => item.owner_user_id).filter((value): value is string => Boolean(value)))];
     if (ownerIds.length) { const { data } = await supabase.from('profile_public_view').select('id, full_name').in('id', ownerIds); setNames(Object.fromEntries((data || []).filter((profile): profile is { id: string; full_name: string | null } => Boolean(profile.id)).map((profile) => [profile.id, profile.full_name || 'Unknown user']))); }
     setLoading(false);
-  })(); }, [customerId]);
+  })(); }, [customerId, toast]);
   const relative = (value: string) => { const minutes = Math.round((Date.now() - new Date(value).getTime()) / 60000); if (minutes < 1) return 'just now'; if (minutes < 60) return `${minutes}m ago`; const hours = Math.round(minutes / 60); if (hours < 24) return `${hours}h ago`; return new Date(value).toLocaleDateString(); };
   const visible = interactions.filter((item) => (!typeFilter || item.interaction_type === typeFilter) && (!outcomeFilter || item.outcome === outcomeFilter));
   return <Card padding={false}><div className="p-4 sm:p-5"><CardHeader title="Interaction" accent="History" /><div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2"><select aria-label="Filter interaction type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as InteractionType | '')} className="min-h-11 rounded-lg border border-gray-200 px-3 text-sm"><option value="">All types</option>{interactionTypes.map((item) => <option key={item} value={item}>{item}</option>)}</select><select aria-label="Filter interaction outcome" value={outcomeFilter} onChange={(event) => setOutcomeFilter(event.target.value as InteractionOutcome | '')} className="min-h-11 rounded-lg border border-gray-200 px-3 text-sm"><option value="">All outcomes</option>{interactionOutcomes.map((item) => <option key={item} value={item}>{item.replace(/_/g, ' ')}</option>)}</select></div></div>{loading ? <div className="px-4 pb-4 space-y-2">{[1, 2].map((item) => <div key={item} className="h-16 rounded-lg bg-gray-100 animate-pulse" />)}</div> : visible.length === 0 ? <p className="px-4 pb-5 text-sm text-secondary">No interactions match these filters.</p> : <div className="divide-y divide-gray-100">{visible.map((item) => { const contact = contacts.find((row) => row.id === item.contact_id); return <div key={item.id} className="p-4"><div className="flex gap-3"><MessageCircle className="mt-0.5 h-4 w-4 shrink-0 text-crx-green" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="font-medium capitalize text-nav-dark">{item.interaction_type}</span>{item.direction && <Badge variant="default">{item.direction}</Badge>}{item.outcome && <Badge variant="info">{item.outcome.replace(/_/g, ' ')}</Badge>}</div><p className="mt-1 text-sm text-secondary">{contact?.name || 'No contact selected'} · {names[item.owner_user_id || ''] || 'Unknown user'} · {relative(item.occurred_at)}</p>{item.summary && <p className="mt-2 whitespace-pre-wrap text-sm text-nav-dark">{item.summary}</p>}</div></div></div>; })}</div>}</Card>;
