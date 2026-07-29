@@ -307,6 +307,56 @@ export function proofSearchDirs(root, listWorktrees) {
   return [...new Set(dirs)];
 }
 
+// Same bug, deliberately stricter answer, for the LIVE-APPLY gate (2026-07-29).
+//
+// `proofSearchDirs` above scans EVERY sibling checkout. For the merge gate that
+// is acceptable: its proof is bound to the exact head and base SHAs GitHub
+// reports, so a sibling's proof can only ever authorize the identical merge.
+// The migration-apply proof is weaker — interactively `queryHash` is checked
+// only when present, and migration names match by substring — so "any sibling
+// checkout" would let a proof minted by a DIFFERENT concurrent session unlock a
+// live apply this session never reviewed. Mason runs dozens of worktrees at
+// once, and the settled rule is proof from THIS session (DECISION_LOG 2026-07-13).
+//
+// So: search this session's OWN checkout and the primary one, and nothing else.
+// `hookCwd` is the working directory the harness reports for the tool call —
+// the same field codex-push-guard.mjs and pr-merge-guard.mjs already trust — and
+// it is honoured ONLY after `git worktree list` confirms it belongs to this
+// repository. An unrecognised cwd falls back to the primary directory alone,
+// which is the pre-2026-07-29 behaviour: strictly safe, never laxer.
+//
+// `listWorktrees` is injected so this is testable without a real repo.
+export function sessionProofDirs(root, hookCwd, listWorktrees) {
+  const stateDir = (dir) => path.resolve(dir, ".claude", "session-state");
+  const dirs = [stateDir(root)];
+  const cwd = String(hookCwd || "").trim();
+  if (!cwd) return dirs;
+  let porcelain;
+  try {
+    porcelain = listWorktrees();
+  } catch {
+    return dirs;
+  }
+  // Windows paths differ in case between `git worktree list` and process.cwd(),
+  // so compare on a normalised key; keep the ORIGINAL path for the return value.
+  const key = (p) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
+  const cwdKey = key(cwd);
+  const contains = (parent, child) => child === parent || child.startsWith(parent + path.sep);
+  // Worktrees nest in this repo (C:/CRX_Manager/.claude/worktrees/*), and the
+  // primary checkout is listed FIRST — so "first match wins" would resolve a
+  // nested worktree's cwd to the primary and reintroduce the original bug. Take
+  // the LONGEST containing path: the most specific checkout is the real one.
+  let best = null;
+  for (const line of String(porcelain ?? "").split(/\r?\n/)) {
+    const match = /^worktree\s+(.+)$/.exec(line.trim());
+    if (!match) continue;
+    const wt = path.resolve(match[1]);
+    if (contains(key(wt), cwdKey) && (!best || wt.length > best.length)) best = wt;
+  }
+  if (best) dirs.push(stateDir(best));
+  return [...new Set(dirs)];
+}
+
 // ── PR-merge request detection (2026-07-16 scaffolding review Theme 1) ───────
 // Since the 2026-07-14 `protect-main` ruleset, work lands on main via PR merge,
 // not `git push` — so the merge action needs the same risky-diff Codex gate the

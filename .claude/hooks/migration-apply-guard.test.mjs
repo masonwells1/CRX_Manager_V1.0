@@ -264,4 +264,110 @@ function armAutopilot(stateDir, hoursFromNow) {
   }
 }
 
+// ── proofs follow THIS SESSION's checkout, and only it (2026-07-29) ─────────
+// The harness pins CLAUDE_PROJECT_DIR to the primary checkout even when the
+// session works inside a linked worktree, while scripts/write-apply-proofs.mjs
+// writes under process.cwd() — the worktree holding the migration. Before this,
+// a migration built in a worktree could never be applied: every proof landed
+// somewhere the guard did not look. Same root cause as pr-merge-guard (PR
+// #252/#255).
+//
+// The merge guard's fix — scan EVERY sibling checkout — was tried here first and
+// Codex blocked it: bound to exact head/base SHAs a sibling's merge proof is
+// harmless, but an apply proof is weaker (interactive queryHash is optional,
+// names match by substring), so any-worktree scanning would let one of Mason's
+// dozens of concurrent sessions unlock a live apply another never reviewed. The
+// lookup follows the session's reported cwd instead. Both halves are asserted:
+// the session's OWN worktree counts, a SIBLING's does not.
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-wt-"));
+  const primary = path.join(tmp, "primary");
+  const linked = path.join(tmp, "linked");
+  const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: hermeticEnv() });
+  try {
+    mkdirSync(primary, { recursive: true });
+    git(["init", "-q", "-b", "main"], primary);
+    git(["config", "user.email", "test@example.com"], primary);
+    git(["config", "user.name", "test"], primary);
+    writeFileSync(path.join(primary, "seed.txt"), "seed\n");
+    git(["add", "seed.txt"], primary);
+    git(["commit", "-qm", "seed"], primary);
+    const added = git(["worktree", "add", "-q", "-b", "wt", linked], primary);
+    // Asserted, never skipped. An `if (added.status === 0)` guard here would let
+    // the whole worktree regression disappear silently the day `git worktree add`
+    // stops working, and the suite would still print green.
+    ok(
+      added.status === 0,
+      `git worktree add succeeded (status=${added.status}): ${(added.stderr || "").trim()}`,
+    );
+
+    const linkedState = path.join(linked, ".claude", "session-state");
+    mkdirSync(linkedState, { recursive: true });
+    // Proof exists ONLY in the linked worktree; the primary has none.
+    writeProof(linkedState, BENIGN_SQL);
+    // CLAUDE_PROJECT_DIR stays pinned to `primary` in every call below — that is
+    // what the real harness does. Only the session's reported cwd varies, which
+    // is the whole behaviour under test.
+    const callFrom = (cwd, query, name = MIG) =>
+      ({ tool_name: "mcp__supabase__apply_migration", cwd, tool_input: { name, query } });
+
+    let r = runHook(callFrom(linked, BENIGN_SQL), primary);
+    ok(!isDeny(r), "a proof minted in the worktree the session is working in satisfies the gate");
+
+    // Codex's blocker on the first version of this fix. Same proof, same
+    // migration, same 30-minute window — only the session's checkout differs.
+    r = runHook(callFrom(primary, BENIGN_SQL), primary);
+    ok(isDeny(r), "a concurrent sibling session's proof does NOT authorize an apply from another checkout");
+
+    // A cwd outside the repo cannot manufacture a search directory; the guard
+    // falls back to the primary alone, which holds no proof.
+    r = runHook(callFrom(path.join(tmp, "not-a-checkout"), BENIGN_SQL), primary);
+    ok(isDeny(r), "a cwd that is not a checkout of this repository is ignored, not trusted");
+
+    // Mason's worktrees live INSIDE the primary checkout
+    // (C:/CRX_Manager/.claude/worktrees/*), and `git worktree list` prints the
+    // primary first — so resolving the cwd to the first checkout that contains
+    // it would pick the primary and reproduce the original bug for exactly the
+    // layout he actually uses. The most specific checkout has to win.
+    const nested = path.join(primary, ".claude", "worktrees", "nested");
+    const addedNested = git(["worktree", "add", "-q", "-b", "wt-nested", nested], primary);
+    ok(addedNested.status === 0, `nested git worktree add succeeded (status=${addedNested.status}): ${(addedNested.stderr || "").trim()}`);
+    const nestedState = path.join(nested, ".claude", "session-state");
+    mkdirSync(nestedState, { recursive: true });
+    writeProof(nestedState, BENIGN_SQL);
+    r = runHook(callFrom(nested, BENIGN_SQL), primary);
+    ok(!isDeny(r), "a worktree nested inside the primary checkout resolves to itself, not to its parent");
+    git(["worktree", "remove", "--force", nested], primary);
+
+    r = runHook(callFrom(linked, BENIGN_SQL + " -- edited after review"), primary);
+    ok(isDeny(r), "the session's own worktree proof does NOT excuse a queryHash mismatch — content binding survives");
+
+    r = runHook(callFrom(linked, BENIGN_SQL, "20990101000001_other_mig"), primary);
+    ok(isDeny(r), "the session's own worktree proof does NOT cover a different migration name");
+
+    // AUTOPILOT.on is narrower still — pinned to the primary checkout even when
+    // the session's proofs are read from its worktree. It is authorization state
+    // for this project, not evidence about a migration. A malformed flag is the
+    // loudest observable signal: it forces flagState "stale", which parks every
+    // apply with a LAPSED message. Planted in the worktree it must change
+    // nothing; planted in the primary it must block. The second half proves the
+    // first is not passing vacuously.
+    const primaryState = path.join(primary, ".claude", "session-state");
+    mkdirSync(primaryState, { recursive: true });
+    writeFileSync(path.join(linkedState, "AUTOPILOT.on"), "not json at all");
+    r = runHook(callFrom(linked, BENIGN_SQL), primary);
+    ok(!isDeny(r), "a flag Mason never armed here, sitting in the session's worktree, does not change the rule-set");
+    ok(!/LAPSED/i.test(r.stdout), "worktree AUTOPILOT.on is not read as this checkout's authorization state");
+
+    writeFileSync(path.join(primaryState, "AUTOPILOT.on"), "not json at all");
+    r = runHook(callFrom(linked, BENIGN_SQL), primary);
+    ok(isDeny(r) && /LAPSED/i.test(r.stdout), "the same flag in the PRIMARY checkout still parks the apply");
+    rmSync(path.join(primaryState, "AUTOPILOT.on"));
+
+    git(["worktree", "remove", "--force", linked], primary);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 console.log(`migration-apply-guard: ${pass} assertions passed`);
