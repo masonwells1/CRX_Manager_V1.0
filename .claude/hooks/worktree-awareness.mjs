@@ -76,7 +76,10 @@ function dirtyCount(wtPath) {
   let result = null;
   try {
     if (existsSync(wtPath)) {
-      result = git(["status", "--porcelain"], wtPath).split("\n").filter((l) => l.trim()).length;
+      // -uall, not the default: a repo with status.showUntrackedFiles=no would report
+      // an unwritten draft's checkout as CLEAN, and the clean path skips the untracked
+      // scan — silently hiding pending work, the exact defect this file exists to fix.
+      result = git(["status", "--porcelain", "-uall"], wtPath).split("\n").filter((l) => l.trim()).length;
     }
   } catch { result = null; }
   dirtyCache.set(wtPath, result);

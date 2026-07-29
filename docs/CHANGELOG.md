@@ -27,6 +27,13 @@ clear the number. The mainline backlog is seeded separately from `origin/main`'s
 backlog instead of zero. When the branch point cannot be read at all, the reader falls back to
 scanning the whole checkout rather than risk hiding pending work, and `/fleet` says so in its notes.
 
+Both readers classify a checkout as clean with `git status --porcelain -uall`, not the default. A
+repo carrying `status.showUntrackedFiles=no` reports a checkout as clean even while an unwritten
+draft sits in it, and the clean path skips the untracked scan — the same silent under-report this
+change exists to prevent (Codex MEDIUM on #279). Proven in a scratch repo with that setting on:
+`git status --porcelain` returns empty where `--porcelain -uall` lists the draft. The setting is
+unset in this repo, so behaviour here is unchanged.
+
 Three earlier cuts were killed by review, each for under-reporting:
 
 - dropping every behind-main worktree wholesale (CodeRabbit P1) — a genuinely new migration on a

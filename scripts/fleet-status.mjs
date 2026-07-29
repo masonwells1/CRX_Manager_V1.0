@@ -174,7 +174,10 @@ function dirtyCount(wtPath) {
   if (dirtyCache.has(wtPath)) return dirtyCache.get(wtPath);
   let result = null;
   try {
-    result = git(["status", "--porcelain"], wtPath, 5000).split("\n").filter((l) => l.trim()).length;
+    // -uall, not the default: a repo with status.showUntrackedFiles=no would report an
+    // unwritten draft's checkout as CLEAN, and the clean path skips the untracked scan —
+    // silently hiding pending work, the exact defect this change exists to fix.
+    result = git(["status", "--porcelain", "-uall"], wtPath, 5000).split("\n").filter((l) => l.trim()).length;
   } catch { result = null; }
   dirtyCache.set(wtPath, result);
   return result;
