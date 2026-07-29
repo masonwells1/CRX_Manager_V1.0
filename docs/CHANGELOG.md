@@ -44,11 +44,15 @@ partner trigger cannot loop; and each write carries an `IS DISTINCT FROM` guard,
 nothing. `sync_profile_public_directory()` additionally has EXECUTE revoked from `PUBLIC`, `anon` and
 `authenticated` in the same migration.
 
-Both files were B7-renamed before landing: authored `20260728185739` and `20260728185913`, they both
-sorted *below* the `20260728233459` high-water that the same-day anon-EXECUTE applies established, so
-they became `20260728235500` and `20260728235600` — strictly above it, relative order preserved.
-Renames only; neither SQL body was touched. Both are indexed in `docs/reference/migration-history.md`
-as rows 834 and 835 with `PENDING APPLY`.
+Both files were B7-renamed **twice** before landing. Authored `20260728185739` and `20260728185913`,
+they sorted *below* the `20260728233459` high-water that the same-day anon-EXECUTE applies
+established, so they were renamed to `20260728235500` and `20260728235600`. While this PR was in
+review a concurrent session applied `application_service_cost_admin_only`, which pushed the live
+high-water to `20260729015706` (live runs UTC — the apply landed on 2026-07-29 UTC) and put those
+names back below it. They were renamed a second time to `20260729020000` and `20260729020100` —
+strictly above the current high-water, relative order preserved. Renames only; neither SQL body was
+touched by either rename. Both are indexed in `docs/reference/migration-history.md` as rows 834 and
+835 with `PENDING APPLY`.
 
 The Codex connector then filed three P2 findings on the directory migration, all three real and all
 three confirmed against live before fixing. They have **three separate causes** — worth stating
