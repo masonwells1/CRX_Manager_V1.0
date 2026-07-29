@@ -64,19 +64,34 @@ recorded for audit accuracy, not as open remediation work.
 
 ---
 
-## 0c. PARKED 2026-07-28 — logged-out visitors can execute 43 database functions
+## 0c. RESOLVED 2026-07-28 — logged-out visitors could execute 43 database functions
 
-**Status: fix WRITTEN and PARKED in two halves, NEITHER applied live.** Deliberately split so the
-easy half can be approved without the risky half.
+**Status: BOTH halves APPLIED LIVE 2026-07-28** with Mason's in-chat approval, under the full proof
+gate (both reviewer charters CLEAN from gpt-5.6-terra, hash-bound proofs, live-ledger preflight
+recorded first). Deliberately split so the easy half could be approved without the risky half; in
+the end both were approved together.
 
-- **Half 1 — `20260728193000_revoke_anon_execute_non_policy_functions`** (this section's PR). 40
+Supabase stamps its own ledger version at apply time, so each file was B7-renamed to the version it
+came back with — bodies never edited. Half 1 authored `20260728193000` → **ledger
+`20260728231350`**; half 2 authored `20260728193100`, renamed to `20260728232500` to clear the
+high-water half 1 had just raised, then → **ledger `20260728233459`**. Live high-water is now
+`20260728233459` at 918 ledger rows.
+
+**Post-apply proof, read back independently from live.** Half 1: `anon` EXECUTE **false on 40 of
+40** targets, `authenticated` **true on 40 of 40**, `service_role` **true on 40 of 40**. Half 2:
+`anon` **false** on `is_admin()`, `is_applicator()` and `is_driver()`; `authenticated` and
+`service_role` **true on all three**. `handle_new_user()` remains anon-executable by design.
+Production loaded logged out immediately after: the sign-in page renders, zero console messages, no
+`42501`, all asset requests 200.
+
+- **Half 1 — `20260728231350_revoke_anon_execute_non_policy_functions`** (was `20260728193000`). 40
   functions that appear in **no** RLS policy, so nothing changes from "returns nothing" to "hard
   error". 20 are trigger-only (`RETURNS trigger`, no arguments) and PostgREST cannot expose them at
   all. 12 are SECURITY DEFINER callables that already gate internally. **The other 8 are the actual
   live exposure**: `calculate_billing_splits(bigint, numeric[])`, `check_period_open(date)` and the
   six `next_*_number()` document-number allocators have no auth gate of any kind, and a logged-out
   caller can invoke them today.
-- **Half 2 — `20260728193100_revoke_anon_execute_rls_role_helpers`** — `is_admin()`,
+- **Half 2 — `20260728233459_revoke_anon_execute_rls_role_helpers`** (was `20260728193100`) — `is_admin()`,
   `is_applicator()`, `is_driver()`. These are evaluated **inside** RLS policies as the querying
   role, so removing anon's EXECUTE turns a silent filter into `42501 permission denied for function
   is_admin`. Blast radius measured live: 30 tables / 70 PUBLIC-audience policies for `is_admin`, 6
@@ -84,7 +99,8 @@ easy half can be approved without the risky half.
   that state on 24 tables in production today and nothing is broken by it, the login route never
   reads those tables as anon (`src/App.tsx:185` — `login` is the only route outside
   `<ProtectedRoute>`), no edge function reads as anon, and the `authenticated` grant is retained and
-  positively asserted. Approve this one separately.
+  positively asserted. That judgment held: the post-apply reads above and the logged-out production
+  load confirm it.
 
 **Why this is not the blanket judgment it looks like.** The overnight Codex draft
 (`20260728185827_revoke_anon_security_definer_execute`) revoked **44** functions with the same

@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-28 (read-only Supabase `list_migrations` confirms **916 ledger rows** and live high-water `20260728182141`; `secdef_pricing_reads_office_only` is applied live. The live July 27 table hardening and July 28 RPC hardening now jointly restrict quote pricing, per-customer rates, rebate terms, and the two remaining `SECURITY DEFINER` pricing readers to the intended office roles.)
+**Last verified:** 2026-07-28 (read-only Supabase `list_migrations` confirms **918 ledger rows** and live high-water `20260728233459`; `secdef_pricing_reads_office_only` is applied live. The live July 27 table hardening and July 28 RPC hardening now jointly restrict quote pricing, per-customer rates, rebate terms, and the two remaining `SECURITY DEFINER` pricing readers to the intended office roles. Both halves of the anon-EXECUTE revoke are also applied live — ledger `20260728231350` for the 40 functions in no RLS policy and `20260728233459` for the `is_admin`/`is_applicator`/`is_driver` role helpers — so logged-out callers no longer reach any of the 43, including the six `next_*_number()` allocators, `calculate_billing_splits` and `check_period_open`, which had no auth gate of any kind. See `docs/manual/KNOWN_ISSUES.md` §0c.)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check
