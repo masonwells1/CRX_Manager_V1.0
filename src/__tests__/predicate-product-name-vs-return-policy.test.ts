@@ -48,6 +48,11 @@ const MUST_MATCH: Array<[string, string]> = [
   ['NON-RETURNABLE', 'PARAQUAT NON-RETURNABLE'],
   ['NONRETURNABLE', 'PARAQUAT NONRETURNABLE'],
   ['NOT RETURNABLE', 'UREA 46 NOT RETURNABLE'],
+  // The separator class is [[:space:][:punct:]], which already covers the
+  // hyphen — an automated reviewer read it as whitespace-only, so the
+  // hyphenated form is pinned here rather than left to a comment thread.
+  ['NOT-RETURNABLE, hyphenated', 'UREA 46 NOT-RETURNABLE'],
+  ['NOTRETURNABLE, run together', 'UREA 46 NOTRETURNABLE'],
   ['FINAL SALE', 'CLETHODIM FINAL SALE'],
   ['ALL SALES FINAL, reversed word order', 'CLETHODIM ALL SALES FINAL'],
   ['lower case still matches', 'clethodim no return'],

@@ -60,7 +60,7 @@ WITH flagged AS (
          p.return_policy,
          p.is_active
     FROM public.products p
-   WHERE p.product_name ~* '(\mno[[:space:][:punct:]]*returns?\M)|(\mnon[[:space:][:punct:]]*return(s|able)?\M)|(\mnot[[:space:][:punct:]]+returnable\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*final\M)'
+   WHERE p.product_name ~* '(\mno[[:space:][:punct:]]*returns?\M)|(\mnon[[:space:][:punct:]]*return(s|able)?\M)|(\mnot[[:space:][:punct:]]*returnable\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*final\M)'
 )
 SELECT 'products:' || f.id::text AS violation_key,
        'product name asserts it cannot be returned but return_policy is '
