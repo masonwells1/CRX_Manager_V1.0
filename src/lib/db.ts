@@ -233,9 +233,13 @@ export const RpcErrorCodes = {
   IDEMPOTENCY_ARGUMENT_MISMATCH: 'IDEMPOTENCY_ARGUMENT_MISMATCH',
   // check_idempotency (20260714230000_gauntlet_core_guards.sql) — raised when a
   // key already on file was minted for a DIFFERENT operation string. RPCs whose
-  // operation scope includes the payload (admin_set_application_service_cost)
-  // hit this on a legitimate corrected resubmit, so callers detect it to rotate
-  // the key and retry rather than surfacing it as a dead end.
+  // operation scope includes the payload (admin_set_application_service_cost,
+  // and the EDIT path of admin_save_application_service) hit this on a legitimate
+  // corrected resubmit, so callers detect it to rotate the key and retry rather
+  // than surfacing it as a dead end. The CREATE path of
+  // admin_save_application_service scopes on a CONSTANT operation string instead,
+  // so one key creates at most one service — callers must NOT rotate there, or a
+  // lost response plus any edited field manufactures a duplicate service.
   IDEMPOTENCY_CROSS_OP_KEY_REUSE: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE',
   // CRM relationship-intelligence loop (2026-07-16/17)
   CONTACT_NOT_FOUND: 'CONTACT_NOT_FOUND',

@@ -2103,8 +2103,9 @@ function registryMigrationHighWater(): string {
 // new current pending migration is added; otherwise the inventory fails closed.
 // Empty as of 2026-07-29: application_service_cost_admin_only applied live and
 // its row carries the server-assigned ledger version 20260729015706 (authored
-// 20260729003600), so it is no longer pending — as with both halves of the
-// anon-EXECUTE revoke (20260728231350 and 20260728233459) before it.
+// 20260729003600), and application_service_atomic_save applied live as
+// 20260729035923 (authored 20260729024500), so neither is pending — as with both
+// halves of the anon-EXECUTE revoke (20260728231350 and 20260728233459) before them.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
 
 /**

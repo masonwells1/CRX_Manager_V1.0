@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-29** (live re-read this date via the Supabase connector: **918 ledger rows, max version `20260728233459`** — unchanged, and every claim below re-checked against it. The stamp moved because `20260729015706_application_service_cost_admin_only` now exists **on disk, not applied** (`already_applied = false`, strictly above the high-water); the `application_services.cost_per_acre_cents` item in section 0 stays OPEN until it applies. Prior stamp, still accurate: **2026-07-28** — live high-water re-read that date via the Supabase connector: **918 ledger rows, max version `20260728233459`**. Both halves of the anon-EXECUTE revoke **RESOLVE section 0c** and are applied live — `revoke_anon_execute_non_policy_functions` (ledger `20260728231350`) and `revoke_anon_execute_rls_role_helpers` (ledger `20260728233459`) — so logged-out callers no longer reach any of the 43 functions, and both raised the high-water above the `20260728182141` this stamp previously recorded. `secdef_pricing_reads_office_only` **RESOLVES section 0**: both remaining `SECURITY DEFINER` pricing readers now enforce active admin/sales-rep access in-body, with explicit execute grants. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Sections 0, 0a and 0c now have nothing open**; they are retained for their proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
+**Last verified: 2026-07-29** (live re-read this date via the Supabase connector: **919 ledger rows, max version `20260729015706`**, and every claim below re-checked against it. `20260729015706_application_service_cost_admin_only` is **APPLIED LIVE** — an earlier revision of this stamp said it was "on disk, not applied" at 918 rows, which was already wrong when written: `20260729015706` is the *server-assigned* version from that apply (the file was authored `20260729003600`), so a file bearing it cannot be unapplied. The `application_services.cost_per_acre_cents` leak in section 0 is therefore **CLOSED**. One follow-up is open and tracked in section 0d below. Prior stamp, still accurate: **2026-07-28** — live high-water re-read that date via the Supabase connector: **918 ledger rows, max version `20260728233459`**. Both halves of the anon-EXECUTE revoke **RESOLVE section 0c** and are applied live — `revoke_anon_execute_non_policy_functions` (ledger `20260728231350`) and `revoke_anon_execute_rls_role_helpers` (ledger `20260728233459`) — so logged-out callers no longer reach any of the 43 functions, and both raised the high-water above the `20260728182141` this stamp previously recorded. `secdef_pricing_reads_office_only` **RESOLVES section 0**: both remaining `SECURITY DEFINER` pricing readers now enforce active admin/sales-rep access in-body, with explicit execute grants. `inline_role_checks_require_active_profile` (`20260727145843`) **RESOLVES section 0a**: the 38 RLS policies that inlined a role check now also require an active profile, residual gaps 38 → 0. Its two out-of-scope follow-ups are now **also RESOLVED and applied live**: `broad_reads_require_active_profile` (`20260727174657`) took wide-open PERMISSIVE read policies **31 → 0**, and `deactivation_revokes_auth_access` (`20260727174805`) made deactivation actually revoke auth access. `quote_and_rate_reads_office_only` (`20260727231652`) is also applied live and restricts quote pricing, per-customer rates, and rebate terms to office roles. The third follow-up — a disaster-recovery defect in the schema baseline, never a production one — is **also RESOLVED this date**: the baseline was regenerated at high-water `20260727174805` and proven by a disposable PostgreSQL 17 restore, post-baseline replay, and thirteen catalog fingerprints. **Sections 0, 0a and 0c now have nothing open**; they are retained for their proofs. Every other dated claim below stands unchanged. Prior stamp, still accurate: 2026-07-26, live high-water `20260726190515` — Section 9 PO/AP HIGH remediation applied live 2026-07-26 with Mason's in-chat approval: all five Section 9 sweep findings cleared (the `section9-po-ap-controls` predicate returns zero rows live). Supplier Pricing Phase 3 Stage A remains dormant: 604 Products unchanged, zero classifications/family rows, and `supplier_cost_basis_enabled=false`; supplier-pricing governed edit/batch paths and `process-document` v19 OCR retirement remain live and proven. Older open/deferred claims retain their dated evidence below; owner-facing combined list: root `TODO.md`)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -137,7 +137,8 @@ user shares the `authenticated` role — but the conclusion is wrong, and no tab
 from `authenticated` does not affect it. The migration therefore revokes `SELECT, INSERT, UPDATE,
 REFERENCES` on the table from `authenticated`, re-grants on the explicit nine-column list that omits
 the cost, and re-admits admins through two gated RPCs
-(`admin_get_application_service_costs` / `admin_set_application_service_cost`). Note the revoke-then-regrant
+(`admin_get_application_service_costs` / `admin_set_application_service_cost`; a third,
+`admin_save_application_service`, supersedes the setter — see section 0d). Note the revoke-then-regrant
 shape is required: a table-level grant implies every column and `REVOKE … (col)` does not subtract from
 it. All five functions that touch `application_services` were verified live to be SECDEF owned by
 `postgres`, so the money engine is untouched — including `preview_field_app_invoice_split`, which reads
@@ -165,6 +166,54 @@ carry a non-zero `cost_per_acre_cents`, so there is no figure to derive yet.
 function (returns `trigger`, not RPC-callable) and is the only one in the set with EXECUTE to `anon`
 — inconsistent with `20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql`. This is
 recorded for audit accuracy, not as open remediation work.
+
+---
+
+## 0d. 2026-07-29 — the admin application-service save is now atomic (APPLIED LIVE; two follow-ups still OPEN)
+
+**Status: migration `20260729035923_application_service_atomic_save.sql` APPLIED LIVE 2026-07-29** (authored
+`20260729024500`, B7-renamed to the server-assigned ledger version; body unchanged). Proven live on rolled-back
+impersonation blocks: a real sales rep gets `42501 INSUFFICIENT_ROLE`, a real admin creates and then edits a
+service with name, rate and cost landing in one transaction. **The two follow-ups below are still open.**
+
+**The bug.** Section 0's fix left the admin save split across two calls: the ordinary columns went over
+PostgREST and the admin-only `cost_per_acre_cents` went through a second RPC. Two calls are two
+transactions with no rollback between them. If the second failed, a brand-new service stayed committed
+at `cost_per_acre_cents = 0` — and zero cost reads as **infinite margin** on every job that uses it. The
+admin's natural retry then created a *duplicate*, because `idx_application_services_active_name` is not
+unique. Not reachable by a non-admin, and it never corrupts an existing figure, but a money fact should
+not depend on the second of two network calls succeeding. Found by the adversarial cross-model review of
+PR #267, not by the two migration gates — both of which had passed the split version.
+
+**The fix.** One `SECURITY DEFINER` RPC, `admin_save_application_service`, writes the whole row including
+the cost. A single PL/pgSQL call is one transaction, so either every field lands or none does.
+
+**Follow-up 1 — expand/contract obligation (MUST be paid).** This migration deliberately does **not** drop
+`admin_set_application_service_cost`, even though nothing calls it once the new bundle ships. Dropping it
+in the same migration would be an outage: between the apply and the Vercel deploy, the browser still runs
+the previous bundle, whose first (PostgREST) write would still succeed and whose second call would fail —
+so *every* admin save in that window would produce exactly the partial commit this work exists to prevent,
+deterministically rather than occasionally. **A follow-up migration must retire the setter once the new
+bundle is live on production.** Until then it is admin-gated, correctly revoked from `anon`/`PUBLIC`, and
+caller-less — low-risk surface, but surface.
+
+**Follow-up 2 — duplicate services are still possible under true concurrency (DEFERRED, needs an owner
+call).** The RPC's create path uses a *constant* idempotency operation string, so one key creates at most
+one service no matter what the admin edits before resubmitting. That closes the retry-driven duplicate.
+It does **not** serialize two genuinely concurrent creates from two tabs or two admins, and it is not a
+control against a caller that simply mints a fresh key per attempt. The durable fix is a unique partial
+index on the active service name. It is deferred because it imposes a **new business rule** — two active
+services could no longer share a name — which is Mason's call, not an agent's, and it needs a live
+duplicate check first (there are 4 services today).
+
+**Accepted trade-off, recorded so it is not "fixed" by accident.** On a create replay the figures in the
+resubmitted form are not applied. That is the deliberate price of the constant operation string, and the
+alternative is worse: any payload-derived scope loses the duplicate protection the moment the admin edits
+the field it hashes. The stale figure is visible immediately — the save navigates to the detail page,
+which re-reads the true cost — whereas a duplicate service bills wrong indefinitely. The caller's
+rotate-and-retry is therefore restricted to the *edit* path; rotating on create is the exact step that
+manufactures the duplicate. **The RPC's scoping and the caller's rotation are one design; do not change
+either alone.**
 
 ---
 

@@ -77,11 +77,24 @@ eq(destructiveMigrationCheck("").destructive, false, "empty SQL is not destructi
 
 // ── live hook: proof gate + armed-run destructive carve-out ─────────────────
 const HOOK = path.join(__dirname, "migration-apply-guard.mjs");
+// Git exports GIT_DIR/GIT_INDEX_FILE to every hook it runs, and this suite runs
+// inside pre-commit. Inheriting those redirects every fixture git command at the
+// REAL repository: `git init` on an inherited GIT_DIR rewrites the shared config
+// to `bare = true`, which breaks every worktree in the checkout until repaired.
+// Strip the whole GIT_* namespace so fixtures only ever touch their own temp dir.
+function hermeticEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase().startsWith("GIT_")) delete env[key];
+  }
+  return env;
+}
 function runHook(payload, projectDir) {
   return spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(payload),
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+    cwd: projectDir,
+    env: hermeticEnv({ CLAUDE_PROJECT_DIR: projectDir }),
   });
 }
 const isDeny = (r) => r.stdout.includes('"permissionDecision":"deny"');
@@ -246,6 +259,52 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 8. Non-apply_migration tool → instant allow, no interference.
     r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "DROP TABLE customers;" } }, tmp);
     ok(!isDeny(r), "other tools pass through untouched");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── proofs minted in a LINKED WORKTREE are found (2026-07-29) ───────────────
+// The harness pins CLAUDE_PROJECT_DIR to the primary checkout even when the
+// session works inside a linked worktree, while scripts/write-apply-proofs.mjs
+// writes under process.cwd() — the worktree holding the migration. Before this,
+// a migration built in a worktree could never be applied: every proof landed
+// somewhere the guard did not look. Same bug/fix as pr-merge-guard (PR
+// #252/#255). Widening WHERE proofs are found must not widen WHAT counts, so
+// the mismatch case is asserted right after the success case.
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-wt-"));
+  const primary = path.join(tmp, "primary");
+  const linked = path.join(tmp, "linked");
+  const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: hermeticEnv() });
+  try {
+    mkdirSync(primary, { recursive: true });
+    git(["init", "-q", "-b", "main"], primary);
+    git(["config", "user.email", "test@example.com"], primary);
+    git(["config", "user.name", "test"], primary);
+    writeFileSync(path.join(primary, "seed.txt"), "seed\n");
+    git(["add", "seed.txt"], primary);
+    git(["commit", "-qm", "seed"], primary);
+    const added = git(["worktree", "add", "-q", "-b", "wt", linked], primary);
+
+    if (added.status === 0) {
+      const linkedState = path.join(linked, ".claude", "session-state");
+      mkdirSync(linkedState, { recursive: true });
+      // Proof exists ONLY in the linked worktree; the primary has none.
+      writeProof(linkedState, BENIGN_SQL);
+      const call = (query) => ({ tool_name: "mcp__supabase__apply_migration", tool_input: { name: MIG, query } });
+
+      let r = runHook(call(BENIGN_SQL), primary);
+      ok(!isDeny(r), "proof minted in a linked worktree satisfies the gate from the primary checkout");
+
+      r = runHook(call(BENIGN_SQL + " -- edited after review"), primary);
+      ok(isDeny(r), "worktree proof does NOT excuse a queryHash mismatch — content binding survives the widening");
+
+      r = runHook({ tool_name: "mcp__supabase__apply_migration", tool_input: { name: "20990101000001_other_mig", query: BENIGN_SQL } }, primary);
+      ok(isDeny(r), "worktree proof does NOT cover a different migration name");
+
+      git(["worktree", "remove", "--force", linked], primary);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

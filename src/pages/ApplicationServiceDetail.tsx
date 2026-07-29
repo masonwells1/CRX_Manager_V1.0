@@ -63,7 +63,7 @@ export default function ApplicationServiceDetail() {
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
-  const costIdem = useIdempotencyKey('admin_set_application_service_cost', profile?.id || '');
+  const saveIdem = useIdempotencyKey('admin_save_application_service', profile?.id || '');
   const [newOverride, setNewOverride] = useState({ customer_id: '', rate: '', season: currentSeason().toString(), notes: '' });
   const [deleteOverrideId, setDeleteOverrideId] = useState<string | null>(null);
 
@@ -114,60 +114,99 @@ export default function ApplicationServiceDetail() {
     else { setTimeout(() => { initialLoadDone.current = true; }, 0); }
   }, [id, isNew, fetchService, fetchOverrides]);
 
-  // Writes cost_per_acre_cents through the admin-gated RPC, since `authenticated`
-  // holds no UPDATE grant on that column. The RPC is a no-op when the value is
-  // unchanged, so re-saving an untouched form writes nothing.
-  const saveCost = async (serviceId: string, costCents: number) => {
+  // ONE call writes the whole service, cost_per_acre_cents included, inside a
+  // single database transaction. This used to be a PostgREST insert/update
+  // followed by a separate cost RPC, because `authenticated` holds no write grant
+  // on that column — but two calls are two transactions with no rollback between
+  // them: if the second failed, a brand-new service stayed committed at cost 0
+  // (zero cost reads as infinite margin), and the admin's natural retry created a
+  // DUPLICATE service, since idx_application_services_active_name is not unique.
+  // Migration 20260729035923 collapsed both writes into
+  // admin_save_application_service so they land together or not at all.
+  const saveService = async (args: {
+    p_name: string;
+    p_default_rate_per_acre_cents: number;
+    p_is_active: boolean;
+    p_sort_order: number;
+    p_vehicle_id: string | null;
+    p_cost_per_acre_cents: number | null;
+    p_service_id: string | null;
+  }) => {
     const attempt = async () => {
-      const { data, error } = await supabase.rpc('admin_set_application_service_cost', {
-        p_service_id: serviceId,
-        p_cost_per_acre_cents: costCents,
-        p_idempotency_key: costIdem.getKey(),
+      const { data, error } = await supabase.rpc('admin_save_application_service', {
+        ...args,
+        // The Supabase type generator never emits `| null` for an RPC argument,
+        // but these three take SQL NULL by design: p_service_id NULL means
+        // "create", p_cost_per_acre_cents NULL means "leave the cost alone", and
+        // p_vehicle_id NULL means "no vehicle". Same cast the other
+        // null-accepting RPC callers use (BlendRecipes.tsx, JobDetail.tsx).
+        p_service_id: args.p_service_id as unknown as string,
+        p_vehicle_id: args.p_vehicle_id as unknown as string,
+        p_cost_per_acre_cents: args.p_cost_per_acre_cents as unknown as number,
+        p_idempotency_key: saveIdem.getKey(),
       });
       if (error) throw error;
-      assertRpcResult<{ success: boolean }>(data, 'admin_set_application_service_cost');
+      return assertRpcResult<{ success: boolean; service_id: string; created: boolean }>(
+        data, 'admin_save_application_service',
+      );
     };
+    let result: { success: boolean; service_id: string; created: boolean };
     try {
-      await attempt();
+      result = await attempt();
     } catch (err: unknown) {
-      // The RPC's idempotency scope includes the cents amount, so a *corrected*
-      // figure retried under the same key is a different operation and the server
-      // rejects it with IDEMPOTENCY_CROSS_OP_KEY_REUSE. useIdempotencyKey only
-      // clears its key on success, so without this the admin would hit the same
-      // rejection on every further attempt and stay wedged until a page reload.
-      // Rotating and retrying once is safe: the rejection proves the stored key
-      // belongs to a different amount, and the end state we want is simply the
-      // amount the admin just submitted.
       if (!hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_CROSS_OP_KEY_REUSE)) throw err;
-      costIdem.resetKey();
-      await attempt();
+      // ROTATE ONLY ON THE EDIT PATH. This asymmetry mirrors the RPC's, which
+      // scopes the two paths differently on purpose — see the long comment in
+      // migration 20260729035923. The two halves are a pair; changing one alone
+      // reintroduces a bug.
+      //
+      // EDIT — the RPC hashes the whole payload, so a *corrected* form retried
+      // under the same key is a different operation and is rejected. That loud
+      // rejection is deliberate (it beats silently discarding a corrected money
+      // figure), but useIdempotencyKey only clears its key on success, so without
+      // a rotation here the admin would hit the same rejection on every further
+      // attempt and stay wedged until a page reload. Rotating once is safe: the
+      // service already exists, the write is an absolute SET rather than a delta,
+      // and the end state we want is simply the form just submitted.
+      //
+      // CREATE — rotating is the exact step that manufactures a duplicate service,
+      // so we must not. The RPC's create scope is a constant, which makes one key
+      // create at most one service; a fresh key defeats that and nothing in the
+      // schema would stop the second row (idx_application_services_active_name is
+      // not unique). Reaching this branch on a create would mean the key had
+      // already been spent on some other operation, which cannot happen for a
+      // freshly mounted new-service form — so surface it rather than paper over it.
+      if (args.p_service_id === null) throw err;
+      saveIdem.resetKey();
+      result = await attempt();
     }
-    costIdem.resetKey();
+    saveIdem.resetKey();
+    return result;
   };
 
   const handleSave = async () => {
     if (!form.name.trim()) { toast('error', 'Service name is required'); return; }
     if (!isAdmin) { toast('error', 'Only admins can manage application services'); return; }
     setSaving(true);
-    // cost_per_acre_cents is deliberately absent from this payload: authenticated
-    // holds no INSERT/UPDATE grant on that column (migration 20260729015706).
-    // It is written through the admin-gated RPC immediately after.
-    const payload = { name: form.name.trim(), vehicle_id: form.vehicle_id || null, default_rate_per_acre_cents: parseDollarsToCents(form.default_rate_per_acre), is_active: form.is_active, sort_order: parseInt(form.sort_order) || 0, ...(isNew ? { created_by: profile?.id } : {}) };
-    const costCents = parseDollarsToCents(form.cost_per_acre);
     try {
+      const saved = await saveService({
+        p_name: form.name.trim(),
+        p_default_rate_per_acre_cents: parseDollarsToCents(form.default_rate_per_acre),
+        p_is_active: form.is_active,
+        p_sort_order: parseInt(form.sort_order) || 0,
+        p_vehicle_id: form.vehicle_id || null,
+        // NULL means "leave the cost alone" — it is NOT a synonym for zero. If the
+        // cost RPC failed on load, form.cost_per_acre is blank and would parse to
+        // 0, which would silently replace the real cost. Sending NULL carries the
+        // costKnown write-lock into the database instead of relying on the client
+        // to skip a second call.
+        p_cost_per_acre_cents: costKnown ? parseDollarsToCents(form.cost_per_acre) : null,
+        p_service_id: isNew ? null : id!,
+      });
       if (isNew) {
-        const result = await supabase.from('application_services').insert(payload).select(SERVICE_COLUMNS).single();
-        checkMutationResult(result, 'Create application service');
-        await saveCost(result.data!.id, costCents);
-        if (profile) logActivity({ event: 'app_service_created', description: `Application service "${form.name}" created`, performedBy: profile.id, entityType: 'application_service', entityId: result.data!.id });
-        toast('success', 'Application service created'); setIsDirty(false); navigate(`/application-services/${result.data!.id}`);
+        if (profile) logActivity({ event: 'app_service_created', description: `Application service "${form.name}" created`, performedBy: profile.id, entityType: 'application_service', entityId: saved.service_id });
+        toast('success', 'Application service created'); setIsDirty(false); navigate(`/application-services/${saved.service_id}`);
       } else {
-        const result = await supabase.from('application_services').update(payload).eq('id', id!).select(SERVICE_COLUMNS).single();
-        checkMutationResult(result, 'Update application service');
-        // Only write the cost when we actually read one. If the cost RPC failed
-        // on load, form.cost_per_acre is blank and costCents is 0 — writing that
-        // would silently replace the real cost with zero.
-        if (costKnown) await saveCost(id!, costCents);
         if (profile) logActivity({ event: 'app_service_updated', description: `Application service "${form.name}" updated`, performedBy: profile.id, entityType: 'application_service', entityId: id! });
         toast('success', costKnown ? 'Service saved' : 'Service saved — cost/acre left unchanged (it could not be loaded)'); setIsDirty(false);
       }

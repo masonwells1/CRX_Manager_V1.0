@@ -11919,6 +11919,19 @@ export type Database = {
           service_id: string
         }[]
       }
+      admin_save_application_service: {
+        Args: {
+          p_cost_per_acre_cents: number
+          p_default_rate_per_acre_cents: number
+          p_idempotency_key?: string
+          p_is_active: boolean
+          p_name: string
+          p_service_id: string
+          p_sort_order: number
+          p_vehicle_id: string
+        }
+        Returns: Json
+      }
       admin_set_application_service_cost: {
         Args: {
           p_cost_per_acre_cents: number
