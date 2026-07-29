@@ -24,6 +24,8 @@ function docker(args, { input, allowFailure = false } = {}) {
     encoding: 'utf8',
     input,
     maxBuffer: 10 * 1024 * 1024,
+    timeout: 120_000,
+    killSignal: 'SIGTERM',
   });
   if (result.error) throw result.error;
   if (!allowFailure && result.status !== 0) {
@@ -73,9 +75,9 @@ function startContainer() {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (docker(['exec', CONTAINER, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
       return;
     }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
   throw new Error('disposable PostgreSQL container did not become ready');
 }

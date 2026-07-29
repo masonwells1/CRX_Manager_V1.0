@@ -16,7 +16,7 @@
 > activity-actor spoofing MED is fixed live by
 > `20260729222311_bind_save_field_actor`; only the anon-executable SECDEF number-generator MED
 > remains open. Branch `codex/section1-security-hardening-20260725` still exists locally **and on
-> `origin`**, and is additionally pinned by tag
+> `origin`** (superseding the dated 2026-07-26 “Absent” remote-state row below), and is additionally pinned by tag
 > `preserve/2026-07-29/codex-section1-security-hardening-20260725`, but it must not be applied
 > as-is. When rebasing it, drop the `save_field` half of
 > `20260725234503_harden_section1_number_and_field_actor.sql` and the duplicate

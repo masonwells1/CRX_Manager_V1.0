@@ -1,7 +1,9 @@
 -- Rollback-only save_field actor-binding smoke.
 -- Run after migration 20260729222311. It proves no-auth and forged actors are
--- rejected before writes, NULL compatibility remains safe, replay is
--- idempotent, attribution is truthful, and the function contract is exact.
+-- rejected with the expected contract errors and leave no field rows, NULL
+-- compatibility remains safe, replay is idempotent, attribution is truthful,
+-- and the function contract is exact. Guard ordering is pinned separately by
+-- the migration body fingerprint predicate.
 
 DO $smoke$
 DECLARE

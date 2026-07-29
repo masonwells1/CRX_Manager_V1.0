@@ -154,8 +154,8 @@ For every RPC the migration creates or modifies:
 5. **Run it** (post-apply, rolled back) and require `SMOKE_PASS_ROLLBACK`
    before claiming the fix/feature works.
 
-For the `save_field` actor-binding migration, the same exact migration and
-rollback chain can be proven without contacting Supabase:
+For the `save_field` actor-binding migration, the exact migration and rollback
+chain can be proven without contacting Supabase:
 
 ```bash
 node scripts/smoke/prove-save-field-actor-binding.mjs

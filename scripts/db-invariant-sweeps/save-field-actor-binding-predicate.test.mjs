@@ -17,7 +17,9 @@ const MIGRATION = path.join(ROOT, 'supabase', 'migrations', '20260729222311_bind
 const PREFIX = 'crx-save-field-actor-predicate-';
 const CONTAINER = `${PREFIX}${process.pid}-${Date.now().toString(36)}`.toLowerCase();
 const VIOLATION = 'save_field(uuid, jsonb, jsonb, uuid, text)';
-const EXPECTED_HASH = '10a53c6b4c218a3836b0a5269fc558cc214eb8741a2df6669133885919f50ff2';
+const HASH_MATCH = readFileSync(PREDICATE, 'utf8').match(/\b[0-9a-f]{64}\b/);
+assert.ok(HASH_MATCH, 'predicate must embed one reviewed SHA-256 fingerprint');
+const EXPECTED_HASH = HASH_MATCH[0];
 
 function docker(args, options = {}) {
   const result = spawnSync('docker', args, {
@@ -77,10 +79,15 @@ try {
     '--env', 'POSTGRES_PASSWORD=disposable-only', 'postgres:17-alpine',
   ]);
 
+  let ready = false;
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (docker(['exec', CONTAINER, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0) break;
+    if (docker(['exec', CONTAINER, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0) {
+      ready = true;
+      break;
+    }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
   }
+  assert.ok(ready, 'disposable PostgreSQL container did not become ready');
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
 
   psql(`
