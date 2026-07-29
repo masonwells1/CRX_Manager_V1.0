@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-26",
+    "generated_at": "2026-07-29",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260726223520",
+    "migrations_high_water": "20260729125314",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -310,7 +310,11 @@
       "20260722173000_reuse_guard_covers_revivable_quotes",
       "20260722180000_reuse_guard_covers_invoiced_jobs",
       "20260722190000_commission_split_lost_update_guard",
-      "20260722222743_product_families_return_policy_foundation", "20260726210000_void_vendor_payment_vendor_liveness",
+      "20260722222743_product_families_return_policy_foundation",
+      "20260726210000_void_vendor_payment_vendor_liveness",
+      "20260728123224_secdef_pricing_reads_office_only",
+      "20260728193000_revoke_anon_execute_non_policy_functions",
+      "20260728232500_revoke_anon_execute_rls_role_helpers",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -350,6 +354,9 @@
       "ap_polish_partial",
       "ap_structural_fixes",
       "application_records_table",
+      "application_service_atomic_save",
+      "application_service_cost_admin_only",
+      "application_service_cost_exact_text",
       "application_services",
       "applicator_license_gates",
       "applicator_license_holder_xor",
@@ -403,6 +410,7 @@
       "blend_ticket_order_lifecycle",
       "blend_ticket_single_app_record_per_ticket",
       "block_partial_cancel_with_received_returns",
+      "broad_reads_require_active_profile",
       "browser_smoke_test_fixes",
       "bulk_idempotency_wiring",
       "bulk_import_order_seed_quantity_remaining",
@@ -475,6 +483,7 @@
       "data_fix_commissions_test_quote_split_hygiene",
       "data_integrity_sentinel",
       "data_validation_and_cleanup",
+      "deactivation_revokes_auth_access",
       "deep_audit_fixes",
       "delete_invoices_softdelete_rpc",
       "delivery_integrity_and_quick_delivery",
@@ -664,6 +673,7 @@
       "idempotency_operation_scope_sweep",
       "immutability_triggers_ledger_tables",
       "increment_customer_prepay_lock_down",
+      "inline_role_checks_require_active_profile",
       "invalidate_deleted_bulk_po_retry_state",
       "inventory_cost_report_column_fix",
       "inventory_forecasting",
@@ -744,6 +754,7 @@
       "phase5_inventory_enhancements",
       "phase6_returns_rma",
       "phase7_reporting_compliance_rebates",
+      "pin_contact_sync_search_path",
       "planned_programs",
       "po_cancel_soft_delete",
       "po_receive_skip_cost_update_default",
@@ -773,6 +784,7 @@
       "quick_delivery_optional_invoice",
       "quick_delivery_server_pricing_and_audit_log",
       "quick_receive",
+      "quote_and_rate_reads_office_only",
       "quote_items_calc_mode_and_price_unit",
       "quote_pdf_templates",
       "quote_section_header_notes",
@@ -840,6 +852,7 @@
       "seasonal_rollover",
       "section9_po_ap_high_remediation",
       "secure_bulk_po_fingerprint_trigger",
+      "secure_profile_public_directory",
       "security_audit_2026_05_11",
       "security_audit_auth_uid_enforcement",
       "sentinel_exclude_credit_memos",
@@ -1267,6 +1280,7 @@
     "product_cost_basis_change_rows",
     "product_cost_basis_rollout",
     "product_info_change_set_rows",
+    "profile_public_directory",
     "purchase_order_import_intents",
     "purchase_order_items",
     "quote_items",
@@ -5166,6 +5180,16 @@
         "is_full_tote_only"
       ]
     },
+    "profile_public_directory": {
+      "no_default": [
+        "id",
+        "full_name",
+        "role"
+      ],
+      "with_default": [
+        "is_active"
+      ]
+    },
     "profiles": {
       "no_default": [
         "id",
@@ -7452,6 +7476,12 @@
       "return_policy",
       "packaging_variant",
       "is_full_tote_only"
+    ],
+    "profile_public_directory": [
+      "id",
+      "full_name",
+      "role",
+      "is_active"
     ],
     "profiles": [
       "id",
