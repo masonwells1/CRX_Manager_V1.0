@@ -18,10 +18,12 @@
 // in-script for tool names containing "apply_migration".
 
 import { readFileSync, existsSync, readdirSync, statSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
+import { sessionProofDirs } from "./codex-push-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -47,6 +49,44 @@ const stateDir = path.join(projectDir, ".claude", "session-state");
 
 // Make sure the directory exists so future writes work.
 try { mkdirSync(stateDir, { recursive: true }); } catch { /* ignore */ }
+
+// The session-state directories this apply may draw evidence from: THIS
+// session's own checkout, plus the primary one. Nothing else.
+//
+// Why (2026-07-29): the harness pins CLAUDE_PROJECT_DIR to the PRIMARY checkout
+// even when the session's cwd is a linked worktree, while
+// scripts/write-apply-proofs.mjs writes its output under `process.cwd()` — the
+// worktree that actually holds the migration file. A migration built in a
+// worktree therefore minted perfectly valid proofs somewhere this guard never
+// looked, and the apply was denied no matter how many clean reviews ran. Same
+// root cause pr-merge-guard hit in PR #252/#255.
+//
+// The merge guard's answer — scan every sibling checkout — is NOT safe here, and
+// Codex blocked the first version of this fix for taking it. Its proof is bound
+// to the exact head and base SHAs GitHub reports, so a sibling's proof can only
+// authorize the identical merge. This proof is weaker: interactively `queryHash`
+// is enforced only when the proof carries one, and migration names match by
+// substring. Scanning all worktrees would therefore let a proof minted by a
+// DIFFERENT concurrent session authorize a live apply this session never
+// reviewed — against the settled "proof from THIS session" rule
+// (docs/manual/DECISION_LOG.md, 2026-07-13) and squarely in Mason's way of
+// working, where dozens of worktrees run at once.
+//
+// So the lookup follows the session's actual working directory, honoured only
+// after `git worktree list` confirms it is a checkout of this repository. An
+// unrecognised cwd falls back to the primary directory alone — the old
+// behaviour, which fails closed.
+//
+// The AUTOPILOT.on flag above is deliberately narrower still: it stays pinned to
+// the primary checkout. It is authorization state for this project, not evidence
+// about a migration; reading it from any other checkout would let a flag Mason
+// never armed here change the rule-set.
+const hookCwd = payload?.cwd || payload?.tool_input?.cwd || process.cwd();
+const proofDirs = sessionProofDirs(projectDir, hookCwd, () => execFileSync(
+  "git",
+  ["worktree", "list", "--porcelain"],
+  { cwd: projectDir, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] },
+));
 
 // Extract the migration identifier from the MCP call. Supabase MCP apply_migration
 // shape is { project_id, name, query }. We use `name` if present, otherwise fall
@@ -116,10 +156,12 @@ const MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
 const now = Date.now();
 
 let validProof = null;
-try {
-  const files = readdirSync(stateDir).filter(f => f.startsWith("migration-review-") && f.endsWith(".json"));
+for (const dir of proofDirs) {
+  if (validProof) break;
+  try {
+  const files = readdirSync(dir).filter(f => f.startsWith("migration-review-") && f.endsWith(".json"));
   for (const f of files) {
-    const full = path.join(stateDir, f);
+    const full = path.join(dir, f);
     let data;
     try { data = JSON.parse(readFileSync(full, "utf8")); } catch { continue; }
     let ageMs;
@@ -141,12 +183,13 @@ try {
         // actually being applied. A mismatch means the migration was edited AFTER it
         // was reviewed, so the proof no longer attests to this content — skip it.
         if (data.queryHash && currentHash && data.queryHash !== currentHash) continue;
-        validProof = { file: f, data };
+        validProof = { file: f, dir, data };
         break;
       }
     }
   }
-} catch { /* directory unreadable — fall through to block */ }
+  } catch { /* directory unreadable — try the next one, then fall through to block */ }
+}
 
 if (validProof) {
   // Hands-free applies carry three EXTRA requirements (Codex P1s 2026-07-13
@@ -197,12 +240,26 @@ if (validProof) {
     // Write it ONLY after an ACTUAL /codex-review run on this migration this
     // session — a fabricated file violates Mason's codex-gate rule and is the
     // documented self-attestation residual (KNOWN_ISSUES §4b).
+    // Searched across the same session-scoped directories as the reviewer proof
+    // above, for the same reason. A candidate only WINS by satisfying
+    // every criterion the single-directory version demanded — clean verdict,
+    // exact queryHash, age inside [0, 30min]; the first parseable file is kept
+    // only so the block message below can say which criterion failed.
     let codexProof = null;
-    try {
-      codexProof = JSON.parse(
-        readFileSync(path.join(stateDir, `codex-review-mig-${safeName}.json`), "utf8"),
-      );
-    } catch { codexProof = null; }
+    for (const dir of proofDirs) {
+      let candidate = null;
+      try { candidate = JSON.parse(readFileSync(path.join(dir, `codex-review-mig-${safeName}.json`), "utf8")); } catch { continue; }
+      if (!candidate) continue;
+      if (!codexProof) codexProof = candidate;
+      const okVerdict = ["clean", "ship", "ship-with-followups"].includes(String(candidate.verdict || "").toLowerCase());
+      const okHash = !!currentHash && String(candidate.queryHash || "") === currentHash;
+      let okFresh = false;
+      try {
+        const candidateAge = now - new Date(candidate.timestamp).getTime();
+        okFresh = candidateAge >= 0 && candidateAge <= MAX_AGE_MS;
+      } catch { okFresh = false; }
+      if (okVerdict && okHash && okFresh) { codexProof = candidate; break; }
+    }
     const cvOk = codexProof && ["clean", "ship", "ship-with-followups"].includes(String(codexProof.verdict || "").toLowerCase());
     const cvHashOk = codexProof && currentHash && String(codexProof.queryHash || "") === currentHash;
     // Freshness = age inside [0, 30min]; a FUTURE-dated timestamp must not
