@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-07-29 — Profile-directory follow-up hardening prepared
+## 2026-07-29 — Profile-directory follow-up hardening applied
 
 A forward-only migration now closes the two non-urgent follow-ups left by the staff-directory
 security repair. The authenticated read policy calls the canonical `is_active_profile()` helper
@@ -10,9 +10,10 @@ instead of carrying a second copy of the active-user rule. `service_role` is red
 on the directory table and view, and direct execution of the trigger-only synchronizer is removed
 from application roles. The existing postgres-owned trigger remains responsible for synchronization,
 so trusted profile creation/update paths do not need direct directory writes. The migration is
-review-clean and pending live apply; exact-SQL and role-impersonation rehearsals ran inside
+review-clean and applied live as ledger version `20260729163243`; live catalog checks found 11/11
+profile and directory rows with zero mismatches. Post-apply role-impersonation checks ran inside
 transactions that rolled back, proving both `service_role` and authenticated profile updates still
-synchronize while direct directory writes are denied. It changes no business rows.
+synchronize while direct directory writes are denied. It changed no business rows.
 
 ## 2026-07-29 — Application-service costs preserve exact bigint cents
 
