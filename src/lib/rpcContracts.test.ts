@@ -2101,16 +2101,12 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// Both application-service migrations applied live 2026-07-29 under their
-// server-assigned ledger versions (20260729015706 and 20260729035923), as did
-// both halves of the anon-EXECUTE revoke before them — none of those are pending.
-// The two below are PR #264's, B7-renamed above that high-water and verified
-// absent from the live ledger on 2026-07-29; empty this set again once they land.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
-  '20260729043000',
-  '20260729043100',
-  '20260729122730',
-]);
+// The three latest approved migrations applied live 2026-07-29 under their
+// server-assigned ledger versions (20260729125227, 20260729125251, and
+// 20260729125314) — none of those are pending.
+// Keep this set empty while the repository has no approved migrations awaiting
+// production application.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2202,12 +2198,9 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
-  // _sync_auth_access_on_profile_active retired from this list on 2026-07-29: its
-  // migration (20260727174805_deactivation_revokes_auth_access) is now live and below
-  // the registry high-water, so generatedMutatingRpcInventory() no longer discovers it
-  // (trigger-only, absent from generated types, EXECUTE revoked from every client role).
-  // An exemption for a name the inventory cannot surface is dead weight that would
-  // silently pre-suppress any future RPC reusing the name.
+  // Trigger-only helpers whose migrations are now at or below the live registry
+  // high-water are absent from generated client types and this inventory. Keeping
+  // dead exemptions would silently pre-suppress any future RPC reusing a name.
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
@@ -2229,12 +2222,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
-  sync_customer_to_primary_contact:
-    'trigger-only contact mirror on customers: copies contact_name/phone/email onto the customer primary contact row. Not reachable from a client at all -- it RETURNS trigger with no arguments, so PostgREST cannot expose it, and pg_trigger_depth() > 1 short-circuits the recursive partner trigger. Convergent by construction: the UPSERT carries an IS DISTINCT FROM guard, so a replay writes nothing',
-  sync_primary_contact_to_customer:
-    'trigger-only contact mirror on customer_contacts: copies the primary contact name/phone/email back onto customers. Not reachable from a client at all -- it RETURNS trigger with no arguments, so PostgREST cannot expose it, and pg_trigger_depth() > 1 short-circuits the recursive partner trigger. Convergent by construction: the UPDATE carries an IS DISTINCT FROM guard, so a replay writes nothing',
-  sync_profile_public_directory:
-    'trigger-only staff-directory mirror on profiles: keeps profile_public_directory holding the four non-sensitive fields (id, full_name, role, is_active) and deletes the row on profile delete. Convergent (the UPSERT and the DELETE settle to the same state on replay) and EXECUTE is revoked from PUBLIC, anon, and authenticated in the same migration',
 };
 
 
