@@ -26,7 +26,7 @@ export interface Profile {
 // Use for assignment dropdowns, joined display names, and any read that
 // doesn't need email/phone/license/certificate.
 //
-// As of migration 20260729043000 the view is `security_invoker = true` and reads
+// As of migration 20260729125227 the view is `security_invoker = true` and reads
 // `public.profile_public_directory` -- a non-sensitive mirror of profiles kept in
 // sync by trigger -- NOT `public.profiles` directly. Any active signed-in user can
 // read it by policy, which is why the non-admin pickers still work even though

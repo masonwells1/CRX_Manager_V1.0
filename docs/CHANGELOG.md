@@ -7,8 +7,8 @@ All significant development milestones, in reverse chronological order.
 The admin-only application-service cost getter now returns cents as text instead of a JSON number,
 preventing values above JavaScript's safe-integer limit from being rounded. The admin list, detail,
 CSV, and PDF paths normalize the value to `bigint`, retain compatibility with safe numeric responses
-during deployment, and fail closed on unsafe values. The migration changes no business rows and must
-apply after the two earlier pending security migrations.
+during deployment, and fail closed on unsafe values. The migration changed no business rows and
+applied live after the two earlier security migrations as ledger version `20260729125314`.
 
 ## 2026-07-28 — The staff directory view read profiles as its owner; the contact-sync triggers had no pinned lookup path
 
@@ -63,14 +63,14 @@ live high-water to `20260729015706` (live runs UTC — the apply landed on 2026-
 those names back below it, forcing a second rename to `20260729020000` and `20260729020100`. Then,
 while CI ran on the security fix below, a *third* concurrent apply landed —
 `20260729035923_application_service_atomic_save` — and invalidated those names too. The final
-rename is to `20260729043000` and `20260729043100`, strictly above the `20260729035923` high-water,
+rename is to `20260729125227` and `20260729125251`, strictly above the `20260729035923` high-water,
 relative order preserved.
 
 Renames only; no SQL body was touched by any of the three. The lesson is mechanical and worth
 repeating: on a repo with several concurrent sessions applying migrations, a disk timestamp is only
 valid for as long as it takes someone else to apply. **Re-read the live high-water immediately
 before minting apply proofs, not once at the start of the work.** Both files are indexed in
-`docs/reference/migration-history.md` as rows 834 and 835 with `PENDING APPLY`.
+`docs/reference/migration-history.md` as rows 834 and 835 as applied live.
 
 The Codex connector then filed three P2 findings on the directory migration, all three real and all
 three confirmed against live before fixing. They have **three separate causes** — worth stating
@@ -125,7 +125,7 @@ is `EXISTS (… id = auth.uid() AND role = 'admin' AND is_active)`, which is now
 
 Realistically that is a new or low-activity account, acting deliberately through the API, escalating
 itself to admin — not something a user trips into, and not reachable logged out. It is still an
-escalation path rather than a deletion nuisance, which is why this migration should not sit unapplied.
+escalation path rather than a deletion nuisance, which is why the migration required prompt application.
 Three pre-existing follow-ups it exposed — an INSERT arm for the role-lock trigger, `authenticated`'s
 direct TRUNCATE/TRIGGER grants on `profiles`, and TRUNCATE not firing the row-level sync trigger —
 are recorded in `docs/manual/KNOWN_ISSUES.md` §0d and are **not** fixed here.
@@ -134,7 +134,7 @@ A schema-wide sweep for the identical pattern — auto-updatable, not `security_
 by `authenticated` — returns **exactly one row across all of `public`: this view.** It is not a class
 of problem elsewhere in the schema.
 
-`20260729043000` closes it two independent ways: the `REVOKE` now names `authenticated` and
+`20260729125227` closes it two independent ways: the `REVOKE` now names `authenticated` and
 `metabase_ro`, and the view is redefined `security_invoker = true` over `profile_public_directory`,
 where `authenticated` holds `SELECT` only. Either alone would be sufficient; both are asserted so
 neither silently carries the other.
@@ -158,8 +158,8 @@ difference rather than on a real regression. The pattern was checked against a l
 it discriminates rather than always matching: on `profiles_select`, `qual LIKE '%auth.uid()%'` is true
 and `qual LIKE '%is_active%'` is false.
 
-Neither migration has been applied to live — so this bypass is still open on production until
-`20260729043000` applies.
+Both migrations applied live on 2026-07-29. The view bypass is closed and both contact-sync
+functions now pin `search_path = public, pg_temp`.
 
 ## 2026-07-28 — Split the 44-function anon-EXECUTE revoke into two migrations and took both live. Part 1 (40 functions in no RLS policy, incl. the 8 genuinely ungated ones: six next_*_number() allocators, calculate_billing_splits, check_period_open) applied as ledger 20260728231350 via PR #262; anon EXECUTE false on 40/40, authenticated true on 40/40. Part 2 (the RLS role helpers is_admin/is_applicator/is_driver) applied as ledger 20260728233459 via PR #263; anon false and authenticated/service_role true on all three. Both files B7-renamed to their server-assigned versions, bodies unedited. Production loaded logged out after the apply: sign-in page renders, no console errors, no 42501, assets 200. PR #266 carried the bookkeeping; PR #264 has since been renamed above the new high-water (see the entry above).
 
