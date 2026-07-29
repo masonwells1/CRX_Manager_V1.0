@@ -34,6 +34,25 @@ behind deliberately — it is either byte-identical to `main` already or *older*
 carrying it over wholesale would have reverted roughly a thousand lines of merged work, including
 the `/fleet` counter fix below and the session-scoped apply-proof decision from #273.
 
+## 2026-07-29 — Supplier Pricing Phase 3 Stage C: the return-policy guard finally fires
+
+Supplier Pricing Phase 3 Stage C: applied the owner-approved return-policy classification live (migration 20260729213733) — 21 products no_return (10 also full-tote-only), 2 returnable, remainder left unknown by owner decision. Activates the previously dormant assert_phase3_return_policy() guard across create_return/approve_return/receive_return/issue_return_credit. Rows keyed by primary key so no product names or SKUs enter the repo. Verified live: catalog 604 rows -> 21/2/581/0, tote=10 all inside no_return, and the guard raises RETURN_POLICY_NO_RETURN on a real classified product while both returnable overrides and an untouched unknown product pass. Landed via PR #282.
+
+- **Commits this session** (git log --since=12.hours --author=Mason):
+  - `1442ee92 feat(products): Supplier Pricing Phase 3 Stage C return-policy classification`
+  - `149c8b00 docs(gauntlet): close inventory net position backlog (#280)`
+  - `fd677ff5 docs(manual): refresh CURRENT_STATE to the post-#276 live ledger snapshot (#278)`
+  - `6b191b3f fix(hooks): find apply-proofs minted in a linked worktree (#273)`
+  - `1e6c0426 Merge pull request #277 from masonwells1/codex/profile-directory-followups-closeout-20260729`
+  - `1a863928 chore(db): close out profile directory hardening`
+  - `1b2d9062 fix(db): harden profile directory follow-ups (#276)`
+  - `2ef9ab4b chore(db): reconcile three live migration versions (#272)`
+  - `cf2d8a82 chore(schema): refresh registry + generated types after the 3 live applies (#274)`
+  - `c1e4ce40 fix: restrict application service costs to admins (#267)`
+  - `69d60b8b chore(migrations): B7-rename directory migrations (#269)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260729213733_supplier_pricing_phase3c_return_policy_classification.sql`
+
 ## 2026-07-29 — The fleet's "parked migrations awaiting apply" count could never reach zero
 
 The SessionStart banner and `/fleet` both counted parked migration drafts by scanning the working
