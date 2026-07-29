@@ -2,6 +2,96 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — The fleet's "parked migrations awaiting apply" count could never reach zero
+
+The SessionStart banner and `/fleet` both counted parked migration drafts by scanning the working
+tree of **every** checkout `git worktree list` reports. About thirty of those are frozen review
+snapshots pinned to old commits, and several more are branch checkouts far behind `main`. Once a
+draft file had ever existed, those stale checkouts kept reporting it forever — retiring it on `main`
+with the sanctioned `SUPERSEDED-` rename could not clear the count, because the old filename still
+sat on disk in 42 other places. The banner had been reading "2 parked migrations awaiting apply"
+while nothing was actually pending.
+
+Verified before changing anything: renaming the last live draft and re-running the real hook left the
+count at 2, unchanged. That is the proof the scan — not the drafts — was the defect.
+
+The rule is now per-draft rather than per-checkout, and it is read out of git instead of inferred
+from what is lying on disk. A worktree contributes exactly what **it** changed since its branch point
+with `origin/main` — `git diff --name-only <merge-base>` for drafts it added or edited, committed or
+not, plus `git ls-files --others --exclude-standard` for ones not yet under version control. Anything
+else in the checkout is inherited history, so a stale copy of a draft main has since retired stops
+being re-reported. A draft the branch actually wrote still counts even when the branch is far behind
+main, and a draft the branch *deleted* does not, which is what finally lets the `SUPERSEDED-` rename
+clear the number. The mainline backlog is seeded separately from `origin/main`'s tree via
+`git ls-tree`, so a fleet in which no checkout happens to be current still reports main's real
+backlog instead of zero. When the branch point cannot be read at all, the reader falls back to
+scanning the whole checkout rather than risk hiding pending work, and `/fleet` says so in its notes.
+
+Both readers classify a checkout as clean with `git status --porcelain -uall`, not the default. A
+repo carrying `status.showUntrackedFiles=no` reports a checkout as clean even while an unwritten
+draft sits in it, and the clean path skips the untracked scan — the same silent under-report this
+change exists to prevent (Codex MEDIUM on #279). Proven in a scratch repo with that setting on:
+`git status --porcelain` returns empty where `--porcelain -uall` lists the draft. The setting is
+unset in this repo, so behaviour here is unchanged.
+
+The rule itself lives in one place — `createOwnDraftPathsReader()` in
+`.claude/hooks/worktree-awareness-lib.mjs` — and both readers call it, injecting only their own
+git runner and repo root. The two started as near-identical copies differing in a single variable
+name, which would have drifted the moment either was touched, defeating the point of the fix
+(CodeRabbit on #279). `/fleet`'s fallback scan also stopped lower-casing the filename it prints:
+the de-duplication key is normalized, the displayed name now keeps the real on-disk casing.
+
+That shared reader has its own tests — 17 assertions covering the clean/dirty split, both
+per-sha caches, and all six ways it must answer "I don't know" so the caller falls back to a full
+scan instead of a confident zero (Codex low on #279). It is fully injected, so they run without a
+real git or filesystem. Mutation-proven six directions: pointing the clean diff at the worktree
+instead of the main repo, returning an empty map instead of `null`, dropping the still-on-disk
+filter, disabling either cache, and ignoring an untracked-scan failure each turn the suite red.
+
+Three earlier cuts were killed by review, each for under-reporting:
+
+- dropping every behind-main worktree wholesale (CodeRabbit P1) — a genuinely new migration on a
+  behind-main branch vanished behind "Nothing waiting on you";
+- treating a draft as inherited whenever its filename existed at the branch point (CodeRabbit P2) —
+  draft names repeat across hunts, so a retired draft masked a brand-new one in another folder;
+- deciding inheritance by path *existence* alone (Codex HIGH on #279) — a branch that materially
+  edited an inherited draft in place was still classified as inherited and suppressed. Asking git
+  what changed also handles the CRLF-on-disk / LF-in-git difference, which a raw content-hash
+  comparison would have gotten wrong in the other direction, marking every draft modified.
+
+Two further Codex findings on #279 are fixed by the same rewrite: detached checkouts are no longer
+skipped wholesale (their frozen trees change nothing, so they still contribute nothing, but a draft
+genuinely being written in one now shows up as untracked), and the count is keyed by repo-relative
+path rather than filename, so two distinct pending drafts that share a name stay two entries.
+
+Proven by experiment, old reader against new, using scratch worktrees pinned behind main: baseline 1
+and 1; a branch editing an inherited draft in place → old 1, new 2; a new draft written in a detached
+snapshot → old 1, new 3; a second draft sharing that filename → old 1, new 4; teardown → 1 and 1.
+`/fleet` reported the same 4 and named each file by its full path. The ~30 frozen snapshots
+contribute nothing at every stage, so the original defect stays fixed.
+
+Both readers were fixed together so they cannot disagree: the hook and `scripts/fleet-status.mjs` now
+report the same number. The count dropped 2 → 1, the remaining entry being the one draft still
+un-retired on `origin/main` — which this change also retires, taking it to 0.
+
+Also retired here: `PARKED-dispatch-backfill.sql`, a one-time backfill for jobs assigned before the
+per-field dispatch system existed. Confirmed dead against the live database — its own count query
+returns 0 rows, no open assigned job is missing a dispatch row at all, and the two sync triggers that
+supersede it (`trg_sync_job_location_dispatch_on_applicator_change` on `jobs`,
+`trg_sync_job_location_dispatch_on_field_insert` on `job_fields`) are live. It was already a no-op
+when parked on 2026-07-10. No database change was made.
+
+The cross-model review of this PR pushed back on the *reason* given for retiring it, correctly: both
+sync triggers silently skip a job whose assignee is not (`is_active` and `role = 'applicator'`),
+nothing in the database prevents that assignment, and no trigger re-syncs when a profile is later
+reactivated — so a gap can reopen, and 2 open jobs are assigned to an `admin`-role profile today.
+The retirement stands (the file is a no-op, and a bulk backfill is the wrong remedy for a
+trigger-coverage defect), but the claim that it "can never have work again" was withdrawn and the
+underlying defect now has its own OPEN row in `docs/manual/KNOWN_ISSUES.md`. Its retirement row in
+`docs/manual/KNOWN_ISSUES.md` was rewritten in the same change — it had still been telling agents to
+re-run the count query and apply it with Mason's go-ahead, which would have resurrected a
+business-data write this change exists to retire.
+
 ## 2026-07-29 — Branch/worktree cleanup: ten review documents recovered before the branches went away
 
 43 worktrees and 38 local branches had accumulated. Nine of those branches held review and design
