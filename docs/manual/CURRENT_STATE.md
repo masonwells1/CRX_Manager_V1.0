@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-28 (read-only Supabase `list_migrations` confirms **916 ledger rows** and live high-water `20260728182141`; `secdef_pricing_reads_office_only` is applied live. The live July 27 table hardening and July 28 RPC hardening now jointly restrict quote pricing, per-customer rates, rebate terms, and the two remaining `SECURITY DEFINER` pricing readers to the intended office roles.)
+**Last verified:** 2026-07-28 (read-only Supabase `list_migrations` confirms **916 ledger rows** and live high-water `20260728182141`; `secdef_pricing_reads_office_only` is applied live. The live July 27 table hardening and July 28 RPC hardening now jointly restrict quote pricing, per-customer rates, rebate terms, and the two remaining `SECURITY DEFINER` pricing readers to the intended office roles. Regression guard: `scripts/db-invariant-sweeps/predicates/office-only-pricing-secdef-gates.sql`.)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## 1. Reality check

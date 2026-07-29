@@ -97,7 +97,9 @@
         "src/lib/supplierPricingWorkbook.test.ts",
         "src/components/products"
       ],
-      "sweeps": []
+      "sweeps": [
+        "office-only-pricing-secdef-gates"
+      ]
     },
     "security": {
       "description": "Access control: RLS contracts, role gates, SECURITY DEFINER hygiene, actor forgery, page permissions, error sanitization.",
@@ -117,6 +119,7 @@
         "actor-forgery-fin-audit",
         "anon-exec-secdef",
         "auth-bound-role-ungated",
+        "office-only-pricing-secdef-gates",
         "secdef-searchpath",
         "section9-po-ap-controls",
         "ungated-secdef-mutators"
