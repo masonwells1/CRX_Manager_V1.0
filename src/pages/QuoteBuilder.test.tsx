@@ -2,7 +2,7 @@
  * QuoteBuilder.test.tsx — Tests for the quote builder page
  */
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
@@ -1236,8 +1236,14 @@ describe('QuoteBuilder', () => {
     ));
 
     renderQuoteBuilder(quote.id);
-    fireEvent.click(await screen.findByRole('button', { name: 'Book as Order' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Book as Order' })[1]);
+    await waitFor(() => {
+      const bookAsOrderOpener = screen.getByRole('button', { name: 'Book as Order' });
+      expect(bookAsOrderOpener).toBeEnabled();
+      fireEvent.click(bookAsOrderOpener);
+      expect(screen.getByRole('dialog', { name: 'Book as Order' })).toBeInTheDocument();
+    });
+    const initialBookDialog = screen.getByRole('dialog', { name: 'Book as Order' });
+    fireEvent.click(within(initialBookDialog).getByRole('button', { name: 'Book as Order' }));
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'warning',
@@ -1245,8 +1251,9 @@ describe('QuoteBuilder', () => {
     ));
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('quote was frozen'));
     fireEvent.click(screen.getByRole('button', { name: /Keep editing/i }));
-    expect(screen.getByText('Mark this quote as sent and convert it to an order now?')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Book as Order' }));
+    const retryBookDialog = await screen.findByRole('dialog', { name: 'Book as Order' });
+    expect(within(retryBookDialog).getByText('Mark this quote as sent and convert it to an order now?')).toBeInTheDocument();
+    fireEvent.click(within(retryBookDialog).getByRole('button', { name: 'Book as Order' }));
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'error',
       expect.stringContaining('Reload the quote, then try Book as Order again'),
