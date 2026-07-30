@@ -360,6 +360,15 @@ export function repoIsGuardedApp(remoteListOutput) {
 export function urlIsGuardedApp(url) {
   const text = String(url ?? "").trim().replace(/\/+$/, "");
   if (text.length === 0) return true; // fail CLOSED: unresolvable destination gates
+  // Remote-helper syntax (`<helper>::<address>`) is checked BEFORE any attempt to
+  // read a repository out of the text, because the text is not an address at
+  // all: `<helper>` names a program git hands the objects to, and that program
+  // decides where they go. Round eighteen found `ext::ssh git@github.com %S
+  // masonwells1/CRX_Manager_V1.0.git` classified as unrelated while naming the
+  // production app repo. Parsing it harder is the wrong instinct — parsed
+  // successfully, `transport::whatever` yields a repo id that says "not
+  // production" no matter which helper is behind it. So the whole syntax gates.
+  if (/^[A-Za-z][A-Za-z0-9+.-]*::/.test(text)) return true;
   const id = canonicalRepoId(text);
   if (id) return idNamesGuardedRepo(id);
   // Not canonicalizable. If it still carries a URL SCHEME it names some host the
@@ -368,6 +377,22 @@ export function urlIsGuardedApp(url) {
   // filesystem path names no host at all; those resolve elsewhere, and calling
   // them guarded here would gate every push to a local repo.
   if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text)) return true;
+  // Rounds sixteen, seventeen and eighteen were three spellings of ONE idea: a
+  // destination that names a program or an alias instead of an address, so the
+  // place the guard inspects is not the place the objects land. Round eighteen's
+  // was git's remote-helper syntax — Codex's own probe classified
+  // `ext::ssh git@github.com %S masonwells1/CRX_Manager_V1.0.git` as unrelated
+  // while it names the production app repo, because `ext::` hands delivery to an
+  // arbitrary command. Enumerating such spellings is an endless job (`ext::`,
+  // `transport::`, whatever git adds next), so the rule is inverted here rather
+  // than extended: past this point a destination is only judged "unrelated" when
+  // it is recognisably a plain remote NAME (`origin`) or a plain filesystem PATH
+  // (`../bare.git`, `C:\repos\bare.git`) — neither of which names a host or a
+  // program. A leftover colon means it names something else, and anything the
+  // guard cannot resolve fails CLOSED: one extra review versus an unreviewed
+  // push to production.
+  const withoutWindowsDrive = text.replace(/^[A-Za-z]:(?=[\\/])/, "");
+  if (withoutWindowsDrive.includes(":")) return true;
   return GUARDED_REPO_RE.test(text);
 }
 

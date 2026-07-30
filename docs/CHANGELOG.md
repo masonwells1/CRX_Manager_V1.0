@@ -255,6 +255,26 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round eighteen: stop enumerating the spellings
+
+One high, and the last three rounds turned out to be one idea.
+
+**A destination can name a program instead of an address.** Git's remote-helper
+syntax — `ext::ssh git@github.com %S masonwells1/CRX_Manager_V1.0.git` — hands delivery to an
+arbitrary command, so the address written on the command is decoration. Codex's own read-only probe
+classified exactly that as targeting `main` with `destinationIsGuarded: false`, while it names the
+production app repo: the proof gate would have been skipped.
+
+Rounds sixteen (an ssh `Host` alias), seventeen (`--receive-pack`) and eighteen (`ext::`) are three
+spellings of the same idea, and each was patched as its own special case. That is an endless job, so
+the last-resort rule is **inverted rather than extended**: past the point where a destination fails
+to canonicalize, it is only judged "unrelated" when it is recognisably a plain remote name
+(`origin`) or a plain filesystem path (`../bare.git`, `C:\repos\bare.git`) — neither of which names a
+host or a program. Anything else fails closed. Helper syntax is refused *before* repository scoping,
+because parsing it harder is the wrong instinct: parsed successfully, `transport::whatever` yields a
+tidy repo id that says "not production" regardless of which program is behind it. All three mutants
+turn the suite red, including the Windows drive-letter exemption — `C:` is a path, not a host.
+
 ### Round seventeen: the destination is not where the data lands
 
 Two highs and a medium, each confirmed against the real code before it was touched.

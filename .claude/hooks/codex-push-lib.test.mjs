@@ -375,6 +375,50 @@ assert.equal(
   urlIsGuardedApp("github-crx:masonwells1/CRX_Backups.git"), false,
   "and the alias rule does not start policing the private backup repo",
 );
+
+// ── round 18: a destination that names a PROGRAM, not an address ─────────────
+// `ext::<command>` is git's remote-helper syntax: delivery is handed to an
+// arbitrary program, so the address written on the command means nothing. Codex
+// probed exactly this and got `guarded: false` for the production app repo. The
+// last-resort rule is inverted rather than extended — only a plain remote name
+// or a plain filesystem path may still be judged by pattern; a leftover colon
+// means unresolvable, and unresolvable fails CLOSED.
+assert.equal(
+  urlIsGuardedApp("ext::ssh git@github.com %S masonwells1/CRX_Manager_V1.0.git"), true,
+  "a remote-helper destination naming the production repo is guarded",
+);
+assert.equal(
+  urlIsGuardedApp("ext::ssh relay-host %S someone/anything.git"), true,
+  "and one naming anything else is too — the helper decides where it lands",
+);
+assert.equal(
+  urlIsGuardedApp("transport::whatever"), true,
+  "the rule is the syntax, not the `ext` spelling of it",
+);
+assert.equal(
+  urlIsGuardedApp("upstream-2"), false,
+  "a plain remote name is still resolved elsewhere",
+);
+assert.equal(
+  urlIsGuardedApp("../scratch/bare.git"), false,
+  "and so is a relative filesystem path",
+);
+assert.equal(
+  urlIsGuardedApp("C:\\repos\\bare.git"), false,
+  "a Windows drive letter is a path, not a host — the drive colon does not gate",
+);
+// The inverted last-resort rule itself: a destination that did not canonicalize
+// and still carries a colon names something this guard cannot resolve. It is not
+// enough that the `::` check above caught the helper spelling — the point of
+// inverting the rule is that unrecognised shapes gate WITHOUT being enumerated.
+assert.equal(
+  urlIsGuardedApp("a:b"), true,
+  "an uncanonicalizable colon destination fails CLOSED rather than reading as unrelated",
+);
+assert.equal(
+  urlIsGuardedApp("weird-host:"), true,
+  "including one with nothing after the colon",
+);
 assert.equal(
   repoIsGuardedApp("origin\tgithub-crx:masonwells1/CRX_Manager_V1.0.git (push)"), true,
   "a checkout whose only remote is an aliased app-repo URL is the app repo",
@@ -928,6 +972,27 @@ assert.equal(pushDestinationToken("git push"), null);
       `git -C ${work} push ssh://git@github-crx/masonwells1/CRX_Manager_V1.0.git HEAD:main`,
       /codex/i,
       "nor does the ssh:// spelling of the same alias",
+    );
+
+    // Round 18, end-to-end: git's remote-helper syntax hands delivery to an
+    // arbitrary program, so `ext::…` names the production repo while every
+    // destination classifier answered "unrelated" (Codex's own probe). The rule
+    // is inverted rather than extended — a leftover colon in a destination that
+    // did not canonicalize means the guard cannot resolve it, so it gates.
+    deniedBecause(
+      `git -C ${work} push "ext::ssh git@github.com %S masonwells1/CRX_Manager_V1.0.git" HEAD:main`,
+      /codex/i,
+      "a remote-helper destination naming the production repo is gated, not waved through",
+    );
+    deniedBecause(
+      `git -C ${work} push "ext::ssh relay-host %S someone/anything.git" HEAD:main`,
+      /codex/i,
+      "and so is one naming anything else, because an opaque transport is unresolvable",
+    );
+    deniedBecause(
+      `git -C ${work} push "transport::whatever" HEAD:main`,
+      /codex/i,
+      "any helper transport, not just the ext:: spelling",
     );
 
     // Round 17, end-to-end: `--receive-pack`/`--exec` name the program that
