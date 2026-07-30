@@ -39,7 +39,7 @@
 // Deps:   none (node builtins only).
 
 import {
-  existsSync, mkdirSync, readdirSync, readFileSync, statSync,
+  existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync,
   unlinkSync, writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -71,11 +71,38 @@ function usage(msg) {
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
+// lstat, not stat: a symlink named `a.md` reports as a regular file through stat,
+// so a link in the source would have copied whatever it pointed at into the
+// backup, and a link in the STAGING directory would have been written through —
+// putting the notes into another repository's file, a config file, or back over
+// the source itself (Codex's fourteenth 2026-07-30 review). Nothing here follows
+// a link now: a symlink is simply not one of the files this script handles.
+// Seam for the tests. Creating a symbolic link on Windows needs Developer Mode or
+// elevation, which a test suite cannot assume, so the suite substitutes a stat
+// that reports one — exercising the REAL refusal path rather than skipping it.
+// Production always uses lstatSync.
+let linkStat = lstatSync;
+export function __setLinkStat(fn) { linkStat = fn || lstatSync; }
+
 const mdFiles = (dir) =>
   readdirSync(dir)
     .filter((f) => f.toLowerCase().endsWith(".md"))
-    .filter((f) => statSync(path.join(dir, f)).isFile())
+    .filter((f) => linkStat(path.join(dir, f)).isFile())
     .sort();
+
+// Refuse to write THROUGH a link. The destination check above decides which
+// repository the directory belongs to; a symlink inside it escapes that decision
+// entirely, so the write is refused rather than redirected.
+function symlinkRefusal(dest) {
+  let info;
+  try { info = linkStat(dest); } catch { return null; }    // does not exist yet — normal
+  if (!info.isSymbolicLink()) return null;
+  return (
+    `FAIL: refusing to write — ${dest} is a symbolic link.\n` +
+    `      Writing through it would put the notes wherever it points, outside the\n` +
+    `      destination this run verified. Remove the link and re-run.`
+  );
+}
 
 // Claude Code stores memory at ~/.claude/projects/<encoded-project>/memory. The
 // encoding is not ours to reproduce, so discover instead of deriving: take every
@@ -448,6 +475,10 @@ function stage(outDir, sourceArg) {
   // never be mistaken for a good one. The recoverable copy is git: in the backup
   // clone the previous snapshot is one `git restore` away.
   const manifestPath = path.join(outDir, MANIFEST);
+  // Checked before the unlink: existsSync says false for a DANGLING link, which
+  // would then survive to be written through.
+  const linkedManifest = symlinkRefusal(manifestPath);
+  if (linkedManifest) { console.error(linkedManifest); return 1; }
   if (existsSync(manifestPath)) unlinkSync(manifestPath);
 
   const files = [];
@@ -455,6 +486,8 @@ function stage(outDir, sourceArg) {
   for (const { name, buf } of entries) {
     // `buf` is the SAME buffer the secret scan above inspected — not a re-read.
     const dest = path.join(outDir, name);
+    const linked = symlinkRefusal(dest);
+    if (linked) { console.error(linked); return 1; }
     writeFileSync(dest, buf);
     // Re-read what actually landed: a short write must fail the run, not ship.
     const wrote = readFileSync(dest);

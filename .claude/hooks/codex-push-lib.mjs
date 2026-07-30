@@ -278,8 +278,20 @@ export function canonicalRepoId(url) {
     host = scp[1];
     rawPath = scp[2];
   }
+  // Percent-escapes decode before identity is decided. `%43RX_Manager_V1.0` is the
+  // production repository to every server that receives it, and on raw text it read
+  // as somewhere unrelated — a direct URL in that spelling skipped the proof gate
+  // from an unrelated checkout (Codex's fourteenth 2026-07-30 review, confirmed by
+  // its own read-only probe). Decoding happens per segment and the result is split
+  // again, so an encoded separator (`owner%2Frepo`) cannot hide a second segment
+  // either. A malformed escape is not decodable at all, so it fails CLOSED: null
+  // here means "no repository named", which every caller gates on.
   const segments = [];
-  for (const segment of String(rawPath).split(/[\\/]+/)) {
+  let decoded;
+  try {
+    decoded = String(rawPath).split(/[\\/]+/).flatMap((raw) => decodeURIComponent(raw).split(/[\\/]+/));
+  } catch { return null; }
+  for (const segment of decoded) {
     if (!segment || segment === ".") continue;
     if (segment === "..") { segments.pop(); continue; }
     segments.push(segment);

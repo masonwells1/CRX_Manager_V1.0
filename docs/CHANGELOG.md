@@ -255,6 +255,35 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round fourteen: an escape is not a name, and a link is not a file
+
+Three findings, all real.
+
+**A percent-encoded repository name was a different repository to the guard and the same one to
+GitHub.** `canonicalRepoId` split the URL path into segments and compared them raw, so
+`https://github.com/masonwells1/%43RX_Manager_V1.0.git` — which every server reads as
+`CRX_Manager_V1.0` — did not match the production repo and skipped the independent-review gate. The
+same trick hides a path separator: `masonwells1%2FCRX_Manager_V1.0` looked like one segment. Identity
+is now decided *after* unescaping, per segment and then re-split, so neither spelling escapes the
+guard. A malformed escape returns "no repository named", which every caller already treats as
+dangerous.
+
+**The backup followed symbolic links in both directions.** `statSync` reports what a link points at,
+so a link in the source directory pulled an outside file into the snapshot, and a link at a
+destination path wrote the notes wherever it pointed — outside the destination the run had just
+verified as private. Both sides now use `lstatSync`: a link in the source is not a file and is not
+copied, and a link at a write target refuses the run rather than writing through it. The manifest
+path is checked the same way, because `existsSync` answers false for a link whose target is missing.
+Windows will not let the test suite create a real symlink without Developer Mode, so the checks run
+through an injected stat instead of skipping — the refusal is proven, not assumed.
+
+**The runbook's recovery step could destroy unrelated work.** It said to recover a bad snapshot with
+a discard-all in the backup clone, which throws away every other uncommitted change there. It now
+names the one path to restore.
+
+All three are mutation-tested: comparing raw path segments, following links in the source, and
+dropping the destination refusal each turn the suite red on its own case.
+
 ### Round thirteen: insteadOf is a prefix, and ignoring one file is not ignoring the snapshot
 
 Two blockers.

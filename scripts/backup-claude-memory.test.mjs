@@ -8,13 +8,14 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
   INDEX_FILE,
   MANIFEST,
   SNAPSHOT_KIND,
+  __setLinkStat,
   __setVisibilityProbe,
   scanForSecrets,
   stage,
@@ -478,6 +479,74 @@ try {
     eq(
       readFileSync(path.join(dest, "a.md"), "utf8"), "second snapshot\n",
       "the notes written before the failure are the new ones — the previous snapshot is NOT preserved in place, which is why the manifest must go first",
+    );
+  }
+
+  // ── round 14: never follow a symbolic link, in either direction ───────────
+  // A link named `a.md` reports as a regular file through stat, so the source
+  // side would copy whatever it points at into the backup, and the destination
+  // side would write the notes THROUGH the link — outside the directory whose
+  // repository was just verified. Creating a symlink on Windows needs Developer
+  // Mode or elevation; where it is not permitted the case is skipped rather than
+  // silently passing.
+  {
+    const notes = makeSource("symlink-source", {
+      [INDEX_FILE]: "# Memory Index\n- [a](a.md) — hook\n",
+      "a.md": "---\nname: a\n---\n\nreal note\n",
+    });
+    const outsideDir = fresh("symlink-outside");
+    const outside = path.join(outsideDir, "someone-elses-file.md");
+    writeFileSync(outside, "do not overwrite me\n");
+    const dest = fresh("symlink-destination");
+    let realLink = true;
+    try {
+      symlinkSync(outside, path.join(dest, "a.md"));
+    } catch {
+      realLink = false;
+    }
+    if (realLink) {
+      eq(quiet(() => stage(dest, notes)), 1, "staging refuses to write through a real symlink");
+      eq(
+        readFileSync(outside, "utf8"), "do not overwrite me\n",
+        "and the file the link pointed at is untouched",
+      );
+      rmSync(path.join(dest, "a.md"), { force: true });
+    }
+
+    // Where the OS would not create one, substitute a stat that reports it. This
+    // runs the same refusal in the same place — only the "is it a link?" answer
+    // is supplied by the test.
+    const asLink = { isFile: () => false, isSymbolicLink: () => true };
+    const linkedPath = path.resolve(dest, "a.md");
+    try {
+      __setLinkStat((p) => (path.resolve(p) === linkedPath ? asLink : lstatSync(p)));
+      eq(quiet(() => stage(dest, notes)), 1, "staging refuses to write through a symlink in the destination");
+      eq(
+        readFileSync(outside, "utf8"), "do not overwrite me\n",
+        "and the file the link pointed at is untouched",
+      );
+      ok(!readdirSync(dest).includes(MANIFEST), "the run stops before a manifest is written");
+    } finally {
+      __setLinkStat(null);
+    }
+
+    // The same rule on the source side: a linked note is not one of the files
+    // this script copies, so its target never reaches the backup.
+    const sneaky = makeSource("symlink-sneaky-source", {
+      [INDEX_FILE]: "# Memory Index\n",
+      "b.md": "stand-in for a link\n",
+    });
+    const sneakyPath = path.resolve(sneaky, "b.md");
+    const out = fresh("symlink-source-destination");
+    try {
+      __setLinkStat((p) => (path.resolve(p) === sneakyPath ? asLink : lstatSync(p)));
+      eq(quiet(() => stage(out, sneaky)), 0, "a source symlink does not stop the run");
+    } finally {
+      __setLinkStat(null);
+    }
+    ok(
+      !readdirSync(out).includes("b.md"),
+      "but the linked note is not copied — its target never enters the backup",
     );
   }
 

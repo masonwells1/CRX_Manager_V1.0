@@ -328,6 +328,24 @@ assert.equal(
 );
 // A malformed line yields an empty base, which fails CLOSED.
 assert.equal(rewritesReachGuardedApp("garbage"), true, "unparseable rewrite config gates");
+// Percent-escapes are decoded before identity is decided — the server decodes
+// them, so `%43RX_Manager_V1.0` IS the production repository.
+assert.equal(
+  urlIsGuardedApp("https://github.com/masonwells1/%43RX_Manager_V1.0.git"), true,
+  "a percent-encoded repo name is still the app repo",
+);
+assert.equal(
+  urlIsGuardedApp("git@github.com:masonwells1%2FCRX_Manager_V1.0.git"), true,
+  "an encoded separator does not hide the owner segment",
+);
+assert.equal(
+  urlIsGuardedApp("https://github.com/masonwells1/CRX%ZZ.git"), true,
+  "a malformed escape is undecodable and fails CLOSED",
+);
+assert.equal(
+  urlIsGuardedApp("https://github.com/masonwells1/%43RX_Backups.git"), false,
+  "decoding does not turn an unrelated repo into this one",
+);
 // insteadOf is a PREFIX substitution: `ghm:CRX_Manager_V1.0.git` expands to the
 // production repo even though the base names no repository on its own.
 assert.equal(
