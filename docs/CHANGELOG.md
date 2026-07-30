@@ -43,12 +43,25 @@ overload retaining its owner, security mode, search path, two idempotency
 reads, month lock, and callable-role boundary. The security-integrity suite now
 guards `check_period_open` as an exact-empty-path, fully schema-qualified
 exception and separately pins `compute_season` to SECURITY INVOKER.
-The disposable PostgreSQL 17 proof now replays 12 pre-release migrations after
-the trusted baseline before reproducing the old race, then applies the 3 release
-candidates in live order (15 total) and completes the full concurrency matrix.
+The validation-only helper/caller postflight was authored as
+`20260730170743_vendor_bill_month_lock_helper_acl_postflight` and B7-renamed
+to server-assigned live version `20260730174628`. It changes no schema or
+business rows, but requires the helper to be the unique `postgres`-owned
+SECURITY INVOKER routine with `search_path=public, pg_temp` and EXECUTE for
+`postgres` alone; API roles are denied. Its three callers must each be unique
+`postgres`-owned SECURITY DEFINER routines. The ledger records it exactly once
+at high-water (930 rows), and the schema registry was refreshed to the same
+version/name. The disposable PostgreSQL 17 proof now replays 12 pre-release
+migrations after the trusted baseline, applies 4 candidates in live order (16
+total), and rejects both an untrusted helper-owner mutation and a custom-role
+helper-EXECUTE mutation before its clean replay completes the concurrency
+matrix. Post-apply, all 21 standing invariant predicates executed live with
+7 raw/7 allowlisted/0 new rows; the registered Section 9 PO/AP chain returned
+`SMOKE_PASS_ROLLBACK` and left zero checked remnants.
 Its owning npm command also runs the readiness helper unit test. The generated
 schema registry was refreshed from live introspection to high-water
-`20260730140808` and now records the whole-calendar-month constraint.
+`20260730174628`, records the validation-postflight migration name, and retains
+the whole-calendar-month constraint.
 The live schema-integrity tripwire now guards the exact month-lock calls in
 both vendor-bill writers and period close, so a later function re-emission
 cannot silently reopen the race.

@@ -30,6 +30,16 @@ if (immutableDateMathMatches.length !== 1) {
 }
 const immutableDateMathMigration = readFileSync(join(migrationDir, immutableDateMathMatches[0]), 'utf8')
   .replace(/\r\n/g, '\n');
+const helperAclPostflightSuffix = '_vendor_bill_month_lock_helper_acl_postflight.sql';
+const helperAclPostflightMatches = readdirSync(migrationDir)
+  .filter((name) => /^\d{14}_/.test(name) && name.endsWith(helperAclPostflightSuffix));
+if (helperAclPostflightMatches.length !== 1) {
+  throw new Error(`expected exactly one ${helperAclPostflightSuffix} migration, found ${helperAclPostflightMatches.join(', ') || 'none'}`);
+}
+const helperAclPostflightMigration = readFileSync(
+  join(migrationDir, helperAclPostflightMatches[0]),
+  'utf8',
+).replace(/\r\n/g, '\n');
 const smokeSpecs = JSON.parse(source('scripts', 'smoke', 'smoke-specs.json')) as {
   specs: Record<string, { chain: string; covers: string[] }>;
 };
@@ -201,5 +211,35 @@ describe('vendor-bill accounting-period close serialization', () => {
     );
     expect(section9Smoke).toContain("'request.jwt.claims'");
     expect(section9Smoke).toContain("'request.jwt.claim.sub'");
+  });
+
+  it('fails apply if the helper or its SECURITY DEFINER callers lose trusted ownership or least privilege', () => {
+    expect(helperAclPostflightMigration).toContain(
+      'VENDOR_BILL_MONTH_LOCK_HELPER_ACL_DRIFT',
+    );
+    expect(helperAclPostflightMigration).toContain(
+      'acl.grantee <> v_owner_oid',
+    );
+    expect(helperAclPostflightMigration).toContain(
+      "v_owner_name IS DISTINCT FROM 'postgres'",
+    );
+    expect(helperAclPostflightMigration).toContain(
+      'VENDOR_BILL_MONTH_LOCK_CALLER_TRUSTED_OWNER_DRIFT',
+    );
+    for (const caller of ['create_vendor_bill', 'update_vendor_bill', 'close_accounting_period']) {
+      expect(helperAclPostflightMigration).toContain(`'${caller}'`);
+    }
+    expect(helperAclPostflightMigration).toContain(
+      'VENDOR_BILL_MONTH_LOCK_HELPER_SECURITY_DRIFT',
+    );
+    expect(helperAclPostflightMigration).toContain(
+      "ARRAY['search_path=public, pg_temp']::text[]",
+    );
+    const proof = source(
+      'scripts', 'smoke', 'prove-vendor-bill-period-close-concurrency.mjs',
+    );
+    expect(proof).toContain('proof_untrusted_helper_owner');
+    expect(proof).toContain('proof_helper_exec_grantee');
+    expect(proof).toContain('CANDIDATE_VALIDATION_MUTATION_REJECTED');
   });
 });

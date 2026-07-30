@@ -1,4 +1,4 @@
-# Vendor-bill/accounting-period close lock — local candidate closeout
+# Vendor-bill/accounting-period close lock — applied B7 closeout
 
 ## Scope
 
@@ -46,8 +46,16 @@ calling it.
 Every re-emitted public SECURITY DEFINER routine explicitly reasserts its live
 callable-role boundary: `PUBLIC` and `anon` are denied, while `authenticated`
 and `service_role` retain EXECUTE. The non-public month-lock helper remains
-unexecutable by all four API roles. The apply-time postflight proves both
-boundaries instead of relying on `CREATE OR REPLACE` to preserve prior ACLs.
+unexecutable by all four API roles. The original apply-time postflight proves
+the public RPC boundary. The validation-only B7 follow-up was authored as
+`20260730170743_vendor_bill_month_lock_helper_acl_postflight` and renamed on
+disk to its server-assigned ledger version,
+`20260730174628_vendor_bill_month_lock_helper_acl_postflight`. It changes no
+schema or business rows and fails unless the helper is the unique
+`postgres`-owned SECURITY INVOKER routine with `search_path=public, pg_temp`,
+EXECUTE for `postgres` alone, and no API-role access. It also requires each of
+`create_vendor_bill`, `update_vendor_bill`, and `close_accounting_period` to
+be the unique `postgres`-owned SECURITY DEFINER caller.
 
 ## Live apply and postflight observed
 
@@ -156,18 +164,36 @@ idempotency reads, canonical `ACTOR_MISMATCH`, `anon=false`, and
 exactly empty path, fully qualified relation reference, and explanatory
 catalog comment.
 
+## Applied validation-only postflight
+
+The live ledger records `20260730174628` exactly once; it is the current
+high-water with 930 rows. The schema registry was refreshed from live
+introspection to that version and migration name. The postflight is
+validation-only: it added no schema objects and changed no business rows.
+All 21 standing invariant predicates were then executed live: 7 raw rows were
+all already allowlisted and 0 new violations remained. The registered Section
+9 PO/AP rollback chain reached `SMOKE_PASS_ROLLBACK`, and its vendor, purchase
+order, vendor-bill, accounting-period, and idempotency remnant checks were all
+zero.
+
 ## Disposable PostgreSQL 17 proof
 
 `npm run proof:vendor-bill-period-close` first runs the readiness helper's
 success/timeout unit test, then restores the checked-in real schema baseline in
 a network-isolated Supabase PostgreSQL 17 container. Before reproducing the old
 race, it replays in ledger order all 12 migrations that production had between
-the `20260727174805` baseline and this three-migration release. The proof then
-applies the three candidates in their exact live order, for 15 post-baseline
-migrations total. Markers
+the `20260727174805` baseline and this release. The proof then applies the
+four candidates in their exact live order, for 16 post-baseline migrations
+total. Markers
 `PRE_CANDIDATE_POST_BASELINE_REPLAY_PASS count=12` and
-`FULL_POST_BASELINE_REPLAY_PASS count=15` make those schema generations
+`FULL_POST_BASELINE_REPLAY_PASS count=16` make those schema generations
 observable instead of silently testing a stale snapshot.
+
+Before applying the fourth candidate cleanly, the same disposable proof changes
+the helper owner to a temporary untrusted role and grants helper EXECUTE to a
+separate temporary custom role. The validation migration rejects both mutations
+with its trusted-owner and ACL drift markers; each mutation is then restored
+before the clean replay continues.
 
 The runner uses disposable BEFORE INSERT/UPDATE proof barriers only after the
 actual RPC period checks, not replacement writer functions. It reproduces the
@@ -186,9 +212,9 @@ helper's ascending `ORDER BY` clause. Terminal markers include
 `CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS`, and
 `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
 
-The generated schema registry was refreshed from all six live-introspection
-queries after the migrations landed. Its high-water is now
-`20260730140808`; it records all three applied migration names and lists
+The generated schema registry was refreshed from live introspection after the
+migrations landed. Its high-water is now `20260730174628`; it records all four
+applied migration names and lists
 `accounting_periods_whole_calendar_month_check` as a loud, intentionally
 unparsed multi-column constraint for future hook and reviewer awareness.
 The live schema-integrity suite now also fails if any of

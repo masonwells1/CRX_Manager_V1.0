@@ -9,6 +9,22 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-07-30 — Period-close month lock spans the atomic close result
+
+**Decision (Mason, in-chat — "I approve pushing all of this and migrating and making it live",
+after the release packet and lock behavior were presented):** retain the transaction-scoped
+exclusive accounting-month lock through the close upsert, summary construction, idempotency save,
+and return. The five summary aggregates do not read `vendor_bills`; keeping the lock until commit
+preserves one atomic close/result boundary, while vendor-bill writers wait under the calling
+request's statement timeout. Do not switch to a releasable session lock or move result construction
+outside the transaction without a new concurrency and failure-path proof.
+
+**Tradeoff:** a close temporarily blocks vendor-bill create/update for that month through its
+bounded reporting queries. This is an accepted close-time latency cost, not an invitation to widen
+the protocol to unrelated writers.
+
+---
+
 ## 2026-07-30 — Empty search_path is the narrow stronger SECURITY DEFINER variant
 
 **Decision (Mason, in-chat — "I approve pushing all of this and migrating and making it live",

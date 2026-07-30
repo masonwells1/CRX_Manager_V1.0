@@ -33,10 +33,16 @@ const immutableDateMathMatches = readdirSync(migrationDir)
   .filter((name) => /^\d{14}_/.test(name) && name.endsWith(IMMUTABLE_DATE_MATH_SUFFIX));
 assert.equal(immutableDateMathMatches.length, 1, `expected exactly one ${IMMUTABLE_DATE_MATH_SUFFIX} migration, found ${immutableDateMathMatches.join(', ') || 'none'}`);
 const IMMUTABLE_DATE_MATH_MIGRATION = path.join(migrationDir, immutableDateMathMatches[0]);
+const HELPER_ACL_POSTFLIGHT_SUFFIX = '_vendor_bill_month_lock_helper_acl_postflight.sql';
+const helperAclPostflightMatches = readdirSync(migrationDir)
+  .filter((name) => /^\d{14}_/.test(name) && name.endsWith(HELPER_ACL_POSTFLIGHT_SUFFIX));
+assert.equal(helperAclPostflightMatches.length, 1, `expected exactly one ${HELPER_ACL_POSTFLIGHT_SUFFIX} migration, found ${helperAclPostflightMatches.join(', ') || 'none'}`);
+const HELPER_ACL_POSTFLIGHT_MIGRATION = path.join(migrationDir, helperAclPostflightMatches[0]);
 const CANDIDATE_MIGRATIONS = [
   MIGRATION,
   IDEMPOTENCY_RECHECK_MIGRATION,
   IMMUTABLE_DATE_MATH_MIGRATION,
+  HELPER_ACL_POSTFLIGHT_MIGRATION,
 ];
 const candidateMigrationPaths = new Set(CANDIDATE_MIGRATIONS.map((local) => path.resolve(local)));
 const SIBLING_SMOKES = [
@@ -151,11 +157,11 @@ function postBaselineMigrations() {
 const pendingMigrations = postBaselineMigrations();
 const candidateIndices = CANDIDATE_MIGRATIONS.map((local) =>
   pendingMigrations.findIndex((pending) => path.resolve(pending) === path.resolve(local)));
-assert.ok(candidateIndices.every((index) => index >= 0), 'all three candidate migrations must be in the post-baseline replay');
+assert.ok(candidateIndices.every((index) => index >= 0), 'all release candidate migrations must be in the post-baseline replay');
 assert.deepEqual(
   candidateIndices,
-  [candidateIndices[0], candidateIndices[0] + 1, candidateIndices[0] + 2],
-  'the three candidate migrations must be consecutive and in release order',
+  candidateIndices.map((_, offset) => candidateIndices[0] + offset),
+  'the release candidate migrations must be consecutive and in release order',
 );
 const preCandidateMigrations = pendingMigrations.slice(0, candidateIndices[0]);
 const postCandidateMigrations = pendingMigrations.slice(candidateIndices.at(-1) + 1);
@@ -172,6 +178,16 @@ function applyMigration(local, marker) {
   if (ownsTransaction) sql(`\\i /tmp/${remote}`);
   else applyFile(remote);
   console.log(`POST_BASELINE_MIGRATION_APPLIED ${name}${ownsTransaction ? ' (self-transacted)' : ''}`);
+}
+
+function expectValidationFailure(local, marker, expectedError) {
+  const name = path.basename(local);
+  const remote = `${marker}_${name}`;
+  run(['cp', local, `${NAME}:/tmp/${remote}`]);
+  const result = sql(`BEGIN;\n\\i /tmp/${remote}\nCOMMIT;`, { fail: true });
+  assert.notEqual(result.status, 0, `${marker}: validation migration unexpectedly succeeded`);
+  assert.match(`${result.stdout}\n${result.stderr}`, new RegExp(expectedError), `${marker}: wrong validation failure`);
+  console.log(`CANDIDATE_VALIDATION_MUTATION_REJECTED ${marker}`);
 }
 
 try {
@@ -220,7 +236,22 @@ try {
   console.log('BASELINE_CREATE_CLOSE_RACE_REPRODUCED');
 
   sql(`DELETE FROM public.vendor_bills WHERE bill_number='proof-baseline-create'; DELETE FROM public.accounting_periods WHERE period_start='2025-01-01'; DROP TRIGGER proof_pause_bill ON public.vendor_bills; DROP FUNCTION public._proof_pause_bill();`);
-  for (const local of CANDIDATE_MIGRATIONS) applyMigration(local, 'candidate');
+  for (const local of CANDIDATE_MIGRATIONS) {
+    if (local !== HELPER_ACL_POSTFLIGHT_MIGRATION) {
+      applyMigration(local, 'candidate');
+      continue;
+    }
+
+    sql(`CREATE ROLE proof_untrusted_helper_owner NOLOGIN; GRANT proof_untrusted_helper_owner TO postgres; GRANT USAGE, CREATE ON SCHEMA public TO proof_untrusted_helper_owner; ALTER FUNCTION public._lock_accounting_months(date[], boolean) OWNER TO proof_untrusted_helper_owner;`);
+    expectValidationFailure(local, 'helper-untrusted-owner', 'VENDOR_BILL_MONTH_LOCK_HELPER_TRUSTED_OWNER_DRIFT');
+    sql(`ALTER FUNCTION public._lock_accounting_months(date[], boolean) OWNER TO postgres; REVOKE ALL ON SCHEMA public FROM proof_untrusted_helper_owner; REVOKE proof_untrusted_helper_owner FROM postgres; DROP ROLE proof_untrusted_helper_owner;`);
+
+    sql(`CREATE ROLE proof_helper_exec_grantee NOLOGIN; GRANT EXECUTE ON FUNCTION public._lock_accounting_months(date[], boolean) TO proof_helper_exec_grantee;`);
+    expectValidationFailure(local, 'helper-custom-execute', 'VENDOR_BILL_MONTH_LOCK_HELPER_ACL_DRIFT');
+    sql(`REVOKE EXECUTE ON FUNCTION public._lock_accounting_months(date[], boolean) FROM proof_helper_exec_grantee; DROP ROLE proof_helper_exec_grantee;`);
+
+    applyMigration(local, 'candidate');
+  }
   for (const local of postCandidateMigrations) applyMigration(local, 'post_candidate');
   console.log(`FULL_POST_BASELINE_REPLAY_PASS count=${pendingMigrations.length} baseline_high_water=${BASELINE_MANIFEST.migrations_high_water}`);
   // The candidate must be visibly present before the registered business chains

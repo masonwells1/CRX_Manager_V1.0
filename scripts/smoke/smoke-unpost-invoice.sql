@@ -118,7 +118,7 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: unposted an invoice with money applied';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF SQLERRM NOT LIKE '%payments, prepay%write-offs%' THEN RAISE EXCEPTION 'SMOKE_FAIL: money-guard wrong error: %', SQLERRM; END IF;
+    IF SQLERRM NOT LIKE '%it has payments, prepay, write-offs, or applied credit. Reverse those first (or void the invoice instead).%' THEN RAISE EXCEPTION 'SMOKE_FAIL: money-guard wrong error: %', SQLERRM; END IF;
   END;
   SELECT status INTO v_invR.status FROM invoices WHERE id=v_inv_money;
   IF v_invR.status<>'posted' THEN RAISE EXCEPTION 'SMOKE_FAIL: money-guard mutated status (%)', v_invR.status; END IF;
