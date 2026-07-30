@@ -24,6 +24,10 @@ The state lives under `<git-common-dir>/crx-factory/`, so every worktree and bot
 Only the canonical `scripts/factory.mjs` process and the owner-routing hooks may call the state writer.
 The library checks the invoked entrypoint and real call stack; pre-tool guards also block direct state
 paths, factory-internal imports, inline code execution, and governance self-edits in an active lane.
+Every mutating CLI call additionally consumes a 30-second, single-use permit minted by the real
+PreToolUse hook from that tool call's actual chat identity. Agent-supplied `--session`, `--tool`, or
+permit values cannot create or override identity, and the permit-minting hook cannot be launched as
+an agent command.
 These are strong defense-in-depth controls inside the agent tool model, not a cryptographic sandbox
 against replacement of the installed runtime or operating system. The supported commands are
 agent-facing implementation details, not owner interfaces.
@@ -72,7 +76,9 @@ An approval is valid only when all of these are true:
 ## Pilot limits
 
 - One active build lane at a time. While it is building, verifying, or in review, build writes from
-  every other chat are denied, including fresh chats with no prior factory intent.
+  every other chat are denied, including fresh chats with no prior factory intent. Native editing,
+  MCP filesystem tools, shell file commands, redirects, Git mutation, and unknown repository scripts
+  all count as writes; read commands and fixed verification harnesses remain available.
 - The board binds only to loopback and is read-only.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
@@ -83,8 +89,10 @@ Before morning review, the agent must run a repository-owned npm harness named i
 approved ticket through `factory.mjs evidence run`. The harness must also be in the factory's fixed
 allowlist (`test`, `test:factory`, `test:agent-workflows`, `typecheck`, `lint`, `build`,
 `verify-deps`, or `check-doc-drift`) and its script body must still equal `origin/main`. The CLI
-captures and hashes the name, resolved script body, package file, base SHA, zero exit, and output;
-the gate rechecks those hashes before morning review and closeout. Morning review additionally
+captures and hashes the name, resolved script body, package file, base SHA, zero exit, output, and a
+content fingerprint covering every tracked and non-ignored repository file. It verifies that the
+content stayed frozen while the harness ran and rechecks that fingerprint before morning review and
+closeout, so later source or test edits invalidate stale proof. Morning review additionally
 requires the original base to remain current. After landing, closeout validates proof against the
 job's immutable original base while separately proving that the landing commit is contained in
 current `origin/main`. A copied file or self-declared evidence kind is informational and does not
@@ -107,8 +115,8 @@ decision; it does not brick unrelated read-only work.
 Do not edit or delete a lock or ledger by hand. Use the validated agent-facing recovery route:
 
 ```
-node scripts/factory.mjs recover unlock --reason-file <plain-text-reason> --session <id> --tool <tool>
-node scripts/factory.mjs recover torn-tail --reason-file <plain-text-reason> --session <id> --tool <tool>
+node scripts/factory.mjs recover unlock --reason-file <plain-text-reason>
+node scripts/factory.mjs recover torn-tail --reason-file <plain-text-reason>
 ```
 
 Unlock refuses locks younger than five minutes or owned by a live process and preserves a backup.

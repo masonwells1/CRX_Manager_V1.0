@@ -1,11 +1,11 @@
 # CRX Governed Delivery Pipeline V1
 
-Date: 2026-07-30  
-Status: PLAN — awaiting Fable-low adversarial review before implementation  
-Owner: Mason Wells  
-Implementation driver: Codex  
-Independent reviewer: Claude Fable, low effort  
-Delivery gate: stop before commit; no push, merge, deploy, live migration, or live-data change
+Date: 2026-07-30
+Status: IMPLEMENTED — publication-blocker repairs awaiting fresh exact-SHA acceptance
+Owner: Mason Wells
+Implementation driver: Codex
+Independent reviewers: Claude Fable low effort and trusted Codex high effort
+Publication gate: fresh exact-SHA Codex and Fable acceptance before the authorized feature-branch push and draft PR; no merge, deploy, live migration, or live-data change
 
 ## Goal
 

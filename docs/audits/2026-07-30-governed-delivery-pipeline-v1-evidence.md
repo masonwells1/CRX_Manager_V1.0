@@ -1,10 +1,10 @@
 # Governed Delivery Pipeline V1 — Pre-Commit Evidence
 
-Date: 2026-07-30  
-Branch: `claude/autonomous-factory-review-275248`  
-Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790` (`origin/main`, fresh fetch)  
-Current `origin/main`: `db9b5efc7a3c5ef0d9e9b1171ad8f5d0863c2544` (one later commit; no changed-file overlap)  
-State: uncommitted; no push, deployment, live migration, or live-data mutation
+Date: 2026-07-30
+Branch: `claude/autonomous-factory-review-275248`
+Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
+Current `origin/main`: `db9b5efc7a3c5ef0d9e9b1171ad8f5d0863c2544`
+State: rebased onto current `origin/main`; publication-blocker repairs are uncommitted and unpushed
 
 ## Owner-facing result
 
@@ -32,8 +32,11 @@ pipeline remains the delivery engine and all of its landing and production gates
 - Legal stage transitions and evidence writes are bound to the lane-start session. A successful
   CLI-executed repository harness is required before morning review. Its name is bound into the
   immutable ticket and fixed allowlist; its resolved script body must equal `origin/main`, and the
-  command/body/package/base/output hashes are rechecked. Copied or self-labeled files do not qualify.
-- While one lane is active, build writes from other or fresh chat sessions are denied.
+  command/body/package/base/output hashes plus the full tracked/non-ignored repository content
+  fingerprint are rechecked. Source or test edits after the harness invalidate it. Copied or
+  self-labeled files do not qualify.
+- While one lane is active, native edits, MCP filesystem tools, shell writes/redirection, Git
+  mutations, and unknown repository scripts from other or fresh chats are denied.
 - A stale lock can be removed only after five minutes when its process is gone, with a backup retained.
   A torn final line has a backup-first repair path, and a failed ledger pause creates an emergency hold
   that still blocks lane writes.
@@ -60,12 +63,15 @@ pipeline remains the delivery engine and all of its landing and production gates
   a hold.
 - Natural unqualified “yes, ship it” binds to the exact presented decision, while decision-like replies
   that are still ambiguous fail closed with a plain-English explanation.
+- Every mutating factory CLI invocation consumes a short-lived, single-use permit minted from the real
+  PreToolUse session. Direct CLI execution, forged `--session`/`--tool`, direct hook invocation, and
+  permit read/set/forward routes fail closed. Status JSON exposes no session or ticket identity.
 
 ## Automated proof
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 142 focused assertions after Fable remediation |
+| `npm run test:factory` | PASS — 5 files, 170 focused assertions after publication-blocker remediation |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
 | `npm run typecheck` | PASS |
 | `npm run lint` | PASS |
@@ -130,22 +136,29 @@ recursive force-delete cleanup command.
   then found one MED residual self-edit route through `.claude/settings.local.json` and additional
   shell mutators, plus one NIT involving “yes, ship it.” Both are repaired in this candidate and
   covered by focused regression tests.
+- Fresh Fable-low acceptance `2026-07-30T14:35:44Z`: `SHIP`; no BLOCKER/HIGH/MED/LOW findings.
+- Mandatory generated-map scope refresh `2026-07-30T14:44:09Z`: `SHIP`; no findings. The accepted
+  candidate was committed, then rebased cleanly onto current `origin/main`.
+- Trusted Codex exact-head publication review `2026-07-30T15:30:43Z`: `BLOCKERS`; it found three HIGH
+  issues: shell writes bypassed ticket/pause/one-lane enforcement, harness proof did not bind source
+  content, and mutating CLI identity trusted caller flags. The current repair candidate closes all
+  three with broad write classification, repository-content-bound proof, and hook-minted one-time
+  identity permits. Publication remains parked until fresh exact-SHA Codex and Fable acceptance pass.
 
 The latest review capture is
-`.claude/session-state/history/claude-review-2026-07-30T14-28-17-869Z-933b9586.txt`
-(`FINAL_VERDICT: NEEDS-WORK`). The acceptance verdict for the current candidate is intentionally
-recorded in a new immutable review capture after all tracked bytes and tests are frozen.
+`.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
+verdicts for the repair candidate will be recorded in new immutable captures after all tracked bytes
+and tests are frozen.
 
 ## Moving-main check
 
-While verification was running, `origin/main` advanced by one commit from `aee913d` to `db9b5ef`.
-That commit changes only `docs/app-workflow-map.html` and
-`scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs`; neither overlaps this
-factory change. No rebase or working-tree mutation was attempted. A fresh acceptance review must use
-the current base before any commit.
+`origin/main` advanced once from `aee913d` to `db9b5ef`. The feature commit was rebased onto that
+current base before publication repair began. The duplicate generated map-date hunk disappeared;
+the upstream Phase 3 smoke-prover change does not overlap the factory implementation.
 
 ## Remaining gate
 
-This work intentionally stops before commit. A commit, push, PR, merge, board installation/startup, and
-any production action remain undone. The single next gate is a fresh independent Fable-low acceptance
-of these exact repaired bytes against current `origin/main`; the implementation cannot self-certify it.
+The repair remains uncommitted and unpushed. The next gates are full verification, a repair commit,
+fresh exact-SHA Codex and Fable acceptance, then the explicitly authorized feature-branch push and
+draft PR. Merge, board installation/startup, deployment, migration, and all production actions remain
+undone.

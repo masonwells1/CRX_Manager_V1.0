@@ -8,6 +8,7 @@ import {
   APPROVAL_TTL_MS,
   appendFactoryEvent,
   buildFactorySnapshot,
+  consumeFactoryCliPermit,
   copyEvidence,
   currentOriginMain,
   loadFactorySnapshot,
@@ -31,15 +32,15 @@ function usage(message = "") {
     "Agent-facing CRX Factory CLI. Mason never runs this command.",
     "",
     "Usage:",
-    "  node scripts/factory.mjs ticket draft --file <ticket.json> --session <id> --tool <claude|codex>",
-    "  node scripts/factory.mjs ticket present --job <id> --question-file <text> --session <id> --tool <claude|codex>",
-    "  node scripts/factory.mjs lane start --job <id> --session <id> --tool <claude|codex>",
-    "  node scripts/factory.mjs review present --job <id> --question-file <text> --session <id> --tool <claude|codex>",
-    "  node scripts/factory.mjs stage --job <id> --stage <stage> --session <id> --tool <tool> [--summary-file <text>] [--blocker-file <text>]",
-    "  node scripts/factory.mjs evidence attach --job <id> --file <path> --label <text> --kind <kind> --session <id> --tool <tool>",
-    "  node scripts/factory.mjs evidence run --job <id> --harness <npm-script> --label <text> --session <id> --tool <tool>",
-    "  node scripts/factory.mjs closeout write --job <id> --landing-commit <sha> --production-proof-file <text> --session <id> --tool <tool>",
-    "  node scripts/factory.mjs recover <unlock|torn-tail> --reason-file <text> --session <id> --tool <tool>",
+    "  node scripts/factory.mjs ticket draft --file <ticket.json>",
+    "  node scripts/factory.mjs ticket present --job <id> --question-file <text>",
+    "  node scripts/factory.mjs lane start --job <id>",
+    "  node scripts/factory.mjs review present --job <id> --question-file <text>",
+    "  node scripts/factory.mjs stage --job <id> --stage <stage> [--summary-file <text>] [--blocker-file <text>]",
+    "  node scripts/factory.mjs evidence attach --job <id> --file <path> --label <text> --kind <kind>",
+    "  node scripts/factory.mjs evidence run --job <id> --harness <npm-script> --label <text>",
+    "  node scripts/factory.mjs closeout write --job <id> --landing-commit <sha> --production-proof-file <text>",
+    "  node scripts/factory.mjs recover <unlock|torn-tail> --reason-file <text>",
     "  node scripts/factory.mjs status [--json]",
   ].join("\n") + "\n");
   process.exit(2);
@@ -71,10 +72,17 @@ function required(flags, name) {
   return value;
 }
 
-function actor(flags) {
-  const tool = required(flags, "tool").toLowerCase();
-  if (!["claude", "codex", "factory"].includes(tool)) usage("--tool must be claude, codex, or factory.");
-  return { actorTool: tool, sessionId: required(flags, "session") };
+function actor(paths, flags, env, nowMs) {
+  const who = consumeFactoryCliPermit(paths, env.CRX_FACTORY_PERMIT, { nowMs });
+  const claimedTool = String(flags.get("tool") || "").toLowerCase();
+  const claimedSession = String(flags.get("session") || "");
+  if (claimedTool && claimedTool !== who.actorTool) {
+    throw new Error("--tool does not match the trusted PreToolUse identity.");
+  }
+  if (claimedSession && claimedSession !== who.sessionId) {
+    throw new Error("--session does not match the trusted PreToolUse identity.");
+  }
+  return who;
 }
 
 function readTextFile(filename) {
@@ -105,7 +113,28 @@ function markdownCell(value) {
 
 function printStatus(snapshot, asJson) {
   if (asJson) {
-    process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({
+      schemaVersion: snapshot.schemaVersion,
+      held: snapshot.held,
+      holdReason: snapshot.holdReason,
+      degraded: snapshot.degraded,
+      warning: snapshot.warning,
+      jobs: snapshot.jobs.map((job) => ({
+        id: job.id,
+        title: job.title,
+        stage: job.stage,
+        behaviorSummary: job.behaviorSummary,
+        blocker: job.blocker,
+        lastActivity: job.lastActivity,
+        evidence: job.evidence.map((item) => ({
+          label: item.label,
+          kind: item.kind,
+          sha256: item.sha256,
+          verified: item.verified,
+          sourceCommand: item.sourceCommand,
+        })),
+      })),
+    }, null, 2)}\n`);
     return;
   }
   process.stdout.write(`CRX Factory: ${snapshot.held ? "PAUSED" : "READY"} · ${snapshot.jobs.length} job(s)\n`);
@@ -126,9 +155,9 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   const paths = resolveFactoryPaths(cwd, env);
 
   if (group === "ticket" && action === "draft") {
+    const who = actor(paths, flags, env, now().getTime());
     const source = JSON.parse(readFileSync(path.resolve(required(flags, "file")), "utf8"));
     const written = writeImmutableTicket(paths, source);
-    const who = actor(flags);
     appendFactoryEvent(paths, {
       type: "ticket-drafted",
       jobId: written.ticket.id,
@@ -150,7 +179,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   }
 
   if (group === "ticket" && action === "present") {
-    const who = actor(flags);
+    const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const questionText = normalizeOwnerQuestion(readTextFile(required(flags, "question-file")));
     if (!questionText.endsWith("?")) throw new Error("Ticket approval question must end with a question mark.");
@@ -180,7 +209,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   }
 
   if (group === "lane" && action === "start") {
-    const who = actor(flags);
+    const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
     const baseSha = currentOriginMain(cwd);
@@ -214,7 +243,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   }
 
   if (group === "review" && action === "present") {
-    const who = actor(flags);
+    const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const questionText = normalizeOwnerQuestion(readTextFile(required(flags, "question-file")));
     if (!questionText.endsWith("?")) throw new Error("Morning review question must end with a question mark.");
@@ -245,7 +274,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   }
 
   if (group === "stage" && !action) {
-    const who = actor(flags);
+    const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const stage = required(flags, "stage");
     const behaviorSummary = flags.get("summary-file") ? readTextFile(flags.get("summary-file")) : "";
@@ -268,7 +297,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   }
 
   if (group === "evidence" && action === "attach") {
-    const who = actor(flags);
+    const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
     validateLaneActor(snapshot, jobId, who.sessionId);
@@ -303,7 +332,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   }
 
   if (group === "evidence" && action === "run") {
-    const who = actor(flags);
+    const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
     const job = validateLaneActor(snapshot, jobId, who.sessionId);
@@ -337,6 +366,10 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         baseScriptBodyHash: evidence.baseScriptBodyHash,
         baseSha: evidence.baseSha,
         packageJsonHash: evidence.packageJsonHash,
+        headSha: evidence.headSha,
+        headTreeSha: evidence.headTreeSha,
+        repositoryContentHash: evidence.repositoryContentHash,
+        repositoryFileCount: evidence.repositoryFileCount,
       },
     });
     process.stdout.write(`${JSON.stringify({
@@ -350,7 +383,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   }
 
   if (group === "closeout" && action === "write") {
-    const who = actor(flags);
+    const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const landingCommit = required(flags, "landing-commit");
     const productionProof = readTextFile(required(flags, "production-proof-file"));
@@ -452,7 +485,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   }
 
   if (group === "recover" && ["unlock", "torn-tail"].includes(action)) {
-    const who = actor(flags);
+    const who = actor(paths, flags, env, now().getTime());
     const reason = readTextFile(required(flags, "reason-file"));
     const recovered = recoverFactoryState(paths, { mode: action, reason, nowMs: now().getTime() });
     appendFactoryEvent(paths, {

@@ -35,6 +35,10 @@ function denied(result, pattern, message) {
   assert.match(result.stdout, pattern, message);
 }
 
+function hookOutput(result) {
+  return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput : null;
+}
+
 {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-integrity-"));
   const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
@@ -57,7 +61,17 @@ function denied(result, pattern, message) {
     tool_input: {
       command: "node .claude/hooks/factory-owner-input.mjs",
     },
-  }), /owner-input hook may run only/i, "agents cannot invoke the trusted owner-input hook as a command");
+  }), /trusted factory identity\/owner hooks may run only/i, "agents cannot invoke the trusted owner-input hook as a command");
+  denied(run(integrityHook, stateDir, {
+    tool_name: "PowerShell",
+    tool_input: {
+      command: "node .claude/hooks/factory-lane-guard.mjs",
+    },
+  }), /trusted factory identity\/owner hooks may run only/i, "agents cannot invoke the permit-minting lane hook as a command");
+  denied(run(integrityHook, stateDir, {
+    tool_name: "PowerShell",
+    tool_input: { command: "$env:CRX_FACTORY_PERMIT='forged'; node scripts/factory.mjs status" },
+  }), /cannot read, set, or forward trusted factory CLI permits/i, "agents cannot inject a forged factory permit");
   const allowed = run(integrityHook, stateDir, {
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/factory.mjs status --json" },
@@ -84,6 +98,45 @@ function denied(result, pattern, message) {
     tool_name: "apply_patch",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
   }), /no mission ticket/i, "factory intent blocks build edits before ticket approval");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content src/example.ts forged" },
+  }), /no mission ticket/i, "factory intent blocks PowerShell source writes before ticket approval");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "'forged' > src/example.ts" },
+  }), /no mission ticket/i, "factory intent blocks redirected source writes before ticket approval");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/custom-writer.mjs" },
+  }), /no mission ticket/i, "factory intent treats unknown repository scripts as mutating");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "python scripts/custom-writer.py" },
+  }), /no mission ticket/i, "factory intent fails closed on unknown non-Node repository scripts");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__desktop_commander__write_file",
+    tool_input: { path: path.join(root, "src", "example.ts"), content: "forged" },
+  }), /no mission ticket/i, "factory intent blocks MCP filesystem writers before approval");
+  const readAllowed = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Get-Content src/example.ts" },
+  });
+  assertions++;
+  assert.equal(readAllowed.stdout, "", "factory intent keeps shell reads available");
+  const gitReadAllowed = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git status --short" },
+  });
+  assertions++;
+  assert.equal(gitReadAllowed.stdout, "", "factory intent keeps fixed Git diagnostics available");
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
@@ -219,11 +272,38 @@ function denied(result, pattern, message) {
   });
   assertions++;
   assert.equal(allowed.stdout, "", "started governed lane permits scoped build edits");
+  const shellAllowed = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content src/example.ts repaired" },
+  });
+  assertions++;
+  assert.equal(shellAllowed.stdout, "", "started governed lane permits ordinary scoped shell writes");
+  const factoryCommand = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/factory.mjs stage --job lane-job --stage verifying" },
+  });
+  const factoryCommandHook = hookOutput(factoryCommand);
+  assertions++;
+  assert.equal(factoryCommandHook.permissionDecision, "allow", "mutating factory CLI command receives an explicit allow");
+  assertions++;
+  assert.match(factoryCommandHook.updatedInput.command, /CRX_FACTORY_PERMIT/, "mutating factory CLI identity comes from the real hook session");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "parallel.ts") },
   }), /one-lane pilot blocks parallel repository writes/i, "fresh chats cannot bypass an active factory lane");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-parallel-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content src/parallel.ts forged" },
+  }), /one-lane pilot blocks parallel repository writes/i, "fresh chats cannot bypass one-lane enforcement with shell writes");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-parallel-thread",
+    tool_name: "mcp__desktop_commander__write_file",
+    tool_input: { path: path.join(root, "src", "parallel.ts"), content: "forged" },
+  }), /one-lane pilot blocks parallel repository writes/i, "fresh chats cannot bypass one-lane enforcement with MCP writers");
 
   appendFactoryEvent(paths, {
     type: "factory-held",
@@ -237,6 +317,18 @@ function denied(result, pattern, message) {
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
   }), /globally paused/i, "global hold blocks an active lane");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content src/example.ts forged" },
+  }), /globally paused/i, "global hold blocks shell source writes");
+  const verificationAllowed = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "npm run test:factory" },
+  });
+  assertions++;
+  assert.equal(verificationAllowed.stdout, "", "global hold leaves approved verification harnesses available");
 }
 
 {
@@ -261,7 +353,10 @@ function denied(result, pattern, message) {
     tool_input: { command: "node scripts/factory.mjs recover torn-tail --reason-file reason.txt --session diagnostic-thread --tool codex" },
   });
   assertions++;
-  assert.equal(recoveryResult.stdout, "", "corrupt factory state leaves the canonical recovery CLI reachable");
+  const recoveryHook = hookOutput(recoveryResult);
+  assert.equal(recoveryHook.permissionDecision, "allow", "corrupt factory state leaves canonical recovery reachable");
+  assertions++;
+  assert.match(recoveryHook.updatedInput.command, /CRX_FACTORY_PERMIT/, "recovery receives a trusted one-time permit");
 }
 
 console.log(`factory-guards: ${assertions} assertions passed`);

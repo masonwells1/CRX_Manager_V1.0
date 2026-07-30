@@ -8,6 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -15,9 +16,12 @@ import {
   appendFactoryEvent,
   buildFactorySnapshot,
   canonicalJson,
+  consumeFactoryCliPermit,
   loadFactorySnapshot,
+  mintFactoryCliPermit,
   readEventLog,
   recoverFactoryState,
+  repositoryContentFingerprint,
   resolveFactoryPaths,
   resolveHookFactoryPaths,
   setEmergencyFactoryHold,
@@ -28,8 +32,15 @@ import {
   validateLaneStart,
   writeImmutableTicket,
 } from "./factory-state-lib.mjs";
+import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
+// Git hooks export repository-local GIT_* variables. Scrub them before any
+// scratch `git init`; otherwise the fixture can rewrite the real shared config.
+for (const name of gitLocalEnvironmentNames()) delete process.env[name];
+for (const name of Object.keys(process.env)) {
+  if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) delete process.env[name];
+}
 let pass = 0;
 const ok = (value, message) => { assert.ok(value, message); pass++; };
 const eq = (actual, expected, message) => { assert.deepEqual(actual, expected, message); pass++; };
@@ -71,6 +82,36 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     timestamp: options.timestamp || "2026-07-30T12:00:00.000Z",
     payload,
   });
+}
+
+{
+  const { root, paths } = fixture();
+  const issued = mintFactoryCliPermit(paths, {
+    sessionId: "trusted-session",
+    actorTool: "codex",
+    nowMs: 1_000,
+  });
+  eq(
+    consumeFactoryCliPermit(paths, issued.token, { nowMs: 2_000 }),
+    { sessionId: "trusted-session", actorTool: "codex" },
+    "one-time CLI permit returns hook-bound identity",
+  );
+  throws(
+    () => consumeFactoryCliPermit(paths, issued.token, { nowMs: 2_001 }),
+    /missing, expired, or already consumed/,
+    "consumed CLI permit cannot be replayed",
+  );
+  const expired = mintFactoryCliPermit(paths, {
+    sessionId: "trusted-session",
+    actorTool: "codex",
+    nowMs: 1_000,
+  });
+  throws(
+    () => consumeFactoryCliPermit(paths, expired.token, { nowMs: 60_000 }),
+    /expired before use/,
+    "expired CLI permit is refused",
+  );
+  rmSync(root, { recursive: true, force: true });
 }
 
 {
@@ -239,9 +280,33 @@ function append(paths, type, jobId, payload = {}, options = {}) {
 }
 
 {
+  const fingerprintRepo = mkdtempSync(path.join(tmpdir(), "crx-factory-fingerprint-"));
+  execFileSync("git", ["init"], { cwd: fingerprintRepo, stdio: "ignore" });
+  writeFileSync(path.join(fingerprintRepo, "source.txt"), "before\n");
+  execFileSync("git", ["add", "source.txt"], { cwd: fingerprintRepo, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-m", "init"], {
+    cwd: fingerprintRepo,
+    stdio: "ignore",
+  });
+  const before = repositoryContentFingerprint(fingerprintRepo);
+  writeFileSync(path.join(fingerprintRepo, "source.txt"), "after\n");
+  const changed = repositoryContentFingerprint(fingerprintRepo);
+  ok(before.repositoryContentHash !== changed.repositoryContentHash, "repository proof hash changes after source bytes change");
+  execFileSync("git", ["add", "source.txt"], { cwd: fingerprintRepo, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-m", "after"], {
+    cwd: fingerprintRepo,
+    stdio: "ignore",
+  });
+  const committed = repositoryContentFingerprint(fingerprintRepo);
+  eq(committed.repositoryContentHash, changed.repositoryContentHash, "repository proof hash survives committing identical content");
+  rmSync(fingerprintRepo, { recursive: true, force: true });
+}
+
+{
   const packageBytes = readFileSync(path.join(repoRoot, "package.json"));
   const packageJson = JSON.parse(packageBytes);
   const scriptBody = packageJson.scripts["verify-deps"];
+  const repository = repositoryContentFingerprint(repoRoot);
   const landedJob = {
     baseSha: "1111111111111111111111111111111111111111",
     ticket: { proofHarnesses: ["verify-deps"] },
@@ -253,6 +318,8 @@ function append(paths, type, jobId, payload = {}, options = {}) {
       scriptBodyHash: sha256(scriptBody),
       baseScriptBodyHash: sha256(scriptBody),
       packageJsonHash: sha256(packageBytes),
+      repositoryContentHash: repository.repositoryContentHash,
+      repositoryFileCount: repository.repositoryFileCount,
     }],
   };
   throws(
@@ -263,6 +330,12 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   ok(
     validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false }),
     "post-landing closeout accepts proof bound to the job's immutable original base",
+  );
+  landedJob.evidence[0].repositoryContentHash = "0".repeat(64);
+  throws(
+    () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false }),
+    /current, ticket-approved/,
+    "source changes invalidate previously verified harness evidence",
   );
 }
 

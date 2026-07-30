@@ -23,13 +23,15 @@ function norm(value) {
 let payload;
 try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { nothing(); }
 
-let stateDir;
+let factoryPaths;
 try {
-  stateDir = path.resolve(resolveHookFactoryPaths(process.env.CLAUDE_PROJECT_DIR || process.cwd()).stateDir);
+  factoryPaths = resolveHookFactoryPaths(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 } catch {
   nothing();
 }
+const stateDir = path.resolve(factoryPaths.stateDir);
 const stateNorm = norm(stateDir);
+const permitsNorm = norm(path.resolve(factoryPaths.permitsDir));
 const input = payload?.tool_input || {};
 const toolName = String(payload?.tool_name || "");
 const target = norm(input.file_path || input.filePath || input.path || input.target || "");
@@ -54,6 +56,9 @@ if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(toolName)
   deny("CRX FACTORY STATE GUARD: direct edits to the shared factory ledger/tickets/evidence are forbidden. Use the validated scripts/factory.mjs entrypoint.");
 }
 const governanceTarget = /(?:^|\/)(?:package\.json|scripts\/factory(?:-[^/]*)?\.mjs|\.claude\/settings(?:\.local)?\.json|\.codex\/hooks\.json|\.codex\/hooks\/codex-hook-adapter\.mjs|\.claude\/hooks\/(?:factory-[^/]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib)\.mjs)$/;
+if (target && target.startsWith(permitsNorm)) {
+  deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
+}
 if (governedSession
     && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(toolName)
     && governanceTarget.test(target)) {
@@ -63,10 +68,13 @@ if (governedSession
 const command = String(input.command || "");
 if (!command) nothing();
 const commandNorm = norm(command);
-if (/\bnode(?:\.exe)?\b[^\r\n;&|]*factory-owner-input\.mjs\b/i.test(commandNorm)) {
-  deny("CRX FACTORY STATE GUARD: the owner-input hook may run only as a real UserPromptSubmit hook. Agents cannot invoke it as a command.");
+if (/crx_factory_permit/i.test(command) || commandNorm.includes("/crx-factory/permits/")) {
+  deny("CRX FACTORY STATE GUARD: agents cannot read, set, or forward trusted factory CLI permits.");
 }
-const factoryInternals = /factory-state-lib\.mjs|appendfactoryevent|writeimmutableticket|runharnessevidence|recoverfactorystate/i.test(command);
+if (/\bnode(?:\.exe)?\b[^\r\n;&|]*(?:factory-owner-input|factory-lane-guard|ship-intent-reminder)\.mjs\b/i.test(commandNorm)) {
+  deny("CRX FACTORY STATE GUARD: trusted factory identity/owner hooks may run only through their real hook events. Agents cannot invoke them as commands.");
+}
+const factoryInternals = /factory-state-lib\.mjs|appendfactoryevent|writeimmutableticket|runharnessevidence|recoverfactorystate|mintfactoryclipermit|consumefactoryclipermit/i.test(command);
 const dynamicExecution = /\bnode(?:\.exe)?\s+(?:-e|--eval|-p|--print)\b|\bpython(?:\.exe)?\s+(?:-c|-)\b|\b(?:invoke-expression|iex)\b|(?:<<|@['\"])/i.test(command);
 if (factoryInternals && dynamicExecution) {
   deny("CRX FACTORY STATE GUARD: direct invocation of factory state internals is forbidden. Use only the canonical scripts/factory.mjs CLI.");

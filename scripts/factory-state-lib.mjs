@@ -5,10 +5,13 @@ import {
   closeSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
+  readlinkSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeSync,
@@ -24,6 +27,7 @@ export const FACTORY_SCHEMA_VERSION = 1;
 export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 export const ACTIVE_STAGES = new Set(["building", "verifying", "in-review"]);
 export const STALE_LOCK_MS = 5 * 60 * 1000;
+export const FACTORY_CLI_PERMIT_TTL_MS = 30 * 1000;
 export const FACTORY_HARNESS_ALLOWLIST = new Set([
   "test",
   "test:factory",
@@ -105,6 +109,7 @@ function buildPaths(stateDir) {
     stateDir,
     ticketsDir: path.join(stateDir, "tickets"),
     evidenceDir: path.join(stateDir, "evidence"),
+    permitsDir: path.join(stateDir, "permits"),
     eventsPath: path.join(stateDir, "events.jsonl"),
     lockPath: path.join(stateDir, "events.lock"),
     emergencyHoldPath: path.join(stateDir, "EMERGENCY-HOLD.json"),
@@ -115,6 +120,7 @@ function buildPaths(stateDir) {
 export function ensureFactoryDirs(paths) {
   mkdirSync(paths.ticketsDir, { recursive: true });
   mkdirSync(paths.evidenceDir, { recursive: true });
+  mkdirSync(paths.permitsDir, { recursive: true });
 }
 
 export function canonicalize(value) {
@@ -264,6 +270,7 @@ const FACTORY_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FACTORY_ROOT = path.resolve(FACTORY_MODULE_DIR, "..");
 const ALLOWED_WRITERS = new Set([
   path.join(FACTORY_ROOT, "scripts", "factory.mjs"),
+  path.join(FACTORY_ROOT, ".claude", "hooks", "factory-lane-guard.mjs"),
   path.join(FACTORY_ROOT, ".claude", "hooks", "factory-owner-input.mjs"),
   path.join(FACTORY_ROOT, ".claude", "hooks", "ship-intent-reminder.mjs"),
 ].map((value) => path.resolve(value).toLowerCase()));
@@ -287,6 +294,65 @@ function authorizedFactoryWriter(paths) {
     && stack.includes(invoked.replaceAll("/", "\\"));
   if (isIsolatedTest) return;
   throw new Error("Factory state mutation is restricted to the canonical CLI and owner hooks.");
+}
+
+export function mintFactoryCliPermit(paths, {
+  sessionId,
+  actorTool,
+  nowMs = Date.now(),
+}) {
+  authorizedFactoryWriter(paths);
+  ensureFactoryDirs(paths);
+  const token = randomUUID();
+  const payload = canonicalize({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    token,
+    sessionId: requiredText(sessionId, "permit sessionId", 200),
+    actorTool: requiredText(actorTool, "permit actorTool", 40),
+    issuedAt: new Date(nowMs).toISOString(),
+    expiresAt: new Date(nowMs + FACTORY_CLI_PERMIT_TTL_MS).toISOString(),
+  });
+  writeFileSync(
+    path.join(paths.permitsDir, `${token}.json`),
+    `${canonicalJson(payload)}\n`,
+    { encoding: "utf8", flag: "wx" },
+  );
+  return payload;
+}
+
+export function consumeFactoryCliPermit(paths, token, {
+  nowMs = Date.now(),
+} = {}) {
+  authorizedFactoryWriter(paths);
+  const safeToken = String(token || "").trim();
+  if (!/^[a-f0-9-]{36}$/i.test(safeToken)) {
+    throw new Error("A trusted one-time factory CLI permit is required.");
+  }
+  const source = path.join(paths.permitsDir, `${safeToken}.json`);
+  const consuming = path.join(paths.permitsDir, `${safeToken}.consuming-${process.pid}`);
+  try {
+    renameSync(source, consuming);
+  } catch {
+    throw new Error("The factory CLI permit is missing, expired, or already consumed.");
+  }
+  try {
+    const raw = readFileSync(consuming, "utf8");
+    const permit = JSON.parse(raw);
+    if (`${canonicalJson(permit)}\n` !== raw.replace(/\r\n/g, "\n")) {
+      throw new Error("The factory CLI permit is not canonically serialized.");
+    }
+    if (permit.schemaVersion !== FACTORY_SCHEMA_VERSION || permit.token !== safeToken) {
+      throw new Error("The factory CLI permit is malformed.");
+    }
+    requiredText(permit.sessionId, "permit sessionId", 200);
+    requiredText(permit.actorTool, "permit actorTool", 40);
+    if (!Number.isFinite(Date.parse(permit.expiresAt)) || Date.parse(permit.expiresAt) <= nowMs) {
+      throw new Error("The factory CLI permit expired before use.");
+    }
+    return { sessionId: permit.sessionId, actorTool: permit.actorTool };
+  } finally {
+    try { unlinkSync(consuming); } catch { /* best-effort cleanup after atomic consumption */ }
+  }
 }
 
 function releaseLock(paths, fd) {
@@ -405,6 +471,41 @@ export function appendFactoryEvent(paths, {
 
 export function currentOriginMain(cwd = process.cwd()) {
   return git(["rev-parse", "--verify", "origin/main"], cwd);
+}
+
+export function repositoryContentFingerprint(cwd = process.cwd()) {
+  const repoRoot = resolveRepoRoot(cwd);
+  const listed = git(
+    ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    repoRoot,
+  ).split("\0").filter(Boolean).sort();
+  const hash = createHash("sha256");
+  let fileCount = 0;
+  for (const relative of listed) {
+    const fullPath = path.join(repoRoot, relative);
+    if (!existsSync(fullPath)) continue;
+    const info = lstatSync(fullPath);
+    const normalized = relative.replace(/\\/g, "/");
+    hash.update(`path:${Buffer.byteLength(normalized)}:${normalized}\0`);
+    if (info.isSymbolicLink()) {
+      const target = readlinkSync(fullPath);
+      hash.update(`symlink:${Buffer.byteLength(target)}:${target}\0`);
+    } else if (info.isFile()) {
+      const bytes = readFileSync(fullPath);
+      hash.update(`file:${bytes.length}:`);
+      hash.update(bytes);
+      hash.update("\0");
+    } else {
+      hash.update(`type:${info.mode}\0`);
+    }
+    fileCount++;
+  }
+  return {
+    headSha: git(["rev-parse", "HEAD"], repoRoot),
+    headTreeSha: git(["rev-parse", "HEAD^{tree}"], repoRoot),
+    repositoryContentHash: hash.digest("hex"),
+    repositoryFileCount: fileCount,
+  };
 }
 
 export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
@@ -533,6 +634,10 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
           baseScriptBodyHash: String(event.payload.baseScriptBodyHash || ""),
           baseSha: String(event.payload.baseSha || ""),
           packageJsonHash: String(event.payload.packageJsonHash || ""),
+          headSha: String(event.payload.headSha || ""),
+          headTreeSha: String(event.payload.headTreeSha || ""),
+          repositoryContentHash: String(event.payload.repositoryContentHash || ""),
+          repositoryFileCount: Number(event.payload.repositoryFileCount || 0),
         });
         break;
       default:
@@ -719,6 +824,7 @@ export function runHarnessEvidence(paths, {
   if (basePackageJson.scripts?.[scriptName] !== packageJson.scripts[scriptName]) {
     throw new Error(`Harness ${scriptName} differs from its reviewed origin/main script body.`);
   }
+  const repositoryBefore = repositoryContentFingerprint(cwd);
   const executable = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm";
   const args = process.platform === "win32"
     ? ["/d", "/s", "/c", `npm run ${scriptName}`]
@@ -734,6 +840,10 @@ export function runHarnessEvidence(paths, {
   if (result.status !== 0) {
     throw new Error(`Repository harness npm run ${scriptName} failed with exit ${result.status}.`);
   }
+  const repositoryAfter = repositoryContentFingerprint(cwd);
+  if (repositoryAfter.repositoryContentHash !== repositoryBefore.repositoryContentHash) {
+    throw new Error(`Repository content changed while npm run ${scriptName} executed; rerun the harness on frozen bytes.`);
+  }
   const payload = {
     schemaVersion: FACTORY_SCHEMA_VERSION,
     command: `npm run ${scriptName}`,
@@ -743,6 +853,7 @@ export function runHarnessEvidence(paths, {
     baseScriptBodyHash: sha256(String(basePackageJson.scripts[scriptName])),
     baseSha: currentOriginMain(cwd),
     packageJsonHash: sha256(readFileSync(path.join(cwd, "package.json"))),
+    ...repositoryAfter,
     exitCode: result.status,
     capturedAt: new Date().toISOString(),
     stdout: String(result.stdout || ""),
@@ -769,6 +880,10 @@ export function runHarnessEvidence(paths, {
     baseScriptBodyHash: payload.baseScriptBodyHash,
     baseSha: payload.baseSha,
     packageJsonHash: payload.packageJsonHash,
+    headSha: payload.headSha,
+    headTreeSha: payload.headTreeSha,
+    repositoryContentHash: payload.repositoryContentHash,
+    repositoryFileCount: payload.repositoryFileCount,
   };
 }
 
@@ -778,6 +893,7 @@ export function validateCurrentHarnessEvidence(job, cwd = FACTORY_ROOT, {
   const packageBytes = readFileSync(path.join(cwd, "package.json"));
   const packageJson = JSON.parse(packageBytes);
   const currentBaseSha = requireCurrentBase ? currentOriginMain(cwd) : "";
+  const repository = repositoryContentFingerprint(cwd);
   const accepted = job.evidence.find((item) => {
     if (item.verified !== true || item.kind !== "harness") return false;
     if (!FACTORY_HARNESS_ALLOWLIST.has(item.scriptName)) return false;
@@ -788,7 +904,9 @@ export function validateCurrentHarnessEvidence(job, cwd = FACTORY_ROOT, {
     return typeof currentBody === "string"
       && sha256(currentBody) === item.scriptBodyHash
       && item.baseScriptBodyHash === item.scriptBodyHash
-      && sha256(packageBytes) === item.packageJsonHash;
+      && sha256(packageBytes) === item.packageJsonHash
+      && item.repositoryContentHash === repository.repositoryContentHash
+      && Number(item.repositoryFileCount) === repository.repositoryFileCount;
   });
   if (!accepted) {
     throw new Error("A current, ticket-approved, allowlisted repository harness proof is required.");

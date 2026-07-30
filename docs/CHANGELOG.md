@@ -303,6 +303,15 @@ through `.claude/settings.local.json` plus in-place/opaque shell mutators. The f
 that local hook-disabling manifest, denies `sed -i`, `perl -i`, `tee`, `git apply`,
 `git checkout --`, and `git restore` governance rewrites from governed sessions, accepts the natural
 unqualified reply “yes, ship it,” and explains decision-like replies that remain too ambiguous to bind.
+The first trusted Codex exact-head publication review then found three HIGH control gaps that the
+earlier Fable passes missed: shell writes were not classified as lane mutations, harness evidence was
+not bound to the code bytes it proved, and the mutating CLI trusted caller-supplied session/tool flags.
+Publication stopped. The repair classifies native, MCP, shell/redirection, Git, and unknown-script
+writes across ticket/pause/one-lane gates; fingerprints every tracked and non-ignored repository file
+before and after a harness and rechecks it before review/closeout; redacts status identity; and requires
+each mutating CLI call to consume a 30-second, single-use permit minted from the real PreToolUse
+session. Direct permit injection, reading, forwarding, hook invocation, and identity-flag overrides
+fail closed. The focused suite now covers these routes before a fresh exact-SHA publication review.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
