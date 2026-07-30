@@ -24,7 +24,7 @@ import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
-import { buildRowVersionPatch, readRowVersion } from '../lib/recordVersionConcurrency';
+import { buildRowVersionPatch, readRowVersion, resolveDirectMutationRowVersion } from '../lib/recordVersionConcurrency';
 import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 import { logActivity } from '../lib/activityLogger';
 import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
@@ -652,6 +652,7 @@ export default function CustomerDetail() {
     setCrops(nextCrops);
     setCropSaving(crop);
     try {
+      const previousRowVersion = customerRowVersionRef.current;
       const result = await supabase
         .from('customers')
         .update({ crops: nextCrops })
@@ -659,7 +660,15 @@ export default function CustomerDetail() {
         .select('*');
       checkMutationResult(result, 'update customer crops');
       const nextRowVersion = (result.data as Array<{ row_version?: unknown }>)[0]?.row_version;
-      customerRowVersionRef.current = readRowVersion(nextRowVersion);
+      const rowVersionResult = resolveDirectMutationRowVersion(previousRowVersion, nextRowVersion);
+      customerRowVersionRef.current = rowVersionResult.rowVersion;
+      if (rowVersionResult.kind === 'recovery') {
+        // The crop change committed, but this tab cannot prove the returned token
+        // belongs to this write. Keep the visible crop state and any form edits;
+        // a later whole-record save must reload instead of overwriting unseen work.
+        setStaleSaveOpen(true);
+        toast('warning', 'Crops were updated, but another customer edit may have completed at the same time. Your current edits were kept; reload before saving other customer changes.');
+      }
       if (profile?.id) {
         await logActivity({
           event: 'crops_updated',

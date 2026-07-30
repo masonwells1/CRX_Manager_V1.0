@@ -11,6 +11,8 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 `20260730031925_quote_customer_row_version_guard.sql` is authored locally and **not applied, deployed, or live-verified**. It addresses the known last-write-wins exposure for whole-record `save_quote` and `save_customer` updates with trigger-maintained row versions. The payload is compatible with the old RPCs because their JSON inputs ignore the extra token key: merge/deploy and production-verify the compatible frontend first while the migration remains unapplied; then obtain separate explicit approval, apply the migration in a bounded maintenance window, require browser/PWA refresh for cached bundles, and run postflight/live smoke. Regenerate generated schema/types only after that applied proof. Cached old bundles fail closed after apply until refreshed, but the deployed compatible bundle avoids an all-user outage. No rollout toggle is required. No live claim belongs here until the governed migration and rollback-only smoke chain run.
 
+The same candidate closes two adjacent bypasses: direct crop/lifecycle writes only adopt the returned token when it is exactly the previous token plus one (otherwise they preserve the committed narrow change, clear the local token, and require Reload), and normal browser roles lose direct INSERT/UPDATE/DELETE on `quote_sections`, `quote_items`, and `customer_addresses`. Those children remain readable under their existing policy/SELECT boundary and are written only by the parent-locking `save_quote`/`save_customer` SECURITY DEFINER RPCs; no child-to-parent version trigger is used because it would invert that lock order.
+
 ---
 
 ## 0d. RESOLVED LIVE 2026-07-29 — `profile_public_view` RLS bypass onto `profiles`

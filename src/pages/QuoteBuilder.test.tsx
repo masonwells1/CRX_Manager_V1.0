@@ -65,8 +65,34 @@ function buildPendingChain(): Record<string, unknown> {
   return self;
 }
 
+function buildUpdateChain(
+  readResult: { data: unknown; error: unknown },
+  updateResult: { data: unknown; error: unknown },
+): Record<string, unknown> {
+  let updated = false;
+  const self: Record<string, unknown> = {};
+  const method = (..._args: unknown[]) => self;
+  const methods = ['insert', 'upsert', 'delete', 'eq', 'neq',
+    'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains',
+    'containedBy', 'range', 'filter', 'not', 'or', 'and', 'match',
+    'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
+    'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal'];
+  for (const m of methods) self[m] = method;
+  self.update = (..._args: unknown[]) => {
+    updated = true;
+    return self;
+  };
+  self.select = (..._args: unknown[]) => self;
+  const resolve = () => Promise.resolve(updated ? updateResult : readResult);
+  self.then = (...args: Parameters<Promise<unknown>['then']>) => resolve().then(...args);
+  self.catch = (...args: Parameters<Promise<unknown>['catch']>) => resolve().catch(...args);
+  self.finally = (...args: Parameters<Promise<unknown>['finally']>) => resolve().finally(...args);
+  return self;
+}
+
 vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
+  supabaseUntyped: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
@@ -321,6 +347,33 @@ describe('QuoteBuilder', () => {
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
       p_quote_payload: expect.objectContaining({ row_version_expected: 8, header_notes: 'Newer header' }),
     })));
+  });
+
+  it('keeps a committed direct decline visible and opens recovery when its returned version jumps from 7 to 9', async () => {
+    const quote = { id: 'quote-direct-jump', quote_number: 'Q-direct-jump', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Keep this local note', footer_notes: '', status: 'sent', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
+    const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
+    const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'quotes') {
+        return buildUpdateChain(
+          { data: quote, error: null },
+          { data: [{ ...quote, status: 'declined', row_version: 9 }], error: null },
+        );
+      }
+      const data = table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [];
+      return buildChain({ data, error: null });
+    });
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.change(await screen.findByDisplayValue('Keep this local note'), { target: { value: 'Keep this local edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Decline' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Decline Quote' }));
+
+    expect(await screen.findByText('Reload Quote')).toBeInTheDocument();
+    expect(screen.getAllByText('declined')).not.toHaveLength(0);
+    expect(screen.getByDisplayValue('Keep this local edit')).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('another edit may have completed'));
   });
 
   it('keeps the conflict dialog and every local quote edit when Reload cannot read sections', async () => {

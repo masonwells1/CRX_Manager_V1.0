@@ -6,7 +6,7 @@
  * primitive and rejects a migration whose canonical bodies lost known guards.
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -96,6 +96,38 @@ function assertCanonicalContract() {
   assert.ok(customerGuard >= 0 && customerGuard < customerVersion, 'customer split conflict must precede generic stale guard');
 }
 
+function assertChildOwnershipContract() {
+  const current = readFileSync(migration, 'utf8');
+  const smoke = readFileSync(path.join(root, 'scripts/smoke/smoke-save-quote-customer-row-version.sql'), 'utf8');
+  for (const table of ['quote_sections', 'quote_items', 'customer_addresses']) {
+    assert.match(
+      current,
+      new RegExp(`REVOKE INSERT, UPDATE, DELETE ON TABLE public\\.${table} FROM PUBLIC, anon, authenticated;`),
+      `${table} must revoke normal-app direct DML`,
+    );
+    assert.doesNotMatch(current, new RegExp(`CREATE TRIGGER[^;]+ON public\\.${table}`, 'i'), `${table} must not use a child-to-parent bump trigger`);
+  }
+  assert.match(smoke, /SET LOCAL ROLE authenticated;/, 'registered smoke must run direct-child probes as the normal app role');
+  assert.match(smoke, /authenticated direct child DML succeeded/, 'registered smoke must reject every direct child DML verb');
+
+  const visit = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    return entry.isDirectory() ? visit(full) : [full];
+  });
+  const childMutation = /\.from\(['"](quote_sections|quote_items|customer_addresses)['"]\)[\s\S]{0,500}?\.(?:insert|update|upsert|delete)\(/;
+  for (const table of ['quote_sections', 'quote_items', 'customer_addresses']) {
+    assert.match(
+      `supabase.from('${table}').upsert({ id: 'direct-child-write' })`,
+      childMutation,
+      `${table} frontend upserts must stay RPC-owned`,
+    );
+  }
+  const offenders = visit(path.join(root, 'src'))
+    .filter((file) => /\.tsx?$/.test(file))
+    .filter((file) => childMutation.test(readFileSync(file, 'utf8')));
+  assert.deepEqual(offenders, [], `frontend child writes must stay RPC-owned: ${offenders.join(', ')}`);
+}
+
 async function race(table, fn, reverseLockOrder) {
   psql(`TRUNCATE TABLE public.${table}; INSERT INTO public.${table}(id,value,row_version) VALUES ('one','original',1);`);
   // In the reverse path the first client is deliberately held *before* it
@@ -114,6 +146,7 @@ async function race(table, fn, reverseLockOrder) {
 
 async function main() {
   assertCanonicalContract();
+  assertChildOwnershipContract();
   try {
     docker(['run', '-d', '--rm', '--name', name, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data', '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', 'postgres:17-alpine']);
     await waitForHealthyPostgres();

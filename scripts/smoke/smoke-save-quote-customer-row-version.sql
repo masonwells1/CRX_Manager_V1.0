@@ -2,6 +2,8 @@
 -- Run only against a disposable restored schema or after the governed apply,
 -- as one transaction. PASS is exactly SMOKE_PASS_ROLLBACK; any other result
 -- is failure. The block calls the real save_quote/save_customer functions.
+BEGIN;
+
 DO $smoke$
 DECLARE
   v_admin uuid; v_rep uuid; v_nonoffice uuid; v_customer uuid; v_quote uuid; v_product uuid;
@@ -146,5 +148,98 @@ BEGIN
   BEGIN PERFORM public.save_quote(v_quote, jsonb_build_object('status', 'draft', 'tier', 1, 'row_version_expected', v_quote_after), v_sections, v_nonoffice, NULL); RAISE EXCEPTION 'SMOKE_FAIL: non-office quote save succeeded';
   EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM <> 'Not authorized to save quotes' THEN RAISE EXCEPTION 'SMOKE_FAIL: quote role gate %', SQLERRM; END IF; END;
 
-  RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
+  -- Keep fixtures addressable after this privileged setup so the following
+  -- authenticated-role block can prove child writes are RPC-only.
+  PERFORM set_config('crx.row_version_smoke_quote_id', v_quote::text, true);
+  PERFORM set_config('crx.row_version_smoke_customer_id', v_customer::text, true);
+  PERFORM set_config('crx.row_version_smoke_product_id', v_product::text, true);
+  PERFORM set_config('crx.row_version_smoke_admin_id', v_admin::text, true);
 END $smoke$;
+
+-- This is the normal application database role, with the active admin JWT
+-- above. It proves a child cannot change between a stable parent-version read
+-- and the next save: all three direct DML verbs fail before RLS can admit a
+-- row, while the SECURITY DEFINER parent RPC still replaces the collection.
+SET LOCAL ROLE authenticated;
+SELECT set_config(
+  'request.jwt.claims',
+  jsonb_build_object('sub', current_setting('crx.row_version_smoke_admin_id', true)::uuid, 'role', 'authenticated')::text,
+  true
+);
+SELECT set_config('request.jwt.claim.sub', current_setting('crx.row_version_smoke_admin_id', true), true);
+DO $authenticated_child_dml$
+DECLARE
+  v_quote uuid := current_setting('crx.row_version_smoke_quote_id', true)::uuid;
+  v_customer uuid := current_setting('crx.row_version_smoke_customer_id', true)::uuid;
+  v_product uuid := current_setting('crx.row_version_smoke_product_id', true)::uuid;
+  v_quote_version bigint;
+  v_customer_version bigint;
+  v_q jsonb;
+  v_c jsonb;
+  v_child_table text;
+  v_sql text;
+  v_sections jsonb;
+BEGIN
+  IF v_quote IS NULL OR v_customer IS NULL OR v_product IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated child-DML fixture IDs are missing';
+  END IF;
+
+  -- A stable parent-version read is possible for the normal app role, but no
+  -- direct child mutation can slip in before the parent-locking save RPC.
+  SELECT row_version INTO v_quote_version FROM public.quotes WHERE id = v_quote;
+  SELECT row_version INTO v_customer_version FROM public.customers WHERE id = v_customer;
+  IF v_quote_version IS NULL OR v_customer_version IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated role could not read owned parent versions';
+  END IF;
+
+  FOREACH v_child_table IN ARRAY ARRAY['quote_sections', 'quote_items', 'customer_addresses'] LOOP
+    FOREACH v_sql IN ARRAY ARRAY[
+      format('INSERT INTO public.%I DEFAULT VALUES', v_child_table),
+      format('UPDATE public.%I SET id = id WHERE false', v_child_table),
+      format('DELETE FROM public.%I WHERE false', v_child_table)
+    ] LOOP
+      BEGIN
+        EXECUTE v_sql;
+        RAISE EXCEPTION 'SMOKE_FAIL: authenticated direct child DML succeeded on %', v_child_table;
+      EXCEPTION WHEN insufficient_privilege THEN
+        NULL;
+      END;
+    END LOOP;
+  END LOOP;
+
+  v_sections := jsonb_build_array(jsonb_build_object(
+    'section_name', 'Authenticated RPC child write', 'sort_order', 0,
+    'items', jsonb_build_array(jsonb_build_object(
+      'product_id', v_product, 'calc_mode', 'units_direct',
+      'total_units_needed', 1, 'sort_order', 0))));
+  v_q := public.save_quote(v_quote, jsonb_build_object(
+    'quote_number', (SELECT quote_number FROM public.quotes WHERE id = v_quote),
+    'customer_id', v_customer, 'status', 'draft', 'tier', 1,
+    'header_notes', 'authenticated-rpc-child-write',
+    'row_version_expected', v_quote_version),
+    v_sections,
+    current_setting('request.jwt.claim.sub', true)::uuid,
+    'rv-quote-auth-child-' || substr(md5(random()::text), 1, 8));
+  IF (v_q->>'row_version')::bigint <> (SELECT row_version FROM public.quotes WHERE id = v_quote)
+     OR (SELECT count(*) FROM public.quote_sections WHERE quote_id = v_quote) <> 1
+     OR (SELECT count(*) FROM public.quote_items WHERE quote_id = v_quote) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated save_quote did not manage children through the parent lock';
+  END IF;
+
+  v_c := public.save_customer(v_customer, jsonb_build_object(
+    'farm_name', '[SMOKE] authenticated customer update',
+    'row_version_expected', v_customer_version),
+    jsonb_build_array(jsonb_build_object('label', 'authenticated', 'address_line', '3 RPC-only Rd', 'is_default', true)),
+    current_setting('request.jwt.claim.sub', true)::uuid,
+    'rv-customer-auth-child-' || substr(md5(random()::text), 1, 8));
+  IF (v_c->>'row_version')::bigint <> (SELECT row_version FROM public.customers WHERE id = v_customer)
+     OR (SELECT count(*) FROM public.customer_addresses WHERE customer_id = v_customer) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated save_customer did not manage addresses through the parent lock';
+  END IF;
+END $authenticated_child_dml$;
+RESET ROLE;
+
+DO $rollback_marker$
+BEGIN
+  RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
+END $rollback_marker$;

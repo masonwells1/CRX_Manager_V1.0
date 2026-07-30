@@ -45,7 +45,7 @@ import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
-import { buildRowVersionPatch, readRowVersion } from '../lib/recordVersionConcurrency';
+import { buildRowVersionPatch, readRowVersion, resolveDirectMutationRowVersion } from '../lib/recordVersionConcurrency';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
@@ -594,6 +594,23 @@ export default function QuoteBuilder() {
   const clearQuoteRowVersionWithRefreshWarning = useCallback((action: string) => {
     quoteRowVersionRef.current = null;
     toast('warning', `The quote was ${action}, but its save-protection version could not be confirmed. Refresh before editing, revising, or converting it.`);
+  }, [toast]);
+
+  const applyDirectQuoteMutationRowVersion = useCallback((
+    previousRowVersion: number | null,
+    returnedRowVersion: unknown,
+    action: string,
+  ): boolean => {
+    const rowVersionResult = resolveDirectMutationRowVersion(previousRowVersion, returnedRowVersion);
+    quoteRowVersionRef.current = rowVersionResult.rowVersion;
+    if (rowVersionResult.kind !== 'recovery') return true;
+
+    // The direct lifecycle update committed, but a jumped/missing token could
+    // belong to another writer. Do not adopt it: preserve local edits and make
+    // the next whole-record save fail closed until the operator reloads.
+    setStaleSaveOpen(true);
+    toast('warning', `The quote was ${action}, but another edit may have completed at the same time. Your current edits were kept; reload before saving, revising, or converting it.`);
+    return false;
   }, [toast]);
 
   // An RPC response without row_version must never be followed by a blind
@@ -1543,6 +1560,7 @@ export default function QuoteBuilder() {
         toast('warning', `This booking has partial draw-downs or job reservations — close it from its orders/jobs (draw or cancel the remaining balance) before you ${verb} the quote.`);
         return;
       }
+      const previousRowVersion = quoteRowVersionRef.current;
       const result = await supabase
         .from('quotes')
         .update({ status: newStatus, updated_at: new Date().toISOString() })
@@ -1550,8 +1568,12 @@ export default function QuoteBuilder() {
         .select('*');
       checkMutationResult(result, `${verb === 'decline' ? 'Decline' : 'Cancel'} quote`);
       setStatus(newStatus);
-      installAuthoritativeQuoteRowVersion((result.data as Array<{ row_version?: unknown }>)[0]?.row_version, 'updated');
-      setIsDirty(false);
+      const trustedRowVersion = applyDirectQuoteMutationRowVersion(
+        previousRowVersion,
+        (result.data as Array<{ row_version?: unknown }>)[0]?.row_version,
+        'updated',
+      );
+      if (trustedRowVersion) setIsDirty(false);
       await logActivity({
         event: newStatus === 'declined' ? 'quote_declined' : 'quote_cancelled',
         description: `Quote ${quoteNumber} ${newStatus}`,
@@ -2403,10 +2425,15 @@ export default function QuoteBuilder() {
       // already committed it as sent; keep it sent so normal Convert remains.
       const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
       try {
+        const previousRowVersion = quoteRowVersionRef.current;
         const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select('*');
         checkMutationResult(revertResult, 'Revert quote status');
         setStatus(revertTo);
-        installAuthoritativeQuoteRowVersion((revertResult.data as Array<{ row_version?: unknown }>)[0]?.row_version, 'updated');
+        applyDirectQuoteMutationRowVersion(
+          previousRowVersion,
+          (revertResult.data as Array<{ row_version?: unknown }>)[0]?.row_version,
+          'reverted',
+        );
       } catch (revertErr) {
         // The quote is now stuck 'accepted' with no order — surface it instead
         // of failing silently so someone fixes the status by hand.

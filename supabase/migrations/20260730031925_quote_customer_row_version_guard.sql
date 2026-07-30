@@ -60,6 +60,19 @@ CREATE TRIGGER customers_bump_row_version
   BEFORE UPDATE ON public.customers
   FOR EACH ROW EXECUTE FUNCTION public.bump_record_row_version();
 
+-- Quote/customer editors replace their child collections only inside the
+-- parent-locking SECURITY DEFINER save RPCs below. Direct child DML let an
+-- authenticated tab evade the parent row_version and later be overwritten by
+-- a whole-record save. Do not use child->parent bump triggers here: save_quote
+-- and save_customer already lock parent then manage children, so the inverse
+-- child->parent lock order would introduce a deadlock path.
+--
+-- SELECT stays available to the current authenticated readers; service_role
+-- and the migration owner retain their existing direct maintenance access.
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.quote_sections FROM PUBLIC, anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.quote_items FROM PUBLIC, anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON TABLE public.customer_addresses FROM PUBLIC, anon, authenticated;
+
 CREATE OR REPLACE FUNCTION public.save_quote(p_quote_id uuid, p_quote_payload jsonb, p_sections jsonb, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -721,6 +734,7 @@ DO $$
 DECLARE
   v_count integer;
   v_distinct_tables integer;
+  v_child_table text;
 BEGIN
   SELECT count(*), count(DISTINCT c.relname) INTO v_count, v_distinct_tables
   FROM pg_trigger t
@@ -785,5 +799,27 @@ BEGIN
      OR has_function_privilege('anon', 'public.save_customer(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE') THEN
     RAISE EXCEPTION 'ROW_VERSION_RPC_ACL_POSTFLIGHT_FAILED';
   END IF;
+
+  -- Browser roles retain the established read boundary but cannot change an
+  -- independently-addressable child behind a stable quote/customer token.
+  -- service_role and the migration owner retain the prior maintenance path;
+  -- save_quote/save_customer are SECURITY DEFINER and therefore continue to
+  -- replace children while holding the parent row lock.
+  FOREACH v_child_table IN ARRAY ARRAY['quote_sections', 'quote_items', 'customer_addresses'] LOOP
+    IF has_table_privilege('authenticated', format('public.%I', v_child_table), 'INSERT')
+       OR has_table_privilege('authenticated', format('public.%I', v_child_table), 'UPDATE')
+       OR has_table_privilege('authenticated', format('public.%I', v_child_table), 'DELETE')
+       OR has_table_privilege('anon', format('public.%I', v_child_table), 'INSERT')
+       OR has_table_privilege('anon', format('public.%I', v_child_table), 'UPDATE')
+       OR has_table_privilege('anon', format('public.%I', v_child_table), 'DELETE') THEN
+      RAISE EXCEPTION 'ROW_VERSION_CHILD_DML_ACL_POSTFLIGHT_FAILED: %', v_child_table;
+    END IF;
+
+    IF NOT has_table_privilege('authenticated', format('public.%I', v_child_table), 'SELECT')
+       OR NOT has_table_privilege('service_role', format('public.%I', v_child_table), 'SELECT, INSERT, UPDATE, DELETE')
+       OR NOT has_table_privilege(current_user, format('public.%I', v_child_table), 'SELECT, INSERT, UPDATE, DELETE') THEN
+      RAISE EXCEPTION 'ROW_VERSION_CHILD_ACCESS_POSTFLIGHT_FAILED: %', v_child_table;
+    END IF;
+  END LOOP;
 END;
 $$;

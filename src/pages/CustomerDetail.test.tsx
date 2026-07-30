@@ -176,4 +176,35 @@ describe('CustomerDetail stale whole-record save', () => {
     expect(screen.getByRole('button', { name: 'Reload Customer' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('Keep this customer edit')).toBeInTheDocument();
   });
+
+  it('keeps the committed crop but clears a jumped 4-to-6 token and requires recovery before a whole-record save', async () => {
+    let customerReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return customerQuery(() => {
+          customerReads += 1;
+          return customerReads <= 2
+            ? original
+            : ({ ...original, crops: ['corn'], row_version: 6 } as unknown as typeof original);
+        });
+      }
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'CUSTOMER_STALE_WRITE' } });
+
+    renderDetail();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'Corn' }));
+
+    expect(await screen.findByRole('button', { name: 'Reload Customer' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Corn' })).toHaveAttribute('aria-pressed', 'true');
+    expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('Crops were updated'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    fireEvent.change(screen.getByDisplayValue('Original Farm'), { target: { value: 'Local edit after crop update' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.objectContaining({
+      p_customer_payload: expect.objectContaining({ row_version_expected: null, farm_name: 'Local edit after crop update' }),
+    })));
+  });
 });
