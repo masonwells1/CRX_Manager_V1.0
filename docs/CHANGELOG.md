@@ -74,6 +74,18 @@ mutation-tested to red before shipping: empty source, missing index file, and a 
 all exit 1; a re-stage then repaired the tamper and pruned a planted orphan. The committed folder
 turned out to be 23 files out of date — the live memory holds 185 notes, the mirror had 162 — which
 is the second reason not to commit it: a snapshot in git drifts from the moment it lands.
+
+Three fixes from CodeRabbit's review, all confirmed by running them. The runbook's final "prove it
+landed on GitHub" step counted every entry in the remote folder and compared that to the manifest's
+`file_count`, but `manifest.json` sits in that same folder and is not one of the files it counts —
+measured 187 vs 186, so the one check that proves the backup arrived would have failed every single
+time. It now counts `.md` notes only. The flag parser accepted the *next argument* as a value even
+when that argument was another flag, so `--stage --source x` would have created a directory literally
+named `--source` and reported success while leaving the real destination stale; it now rejects a
+flag-shaped value (exit 2, and no bogus directory). And an unexpected crash exited 1, the same code
+the runbook reads as "verification failed" — crashes now print `FAIL:` and exit 3, proven by
+injecting a permission error. The script turned out to already handle a missing, corrupt, or
+non-directory target itself, so exit 1 still means exactly what it claims.
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

@@ -212,9 +212,15 @@ function verify(dir) {
 }
 
 function main(argv) {
+  // A flag's value must not be another flag. Without this, `--stage --source x`
+  // reads "--source" as the destination and this script happily creates a
+  // directory literally named `--source`, reporting success — the worst outcome
+  // for a backup tool, because the real destination is left stale and untouched.
   const flag = (name) => {
     const i = argv.indexOf(name);
-    return i === -1 ? null : argv[i + 1] ?? null;
+    if (i === -1) return null;
+    const value = argv[i + 1];
+    return value === undefined || value.startsWith("--") ? null : value;
   };
 
   const stageDir = flag("--stage");
@@ -227,4 +233,13 @@ function main(argv) {
   return stageDir ? stage(stageDir, flag("--source")) : verify(verifyDir);
 }
 
-process.exit(main(process.argv.slice(2)));
+// Exit 1 means "the snapshot is not trustworthy" — a check ran and failed. An
+// unexpected crash (permissions, a dangling symlink, a short read) is a
+// different thing and must not wear the same code, or the runbook's exit
+// contract is a lie and a broken environment reads as a failed verification.
+try {
+  process.exit(main(process.argv.slice(2)));
+} catch (error) {
+  console.error(`FAIL: ${error?.message ?? error}`);
+  process.exit(3);
+}

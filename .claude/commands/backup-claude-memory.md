@@ -39,10 +39,13 @@ Commit to `CRX_Backups` with a dated message and push. This is a **private** rep
 Do not report success from the local clone. Confirm against GitHub:
 
 ```bash
-gh api repos/masonwells1/CRX_Backups/contents/claude-memory --jq 'length'
+gh api repos/masonwells1/CRX_Backups/contents/claude-memory --jq '[.[] | select(.name | endswith(".md"))] | length'
 ```
 
-The count must match the `file_count` in the manifest.
+The count must match the `file_count` in the manifest. Count only the `.md`
+notes — `manifest.json` lives in that same folder and is **not** one of the
+files it counts, so a bare `length` is always one too high and would never
+match.
 
 ### 6. Report — one line, plain English
 
