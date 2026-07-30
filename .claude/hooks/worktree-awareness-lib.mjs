@@ -88,23 +88,23 @@ export function isDraftSqlName(name) {
 export function hasExplicitParkedMigrationHeader(sqlText) {
   const header = [];
   for (const raw of String(sqlText || "").split("\n")) {
-    const line = raw.replace(/\r/g, "").trim();
+    // Keep the parser and the Git prefilter on portable whitespace: a status line
+    // may indent or pad with ASCII space/tab, never Unicode whitespace such as NBSP.
+    const line = raw.replace(/\r/g, "").replace(/^[ \t]+|[ \t]+$/g, "");
     if (!line) continue;
     if (!line.startsWith("--")) break;
-    header.push(line.replace(/^--\s?/, ""));
+    header.push(line.replace(/^--[ \t]*/, ""));
   }
-  return header.some((line) => /^(?:status:\s*)?(?:PARKED(?:\s+DRAFT)?(?:\s*$|\s*(?:\/|—|:|-)\s*(?:NOT\s+APPLIED|DO\s+NOT\s+APPLY)\b)|NOT\s+APPLIED(?=\s*$|\s*(?:\/|—|:|-)\s*DO\s+NOT\s+APPLY\b)|DO\s+NOT\s+APPLY(?=\s*$|\s*[—:-]))/i.test(line));
+  return header.some((line) => /^(?:status:[ \t]*)?(?:PARKED(?:[ \t]+DRAFT)?(?:[ \t]*$|[ \t]*(?:\/|—|:|-)[ \t]*(?:NOT[ \t]+APPLIED|DO[ \t]+NOT[ \t]+APPLY)\b)|NOT[ \t]+APPLIED(?=[ \t]*$|[ \t]*(?:\/|—|:|-)[ \t]*DO[ \t]+NOT[ \t]+APPLY\b)|DO[ \t]+NOT[ \t]+APPLY(?=[ \t]*$|[ \t]*[—:-]))/i.test(line));
 }
 
-// Every parser-accepted explicit status header contains at least one of these
-// phrases. Extended POSIX whitespace mirrors the parser's flexible multiword
-// status spacing. `git grep` is only a cheap complete prefilter: the SQL blob is
+// This is a safe, anchored superset of parser-accepted leading SQL status lines.
+// Git cannot enforce the parser's first-comment-block window, so the SQL blob is
 // still opened and passed through hasExplicitParkedMigrationHeader before it counts.
+// POSIX blank means portable ASCII space/tab, matching the parser exactly.
 export const ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS = [
   "grep", "-l", "-i", "-E",
-  "-e", "PARKED",
-  "-e", "NOT[[:space:]]+APPLIED",
-  "-e", "DO[[:space:]]+NOT[[:space:]]+APPLY",
+  "-e", "^[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)",
   "origin/main", "--", "supabase/migrations",
 ];
 

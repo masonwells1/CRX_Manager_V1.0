@@ -37,6 +37,46 @@ function git(args, cwd = repoRoot, timeout = 5000) {
   });
 }
 
+// Read every prefiltered origin/main SQL blob in one Git process. The prefilter is
+// deliberately a safe superset; batching avoids one `git show` process per match.
+function originMainSqlBlobMap(paths) {
+  const uniquePaths = [...new Set((paths || []).map((p) => String(p || "").trim()).filter(Boolean))];
+  if (uniquePaths.length === 0) return new Map();
+  const result = spawnSync("git", ["cat-file", "--batch"], {
+    cwd: repoRoot,
+    input: Buffer.from(`${uniquePaths.map((p) => `origin/main:${p}`).join("\n")}\n`, "utf8"),
+    timeout: 5000,
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  if (result.status !== 0 || !Buffer.isBuffer(result.stdout)) return null;
+  const output = result.stdout;
+  const blobs = new Map();
+  let offset = 0;
+  for (const p of uniquePaths) {
+    const headerEnd = output.indexOf(0x0a, offset);
+    if (headerEnd < 0) return null;
+    const header = output.subarray(offset, headerEnd).toString("utf8");
+    const match = header.match(/^[0-9a-f]+ blob (\d+)$/);
+    if (!match) return null;
+    const size = Number(match[1]);
+    const bodyStart = headerEnd + 1;
+    const bodyEnd = bodyStart + size;
+    if (!Number.isSafeInteger(size) || bodyEnd > output.length) return null;
+    blobs.set(normRepoPath(p), output.subarray(bodyStart, bodyEnd).toString("utf8"));
+    offset = bodyEnd + 1; // cat-file terminates each blob body with one newline.
+  }
+  return blobs;
+}
+
+function originMainForwardBlobPaths(treePaths, prefilterPaths) {
+  const candidates = prefilterPaths === null ? treePaths : prefilterPaths;
+  return (candidates || []).filter((p) => {
+    const normalized = normRepoPath(p);
+    const name = String(p || "").slice(String(p || "").lastIndexOf("/") + 1);
+    return normalized.startsWith("supabase/migrations/") && isParkedMigrationFile(name);
+  });
+}
+
 function listDir(dir) {
   try { return readdirSync(dir); } catch { return []; }
 }
@@ -261,8 +301,8 @@ for (const e of entries) {
 }
 
 // The mainline backlog is read from one immutable origin/main tree. Forward SQL must
-// agree with migration-history.md; a cheap PARKED-content prefilter catches orphaned
-// explicit status headers while applied historical headers still never resurrect.
+// agree with migration-history.md; an anchored status prefilter catches orphaned
+// explicit status headers while a batched blob read avoids per-file Git spawns.
 const mainlineBlobCache = new Map();
 let mainlineParkedState = hasOriginMain ? "known" : "unknown";
 let mainlineParkedReason = hasOriginMain ? "" : "origin/main is unavailable";
@@ -273,13 +313,10 @@ if (hasOriginMain) {
     const parkedPrefilter = originMainParkedMigrationPrefilter(
       () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, repoRoot, 5000),
     );
-    const discovery = parkedMainlineDiscoveryFrom(tree.split("\n"), history, (p) => {
-      try {
-        const text = git(["show", `origin/main:${p}`], repoRoot, 5000);
-        mainlineBlobCache.set(normRepoPath(p), text);
-        return text;
-      } catch { return null; }
-    }, parkedPrefilter.paths);
+    const mainlinePaths = tree.split("\n");
+    const blobs = originMainSqlBlobMap(originMainForwardBlobPaths(mainlinePaths, parkedPrefilter.paths));
+    for (const [key, text] of blobs || []) mainlineBlobCache.set(key, text);
+    const discovery = parkedMainlineDiscoveryFrom(mainlinePaths, history, (p) => blobs?.get(normRepoPath(p)) ?? null, parkedPrefilter.paths);
     mainlineParkedState = discovery.state;
     mainlineParkedReason = discovery.reason;
     for (const p of discovery.paths) {

@@ -69,7 +69,11 @@ inspect those possible headers, and report `PARKED STATE UNKNOWN` unless each he
 the required candidate signal or an exact applied/retired/superseded history state. Git's
 exit `1` means the healthy case of no prefilter matches and preserves a known empty set;
 only a real prefilter error falls back to a complete forward scan rather than claiming the
-backlog is clear.
+backlog is clear. The prefilter is anchored to an ASCII-space/tab SQL comment status line,
+which removes prose-only matches; it intentionally remains a safe superset because only
+the parser can enforce the first-comment-block window. Both readers load the remaining
+safe-superset SQL blobs through one `git cat-file --batch` process rather than spawning a
+separate `git show` for each candidate.
 
 **Explicit scope residual.** This candidate guarantees only
 `create_vendor_bill` and `update_vendor_bill` date writes. `record_vendor_payment`,

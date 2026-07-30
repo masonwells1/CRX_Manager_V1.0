@@ -42,6 +42,46 @@ function git(args, cwd) {
   });
 }
 
+// Read every prefiltered origin/main SQL blob in one Git process. The prefilter is
+// deliberately a safe superset; batching avoids one `git show` process per match.
+function originMainSqlBlobMap(paths) {
+  const uniquePaths = [...new Set((paths || []).map((p) => String(p || "").trim()).filter(Boolean))];
+  if (uniquePaths.length === 0) return new Map();
+  const result = spawnSync("git", ["cat-file", "--batch"], {
+    cwd: projectDir,
+    input: Buffer.from(`${uniquePaths.map((p) => `origin/main:${p}`).join("\n")}\n`, "utf8"),
+    timeout: 5000,
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  if (result.status !== 0 || !Buffer.isBuffer(result.stdout)) return null;
+  const output = result.stdout;
+  const blobs = new Map();
+  let offset = 0;
+  for (const p of uniquePaths) {
+    const headerEnd = output.indexOf(0x0a, offset);
+    if (headerEnd < 0) return null;
+    const header = output.subarray(offset, headerEnd).toString("utf8");
+    const match = header.match(/^[0-9a-f]+ blob (\d+)$/);
+    if (!match) return null;
+    const size = Number(match[1]);
+    const bodyStart = headerEnd + 1;
+    const bodyEnd = bodyStart + size;
+    if (!Number.isSafeInteger(size) || bodyEnd > output.length) return null;
+    blobs.set(normRepoPath(p), output.subarray(bodyStart, bodyEnd).toString("utf8"));
+    offset = bodyEnd + 1; // cat-file terminates each blob body with one newline.
+  }
+  return blobs;
+}
+
+function originMainForwardBlobPaths(treePaths, prefilterPaths) {
+  const candidates = prefilterPaths === null ? treePaths : prefilterPaths;
+  return (candidates || []).filter((p) => {
+    const normalized = normRepoPath(p);
+    const name = String(p || "").slice(String(p || "").lastIndexOf("/") + 1);
+    return normalized.startsWith("supabase/migrations/") && isParkedMigrationFile(name);
+  });
+}
+
 let porcelain = "";
 try {
   porcelain = git(["worktree", "list", "--porcelain"]);
@@ -144,7 +184,7 @@ const ownDraftPaths = createOwnDraftPathsReader({
 
 // The mainline backlog is read from one immutable origin/main tree. A forward SQL
 // file counts only when migration-history.md names that exact LOCAL CANDIDATE file;
-// a cheap PARKED-content prefilter also catches orphaned explicit status headers.
+// an anchored status prefilter also catches orphans, with its blobs read in one batch.
 function mainlineParkedDiscovery() {
   try {
     const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
@@ -152,9 +192,9 @@ function mainlineParkedDiscovery() {
     const parkedPrefilter = originMainParkedMigrationPrefilter(
       () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS),
     );
-    return parkedMainlineDiscoveryFrom(tree.split("\n"), history, (p) => {
-      try { return git(["show", `origin/main:${p}`]); } catch { return null; }
-    }, parkedPrefilter.paths);
+    const mainlinePaths = tree.split("\n");
+    const blobs = originMainSqlBlobMap(originMainForwardBlobPaths(mainlinePaths, parkedPrefilter.paths));
+    return parkedMainlineDiscoveryFrom(mainlinePaths, history, (p) => blobs?.get(normRepoPath(p)) ?? null, parkedPrefilter.paths);
   } catch {
     return { state: "unknown", paths: new Set(), reason: "origin/main parked-state metadata is unreadable" };
   }

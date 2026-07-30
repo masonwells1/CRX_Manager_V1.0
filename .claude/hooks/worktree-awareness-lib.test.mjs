@@ -98,6 +98,11 @@ const DO_NOT_APPLY_HEADER = "-- DO NOT APPLY\n";
 const NOT_SPACED_APPLIED_HEADER = "-- NOT    APPLIED\n";
 const DO_TABBED_NOT_APPLY_HEADER = "-- DO\tNOT\tAPPLY: owner gate\n";
 const STATUS_TABBED_NOT_APPLIED_HEADER = "-- STATUS: NOT\tAPPLIED\n";
+const INDENTED_TABBED_NOT_APPLIED_HEADER = " \t--   NOT\tAPPLIED\n";
+const NBSP_NOT_APPLIED_HEADER = "-- NOT\u00a0APPLIED\n";
+const NBSP_AFTER_COMMENT_HEADER = "--\u00a0NOT APPLIED\n";
+const FALSE_PROSE_HEADER = "-- Historical note: NOT APPLIED after a prior review\n";
+const LATER_STATUS_HEADER = "SELECT 1;\n-- NOT APPLIED\n";
 ok(isParkedDraftPath(DISPATCH), "a staged .sql draft is a parked draft");
 ok(isParkedDraftPath("docs/audits/new-hunt/PARKED-brand-new.sql"), "an audits PARKED-*.sql is a parked draft");
 ok(isParkedDraftPath("docs/audits/2026-07-01-per-acre-draft.sql"), "an audits *draft*.sql is a parked draft");
@@ -110,6 +115,11 @@ ok(hasExplicitParkedMigrationHeader(DO_NOT_APPLY_HEADER), "standalone DO NOT APP
 ok(hasExplicitParkedMigrationHeader(NOT_SPACED_APPLIED_HEADER), "repeated-space NOT APPLIED status line is recognized");
 ok(hasExplicitParkedMigrationHeader(DO_TABBED_NOT_APPLY_HEADER), "tabbed DO NOT APPLY status line with owner-gate colon is recognized");
 ok(hasExplicitParkedMigrationHeader(STATUS_TABBED_NOT_APPLIED_HEADER), "STATUS-prefixed tabbed NOT APPLIED status line is recognized");
+ok(hasExplicitParkedMigrationHeader(INDENTED_TABBED_NOT_APPLIED_HEADER), "leading indentation plus multiple comment-padding spaces/tabs is recognized");
+ok(!hasExplicitParkedMigrationHeader(NBSP_NOT_APPLIED_HEADER), "NBSP between multiword status tokens is rejected by portable parser grammar");
+ok(!hasExplicitParkedMigrationHeader(NBSP_AFTER_COMMENT_HEADER), "NBSP after SQL comment marker is rejected by portable parser grammar");
+ok(!hasExplicitParkedMigrationHeader(FALSE_PROSE_HEADER), "status-looking prose after another leading comment word is rejected");
+ok(!hasExplicitParkedMigrationHeader(LATER_STATUS_HEADER), "status-looking later comment after SQL is outside the leading header window");
 ok(!hasExplicitParkedMigrationHeader("-- normal feature migration\nCREATE TABLE public.example();"), "ordinary leading comments do not park a migration");
 ok(!hasExplicitParkedMigrationHeader("-- This was previously parked for review\nSELECT 1;"), "historical parked prose is not a current status line");
 ok(!hasExplicitParkedMigrationHeader("-- PARKED migration notes appear later\nSELECT 1;"), "bare parked prose is not a current status line");
@@ -206,6 +216,7 @@ const ORPHAN_DO_NOT_APPLY = "supabase/migrations/20260730235963_orphaned_do_not_
 const ORPHAN_SPACED_NOT_APPLIED = "supabase/migrations/20260730235964_orphaned_spaced_not_applied.sql";
 const ORPHAN_TABBED_DO_NOT_APPLY = "supabase/migrations/20260730235965_orphaned_tabbed_do_not_apply.sql";
 const ORPHAN_STATUS_TABBED_NOT_APPLIED = "supabase/migrations/20260730235966_orphaned_status_tabbed_not_applied.sql";
+const ORPHAN_INDENTED_TABBED_NOT_APPLIED = "supabase/migrations/20260730235967_orphaned_indented_tabbed_not_applied.sql";
 const STALE_HEADERS = Array.from({ length: 76 }, (_unused, i) => `supabase/migrations/2025${String(i).padStart(10, "0")}_historical_${i}.sql`);
 const STALE_APPLIED_HISTORY = STALE_HEADERS.map((p, i) => {
   const filename = p.slice(p.lastIndexOf("/") + 1);
@@ -231,6 +242,7 @@ const mainlineTexts = new Map([
   [ORPHAN_SPACED_NOT_APPLIED, NOT_SPACED_APPLIED_HEADER],
   [ORPHAN_TABBED_DO_NOT_APPLY, DO_TABBED_NOT_APPLY_HEADER],
   [ORPHAN_STATUS_TABBED_NOT_APPLIED, STATUS_TABBED_NOT_APPLIED_HEADER],
+  [ORPHAN_INDENTED_TABBED_NOT_APPLIED, INDENTED_TABBED_NOT_APPLIED_HEADER],
   ...STALE_HEADERS.map((p) => [p, PARKED_FORWARD_HEADER]),
 ]);
 const mainlinePaths = [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD, CANDIDATE_NO_HEADER, APPLIED_HEADER, SUPERSEDED_FORWARD, MAINLINE_ORDINARY_FORWARD, ...STALE_HEADERS];
@@ -281,6 +293,7 @@ for (const [path, header, label] of [
   [ORPHAN_SPACED_NOT_APPLIED, NOT_SPACED_APPLIED_HEADER, "repeated-space NOT APPLIED"],
   [ORPHAN_TABBED_DO_NOT_APPLY, DO_TABBED_NOT_APPLY_HEADER, "tabbed DO NOT APPLY"],
   [ORPHAN_STATUS_TABBED_NOT_APPLIED, STATUS_TABBED_NOT_APPLIED_HEADER, "STATUS-prefixed tabbed NOT APPLIED"],
+  [ORPHAN_INDENTED_TABBED_NOT_APPLIED, INDENTED_TABBED_NOT_APPLIED_HEADER, "indented tabbed NOT APPLIED"],
 ]) {
   const standaloneOrphan = parkedMainlineDiscoveryFrom(
     [PARKED_FORWARD, path],
@@ -293,8 +306,8 @@ for (const [path, header, label] of [
 
 eq(
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS,
-  ["grep", "-l", "-i", "-E", "-e", "PARKED", "-e", "NOT[[:space:]]+APPLIED", "-e", "DO[[:space:]]+NOT[[:space:]]+APPLY", "origin/main", "--", "supabase/migrations"],
-  "shared origin/main prefilter covers every parser-accepted phrase including repeated spaces and tabs",
+  ["grep", "-l", "-i", "-E", "-e", "^[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)", "origin/main", "--", "supabase/migrations"],
+  "shared origin/main prefilter anchors to portable SQL comment status lines",
 );
 const grepFixtureDir = mkdtempSync(path.join(tmpdir(), "crx-parked-prefilter-"));
 try {
@@ -302,6 +315,11 @@ try {
     ["spaced.sql", NOT_SPACED_APPLIED_HEADER],
     ["tabbed.sql", DO_TABBED_NOT_APPLY_HEADER],
     ["status-tabbed.sql", STATUS_TABBED_NOT_APPLIED_HEADER],
+    ["indented.sql", INDENTED_TABBED_NOT_APPLIED_HEADER],
+    ["nbsp-between.sql", NBSP_NOT_APPLIED_HEADER],
+    ["nbsp-after-comment.sql", NBSP_AFTER_COMMENT_HEADER],
+    ["prose.sql", FALSE_PROSE_HEADER],
+    ["later.sql", LATER_STATUS_HEADER],
     ["ordinary.sql", "-- ordinary feature migration\nSELECT 1;\n"],
   ];
   for (const [name, text] of grepFixtures) writeFileSync(path.join(grepFixtureDir, name), text, "utf8");
@@ -314,7 +332,7 @@ try {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((p) => path.basename(p));
-  eq(matches.sort(), ["spaced.sql", "status-tabbed.sql", "tabbed.sql"], "Git extended-regex prefilter finds repeated-space and tabbed parser-accepted headers only");
+  eq(matches.sort(), ["indented.sql", "later.sql", "spaced.sql", "status-tabbed.sql", "tabbed.sql"], "anchored Git prefilter finds portable comment status lines, including the safe later-header superset only");
 } finally {
   rmSync(grepFixtureDir, { recursive: true, force: true });
 }
