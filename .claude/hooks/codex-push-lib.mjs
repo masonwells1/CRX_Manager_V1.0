@@ -15,8 +15,18 @@ const GIT_GLOBAL_OPTS =
   // failed `isGitPush` and skipped EVERY check in this guard (found while testing
   // Codex's 2026-07-30 inline-config finding).
   `(?:\\s+(?:-C\\s+${GIT_ARG}|-c\\s+${GIT_ARG}|--config-env(?:=${GIT_ARG}|\\s+${GIT_ARG})|--git-dir(?:=${GIT_ARG}|\\s+${GIT_ARG})|--work-tree(?:=${GIT_ARG}|\\s+${GIT_ARG})|--no-pager|--literal-pathspecs|--exec-path(?:=${GIT_ARG})?))*`;
-const GIT_PUSH_RE = new RegExp(`(?:^|\\s)${GIT_BIN}${GIT_GLOBAL_OPTS}\\s+push\\b([^;&|]*)`, "i");
-const GIT_PUSH_PREFIX_RE = new RegExp(`(?:^|\\s)${GIT_BIN}(${GIT_GLOBAL_OPTS})\\s+push\\b`, "i");
+// A command can START right after a separator with no space: `npm test&&git push
+// origin HEAD:main` is a perfectly ordinary shell line, and requiring whitespace
+// before `git` meant the hook saw no push at all and exited before the force,
+// destination, risky-diff and proof checks (Codex's twentieth 2026-07-30 review,
+// which probed `&&`, `;` and `|` and got zero detected pushes from all three).
+// The separators are word boundaries to the shell, so they are word boundaries
+// here. `(` is deliberately NOT in this class: `$(git push …)` must keep failing
+// this test so the substitution check above refuses it outright rather than
+// inspecting a command whose text the shell rewrites.
+const CMD_START = `(?:^|[\\s;&|])`;
+const GIT_PUSH_RE = new RegExp(`${CMD_START}${GIT_BIN}${GIT_GLOBAL_OPTS}\\s+push\\b([^;&|]*)`, "i");
+const GIT_PUSH_PREFIX_RE = new RegExp(`${CMD_START}${GIT_BIN}(${GIT_GLOBAL_OPTS})\\s+push\\b`, "i");
 export function isGitPush(cmd) {
   return GIT_PUSH_RE.test(String(cmd || ""));
 }

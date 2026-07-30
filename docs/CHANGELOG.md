@@ -255,6 +255,19 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round twenty: a command can start right after a separator
+
+**`npm test&&git push origin HEAD:main` was invisible to the hook.** The pattern required whitespace
+or the start of the line before `git`, and a shell separator is neither — so with no space after
+`&&`, `;` or `|` the guard saw no push at all and exited before the force, destination, risky-diff
+and proof checks. Codex probed all three separators and got zero detected pushes from every one.
+They are word boundaries to the shell, so they are word boundaries here now. `(` is deliberately kept
+out of that class: `$(git push …)` must keep failing this test so round nineteen's substitution check
+refuses it outright rather than inspecting a spelling the shell rewrites. Proven against the real
+hook — both separator-adjacent forms now reach the full gate and return **DENY** for want of a proof,
+where before they passed through silently — and removing the separators from the boundary turns the
+suite red.
+
 ### Round nineteen: the shell runs something other than the text we matched
 
 **A guard that reads command text can be re-spelled around.** Codex probed three forms that walked

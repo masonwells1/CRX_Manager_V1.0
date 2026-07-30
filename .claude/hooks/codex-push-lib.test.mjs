@@ -15,6 +15,8 @@ import {
   mainPushIsForced,
   mainPushSource,
   pushIsForced,
+  isGitPush,
+  eachPush,
   pushNamesRemoteProgram,
   pushHiddenByShellComposition,
   pushContextIsAmbiguous,
@@ -375,6 +377,38 @@ assert.equal(
 assert.equal(
   urlIsGuardedApp("github-crx:masonwells1/CRX_Backups.git"), false,
   "and the alias rule does not start policing the private backup repo",
+);
+
+// ── round 20: a command can start right after a separator, with no space ─────
+// `npm test&&git push …` is an ordinary shell line. Requiring whitespace before
+// `git` meant the hook saw NO push and exited before every check it exists for.
+// Codex probed all three separators and got zero detected pushes.
+for (const cmd of [
+  "npm test&&git push origin HEAD:main",
+  "echo ok;git push origin HEAD:main",
+  "echo ok|git push origin HEAD:main",
+]) {
+  assert.equal(isGitPush(cmd), true, `a push right after a separator is seen: ${cmd}`);
+  assert.equal(eachPush(cmd).length, 1, `and is enumerated for per-push checks: ${cmd}`);
+}
+assert.equal(
+  isGitPush("npm test && git push origin HEAD:main"), true,
+  "the spaced spelling still works",
+);
+assert.equal(
+  isGitPush("echo notagit push"), false,
+  "and a word merely ENDING in git does not become a push",
+);
+// `(` stays out of the boundary class on purpose: a substitution must keep
+// failing this test so the round-19 check refuses it rather than inspecting text
+// the shell rewrites.
+assert.equal(
+  isGitPush("$(git push origin HEAD:main)"), false,
+  "a command substitution is still not read as an ordinary push",
+);
+assert.equal(
+  pushHiddenByShellComposition("$(git push origin HEAD:main)"), true,
+  "so the substitution check is still the thing that catches it",
 );
 
 // ── round 19: the shell runs something other than the text we matched ────────
