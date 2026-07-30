@@ -290,6 +290,41 @@ export const GUARDED_REPO_RE = /[:/]masonwells1\/CRX_Manager_V1\.0(?:\.git)?$/i;
 // treats owner and repo case-insensitively). Returns null when the text is not a
 // URL form at all — a bare remote name like `origin` or a filesystem path — so
 // callers can tell "not this repo" apart from "no repository named here".
+// Git implements a handful of transports itself; every other `scheme://` is
+// dispatched to a `git-remote-<scheme>` program on PATH, which is free to ignore
+// the address entirely. So the scheme, not just the host, decides whether a URL
+// describes a destination or merely names a courier. Anything outside this list
+// is treated as the latter. `file:` stays in because a local bare repo is an
+// ordinary, checkable destination; `ftp`/`ftps` are deliberately left out — git
+// ships helpers for them, but nothing here pushes over FTP, and the narrower list
+// is the safer default.
+const BUILTIN_TRANSPORT_SCHEMES = new Set(["https", "http", "ssh", "git", "file"]);
+export function urlUsesUnknownTransport(url) {
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(String(url ?? "").trim());
+  return scheme ? !BUILTIN_TRANSPORT_SCHEMES.has(scheme[1].toLowerCase()) : false;
+}
+
+// Repository-SELECTOR variables, as opposed to the config and transport ones
+// above. An inherited `GIT_DIR` points the push at one repository while this
+// guard's own lookups — which strip these very variables so they read the real
+// checkout — describe another (Codex's twenty-second 2026-07-30 review).
+// `GIT_INDEX_FILE` and `GIT_PREFIX` are deliberately absent: git sets them itself
+// when it runs a hook, they cannot move a push's destination, and denying on them
+// would refuse ordinary work.
+const REPO_SELECTOR_ENV_NAMES = new Set([
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_COMMON_DIR",
+  "GIT_NAMESPACE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+]);
+export function environmentSelectsDifferentRepo(env) {
+  return Object.keys(env || {}).filter(
+    (key) => REPO_SELECTOR_ENV_NAMES.has(key.toUpperCase()) && String(env[key] ?? "").trim() !== "",
+  );
+}
+
 export function canonicalRepoId(url) {
   let text = String(url ?? "").trim();
   if (!text) return null;
@@ -401,6 +436,13 @@ export function urlIsGuardedApp(url) {
   // successfully, `transport::whatever` yields a repo id that says "not
   // production" no matter which helper is behind it. So the whole syntax gates.
   if (/^[A-Za-z][A-Za-z0-9+.-]*::/.test(text)) return true;
+  // `relay://…` is the same idea wearing a scheme. Git runs `git-remote-<scheme>`
+  // for any scheme it does not implement itself, so an unknown one names a
+  // program exactly as `ext::` does — and this one PARSES, so canonicalRepoId
+  // below hands back a tidy repository id and the URL reads as unrelated
+  // (Codex's twenty-second 2026-07-30 review probed `relay://example.invalid/…`).
+  // Checked before parsing for that reason.
+  if (urlUsesUnknownTransport(text)) return true;
   const id = canonicalRepoId(text);
   if (id) return idNamesGuardedRepo(id);
   // Not canonicalizable. If it still carries a URL SCHEME it names some host the

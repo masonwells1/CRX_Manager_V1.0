@@ -35,6 +35,7 @@ import {
   unknownPushOptions,
   environmentCarriesConfigOverride,
   environmentCarriesTransportOverride,
+  environmentSelectsDifferentRepo,
   destinationLooksLikeUrl,
   pushDestinationToken,
   repoIsGuardedApp,
@@ -82,6 +83,16 @@ if (pushUsesConfigEnv(cmd)) {
 const inheritedOverrides = environmentCarriesConfigOverride(process.env);
 if (inheritedOverrides.length > 0) {
   deny(`CODEX GATE: this shell already has GIT_CONFIG* variables set (${inheritedOverrides.join(", ")}), so the push would inherit configuration this guard cannot see — its own destination lookups deliberately ignore them. Unset them before pushing.`);
+}
+// Those name a config file; these name the REPOSITORY. An inherited GIT_DIR or
+// GIT_WORK_TREE sends the push to one repository while every lookup below reads
+// another — the `git()` helper strips exactly these variables so it sees the real
+// checkout, which is precisely what makes the two disagree (Codex's twenty-second
+// 2026-07-30 review). Stripping them for our own reads is right; continuing as if
+// the push would do the same is not.
+const inheritedSelectors = environmentSelectsDifferentRepo(process.env);
+if (inheritedSelectors.length > 0) {
+  deny(`CODEX GATE: this shell already selects a different repository (${inheritedSelectors.join(", ")}), so the push would act on that repository while this guard inspects the working directory's own checkout. Unset them and use \`git -C <repo> push\`.`);
 }
 // `GIT_CONFIG*` names a config file; these name the directory git searches for
 // the global one, which redirects a push just as effectively. Codex's seventh

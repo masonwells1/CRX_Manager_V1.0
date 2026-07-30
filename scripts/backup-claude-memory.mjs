@@ -44,7 +44,12 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { canonicalRepoId, executableTransportSettings } from "../.claude/hooks/codex-push-lib.mjs";
+import {
+  canonicalRepoId,
+  environmentCarriesTransportOverride,
+  executableTransportSettings,
+  urlUsesUnknownTransport,
+} from "../.claude/hooks/codex-push-lib.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -417,6 +422,32 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
     // manifest comparison would notice — but only after these notes, which name
     // real people and real money, had already left. So it is checked before the
     // destination is called verified, not after.
+    // Same reasoning, three sources. A `relay://github.com/masonwells1/CRX_Backups.git`
+    // canonicalizes to exactly the approved repository id while git hands delivery
+    // to a `git-remote-relay` program (Codex's twenty-second 2026-07-30 review);
+    // an inherited GIT_SSH_COMMAND replaces the ssh binary for the push the runbook
+    // performs next, and the branch already owns a detector for it that this path
+    // never called. All three mean the same thing: the URL above names a repository
+    // but does not describe how the objects get there.
+    const courierUrls = pushUrls.filter(urlUsesUnknownTransport);
+    if (courierUrls.length > 0) {
+      return (
+        `FAIL: refusing to ${verb} — a push remote uses a transport git does not implement\n` +
+        `      itself, so git would hand the objects to a \`git-remote-<scheme>\` program that is\n` +
+        `      free to ignore the address entirely. (The URL is not reproduced here.) Re-point the\n` +
+        `      remote at a plain https:// or ssh:// GitHub URL and re-run. Nothing was written.`
+      );
+    }
+    const inheritedTransport = environmentCarriesTransportOverride(process.env);
+    if (inheritedTransport.length > 0) {
+      return (
+        `FAIL: refusing to ${verb} — this shell has transport variables set\n` +
+        `      (${inheritedTransport.join(", ")}) whose values are outside the sanctioned keepalive\n` +
+        `      shape. They name a command git EXECUTES, so the push this runbook performs next\n` +
+        `      could send these notes somewhere the verified URL never mentions. Unset them and\n` +
+        `      re-run. Nothing was written.`
+      );
+    }
     const namedPrograms = executableTransportSettings(String(git(["config", "--list"]).stdout || ""));
     if (namedPrograms.length > 0) {
       return (

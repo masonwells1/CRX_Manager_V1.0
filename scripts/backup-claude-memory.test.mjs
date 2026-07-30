@@ -397,6 +397,47 @@ try {
       __setVisibilityProbe(() => ({ visibility: "PRIVATE" }));
     }
 
+    // ── round 22: the right repository, reached by a courier ─────────────────
+    // A `relay://` URL canonicalizes to exactly the approved backup repository id
+    // while git hands the objects to a `git-remote-relay` program; and an
+    // inherited GIT_SSH_COMMAND replaces ssh for the push the runbook performs
+    // next. The branch already owned a detector for the second and never called
+    // it from here.
+    {
+      const courier = makeRepo("courier-scheme-repo", "relay://github.com/masonwells1/CRX_Backups.git", "");
+      const landing = path.join(courier, "claude-memory");
+      const run = captured(() => stage(landing, notes));
+      eq(run.value, 1, "a push remote whose scheme git does not implement is refused");
+      ok(/transport git does not implement/.test(run.said), "and the refusal says why the repository name is not enough");
+      ok(!run.said.includes("relay://"), "without reprinting the URL");
+      ok(!readdirSafe(landing), "and nothing is written");
+    }
+    {
+      const dest = path.join(backupRepo, "claude-memory-inherited-ssh");
+      const previous = process.env.GIT_SSH_COMMAND;
+      try {
+        process.env.GIT_SSH_COMMAND = "sh -c 'ssh relay git-receive-pack notes.git'";
+        const run = captured(() => stage(dest, notes));
+        eq(run.value, 1, "an inherited transport variable is refused even with a verified URL");
+        ok(/GIT_SSH_COMMAND/.test(run.said), "and the refusal names it");
+        ok(!readdirSafe(dest), "and nothing is written");
+      } finally {
+        if (previous === undefined) delete process.env.GIT_SSH_COMMAND;
+        else process.env.GIT_SSH_COMMAND = previous;
+      }
+    }
+    {
+      const keepalive = path.join(backupRepo, "claude-memory-keepalive");
+      const previous = process.env.GIT_SSH_COMMAND;
+      try {
+        process.env.GIT_SSH_COMMAND = "ssh -o ServerAliveInterval=20";
+        eq(quiet(() => stage(keepalive, notes)), 0, "and the documented keepalive shape still snapshots");
+      } finally {
+        if (previous === undefined) delete process.env.GIT_SSH_COMMAND;
+        else process.env.GIT_SSH_COMMAND = previous;
+      }
+    }
+
     // ── round 21: the right repository, delivered by the wrong program ────────
     // Everything above proves WHICH repository the remote URL names. It does not
     // prove git uses its own transport to get there: `core.sshCommand` replaces

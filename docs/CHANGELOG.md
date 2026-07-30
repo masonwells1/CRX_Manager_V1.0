@@ -255,6 +255,35 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round twenty-two: a scheme is a program, and a selector picks the repository
+
+**Three fail-open paths, one shape.** `relay://github.com/masonwells1/CRX_Backups.git` names a
+courier, not a place: git dispatches any scheme it does not implement itself to a
+`git-remote-<scheme>` program that is free to ignore the address. Round eighteen caught the `ext::`
+spelling of this by refusing the syntax before parsing it — but a `scheme://` URL *parses*, so it
+came back as a tidy repository id and read as unrelated (or, at the backup script, as exactly the
+approved private repo). Only git's own transports — `https`, `http`, `ssh`, `git`, `file` — now
+describe a destination; anything else gates, checked before parsing for the same reason `ext::` is.
+
+Second: an inherited `GIT_DIR` or `GIT_WORK_TREE` points the push at one repository while the guard
+reads another. The guard's own lookups deliberately strip those variables so they see the real
+checkout — which is precisely what makes the two disagree. Stripping them for our own reads was
+right; continuing as though the push would do the same was not. `GIT_INDEX_FILE` and `GIT_PREFIX`
+are deliberately excluded: git sets them itself when it runs a hook, and neither moves a
+destination.
+
+Third: the off-site backup script checked *stored* transport settings (round twenty-one) but never
+the *inherited* ones, though this branch already owned a detector for them. It calls it now, before
+declaring a destination verified.
+
+Proven by discrimination, not just by denial: given one scratch checkout with one risky file, a push
+to a plain local remote and a push to `https://github.com/someone/else.git` both pass through, and
+only the `relay://` spelling of the same push returns **DENY**. An inherited `GIT_DIR` turns an
+otherwise-allowed push into a **DENY** naming the variable. On the real private `CRX_Backups` clone
+an inherited `GIT_SSH_COMMAND` turns `Destination verified … PRIVATE` into a refusal, while the
+documented keepalive value still verifies. All three predicates and all four call sites are
+mutation-tested.
+
 ### Round twenty-one: the checkout can remember the relay
 
 **Round seventeen refused `--receive-pack` on the command line; the same instruction stored in git

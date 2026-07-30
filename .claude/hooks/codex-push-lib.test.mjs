@@ -17,6 +17,8 @@ import {
   pushIsForced,
   isGitPush,
   executableTransportSettings,
+  urlUsesUnknownTransport,
+  environmentSelectsDifferentRepo,
   eachPush,
   pushNamesRemoteProgram,
   pushHiddenByShellComposition,
@@ -412,6 +414,52 @@ assert.ok(
 assert.ok(
   executableTransportSettings("protocol.ext.command=/tmp/relay").includes("protocol.ext.command"),
   "the transport-helper command setting is named too",
+);
+
+// ── round 22: an unknown scheme names a program, not a place ─────────────────
+// Git dispatches any scheme it does not implement to `git-remote-<scheme>`, which
+// is free to ignore the address. Unlike `ext::`, these PARSE — so canonicalRepoId
+// hands back a tidy repository id and the URL reads as a perfectly ordinary,
+// perfectly unrelated destination unless the scheme itself is checked first.
+for (const ordinary of [
+  "https://github.com/someone/else.git",
+  "http://example.invalid/x.git",
+  "ssh://git@github.com/masonwells1/CRX_Manager_V1.0.git",
+  "git://example.invalid/x.git",
+  "file:///c/repos/bare.git",
+  "git@github.com:someone/else.git",
+  "origin",
+  "../scratch/bare.git",
+]) {
+  assert.equal(urlUsesUnknownTransport(ordinary), false, `${ordinary} uses a transport git implements itself`);
+}
+for (const courier of ["relay://example.invalid/harmless.git", "RELAY://example.invalid/x.git", "ftp://example.invalid/x.git"]) {
+  assert.equal(urlUsesUnknownTransport(courier), true, `${courier} hands delivery to a helper program`);
+}
+assert.equal(
+  urlIsGuardedApp("relay://example.invalid/harmless.git"), true,
+  "an unknown scheme gates even when the address it names is unrelated",
+);
+assert.equal(
+  urlIsGuardedApp("relay://github.com/masonwells1/CRX_Backups.git"), true,
+  "and even when it canonicalizes to a repository that would otherwise be allowed",
+);
+assert.equal(
+  urlIsGuardedApp("https://github.com/someone/else.git"), false,
+  "while an ordinary https destination is still classified on its repository",
+);
+
+// ── round 22: a repository selector inherited from the shell ─────────────────
+// GIT_INDEX_FILE and GIT_PREFIX are deliberately NOT selectors here: git sets
+// them itself when it runs a hook, and neither can move a push's destination.
+assert.deepEqual(environmentSelectsDifferentRepo({ PATH: "/usr/bin" }), [], "an ordinary environment selects nothing");
+assert.deepEqual(environmentSelectsDifferentRepo({ GIT_DIR: "/tmp/other/.git" }), ["GIT_DIR"], "GIT_DIR is a selection");
+assert.deepEqual(environmentSelectsDifferentRepo({ GIT_WORK_TREE: "/tmp/other" }), ["GIT_WORK_TREE"], "so is GIT_WORK_TREE");
+assert.deepEqual(environmentSelectsDifferentRepo({ GIT_NAMESPACE: "x" }), ["GIT_NAMESPACE"], "so is a namespace");
+assert.deepEqual(environmentSelectsDifferentRepo({ GIT_DIR: "  " }), [], "an empty value selects nothing");
+assert.deepEqual(
+  environmentSelectsDifferentRepo({ GIT_INDEX_FILE: "/tmp/i", GIT_PREFIX: "sub/" }), [],
+  "and the variables git itself exports into hooks are not selections",
 );
 
 // ── round 20: a command can start right after a separator, with no space ─────
@@ -1174,6 +1222,21 @@ assert.equal(pushDestinationToken("git push"), null);
       "allow",
       "and the same value written in an earlier segment",
     );
+
+    // Round 22, end-to-end: a repository selector inherited from the shell. The
+    // command is an ordinary push; the guard's own lookups strip these variables
+    // so they read the real checkout, which is exactly why the two disagree.
+    {
+      const result = runHook(push, { GIT_DIR: path.join(work, ".git-elsewhere") });
+      assert.equal(result.decision, "deny", "an inherited GIT_DIR is denied");
+      assert.match(result.reason, /GIT_DIR/, "and the denial names it");
+    }
+    {
+      const result = runHook(push, { GIT_WORK_TREE: work });
+      assert.equal(result.decision, "deny", "so is an inherited GIT_WORK_TREE");
+      assert.match(result.reason, /GIT_WORK_TREE/, "and the denial names that too");
+    }
+    assert.equal(runHook(push, { GIT_DIR: "" }).decision, "allow", "an empty selector is not a selection");
 
     // Round 21, end-to-end: the STORED twins of round 17's `--receive-pack`.
     // Nothing about the command line is unusual — the checkout itself remembers
