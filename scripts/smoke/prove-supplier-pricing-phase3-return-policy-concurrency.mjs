@@ -282,10 +282,13 @@ $rls$;`);
   // deactivated one. The catalog check alone cannot show that -- it reads text --
   // and the empty restored table made every earlier read-based probe blind. This
   // runs the genuine article: the image's own auth.uid(), the dump's own
-  // is_active_profile(), and the restored policy, with nothing stubbed. The whole
-  // fixture (a deactivated profile, which nothing else here provides, plus one
-  // product_families row) is rolled back, so the rest of this proof continues
-  // against exactly the schema it did before.
+  // is_active_profile(), and the restored policy, with nothing stubbed.
+  // Everything this block adds -- the a003 deactivated profile, which nothing
+  // else here provides, and one product_families row -- is rolled back, so the
+  // rest of this proof continues against exactly the schema it did before. It
+  // reuses the already-seeded a002 rather than seeding its own active profile,
+  // and a001/a002 deliberately stay outside this transaction: the actor-binding
+  // fixtures below depend on both surviving it. Do not move that seed in here.
   const rlsBehavior=sql(`BEGIN;
 INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a003') ON CONFLICT DO NOTHING;
 INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a003','phase3-deactivated@example.invalid','sales_rep',false) ON CONFLICT (id) DO UPDATE SET is_active=false;
