@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-07-29",
+    "generated_at": "2026-07-30",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260729222311",
+    "migrations_high_water": "20260730174628",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -315,6 +315,10 @@
       "20260728123224_secdef_pricing_reads_office_only",
       "20260728193000_revoke_anon_execute_non_policy_functions",
       "20260728232500_revoke_anon_execute_rls_role_helpers",
+      "20260729231031_vendor_bill_period_close_lock",
+      "20260730121951_close_accounting_period_idempotency_recheck",
+      "20260730140000_accounting_period_immutable_date_math",
+      "20260730170743_vendor_bill_month_lock_helper_acl_postflight",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -2652,6 +2656,12 @@
       "constraint": "accounting_periods_check",
       "def": "CHECK ((period_end >= period_start))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "accounting_periods",
+      "constraint": "accounting_periods_whole_calendar_month_check",
+      "def": "CHECK (((period_start = (date_trunc('month'::text, (period_start)::timestamp without time zone))::date) AND (period_end = ((date_trunc('month'::text, (period_start)::timestamp without time zone) + '1 mon -1 days'::interval))::date)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
     },
     {
       "table": "application_record_fields",

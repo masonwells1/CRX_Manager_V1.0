@@ -35,6 +35,7 @@
     "db-sweeps": "node scripts/db-invariant-sweeps/run-sweeps.mjs",
     "db-sweeps:strict": "node scripts/db-invariant-sweeps/run-sweeps.mjs --strict",
     "smoke": "node scripts/smoke/run-smoke.mjs",
+    "proof:vendor-bill-period-close": "node scripts/smoke/vendor-bill-period-close-readiness.test.mjs && node scripts/smoke/prove-vendor-bill-period-close-concurrency.mjs",
     "proof:pricing-phase1a": "node scripts/smoke/prove-supplier-pricing-phase1a.mjs",
     "proof:pricing-phase2": "node scripts/smoke/prove-supplier-cost-basis-phase2.mjs",
     "proof:save-field-actor": "node scripts/db-invariant-sweeps/save-field-actor-binding-predicate.test.mjs && node scripts/smoke/prove-save-field-actor-binding.mjs",
