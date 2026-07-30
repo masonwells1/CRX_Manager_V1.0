@@ -27,6 +27,7 @@ import {
   destinationLooksLikeUrl,
   pushUsesInlineConfig,
   pushUsesConfigEnv,
+  environmentCarriesConfigOverride,
   rewritesReachGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -364,6 +365,30 @@ assert.equal(pushUsesConfigEnv('$env:GIT_CONFIG_PARAMETERS = "x"; git push origi
 // point of matching the prefix instead of a list.
 assert.equal(pushUsesConfigEnv("GIT_CONFIG_SOMETHING_NEW=x git push origin main"), true, "any future GIT_CONFIG_* variable is denied");
 assert.equal(pushUsesConfigEnv("MY_GIT_CONFIG_PARAMETERS=x git push origin main"), false, "the prefix match is still anchored at a boundary");
+// Round 6 (Codex, 2026-07-30): the detector still described the ASSIGNMENT
+// syntax, and PowerShell has several. All four of these returned `false` before
+// the rule became "mentions the namespace at all".
+assert.equal(pushUsesConfigEnv("Set-Item Env:GIT_CONFIG_COUNT 1; git push origin HEAD:main"), true, "PowerShell Set-Item form");
+assert.equal(pushUsesConfigEnv("${env:GIT_CONFIG_COUNT} = '1'; git push origin HEAD:main"), true, "PowerShell ${env:…} form");
+assert.equal(pushUsesConfigEnv("New-Item -Path Env:GIT_CONFIG_KEY_0 -Value remote.origin.pushurl; git push origin main"), true, "PowerShell New-Item form");
+// Not named by the round-6 review — found while probing it. A detector that
+// enumerates syntax would have missed this one next.
+assert.equal(pushUsesConfigEnv("[Environment]::SetEnvironmentVariable('GIT_CONFIG_COUNT','1'); git push origin main"), true, ".NET SetEnvironmentVariable form");
+// Controls: the broadened rule must not start denying ordinary pushes.
+assert.equal(pushUsesConfigEnv("git -C C:/CRX_Manager push origin feature"), false, "an ordinary push does not name the namespace");
+assert.equal(pushUsesConfigEnv('GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" git -C /repo push origin feature'), false, "the keepalive workaround still passes");
+assert.equal(pushUsesConfigEnv("Set-Item Env:GIT_CONFIG_COUNT 1"), false, "still only applies to push commands");
+
+// --- a GIT_CONFIG* variable set by an EARLIER command (Codex 2026-07-30, round 6)
+// The push command text is innocent; the variable is live in the environment the
+// push inherits. The hook inherits the same one, so it checks directly.
+assert.deepEqual(environmentCarriesConfigOverride({ PATH: "/usr/bin", GIT_EDITOR: "vi" }), [], "an ordinary environment is clean");
+assert.deepEqual(environmentCarriesConfigOverride({ GIT_CONFIG_COUNT: "1" }), ["GIT_CONFIG_COUNT"]);
+assert.deepEqual(environmentCarriesConfigOverride({ GIT_CONFIG_PARAMETERS: "x" }), ["GIT_CONFIG_PARAMETERS"]);
+assert.deepEqual(environmentCarriesConfigOverride({ GIT_CONFIG: "/tmp/evil" }), ["GIT_CONFIG"]);
+assert.deepEqual(environmentCarriesConfigOverride({ MY_GIT_CONFIG_COUNT: "1" }), [], "an unrelated variable is not an override");
+assert.deepEqual(environmentCarriesConfigOverride({ GIT_SSH_COMMAND: "ssh" }), [], "transport variables are not destination overrides");
+assert.deepEqual(environmentCarriesConfigOverride(null), [], "a missing environment is not a crash");
 
 // --- `--repo` vs a positional destination -------------------------------------
 // git-push: "if both are specified, the command-line argument takes precedence".
@@ -391,11 +416,11 @@ assert.equal(pushDestinationToken("git push"), null);
   const dest = path.join(tmp, "dest.git");
   const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: scratchHookEnvironment(cwd, process.env) });
 
-  const runHook = (command) => {
+  const runHook = (command, extraEnv = {}) => {
     const res = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({ cwd: work, tool_input: { command } }),
       encoding: "utf8",
-      env: scratchHookEnvironment(work, process.env),
+      env: { ...scratchHookEnvironment(work, process.env), ...extraEnv },
     });
     assert.equal(res.status, 0, `guard exited ${res.status}: ${res.stderr}`);
     const out = (res.stdout || "").trim();
@@ -437,6 +462,26 @@ assert.equal(pushDestinationToken("git push"), null);
     // still described the harmless remote.
     denied(`GIT_CONFIG_PARAMETERS="'remote.origin.pushurl=${CRX_URL}'" ${push}`, "GIT_CONFIG_PARAMETERS redirect");
     denied(`env 'GIT_CONFIG_PARAMETERS=remote.origin.pushurl=${CRX_URL}' ${push}`, "quoted GIT_CONFIG_PARAMETERS redirect");
+    // Round-6 forms: PowerShell has more than one way to set a variable, and the
+    // detector used to describe the syntax rather than the namespace.
+    denied(`Set-Item Env:GIT_CONFIG_COUNT 1; ${push}`, "PowerShell Set-Item");
+    denied(`\${env:GIT_CONFIG_COUNT} = '1'; ${push}`, "PowerShell \${env:…}");
+    denied(`New-Item -Path Env:GIT_CONFIG_KEY_0 -Value remote.origin.pushurl; ${push}`, "PowerShell New-Item");
+    denied(`[Environment]::SetEnvironmentVariable('GIT_CONFIG_COUNT','1'); ${push}`, ".NET SetEnvironmentVariable");
+
+    // The other half of round 6: the push command is innocent, but a variable
+    // set by an EARLIER command is still live in the environment the push
+    // inherits. The hook inherits it too, so it denies on what it can see.
+    {
+      const result = runHook(push, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "remote.origin.pushurl", GIT_CONFIG_VALUE_0: CRX_URL });
+      assert.equal(result.decision, "deny", "an innocent push command inheriting GIT_CONFIG* is denied");
+      assert.match(result.reason, /GIT_CONFIG_COUNT/, "the denial names the variable that is set");
+    }
+    assert.equal(
+      runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,
+      "allow",
+      "an inherited transport variable is not a destination override",
+    );
 
     // Controls: the guard must not have become a blanket denier. Both of these
     // run all the way through the destination lookups against the scratch repo.

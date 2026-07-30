@@ -25,6 +25,7 @@ import {
   pushUsesBulkMode,
   pushUsesInlineConfig,
   pushUsesConfigEnv,
+  environmentCarriesConfigOverride,
   destinationLooksLikeUrl,
   pushDestinationToken,
   repoIsGuardedApp,
@@ -53,7 +54,16 @@ if (pushContextIsAmbiguous(cmd)) {
 // guard after writing the per-segment version, which passed its unit tests and
 // still let the chained form through.
 if (pushUsesConfigEnv(cmd)) {
-  deny("CODEX GATE: pushes carrying GIT_CONFIG* environment variables are denied. Those variables rewrite git configuration for that one command only (e.g. GIT_CONFIG_KEY_0=remote.origin.pushurl), so the push can land in a different repository than the one this guard inspected. Use `git -C <repo> push` with the repository's own configuration.");
+  deny("CODEX GATE: pushes that name the GIT_CONFIG* environment namespace are denied. Those variables rewrite git configuration for that one command only (e.g. GIT_CONFIG_KEY_0=remote.origin.pushurl), so the push can land in a different repository than the one this guard inspected. Use `git -C <repo> push` with the repository's own configuration.");
+}
+// The command text is only half the story. A GIT_CONFIG* variable set by an
+// EARLIER command is still live when this push runs, and the push command itself
+// then looks completely ordinary. This hook inherits the same environment the
+// push will inherit, so it checks directly rather than trying to parse history.
+// Codex's sixth 2026-07-30 review asked for this.
+const inheritedOverrides = environmentCarriesConfigOverride(process.env);
+if (inheritedOverrides.length > 0) {
+  deny(`CODEX GATE: this shell already has GIT_CONFIG* variables set (${inheritedOverrides.join(", ")}), so the push would inherit configuration this guard cannot see — its own destination lookups deliberately ignore them. Unset them before pushing.`);
 }
 
 // Claude's shell cwd can persist across tool calls. The hook payload's cwd is

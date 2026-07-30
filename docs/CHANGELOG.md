@@ -231,6 +231,30 @@ list turns the suite red on the `GIT_CONFIG_PARAMETERS` case.
 Three rounds of this guard have now failed the same way — a check written as a list of known-bad
 spellings rather than as a boundary. The list is gone.
 
+### Round six: the list was gone, the grammar wasn't
+
+The sixth review found the detector still describing how a variable gets *set*, and PowerShell has
+more than one way. `Set-Item Env:GIT_CONFIG_COUNT 1`, `${env:GIT_CONFIG_COUNT} = '1'`, and
+`New-Item -Path Env:GIT_CONFIG_KEY_0 -Value …` all returned `false`; so did
+`[Environment]::SetEnvironmentVariable('GIT_CONFIG_COUNT','1')`, which the review did not name and
+which would have been the next round's finding. A shell has unbounded ways to spell an assignment,
+so the rule no longer describes syntax at all: **if a push command mentions `GIT_CONFIG` as its own
+identifier anywhere, it is denied.** Nothing in this repo's push path has any reason to name that
+namespace, and the two failure directions are not comparable — a false deny costs one error message,
+a false allow writes to production unreviewed. `MY_GIT_CONFIG_COUNT` and `GIT_SSH_COMMAND` still pass.
+
+The review also asked about the other half: a variable set by an *earlier*, separate command, still
+live when an innocent-looking push runs. The push text is clean, so no amount of parsing finds it —
+but the hook inherits the same environment the push will, so it now simply looks. Any `GIT_CONFIG*`
+variable present in the guard's own environment denies the push and names the offending variables,
+because at that point the guard's destination lookups (which deliberately ignore those variables)
+and the actual push disagree by construction.
+
+Proven against the real `C:\CRX_Manager` checkout, not just the helper: all four command forms and
+the inherited-environment case return **DENY**, and an ordinary push to the same repo still returns
+**ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
+environment check, each turns the suite red on its own case.
+
 ## 2026-07-29 — agent memory is now backed up off-site, and permanently barred from this public repo
 
 162 stale agent-memory notes had been sitting untracked in the main checkout since 2026-07-26,

@@ -322,28 +322,44 @@ export function pushUsesInlineConfig(cmd) {
 // change HOW a connection is made, not WHICH repository is written, and the
 // documented keepalive push workaround for this repo sets GIT_SSH_COMMAND —
 // denying it would break the normal push path to close nothing.
+// Four review rounds tried to describe the SYNTAX of setting one of these
+// variables, and each description had a hole:
+//   round 3 — the variables existed at all (`GIT_CONFIG_KEY_0=… git push`)
+//   round 4 — quoting  (`env 'GIT_CONFIG_COUNT=1' git push`)
+//   round 5 — the variable NAME list  (`GIT_CONFIG_PARAMETERS` was not on it)
+//   round 6 — the assignment SYNTAX  (`Set-Item Env:GIT_CONFIG_COUNT 1`,
+//             `${env:GIT_CONFIG_COUNT} = '1'`, `New-Item -Path Env:… -Value …`,
+//             and `[Environment]::SetEnvironmentVariable('GIT_CONFIG_COUNT','1')`,
+//             which the round-6 review did not even name — all verified `false`
+//             against the previous detector on 2026-07-30)
+// A shell has unbounded ways to spell "set a variable", so matching spellings is
+// the wrong shape. The rule is now about the NAMESPACE, not the syntax: if a
+// push command mentions `GIT_CONFIG` as its own identifier ANYWHERE, deny it.
+// There is no legitimate reason for a push command in this repo to name that
+// namespace at all, and the failure directions are not symmetric — a false deny
+// costs one clear error message, a false allow writes to production unreviewed.
 export function pushUsesConfigEnv(cmd) {
   const text = String(cmd || "");
   if (!isGitPush(text)) return false;
-  // Covers `VAR=x git push`, `export VAR=x; git push`, `set VAR=x`, and the
-  // PowerShell `$env:VAR = "x"` form. Bare `GIT_CONFIG=` (a config file path)
-  // counts too — it redirects config just as effectively.
-  //
-  // The leading boundary must include quote characters. Codex's fourth
-  // 2026-07-30 review caught that `env 'GIT_CONFIG_COUNT=1' git push ...` slipped
-  // through the earlier class: the shell strips the quotes and Git sees the
-  // assignment, but the detector saw a `'` where it demanded whitespace. `_` is
-  // still not in the class, so an unrelated `MY_GIT_CONFIG_COUNT=1` stays allowed.
-  //
-  // The NAME half matches the whole `GIT_CONFIG*` namespace, not a hand-listed
-  // subset. Codex's fifth 2026-07-30 review found the list was missing
-  // `GIT_CONFIG_PARAMETERS`, and git 2.54 honours it: verified 2026-07-30 that
-  // `GIT_CONFIG_PARAMETERS="'remote.origin.pushurl=<app repo>'" git config --get
-  // remote.origin.pushurl` returns the injected URL in a checkout that has no
-  // pushurl configured at all. Enumerating variable names is the wrong shape for
-  // this check — every future addition to the namespace would be another silent
-  // hole — so the whole prefix is denied instead.
-  return /(?:^|[;&|(\r\n'"]|\s)(?:\$env:)?GIT_CONFIG(?:_[A-Z0-9_]+)?\s*=/i.test(text);
+  // `(?<![A-Za-z0-9_])` keeps an unrelated `MY_GIT_CONFIG_COUNT` allowed: the
+  // token has to start on its own, not in the middle of a longer identifier.
+  // The trailing group swallows the rest of the variable name so the check does
+  // not care which one it is.
+  return /(?<![A-Za-z0-9_])GIT_CONFIG(?:_[A-Za-z0-9_]*)?(?![A-Za-z0-9])/i.test(text);
+}
+
+// The other half of the same bypass: a variable that was set by an EARLIER,
+// separate command and is still live when the push runs. The push command text
+// is then completely innocent, so `pushUsesConfigEnv` above cannot see it — but
+// the hook inherits the same environment the push will inherit, so it can just
+// look. Codex's sixth 2026-07-30 review asked for this after noting that
+// `Set-Item Env:GIT_CONFIG_COUNT 1` on its own line is not a push command.
+//
+// Fails CLOSED by design: if any `GIT_CONFIG*` variable is set, the guard cannot
+// trust its own destination lookups (it strips them to read the real config) AND
+// the push would carry them, so the two disagree by construction.
+export function environmentCarriesConfigOverride(env) {
+  return Object.keys(env || {}).filter((key) => /^GIT_CONFIG(_|$)/i.test(key));
 }
 
 // URL rewrites are the other way inline-free config can redirect a push:
