@@ -7,12 +7,13 @@ import Input from '../components/ui/Input';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictDialog';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate, localToday } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -23,6 +24,7 @@ import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
+import { buildRowVersionPatch, readRowVersion } from '../lib/recordVersionConcurrency';
 import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 import { logActivity } from '../lib/activityLogger';
 import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
@@ -95,6 +97,9 @@ export default function CustomerDetail() {
   const defaultSplitTouchedRef = useRef(false);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
+  // Narrow local structural state: generated types are refreshed only after apply.
+  const customerRowVersionRef = useRef<number | null>(null);
+  const [staleSaveOpen, setStaleSaveOpen] = useState(false);
   const [tab, setTab] = useState<'info' | 'contacts' | 'knowledge' | 'documents' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
   const [timeline, setTimeline] = useState<ActivityFeedItem[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -141,6 +146,7 @@ export default function CustomerDetail() {
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
+  const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
   const fetchCustomer = useCallback(async () => {
@@ -152,6 +158,8 @@ export default function CustomerDetail() {
     }
     if (data) {
       setCustomer(data as Customer);
+      const loadedRowVersion = (data as Customer & { row_version?: unknown }).row_version;
+      customerRowVersionRef.current = readRowVersion(loadedRowVersion);
       loadedDefaultSplitRef.current = (data as Customer).default_commission_split ?? null;
       defaultSplitTouchedRef.current = false;
       // DB type is string[]; the CHECK constraint guarantees values are CropValue.
@@ -179,8 +187,23 @@ export default function CustomerDetail() {
 
   useEffect(() => {
     if (!initialLoadDone.current) return;
+    if (suppressDirtyUntilReloadSettlesRef.current) return;
     setIsDirty(true);
   }, [customer, addresses]);
+
+  const reloadAfterStaleSave = useCallback(async () => {
+    suppressDirtyUntilReloadSettlesRef.current = true;
+    try {
+      await Promise.all([fetchCustomer(), fetchAddresses()]);
+      setIsDirty(false);
+      setStaleSaveOpen(false);
+    } finally {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        suppressDirtyUntilReloadSettlesRef.current = false;
+        setIsDirty(false);
+      }));
+    }
+  }, [fetchAddresses, fetchCustomer]);
 
   useEffect(() => {
     // Fetch all customers for parent selector
@@ -494,6 +517,7 @@ export default function CustomerDetail() {
           value: customer.default_commission_split ?? null,
           loaded: loadedDefaultSplitRef.current,
         }),
+        ...buildRowVersionPatch(!isNew, customerRowVersionRef.current),
         credit_limit_cents: customer.credit_limit_cents || 0,
         finance_charge_rate: customer.finance_charge_rate || 0,
         finance_charge_enabled: customer.finance_charge_enabled ?? true,
@@ -526,10 +550,16 @@ export default function CustomerDetail() {
       });
 
       if (error) {
-        toast('error', error.message);
+        if (hasRpcCode(error, RpcErrorCodes.CUSTOMER_STALE_WRITE)
+          || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)) {
+          setStaleSaveOpen(true);
+        } else {
+          toast('error', error.message);
+        }
       } else {
         saveCustomerIdem.resetKey();
-        const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null }>(data, 'save_customer');
+        const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null; row_version?: unknown }>(data, 'save_customer');
+        customerRowVersionRef.current = readRowVersion(result.row_version);
         // Advance the baseline snapshot ONLY when THIS tab saved its own split edit
         // (see QuoteBuilder / nextLoadedSplitSnapshot for the multi-tab rationale).
         loadedDefaultSplitRef.current = nextLoadedSplitSnapshot({
@@ -572,8 +602,10 @@ export default function CustomerDetail() {
         .from('customers')
         .update({ crops: nextCrops })
         .eq('id', id)
-        .select('id');
+        .select('row_version');
       checkMutationResult(result, 'update customer crops');
+      const nextRowVersion = (result.data as Array<{ row_version?: unknown }>)[0]?.row_version;
+      customerRowVersionRef.current = readRowVersion(nextRowVersion);
       if (profile?.id) {
         await logActivity({
           event: 'crops_updated',
@@ -632,6 +664,12 @@ export default function CustomerDetail() {
         { label: 'Customers', href: '/customers' },
         { label: isNew ? 'New Customer' : (customer.farm_name || 'Customer') },
       ]} />
+      <RecordVersionConflictDialog
+        open={staleSaveOpen}
+        entityLabel="customer"
+        onKeepEditing={() => setStaleSaveOpen(false)}
+        onReload={reloadAfterStaleSave}
+      />
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold font-heading text-nav-dark">
           {isNew ? 'New Customer' : customer.farm_name}

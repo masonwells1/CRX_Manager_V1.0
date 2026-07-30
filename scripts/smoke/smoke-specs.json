@@ -7,6 +7,12 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "save_quote_customer_row_version": {
+      "chain": "smoke-save-quote-customer-row-version.sql",
+      "description": "LOCAL ONLY pending-apply rollback fixture: executes the real save_quote/save_customer contracts for fresh create/update, exact idempotent replay, stale header/child/address rejection with no mutation, split-conflict precedence, auth/role and sales-rep non-owner gates, and server-authoritative quote item math. The companion network-isolated PostgreSQL 17 prover demonstrates the pre-fix overwrite, both observed lock orders, real replay caching, and normalized exact canonical-body preservation outside the audited row-version delta. Run smoke-planned-holds-drawn-sync.sql alongside this chain for planned-hold preservation; no PASS is a live-apply claim.",
+      "covers": ["save_quote", "save_customer"],
+      "area": ["lifecycle", "security", "idempotency"]
+    },
     "save_field": {
       "chain": "smoke-save-field-actor-binding.sql",
       "description": "save_field actor-binding rollback proof: no-auth and forged actors fail before field writes, a legacy NULL actor is bound to the authenticated admin, request replay returns the same field without duplicate activity, and the sole SECURITY DEFINER overload retains its fixed search_path and narrow grants.",

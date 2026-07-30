@@ -31,6 +31,7 @@ import Input from '../components/ui/Input';
 import SearchableSelect from '../components/ui/SearchableSelect';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictDialog';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -44,6 +45,7 @@ import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
+import { buildRowVersionPatch, readRowVersion } from '../lib/recordVersionConcurrency';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
@@ -236,6 +238,9 @@ export default function QuoteBuilder() {
 
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
+  // Kept locally rather than in generated DB types until post-apply regeneration.
+  const quoteRowVersionRef = useRef<number | null>(null);
+  const [staleSaveOpen, setStaleSaveOpen] = useState(false);
 
   const [converting, setConverting] = useState(false);
   const [quoteCreatedAt, setQuoteCreatedAt] = useState<string | null>(null);
@@ -343,6 +348,7 @@ export default function QuoteBuilder() {
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
+  const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
   // Status-based guards
@@ -416,6 +422,7 @@ export default function QuoteBuilder() {
   // Mark dirty whenever user changes form data (after initial load)
   useEffect(() => {
     if (!initialLoadDone.current) return;
+    if (suppressDirtyUntilReloadSettlesRef.current) return;
     setIsDirty(true);
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
 
@@ -602,6 +609,8 @@ export default function QuoteBuilder() {
     }
 
     const q = quoteRes.data as Quote;
+    const loadedRowVersion = (q as Quote & { row_version?: unknown }).row_version;
+    quoteRowVersionRef.current = readRowVersion(loadedRowVersion);
     setQuoteId(q.id);
     setQuoteNumber(q.quote_number);
     setCustomerId(q.customer_id);
@@ -687,6 +696,21 @@ export default function QuoteBuilder() {
     // Allow a tick for state to settle before tracking changes
     setTimeout(() => { initialLoadDone.current = true; }, 0);
   }, [toast, navigate]);
+
+  const reloadAfterStaleSave = useCallback(async () => {
+    if (!quoteId) return;
+    suppressDirtyUntilReloadSettlesRef.current = true;
+    try {
+      await fetchQuote(quoteId);
+      setIsDirty(false);
+      setStaleSaveOpen(false);
+    } finally {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        suppressDirtyUntilReloadSettlesRef.current = false;
+        setIsDirty(false);
+      }));
+    }
+  }, [fetchQuote, quoteId]);
 
   useEffect(() => {
     fetchReferenceData();
@@ -1129,6 +1153,7 @@ export default function QuoteBuilder() {
         value: { splits: commissionSplit.splits },
         loaded: loadedCommissionSplitRef.current,
       }),
+      ...buildRowVersionPatch(Boolean(quoteId && isEditing), quoteRowVersionRef.current),
       total_price: totals.totalPrice,
       total_cost: totals.totalCost,
       total_profit: totals.totalProfit,
@@ -1187,12 +1212,18 @@ export default function QuoteBuilder() {
       });
 
       if (error) {
+        if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
+          || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)) {
+          setStaleSaveOpen(true);
+          return null;
+        }
         toast('error', error.message || 'Failed to save quote');
         return null;
       }
 
       saveQuoteIdem.resetKey();
-      const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null }>(data, 'save_quote');
+      const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown }>(data, 'save_quote');
+      quoteRowVersionRef.current = readRowVersion(result.row_version);
       // Advance the baseline snapshot ONLY when THIS tab saved its own split edit;
       // an untouched save keeps the old baseline (still shown in the editor) so a
       // later edit fail-closed-conflicts if another tab changed the split.
@@ -1416,8 +1447,10 @@ export default function QuoteBuilder() {
         .from('quotes')
         .update({ status: newStatus, updated_at: new Date().toISOString() })
         .eq('id', id)
-        .select();
+        .select('row_version');
       checkMutationResult(result, `${verb === 'decline' ? 'Decline' : 'Cancel'} quote`);
+      const nextRowVersion = (result.data as Array<{ row_version?: unknown }>)[0]?.row_version;
+      quoteRowVersionRef.current = readRowVersion(nextRowVersion);
       setStatus(newStatus);
       setIsDirty(false);
       await logActivity({
@@ -1776,6 +1809,12 @@ export default function QuoteBuilder() {
       });
       if (error) throw error;
       const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
+      // Version creation can update the quote; re-read the stored token rather than guessing.
+      const { data: currentQuote, error: versionReadError } = await supabase
+        .from('quotes').select('row_version').eq('id', savedId).maybeSingle();
+      if (versionReadError) throw versionReadError;
+      const currentRowVersion = (currentQuote as { row_version?: unknown } | null)?.row_version;
+      quoteRowVersionRef.current = readRowVersion(currentRowVersion);
       createVersionIdem.resetKey();
       setShowPreviewModal(false);
       if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
@@ -2250,8 +2289,10 @@ export default function QuoteBuilder() {
       // already committed it as sent; keep it sent so normal Convert remains.
       const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
       try {
-        const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select();
+        const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select('row_version');
         checkMutationResult(revertResult, 'Revert quote status');
+        const revertedRowVersion = (revertResult.data as Array<{ row_version?: unknown }>)[0]?.row_version;
+        quoteRowVersionRef.current = readRowVersion(revertedRowVersion);
         setStatus(revertTo);
       } catch (revertErr) {
         // The quote is now stuck 'accepted' with no order — surface it instead
@@ -3908,6 +3949,13 @@ export default function QuoteBuilder() {
           </div>
         </Modal>
       )}
+
+      <RecordVersionConflictDialog
+        open={staleSaveOpen}
+        entityLabel="quote"
+        onKeepEditing={() => setStaleSaveOpen(false)}
+        onReload={reloadAfterStaleSave}
+      />
 
       <ConfirmModal
         open={confirmBookAsOrderOpen}

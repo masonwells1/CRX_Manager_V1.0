@@ -39,7 +39,7 @@
 DO $smoke$
 DECLARE
   v_admin uuid; v_cust uuid; v_pa uuid; v_pb uuid; v_q uuid;
-  v_s1 uuid; v_s2 uuid; v_res jsonb; v_ver uuid;
+  v_s1 uuid; v_s2 uuid; v_res jsonb; v_ver uuid; v_quote_version bigint;
   v_pa_total numeric; v_pb_total numeric; v_cnt int;
   v_e1 date; v_e2 date;
   v_payload jsonb; v_sections jsonb;
@@ -50,10 +50,13 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_SETUP: no active admin profile found';
   END IF;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] PHS Farm ' || sfx) RETURNING id INTO v_cust;
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size) VALUES ('[SMOKE] PHS A ' || sfx, 6, 10, 'gal') RETURNING id INTO v_pa;
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size) VALUES ('[SMOKE] PHS B ' || sfx, 4, 8, 'gal') RETURNING id INTO v_pb;
+  -- Hold quantities do not need a pricing mutation; use pricing-free shells
+  -- so this focused hold proof respects the governed product-pricing path.
+  INSERT INTO products (product_name, unit_size) VALUES ('[SMOKE] PHS A ' || sfx, 'gal') RETURNING id INTO v_pa;
+  INSERT INTO products (product_name, unit_size) VALUES ('[SMOKE] PHS B ' || sfx, 'gal') RETURNING id INTO v_pb;
 
   INSERT INTO quotes (quote_number, customer_id, created_by, status, is_planned, commission_split)
   VALUES ('[SMOKE] PHS-' || sfx, v_cust, v_admin, 'sent', true, '{"splits": []}'::jsonb) RETURNING id INTO v_q;
@@ -109,6 +112,8 @@ BEGIN
       jsonb_build_object('product_id', v_pb, 'calc_mode', 'units_direct', 'total_units_needed', 100, 'price_per_unit', 8, 'current_cost', 4, 'sort_order', 1))),
     jsonb_build_object('section_name', 'Late', 'sort_order', 1, 'items', jsonb_build_array(
       jsonb_build_object('product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0))));
+  SELECT row_version INTO v_quote_version FROM quotes WHERE id = v_q;
+  v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_version);
   v_res := save_quote(v_q, v_payload, v_sections, v_admin, NULL);
   IF v_res->>'status' IS DISTINCT FROM 'saved' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) save_quote returned %', v_res;
@@ -125,6 +130,8 @@ BEGIN
   PERFORM create_quote_version(v_q, v_admin, 'presented', NULL);
   SELECT id INTO v_ver FROM quote_versions WHERE quote_id = v_q ORDER BY version_number DESC LIMIT 1;
   v_sections := jsonb_set(v_sections, '{1,items,0,total_units_needed}', to_jsonb(250));
+  SELECT row_version INTO v_quote_version FROM quotes WHERE id = v_q;
+  v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_version);
   v_res := save_quote(v_q, v_payload, v_sections, v_admin, NULL);
   SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0) INTO v_pa_total
   FROM inventory_holds WHERE source_id = v_q AND is_active = true;
@@ -143,7 +150,8 @@ BEGIN
 
   -- (f) plan switched off: save_quote releases everything transactionally.
   UPDATE quotes SET is_planned = false WHERE id = v_q;
-  v_payload := v_payload || jsonb_build_object('status', 'revised');
+  SELECT row_version INTO v_quote_version FROM quotes WHERE id = v_q;
+  v_payload := v_payload || jsonb_build_object('status', 'revised', 'row_version_expected', v_quote_version);
   v_res := save_quote(v_q, v_payload, v_sections, v_admin, NULL);
   SELECT count(*) INTO v_cnt FROM inventory_holds WHERE source_id = v_q AND is_active = true;
   IF v_cnt <> 0 THEN

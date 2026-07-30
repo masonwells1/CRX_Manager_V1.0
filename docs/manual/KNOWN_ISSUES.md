@@ -1,9 +1,15 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-29** (live post-apply read: **926 ledger rows**, high-water `20260729222311_bind_save_field_actor`. The six approved migrations applied in order: `20260729125227_secure_profile_public_directory`, `20260729125251_pin_contact_sync_search_path`, `20260729125314_application_service_cost_exact_text`, `20260729163243_harden_profile_directory_followups`, `20260729213733_supplier_pricing_phase3_stage_c`, then `20260729222311_bind_save_field_actor`. The earlier profile-directory postflights remain green. The final migration passed a rollback-only live smoke proving unauthenticated and forged actors are rejected, signed-in attribution and idempotent replay work, and zero smoke fixtures remain. Earlier resolved and deferred claims below remain unchanged.)
+**Last verified: 2026-07-30** (read-only live recheck: **926 ledger rows**, high-water `20260729222311_bind_save_field_actor`; local candidate `20260730031925_quote_customer_row_version_guard.sql` remains unapplied and is documented below as local-only. The six approved migrations applied in order: `20260729125227_secure_profile_public_directory`, `20260729125251_pin_contact_sync_search_path`, `20260729125314_application_service_cost_exact_text`, `20260729163243_harden_profile_directory_followups`, `20260729213733_supplier_pricing_phase3_stage_c`, then `20260729222311_bind_save_field_actor`. The earlier profile-directory postflights remain green. The final migration passed a rollback-only live smoke proving unauthenticated and forged actors are rejected, signed-in attribution and idempotent replay work, and zero smoke fixtures remain. Earlier resolved and deferred claims below remain unchanged.)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
+
+---
+
+## LOCAL ONLY — Quote and Customer whole-record save protection pending review
+
+`20260730031925_quote_customer_row_version_guard.sql` is authored locally and **not applied, deployed, or live-verified**. It addresses the known last-write-wins exposure for whole-record `save_quote` and `save_customer` updates with trigger-maintained row versions. Apply sequencing is migration review/proof, explicit apply approval, database apply, generated schema/type regeneration, then frontend deployment. Because old bundles omit the required existing-record token, this is a coordinated maintenance window: saves fail closed between migration apply and the refreshed browser bundle. No live claim belongs here until the governed migration and rollback-only smoke chain run.
 
 ---
 

@@ -1,5 +1,7 @@
 # Migration History (841 migration-history entries)
 
+> LOCAL ONLY — `20260730031925_quote_customer_row_version_guard.sql` is pending governed review/application. It adds trigger-maintained `row_version bigint NOT NULL DEFAULT 1` to `quotes` and `customers`, re-emits `save_quote`/`save_customer` with fail-closed expected-version checks and fresh-version results, and preserves the commission-split-specific guard ahead of the generic guard. Roll out database migration before the browser bundle; immediately after apply regenerate `src/types/supabase.ts` and `.claude/schema-registry.json` from the applied database, then verify the registered smoke/prover packet. Do not treat this note as apply proof.
+
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 The first column is the historical documentation-entry sequence, not the file
 count; one entry can index multiple reconstruction sources restored together.

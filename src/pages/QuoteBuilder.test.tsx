@@ -2,17 +2,18 @@
  * QuoteBuilder.test.tsx — Tests for the quote builder page
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
-const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => {
+const { mockFrom, mockRpc, mockToast, mockNavigate, dirtyStates } = vi.hoisted(() => {
   return {
     mockFrom: vi.fn(),
     mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
     mockToast: vi.fn(),
     mockNavigate: vi.fn(),
+    dirtyStates: [] as boolean[],
   };
 });
 
@@ -67,6 +68,8 @@ vi.mock('../lib/db', () => ({
   supabase: { from: mockFrom, rpc: mockRpc },
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
+  hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
+  RpcErrorCodes: { QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT' },
   sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
 }));
 
@@ -88,13 +91,16 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
 }));
 
 vi.mock('../hooks/useUnsavedChanges', () => ({
-  useUnsavedChanges: () => ({
+  useUnsavedChanges: (dirty: boolean) => {
+    dirtyStates.push(dirty);
+    return ({
     setDirty: vi.fn(),
     confirmNavigation: vi.fn(() => true),
     showModal: false,
     handleConfirm: vi.fn(),
     handleCancel: vi.fn(),
-  }),
+    });
+  },
 }));
 
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
@@ -138,6 +144,7 @@ describe('QuoteBuilder', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    dirtyStates.length = 0;
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
   });
@@ -278,5 +285,40 @@ describe('QuoteBuilder', () => {
     expect(await screen.findByText('Family: Family Alpha')).toBeInTheDocument();
     expect(screen.getAllByText('SKU: SKU-EXACT')).toHaveLength(1);
     expect(quoteItemSelects).toContain('*, product:products(*, product_family:product_families(name))');
+  });
+
+  it('preserves a stale edit until Reload Quote replaces it and sends the refreshed version on the next save', async () => {
+    const quote = { id: 'quote-stale', quote_number: 'Q-stale', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const reloadedQuote = { ...quote, header_notes: 'Newer header', row_version: 8 };
+    const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
+    const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
+    const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({ data: table === 'quotes' ? (++quoteReads === 1 ? quote : reloadedQuote) : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [], error: null }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote' ? { data: null, error: { message: 'QUOTE_STALE_WRITE' } } : { data: null, error: null }));
+    renderQuoteBuilder(quote.id);
+    const header = await screen.findByDisplayValue('Original header');
+    fireEvent.change(header, { target: { value: 'Unsaved header edit' } });
+    fireEvent.click(screen.getByText('Save Draft'));
+    expect(await screen.findByText('Reload Quote')).toBeInTheDocument();
+    expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_payload: expect.objectContaining({ row_version_expected: 7, header_notes: 'Unsaved header edit' }),
+    }));
+    const readsBeforeKeepEditing = quoteReads;
+    fireEvent.click(screen.getByText('Keep editing'));
+    await waitFor(() => expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument());
+    expect((screen.getByDisplayValue('Unsaved header edit') as HTMLTextAreaElement).value).toBe('Unsaved header edit');
+    expect(quoteReads).toBe(readsBeforeKeepEditing);
+
+    fireEvent.click(screen.getByText('Save Draft'));
+    await screen.findByText('Reload Quote');
+    fireEvent.click(screen.getByText('Reload Quote'));
+    await waitFor(() => expect((screen.getByDisplayValue('Newer header') as HTMLTextAreaElement).value).toBe('Newer header'));
+    expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
+    await waitFor(() => expect(dirtyStates[dirtyStates.length - 1]).toBe(false));
+    fireEvent.click(screen.getByText('Save Draft'));
+    await waitFor(() => expect(mockRpc).toHaveBeenLastCalledWith('save_quote', expect.objectContaining({
+      p_quote_payload: expect.objectContaining({ row_version_expected: 8, header_notes: 'Newer header' }),
+    })));
   });
 });
