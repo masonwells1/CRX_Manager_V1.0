@@ -138,8 +138,8 @@ try {
   // policy targets anon, but it never asserts that RLS is still ENABLED. Every
   // later check in this proof runs as `postgres`, which bypasses RLS, so a dump
   // with `relrowsecurity` off would sail through undetected. The catalog is the
-  // only instrument that can see this: with a permissive `USING (true)` SELECT
-  // policy, an application role reads identically whether RLS is on or off.
+  // only instrument that can see this: a permissive SELECT policy that admits
+  // the reader reads identically whether RLS is enabled or disabled.
   sql(`DO $rls$
 DECLARE v_pol record; v_count integer;
 BEGIN
@@ -154,18 +154,34 @@ BEGIN
     RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_POLICY_COUNT_UNEXPECTED: %', v_count;
   END IF;
   SELECT * INTO v_pol FROM pg_policies WHERE schemaname='public' AND tablename='product_families';
+  -- The predicate is asserted from the catalog, not inferred from a role-scoped
+  -- read. Stage A restores an empty product_families, so a predicate narrowed to
+  -- admit nothing returns the same count(*) = 0 as an unconditional one, and no
+  -- read-based probe can tell them apart. The catalog text is the only witness.
+  --
+  -- Stage A created this policy as USING (true); 20260727174657 then tightened
+  -- it to require an active profile, which is the state both the baseline and
+  -- production now carry. Assert that invariant -- gated on is_active_profile(),
+  -- never unconditionally open -- rather than the exact rendered text, which
+  -- carries PostgreSQL's own whitespace.
   IF v_pol.policyname <> 'product_families_select'
      OR v_pol.cmd <> 'SELECT'
      OR v_pol.permissive <> 'PERMISSIVE'
-     OR v_pol.roles <> ARRAY['authenticated']::name[] THEN
-    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_POLICY_IDENTITY_DRIFTED: % / % / % / %',
-      v_pol.policyname, v_pol.cmd, v_pol.permissive, v_pol.roles;
+     OR v_pol.roles <> ARRAY['authenticated']::name[]
+     OR v_pol.qual IS NULL
+     OR btrim(v_pol.qual) = 'true'
+     OR position('is_active_profile' IN v_pol.qual) = 0
+     OR v_pol.with_check IS NOT NULL THEN
+    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_POLICY_IDENTITY_DRIFTED: % / % / % / % / qual=% / with_check=%',
+      v_pol.policyname, v_pol.cmd, v_pol.permissive, v_pol.roles, v_pol.qual, v_pol.with_check;
   END IF;
 END;
 $rls$;`);
-  // ...and confirm the table really is reachable by the intended application
-  // role and unreachable by anon, exercised as those roles rather than as the
-  // RLS-bypassing superuser every other statement here runs as.
+  // ...and confirm the GRANT layer agrees: reachable by the intended
+  // application role, refused for anon, exercised as those roles rather than as
+  // the RLS-bypassing superuser every other statement here runs as. This pair
+  // proves grant reachability only -- the policy predicate itself is asserted
+  // from the catalog above, because the restored table is empty.
   sql(`BEGIN; SET LOCAL ROLE authenticated; SELECT count(*) FROM public.product_families; ROLLBACK;`);
   assertExactFailure(sql(`BEGIN; SET LOCAL ROLE anon; SELECT count(*) FROM public.product_families; ROLLBACK;`,{fail:true}),'permission denied for table product_families','anon read of product_families');
   console.log('PHASE3_PRODUCT_FAMILIES_RLS_IN_FORCE_PASS');
