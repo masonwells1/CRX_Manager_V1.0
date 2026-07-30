@@ -26,7 +26,16 @@ BEGIN
     AND c.relname IN ('quotes', 'customers')
     AND a.attname = 'row_version'
     AND NOT a.attisdropped
-    AND (a.atttypid <> 'int8'::regtype OR NOT a.attnotnull OR pg_get_expr(d.adbin, d.adrelid) <> '1');
+    AND (
+      a.atttypid <> 'int8'::regtype
+      OR NOT a.attnotnull
+      OR regexp_replace(
+        regexp_replace(pg_get_expr(d.adbin, d.adrelid), '::(pg_catalog\.)?(int8|bigint)', '', 'g'),
+        E'[\\s''()]',
+        '',
+        'g'
+      ) <> '1'
+    );
   IF v_bad IS NOT NULL THEN
     RAISE EXCEPTION 'ROW_VERSION_SCHEMA_DRIFT: % must be bigint NOT NULL DEFAULT 1', v_bad;
   END IF;
@@ -413,14 +422,11 @@ BEGIN
       ELSE sent_at
     END,
     total_price = v_server_totals.total_price,
-    total_cost = (SELECT COALESCE(SUM(current_cost * total_units_needed), 0) FROM quote_items WHERE quote_id = v_quote_id),
-    total_profit = (SELECT COALESCE(SUM(profit), 0) FROM quote_items WHERE quote_id = v_quote_id),
+    total_cost = v_server_totals.total_cost,
+    total_profit = v_server_totals.total_profit,
     total_margin_pct = CASE
-      WHEN (SELECT COALESCE(SUM(total_price), 0) FROM quote_items WHERE quote_id = v_quote_id) > 0
-      THEN ROUND(
-        (SELECT COALESCE(SUM(profit), 0) FROM quote_items WHERE quote_id = v_quote_id)
-        / (SELECT COALESCE(SUM(total_price), 0) FROM quote_items WHERE quote_id = v_quote_id) * 100, 2
-      )
+      WHEN v_server_totals.total_price > 0
+      THEN ROUND(v_server_totals.total_profit / v_server_totals.total_price * 100, 2)
       ELSE 0
     END,
     updated_at = now()
@@ -756,7 +762,11 @@ BEGIN
     WHERE n.nspname = 'public'
       AND p.oid = 'public.bump_record_row_version()'::regprocedure
       AND p.prosecdef = false
-      AND p.proconfig = ARRAY['search_path=public, pg_temp']
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS setting
+        WHERE regexp_replace(setting, '\s+', '', 'g') = 'search_path=public,pg_temp'
+      )
       AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
       AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
       AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
@@ -776,7 +786,11 @@ BEGIN
     FROM pg_proc p
     WHERE p.oid = 'public.save_quote(uuid,jsonb,jsonb,uuid,text)'::regprocedure
       AND p.prosecdef
-      AND p.proconfig = ARRAY['search_path=public, pg_temp']
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS setting
+        WHERE regexp_replace(setting, '\s+', '', 'g') = 'search_path=public,pg_temp'
+      )
   ) THEN
     RAISE EXCEPTION 'ROW_VERSION_QUOTE_SECURITY_POSTFLIGHT_FAILED';
   END IF;
@@ -786,7 +800,11 @@ BEGIN
     FROM pg_proc p
     WHERE p.oid = 'public.save_customer(uuid,jsonb,jsonb,uuid,text)'::regprocedure
       AND p.prosecdef
-      AND p.proconfig = ARRAY['search_path=public, pg_temp']
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS setting
+        WHERE regexp_replace(setting, '\s+', '', 'g') = 'search_path=public,pg_temp'
+      )
   ) THEN
     RAISE EXCEPTION 'ROW_VERSION_CUSTOMER_SECURITY_POSTFLIGHT_FAILED';
   END IF;

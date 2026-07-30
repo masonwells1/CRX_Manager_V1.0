@@ -29,9 +29,9 @@ function psql(sql, allowFailure = false) {
 function scalar(sql) {
   return psql(sql).stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
 }
-function asyncSql(sql) {
+function asyncSql(sql, applicationName) {
   return new Promise((resolve, reject) => {
-    const child = spawn('docker', ['exec', '-i', name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1'], { cwd: root });
+    const child = spawn('docker', ['exec', '-i', '-e', `PGAPPNAME=${applicationName}`, name, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-A', '-t', '-v', 'ON_ERROR_STOP=1'], { cwd: root });
     let out = ''; let err = '';
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.stderr.on('data', (chunk) => { err += chunk; });
@@ -41,6 +41,21 @@ function asyncSql(sql) {
   });
 }
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForPgSleep(applicationName) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const sleepers = scalar(`
+      SELECT count(*)
+      FROM pg_stat_activity
+      WHERE application_name = '${applicationName}'
+        AND wait_event = 'PgSleep'
+        AND pid <> pg_backend_pid();
+    `);
+    if (sleepers === '1') return;
+    await wait(25);
+  }
+  throw new Error(`timed out waiting for ${applicationName} to reach its controlled sleep`);
+}
 
 async function waitForHealthyPostgres() {
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -56,10 +71,10 @@ async function waitForHealthyPostgres() {
   throw new Error(`local PostgreSQL did not become healthy within 20 seconds\n${logs}`);
 }
 
-function extractFunction(source, name, nextName) {
-  const start = source.indexOf(`CREATE OR REPLACE FUNCTION public.${name}`);
+function extractFunction(source, functionName, nextName) {
+  const start = source.indexOf(`CREATE OR REPLACE FUNCTION public.${functionName}`);
   const end = nextName ? source.indexOf(`CREATE OR REPLACE FUNCTION public.${nextName}`, start) : source.indexOf('-- Self-contained ACL', start);
-  assert.ok(start >= 0 && end > start, `could not extract ${name} body`);
+  assert.ok(start >= 0 && end > start, `could not extract ${functionName} body`);
   return source.slice(start, end).replace(/\r\n/g, '\n').trim();
 }
 
@@ -109,8 +124,8 @@ function assertQuoteValidationOrder(source) {
     unplan: body.indexOf("RAISE EXCEPTION 'BOOKING_HAS_JOB_RESERVATION:"),
     write: body.indexOf('\n  UPDATE quotes SET'),
   };
-  for (const [name, position] of Object.entries(anchors)) {
-    assert.ok(position >= 0, `save_quote ${name} validation/write anchor is missing`);
+  for (const [anchorName, position] of Object.entries(anchors)) {
+    assert.ok(position >= 0, `save_quote ${anchorName} validation/write anchor is missing`);
   }
   assert.ok(anchors.split < anchors.stale, 'quote split conflict must precede generic stale guard');
   assert.ok(anchors.stale < anchors.lifecycle, 'quote stale guard must precede lifecycle validation');
@@ -138,14 +153,25 @@ function assertCanonicalQuoteUpdate(currentSource, priorSource) {
     expectedAssignments.map(({ field }) => field),
     'consolidated quote UPDATE field order differs from the two prior canonical UPDATEs',
   );
+  const authoritativeTotalExpressions = new Map([
+    ['total_price', 'v_server_totals.total_price'],
+    ['total_cost', 'v_server_totals.total_cost'],
+    ['total_profit', 'v_server_totals.total_profit'],
+    ['total_margin_pct', 'CASE WHEN v_server_totals.total_price > 0 THEN ROUND(v_server_totals.total_profit / v_server_totals.total_price * 100, 2) ELSE 0 END'],
+  ]);
   for (const expected of expectedAssignments) {
     const actual = currentAssignments.find(({ field }) => field === expected.field);
     assert.equal(
       actual?.expression,
-      expected.expression,
+      authoritativeTotalExpressions.get(expected.field) ?? expected.expression,
       `consolidated quote UPDATE assignment mismatch for ${expected.field}`,
     );
   }
+  assert.match(
+    currentQuote,
+    /SELECT\s+COALESCE\(SUM\(total_price\), 0\) AS total_price,\s+COALESCE\(SUM\(current_cost \* total_units_needed\), 0\) AS total_cost,\s+COALESCE\(SUM\(profit\), 0\) AS total_profit\s+INTO v_server_totals\s+FROM quote_items\s+WHERE quote_id = v_quote_id;/,
+    'v_server_totals must come from the canonical quote-item aggregates',
+  );
   assert.equal(
     currentQuote.match(/\bUPDATE quotes SET\b/g)?.length,
     1,
@@ -286,7 +312,7 @@ function assertChildOwnershipContract() {
     const full = path.join(dir, entry.name);
     return entry.isDirectory() ? visit(full) : [full];
   });
-  const childMutation = /\.from\(['"](quote_sections|quote_items|customer_addresses)['"]\)[\s\S]{0,500}?\.(?:insert|update|upsert|delete)\(/;
+  const childMutation = /\.from\(['"](quote_sections|quote_items|customer_addresses)['"]\)(?:(?!;|\.from\().){0,500}?\.(?:insert|update|upsert|delete)\(/s;
   for (const table of ['quote_sections', 'quote_items', 'customer_addresses']) {
     assert.match(
       `supabase.from('${table}').upsert({ id: 'direct-child-write' })`,
@@ -294,6 +320,11 @@ function assertChildOwnershipContract() {
       `${table} frontend upserts must stay RPC-owned`,
     );
   }
+  assert.doesNotMatch(
+    "supabase.from('quote_items').select('*'); supabase.from('quotes').update({ status: 'sent' })",
+    childMutation,
+    'a later unrelated mutation must not be attributed to a child-table read',
+  );
   const offenders = visit(path.join(root, 'src'))
     .filter((file) => /\.tsx?$/.test(file))
     .filter((file) => childMutation.test(readFileSync(file, 'utf8')));
@@ -304,9 +335,11 @@ async function race(table, fn, reverseLockOrder) {
   psql(`TRUNCATE TABLE public.${table}; INSERT INTO public.${table}(id,value,row_version) VALUES ('one','original',1);`);
   // In the reverse path the first client is deliberately held *before* it
   // calls the locking function, so the later-labelled client owns the row.
-  const first = asyncSql(`${reverseLockOrder ? 'SELECT pg_sleep(.25); ' : ''}SELECT public.${fn}('one', 'first', 1, ${reverseLockOrder ? 0 : 1}, 'race-${table}-${reverseLockOrder}-first');`);
-  await wait(75);
-  const second = asyncSql(`SELECT public.${fn}('one', 'second', 1, ${reverseLockOrder ? 1 : 0}, 'race-${table}-${reverseLockOrder}-second');`);
+  const firstApplicationName = `race-${table}-${reverseLockOrder}-first`;
+  const secondApplicationName = `race-${table}-${reverseLockOrder}-second`;
+  const first = asyncSql(`${reverseLockOrder ? 'SELECT pg_sleep(2); ' : ''}SELECT public.${fn}('one', 'first', 1, ${reverseLockOrder ? 0 : 1}, 'race-${table}-${reverseLockOrder}-first');`, firstApplicationName);
+  await waitForPgSleep(firstApplicationName);
+  const second = asyncSql(`SELECT public.${fn}('one', 'second', 1, ${reverseLockOrder ? 1 : 0}, 'race-${table}-${reverseLockOrder}-second');`, secondApplicationName);
   const [a, b] = await Promise.all([first, second]);
   const successes = [a, b].filter((result) => result.code === 0);
   const failures = [a, b].filter((result) => result.code !== 0);

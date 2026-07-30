@@ -25,7 +25,6 @@ async function isolate(page: Page, options: { failQuoteReload?: boolean } = {}) 
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('requestfailed', (request) => { if (request.failure()?.errorText !== 'net::ERR_ABORTED') failedRequests.push(`${request.method()} ${request.url()}`); });
   let quoteReloadRequested = false;
-  let quoteSectionReads = 0;
   let customerReloadRequested = false;
   await page.routeWebSocket(`${API.replace('http', 'ws')}/realtime/v1/websocket**`, (socket) => socket.onMessage(() => undefined));
   await page.route(`${API}/**`, async (route) => {
@@ -62,8 +61,7 @@ async function isolate(page: Page, options: { failQuoteReload?: boolean } = {}) 
     if (url.pathname.endsWith('/rpc/get_customer_prep_card')) return json({ farm_name: customer.farm_name, contacts: [], balance_credit: { credit_limit_cents: 0, prepay_balance_cents: 0, open_ar_cents: 0 }, last_invoice: null, last_interaction: null, open_follow_ups_count: 0, open_workflow_counts: { quotes: 0, orders: 0, deliveries: 0 }, top_verified_facts: [], acres_tier: { total_acres: null, corn_acres: null, soybean_acres: null, other_acres: null, assigned_tier: 1 } });
     if (url.pathname.endsWith('/rpc/get_customer_purchase_summary')) return json({ top_products: [] });
     if (url.pathname === '/rest/v1/quote_sections') {
-      quoteSectionReads += 1;
-      if (options.failQuoteReload && quoteSectionReads >= 2) return json({ message: 'controlled quote-section read failure' }, 500);
+      if (options.failQuoteReload && quoteReloadRequested) return json({ message: 'controlled quote-section read failure' }, 500);
       return json([section]);
     }
     if (url.pathname === '/rest/v1/quote_items') return json([item]);

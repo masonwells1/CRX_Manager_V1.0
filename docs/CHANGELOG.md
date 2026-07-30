@@ -2,6 +2,25 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — Quote and Customer stale-save recovery was hardened before merge
+
+PR #290's automated review found that Customer saves did not validate the RPC's
+returned `row_version` as strictly as Quote saves, and that the reload dirty-state
+suppression depended only on `requestAnimationFrame`. The shared version resolver
+now rejects missing or jumped Customer save tokens, both Quote and Customer reloads
+have an idempotent timer fallback, and the conflict dialog reports asynchronous
+reload failure without discarding the operator's edits. Lifecycle recovery warnings
+also name the action that actually committed.
+
+The candidate migration's catalog postflight now tolerates PostgreSQL's harmless
+default/search-path formatting while preserving the exact security requirements.
+Quote totals reuse the single authoritative aggregate, and the disposable race,
+source-shape, and phone-browser proofs were made deterministic. Verification passed
+4,042 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
+PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
+SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains
+unapplied; frontend-first deployment and live migration apply remain separate gates.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

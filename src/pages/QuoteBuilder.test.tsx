@@ -1,7 +1,7 @@
 /**
  * QuoteBuilder.test.tsx — Tests for the quote builder page
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -376,6 +376,10 @@ describe('QuoteBuilder', () => {
     expect(quoteItemSelects).toContain('*, product:products(*, product_family:product_families(name))');
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('preserves a stale edit until Reload Quote replaces it and sends the refreshed version on the next save', async () => {
     const quote = { id: 'quote-stale', quote_number: 'Q-stale', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
     const reloadedQuote = { ...quote, header_notes: 'Newer header', row_version: 8 };
@@ -730,7 +734,7 @@ describe('QuoteBuilder', () => {
     fireEvent.change(screen.getByPlaceholderText('Why is this quote being reopened?'), { target: { value: 'Corrected customer request' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Un-accept' })[1]);
     await waitFor(() => expect(screen.getByText('sent')).toBeInTheDocument());
-    expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('was updated'));
+    expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('was reopened'));
     expect(mockToast).toHaveBeenCalledWith('success', 'Quote reopened to sent.');
   });
 

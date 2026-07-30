@@ -11,6 +11,8 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: 'line',
+  timeout: 60_000,
+  expect: { timeout: 10_000 },
   outputDir: 'output/playwright/row-version-results',
   use: { baseURL: 'http://127.0.0.1:41732', ...devices['Desktop Chrome'], trace: 'retain-on-failure', screenshot: 'only-on-failure' },
   webServer: { command: 'npm run dev -- --host 127.0.0.1 --port 41732', url: 'http://127.0.0.1:41732', reuseExistingServer: false, timeout: 120_000 },

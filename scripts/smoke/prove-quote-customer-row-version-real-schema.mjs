@@ -37,7 +37,7 @@ const quoteLifecycleAnchors = [
 
 function docker(args, options = {}) {
   const result = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 60 * 1024 * 1024, ...options });
-  if (result.error || (!options.allowFailure && result.status !== 0)) throw new Error(`${result.error?.message ?? ''}\n${result.stderr ?? result.stdout}`.trim());
+  if (result.error || (!options.allowFailure && result.status !== 0)) throw new Error(`${result.error?.message ?? ''}\n${result.stderr || result.stdout}`.trim());
   return result;
 }
 function psql(sql, options = {}) {
@@ -74,7 +74,7 @@ function proveQuoteLifecycleAnchorMutationResistance(sql) {
   for (const anchor of quoteLifecycleAnchors) {
     const mutations = [
       ['removing', sql.replace(anchor.statement, '')],
-      ['renaming', sql.replace(anchor.statement, `${anchor.statement.slice(0, -2)} (renamed)';`)],
+      ['renaming', sql.replace(anchor.statement, anchor.statement.replace('SMOKE_FAIL:', 'SMOKE_FAIL_RENAMED:'))],
     ];
     for (const [action, mutated] of mutations) {
       assert.notEqual(mutated, sql, `failed to mutate ${anchor.label} assertion anchor`);

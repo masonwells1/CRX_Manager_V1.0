@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -27,12 +27,19 @@ function query(result: QueryResult): Record<string, unknown> {
 function customerQuery(nextCustomer: () => typeof original | typeof newer): Record<string, unknown> {
   const chain: Record<string, unknown> = {};
   let result: QueryResult = { data: [], error: null };
+  let mutation = false;
   const self = (..._args: unknown[]) => chain;
-  for (const name of ['eq', 'neq', 'is', 'in', 'order', 'limit', 'single', 'maybeSingle', 'insert', 'update', 'delete']) chain[name] = self;
+  for (const name of ['eq', 'neq', 'is', 'in', 'order', 'limit', 'single', 'maybeSingle', 'insert', 'delete']) chain[name] = self;
+  chain.update = (..._args: unknown[]) => {
+    mutation = true;
+    return chain;
+  };
   chain.select = (columns: unknown) => {
     if (columns === '*' || columns === 'row_version') {
       const current = nextCustomer();
-      result = columns === '*' ? { data: current, error: null } : { data: { row_version: current.row_version }, error: null };
+      result = columns === '*'
+        ? { data: mutation ? [current] : current, error: null }
+        : { data: { row_version: current.row_version }, error: null };
     } else {
       result = { data: [{ id: 'customer-1', farm_name: 'Original Farm' }], error: null };
     }
@@ -95,6 +102,10 @@ describe('CustomerDetail stale whole-record save', () => {
       return query({ data: [], error: null });
     });
     mockRpc.mockResolvedValue({ data: null, error: { message: 'CUSTOMER_STALE_WRITE' } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('keeps unsaved input until an explicit Reload Customer installs the newer row and clears dirty navigation state', async () => {
@@ -175,6 +186,42 @@ describe('CustomerDetail stale whole-record save', () => {
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('stable saved customer')));
     expect(screen.getByRole('button', { name: 'Reload Customer' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('Keep this customer edit')).toBeInTheDocument();
+  });
+
+  it('releases dirty suppression even when animation frames do not run', async () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
+    renderDetail();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Unsaved Farm Edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload Customer' }));
+    await screen.findByDisplayValue('Newer Farm');
+
+    await new Promise((resolve) => window.setTimeout(resolve, 300));
+    fireEvent.change(screen.getByDisplayValue('Newer Farm'), { target: { value: 'Edit after reload settled' } });
+    await waitFor(() => expect(dirtyStates[dirtyStates.length - 1]).toBe(true));
+  });
+
+  it('rejects a jumped token returned by save_customer and fails the next save closed', async () => {
+    mockRpc
+      .mockResolvedValueOnce({ data: { customer_id: original.id, row_version: 6 }, error: null })
+      .mockResolvedValueOnce({ data: null, error: { message: 'CUSTOMER_STALE_WRITE' } });
+
+    renderDetail();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'First saved edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    expect(await screen.findByRole('button', { name: 'Reload Customer' })).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('version could not be confirmed'));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    fireEvent.change(screen.getByDisplayValue('First saved edit'), { target: { value: 'Second edit after uncertain save' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenLastCalledWith('save_customer', expect.objectContaining({
+      p_customer_payload: expect.objectContaining({
+        row_version_expected: null,
+        farm_name: 'Second edit after uncertain save',
+      }),
+    })));
   });
 
   it('keeps the committed crop but clears a jumped 4-to-6 token and requires recovery before a whole-record save', async () => {

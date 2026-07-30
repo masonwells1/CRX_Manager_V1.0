@@ -24,7 +24,12 @@ import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
-import { buildRowVersionPatch, readRowVersion, resolveDirectMutationRowVersion } from '../lib/recordVersionConcurrency';
+import {
+  buildRowVersionPatch,
+  readRowVersion,
+  resolveAuthoritativeSaveRowVersion,
+  resolveDirectMutationRowVersion,
+} from '../lib/recordVersionConcurrency';
 import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 import { logActivity } from '../lib/activityLogger';
 import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
@@ -253,9 +258,17 @@ export default function CustomerDetail() {
         setStaleSaveOpen(false);
       }
     } finally {
-      requestAnimationFrame(() => requestAnimationFrame(() => {
+      let released = false;
+      const releaseDirtySuppression = () => {
+        if (released) return;
+        released = true;
         suppressDirtyUntilReloadSettlesRef.current = false;
         if (installedSnapshot) setIsDirty(false);
+      };
+      const fallback = window.setTimeout(releaseDirtySuppression, 250);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        window.clearTimeout(fallback);
+        releaseDirtySuppression();
       }));
     }
   }, [fetchCustomerSnapshot]);
@@ -613,7 +626,15 @@ export default function CustomerDetail() {
       } else {
         saveCustomerIdem.resetKey();
         const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null; row_version?: unknown }>(data, 'save_customer');
-        customerRowVersionRef.current = readRowVersion(result.row_version);
+        const rowVersionResult = resolveAuthoritativeSaveRowVersion(
+          customerRowVersionRef.current,
+          result.row_version,
+        );
+        customerRowVersionRef.current = rowVersionResult.rowVersion;
+        if (rowVersionResult.kind === 'recovery') {
+          setStaleSaveOpen(true);
+          toast('warning', 'Customer saved, but its save-protection version could not be confirmed. Reload before editing or saving it again.');
+        }
         // Advance the baseline snapshot ONLY when THIS tab saved its own split edit
         // (see QuoteBuilder / nextLoadedSplitSnapshot for the multi-tab rationale).
         loadedDefaultSplitRef.current = nextLoadedSplitSnapshot({
@@ -625,10 +646,10 @@ export default function CustomerDetail() {
         defaultSplitTouchedRef.current = false;
         setIsDirty(false);
         if (isNew) {
-          toast('success', 'Customer created');
+          if (rowVersionResult.kind !== 'recovery') toast('success', 'Customer created');
           navigate(`/customers/${result.customer_id ?? data}`, { replace: true });
         } else {
-          toast('success', 'Customer updated');
+          if (rowVersionResult.kind !== 'recovery') toast('success', 'Customer updated');
           fetchAddresses();
         }
       }

@@ -625,6 +625,7 @@ export default function QuoteBuilder() {
     mutatedQuoteId: string,
     previousRowVersion: number | null,
     expectedRowVersion: number | null,
+    action: string,
   ): Promise<boolean> => {
     const { data, error } = await supabase
       .from('quotes')
@@ -642,7 +643,7 @@ export default function QuoteBuilder() {
       if (error) {
         Sentry.captureException(error, { tags: { source: 'read', action: 'refresh_quote_row_version_after_mutation' } });
       }
-      clearQuoteRowVersionWithRefreshWarning('updated');
+      clearQuoteRowVersionWithRefreshWarning(action);
       return false;
     }
 
@@ -831,9 +832,17 @@ export default function QuoteBuilder() {
         setStaleSaveOpen(false);
       }
     } finally {
-      requestAnimationFrame(() => requestAnimationFrame(() => {
+      let released = false;
+      const releaseDirtySuppression = () => {
+        if (released) return;
+        released = true;
         suppressDirtyUntilReloadSettlesRef.current = false;
         if (installedSnapshot) setIsDirty(false);
+      };
+      const fallback = window.setTimeout(releaseDirtySuppression, 250);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        window.clearTimeout(fallback);
+        releaseDirtySuppression();
       }));
     }
   }, [fetchQuote, quoteId]);
@@ -1628,7 +1637,7 @@ export default function QuoteBuilder() {
       closeAppliedIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; active_jobs_remaining?: number; warnings?: string[] }>(data, 'close_quote_as_applied');
       setStatus((result.status as QuoteStatus) || 'closed_by_application');
-      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1);
+      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'closed as fulfilled by application');
       setIsDirty(false);
       const warnings = result.warnings || [];
       toast('success', warnings.length > 0
@@ -1670,7 +1679,7 @@ export default function QuoteBuilder() {
       closeShortIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; warnings?: string[] }>(data, 'close_quote_as_short');
       setStatus((result.status as QuoteStatus) || 'closed_short');
-      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1);
+      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'closed short');
       setIsDirty(false);
       const warnings = result.warnings || [];
       toast('success', warnings.length > 0
@@ -1719,7 +1728,7 @@ export default function QuoteBuilder() {
       const result = assertRpcResult<{ success: boolean; old_status: string; new_status: string }>(data, 'revert_quote_status');
       revertStatusIdem.resetKey();
       setStatus((result.new_status as QuoteStatus) || 'sent');
-      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1);
+      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'reopened');
       // Codex round-9 P2: a PLANNED quote's holds are now rebuilt ATOMICALLY inside
       // revert_quote_status (20260613290000) — same transaction as the status flip, so
       // there is no sent-without-holds window. The previous client-side recreate-after-
@@ -1834,6 +1843,7 @@ export default function QuoteBuilder() {
           quoteId,
           previousRowVersion,
           previousRowVersion === null ? null : previousRowVersion + (freezeResult.status === 'duplicate' ? 0 : 1),
+          'sent',
         );
         fetchVersions();
       }
@@ -1964,6 +1974,7 @@ export default function QuoteBuilder() {
         savedId,
         previousRowVersion,
         previousRowVersion === null ? null : previousRowVersion + (ver.status === 'duplicate' ? 0 : 1),
+        'presented',
       );
       createVersionIdem.resetKey();
       setShowPreviewModal(false);

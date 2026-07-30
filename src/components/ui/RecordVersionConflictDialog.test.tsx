@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import RecordVersionConflictDialog from './RecordVersionConflictDialog';
 
@@ -18,8 +18,7 @@ describe('RecordVersionConflictDialog (used by QuoteBuilder and CustomerDetail)'
     expect(reload).toHaveBeenCalledOnce();
   });
 
-  it('keeps both actions reachable at phone width', () => {
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 });
+  it('keeps both actions full-width and touch-sized for phone layouts', () => {
     const { container } = render(<RecordVersionConflictDialog open entityLabel="quote" onKeepEditing={vi.fn()} onReload={vi.fn()} />);
     expect(container.querySelector('[data-modal-panel]')?.className).toContain('max-w-full');
     for (const label of ['Keep editing', 'Reload Quote']) {
@@ -27,5 +26,18 @@ describe('RecordVersionConflictDialog (used by QuoteBuilder and CustomerDetail)'
       expect(button?.className).toContain('min-h-11');
       expect(button?.className).toContain('w-full');
     }
+  });
+
+  it('keeps the dialog open and surfaces an asynchronous reload failure', async () => {
+    render(<RecordVersionConflictDialog
+      open
+      entityLabel="customer"
+      onKeepEditing={vi.fn()}
+      onReload={vi.fn().mockRejectedValue(new Error('offline'))}
+    />);
+
+    fireEvent.click(screen.getByText('Reload Customer'));
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('Reload could not finish'));
+    expect(screen.getByRole('button', { name: 'Reload Customer' })).toBeEnabled();
   });
 });
