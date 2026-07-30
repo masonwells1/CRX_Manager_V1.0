@@ -22,6 +22,7 @@ import {
   mainPushSource,
   proofValid,
   pushContextIsAmbiguous,
+  pushHiddenByShellComposition,
   pushIsForced,
   pushNamesRemoteProgram,
   pushUsesBulkMode,
@@ -52,6 +53,14 @@ let payload;
 try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
 
 const cmd = String(payload?.tool_input?.command || "");
+// Before `isGitPush`, because the point of this check is that `isGitPush` is
+// reading text the shell will not execute (Codex's nineteenth 2026-07-30
+// review). A command that only becomes a push after quote-splicing or command
+// substitution is refused outright — analysing a spelling the shell rewrites
+// proves nothing about where the objects go.
+if (pushHiddenByShellComposition(cmd)) {
+  deny("CODEX GATE: this command only becomes a `git push` after shell quoting or command substitution (for example `git p\"us\"h`, `$(git push …)`, or a backtick). The review gate reads the command text, so a push spelled that way would be inspected as something it is not. Write the push plainly: `git -C <repo> push <remote> <refspec>`.");
+}
 if (!isGitPush(cmd)) passthrough();
 if (pushContextIsAmbiguous(cmd)) {
   deny("CODEX GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");

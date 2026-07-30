@@ -255,6 +255,28 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round nineteen: the shell runs something other than the text we matched
+
+**A guard that reads command text can be re-spelled around.** Codex probed three forms that walked
+past every check in the file: `git p"us"h origin HEAD:main`, which the shell concatenates back into
+`push`, and `$(git push …)` / `` `git push …` ``, where the inner command runs but its `git` is not at
+a word boundary the pattern matches. None reached the destination, force or proof checks.
+
+No pattern closes this, and a better one is not attempted — a shell has unbounded ways to spell a
+word. The command is instead re-read with quotes removed and substitution punctuation turned into
+whitespace; if *that* reading is a push while the literal text is not, the command is **refused
+rather than analysed**, because analysing text the shell will not execute proves nothing about where
+the objects land. Proven by driving the hook itself: both probed commands return **DENY**, `npm run
+build` still passes through. Worth stating plainly, since it is the honest scope of this whole file:
+the real boundary against a determined evader is GitHub's `protect-main` ruleset, which no local
+spelling reaches. These hooks stop the accident and the clever-but-not-adversarial case.
+
+**And the manifest was exempt from its own rule.** Round seventeen made every snapshot *file* prove
+it is a regular file and left `manifest.json` itself reading normally — a symlinked manifest passed
+verification while git recorded only the link, and the stray-entry scan excludes that name
+unconditionally, so nothing else would have caught it. It is now `lstat`ed like everything else. All
+three mutants turn the suites red.
+
 ### Round eighteen: stop enumerating the spellings
 
 One high, and the last three rounds turned out to be one idea.

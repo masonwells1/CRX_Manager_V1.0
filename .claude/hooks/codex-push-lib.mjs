@@ -21,6 +21,28 @@ export function isGitPush(cmd) {
   return GIT_PUSH_RE.test(String(cmd || ""));
 }
 
+// A guard that reads command TEXT sees the text; the shell runs something else.
+// Codex's nineteenth 2026-07-30 review probed three spellings that every check
+// in this file missed: `git p"us"h origin HEAD:main`, which the shell
+// concatenates back into `push`, and `$(git push …)` / `` `git push …` ``, where
+// the inner command runs but its `git` is not at a word start this pattern
+// matches. All three skipped the destination, force and proof checks entirely.
+//
+// No pattern closes this — a shell has unbounded ways to spell a word — so a
+// better pattern is not attempted. The command is instead re-read with quotes
+// removed and substitution/grouping punctuation turned into whitespace. If that
+// reading is a push while the literal text is not, the command is HIDING a push
+// and is refused rather than analysed, because an analysis of text the shell
+// will not execute proves nothing. The honest boundary against a determined
+// evader is GitHub's branch protection, which no local spelling reaches; this
+// only has to stop the accident and the clever-but-not-adversarial case.
+export function pushHiddenByShellComposition(cmd) {
+  const text = String(cmd || "");
+  if (isGitPush(text)) return false; // an ordinary push takes the normal path
+  const unwrapped = text.replace(/["']/g, "").replace(/[$`(){}]/g, " ");
+  return isGitPush(unwrapped);
+}
+
 // EVERY push in the command, not just the first. `String.match` without /g and
 // `RegExp.exec` on a non-global pattern both stop at the first hit, which meant a
 // whole-command check saw only the leading push — so `git push origin feature &&

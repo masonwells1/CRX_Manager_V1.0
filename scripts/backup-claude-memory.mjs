@@ -653,6 +653,21 @@ function verify(dir) {
     console.error(`FAIL: no ${MANIFEST} in ${dir}`);
     return 1;
   }
+  // Round 17 made every SNAPSHOT file prove it is a regular file, and left the
+  // manifest itself reading normally — which is the same hole one level up
+  // (Codex's nineteenth 2026-07-30 review). A manifest symlinked to a valid
+  // manifest elsewhere passes verification while git records only the link, so
+  // the commit would carry a backup that no longer describes itself. The stray-
+  // entry scan excludes this name unconditionally, so nothing else would notice.
+  let manifestInfo;
+  try { manifestInfo = linkStat(manifestPath); } catch { manifestInfo = null; }
+  if (!manifestInfo || !manifestInfo.isFile()) {
+    const kind = manifestInfo?.isSymbolicLink() ? "a symbolic link"
+      : manifestInfo?.isDirectory() ? "a directory"
+      : manifestInfo ? "not a regular file" : "unreadable";
+    console.error(`FAIL: ${MANIFEST} in ${dir} is ${kind} — a snapshot must describe itself with a real file.`);
+    return 1;
+  }
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(manifestPath, "utf8"));

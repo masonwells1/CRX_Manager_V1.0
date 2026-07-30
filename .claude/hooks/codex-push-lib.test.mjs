@@ -16,6 +16,7 @@ import {
   mainPushSource,
   pushIsForced,
   pushNamesRemoteProgram,
+  pushHiddenByShellComposition,
   pushContextIsAmbiguous,
   pushUsesBulkMode,
   reviewProofPathMentioned,
@@ -374,6 +375,35 @@ assert.equal(
 assert.equal(
   urlIsGuardedApp("github-crx:masonwells1/CRX_Backups.git"), false,
   "and the alias rule does not start policing the private backup repo",
+);
+
+// ── round 19: the shell runs something other than the text we matched ────────
+// Three spellings Codex probed straight past every check in the file. The rule
+// is not "recognise these three" — it is that a command which only becomes a
+// push after the shell rewrites it is refused instead of analysed.
+assert.equal(
+  pushHiddenByShellComposition(`git p"us"h origin HEAD:main`), true,
+  "quote splicing that the shell concatenates back into `push` is caught",
+);
+assert.equal(
+  pushHiddenByShellComposition(`git p'us'h origin HEAD:main`), true,
+  "including the single-quote spelling",
+);
+assert.equal(
+  pushHiddenByShellComposition("$(git push origin HEAD:main)"), true,
+  "a command substitution that runs a push is caught",
+);
+assert.equal(
+  pushHiddenByShellComposition("`git push origin HEAD:main`"), true,
+  "and the backtick spelling of the same thing",
+);
+assert.equal(
+  pushHiddenByShellComposition("git -C /repo push origin HEAD:main"), false,
+  "an ordinary push is NOT flagged — it takes the normal inspected path",
+);
+assert.equal(
+  pushHiddenByShellComposition("npm run build"), false,
+  "and a command with no push in any reading is left alone",
 );
 
 // ── round 18: a destination that names a PROGRAM, not an address ─────────────
@@ -972,6 +1002,25 @@ assert.equal(pushDestinationToken("git push"), null);
       `git -C ${work} push ssh://git@github-crx/masonwells1/CRX_Manager_V1.0.git HEAD:main`,
       /codex/i,
       "nor does the ssh:// spelling of the same alias",
+    );
+
+    // Round 19, end-to-end: the hook itself must refuse a command that only
+    // becomes a push after the shell rewrites it. Analysing text the shell will
+    // not execute proves nothing about where the objects land.
+    deniedBecause(
+      `git p"us"h origin HEAD:main`,
+      /quoting or command substitution/i,
+      "quote-spliced `push` is refused by the hook, not analysed",
+    );
+    deniedBecause(
+      `$(git push origin HEAD:main)`,
+      /quoting or command substitution/i,
+      "and so is a command substitution that runs a push",
+    );
+    deniedBecause(
+      "`git push origin HEAD:main`",
+      /quoting or command substitution/i,
+      "and the backtick spelling of it",
     );
 
     // Round 18, end-to-end: git's remote-helper syntax hands delivery to an

@@ -729,6 +729,22 @@ try {
       __setLinkStat(null);
     }
 
+    // Round 19: the same hole one level up. Round 17 made every snapshot FILE
+    // prove it is regular and left the manifest reading normally, so a manifest
+    // symlinked to a valid manifest elsewhere passed while git recorded only the
+    // link — and the stray-entry scan excludes that name unconditionally, so
+    // nothing else would have noticed.
+    const manifestPath = path.resolve(dest, MANIFEST);
+    try {
+      __setLinkStat((p) => (path.resolve(p) === manifestPath ? asLink : lstatSync(p)));
+      const run = captured(() => verify(dest));
+      eq(run.value, 1, "verify refuses a manifest that is itself a symbolic link");
+      ok(/is a symbolic link/.test(run.said), "and says so plainly");
+    } finally {
+      __setLinkStat(null);
+    }
+    eq(quiet(() => verify(dest)), 0, "and the real manifest still verifies");
+
     // A stray entry the manifest does not vouch for is still reported, and a
     // dangling link there no longer throws ENOENT out of the whole run.
     const danglingPath = path.resolve(dest, "stray.md");
