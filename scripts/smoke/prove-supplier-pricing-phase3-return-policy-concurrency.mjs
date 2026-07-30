@@ -60,9 +60,15 @@ function resolveBaseline(suffix){
 // assertions lean on -- `check_idempotency`, `_issue_return_credit_impl`, the
 // return implementations -- so the run would certify behavior that is not the
 // repository's. There is no second trusted input, so there is no second path.
-const schemaArtifact=Object.keys(manifest.artifacts??{}).find(f=>f.endsWith('_public_schema.sql.br'));
-const baselineDumpSha=schemaArtifact&&manifest.artifacts[schemaArtifact].decoded_sha256;
-if(!baselineDumpSha) throw new Error('manifest.json has no *_public_schema.sql.br decoded_sha256 to bind the dump against');
+// Exactly one candidate, same as resolveBaseline: taking the first suffix match
+// would let a second generation's entry sit unnoticed in the manifest and decide
+// which dump this proof accepts, which is the ambiguity this binding exists to
+// remove.
+const schemaHits=Object.keys(manifest.artifacts??{}).filter(f=>f.endsWith('_public_schema.sql.br'));
+if(schemaHits.length!==1) throw new Error(`expected exactly one *_public_schema.sql.br entry in manifest.json to bind the dump against, found ${schemaHits.length}${schemaHits.length?`: ${schemaHits.join(', ')}`:''}`);
+const schemaArtifact=schemaHits[0];
+const baselineDumpSha=manifest.artifacts[schemaArtifact].decoded_sha256;
+if(!baselineDumpSha) throw new Error(`manifest.json entry ${schemaArtifact} has no decoded_sha256 to bind the dump against`);
 const dumpSha=sha256(path.resolve(dump));
 if(dumpSha!==baselineDumpSha) throw new Error(`refusing to prove against an unbound schema dump: ${path.resolve(dump)} hashes to ${dumpSha}, but this baseline generation (${schemaArtifact}) requires ${baselineDumpSha}. Produce the accepted dump with \`node scripts/decompress-schema-baseline.mjs > public-schema.sql\`.`);
 const files={ extensions:resolveBaseline('_extensions.sql'), aclLockdown:resolveBaseline('_acl_lockdown.sql'), dump:path.resolve(dump), section9:resolveMigration('_section9_po_ap_high_remediation.sql'), stageA:resolveMigration('_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
