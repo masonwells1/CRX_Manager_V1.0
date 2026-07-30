@@ -16,6 +16,7 @@ import {
   mainPushSource,
   pushIsForced,
   isGitPush,
+  executableTransportSettings,
   eachPush,
   pushNamesRemoteProgram,
   pushHiddenByShellComposition,
@@ -377,6 +378,40 @@ assert.equal(
 assert.equal(
   urlIsGuardedApp("github-crx:masonwells1/CRX_Backups.git"), false,
   "and the alias rule does not start policing the private backup repo",
+);
+
+// ── round 21: the same instruction, stored instead of typed ──────────────────
+// Round 17 denied `--receive-pack` on the command line. Git stores it too, and
+// `core.sshCommand` replaces the SSH binary outright — neither appears in the
+// push text, so no parser sees them.
+{
+  const list = [
+    "core.sshcommand=ssh -i /tmp/relay",
+    "remote.backup.receivepack=/tmp/relay",
+    "remote.origin.url=git@github.com:masonwells1/CRX_Backups.git",
+    "user.name=Mason",
+  ].join("\n");
+  const found = executableTransportSettings(list);
+  assert.ok(found.includes("core.sshcommand"), "core.sshCommand is named");
+  assert.ok(found.includes("remote.backup.receivepack"), "a stored receivepack is named");
+  assert.equal(found.length, 2, "and nothing innocent is swept up with them");
+}
+assert.deepEqual(
+  executableTransportSettings("user.name=Mason\nremote.origin.url=git@github.com:x/y.git"), [],
+  "an ordinary configuration names no programs",
+);
+assert.deepEqual(executableTransportSettings(""), [], "and an empty config is empty");
+assert.ok(
+  executableTransportSettings("CORE.SSHCOMMAND=ssh").includes("core.sshcommand"),
+  "git config keys are case-insensitive, so the check is too",
+);
+assert.ok(
+  executableTransportSettings("remote.b.uploadpack /tmp/relay").includes("remote.b.uploadpack"),
+  "and --get-regexp's space-separated output reads the same as --list's",
+);
+assert.ok(
+  executableTransportSettings("protocol.ext.command=/tmp/relay").includes("protocol.ext.command"),
+  "the transport-helper command setting is named too",
 );
 
 // ── round 20: a command can start right after a separator, with no space ─────
@@ -1139,6 +1174,27 @@ assert.equal(pushDestinationToken("git push"), null);
       "allow",
       "and the same value written in an earlier segment",
     );
+
+    // Round 21, end-to-end: the STORED twins of round 17's `--receive-pack`.
+    // Nothing about the command line is unusual — the checkout itself remembers
+    // a program to hand the objects to, so the destination the guard reads is
+    // not where they land. The scratch `origin` is an unrelated local repo, and
+    // it is still denied: an unreadable destination is the point, not the repo.
+    for (const [key, value] of [
+      ["remote.origin.receivepack", "/tmp/relay"],
+      ["core.sshCommand", "ssh -i /tmp/relay"],
+    ]) {
+      try {
+        git(["config", key, value], work);
+        const result = runHook(push);
+        assert.equal(result.decision, "deny", `a stored ${key} is denied`);
+        assert.match(result.reason, /name a program to carry the push/, `and the denial names ${key}`);
+        assert.match(result.reason, new RegExp(key.toLowerCase().replace(/\./g, "\\.")), "and quotes the setting itself");
+      } finally {
+        git(["config", "--unset", key], work);
+      }
+    }
+    assert.equal(runHook(push).decision, "allow", "and unsetting them restores an ordinary push");
 
     // Controls: the guard must not have become a blanket denier. Both of these
     // run all the way through the destination lookups against the scratch repo.

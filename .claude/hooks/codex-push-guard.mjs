@@ -39,6 +39,7 @@ import {
   pushDestinationToken,
   repoIsGuardedApp,
   rewritesReachGuardedApp,
+  executableTransportSettings,
   urlIsGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -269,6 +270,23 @@ for (const pushCmd of pushCommands) {
     // means "no rewrites configured" — NOT a failure. An empty string is
     // correctly read as "no rewrite reaches the app repo".
     urlRewrites = "";
+  }
+  // Checked BEFORE the "unrelated repository, skip the gate" exit below, because
+  // these settings are what make "which repository is this?" answerable in the
+  // first place. `remote.<name>.receivepack` and `core.sshCommand` name programs
+  // that carry the objects, so a nominal backup remote can deliver to the app
+  // repo while all three classifiers below say "unrelated" (Codex's twenty-first
+  // 2026-07-30 review). Same fact as round seventeen's command-line flag, stored
+  // instead of typed.
+  let transportConfig = "";
+  try {
+    transportConfig = git(["config", "--list"], pushRepoDir);
+  } catch (_error) {
+    transportConfig = ""; // an unreadable config is handled by the checks below
+  }
+  const namedPrograms = executableTransportSettings(transportConfig);
+  if (namedPrograms.length > 0) {
+    deny(`CODEX GATE: this checkout configures git settings that name a program to carry the push (${namedPrograms.join(", ")}). That program decides where the objects actually go, so no destination check here can be trusted. Unset them with \`git config --unset <setting>\` and push normally — git's own defaults need none of them.`);
   }
   if (
     !urlIsGuardedApp(destinationUrl) &&

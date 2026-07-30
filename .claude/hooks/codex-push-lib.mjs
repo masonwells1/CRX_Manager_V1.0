@@ -487,6 +487,41 @@ export function pushNamesRemoteProgram(cmd) {
   return false;
 }
 
+// Round seventeen denied `--receive-pack` on the COMMAND LINE. Git stores the
+// same instruction persistently, and Codex's twenty-first 2026-07-30 review found
+// both halves of that: `remote.<name>.receivepack` makes an innocuous-looking
+// remote hand its objects to a program of someone else's choosing, and
+// `core.sshCommand` replaces the SSH binary itself, so a verified destination URL
+// is delivered by an arbitrary relay. Neither appears anywhere in the push text
+// the guard reads, so no amount of command parsing sees them.
+//
+// Both are the same fact as round seventeen — a setting that names a PROGRAM —
+// so they are handled the same way: named, refused, not interpreted. Nothing in
+// this repo configures any of these; git's own defaults are used everywhere. A
+// false refusal costs one error message naming the setting to unset.
+//
+// Takes `git config --list` output (or `--get-regexp` output) so it stays a pure
+// function the tests can drive directly.
+const EXECUTABLE_TRANSPORT_KEYS = [
+  /^core\.sshcommand$/,
+  /^core\.gitproxy$/,
+  /^remote\..+\.receivepack$/,
+  /^remote\..+\.uploadpack$/,
+  /^protocol\..+\.command$/,
+  /^ssh\.variant$/,
+];
+export function executableTransportSettings(configOutput) {
+  const found = [];
+  for (const raw of String(configOutput ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const sep = line.search(/[=\s]/);
+    const key = (sep === -1 ? line : line.slice(0, sep)).toLowerCase();
+    if (EXECUTABLE_TRANSPORT_KEYS.some((re) => re.test(key)) && !found.includes(key)) found.push(key);
+  }
+  return found;
+}
+
 // Any option in a push command that this guard's argv walk does not understand.
 // A non-empty result means the destination cannot be resolved safely.
 export function unknownPushOptions(cmd) {

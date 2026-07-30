@@ -44,7 +44,7 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { canonicalRepoId } from "../.claude/hooks/codex-push-lib.mjs";
+import { canonicalRepoId, executableTransportSettings } from "../.claude/hooks/codex-push-lib.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -407,6 +407,24 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
         `      warning. Fix the check (\`gh auth status\`, or come back online) and re-run — or\n` +
         `      stage into a path outside the repo if you only wanted a local copy. Nothing was\n` +
         `      written.`
+      );
+    }
+    // Everything above proves WHICH REPOSITORY the URL names. It does not prove
+    // that git will use git's own transport to get there: `core.sshCommand`
+    // replaces the SSH binary outright, and `remote.<name>.receivepack` names the
+    // program on the far side, so a verified URL can still be delivered by an
+    // arbitrary relay (Codex's twenty-first 2026-07-30 review). The post-push
+    // manifest comparison would notice — but only after these notes, which name
+    // real people and real money, had already left. So it is checked before the
+    // destination is called verified, not after.
+    const namedPrograms = executableTransportSettings(String(git(["config", "--list"]).stdout || ""));
+    if (namedPrograms.length > 0) {
+      return (
+        `FAIL: refusing to ${verb} — this checkout configures git settings that name a program to\n` +
+        `      carry the push (${namedPrograms.join(", ")}). That program decides where the objects\n` +
+        `      actually go, so the verified URL above proves nothing about the destination. Unset\n` +
+        `      them with \`git config --unset <setting>\` and re-run; git's own defaults need none\n` +
+        `      of them. Nothing was written.`
       );
     }
     console.log(`Destination verified: this checkout pushes only to ${redactUrl(pushUrls[0])}, which GitHub reports PRIVATE.`);

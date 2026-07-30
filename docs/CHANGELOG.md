@@ -255,6 +255,30 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round twenty-one: the checkout can remember the relay
+
+**Round seventeen refused `--receive-pack` on the command line; the same instruction stored in git
+config went unread.** `remote.<name>.receivepack` names the program on the far side and
+`core.sshCommand` replaces the ssh binary outright, so a checkout can be armed once and every later
+push — a perfectly ordinary `git push origin main`, with nothing unusual to read anywhere in its
+text — carries the objects to a program of someone else's choosing. Every destination check still
+described the verified URL, correctly and uselessly: the URL says which repository is *named*, not
+which program the objects are *handed to*.
+
+Both places that decide a destination is safe now refuse when the checkout configures any setting
+that names a program to carry the push (`core.sshCommand`, `core.gitProxy`,
+`remote.*.receivepack`, `remote.*.uploadpack`, `protocol.*.command`, `ssh.variant`) — the push guard
+before it decides a repository is unrelated and skips the gate, and the off-site backup script
+before it prints "Destination verified". One shared predicate, not two, so the two paths cannot
+drift apart. The refusal names the setting and the one command that clears it; git's own defaults
+need none of them.
+
+Proven on real paths, not only in the harness: with `remote.origin.receivepack` planted in a scratch
+checkout the real hook returns **DENY** and returns to **ALLOWED** the moment it is unset, and on the
+actual private `CRX_Backups` clone the backup script goes from `Destination verified … PRIVATE` to
+a refusal naming `core.sshcommand` and back again. Both call sites and the predicate are
+mutation-tested — neutering the predicate, or disabling either refusal, turns its suite red.
+
 ### Round twenty: a command can start right after a separator
 
 **`npm test&&git push origin HEAD:main` was invisible to the hook.** The pattern required whitespace

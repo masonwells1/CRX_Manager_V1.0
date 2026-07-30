@@ -397,6 +397,36 @@ try {
       __setVisibilityProbe(() => ({ visibility: "PRIVATE" }));
     }
 
+    // ── round 21: the right repository, delivered by the wrong program ────────
+    // Everything above proves WHICH repository the remote URL names. It does not
+    // prove git uses its own transport to get there: `core.sshCommand` replaces
+    // the ssh binary and `remote.<name>.receivepack` names the program on the far
+    // side, so a verified URL can still be delivered by an arbitrary relay.
+    for (const [key, value] of [
+      ["core.sshCommand", "ssh -i /tmp/relay"],
+      ["remote.origin.receivepack", "/tmp/relay"],
+    ]) {
+      const dest = path.join(backupRepo, `claude-memory-relay-${key.replace(/[^a-z]/gi, "")}`);
+      try {
+        assert.equal(
+          spawnSync("git", ["-C", backupRepo, "config", key, value], { encoding: "utf8", env: cleanEnv }).status,
+          0,
+          `test fixture: could not set ${key}`,
+        );
+        const run = captured(() => stage(dest, notes));
+        eq(run.value, 1, `staging is refused when the checkout configures ${key}`);
+        ok(/name a program to\s+carry the push/.test(run.said), "and the refusal explains why the verified URL proves nothing");
+        ok(run.said.includes(key.toLowerCase()), "and names the setting to unset");
+        ok(!readdirSafe(dest), "and nothing is written when the transport is unaccountable");
+      } finally {
+        spawnSync("git", ["-C", backupRepo, "config", "--unset", key], { encoding: "utf8", env: cleanEnv });
+      }
+    }
+    {
+      const recovered = path.join(backupRepo, "claude-memory-relay-cleared");
+      eq(quiet(() => stage(recovered, notes)), 0, "and unsetting them restores an ordinary snapshot");
+    }
+
     // ── round 11: a push can land somewhere the fetch URL never mentions ──────
     // `git remote set-url --push` splits the two. Reading "any URL git mentions"
     // accepted a clone that FETCHES from the private backup and PUSHES to a public
