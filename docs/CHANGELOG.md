@@ -2,6 +2,21 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — Quote-version restore joins row-version boundary
+
+`restore_quote_version` is now wrapped inside the pending Quote/Customer
+row-version migration with sales-rep ownership enforcement, canonical
+idempotency-before-parent locking, an expected Quote token, and
+request/current-token-bound replay. The browser sends the loaded Quote token
+and preserves its original key/token pair across retries, with the same exact
+`PGRST202` frontend-first fallback used by the other lifecycle calls while
+production remains pre-migration.
+
+Rollback-only and structural proofs now cover stale restore rejection, direct
+and replay ownership, exact one-time token advancement, drawn-ledger
+compatibility, and planned-hold synchronization. The migration remains
+unapplied.
+
 ## 2026-07-30 — Quote and Customer stale-save recovery was hardened before merge
 
 PR #290's automated review found that Customer saves did not validate the RPC's

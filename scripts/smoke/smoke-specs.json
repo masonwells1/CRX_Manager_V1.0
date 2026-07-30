@@ -468,7 +468,7 @@
     },
     "restore_quote_version": {
       "chain": "smoke-restore-version-drawn-guard.sql",
-      "description": "Drawn-version restore guard (Codex r2 MED): restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the restore's section DELETE rolls back atomically), a legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure, and a no-draws control quote restores freely.",
+      "description": "Drawn-version and row-version restore guard: restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the section DELETE rolls back atomically), while the row-version matrix separately proves owner-only access, stale-writer rejection before child replacement, exact N+1 success, and request-bound replay. A legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure; a no-draws control quote restores freely.",
       "covers": [
         "restore_quote_version",
         "create_quote_version",

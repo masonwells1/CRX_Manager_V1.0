@@ -6,7 +6,7 @@ BEGIN;
 
 DO $smoke$
 DECLARE
-  v_admin uuid; v_rep uuid; v_nonoffice uuid; v_customer uuid; v_quote uuid; v_product uuid;
+  v_admin uuid; v_rep uuid; v_nonoffice uuid; v_customer uuid; v_quote uuid; v_product uuid; v_restore_version_id uuid;
   v_q jsonb; v_q_replay jsonb; v_c jsonb; v_c_replay jsonb;
   v_quote_before bigint; v_customer_before bigint; v_quote_after bigint; v_quote_after_second bigint; v_quote_stale_draft bigint; v_customer_after bigint; v_customer_money_after bigint;
   v_prepay_before bigint; v_prepay_after bigint;
@@ -384,6 +384,74 @@ BEGIN
   END IF;
   v_quote_after := v_quote_after_second;
 
+  -- Restoration is a whole-Quote writer too. A writer between snapshot load
+  -- and action must make the stale attempt fail without deleting children.
+  v_restore_version_id := (v_q->>'version_id')::uuid;
+  UPDATE public.quotes
+  SET header_notes = 'restore-writer-won'
+  WHERE id = v_quote;
+  SELECT row_version INTO v_quote_after_second
+  FROM public.quotes
+  WHERE id = v_quote;
+  BEGIN
+    PERFORM public.restore_quote_version(
+      v_quote,
+      v_restore_version_id,
+      v_admin,
+      'rv-restore-stale-' || v_suffix,
+      v_quote_after);
+    RAISE EXCEPTION 'SMOKE_FAIL: stale quote token restored a quote version';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'QUOTE_STALE_WRITE' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: stale quote-restore action raised %', v_error;
+    END IF;
+  END;
+  IF (SELECT row_version FROM public.quotes WHERE id = v_quote) <> v_quote_after_second
+     OR (SELECT header_notes FROM public.quotes WHERE id = v_quote) <> 'restore-writer-won'
+     OR (SELECT count(*) FROM public.quote_sections WHERE quote_id = v_quote) <> 1
+     OR (SELECT count(*) FROM public.quote_items WHERE quote_id = v_quote) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected stale quote restore changed header, children, or token';
+  END IF;
+
+  -- A fresh restore commits exactly once and returns the authoritative N+1
+  -- token. A lost-response retry keeps the original expected token and key,
+  -- and must replay without rebuilding the Quote a second time.
+  v_quote_after := v_quote_after_second;
+  v_q := public.restore_quote_version(
+    v_quote,
+    v_restore_version_id,
+    v_admin,
+    'rv-restore-fresh-' || v_suffix,
+    v_quote_after);
+  SELECT row_version INTO v_quote_after_second
+  FROM public.quotes
+  WHERE id = v_quote;
+  IF v_q->>'status' <> 'restored'
+     OR (v_q->>'row_version')::bigint <> v_quote_after_second
+     OR v_quote_after_second <> v_quote_after + 1
+     OR (SELECT header_notes FROM public.quotes WHERE id = v_quote) <> 'fresh-sent-again'
+     OR (SELECT count(*) FROM public.quote_sections WHERE quote_id = v_quote) <> 1
+     OR (SELECT count(*) FROM public.quote_items WHERE quote_id = v_quote) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: fresh quote restore did not commit exactly once with authoritative token';
+  END IF;
+  v_q_replay := public.restore_quote_version(
+    v_quote,
+    v_restore_version_id,
+    v_admin,
+    'rv-restore-fresh-' || v_suffix,
+    v_quote_after);
+  IF v_q_replay->>'status' <> 'duplicate'
+     OR (v_q_replay->>'row_version')::bigint <> v_quote_after_second
+     OR (SELECT row_version FROM public.quotes WHERE id = v_quote) <> v_quote_after_second
+     OR (SELECT header_notes FROM public.quotes WHERE id = v_quote) <> 'fresh-sent-again'
+     OR (SELECT count(*) FROM public.quote_sections WHERE quote_id = v_quote) <> 1
+     OR (SELECT count(*) FROM public.quote_items WHERE quote_id = v_quote) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: quote-restore replay was not bound to the original versioned request';
+  END IF;
+  v_quote_after := v_quote_after_second;
+
   -- Auth and role gates still run before a stale payload can write.
   PERFORM set_config('request.jwt.claims', '{}'::text, true);
   PERFORM set_config('request.jwt.claim.sub', '', true);
@@ -453,6 +521,36 @@ BEGIN
     IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF v_error <> 'NOT_QUOTE_OWNER' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: quote-conversion ownership gate %', v_error;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.restore_quote_version(
+      v_quote,
+      v_restore_version_id,
+      v_rep,
+      'rv-restore-nonowner-' || v_suffix,
+      v_quote_after);
+    RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep restored another rep''s quote';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'NOT_QUOTE_OWNER' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: quote-restore ownership gate %', v_error;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.restore_quote_version(
+      v_quote,
+      v_restore_version_id,
+      v_rep,
+      'rv-restore-fresh-' || v_suffix,
+      v_quote_after - 1);
+    RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep received another actor''s restore replay';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'NOT_QUOTE_OWNER' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: quote-restore replay ownership gate %', v_error;
     END IF;
   END;
   IF (SELECT row_version FROM quotes WHERE id = v_quote) <> v_quote_after

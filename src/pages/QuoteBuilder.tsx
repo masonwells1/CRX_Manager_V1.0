@@ -41,6 +41,7 @@ import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpc
 import {
   convertQuoteToOrderWithRowVersion,
   createQuoteVersionWithRowVersion,
+  restoreQuoteVersionWithRowVersion,
 } from '../lib/quoteLifecycleRpc';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
@@ -237,7 +238,13 @@ export default function QuoteBuilder() {
     'create_quote_version',
     `${profile?.id || ''}:${id || ''}`,
   );
-  const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
+  const {
+    getKey: getRestoreVersionIdempotencyKey,
+    resetKey: resetRestoreVersionIdempotencyKey,
+  } = useIdempotencyKey(
+    'restore_quote_version',
+    `${profile?.id || ''}:${id || ''}`,
+  );
   const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
   const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
   const emailQuoteIdem = useIdempotencyKey('send_email_quote', profile?.id || '');
@@ -267,7 +274,13 @@ export default function QuoteBuilder() {
     key: string;
     expectedRowVersion: number | null;
   } | null>(null);
+  const restoreVersionAttemptRef = useRef<{
+    key: string;
+    versionId: string;
+    expectedRowVersion: number | null;
+  } | null>(null);
   const resetCreateVersionAfterReloadRef = useRef(false);
+  const resetRestoreVersionAfterReloadRef = useRef(false);
   const resetConvertAfterReloadRef = useRef(false);
   // Once this tab has observed a numeric token, recovery must never downgrade
   // it to the frontend-first legacy tokenless contract.
@@ -291,6 +304,27 @@ export default function QuoteBuilder() {
     createVersionAttemptRef.current = null;
     resetCreateVersionIdempotencyKey();
   }, [resetCreateVersionIdempotencyKey]);
+
+  const getRestoreVersionAttempt = useCallback((versionId: string) => {
+    if (restoreVersionAttemptRef.current?.versionId === versionId) {
+      return restoreVersionAttemptRef.current;
+    }
+    // Selecting a different snapshot is a new action intent and must not reuse
+    // a key that the server may already have bound to the previous version.
+    resetRestoreVersionIdempotencyKey();
+    const attempt = {
+      key: getRestoreVersionIdempotencyKey(),
+      versionId,
+      expectedRowVersion: quoteRowVersionRef.current,
+    };
+    restoreVersionAttemptRef.current = attempt;
+    return attempt;
+  }, [getRestoreVersionIdempotencyKey, resetRestoreVersionIdempotencyKey]);
+
+  const resetRestoreVersionAttempt = useCallback(() => {
+    restoreVersionAttemptRef.current = null;
+    resetRestoreVersionIdempotencyKey();
+  }, [resetRestoreVersionIdempotencyKey]);
 
   const [converting, setConverting] = useState(false);
   const [quoteCreatedAt, setQuoteCreatedAt] = useState<string | null>(null);
@@ -910,6 +944,10 @@ export default function QuoteBuilder() {
           resetCreateVersionAttempt();
           resetCreateVersionAfterReloadRef.current = false;
         }
+        if (resetRestoreVersionAfterReloadRef.current) {
+          resetRestoreVersionAttempt();
+          resetRestoreVersionAfterReloadRef.current = false;
+        }
         if (resetConvertAfterReloadRef.current) {
           convertQuoteIdem.resetKey();
           resetConvertAfterReloadRef.current = false;
@@ -937,6 +975,7 @@ export default function QuoteBuilder() {
     fetchQuote,
     quoteId,
     resetCreateVersionAttempt,
+    resetRestoreVersionAttempt,
     resetSaveQuoteIdempotencyKey,
   ]);
 
@@ -2169,12 +2208,18 @@ export default function QuoteBuilder() {
 
   const handleRestoreVersion = async (versionId: string) => {
     if (!quoteId || !profile) return;
-    const restoreIdemKey = restoreVersionIdem.getKey();
-    const { data, error } = await supabase.rpc('restore_quote_version', {
+    if (quoteVersionRecoveryRequiredRef.current) {
+      setStaleSaveOpen(true);
+      toast('error', 'Reload the quote before restoring a saved version.');
+      return;
+    }
+    const restoreAttempt = getRestoreVersionAttempt(versionId);
+    const { data, error } = await restoreQuoteVersionWithRowVersion({
       p_quote_id: quoteId,
       p_version_id: versionId,
       p_performed_by: profile.id,
-      p_idempotency_key: restoreIdemKey,
+      p_idempotency_key: restoreAttempt.key,
+      p_expected_row_version: restoreAttempt.expectedRowVersion,
     });
     if (error) {
       // Drawn-version guard (Codex r2 MED): the server blocks restoring a
@@ -2185,13 +2230,19 @@ export default function QuoteBuilder() {
           || (typeof error.message === 'string' ? error.message : null)
           || 'This version books less than what has already been drawn down to orders.';
         toast('error', errMsg);
+      } else if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
+        || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
+        resetRestoreVersionAfterReloadRef.current = true;
+        quoteVersionRecoveryRequiredRef.current = true;
+        setStaleSaveOpen(true);
+        toast('error', 'The quote changed before the version could be restored. Reload and review it before trying again.');
       } else {
         toast('error', 'Failed to restore version');
       }
       return;
     }
-    assertRpcResult(data, 'restore_quote_version');
-    restoreVersionIdem.resetKey();
+    if (!data) return;
+    resetRestoreVersionAttempt();
     toast('success', `Restored from V${selectedVersion?.version_number || '?'}`);
     setConfirmRestore(null);
     setSelectedVersion(null);

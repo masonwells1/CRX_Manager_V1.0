@@ -30,6 +30,35 @@
 --   (d) control: a quote with NO draws restores a lower-qty version freely
 -- ============================================================================
 
+CREATE OR REPLACE FUNCTION pg_temp.restore_quote_version_smoke(
+  p_quote_id uuid,
+  p_version_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text,
+  p_expected_row_version bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $helper$
+DECLARE
+  v_result jsonb;
+BEGIN
+  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.restore_quote_version($1, $2, $3, $4, $5)'
+      INTO v_result
+      USING p_quote_id, p_version_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
+  RETURN public.restore_quote_version(
+    p_quote_id,
+    p_version_id,
+    p_performed_by,
+    p_idempotency_key
+  );
+END;
+$helper$;
+
 DO $smoke$
 DECLARE
   v_admin uuid;
@@ -137,7 +166,10 @@ BEGIN
   -- (a) Restore V1 (A booked 100 < 200 drawn): must be BLOCKED
   -- --------------------------------------------------------------------
   BEGIN
-    PERFORM restore_quote_version(v_q, v_v1, v_admin, NULL);
+    PERFORM pg_temp.restore_quote_version_smoke(
+      v_q, v_v1, v_admin, NULL,
+      (SELECT row_version FROM public.quotes WHERE id = v_q)
+    );
     RAISE EXCEPTION 'SMOKE_FAIL: (a) restoring below the drawn ledger was ALLOWED';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -160,7 +192,10 @@ BEGIN
   -- (b) Restore V2 (books only product B — removes drawn A): must be BLOCKED
   -- --------------------------------------------------------------------
   BEGIN
-    PERFORM restore_quote_version(v_q, v_v2, v_admin, NULL);
+    PERFORM pg_temp.restore_quote_version_smoke(
+      v_q, v_v2, v_admin, NULL,
+      (SELECT row_version FROM public.quotes WHERE id = v_q)
+    );
     RAISE EXCEPTION 'SMOKE_FAIL: (b) restoring a version without the drawn product was ALLOWED';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -178,7 +213,10 @@ BEGIN
   -- --------------------------------------------------------------------
   -- (c) Restore V3 (A @ 400 >= 200 drawn): SUCCEEDS, then draws to closure
   -- --------------------------------------------------------------------
-  v_res := restore_quote_version(v_q, v_v3, v_admin, NULL);
+  v_res := pg_temp.restore_quote_version_smoke(
+    v_q, v_v3, v_admin, NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_q)
+  );
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) legal restore returned %', v_res;
   END IF;
@@ -224,7 +262,10 @@ BEGIN
 
   UPDATE quote_items SET total_units_needed = 500 WHERE quote_id = v_qc;
 
-  v_res := restore_quote_version(v_qc, v_vc, v_admin, NULL);
+  v_res := pg_temp.restore_quote_version_smoke(
+    v_qc, v_vc, v_admin, NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_qc)
+  );
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) control restore returned %', v_res;
   END IF;

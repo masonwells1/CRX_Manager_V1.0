@@ -36,6 +36,35 @@
 --       release; the frontend's direct release becomes redundant)
 -- ============================================================================
 
+CREATE OR REPLACE FUNCTION pg_temp.restore_quote_version_smoke(
+  p_quote_id uuid,
+  p_version_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text,
+  p_expected_row_version bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $helper$
+DECLARE
+  v_result jsonb;
+BEGIN
+  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.restore_quote_version($1, $2, $3, $4, $5)'
+      INTO v_result
+      USING p_quote_id, p_version_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
+  RETURN public.restore_quote_version(
+    p_quote_id,
+    p_version_id,
+    p_performed_by,
+    p_idempotency_key
+  );
+END;
+$helper$;
+
 DO $smoke$
 DECLARE
   v_admin uuid; v_cust uuid; v_pa uuid; v_pb uuid; v_q uuid;
@@ -144,7 +173,10 @@ BEGIN
   IF v_pa_total <> 200 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e-pre) after rebook 450 holds pa=% (expected 200)', v_pa_total;
   END IF;
-  v_res := restore_quote_version(v_q, v_ver, v_admin, NULL);
+  v_res := pg_temp.restore_quote_version_smoke(
+    v_q, v_ver, v_admin, NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_q)
+  );
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e) restore returned %', v_res;
   END IF;

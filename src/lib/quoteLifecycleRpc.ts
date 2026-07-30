@@ -27,6 +27,14 @@ export type ConvertQuoteToOrderResult = {
   warnings?: string[];
 };
 
+export type RestoreQuoteVersionResult = {
+  status: string;
+  restored_from_version?: number;
+  quote_id?: string;
+  row_version?: number;
+  message?: string;
+};
+
 /**
  * Frontend-first rollout bridge for the quote row-version migration.
  *
@@ -90,6 +98,36 @@ export async function convertQuoteToOrderWithRowVersion(args: {
   if (legacyError) return { data: null, error: legacyError };
   return {
     data: assertRpcResult<ConvertQuoteToOrderResult>(legacyData, 'convert_quote_to_order'),
+    error: null,
+  };
+}
+
+export async function restoreQuoteVersionWithRowVersion(args: {
+  p_quote_id: string;
+  p_version_id: string;
+  p_performed_by: string;
+  p_idempotency_key: string;
+  p_expected_row_version: number | null;
+}) {
+  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = args;
+  const { data, error } = await supabaseUntyped.rpc('restore_quote_version', args);
+  if (!error) {
+    return {
+      data: assertRpcResult<RestoreQuoteVersionResult>(data, 'restore_quote_version'),
+      error: null,
+    };
+  }
+  if (!isMissingLifecycleSignature(error, 'restore_quote_version')) {
+    return { data: null, error };
+  }
+
+  const { data: legacyData, error: legacyError } = await supabaseUntyped.rpc(
+    'restore_quote_version',
+    legacyArgs,
+  );
+  if (legacyError) return { data: null, error: legacyError };
+  return {
+    data: assertRpcResult<RestoreQuoteVersionResult>(legacyData, 'restore_quote_version'),
     error: null,
   };
 }

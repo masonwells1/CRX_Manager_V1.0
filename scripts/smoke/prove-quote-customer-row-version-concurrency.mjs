@@ -309,7 +309,7 @@ function assertCanonicalContract() {
 
   assertQuoteOwnershipContract(current);
   assertQuoteActionLockOrder(current);
-  for (const functionName of ['create_quote_version', 'convert_quote_to_order']) {
+  for (const functionName of ['create_quote_version', 'convert_quote_to_order', 'restore_quote_version']) {
     assert.match(
       current,
       new RegExp(`p\\.proname = '${functionName}';\\s+IF v_count <> 1 THEN RAISE EXCEPTION 'ROW_VERSION_[A-Z_]+_OVERLOAD_POSTFLIGHT_FAILED'; END IF;`),
@@ -407,7 +407,8 @@ function assertQuoteActionLockOrder(source) {
 
   const specs = [
     ['create_quote_version', 'ALTER FUNCTION public.convert_quote_to_order', 'create_quote_version'],
-    ['convert_quote_to_order', '-- Self-contained ACL', 'convert_quote_to_order'],
+    ['convert_quote_to_order', 'ALTER FUNCTION public.restore_quote_version', 'convert_quote_to_order'],
+    ['restore_quote_version', '-- Self-contained ACL', 'restore_quote_version'],
   ];
   for (const [functionName, endMarker, operation] of specs) {
     const body = extractActionWrapper(source, functionName, endMarker);
@@ -465,6 +466,8 @@ function assertQuoteActionLockOrder(source) {
 function assertChildOwnershipContract() {
   const current = readFileSync(migration, 'utf8');
   const smoke = readFileSync(path.join(root, 'scripts/smoke/smoke-save-quote-customer-row-version.sql'), 'utf8');
+  const quoteBuilder = readFileSync(path.join(root, 'src/pages/QuoteBuilder.tsx'), 'utf8');
+  const lifecycleBridge = readFileSync(path.join(root, 'src/lib/quoteLifecycleRpc.ts'), 'utf8');
   for (const table of ['quote_sections', 'quote_items', 'customer_addresses']) {
     assert.match(
       current,
@@ -479,9 +482,23 @@ function assertChildOwnershipContract() {
   assert.match(smoke, /non-owner sales rep received another actor''s quote replay/, 'registered smoke must prove replay ownership');
   assert.match(smoke, /non-owner sales rep created another rep''s quote version/, 'registered smoke must prove quote-version ownership');
   assert.match(smoke, /non-owner sales rep converted another rep''s quote/, 'registered smoke must prove quote-conversion ownership');
+  assert.match(smoke, /non-owner sales rep restored another rep''s quote/, 'registered smoke must prove quote-restore ownership');
+  assert.match(smoke, /non-owner sales rep received another actor''s restore replay/, 'registered smoke must prove quote-restore replay ownership');
   assert.match(smoke, /cached token after later writes/, 'registered smoke must reject stale cached save tokens');
   assert.match(smoke, /stale quote token created a quote version/, 'registered smoke must reject a quote-version action after another writer advances the token');
   assert.match(smoke, /stale quote token converted a quote/, 'registered smoke must reject a conversion after another writer advances the token');
+  assert.match(smoke, /stale quote token restored a quote version/, 'registered smoke must reject a restore after another writer advances the token');
+  assert.match(smoke, /quote-restore replay was not bound to the original versioned request/, 'registered smoke must prove exact restore replay binding');
+  assert.match(
+    quoteBuilder,
+    /restoreQuoteVersionWithRowVersion\(\{[\s\S]*?p_version_id: versionId,[\s\S]*?p_idempotency_key: restoreAttempt\.key,[\s\S]*?p_expected_row_version: restoreAttempt\.expectedRowVersion/,
+    'QuoteBuilder restore must preserve one idempotency key and loaded row-version token',
+  );
+  assert.match(
+    lifecycleBridge,
+    /supabaseUntyped\.rpc\('restore_quote_version', args\)[\s\S]*?isMissingLifecycleSignature\(error, 'restore_quote_version'\)[\s\S]*?supabaseUntyped\.rpc\(\s*'restore_quote_version',\s*legacyArgs/,
+    'restore rollout may fall back only after the exact new PostgREST signature is missing',
+  );
 
   const ownershipBypass = current.replace(
     /(       WHERE id = p_quote_id\r?\n)         AND created_by = v_actor/,
@@ -611,7 +628,7 @@ INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.custom
     psql("INSERT INTO public.quotes(id,value) VALUES ('new','inserted'); INSERT INTO public.customers(id,value) VALUES ('new','inserted');");
     assert.equal(scalar("SELECT row_version FROM public.quotes WHERE id='new'"), '1');
     assert.equal(scalar("SELECT row_version FROM public.customers WHERE id='new'"), '1');
-    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order,quote_ownership,quote_action_lock_order,lifecycle_token quote_ownership=direct,replay,version,convert quote_action_lock_order=advisory-before-row lifecycle_action=writer-between-load-and-action-rejected reverse_order_deadlock=detected quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=payload-bound,current-token-verified insert_defaults=verified');
+    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order,quote_ownership,quote_action_lock_order,lifecycle_token quote_ownership=direct,replay,version,convert,restore quote_action_lock_order=advisory-before-row lifecycle_action=writer-between-load-and-action-rejected restore_replay=payload-owner-current-token-bound reverse_order_deadlock=detected quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=payload-bound,current-token-verified insert_defaults=verified');
   } finally {
     docker(['rm', '-f', name], undefined, true);
   }
