@@ -249,7 +249,63 @@ export function urlIsGuardedApp(url) {
 
 // Options that consume the FOLLOWING argv token. Without this, `git push -o
 // ci.skip origin main` would read `ci.skip` as the destination.
-const PUSH_OPTS_WITH_VALUE = new Set(["--receive-pack", "--exec", "--repo", "-o", "--push-option"]);
+//
+// `--recurse-submodules` was missing until Codex's seventh 2026-07-30 review.
+// Verified the same day against git 2.54: `git push --recurse-submodules no
+// <urlA> HEAD:main` in a checkout that ALSO has a remote named `no` pushed to
+// urlA, not to `no` — git consumed `no` as the option's value. The guard read
+// `no` as the destination, classified it as an unrelated remote, and skipped the
+// proof gate while the push went to the URL that followed.
+const PUSH_OPTS_WITH_VALUE = new Set([
+  "--receive-pack", "--exec", "--repo", "-o", "--push-option", "--recurse-submodules",
+]);
+// Every remaining `git push` option, from `git push -h` on git 2.54. These take
+// no separate value (`--force-with-lease` and `--signed` take an OPTIONAL one,
+// which git only accepts attached with `=`, so they never swallow a token).
+//
+// This list exists so the guard can fail CLOSED on an option it does not know.
+// Rounds four through seven were all the same mistake in different clothes — a
+// hand-kept list that was missing an entry — so the list is no longer trusted to
+// be complete. Anything not named here makes the argv walk untrustworthy, and an
+// untrustworthy walk means an untrustworthy destination. A future git option
+// then costs one clear error message; the old behaviour cost an unreviewed push.
+const PUSH_OPTS_KNOWN = new Set([
+  ...PUSH_OPTS_WITH_VALUE,
+  "--verbose", "--quiet", "--all", "--branches", "--mirror", "--delete", "--tags",
+  "--dry-run", "--porcelain", "--force", "--force-with-lease", "--force-if-includes",
+  "--thin", "--set-upstream", "--progress", "--prune", "--verify", "--follow-tags",
+  "--signed", "--atomic", "--ipv4", "--ipv6",
+]);
+// Short forms, which git also accepts bundled (`-fu`). `-o` is the only one that
+// takes a value.
+const PUSH_SHORT_OPTS_KNOWN = new Set(["v", "q", "d", "n", "f", "u", "o", "4", "6"]);
+
+// Any option in a push command that this guard's argv walk does not understand.
+// A non-empty result means the destination cannot be resolved safely.
+export function unknownPushOptions(cmd) {
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const tokens = splitShellArgs(args);
+  const unknown = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") break;
+    if (token === "-" || !token.startsWith("-")) continue;
+    const eq = token.indexOf("=");
+    const bare = eq === -1 ? token : token.slice(0, eq);
+    if (bare.startsWith("--")) {
+      // `--no-force` is git's negation of `--force`; judge the base option.
+      const base = PUSH_OPTS_KNOWN.has(bare) ? bare : bare.replace(/^--no-/, "--");
+      if (!PUSH_OPTS_KNOWN.has(base)) unknown.push(bare);
+      else if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(base)) i += 1;
+      continue;
+    }
+    for (const ch of bare.slice(1)) {
+      if (!PUSH_SHORT_OPTS_KNOWN.has(ch)) unknown.push(`-${ch}`);
+    }
+    if (eq === -1 && bare.includes("o")) i += 1;
+  }
+  return unknown;
+}
 // The destination this push writes to: a remote NAME, a URL, or null when the
 // command names none (git then resolves its own default — see the guard).
 export function pushDestinationToken(cmd) {
@@ -277,6 +333,9 @@ export function pushDestinationToken(cmd) {
       continue;
     }
     if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(bare)) i += 1;
+    // A bundled short form (`-uo ci.skip`) hides the value-taking `-o` inside a
+    // longer token, so the bundle consumes the next argv token too.
+    else if (eq === -1 && !bare.startsWith("--") && bare.includes("o")) i += 1;
   }
   return repoOpt;
 }
@@ -360,6 +419,63 @@ export function pushUsesConfigEnv(cmd) {
 // the push would carry them, so the two disagree by construction.
 export function environmentCarriesConfigOverride(env) {
   return Object.keys(env || {}).filter((key) => /^GIT_CONFIG(_|$)/i.test(key));
+}
+
+// `GIT_CONFIG*` names a config FILE. These name the DIRECTORY git looks in for
+// the global config, which reaches the same place by a longer road: point HOME
+// at a directory holding a `.gitconfig` with `url.<CRX Manager URL>.pushInsteadOf`
+// and an ordinary-looking `git push origin main` lands in production.
+//
+// Verified against git 2.54 on 2026-07-30, in a scratch repo whose only remote
+// was a harmless local path: with HOME overridden, `git config --get-regexp
+// '^url\..*insteadof$'` returned NOTHING in the guard's environment and the
+// rewrite in the push's environment, and the objects arrived in the rewritten
+// destination. Codex's seventh 2026-07-30 review found this.
+//
+// Note the asymmetry that decides the shape of the fix: this only works when the
+// override reaches the PUSH but not the GUARD, i.e. when it is written into the
+// command itself. A variable set by an earlier, separate command is inherited by
+// both, so the guard reads the very config the push will use and classifies the
+// destination correctly — which is why this half needs no environment check, and
+// why `environmentCarriesConfigOverride` above stays scoped to `GIT_CONFIG*`.
+const CONFIG_ROOT_ENV_RE =
+  /(?<![A-Za-z0-9_])(?:HOME|HOMEDRIVE|HOMEPATH|USERPROFILE|XDG_CONFIG_HOME|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM)(?![A-Za-z0-9])/i;
+export function pushUsesConfigRootEnv(cmd) {
+  const text = String(cmd || "");
+  if (!isGitPush(text)) return false;
+  return CONFIG_ROOT_ENV_RE.test(text);
+}
+
+// The general net behind both of the specific rules above. A push command that
+// sets ANY environment variable inline is uninspectable on principle: the guard
+// resolves the destination in ITS environment, the push runs in a different one,
+// and no amount of naming individual variables closes a gap that is really about
+// the two environments differing at all. So the rule is inverted here — an
+// allowlist, not a denylist. `GIT_SSH_COMMAND` is the one sanctioned prefix (the
+// documented SSH keepalive workaround); it selects a TRANSPORT, not a
+// destination, and cannot change where the objects land.
+const INLINE_ENV_ALLOWED = new Set(["GIT_SSH_COMMAND", "GIT_TERMINAL_PROMPT"]);
+export function pushSetsInlineEnv(cmd) {
+  const text = String(cmd || "");
+  const match = GIT_PUSH_RE.exec(text);
+  if (!match) return [];
+  // Assignments sit BEFORE the git binary, which is outside what
+  // GIT_PUSH_PREFIX_RE captures (that starts after it). Take the text up to the
+  // binary, trimmed to the current segment so an earlier chained command's
+  // arguments are not misread as this push's prefix.
+  const prefix = text.slice(0, match.index).split(/(?:&&|\|\|?|;|\r?\n)/).pop() || "";
+  const names = [];
+  // splitShellArgs is not usable here: it only treats a quote as grouping when
+  // the token STARTS with one, so `GIT_SSH_COMMAND="ssh -o Foo=1"` came apart at
+  // the space and the fragment `Foo=1"` read as a second assignment. A token is
+  // really a run of unquoted characters and quoted spans, in any order.
+  for (const token of prefix.match(/(?:[^\s'"]|'[^']*'|"[^"]*")+/g) || []) {
+    const assignment = /^(?:'|")?([A-Za-z_][A-Za-z0-9_]*)=/.exec(token);
+    if (assignment && !INLINE_ENV_ALLOWED.has(assignment[1].toUpperCase())) {
+      names.push(assignment[1]);
+    }
+  }
+  return names;
 }
 
 // URL rewrites are the other way inline-free config can redirect a push:

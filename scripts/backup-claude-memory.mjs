@@ -356,10 +356,20 @@ function verify(dir) {
     if (buf.length !== entry.bytes) problems.push(`size differs: ${entry.name}`);
     else if (sha256(buf) !== entry.sha256) problems.push(`content differs: ${entry.name}`);
   }
-  const extra = mdFiles(dir).filter(
-    (n) => !manifest.files.some((e) => e.name === n)
-  );
-  for (const name of extra) problems.push(`not in manifest: ${name}`);
+  // Every entry, not just the `.md` ones. Using mdFiles() here meant a stray
+  // `.env`, `.pem`, or JSON credential file sat in the snapshot directory
+  // unhashed, unscanned for secrets, and silently verified as OK — and from
+  // there into permanent git history, which is not undoable. Codex's seventh
+  // 2026-07-30 review found it: the staging step only ever copies `.md`, but the
+  // documented procedure tells an agent to copy the staged directory wholesale,
+  // so what verification actually has to answer is "is anything here that the
+  // manifest does not vouch for", regardless of its extension.
+  const listed = new Set(manifest.files.map((e) => e.name));
+  for (const name of readdirSync(dir).sort()) {
+    if (name === MANIFEST || listed.has(name)) continue;
+    const kind = statSync(path.join(dir, name)).isDirectory() ? "directory" : "file";
+    problems.push(`not in manifest: ${name} (unexpected ${kind})`);
+  }
 
   if (problems.length > 0) {
     console.error(`FAIL: ${problems.length} problem(s) in ${dir}`);

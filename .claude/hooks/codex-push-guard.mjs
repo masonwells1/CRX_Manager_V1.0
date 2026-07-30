@@ -25,6 +25,9 @@ import {
   pushUsesBulkMode,
   pushUsesInlineConfig,
   pushUsesConfigEnv,
+  pushUsesConfigRootEnv,
+  pushSetsInlineEnv,
+  unknownPushOptions,
   environmentCarriesConfigOverride,
   destinationLooksLikeUrl,
   pushDestinationToken,
@@ -64,6 +67,30 @@ if (pushUsesConfigEnv(cmd)) {
 const inheritedOverrides = environmentCarriesConfigOverride(process.env);
 if (inheritedOverrides.length > 0) {
   deny(`CODEX GATE: this shell already has GIT_CONFIG* variables set (${inheritedOverrides.join(", ")}), so the push would inherit configuration this guard cannot see — its own destination lookups deliberately ignore them. Unset them before pushing.`);
+}
+// `GIT_CONFIG*` names a config file; these name the directory git searches for
+// the global one, which redirects a push just as effectively. Codex's seventh
+// 2026-07-30 review found it, and a scratch-repo probe the same day confirmed a
+// HOME override sent the objects somewhere the guard's own lookups never saw.
+if (pushUsesConfigRootEnv(cmd)) {
+  deny("CODEX GATE: pushes that name HOME, XDG_CONFIG_HOME, or the GIT_DIR/GIT_WORK_TREE/GIT_OBJECT_* namespace are denied. Those select which git configuration the push reads, so a planted global config (e.g. url.<repo>.pushInsteadOf) can send an innocent-looking push to a different repository than the one this guard inspected. Use `git -C <repo> push`.");
+}
+// The general form of the same problem, and the reason the two rules above are
+// backstops rather than the whole answer: this guard resolves the destination in
+// ITS environment while the push runs in a different one. Naming variables one
+// at a time has now failed four review rounds running, so an inline assignment
+// of ANYTHING but the sanctioned transport variables is denied outright.
+const inlineEnv = pushSetsInlineEnv(cmd);
+if (inlineEnv.length > 0) {
+  deny(`CODEX GATE: this push sets environment variables inline (${inlineEnv.join(", ")}). The guard resolves the destination in its own environment, so any variable the push carries and the guard does not makes the two disagree. Only GIT_SSH_COMMAND/GIT_TERMINAL_PROMPT, which select a transport rather than a destination, may prefix a push.`);
+}
+// The destination is read by walking argv, and that walk has to know which
+// options swallow the following token. `--recurse-submodules no <url>` slipped
+// through exactly that gap. Rather than trust the option list to be complete
+// this time, refuse to walk argv at all when it contains something unrecognised.
+const strangeOptions = unknownPushOptions(cmd);
+if (strangeOptions.length > 0) {
+  deny(`CODEX GATE: this push uses options this guard does not recognise (${strangeOptions.join(", ")}), so it cannot tell which argument is the destination — and a misread destination is how a production push skips this gate. Use a plain \`git -C <repo> push <remote> <refspec>\`, or add the option to PUSH_OPTS_KNOWN in codex-push-lib.mjs after checking whether it takes a value.`);
 }
 
 // Claude's shell cwd can persist across tool calls. The hook payload's cwd is

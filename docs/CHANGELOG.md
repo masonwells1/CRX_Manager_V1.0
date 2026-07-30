@@ -255,6 +255,46 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round seven: two more roads to the same place, and a backup that verified too little
+
+The seventh review pointed out that `GIT_CONFIG*` names a config *file*, while `HOME` and
+`XDG_CONFIG_HOME` name the *directory* git searches for the global one — a longer road to the same
+destination. Confirmed against git 2.54 in a scratch repo whose only remote was a harmless local
+path: with `HOME` pointed at a directory holding a `.gitconfig` containing
+`url.<other>.pushInsteadOf`, an ordinary `git push origin HEAD:main` put the objects in `<other>`,
+while the guard's own `git config --get-regexp '^url\..*insteadof$'` returned nothing at all.
+
+That asymmetry is the whole shape of the fix. The trick only works when the override reaches the
+push but *not* the guard — i.e. when it is written into the command. A variable set by an earlier,
+separate command is inherited by both, so the guard reads the very config the push will use and
+classifies it correctly. So the command text is what gets checked, in two layers: the config-root
+namespace is denied by name, and behind it a general rule denies a push that sets **any** variable
+inline other than `GIT_SSH_COMMAND`/`GIT_TERMINAL_PROMPT`, which select a transport and cannot move
+a destination. Naming variables one at a time has now failed four rounds running; the allowlist does
+not care what the next variable is called.
+
+The second finding was a hand-kept list again, this time of options that swallow the following
+argument. `--recurse-submodules` was missing. Verified the same day: in a checkout with a remote
+literally named `no`, `git push --recurse-submodules no <urlA> HEAD:main` pushed to **urlA** — git
+ate `no` as the option's value while the guard read it as the destination, classified the push as
+unrelated, and skipped the gate. It is on the list now, but the list is no longer trusted to be
+complete: every other option `git push -h` documents is enumerated too, and an option that appears
+in neither set makes the guard refuse to walk argv at all. A future git option now costs one clear
+error message instead of an unreviewed push.
+
+Third, unrelated to pushes: the memory-backup verifier checked for unexpected files using a helper
+that filters to `.md`. Staging only ever copies `.md`, but the documented procedure tells an agent to
+copy the staged directory wholesale, so a stray `.env`, `.pem`, JSON credential file, or whole
+subdirectory could sit in a snapshot unhashed, unscanned for secrets, and still verify as OK — and
+from there into permanent git history. Verification now reads every entry in the directory and fails
+on anything the manifest does not vouch for, naming whether it is a file or a directory.
+
+All three are mutation-tested — removing the option, disabling either environment rule, or restoring
+the `.md`-only filter each turns the suite red on its own case — and the push rules are proven
+against the real `C:\CRX_Manager` checkout, where the four override forms and the unknown option
+return **DENY**, the `--recurse-submodules` form now resolves to the app repo instead of to `no`,
+and both an ordinary push and the sanctioned SSH-keepalive prefix still return **ALLOWED**.
+
 ## 2026-07-29 — agent memory is now backed up off-site, and permanently barred from this public repo
 
 162 stale agent-memory notes had been sitting untracked in the main checkout since 2026-07-26,

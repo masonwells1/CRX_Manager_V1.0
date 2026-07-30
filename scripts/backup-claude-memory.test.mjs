@@ -138,6 +138,27 @@ try {
     writeFileSync(path.join(extra, "unlisted.md"), "not in the manifest\n");
     eq(quiet(() => verify(extra)), 1, "a note that is not in the manifest fails verification");
   }
+  // Codex's seventh 2026-07-30 review: the extra-file check only looked at `.md`,
+  // so anything else in the snapshot directory was neither hashed nor scanned for
+  // secrets and still verified OK — then went into git history, permanently.
+  // Staging only ever copies `.md`, but the documented procedure tells an agent to
+  // copy the staged directory wholesale, so verification is the backstop.
+  for (const stray of ["stray.env", "id_rsa.pem", "credentials.json", "notes.txt"]) {
+    const dir = fresh(`extra-${stray}`);
+    for (const entry of manifest.files) writeFileSync(path.join(dir, entry.name), readFileSync(path.join(staged, entry.name)));
+    writeManifest(dir, manifest);
+    eq(quiet(() => verify(dir)), 0, `control: ${stray} case verifies before the stray file lands`);
+    writeFileSync(path.join(dir, stray), "AKIAIOSFODNN7EXAMPLE\n");
+    eq(quiet(() => verify(dir)), 1, `a stray ${stray} fails verification`);
+  }
+  {
+    const withDir = fresh("extra-subdir");
+    for (const entry of manifest.files) writeFileSync(path.join(withDir, entry.name), readFileSync(path.join(staged, entry.name)));
+    writeManifest(withDir, manifest);
+    mkdirSync(path.join(withDir, "secrets"));
+    writeFileSync(path.join(withDir, "secrets", "key.pem"), "-----BEGIN PRIVATE KEY-----\n");
+    eq(quiet(() => verify(withDir)), 1, "a subdirectory in the snapshot fails verification");
+  }
 
   // ── secret scan: scans BUFFERS, not paths (the race fix) ──────────────────
   // A true concurrent-modification race cannot be scripted deterministically

@@ -27,6 +27,9 @@ import {
   destinationLooksLikeUrl,
   pushUsesInlineConfig,
   pushUsesConfigEnv,
+  pushUsesConfigRootEnv,
+  pushSetsInlineEnv,
+  unknownPushOptions,
   environmentCarriesConfigOverride,
   rewritesReachGuardedApp,
   riskyFiles,
@@ -390,6 +393,66 @@ assert.deepEqual(environmentCarriesConfigOverride({ MY_GIT_CONFIG_COUNT: "1" }),
 assert.deepEqual(environmentCarriesConfigOverride({ GIT_SSH_COMMAND: "ssh" }), [], "transport variables are not destination overrides");
 assert.deepEqual(environmentCarriesConfigOverride(null), [], "a missing environment is not a crash");
 
+// --- config ROOT overrides (Codex 2026-07-30, round 7) -------------------------
+// GIT_CONFIG* names a config file; HOME/XDG_CONFIG_HOME name the directory git
+// searches for the global one. Proven against git 2.54 the same day: with HOME
+// pointed at a scratch dir holding a .gitconfig with url.<real>.pushInsteadOf,
+// `git push origin HEAD:main` landed in <real> while `git config --get-regexp
+// '^url\..*insteadof$'` in the guard's own environment returned nothing.
+assert.equal(pushUsesConfigRootEnv(`HOME=/tmp/evil git -C /repo push origin main`), true, "inline HOME override");
+assert.equal(pushUsesConfigRootEnv(`XDG_CONFIG_HOME=/tmp/evil git push origin main`), true, "inline XDG_CONFIG_HOME override");
+assert.equal(pushUsesConfigRootEnv(`env 'HOME=/tmp/evil' git push origin main`), true, "quoted HOME override");
+assert.equal(pushUsesConfigRootEnv(`$env:HOME = "/tmp/evil"; git push origin main`), true, "PowerShell HOME override");
+assert.equal(pushUsesConfigRootEnv(`Set-Item Env:USERPROFILE C:/evil; git push origin main`), true, "PowerShell USERPROFILE override");
+assert.equal(pushUsesConfigRootEnv(`GIT_OBJECT_DIRECTORY=/tmp/o git push origin main`), true, "object-directory override");
+assert.equal(pushUsesConfigRootEnv("git -C C:/CRX_Manager push origin feature"), false, "an ordinary push names none of them");
+assert.equal(pushUsesConfigRootEnv("HOME=/tmp/evil git status"), false, "still only applies to push commands");
+assert.equal(pushUsesConfigRootEnv("git push origin chore/HOMEPAGE-copy"), false, "a branch name containing HOMEPAGE is not an override");
+
+// The general rule behind both: the guard resolves the destination in ITS
+// environment, so a push carrying ANY variable the guard does not is a push the
+// guard cannot vouch for. Allowlist, not denylist — naming variables one at a
+// time failed rounds four, five, six and seven.
+assert.deepEqual(pushSetsInlineEnv(`SOME_NEW_GIT_VAR=x git -C /repo push origin main`), ["SOME_NEW_GIT_VAR"], "an unheard-of variable is still denied");
+assert.deepEqual(pushSetsInlineEnv(`env 'HOME=/tmp/evil' git push origin main`), ["HOME"], "the `env` form is seen too");
+assert.deepEqual(pushSetsInlineEnv(`A=1 B=2 git push origin main`), ["A", "B"], "every assignment is reported");
+assert.deepEqual(pushSetsInlineEnv(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" git -C /repo push origin feature`), [], "the sanctioned transport prefix is allowed");
+assert.deepEqual(pushSetsInlineEnv("git -C C:/CRX_Manager push origin feature"), [], "an ordinary push sets nothing");
+assert.deepEqual(pushSetsInlineEnv(`FOO=1 npm run build && git -C /repo push origin main`), [], "an assignment on an EARLIER chained command is not this push's prefix");
+assert.deepEqual(pushSetsInlineEnv("HOME=/tmp/evil git status"), [], "still only applies to push commands");
+
+// --- options the argv walk does not understand (Codex 2026-07-30, round 7) -----
+// `--recurse-submodules` takes a SEPARATE value. Verified against git 2.54 on
+// 2026-07-30: with a remote literally named `no`, `git push --recurse-submodules
+// no <urlA> HEAD:main` pushed to urlA — git ate `no` as the option's value while
+// the guard read it as the destination and classified the push as unguarded.
+assert.equal(
+  pushDestinationToken(`git push --recurse-submodules no ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "--recurse-submodules consumes its value, so the URL is the destination",
+);
+assert.equal(
+  pushDestinationToken(`git push --recurse-submodules=no ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "the attached form consumes nothing extra",
+);
+assert.equal(
+  pushDestinationToken(`git push -uo ci.skip ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "a bundled short form hiding -o still consumes its value",
+);
+// And the backstop: the option list is no longer trusted to be complete, so
+// anything unrecognised makes the walk — and therefore the destination — void.
+assert.deepEqual(unknownPushOptions("git push --some-future-option x origin main"), ["--some-future-option"]);
+assert.deepEqual(unknownPushOptions("git push --some-future-option=x origin main"), ["--some-future-option"]);
+assert.deepEqual(unknownPushOptions("git push -Z origin main"), ["-Z"], "an unknown short option counts too");
+assert.deepEqual(unknownPushOptions("git push --recurse-submodules no origin main"), [], "the newly-taught option is known");
+assert.deepEqual(unknownPushOptions("git push --force-with-lease --follow-tags --atomic -u origin main"), [], "ordinary options are all known");
+assert.deepEqual(unknownPushOptions("git push --no-verify origin main"), [], "a --no- negation resolves to its base option");
+assert.deepEqual(unknownPushOptions("git push -fu origin main"), [], "a bundle of known short options is fine");
+assert.deepEqual(unknownPushOptions("git push origin main -- --not-an-option"), [], "everything after -- is a refspec");
+assert.deepEqual(unknownPushOptions("git status --weird"), [], "non-pushes are not scanned");
+
 // --- `--repo` vs a positional destination -------------------------------------
 // git-push: "if both are specified, the command-line argument takes precedence".
 // Verified against git 2.54 on 2026-07-30.
@@ -445,11 +508,12 @@ assert.equal(pushDestinationToken("git push"), null);
     git(["remote", "add", "origin", dest], work);
 
     const push = `git -C ${work} push origin main`;
-    const denied = (command, message) => {
+    const deniedBecause = (command, pattern, message) => {
       const result = runHook(command);
       assert.equal(result.decision, "deny", `${message} — got ${result.decision}`);
-      assert.match(result.reason, /GIT_CONFIG/, `${message} — denial should name the variable class`);
+      assert.match(result.reason, pattern, `${message} — denial should explain itself`);
     };
+    const denied = (command, message) => deniedBecause(command, /GIT_CONFIG/, message);
 
     denied(`env 'GIT_CONFIG_COUNT=1' 'GIT_CONFIG_KEY_0=remote.origin.pushurl' 'GIT_CONFIG_VALUE_0=${CRX_URL}' ${push}`, "single-quoted env assignments");
     denied(`env "GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=remote.origin.pushurl" ${push}`, "double-quoted env assignments");
@@ -482,6 +546,15 @@ assert.equal(pushDestinationToken("git push"), null);
       "allow",
       "an inherited transport variable is not a destination override",
     );
+
+    // Round 7: config ROOT overrides, arbitrary inline variables, and an option
+    // the argv walk cannot account for.
+    deniedBecause(`HOME=/tmp/evil ${push}`, /HOME/, "inline HOME override");
+    deniedBecause(`XDG_CONFIG_HOME=/tmp/evil ${push}`, /XDG_CONFIG_HOME/, "inline XDG_CONFIG_HOME override");
+    deniedBecause(`$env:HOME = "/tmp/evil"; ${push}`, /HOME/, "PowerShell HOME override");
+    deniedBecause(`SOME_NEW_GIT_VAR=x ${push}`, /SOME_NEW_GIT_VAR/, "any inline assignment the allowlist does not name");
+    deniedBecause(`git -C ${work} push --recurse-submodules no ${CRX_URL} HEAD:main`, /codex/i, "--recurse-submodules hiding the real destination");
+    deniedBecause(`git -C ${work} push --some-future-option x origin main`, /--some-future-option/, "an option the guard cannot account for");
 
     // Controls: the guard must not have become a blanket denier. Both of these
     // run all the way through the destination lookups against the scratch repo.
