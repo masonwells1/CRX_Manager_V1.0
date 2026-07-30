@@ -62,6 +62,7 @@
       ],
       "sweeps": [
         "returns-lifecycle-rpc-owned",
+        "product-name-vs-return-policy",
         "section9-po-ap-controls"
       ]
     },
@@ -83,6 +84,7 @@
       "sweeps": [
         "status-literals",
         "returns-lifecycle-rpc-owned",
+        "product-name-vs-return-policy",
         "section9-po-ap-controls"
       ]
     },
@@ -95,10 +97,12 @@
         "src/lib/supplierPricing.test.ts",
         "src/lib/supplierPricingMigration.test.ts",
         "src/lib/supplierPricingWorkbook.test.ts",
-        "src/components/products"
+        "src/components/products",
+        "src/__tests__/predicate-product-name-vs-return-policy.test.ts"
       ],
       "sweeps": [
-        "office-only-pricing-secdef-gates"
+        "office-only-pricing-secdef-gates",
+        "product-name-vs-return-policy"
       ]
     },
     "security": {
@@ -143,7 +147,8 @@
         "src/lib/gauntletSections26Remediation.test.ts",
         "src/lib/moneyInventoryGauntletFixes.test.ts",
         "src/lib/sqlRoleGateNullFailOpen.test.ts",
-        "src/lib/splitVectorMath.test.ts"
+        "src/lib/splitVectorMath.test.ts",
+        "src/__tests__/predicate-product-name-vs-return-policy.test.ts"
       ],
       "sweeps": []
     },

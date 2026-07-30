@@ -140,6 +140,74 @@ apply, or it would replace the live function body and intentionally trip the has
 
 Supplier Pricing Phase 3 Stage C: applied the owner-approved return-policy classification live (migration 20260729213733) — 21 products no_return (10 also full-tote-only), 2 returnable, remainder left unknown by owner decision. Activates the previously dormant assert_phase3_return_policy() guard across create_return/approve_return/receive_return/issue_return_credit. Rows keyed by primary key so no product names or SKUs enter the repo. Verified live: catalog 604 rows -> 21/2/581/0, tote=10 all inside no_return, and the guard raises RETURN_POLICY_NO_RETURN on a real classified product while both returnable overrides and an untouched unknown product pass. Landed via PR #282.
 
+The classification is a point-in-time snapshot, so a second change makes the relationship permanent
+(owner decision, same day): `scripts/db-invariant-sweeps/predicates/product-name-vs-return-policy.sql`
+flags any product whose **name** asserts it cannot be returned while its `return_policy` is not
+`no_return` — the state where the app accepts a return the supplier will refuse, because the
+`'unknown'` default does not trip `assert_phase3_return_policy()`. It is a detector, not a CHECK
+constraint, and deliberately so: the live governance trigger fires on
+`UPDATE OF product_family_id, return_policy, packaging_variant, is_full_tote_only`, so a CHECK tying
+name to policy would force `return_policy` into any rename `UPDATE`, raise
+`PRODUCT_PHASE3_METADATA_GOVERNED`, and make renaming a product to include "NO RETURN" impossible
+through the app. Only the unsafe direction is a violation; `no_return` on a product whose name says
+nothing is the expected shape once policies come from supplier sheets, and it fails safe. The
+predicate emits the product id and never the name or SKU, because the repo is public and the
+allowlist is tracked. Proven live: 0 violations across 604 products, and the same query with the
+classification stripped out returns all 21 — the alarm demonstrably fires rather than being a check
+that has only ever seen zero. Cross-model review caught the first pattern matching "no" mid-word
+(so "MONO RETURN" would false-flag) while missing "ALL SALES FINAL" and a space-separated
+"NON RETURN"; every alternative is now word-anchored, and
+`src/__tests__/predicate-product-name-vs-return-policy.test.ts` pins the phrase set plus the
+near-miss false positives, reading the pattern out of the `.sql` file so the two cannot drift.
+Review then hardened two separate things.
+
+The **phrase set** took six further rounds, each closing a false negative — the detector staying
+silent on a product it should flag. "NON-RETURN VALVE" is a check valve rather than a merchandise
+policy and is excluded by a negative lookahead, but that exclusion is now narrowed twice: to
+RETURN/RETURNS and not RETURNABLE, and to the NON spelling and not NO. The equipment term is exactly
+"NON-RETURN VALVE" — both "NON-RETURNABLE VALVE" and "NO RETURN VALVE" assert a policy, and a wider
+lookahead dropped them silently. That is why NO and NON are separate alternatives rather than the
+tidier `(no|non)`. The third round covered compound wording: the separators between the negation and
+the return word span whitespace and punctuation only, so an intervening WORD broke the match and
+"NO REFUNDS OR RETURNS" or "NOT REFUNDABLE OR RETURNABLE" went undetected. A repeating
+refund/exchange/credit clause is now permitted there, from a closed vocabulary — the repetition
+because these lists usually run to three items ("NO REFUNDS, EXCHANGES, OR RETURNS"), the closed
+vocabulary because allowing arbitrary filler words would flag names like "NO TILL SEED RETURN TRAY".
+The fourth round extended that clause
+to the NON spelling and added the opposite word order: "RETURNS NOT ACCEPTED" and "RETURN NOT
+ALLOWED" reject a return just as plainly, and every negation-first alternative missed them. The verb
+list is closed for the same reason — "RETURN LABEL NOT INCLUDED" must not flag. A fifth round widened
+that branch to auxiliaries ("RETURNS WILL NOT BE ACCEPTED", "RETURNS CANNOT BE ACCEPTED"), and a
+sixth made the compound clause repeat rather than fire once, which is what finally caught the
+three-item lists. A
+phrase-matching detector can always be widened by another synonym, so the list is the reviewed set
+rather than a claim of completeness; the live catalog is separately proven fully covered, and adding
+a phrase later is a one-line change plus a fixture, not a migration.
+
+The **containment guard** took three rounds of its own. These are output-safety fixes, not detection
+fixes: they govern what the sweep may emit into a public repo, and none of them changes which
+products are flagged. It is now alias-agnostic (exactly one `product_name` reference is permitted,
+and only as the `~*` filter), and it audits the projected expressions themselves. Enumerating the
+leak forms became whack-a-mole — `p.*`, a bare `*` mid-list, `row_to_json(p)`, a lone table alias,
+and finally `json_build_object('row', p)`, which no constructor blacklist named while still
+serializing every column of the row. So the rule was inverted into an allowlist: a projected
+expression may mention only the three permitted columns, one permitted function, and a table alias
+used strictly as a qualifier before a dot. All six leak forms turn the guard red under mutation, and
+it returns green on restore.
+
+One review round corrected the sweep README rather than the detector. The new row had claimed this
+was the only data predicate and that everything else reads the catalog, which is false and unsafe to
+rely on: `fin-commission-split-sum` emits a customer farm name and raw commission-split JSON, and
+`fin-invoice-balance-identity` emits customer ids, invoice numbers, and cent amounts. An operator
+trusting that sentence could have pasted genuinely private output somewhere public. The README now
+splits the predicates into catalog and business-data groups, names all seven business-data ones
+(verified against their `FROM`/`JOIN` targets, not assumed), and says plainly that only
+`product-name-vs-return-policy` carries an enforced containment guard.
+
+Across every revision the live result is unchanged: 0 violations across 604 products, all 21
+`no_return` products matched, and all 21 still detected under the classification-stripped mutation.
+Landed via PR #286.
+
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `1442ee92 feat(products): Supplier Pricing Phase 3 Stage C return-policy classification`
   - `149c8b00 docs(gauntlet): close inventory net position backlog (#280)`
