@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   ACTIVE_STAGES,
   FACTORY_CUSTODY_STAGES,
+  hasFactoryIntentFailureLatch,
   loadFactorySnapshot,
   mintFactoryCliPermit,
   rejectSecretBearingText,
@@ -74,8 +75,7 @@ function isSafeGitRead(command) {
   const tokens = normalized.split(/\s+/);
   tokens.shift();
   if (tokens[0] === "-C") {
-    if (!tokens[1] || !SAFE_GIT_TOKEN_RE.test(tokens[1])) return false;
-    tokens.splice(0, 2);
+    return false;
   }
   const subcommand = String(tokens.shift() || "").toLowerCase();
   const args = tokens;
@@ -215,6 +215,10 @@ function readTargetBlockReason(rawTarget, projectDir, { allowGlob = false } = {}
   const text = String(rawTarget || "").trim();
   if (!text) return "";
   if (/[\0\r\n$%~]/.test(text)) return `read target is dynamic or ambiguous: ${text}`;
+  const normalizedText = text.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  if (normalizedText === ".git" || normalizedText.startsWith(".git/") || normalizedText.includes("/.git/")) {
+    return `Git internals are not readable in a factory lane: ${text}`;
+  }
   if (SECRET_PATH_RE.test(text.replace(/\\/g, "/"))) {
     return `secret-bearing paths are not readable in a factory lane: ${text}`;
   }
@@ -262,6 +266,20 @@ function governedReadBlockReason(toolName, toolInput, projectDir) {
   }
   if (/(?:^|[\s\\/])\.\.(?:[\\/]|$)|[$%~*?[\]{}()]|\\\\/.test(command)) {
     return "shell reads must use stable paths inside the worktree";
+  }
+  const shellTokens = command.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+  if (shellTokens.join(" ") !== command.replace(/\s+/g, " ").trim()) {
+    return "shell reads must use unambiguous literal arguments";
+  }
+  for (const rawToken of shellTokens.slice(1)) {
+    const token = rawToken.replace(/^(['"])([\s\S]*)\1$/, "$2");
+    if (!token || token.startsWith("-")) {
+      if (/[:=]/.test(token)) return "shell read options cannot hide path values";
+      continue;
+    }
+    if (token.includes(",")) return "shell reads cannot use array or comma-separated paths";
+    const reason = readTargetBlockReason(token, projectDir);
+    if (reason) return reason;
   }
   const absoluteTargets = [...command.matchAll(
     /(?:^|\s)["']?([A-Za-z]:[\\/][^\s"';&|<>]+|\/[^\s"';&|<>]+)["']?/g,
@@ -363,6 +381,7 @@ const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type ||
   ? "codex"
   : "claude";
 const paths = resolveHookFactoryPaths(projectDir);
+const intentRecordFailed = Boolean(sessionId) && hasFactoryIntentFailureLatch(paths, sessionId);
 
 let snapshot;
 try {
@@ -392,6 +411,9 @@ const factoryCliJob = factoryCli?.jobId
 if (factoryCli) {
   if (factoryCli.status) nothing();
   if (!sessionId) deny("CRX FACTORY GATE: mutating factory commands require a verifiable chat session.");
+  if (intentRecordFailed && !factoryCli.recovery) {
+    deny("CRX FACTORY GATE: Mason's factory intent was not recorded in the ledger. Only status/recovery is available until the prompt is re-submitted successfully.");
+  }
   if (snapshot.held && !factoryCli.recovery) {
     deny(`CRX FACTORY GATE: the factory is globally paused${snapshot.holdReason ? ` (${snapshot.holdReason})` : ""}. Only status and canonical recovery remain available.`);
   }
@@ -421,12 +443,16 @@ const governedJob = sessionJobs.find((job) =>
   ACTIVE_STAGES.has(job.stage)
   || ["needs-ticket-ok", "queued", "awaiting-morning-review", "parked"].includes(job.stage),
 );
-if (!hasIntent && !governedJob) nothing();
+if (!hasIntent && !governedJob && !intentRecordFailed) nothing();
 const readBlockReason = governedReadBlockReason(payload?.tool_name, payload?.tool_input, projectDir);
 if (readBlockReason) {
   deny(`CRX FACTORY GATE: ${readBlockReason}. Use tracked, non-secret files inside the governed worktree.`);
 }
 if (!buildMutation) nothing();
+
+if (intentRecordFailed) {
+  deny("CRX FACTORY GATE: Mason requested factory-managed work, but its ledger intent could not be recorded. Build writes fail closed until the ledger is recovered and the owner prompt is re-submitted.");
+}
 
 if (snapshot.held) {
   deny(`CRX FACTORY GATE: the factory is globally paused${snapshot.holdReason ? ` (${snapshot.holdReason})` : ""}. Reads and verification remain available; build writes are blocked.`);

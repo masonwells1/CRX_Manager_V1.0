@@ -413,6 +413,14 @@ bytes, a precomputed diff, and a SHA manifest; ignored secrets, session state, h
 and shared Git metadata are not exposed. The trusted Codex invocation uses the explicit
 `--skip-git-repo-check` compatibility flag because the packet deliberately contains no `.git`;
 read-only sandboxing, disabled hooks, fixed stdin, and exact SHA binding remain enforced.
+A sixth exact-SHA Sol/high acceptance found three remaining fail-open paths. Intent routing now
+writes a durable per-session failure latch before appending the ledger and clears it only after
+success, so a stale ledger lock blocks both build writes and mutating factory commands until
+recovery and owner-prompt re-submit. Governed Git inspection no longer accepts `git -C`, and every
+literal shell-read operand is checked for worktree containment, ignored/secret paths, and symlink
+escape. Repository and landing fingerprints now bind Git mode and object type in addition to path
+and blob identity, preventing a regular-file proof from validating a symlink or executable-mode
+change.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

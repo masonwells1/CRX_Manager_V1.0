@@ -175,6 +175,21 @@ function hookOutput(result) {
   });
   assertions++;
   assert.equal(gitReadAllowed.stdout, "", "factory intent keeps fixed Git diagnostics available");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git -C ..\\other-repository show HEAD:secret.txt" },
+  }), /no mission ticket|direct commands and helper-process execution/i, "factory intent cannot redirect Git reads to another repository");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Get-Content .git/config" },
+  }), /Git internals are not readable|inside the worktree/i, "factory intent cannot read Git internals through relative shell paths");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Get-Content node_modules/react/package.json" },
+  }), /ignored paths are not readable|symlink/i, "factory intent cannot read ignored or escaping dependency paths");
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",

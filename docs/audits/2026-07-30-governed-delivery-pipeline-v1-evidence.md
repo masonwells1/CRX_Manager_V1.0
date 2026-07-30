@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `886fa4591dd72c82d9e8c8f0b09fd3c8b7355053`
-State: rebased onto current `origin/main`; fifth Sol/high publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; sixth Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -111,7 +111,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 282 focused assertions after fifth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 295 focused assertions after sixth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -274,6 +274,15 @@ recursive force-delete cleanup command.
   exact-commit acceptance is still required. The first real sanitized-packet launch failed closed
   because Codex correctly refused a Git-free directory; the trusted wrapper now supplies
   `--skip-git-repo-check` while retaining read-only sandboxing, disabled hooks, and fixed stdin.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `7e08a4beb6dc2d45e00b883ff029f060500a5e25` returned `BLOCKERS`: failed intent append could
+  leave an autonomous chat ungoverned, `git -C` and relative shell operands could escape read
+  controls, and exact-content fingerprints omitted Git mode/type. Intent routing now writes a
+  separate durable per-session fail-closed latch before attempting the ledger append and clears it
+  only after success; the lane guard honors it for writes and mutating factory commands. Governed
+  Git reads cannot redirect with `-C`, every literal shell operand passes worktree/ignored/secret/
+  symlink checks, and fingerprints bind path, mode, object type, and blob identity. Fresh
+  exact-commit acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

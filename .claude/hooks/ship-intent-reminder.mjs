@@ -20,7 +20,9 @@ import { readFileSync } from "node:fs";
 import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 import {
   appendFactoryEvent,
+  clearFactoryIntentFailureLatch,
   resolveHookFactoryPaths,
+  setFactoryIntentFailureLatch,
 } from "../../scripts/factory-state-lib.mjs";
 
 function emit(extra) {
@@ -84,22 +86,36 @@ if (!shipIntent && !factoryIntent) emit();
 if (factoryIntent) {
   const sessionId = String(payload?.session_id || payload?.thread_id || payload?.conversation_id || "").trim();
   if (sessionId) {
+    const paths = resolveHookFactoryPaths(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+    const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type || payload?.tool_surface || "claude").toLowerCase().includes("codex")
+      ? "codex"
+      : "claude";
+    let latched = false;
     try {
+      setFactoryIntentFailureLatch(paths, {
+        sessionId,
+        actorTool,
+        ownerRequest: rawPrompt.slice(0, 1_000),
+      });
+      latched = true;
       appendFactoryEvent(
-        resolveHookFactoryPaths(process.env.CLAUDE_PROJECT_DIR || process.cwd()),
+        paths,
         {
           type: "factory-intent",
           jobId: null,
-          actorTool: String(process.env.CRX_AGENT_SURFACE || payload?.agent_type || payload?.tool_surface || "claude").toLowerCase().includes("codex")
-            ? "codex"
-            : "claude",
+          actorTool,
           sessionId,
           payload: { ownerRequest: rawPrompt.slice(0, 1_000) },
         },
       );
-    } catch {
-      // Routing remains advisory. The lane guard fails closed only after a
-      // verifiable session intent exists in the shared ledger.
+      clearFactoryIntentFailureLatch(paths, sessionId);
+    } catch (error) {
+      if (!latched) {
+        process.stderr.write(`FACTORY INTENT LATCH FAILED: ${error.message}\n`);
+        process.exit(2);
+      }
+      // The separate per-session latch deliberately remains. PreToolUse denies
+      // build writes until this exact prompt is re-submitted and ledger append succeeds.
     }
   }
 }

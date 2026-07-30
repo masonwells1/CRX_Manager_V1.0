@@ -132,6 +132,7 @@ function buildPaths(stateDir) {
     ticketsDir: path.join(stateDir, "tickets"),
     evidenceDir: path.join(stateDir, "evidence"),
     permitsDir: path.join(stateDir, "permits"),
+    intentLatchesDir: path.join(stateDir, "intent-latches"),
     eventsPath: path.join(stateDir, "events.jsonl"),
     lockPath: path.join(stateDir, "events.lock"),
     emergencyHoldPath: path.join(stateDir, "EMERGENCY-HOLD.json"),
@@ -143,6 +144,46 @@ export function ensureFactoryDirs(paths) {
   mkdirSync(paths.ticketsDir, { recursive: true });
   mkdirSync(paths.evidenceDir, { recursive: true });
   mkdirSync(paths.permitsDir, { recursive: true });
+  mkdirSync(paths.intentLatchesDir, { recursive: true });
+}
+
+function factoryIntentLatchPath(paths, sessionId) {
+  const session = requiredText(sessionId, "factory intent sessionId", 200);
+  return path.join(paths.intentLatchesDir, `${sha256(session)}.json`);
+}
+
+export function hasFactoryIntentFailureLatch(paths, sessionId) {
+  if (!sessionId) return false;
+  return existsSync(factoryIntentLatchPath(paths, sessionId));
+}
+
+export function setFactoryIntentFailureLatch(paths, {
+  sessionId,
+  actorTool,
+  ownerRequest,
+}) {
+  authorizedFactoryWriter(paths);
+  ensureFactoryDirs(paths);
+  const target = factoryIntentLatchPath(paths, sessionId);
+  const bytes = `${canonicalJson({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    sessionId,
+    actorTool: requiredText(actorTool, "factory intent actorTool", 40),
+    ownerRequest: requiredText(ownerRequest, "factory intent ownerRequest", 1_000),
+    createdAt: new Date().toISOString(),
+  })}\n`;
+  try {
+    writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  return target;
+}
+
+export function clearFactoryIntentFailureLatch(paths, sessionId) {
+  authorizedFactoryWriter(paths);
+  const target = factoryIntentLatchPath(paths, sessionId);
+  if (existsSync(target)) unlinkSync(target);
 }
 
 export function canonicalize(value) {
@@ -633,6 +674,12 @@ export function repositoryContentFingerprint(cwd = process.cwd()) {
   if (listed.some((relative) => relative.includes("\n"))) {
     throw new Error("Repository fingerprint does not support newline characters in file names.");
   }
+  const indexModes = new Map(git(["ls-files", "--stage", "-z"], repoRoot)
+    .split("\0").filter(Boolean).map((entry) => {
+      const match = entry.match(/^(\d+)\s+[a-f0-9]+\s+0\t([\s\S]+)$/);
+      if (!match) throw new Error("Could not parse Git index mode for repository fingerprint.");
+      return [match[2], match[1]];
+    }));
   const objectIds = listed.length === 0 ? [] : execFileSync("git", ["hash-object", "--stdin-paths"], {
     cwd: repoRoot,
     input: `${listed.join("\n")}\n`,
@@ -648,7 +695,15 @@ export function repositoryContentFingerprint(cwd = process.cwd()) {
   for (let index = 0; index < listed.length; index++) {
     const relative = listed[index];
     const normalized = relative.replace(/\\/g, "/");
+    const stat = lstatSync(path.join(repoRoot, relative));
+    const indexedMode = indexModes.get(relative);
+    const mode = stat.isSymbolicLink()
+      ? "120000"
+      : indexedMode === "100755" || (process.platform !== "win32" && (stat.mode & 0o111) !== 0)
+        ? "100755"
+        : "100644";
     hash.update(`path:${Buffer.byteLength(normalized)}:${normalized}\0`);
+    hash.update(`mode:${mode}\0type:blob\0`);
     hash.update(`blob:${objectIds[index]}\0`);
     fileCount++;
   }
@@ -682,6 +737,7 @@ export function repositoryCommitFingerprint(cwd = process.cwd(), commitish = "HE
     }
     const normalized = entry.relative.replace(/\\/g, "/");
     hash.update(`path:${Buffer.byteLength(normalized)}:${normalized}\0`);
+    hash.update(`mode:${entry.mode}\0type:${entry.type}\0`);
     hash.update(`blob:${entry.objectId}\0`);
   }
   return {

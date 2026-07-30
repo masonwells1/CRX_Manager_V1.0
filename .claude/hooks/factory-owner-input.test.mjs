@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
   buildFactorySnapshot,
+  hasFactoryIntentFailureLatch,
   resolveFactoryPaths,
   sha256,
   writeImmutableTicket,
@@ -16,6 +17,7 @@ import {
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "../..");
 const hook = path.join(root, ".claude", "hooks", "factory-owner-input.mjs");
 const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
+const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
 const baseSha = spawnSync("git", ["rev-parse", "origin/main"], { cwd: root, encoding: "utf8" }).stdout.trim();
 let assertions = 0;
 
@@ -184,6 +186,21 @@ function runShipHook(state, payload) {
   equal(buildFactorySnapshot(state.paths).jobs[0].stage, "needs-ticket-ok", "cross-session reply does not advance");
 }
 
+function runLaneHook(state, payload) {
+  return spawnSync(process.execPath, [laneHook], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: root,
+      CRX_AGENT_SURFACE: "codex",
+      CRX_FACTORY_TEST_MODE: "1",
+      CRX_FACTORY_TEST_STATE_DIR: state.dir,
+    },
+    input: JSON.stringify(payload),
+  });
+}
+
 {
   const state = makeState("original-transfer-thread");
   const result = runHook(state, {
@@ -273,6 +290,37 @@ function runShipHook(state, payload) {
   });
   ok(cleared.stdout.includes("recorded Mason's request"), "owner chat can leave factory mode before a ticket exists");
   equal(buildFactorySnapshot(state.paths).factoryIntentSessions.length, 0, "owner-bound intent clear restores the normal workflow");
+}
+
+{
+  const state = makeEmptyState("latched-factory-thread");
+  writeFileSync(state.paths.lockPath, "{\"pid\":999999,\"createdAt\":\"2026-07-30T00:00:00.000Z\"}\n");
+  const failed = runShipHook(state, {
+    prompt: "run the factory overnight",
+    thread_id: state.sessionId,
+  });
+  equal(failed.status, 0, "ledger contention leaves a durable latch without crashing prompt routing");
+  ok(hasFactoryIntentFailureLatch(state.paths, state.sessionId), "failed ledger append leaves a per-session intent latch");
+  equal(buildFactorySnapshot(state.paths).factoryIntentSessions.length, 0, "failed append does not invent a ledger intent");
+  const deniedWrite = runLaneHook(state, {
+    thread_id: state.sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts"), content: "blocked" },
+  });
+  ok(deniedWrite.stdout.includes("ledger intent could not be recorded"), "intent latch blocks build writes even without a ledger event");
+  const deniedFactoryCommand = runLaneHook(state, {
+    thread_id: state.sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/factory.mjs hold set --reason latched" },
+  });
+  ok(deniedFactoryCommand.stdout.includes("intent was not recorded"), "intent latch blocks mutating factory commands until recovery and re-submit");
+  rmSync(state.paths.lockPath);
+  runShipHook(state, {
+    prompt: "run the factory overnight",
+    thread_id: state.sessionId,
+  });
+  equal(hasFactoryIntentFailureLatch(state.paths, state.sessionId), false, "successful re-submit clears the failure latch");
+  equal(buildFactorySnapshot(state.paths).factoryIntentSessions[0], state.sessionId, "successful re-submit records the governed intent");
 }
 
 {

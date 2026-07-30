@@ -539,6 +539,26 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const landed = repositoryCommitFingerprint(fingerprintRepo, "HEAD");
   eq(committed.repositoryContentHash, changed.repositoryContentHash, "repository proof hash survives committing identical content");
   eq(landed.repositoryContentHash, changed.repositoryContentHash, "landing commit fingerprint binds the exact proven content");
+  execFileSync("git", ["update-index", "--chmod=+x", "source.txt"], { cwd: fingerprintRepo, stdio: "ignore" });
+  const executableWorkingTree = repositoryContentFingerprint(fingerprintRepo);
+  ok(
+    executableWorkingTree.repositoryContentHash !== committed.repositoryContentHash,
+    "working-tree proof changes when the Git executable mode changes without content changes",
+  );
+  execFileSync("git", ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-m", "mode-only"], {
+    cwd: fingerprintRepo,
+    stdio: "ignore",
+  });
+  const executableCommit = repositoryCommitFingerprint(fingerprintRepo, "HEAD");
+  eq(
+    executableCommit.repositoryContentHash,
+    executableWorkingTree.repositoryContentHash,
+    "landing commit and working-tree fingerprints bind the same mode plus blob identity",
+  );
+  ok(
+    executableCommit.repositoryContentHash !== landed.repositoryContentHash,
+    "mode-only landing changes cannot reuse a prior exact-content proof",
+  );
   rmSync(fingerprintRepo, { recursive: true, force: true });
 }
 

@@ -112,6 +112,12 @@ fingerprint before the ticket or morning decision is re-presented there.
   Git-free packet containing exact base bytes, tracked/non-ignored candidate bytes, a precomputed
   diff, and a SHA manifest. Ignored files, factory session state, host profile paths, and repository
   Git metadata are not exposed to the reviewer.
+- Factory-intent routing writes a separate per-session failure latch before the shared ledger. If
+  ledger append fails, build writes and mutating factory commands stay blocked until recovery and
+  successful owner-prompt re-submit clears the latch.
+- Governed Git reads cannot redirect to another checkout with `git -C`; shell-read operands are
+  individually checked for containment, ignored/secret paths, and symlink escape. Exact repository
+  fingerprints bind Git mode and object type as well as path and blob bytes.
 - The board binds only to loopback and is read-only.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
