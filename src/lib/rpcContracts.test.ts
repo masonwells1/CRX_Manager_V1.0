@@ -2101,9 +2101,8 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// The four latest approved migrations applied live 2026-07-29 under their
-// server-assigned ledger versions (20260729125227, 20260729125251,
-// 20260729125314, and 20260729163243) — none of those are pending.
+// The latest approved migration in this checkout applied live 2026-07-29
+// under server-assigned ledger version 20260729222311; it is not pending.
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();

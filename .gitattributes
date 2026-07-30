@@ -22,6 +22,7 @@ supabase/migrations/20260717042803_supplier_pricing_phase1a.sql -text diff white
 supabase/migrations/20260717112011_supplier_pricing_zero_cost_guard.sql text eol=lf
 supabase/migrations/20260717171331_restore_legacy_pricing_version_compat.sql text eol=lf
 supabase/migrations/20260722222743_product_families_return_policy_foundation.sql text eol=lf
+supabase/migrations/20260729222311_bind_save_field_actor.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 
 # Generated clean-rebuild baselines are hash-verified release artifacts.

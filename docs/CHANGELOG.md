@@ -34,6 +34,24 @@ behind deliberately — it is either byte-identical to `main` already or *older*
 carrying it over wholesale would have reverted roughly a thousand lines of merged work, including
 the `/fleet` counter fix below and the session-scoped apply-proof decision from #273.
 
+## 2026-07-29 — `save_field` activity attribution is bound to the authenticated actor
+
+Live migration `20260729222311_bind_save_field_actor` now derives the field activity actor from
+`auth.uid()`, rejects a conflicting caller-supplied `p_performed_by` before idempotency replay or
+business writes, and records `activity_feed.performed_by` from that authenticated identity. The
+function remains `SECURITY DEFINER` with `search_path = public, pg_temp`; `anon` cannot execute it,
+while authenticated callers retain the existing signature and compatible frontend contract.
+
+The live apply was followed by an exact rollback-only smoke (`SMOKE_PASS_ROLLBACK`), a zero-row
+`save-field-actor-binding` invariant result, and a clean run of all 20 standing live predicates.
+The smoke left zero fixture customers, fields, or activity rows. The migration and live
+`pg_proc.prosrc` body hashes match the reviewed definition.
+
+This closes one of the two Section 1 MED findings. The anon-executable SECURITY DEFINER number
+generators remain open. The older parked branch `codex/section1-security-hardening-20260725`
+contains a superseded duplicate `save_field` replacement; it must be narrowed before rebase or
+apply, or it would replace the live function body and intentionally trip the hash-pinned invariant.
+
 ## 2026-07-29 — Supplier Pricing Phase 3 Stage C: the return-policy guard finally fires
 
 Supplier Pricing Phase 3 Stage C: applied the owner-approved return-policy classification live (migration 20260729213733) — 21 products no_return (10 also full-tote-only), 2 returnable, remainder left unknown by owner decision. Activates the previously dormant assert_phase3_return_policy() guard across create_return/approve_return/receive_return/issue_return_credit. Rows keyed by primary key so no product names or SKUs enter the repo. Verified live: catalog 604 rows -> 21/2/581/0, tote=10 all inside no_return, and the guard raises RETURN_POLICY_NO_RETURN on a real classified product while both returnable overrides and an untouched unknown product pass. Landed via PR #282.
