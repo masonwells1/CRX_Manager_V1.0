@@ -2,6 +2,34 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — agent memory is now backed up off-site, and permanently barred from this public repo
+
+162 stale agent-memory notes had been sitting untracked in the main checkout since 2026-07-26,
+surfacing as "pending work" in every status check. Mason asked whether to commit them, so that cloud
+sessions could learn from the recorded decisions and so a copy existed. Both goals are sound; the
+destination was not. `CRX_Manager_V1.0` is **public**, and the notes carry real commission payouts
+naming real people — a per-recipient breakdown of the H1 backfill, among others. A scan of all 162
+found no keys, tokens or passwords, and the Supabase project ref they mention is already public in
+`AGENTS.md`, so the money-and-names content was the whole of the risk. Publishing a third party's
+income to an indexable repo is not undoable by a later delete.
+
+Both goals already had homes. *Learning from decisions* is `docs/manual/DECISION_LOG.md` — committed,
+public, current, and already the file `AGENTS.md` points every agent at before re-opening a settled
+question; curated prose beats an agent's shorthand notes for that purpose. *Having a copy* is the
+private `masonwells1/CRX_Backups`, which already receives the weekly encrypted DB dump. So
+`docs/claude-memory/` is now gitignored here, and `scripts/backup-claude-memory.mjs` +
+`/backup-claude-memory` snapshot the memory to the private repo instead.
+
+The script mirrors `backup-db.mjs`: deterministic, node builtins only, no network and no token — the
+driving session does the push. It auto-discovers the memory dir under `~/.claude/projects/*/memory`,
+re-reads every file after writing to catch a short write, prunes staged orphans file-by-file, and
+records a per-file sha256. It **refuses** an empty or `MEMORY.md`-less source, because a typo'd
+`--source` must not quietly overwrite a good backup with a valid-looking empty one. Each guard was
+mutation-tested to red before shipping: empty source, missing index file, and a tampered staged file
+all exit 1; a re-stage then repaired the tamper and pruned a planted orphan. The committed folder
+turned out to be 23 files out of date — the live memory holds 185 notes, the mirror had 162 — which
+is the second reason not to commit it: a snapshot in git drifts from the moment it lands.
+
 ## 2026-07-29 — `/fleet` can now tell a stalled loop from a finished one
 
 `/fleet` reported what *exists* — worktrees, branches, ledgers, counts — but never whether anything
