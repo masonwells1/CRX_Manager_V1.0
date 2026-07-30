@@ -101,7 +101,7 @@ function isSafeGitRead(command) {
   if (subcommand === "worktree") return args[0] === "list" && args.length === 1;
   return false;
 }
-const SAFE_SHELL_READ_RE = /^\s*(?:rg|findstr|where(?:\.exe)?|ls|dir|pwd|Get-Location|Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|Measure-Object)(?:\s+[^;&|<>]*)?\s*$/i;
+const SAFE_SHELL_READ_RE = /^\s*(?:findstr|where(?:\.exe)?|ls|dir|pwd|Get-Location|Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|Measure-Object)(?:\s+[^;&|<>]*)?\s*$/i;
 const SAFE_VERSION_RE = /^\s*(?:node|npm|gh|git)(?:\.exe|\.cmd)?\s+--version\s*$/i;
 
 function isShellMutation(toolName, toolInput) {
@@ -197,7 +197,7 @@ const sessionJobs = snapshot.jobs.filter((job) => job.sessionId === sessionId);
 const hasIntent = snapshot.factoryIntentSessions.includes(sessionId);
 const governedJob = sessionJobs.find((job) =>
   ACTIVE_STAGES.has(job.stage)
-  || ["needs-ticket-ok", "queued", "awaiting-morning-review", "parked", "approved-to-land"].includes(job.stage),
+  || ["needs-ticket-ok", "queued", "awaiting-morning-review", "parked"].includes(job.stage),
 );
 if (!hasIntent && !governedJob) nothing();
 if (!buildMutation) nothing();

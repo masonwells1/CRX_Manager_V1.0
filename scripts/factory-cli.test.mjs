@@ -169,6 +169,27 @@ pass(run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summ
 
 const reviewQuestion = path.join(fixtureDir, "review-question.txt");
 writeFileSync(reviewQuestion, canonicalMorningReviewQuestion(loadFactorySnapshot(paths).jobs[0]));
+const approvedBase = loadFactorySnapshot(paths).jobs[0].baseSha;
+const fixtureTree = spawnSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: fixtureRepo, encoding: "utf8" }).stdout.trim();
+const movedBaseResult = spawnSync("git", [
+  "-c", "user.name=Factory Test",
+  "-c", "user.email=factory@example.invalid",
+  "commit-tree", fixtureTree, "-p", approvedBase, "-m", "moved main fixture",
+], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(movedBaseResult.status, 0, movedBaseResult.stderr);
+let refResult = spawnSync("git", ["update-ref", "refs/remotes/origin/main", movedBaseResult.stdout.trim()], {
+  cwd: fixtureRepo,
+  encoding: "utf8",
+});
+assert.equal(refResult.status, 0, refResult.stderr);
+const staleMorning = run(["review", "present", "--job", jobId]);
+assertions++;
+assert.notEqual(staleMorning.status, 0, "morning presentation refuses proof after origin/main moves");
+refResult = spawnSync("git", ["update-ref", "refs/remotes/origin/main", approvedBase], {
+  cwd: fixtureRepo,
+  encoding: "utf8",
+});
+assert.equal(refResult.status, 0, refResult.stderr);
 const morningPresented = run(["review", "present", "--job", jobId]);
 pass(morningPresented, "present morning decision");
 assertions++;

@@ -24,6 +24,7 @@ import {
   sha256,
   validateLaneActor,
   validateLaneStart,
+  validateCurrentIndependentReview,
   validateCurrentHarnessEvidence,
   validateStageChange,
   writeImmutableTicket,
@@ -277,6 +278,12 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       throw new Error(`Job ${jobId} must be awaiting morning review before its decision question is presented.`);
     }
     const questionText = canonicalMorningReviewQuestion(job);
+    const baseSha = refreshOriginMain(cwd, env);
+    if (baseSha !== job.baseSha) {
+      throw new Error("origin/main moved after ticket approval; park and re-present the ticket before morning review.");
+    }
+    validateCurrentHarnessEvidence(job, cwd);
+    validateCurrentIndependentReview(job, cwd);
     appendFactoryEvent(paths, {
       type: "review-presented",
       jobId,
@@ -286,7 +293,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         ticketHash: job.ticketHash,
         questionText,
         questionHash: sha256(questionText),
-        baseSha: refreshOriginMain(cwd, env),
+        baseSha,
         expiresAt: new Date(now().getTime() + APPROVAL_TTL_MS).toISOString(),
       },
     });
@@ -447,8 +454,9 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     if (!productionProof) throw new Error("Production verification text is required.");
     const acceptedEvidence = validateCurrentHarnessEvidence(job, cwd, { requireCurrentBase: false });
     const landing = repositoryCommitFingerprint(cwd, landingCommit);
-    if (acceptedEvidence.repositoryContentHash !== landing.repositoryContentHash
-        || Number(acceptedEvidence.repositoryFileCount) !== landing.repositoryFileCount) {
+    if (acceptedEvidence.some((item) =>
+      item.repositoryContentHash !== landing.repositoryContentHash
+      || Number(item.repositoryFileCount) !== landing.repositoryFileCount)) {
       throw new Error("Landing commit does not contain the exact repository content bound to the accepted harness proof.");
     }
 

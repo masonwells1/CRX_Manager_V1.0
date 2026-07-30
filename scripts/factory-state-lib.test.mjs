@@ -486,17 +486,24 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   };
   throws(
     () => validateCurrentHarnessEvidence(landedJob, repoRoot),
-    /current, ticket-approved/,
+    /every ticket-required/,
     "morning review rejects proof when origin/main moved",
   );
   ok(
     validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false }),
     "post-landing closeout accepts proof bound to the job's immutable original base",
   );
+  landedJob.ticket.proofHarnesses = ["verify-deps", "build"];
+  throws(
+    () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false }),
+    /every ticket-required/,
+    "one passing harness cannot satisfy a ticket that requires multiple harnesses",
+  );
+  landedJob.ticket.proofHarnesses = ["verify-deps"];
   landedJob.evidence[0].repositoryContentHash = "0".repeat(64);
   throws(
     () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false }),
-    /current, ticket-approved/,
+    /every ticket-required/,
     "source changes invalidate previously verified harness evidence",
   );
 }

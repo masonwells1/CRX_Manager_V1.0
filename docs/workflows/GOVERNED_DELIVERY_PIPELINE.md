@@ -83,7 +83,7 @@ An approval is valid only when all of these are true:
 ## Pilot limits
 
 - One factory custody window at a time. From ticket drafting/presentation through queued, build,
-  verification, independent review, morning review, and accepted-to-land disposition, build writes
+  verification, independent review, and the morning decision, build writes
   and opaque helper execution from every other chat are denied, including fresh chats with no prior
   factory intent. Native editing,
   MCP filesystem tools, shell file commands, redirects, Git mutation, and unknown repository scripts
@@ -93,14 +93,15 @@ An approval is valid only when all of these are true:
   run only through the permit-bound `factory.mjs evidence run` broker. Git inspection uses a strict
   subcommand/token/option allowlist: output-writing, external-diff/text-conversion, paging/config
   injection, and unknown flags are mutations. Unknown non-shell tools default to opaque execution;
-  only explicit structured read-only tools are exempt.
+  only explicit structured read-only tools are exempt. Shell `rg` is not exempt because its
+  preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
 - The board binds only to loopback and is read-only.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
 
 ## Operator recovery
 
-Before morning review, the agent must run a repository-owned npm harness named in the immutable
+Before morning review, the agent must run every repository-owned npm harness named in the immutable
 approved ticket through `factory.mjs evidence run`. The harness must also be in the factory's fixed
 allowlist (`test`, `test:factory`, `test:agent-workflows`, `typecheck`, `lint`, `build`,
 `verify-deps`, or `check-doc-drift`) and its script body must still equal `origin/main`. The CLI
@@ -117,8 +118,9 @@ morning review and closeout, so later source or test edits invalidate stale proo
 Codex executable then performs a fixed-prompt, read-only review. Its unique terminal CLEAN verdict,
 model, fresh base, and complete repository fingerprint are persisted; any byte change invalidates the
 review. A passing branch-controlled harness without this independent verdict cannot reach morning review.
-Morning review additionally requires the original base to remain current after a fresh fetch. After
-landing, closeout validates proof against the
+Morning presentation reruns both harness and independent-review validation and requires the original
+base to remain current after a fresh fetch. Once Mason accepts, factory custody ends and the ordinary
+`/ship` commit/PR guards become authoritative. After landing, closeout validates proof against the
 job's immutable original base, proves that the landing commit is contained in current `origin/main`,
 and computes the commit's own tree/content fingerprint. The landing commit must contain the exact
 bytes that passed the accepted harness. The CLI has no arbitrary local-file evidence route, and

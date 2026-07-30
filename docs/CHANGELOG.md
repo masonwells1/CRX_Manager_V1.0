@@ -345,6 +345,11 @@ Git inspection accepted output-writing options, raw orchestration tools could ev
 classification, and a raw JWT could enter tracked proof. Git reads now use a strict option/token
 allowlist, unknown non-read tools default to opaque execution, and all ticket/event payloads receive
 expanded cloud-token/JWT scanning before persistence.
+A sixth Codex pass then caught executable ripgrep preprocessing, stale-base rebinding at morning
+presentation, “any one” handling of a multi-harness ticket, and a custody deadlock after acceptance.
+Shell ripgrep is no longer a read exemption; morning presentation freshly revalidates the immutable
+base, every required harness, and exact independent review; the reviewer prompt lists those
+harnesses; and `approved-to-land` exits factory custody into the ordinary `/ship` lifecycle.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

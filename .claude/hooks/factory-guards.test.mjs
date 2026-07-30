@@ -316,6 +316,11 @@ function hookOutput(result) {
     tool_name: "PowerShell",
     tool_input: { command: "git diff origin/main...HEAD --output=src/forged.ts" },
   }), /direct commands and helper-process execution/i, "active lane rejects output-writing options on otherwise read-only Git commands");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "rg --pre=node.exe pattern scripts/generated-helper.mjs" },
+  }), /direct commands and helper-process execution/i, "active lane cannot use ripgrep preprocessor execution");
   const structuredReadAllowed = run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Read",
@@ -386,6 +391,46 @@ function hookOutput(result) {
     tool_name: "PowerShell",
     tool_input: { command: "npm run test:factory" },
   }), /globally paused/i, "global hold blocks direct harness execution; status and read-only inspection remain available");
+}
+
+{
+  const sessionId = "landing-thread";
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-landing-"));
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const ticket = writeImmutableTicket(paths, {
+    id: "landing-job",
+    title: "Release factory custody",
+    goal: "Enter existing ship gates after morning acceptance.",
+    definitionOfDone: ["Normal landing workflow can proceed."],
+    mustNotChange: ["Production without its existing gates."],
+    proofRequirements: ["Factory guard result."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Use existing ship gates.",
+    riskAreas: [],
+  });
+  for (const event of [
+    { type: "ticket-drafted", payload: { ticketFile: ticket.filename, ticketHash: ticket.hash, ticketVersion: 1, title: ticket.ticket.title } },
+    { type: "ticket-presented", payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: "a".repeat(64), baseSha: "b".repeat(40) } },
+    { type: "ticket-approved", payload: { ticketHash: ticket.hash, questionHash: "a".repeat(64), ownerReply: "yes", baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "lane-started", payload: { ticketHash: ticket.hash, baseSha: "b".repeat(40), worktree: root } },
+    { type: "job-stage", payload: { stage: "approved-to-land", behaviorSummary: "Proof accepted.", blocker: "" } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId: ticket.ticket.id,
+      actorTool: "codex",
+      sessionId,
+    });
+  }
+  const landingWrite = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "landing.ts") },
+  });
+  assertions++;
+  assert.equal(landingWrite.stdout, "", "approved-to-land releases factory custody to the existing ship gates");
 }
 
 {

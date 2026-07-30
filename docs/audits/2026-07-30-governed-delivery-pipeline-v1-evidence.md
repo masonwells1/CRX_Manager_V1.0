@@ -37,8 +37,8 @@ pipeline remains the delivery engine and all of its landing and production gates
   production actions; existing `/ship`, GitHub, and owner hard gates remain authoritative.
 - Legal stage transitions and evidence writes are bound to the lane-start session. Lane start uses
   an expected-last-event compare-and-swap under the exclusive ledger lock, so simultaneous starts
-  cannot both win. A successful
-  CLI-executed repository harness is required before morning review. Its name is bound into the
+  cannot both win. Successful output from every
+  CLI-executed repository harness named in the ticket is required before morning review. Each name is bound into the
   immutable ticket and fixed allowlist; its resolved script body must equal `origin/main`, and the
   command/body/package/base/output hashes plus the full tracked/non-ignored repository content
   fingerprint are rechecked. The production broker runs the harness without inherited credentials or
@@ -52,7 +52,7 @@ pipeline remains the delivery engine and all of its landing and production gates
   arbitrary local-file evidence route has been removed. A separate fixed-prompt, read-only Codex run
   must then return one terminal CLEAN verdict bound to the exact base and repository fingerprint;
   branch harness success alone cannot advance the job to morning review.
-- Throughout nonterminal factory custody—from ticket decision through accepted-to-land—native edits,
+- Throughout factory custody—from ticket decision through the morning decision—native edits,
   MCP filesystem tools, shell writes/redirection, Git mutations, unknown repository scripts, and
   opaque helper execution from other or fresh chats are denied. The winning lane
   uses structured target-visible edits and read-only shell inspection; opaque shell/helper/MCP process
@@ -61,6 +61,8 @@ pipeline remains the delivery engine and all of its landing and production gates
   A torn final line has a backup-first repair path, and a failed ledger pause creates an emergency hold
   that still blocks lane writes.
 - Morning chat acceptance produces only `approved-to-land`, never `live`.
+- `approved-to-land` releases factory custody so the ordinary `/ship` commit, push, PR, and production
+  guards can run; the factory cannot deadlock its own landing lifecycle.
 - Live closeout requires an accepted job, a landing commit contained in `origin/main`, bounded
   secret-scanned production-verification text, proof still bound to the job's immutable original
   base, and a new durable content-hashed packet under `docs/audits/factory/jobs/`. The named landing
@@ -190,6 +192,12 @@ recursive force-delete cleanup command.
   gap for raw JWTs and other persisted fields. The current repair strictly allowlists Git read
   tokens/options, defaults unknown non-read tools to opaque mutation, recognizes raw execution
   surfaces, expands common cloud-token detection, and scans all ticket and event payloads.
+- Trusted Codex exact-head publication re-review `2026-07-30T18:09:29Z`: `BLOCKERS`; it found four
+  HIGH gaps: ripgrep preprocessing could execute a helper, morning presentation could rebind stale
+  proof to a moved base, one of multiple required harnesses could satisfy the ticket, and
+  `approved-to-land` remained locked inside factory custody. The current repair removes shell ripgrep
+  from read allowances, revalidates fresh base plus all proof at presentation, requires every named
+  harness and lists them in the independent-review prompt, and hands accepted jobs to `/ship`.
   Publication remains parked until fresh exact-SHA Codex and Fable acceptance pass.
 
 The latest review capture is
