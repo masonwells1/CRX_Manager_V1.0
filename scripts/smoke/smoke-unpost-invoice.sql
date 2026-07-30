@@ -30,10 +30,20 @@ DECLARE
   v_inv_overdue uuid;    -- overdue invoice
   v_aset uuid;
   v_audit_post int; v_audit_unpost int; v_paid bigint; v_prepay bigint;
-  v_period_month date := date_trunc('month', (CURRENT_DATE - INTERVAL '2 months'))::date;
+  -- Fixed pre-history fixture: never select a rolling month that could collide
+  -- with a real closed accounting period as time passes.
+  v_period_month date := DATE '1990-02-01';
 BEGIN
   SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no admin'; END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM accounting_periods ap
+    WHERE ap.period_start <= (v_period_month + INTERVAL '1 month - 1 day')::date
+      AND ap.period_end >= v_period_month
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: fixed pre-history month % is occupied', v_period_month;
+  END IF;
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] UNPOST '||v_sfx) RETURNING id INTO v_cust;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role','authenticated')::text, true);
 
@@ -108,7 +118,7 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: unposted an invoice with money applied';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF SQLERRM NOT LIKE '%payments, prepay, or write-offs%' THEN RAISE EXCEPTION 'SMOKE_FAIL: money-guard wrong error: %', SQLERRM; END IF;
+    IF SQLERRM NOT LIKE '%payments, prepay%write-offs%' THEN RAISE EXCEPTION 'SMOKE_FAIL: money-guard wrong error: %', SQLERRM; END IF;
   END;
   SELECT status INTO v_invR.status FROM invoices WHERE id=v_inv_money;
   IF v_invR.status<>'posted' THEN RAISE EXCEPTION 'SMOKE_FAIL: money-guard mutated status (%)', v_invR.status; END IF;

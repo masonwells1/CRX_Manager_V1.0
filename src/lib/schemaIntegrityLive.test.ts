@@ -445,6 +445,16 @@ interface FunctionBodyRow {
   proconfig: string[] | null;
 }
 
+interface FunctionSecurityRow {
+  proname: string;
+  identity_arguments: string;
+  prosecdef: boolean;
+  public_can_execute: boolean;
+  anon_can_execute: boolean;
+  authenticated_can_execute: boolean;
+  service_role_can_execute: boolean;
+}
+
 const ACCOUNTING_MONTH_LOCK_CONTRACTS = [
   {
     name: 'create_vendor_bill',
@@ -529,6 +539,37 @@ describe.skipIf(!isLiveDB)('Live DB: Mutating RPC Idempotency Bodies', () => {
 });
 
 describe.skipIf(!isLiveDB)('Live DB: Accounting month lock callers', () => {
+  it('the month-lock helper remains a private SECURITY INVOKER primitive', async () => {
+    const result = (await queryInformationSchema(`
+      SELECT
+        p.proname,
+        pg_get_function_identity_arguments(p.oid) AS identity_arguments,
+        p.prosecdef,
+        EXISTS (
+          SELECT 1
+          FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS acl
+          WHERE acl.grantee = 0
+            AND acl.privilege_type = 'EXECUTE'
+        ) AS public_can_execute,
+        has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_can_execute,
+        has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_can_execute,
+        has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_role_can_execute
+      FROM pg_proc AS p
+      WHERE p.pronamespace = 'public'::regnamespace
+        AND p.proname = '_lock_accounting_months'
+    `)) as FunctionSecurityRow[];
+
+    expect(result, 'expected exactly one public._lock_accounting_months overload').toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      identity_arguments: 'p_dates date[], p_exclusive boolean',
+      prosecdef: false,
+      public_can_execute: false,
+      anon_can_execute: false,
+      authenticated_can_execute: false,
+      service_role_can_execute: false,
+    });
+  });
+
   it('governed vendor-bill writers and period close retain their shared/exclusive lock calls', async () => {
     const namesList = ACCOUNTING_MONTH_LOCK_CONTRACTS.map(({ name }) => `'${name}'`).join(',');
     const result = (await queryInformationSchema(`
