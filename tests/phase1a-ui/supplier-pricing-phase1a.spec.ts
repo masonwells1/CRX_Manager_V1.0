@@ -47,16 +47,43 @@ const products = [
 
 const supplierMarketEvidence = [
   {
-    vendorId: SUPPLIER_ID, vendor: 'Supplier A', productSupplierLinkId: '66666666-6666-4666-8666-666666666666',
-    quotedPackageCostCents: '9100', normalizedCostCents: '3640',
+    bestSupplier: 'Supplier A', replacementCostCents: '3640',
+    suppliers: [
+      {
+        vendorId: SUPPLIER_ID, vendor: 'Supplier A', productSupplierLinkId: '66666666-6666-4666-8666-666666666666',
+        quotedPackageCostCents: '9100', normalizedCostCents: '3640', comparisonStatus: 'comparable', isBestComparable: true,
+      },
+      {
+        vendorId: '56565656-5656-4556-8556-565656565656', vendor: 'Supplier A Alternate', productSupplierLinkId: '67676767-6767-4676-8676-676767676767',
+        quotedPackageCostCents: '9500', normalizedCostCents: '3800', comparisonStatus: 'comparable', isBestComparable: false,
+      },
+    ],
   },
   {
-    vendorId: '77777777-7777-4777-8777-777777777777', vendor: 'Supplier B', productSupplierLinkId: '88888888-8888-4888-8888-888888888888',
-    quotedPackageCostCents: '6075', normalizedCostCents: '6075',
+    bestSupplier: 'Supplier B', replacementCostCents: '6075',
+    suppliers: [
+      {
+        vendorId: '77777777-7777-4777-8777-777777777777', vendor: 'Supplier B', productSupplierLinkId: '88888888-8888-4888-8888-888888888888',
+        quotedPackageCostCents: '6075', normalizedCostCents: '6075', comparisonStatus: 'comparable', isBestComparable: true,
+      },
+      {
+        vendorId: '78787878-7878-4787-8787-787878787878', vendor: 'Supplier B Alternate', productSupplierLinkId: '89898989-8989-4989-8989-898989898989',
+        quotedPackageCostCents: '6500', normalizedCostCents: '6500', comparisonStatus: 'comparable', isBestComparable: false,
+      },
+    ],
   },
   {
-    vendorId: '99999999-9999-4999-8999-999999999999', vendor: 'Supplier C', productSupplierLinkId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab',
-    quotedPackageCostCents: '4500', normalizedCostCents: '4500',
+    bestSupplier: 'Supplier C', replacementCostCents: '4500',
+    suppliers: [
+      {
+        vendorId: '99999999-9999-4999-8999-999999999999', vendor: 'Supplier C', productSupplierLinkId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab',
+        quotedPackageCostCents: '4500', normalizedCostCents: '4500', comparisonStatus: 'comparable', isBestComparable: true,
+      },
+      {
+        vendorId: '98989898-9898-4989-8989-989898989898', vendor: 'Supplier C Alternate', productSupplierLinkId: 'abababab-abab-4bab-8bab-abababababab',
+        quotedPackageCostCents: '4700', normalizedCostCents: '4700', comparisonStatus: 'comparable', isBestComparable: false,
+      },
+    ],
   },
 ] as const;
 
@@ -212,26 +239,26 @@ function supplierMarketEvidenceResponse() {
     const evidence = supplierMarketEvidence[index]!;
     return {
       product_id: product.id,
-      supplier_quote_count: 1,
-      comparable_quote_count: 1,
-      replacement_cost_cents: evidence.normalizedCostCents,
+      supplier_quote_count: evidence.suppliers.length,
+      comparable_quote_count: evidence.suppliers.filter((supplier) => supplier.comparisonStatus === 'comparable').length,
+      replacement_cost_cents: evidence.replacementCostCents,
       replacement_cost_as_of: '2026-07-20',
-      best_supplier: evidence.vendor,
+      best_supplier: evidence.bestSupplier,
       last_paid_cents: null,
       last_paid_as_of: null,
       recent_po_weighted_average_cents: null,
       recent_po_window: 'trailing_12_months',
       comparison_status: 'comparable',
-      suppliers: [{
-        vendor_id: evidence.vendorId,
-        vendor_name: evidence.vendor,
-        product_supplier_link_id: evidence.productSupplierLinkId,
-        quoted_package_cost_cents: evidence.quotedPackageCostCents,
-        normalized_cost_cents: evidence.normalizedCostCents,
+      suppliers: evidence.suppliers.map((supplier) => ({
+        vendor_id: supplier.vendorId,
+        vendor_name: supplier.vendor,
+        product_supplier_link_id: supplier.productSupplierLinkId,
+        quoted_package_cost_cents: supplier.quotedPackageCostCents,
+        normalized_cost_cents: supplier.normalizedCostCents,
         effective_from: '2026-07-20',
-        comparison_status: 'comparable',
-        is_best_comparable: true,
-      }],
+        comparison_status: supplier.comparisonStatus,
+        is_best_comparable: supplier.isBestComparable,
+      })),
     };
   }).reverse();
 }
@@ -384,9 +411,10 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
     const row = pricingRowsByProductId.get(product.id);
     const evidence = supplierMarketEvidence[index]!;
     expect(row, `Missing Pricing Update summary for ${product.id}`).toBeTruthy();
-    expect(worksheet!.getCell(row!, headers.get('best_supplier')!).value).toBe(evidence.vendor);
+    expect(worksheet!.getCell(row!, headers.get('best_supplier')!).value).toBe(evidence.bestSupplier);
     expect(worksheet!.getCell(row!, headers.get('replacement_cost')!).value)
-      .toBe(`$${(Number(evidence.normalizedCostCents) / 100).toFixed(2)}`);
+      .toBe(`$${(Number(evidence.replacementCostCents) / 100).toFixed(2)}`);
+    expect(worksheet!.getCell(row!, headers.get('supplier_quote_count')!).value).toBe(evidence.suppliers.length);
     expect(worksheet!.getCell(row!, headers.get('supplier_comparison_status')!).value).toBe('comparable');
   }
 
@@ -394,23 +422,32 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
   expect(supplierEvidenceSheet).toBeTruthy();
   const supplierEvidenceHeaders = new Map<string, number>();
   supplierEvidenceSheet!.getRow(1).eachCell((cell, column) => supplierEvidenceHeaders.set(String(cell.value), column));
-  const evidenceRowsByProductId = new Map<string, number>();
+  const evidenceRowsByProductAndSupplier = new Map<string, number>();
   for (let row = 2; row <= supplierEvidenceSheet!.actualRowCount; row += 1) {
     const productId = String(supplierEvidenceSheet!.getCell(row, supplierEvidenceHeaders.get('product_id')!).value);
-    expect(evidenceRowsByProductId.has(productId), `Duplicate Supplier Evidence row for ${productId}`).toBe(false);
-    evidenceRowsByProductId.set(productId, row);
+    const supplier = String(supplierEvidenceSheet!.getCell(row, supplierEvidenceHeaders.get('supplier')!).value);
+    const key = `${productId}\\u0000${supplier}`;
+    expect(evidenceRowsByProductAndSupplier.has(key), `Duplicate Supplier Evidence row for ${productId} / ${supplier}`).toBe(false);
+    evidenceRowsByProductAndSupplier.set(key, row);
   }
-  expect([...evidenceRowsByProductId.keys()]).toEqual(products.map((product) => product.id));
-  for (const [index, product] of products.entries()) {
-    const row = evidenceRowsByProductId.get(product.id);
-    const evidence = supplierMarketEvidence[index]!;
-    expect(row, `Missing Supplier Evidence detail for ${product.id}`).toBeTruthy();
+  const expectedEvidenceRows = products.flatMap((product, index) => supplierMarketEvidence[index]!.suppliers.map((supplier) => ({
+    productId: product.id,
+    ...supplier,
+  })));
+  const expectedEvidenceKeys = expectedEvidenceRows.map((row) => `${row.productId}\\u0000${row.vendor}`);
+  expect(supplierEvidenceSheet!.actualRowCount - 1).toBe(expectedEvidenceRows.length);
+  expect([...evidenceRowsByProductAndSupplier.keys()].sort()).toEqual([...expectedEvidenceKeys].sort());
+  for (const evidence of expectedEvidenceRows) {
+    const key = `${evidence.productId}\\u0000${evidence.vendor}`;
+    const row = evidenceRowsByProductAndSupplier.get(key);
+    expect(row, `Missing Supplier Evidence detail for ${evidence.productId} / ${evidence.vendor}`).toBeTruthy();
+    expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('product_id')!).value).toBe(evidence.productId);
     expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('supplier')!).value).toBe(evidence.vendor);
     expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('quoted_package_cost')!).value)
       .toBe(`$${(Number(evidence.quotedPackageCostCents) / 100).toFixed(2)}`);
     expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('normalized_inventory_unit_cost')!).value)
       .toBe(`$${(Number(evidence.normalizedCostCents) / 100).toFixed(2)}`);
-    expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('comparison_status')!).value).toBe('comparable');
+    expect(supplierEvidenceSheet!.getCell(row!, supplierEvidenceHeaders.get('comparison_status')!).value).toBe(evidence.comparisonStatus);
   }
   const set = (row: number, header: string, value: string | number) => worksheet!.getCell(row, headers.get(header)!).value = value;
   set(2, 'pricing_mode', 'margin_driven'); set(2, 'new_cost', 0); set(2, 'tier1_margin_percent', 20); set(2, 'tier2_margin_percent', 25); set(2, 'tier3_margin_percent', 30); set(2, 'change_reason', 'Monthly margin update');
