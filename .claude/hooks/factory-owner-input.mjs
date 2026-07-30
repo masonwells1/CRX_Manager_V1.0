@@ -85,7 +85,9 @@ function holdIntent(prompt) {
   const text = String(prompt || "").toLowerCase()
     .replace(/\bfactory\s+board(?:\s+server)?\b/g, "board");
   if (/\b(?:stop|pause|hold)\b.{0,30}\bfactory\b|\bfactory\b.{0,30}\b(?:stop|pause|hold)\b/.test(text)) return "hold";
-  if (/\b(?:resume|restart)\b.{0,30}\bfactory\b|\bfactory\b.{0,30}\b(?:resume|restart)\b/.test(text)) return "resume";
+  const resumeIntent = /\b(?:resume|restart)\b.{0,30}\bfactory\b|\bfactory\b.{0,30}\b(?:resume|restart)\b/.test(text);
+  const negatedResume = /\b(?:do not|don'?t|never|not|can'?t|cannot|shouldn'?t|mustn'?t)\b.{0,30}\b(?:resume|restart)\b|\b(?:resume|restart)\b.{0,20}\b(?:not|never)\b/.test(text);
+  if (resumeIntent && !negatedResume) return "resume";
   return "";
 }
 

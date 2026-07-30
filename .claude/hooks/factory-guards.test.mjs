@@ -32,7 +32,11 @@ function run(hook, stateDir, payload) {
 
 function denied(result, pattern, message) {
   assertions++;
-  assert.match(`${result.stdout}\n${result.stderr}`, pattern, message);
+  assert.match(
+    `${result.stdout}\n${result.stderr}\nstatus=${result.status}\nerror=${result.error?.message || ""}`,
+    pattern,
+    message,
+  );
 }
 
 function hookOutput(result) {
@@ -134,6 +138,14 @@ function hookOutput(result) {
   });
   assertions++;
   assert.equal(readAllowed.stdout, "", "factory intent keeps shell reads available");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: {
+      command: "Get-Content src/example.ts",
+      workdir: path.join(root, ".."),
+    },
+  }), /workdir must be the exact governed repository root/i, "shell reads cannot execute from a caller-selected sibling directory");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
@@ -461,6 +473,33 @@ function hookOutput(result) {
   assert.equal(factoryCommandHook.permissionDecision, "allow", "mutating factory CLI command receives an explicit allow");
   assertions++;
   assert.match(factoryCommandHook.updatedInput.command, /CRX_FACTORY_PERMIT/, "mutating factory CLI identity comes from the real hook session");
+  assertions++;
+  assert.match(
+    factoryCommandHook.updatedInput.command.replace(/\\/g, "/"),
+    new RegExp(path.join(root, "scripts", "factory.mjs").replace(/\\/g, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    "permit-bearing factory commands are rewritten to the canonical absolute broker path",
+  );
+  assertions++;
+  assert.match(factoryCommandHook.updatedInput.command, /Set-Location -LiteralPath/i, "factory commands force the exact governed working directory");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: {
+      command: "node scripts/factory.mjs stage --job lane-job --stage verifying",
+      cwd: path.join(root, ".."),
+    },
+  }), /cwd must be the exact governed repository root/i, "factory CLI permits reject a caller-selected sibling working directory");
+  const canonicalStatus = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/factory.mjs status", workdir: root },
+  });
+  assertions++;
+  assert.match(
+    hookOutput(canonicalStatus).updatedInput.command.replace(/\\/g, "/"),
+    new RegExp(path.join(root, "scripts", "factory.mjs").replace(/\\/g, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    "read-only factory status is also rewritten to the canonical absolute broker path",
+  );
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",

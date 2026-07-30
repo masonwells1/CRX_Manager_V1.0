@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `886fa4591dd72c82d9e8c8f0b09fd3c8b7355053`
-State: rebased onto current `origin/main`; eighth Sol/high publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; ninth Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -111,7 +111,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 303 focused assertions after eighth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 318 focused assertions after ninth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -303,6 +303,15 @@ recursive force-delete cleanup command.
   review-packet tests strip hook-inherited repository-local Git variables before `git init`, so they
   cannot target or reinitialize the caller's real worktree metadata. Fresh exact-commit acceptance
   is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `10f862901495ca65c46ffe43f0a1cd0d3969783e` returned `BLOCKERS`: relative shell commands could
+  receive a governed permit or pass read checks while a caller-selected `cwd`/`workdir` executed
+  them in another checkout; the factory-intent failure latch could persist a secret-bearing raw
+  prompt; and negated resume language could clear the global hold. Shell actions now validate an
+  explicit working directory against the exact governed root, every recognized factory invocation
+  is rewritten to the canonical absolute broker path, latches retain only a prompt SHA-256 plus
+  rejection flag after a pre-persistence secret scan, and negated resume/restart phrases remain
+  paused. Fresh exact-commit acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

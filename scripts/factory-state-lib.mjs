@@ -160,16 +160,22 @@ export function hasFactoryIntentFailureLatch(paths, sessionId) {
 export function setFactoryIntentFailureLatch(paths, {
   sessionId,
   actorTool,
-  ownerRequest,
+  ownerRequestHash,
+  ownerRequestRejected = false,
 }) {
   authorizedFactoryWriter(paths);
   ensureFactoryDirs(paths);
   const target = factoryIntentLatchPath(paths, sessionId);
+  const requestHash = String(ownerRequestHash || "").toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(requestHash)) {
+    throw new Error("factory intent ownerRequestHash must be SHA-256.");
+  }
   const bytes = `${canonicalJson({
     schemaVersion: FACTORY_SCHEMA_VERSION,
     sessionId,
     actorTool: requiredText(actorTool, "factory intent actorTool", 40),
-    ownerRequest: requiredText(ownerRequest, "factory intent ownerRequest", 1_000),
+    ownerRequestHash: requestHash,
+    ownerRequestRejected: ownerRequestRejected === true,
     createdAt: new Date().toISOString(),
   })}\n`;
   try {

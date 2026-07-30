@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -268,6 +268,18 @@ function runLaneHook(state, payload) {
   equal(result.stdout, "", "future factory work does not count as an immediate resume command");
   equal(buildFactorySnapshot(state.paths).held, true, "ambiguous continue wording leaves the global hold active");
   result = runHook(state, {
+    prompt: "do not resume the factory",
+    thread_id: state.sessionId,
+  });
+  equal(result.stdout, "", "negated resume wording does not clear the factory hold");
+  equal(buildFactorySnapshot(state.paths).held, true, "do-not-resume leaves the global hold active");
+  result = runHook(state, {
+    prompt: "I am not ready to restart the factory",
+    thread_id: state.sessionId,
+  });
+  equal(result.stdout, "", "not-ready-to-restart wording does not clear the factory hold");
+  equal(buildFactorySnapshot(state.paths).held, true, "negated restart leaves the global hold active");
+  result = runHook(state, {
     prompt: "resume the factory",
     thread_id: state.sessionId,
   });
@@ -290,6 +302,23 @@ function runLaneHook(state, payload) {
   });
   ok(cleared.stdout.includes("recorded Mason's request"), "owner chat can leave factory mode before a ticket exists");
   equal(buildFactorySnapshot(state.paths).factoryIntentSessions.length, 0, "owner-bound intent clear restores the normal workflow");
+}
+
+{
+  const state = makeEmptyState("secret-factory-thread");
+  const secretPrompt = "run the factory overnight OPENAI_API_KEY=sk-must-not-persist";
+  const rejected = runShipHook(state, {
+    prompt: secretPrompt,
+    thread_id: state.sessionId,
+  });
+  equal(rejected.status, 0, "secret-bearing factory intent fails closed without crashing prompt routing");
+  ok(hasFactoryIntentFailureLatch(state.paths, state.sessionId), "secret-bearing intent leaves a non-secret fail-closed latch");
+  const latchFiles = readdirSync(state.paths.intentLatchesDir);
+  equal(latchFiles.length, 1, "secret-bearing intent creates exactly one session latch");
+  const latchBytes = readFileSync(path.join(state.paths.intentLatchesDir, latchFiles[0]), "utf8");
+  equal(latchBytes.includes("sk-must-not-persist"), false, "failure latch never persists the owner prompt or credential");
+  ok(latchBytes.includes(sha256(secretPrompt)), "failure latch stores only the prompt SHA-256 for correlation");
+  equal(buildFactorySnapshot(state.paths).factoryIntentSessions.length, 0, "rejected secret text never enters the shared factory ledger");
 }
 
 {

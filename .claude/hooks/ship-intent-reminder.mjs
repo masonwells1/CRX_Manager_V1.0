@@ -21,8 +21,10 @@ import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
 import {
   appendFactoryEvent,
   clearFactoryIntentFailureLatch,
+  rejectSecretBearingText,
   resolveHookFactoryPaths,
   setFactoryIntentFailureLatch,
+  sha256,
 } from "../../scripts/factory-state-lib.mjs";
 
 function emit(extra) {
@@ -92,12 +94,23 @@ if (factoryIntent) {
       : "claude";
     let latched = false;
     try {
+      const ownerRequest = rawPrompt.slice(0, 1_000);
+      let ownerRequestRejected = false;
+      let ownerRequestError = null;
+      try {
+        rejectSecretBearingText(ownerRequest, "factory owner request");
+      } catch (error) {
+        ownerRequestRejected = true;
+        ownerRequestError = error;
+      }
       setFactoryIntentFailureLatch(paths, {
         sessionId,
         actorTool,
-        ownerRequest: rawPrompt.slice(0, 1_000),
+        ownerRequestHash: sha256(ownerRequest),
+        ownerRequestRejected,
       });
       latched = true;
+      if (ownerRequestError) throw ownerRequestError;
       appendFactoryEvent(
         paths,
         {
@@ -105,7 +118,7 @@ if (factoryIntent) {
           jobId: null,
           actorTool,
           sessionId,
-          payload: { ownerRequest: rawPrompt.slice(0, 1_000) },
+          payload: { ownerRequest },
         },
       );
       clearFactoryIntentFailureLatch(paths, sessionId);

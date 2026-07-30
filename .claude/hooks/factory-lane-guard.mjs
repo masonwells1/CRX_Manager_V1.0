@@ -26,22 +26,31 @@ function deny(reason) {
   process.exit(0);
 }
 
-function allowWithPermit(payload, token) {
+function allowWithCommand(payload, command, projectDir) {
   const input = payload?.tool_input || {};
-  const command = String(input.command || "");
   const powerShell = process.platform === "win32"
     || /^(?:PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""));
-  const trustedCommand = powerShell
-    ? `$env:CRX_FACTORY_PERMIT='${token}'; ${command}`
-    : `CRX_FACTORY_PERMIT='${token}' ${command}`;
+  const root = path.resolve(projectDir).replace(/\\/g, "/");
+  const rootedCommand = powerShell
+    ? `Set-Location -LiteralPath '${root.replace(/'/g, "''")}'; ${command}`
+    : `cd -- '${root.replace(/'/g, "'\"'\"'")}' && ${command}`;
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "allow",
-      updatedInput: { ...input, command: trustedCommand },
+      updatedInput: { ...input, command: rootedCommand },
     },
   }));
   process.exit(0);
+}
+
+function allowWithPermit(payload, token, canonicalCommand, projectDir) {
+  const powerShell = process.platform === "win32"
+    || /^(?:PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""));
+  const trustedCommand = powerShell
+    ? `$env:CRX_FACTORY_PERMIT='${token}'; ${canonicalCommand}`
+    : `CRX_FACTORY_PERMIT='${token}' ${canonicalCommand}`;
+  allowWithCommand(payload, trustedCommand, projectDir);
 }
 
 function factoryCliInvocation(toolName, toolInput, projectDir) {
@@ -61,7 +70,29 @@ function factoryCliInvocation(toolName, toolInput, projectDir) {
     status: /^status(?:\s|$)/i.test(action),
     recovery: /^recover\s+(?:unlock|torn-tail)(?:\s|$)/i.test(action),
     jobId: action.match(/(?:^|\s)--job\s+([A-Za-z0-9._:@+=,-]+)/i)?.[1] || "",
+    canonicalCommand: `node ${JSON.stringify(absolute)} ${action}`,
   };
+}
+
+function shellWorkingDirectoryBlockReason(toolName, toolInput, projectDir) {
+  if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return "";
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  const root = path.resolve(projectDir);
+  const realRoot = realpathSync(root);
+  for (const [key, value] of [["cwd", input.cwd], ["workdir", input.workdir]]) {
+    if (value == null || String(value).trim() === "") continue;
+    const text = String(value).trim();
+    if (/[\0\r\n$%~*?[\]{}()]/.test(text)) {
+      return `${key} is dynamic or ambiguous`;
+    }
+    const candidate = path.resolve(root, text);
+    if (!existsSync(candidate)
+        || !isInside(root, candidate)
+        || realpathSync(candidate) !== realRoot) {
+      return `${key} must be the exact governed repository root`;
+    }
+  }
+  return "";
 }
 
 const SHELL_MUTATION_RE = /(?:^|[;&|]\s*|\s)(?:set-content|add-content|out-file|new-item|remove-item|copy-item|move-item|rename-item|clear-content|sc|ni|rm|del|erase|mv|cp|copy|move|xcopy|robocopy|mkdir|md|rmdir|rd|touch|truncate|tee|patch|apply_patch)\b|(?:^|[^<])(?:>>?|[12]>>?)\s*(?!&)|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:add|am|apply|branch\s+(?:-[dDmM]|--delete|--move)|checkout|cherry-pick|clean|commit|merge|mv|rebase|reset|restore|rm|switch\s+-c|tag|push)\b|\bnpm(?:\.cmd)?\s+(?:install|uninstall|update|ci|publish)\b|\bnpx(?:\.cmd)?\b/i;
@@ -369,6 +400,11 @@ try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { nothing(); }
 
 const sessionId = String(payload?.session_id || payload?.thread_id || payload?.conversation_id || "").trim();
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const shellWorkingDirectoryBlock = shellWorkingDirectoryBlockReason(
+  payload?.tool_name,
+  payload?.tool_input,
+  projectDir,
+);
 const shellMutation = isShellMutation(payload?.tool_name, payload?.tool_input);
 const opaqueExecution = isOpaqueExecutionTool(payload?.tool_name);
 const shellOutsideInspection = /^(?:Bash|PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""))
@@ -390,12 +426,15 @@ try {
   if (factoryCli?.status || !buildMutation) nothing();
   if (factoryCli?.recovery) {
     if (!sessionId) deny("CRX FACTORY GATE: recovery requires a verifiable chat session.");
+    if (shellWorkingDirectoryBlock) {
+      deny(`CRX FACTORY GATE: ${shellWorkingDirectoryBlock}. Factory commands must execute from the governed checkout.`);
+    }
     const permit = mintFactoryCliPermit(paths, {
       sessionId,
       actorTool,
       expectedLastEventHash: "0".repeat(64),
     });
-    allowWithPermit(payload, permit.token);
+    allowWithPermit(payload, permit.token, factoryCli.canonicalCommand, projectDir);
   }
   deny(`CRX FACTORY GATE: shared factory state could not be verified (${error.message}). Factory-managed build writes fail closed.`);
 }
@@ -409,7 +448,10 @@ const factoryCliJob = factoryCli?.jobId
   : null;
 
 if (factoryCli) {
-  if (factoryCli.status) nothing();
+  if (shellWorkingDirectoryBlock) {
+    deny(`CRX FACTORY GATE: ${shellWorkingDirectoryBlock}. Factory commands must execute from the governed checkout.`);
+  }
+  if (factoryCli.status) allowWithCommand(payload, factoryCli.canonicalCommand, projectDir);
   if (!sessionId) deny("CRX FACTORY GATE: mutating factory commands require a verifiable chat session.");
   if (intentRecordFailed && !factoryCli.recovery) {
     deny("CRX FACTORY GATE: Mason's factory intent was not recorded in the ledger. Only status/recovery is available until the prompt is re-submitted successfully.");
@@ -430,7 +472,7 @@ if (factoryCli) {
     actorTool,
     expectedLastEventHash: snapshot.lastEventHash,
   });
-  allowWithPermit(payload, permit.token);
+  allowWithPermit(payload, permit.token, factoryCli.canonicalCommand, projectDir);
 }
 if (buildMutation && otherCustody) {
   deny(`CRX FACTORY GATE: pilot job ${otherCustody.id} is under factory custody at ${otherCustody.stage} in another chat. The one-lane pilot blocks cross-session repository writes and opaque helper execution from ticket presentation through owner disposition.`);
@@ -444,6 +486,9 @@ const governedJob = sessionJobs.find((job) =>
   || ["needs-ticket-ok", "queued", "awaiting-morning-review", "parked"].includes(job.stage),
 );
 if (!hasIntent && !governedJob && !intentRecordFailed) nothing();
+if (shellWorkingDirectoryBlock) {
+  deny(`CRX FACTORY GATE: ${shellWorkingDirectoryBlock}. Shell inspection must execute from the governed checkout.`);
+}
 const readBlockReason = governedReadBlockReason(payload?.tool_name, payload?.tool_input, projectDir);
 if (readBlockReason) {
   deny(`CRX FACTORY GATE: ${readBlockReason}. Use tracked, non-secret files inside the governed worktree.`);

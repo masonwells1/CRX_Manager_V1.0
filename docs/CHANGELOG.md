@@ -437,6 +437,14 @@ profile path appears in the packet artifacts. Commit-bound closeout revalidation
 from the frozen landing commit rather than the caller's mutable working tree. Scratch review-packet
 tests also strip hook-inherited repository-local Git variables before initializing a disposable
 repository, preventing the test from targeting the caller's real Git administration directory.
+A ninth exact-SHA Sol/high acceptance found that caller-selected shell working directories could
+execute an approved-looking read or permit-bearing relative factory command in another checkout,
+that the factory-intent failure latch could retain a raw secret-bearing owner prompt, and that
+negated resume language could clear the global hold. Governed shell actions now require any explicit
+`cwd`/`workdir` to resolve to the exact governed repository root, and recognized factory commands
+are rewritten to the canonical absolute broker path before execution. Intent routing scans before
+persistence and latches store only the prompt SHA-256 plus a rejection flag. Negated resume/restart
+phrases leave the factory paused.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

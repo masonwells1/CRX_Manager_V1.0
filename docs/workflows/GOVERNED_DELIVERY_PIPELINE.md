@@ -105,6 +105,9 @@ fingerprint before the ticket or morning decision is re-presented there.
   wildcard shell paths, PowerShell providers/drives, and secret-shaped added content fail closed.
   Shell `rg` is not exempt because
   its preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
+- During governed operation, any explicit shell `cwd` or `workdir` must resolve to the exact
+  governed repository root. Recognized factory commands are rewritten to the canonical absolute
+  `scripts/factory.mjs` broker path before a permit or read-only status execution is allowed.
 - A lane starts only from a clean checkout whose `HEAD` is the exact approved `origin/main` SHA.
   Before evidence acceptance, owner review, and closeout, the factory recomputes committed,
   working-tree, and untracked paths from that base and rejects any path outside the ticket.
@@ -118,7 +121,8 @@ fingerprint before the ticket or morning decision is re-presented there.
   publication that changes them requires a fresh exact-SHA Sol/high review.
 - Factory-intent routing writes a separate per-session failure latch before the shared ledger. If
   ledger append fails, build writes and mutating factory commands stay blocked until recovery and
-  successful owner-prompt re-submit clears the latch.
+  successful owner-prompt re-submit clears the latch. The owner text is secret-scanned before any
+  persistence; the latch stores only its SHA-256 and rejection flag, never the raw prompt.
 - Governed Git reads cannot redirect to another checkout with `git -C`; shell-read operands are
   individually checked for containment, ignored/secret paths, and symlink escape. Exact repository
   fingerprints bind Git mode and object type as well as path and blob bytes.
@@ -130,6 +134,8 @@ fingerprint before the ticket or morning decision is re-presented there.
   descendant. Historical success followed by `inactive`, or a rollback to an older SHA, fails
   closed even when the canonical URL still returns HTTP 200.
 - The board binds only to loopback and is read-only.
+- A global hold clears only on an unambiguous affirmative owner resume/restart phrase; negated
+  phrases such as “do not resume” leave the hold active.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
 
