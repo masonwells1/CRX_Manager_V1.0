@@ -20,6 +20,16 @@ const smokeFiles = [
   path.join(ROOT, 'scripts', 'smoke', 'smoke-save-quote-customer-row-version.sql'),
   path.join(ROOT, 'scripts', 'smoke', 'smoke-planned-holds-drawn-sync.sql'),
 ];
+const quoteLifecycleAnchors = [
+  {
+    label: 'draft-to-sent exact-version, sent_at, and commission-split',
+    statement: "RAISE EXCEPTION 'SMOKE_FAIL: draft-to-sent save lost status, sent_at, commission split, or exact N+1 token';",
+  },
+  {
+    label: 'repeated-sent exact-version, sent_at preservation, and commission-split preservation',
+    statement: "RAISE EXCEPTION 'SMOKE_FAIL: repeated sent save reset sent_at, lost commission split, or missed exact N+1 token';",
+  },
+];
 
 function docker(args, options = {}) {
   const result = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 60 * 1024 * 1024, ...options });
@@ -47,6 +57,31 @@ function selectedMigrations() {
   assert.ok(migrations.includes(candidate), 'candidate migration is not in the ledger-selected post-baseline replay');
   return migrations;
 }
+function assertQuoteLifecycleCoverage(sql) {
+  for (const anchor of quoteLifecycleAnchors) {
+    assert.equal(
+      sql.split(anchor.statement).length - 1,
+      1,
+      `quote lifecycle smoke must contain exactly one ${anchor.label} failure assertion`,
+    );
+  }
+}
+function proveQuoteLifecycleAnchorMutationResistance(sql) {
+  for (const anchor of quoteLifecycleAnchors) {
+    const mutations = [
+      ['removing', sql.replace(anchor.statement, '')],
+      ['renaming', sql.replace(anchor.statement, `${anchor.statement.slice(0, -2)} (renamed)';`)],
+    ];
+    for (const [action, mutated] of mutations) {
+      assert.notEqual(mutated, sql, `failed to mutate ${anchor.label} assertion anchor`);
+      assert.throws(
+        () => assertQuoteLifecycleCoverage(mutated),
+        new RegExp(`exactly one ${anchor.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} failure assertion`),
+        `${action} ${anchor.label} assertion anchor must fail closed`,
+      );
+    }
+  }
+}
 function expectRollbackMarker(file) {
   const result = psql(`\\i /tmp/${path.basename(file)}`, { allowFailure: true });
   const output = `${result.stdout}\n${result.stderr}`;
@@ -56,6 +91,9 @@ function expectRollbackMarker(file) {
 
 try {
   for (const file of [candidate, ...smokeFiles]) assert.ok(readFileSync(file, 'utf8').length > 0, `missing required artifact ${file}`);
+  const quoteSmokeSql = readFileSync(smokeFiles[0], 'utf8');
+  assertQuoteLifecycleCoverage(quoteSmokeSql);
+  proveQuoteLifecycleAnchorMutationResistance(quoteSmokeSql);
   docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
   waitForDatabase();
   const artifacts = ['20260727174805_extensions.sql', '20260727174805_acl_lockdown.sql', '20260727174805_platform_overlay.sql', '20260727174805_cron_jobs.sql', '20260727174805_migration_history.sql'];

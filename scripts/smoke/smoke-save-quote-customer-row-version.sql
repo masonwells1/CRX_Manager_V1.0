@@ -89,7 +89,7 @@ BEGIN
 
   -- Exercise the canonical lifecycle assignments that were moved into the
   -- single consolidated UPDATE. A valid draft -> sent save must bump exactly
-  -- once, stamp sent_at once, and persist the server-enriched money-routing
+  -- once, stamp sent_at once, and persist the supplied money-routing
   -- split. Saving sent again must preserve both the timestamp and split.
   v_q := public.save_quote(v_quote, jsonb_build_object(
     'quote_number', '[SMOKE] RVQ-' || v_suffix,
