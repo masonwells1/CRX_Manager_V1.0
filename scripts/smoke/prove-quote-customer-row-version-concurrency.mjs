@@ -56,32 +56,105 @@ async function waitForHealthyPostgres() {
   throw new Error(`local PostgreSQL did not become healthy within 20 seconds\n${logs}`);
 }
 
+function extractFunction(source, name, nextName) {
+  const start = source.indexOf(`CREATE OR REPLACE FUNCTION public.${name}`);
+  const end = nextName ? source.indexOf(`CREATE OR REPLACE FUNCTION public.${nextName}`, start) : source.indexOf('-- Self-contained ACL', start);
+  assert.ok(start >= 0 && end > start, `could not extract ${name} body`);
+  return source.slice(start, end).replace(/\r\n/g, '\n').trim();
+}
+
+function extractQuoteUpdate(body, whereId) {
+  const matches = [...body.matchAll(/\n\s+UPDATE quotes SET[\s\S]*?\n\s+WHERE id = ([^;]+);/g)]
+    .filter((match) => match[1].trim() === whereId)
+    .map((match) => match[0]);
+  assert.equal(matches.length, 1, `expected one quote UPDATE ending WHERE id = ${whereId}`);
+  return matches[0];
+}
+
+function parseUpdateAssignments(update) {
+  const setStart = update.indexOf('UPDATE quotes SET') + 'UPDATE quotes SET'.length;
+  const whereStart = update.lastIndexOf('\n');
+  assert.ok(setStart >= 'UPDATE quotes SET'.length && whereStart > setStart, 'could not isolate quote UPDATE assignments');
+  const assignmentsSource = update.slice(setStart, whereStart);
+  const starts = [...assignmentsSource.matchAll(/^\s+([a-z_][a-z0-9_]*)\s*=\s*/gm)];
+  assert.ok(starts.length > 0, 'quote UPDATE has no assignments');
+  return starts.map((match, index) => {
+    const expressionStart = match.index + match[0].length;
+    const expressionEnd = index + 1 < starts.length ? starts[index + 1].index : assignmentsSource.length;
+    return {
+      field: match[1],
+      expression: assignmentsSource.slice(expressionStart, expressionEnd).replace(/,\s*$/, '').replace(/\s+/g, ' ').trim(),
+    };
+  });
+}
+
+function assertCanonicalQuoteUpdate(currentSource, priorSource) {
+  const currentQuote = extractFunction(currentSource, 'save_quote', 'save_customer');
+  const priorQuote = extractFunction(priorSource, 'save_quote', 'save_customer');
+  const currentUpdate = extractQuoteUpdate(currentQuote, 'v_quote_id');
+  const priorHeaderUpdate = extractQuoteUpdate(priorQuote, 'p_quote_id');
+  const priorTotalsUpdate = extractQuoteUpdate(priorQuote, 'v_quote_id');
+  const currentAssignments = parseUpdateAssignments(currentUpdate);
+  const priorHeaderAssignments = parseUpdateAssignments(priorHeaderUpdate);
+  const priorTotalsAssignments = parseUpdateAssignments(priorTotalsUpdate);
+
+  const expectedAssignments = [
+    ...priorHeaderAssignments.filter(({ field }) => field !== 'updated_at'),
+    ...priorTotalsAssignments,
+  ];
+  assert.deepEqual(
+    currentAssignments.map(({ field }) => field),
+    expectedAssignments.map(({ field }) => field),
+    'consolidated quote UPDATE field order differs from the two prior canonical UPDATEs',
+  );
+  for (const expected of expectedAssignments) {
+    const actual = currentAssignments.find(({ field }) => field === expected.field);
+    assert.equal(
+      actual?.expression,
+      expected.expression,
+      `consolidated quote UPDATE assignment mismatch for ${expected.field}`,
+    );
+  }
+  assert.equal(
+    currentQuote.match(/\bUPDATE quotes SET\b/g)?.length,
+    1,
+    'save_quote must use one parent UPDATE so one logical save bumps row_version exactly once',
+  );
+
+  return {
+    currentQuote,
+    priorQuote,
+    currentUpdate,
+    priorHeaderUpdate,
+    priorTotalsUpdate,
+  };
+}
+
 function assertCanonicalContract() {
   const current = readFileSync(migration, 'utf8');
   const prior = readFileSync(previous, 'utf8');
-  const extract = (source, name, nextName) => {
-    const start = source.indexOf(`CREATE OR REPLACE FUNCTION public.${name}`);
-    const end = nextName ? source.indexOf(`CREATE OR REPLACE FUNCTION public.${nextName}`, start) : source.indexOf('-- Self-contained ACL', start);
-    assert.ok(start >= 0 && end > start, `could not extract ${name} body`);
-    return source.slice(start, end).replace(/\r\n/g, '\n').trim();
-  };
-  const priorQuote = extract(prior, 'save_quote', 'save_customer');
-  const priorQuoteHeaderUpdate = priorQuote.match(/\n    UPDATE quotes SET[\s\S]*?\n    WHERE id = p_quote_id;\n/)?.[0];
-  assert.ok(priorQuoteHeaderUpdate, 'could not extract prior quote header update');
-  const restorePriorQuoteUpdateShape = (body) => body
+  const {
+    currentQuote,
+    priorQuote,
+    currentUpdate,
+    priorHeaderUpdate,
+    priorTotalsUpdate,
+  } = assertCanonicalQuoteUpdate(current, prior);
+  const restoreVerifiedQuoteUpdateShape = (body) => body
     .replace(
-      /\n  -- One logical save must produce exactly one quote UPDATE\.[\s\S]*?\n  UPDATE quotes SET\n    customer_id =[\s\S]*?(?=    total_price =)/,
-      '\n  UPDATE quotes SET\n',
+      /\n  -- One logical save must produce exactly one quote UPDATE\.[\s\S]*?\n  -- that lock order while ensuring the row-version trigger advances once\./,
+      '',
     )
+    .replace(currentUpdate, priorTotalsUpdate)
     .replace(
       '\n    v_quote_id := p_quote_id;',
-      `${priorQuoteHeaderUpdate}\n    v_quote_id := p_quote_id;`,
+      `${priorHeaderUpdate}\n\n    v_quote_id := p_quote_id;`,
     );
   const stripQuoteToken = (body) => body
     .replace('  v_old_row_version bigint;\n', '')
     .replace('  v_expected_row_version bigint;\n', '')
     .replace('SELECT status, commission_split, row_version\n      INTO v_old_status, v_old_commission_split, v_old_row_version', 'SELECT status, commission_split\n      INTO v_old_status, v_old_commission_split')
-    .replace(/\n    IF NOT \(p_quote_payload \? 'row_version_expected'\)[\s\S]*?\n    END IF;\n(?=\n    UPDATE quotes SET)/, '')
+    .replace(/\n    IF NOT \(p_quote_payload \? 'row_version_expected'\)[\s\S]*?\n    END IF;\n(?=\n    v_quote_id := p_quote_id;)/, '')
     .replace(",\n    'row_version', (SELECT row_version FROM quotes WHERE id = v_quote_id)", '');
   const stripCustomerToken = (body) => body
     .replace('  v_old_row_version bigint;\n', '')
@@ -91,13 +164,13 @@ function assertCanonicalContract() {
     .replace(",\n    'row_version', (SELECT row_version FROM customers WHERE id = v_customer_id)", '');
   const normalizeSqlLayout = (body) => body.replace(/\s+/g, ' ').trim();
   assert.equal(
-    normalizeSqlLayout(stripQuoteToken(restorePriorQuoteUpdateShape(extract(current, 'save_quote', 'save_customer')))),
+    normalizeSqlLayout(restoreVerifiedQuoteUpdateShape(stripQuoteToken(currentQuote))),
     normalizeSqlLayout(priorQuote),
     'save_quote changed outside the audited row-version delta',
   );
   assert.equal(
-    normalizeSqlLayout(stripCustomerToken(extract(current, 'save_customer'))),
-    normalizeSqlLayout(extract(prior, 'save_customer')),
+    normalizeSqlLayout(stripCustomerToken(extractFunction(current, 'save_customer'))),
+    normalizeSqlLayout(extractFunction(prior, 'save_customer')),
     'save_customer changed outside the audited row-version delta',
   );
   const quoteGuard = current.indexOf('COMMISSION_SPLIT_CONFLICT');
@@ -107,16 +180,26 @@ function assertCanonicalContract() {
   assert.ok(quoteGuard >= 0 && quoteGuard < quoteVersion, 'quote split conflict must precede generic stale guard');
   assert.ok(customerGuard >= 0 && customerGuard < customerVersion, 'customer split conflict must precede generic stale guard');
 
-  const currentQuote = extract(current, 'save_quote', 'save_customer');
-  assert.equal(
-    currentQuote.match(/\bUPDATE quotes SET\b/g)?.length,
-    1,
-    'save_quote must use one parent UPDATE so one logical save bumps row_version exactly once',
-  );
   assert.match(
     currentQuote,
     /UPDATE quotes SET[\s\S]*customer_id =[\s\S]*total_price =[\s\S]*WHERE id = v_quote_id;/,
     'save_quote must consolidate header and calculated totals into its single parent UPDATE',
+  );
+
+  const corruptStatus = current.replace('    status = v_status,', "    status = 'draft',");
+  assert.throws(
+    () => assertCanonicalQuoteUpdate(corruptStatus, prior),
+    /assignment mismatch for status/,
+    'canonical proof must reject a corrupted status assignment',
+  );
+  const corruptFirstSentAt = current.replace(
+    "      WHEN v_status = 'sent' AND sent_at IS NULL THEN now()",
+    "      WHEN v_status = 'sent' AND sent_at IS NULL THEN NULL",
+  );
+  assert.throws(
+    () => assertCanonicalQuoteUpdate(corruptFirstSentAt, prior),
+    /assignment mismatch for sent_at/,
+    'canonical proof must reject a corrupted first-send sent_at branch',
   );
 }
 
@@ -202,7 +285,7 @@ INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.custom
     psql("INSERT INTO public.quotes(id,value) VALUES ('new','inserted'); INSERT INTO public.customers(id,value) VALUES ('new','inserted');");
     assert.equal(scalar("SELECT row_version FROM public.quotes WHERE id='new'"), '1');
     assert.equal(scalar("SELECT row_version FROM public.customers WHERE id='new'"), '1');
-    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=real insert_defaults=verified');
+    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved canonical_mutation_self_tests=status,sent_at quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=real insert_defaults=verified');
   } finally {
     docker(['rm', '-f', name], undefined, true);
   }

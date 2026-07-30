@@ -9,7 +9,8 @@ DECLARE
   v_admin uuid; v_rep uuid; v_nonoffice uuid; v_customer uuid; v_quote uuid; v_product uuid;
   v_q jsonb; v_q_replay jsonb; v_c jsonb; v_c_replay jsonb;
   v_quote_before bigint; v_customer_before bigint; v_quote_after bigint; v_quote_after_second bigint; v_customer_after bigint;
-  v_note_before text; v_addresses_before jsonb; v_error text;
+  v_note_before text; v_admin_name text; v_addresses_before jsonb; v_error text;
+  v_sent_at_first timestamptz; v_sent_at_after timestamptz; v_split_after jsonb;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_sections jsonb;
 BEGIN
@@ -18,6 +19,10 @@ BEGIN
   SELECT id INTO v_nonoffice FROM public.profiles WHERE role NOT IN ('admin', 'sales_rep') AND is_active = true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL OR v_rep IS NULL OR v_nonoffice IS NULL THEN
     RAISE EXCEPTION 'SMOKE_SETUP: active admin, sales rep, and non-office profile required';
+  END IF;
+  SELECT full_name INTO v_admin_name FROM public.profiles WHERE id = v_admin;
+  IF NULLIF(btrim(v_admin_name), '') IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: active admin must have a display name for commission persistence proof';
   END IF;
   PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
@@ -82,16 +87,67 @@ BEGIN
   END IF;
   v_quote_after := v_quote_after_second;
 
+  -- Exercise the canonical lifecycle assignments that were moved into the
+  -- single consolidated UPDATE. A valid draft -> sent save must bump exactly
+  -- once, stamp sent_at once, and persist the server-enriched money-routing
+  -- split. Saving sent again must preserve both the timestamp and split.
+  v_q := public.save_quote(v_quote, jsonb_build_object(
+    'quote_number', '[SMOKE] RVQ-' || v_suffix,
+    'customer_id', v_customer,
+    'status', 'sent',
+    'tier', 1,
+    'header_notes', 'fresh-sent',
+    'commission_split_expected', (SELECT commission_split FROM quotes WHERE id = v_quote),
+    'commission_split', jsonb_build_object('splits', jsonb_build_array(jsonb_build_object(
+      'recipient', v_admin_name, 'recipient_user_id', v_admin, 'percentage', 100))),
+    'row_version_expected', v_quote_after),
+    v_sections, v_admin, 'rv-quote-sent-' || v_suffix);
+  SELECT row_version, sent_at, commission_split
+    INTO v_quote_after_second, v_sent_at_first, v_split_after
+  FROM quotes WHERE id = v_quote;
+  IF v_q->>'status' <> 'saved'
+     OR (v_q->>'row_version')::bigint <> v_quote_after_second
+     OR v_quote_after_second <> v_quote_after + 1
+     OR (SELECT status FROM quotes WHERE id = v_quote) <> 'sent'
+     OR v_sent_at_first IS NULL
+     OR v_q->'commission_split' IS DISTINCT FROM v_split_after
+     OR v_split_after#>>'{splits,0,recipient_user_id}' IS DISTINCT FROM v_admin::text
+     OR (v_split_after#>>'{splits,0,percentage}')::numeric IS DISTINCT FROM 100::numeric THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: draft-to-sent save lost status, sent_at, commission split, or exact N+1 token';
+  END IF;
+  v_quote_after := v_quote_after_second;
+
+  v_q := public.save_quote(v_quote, jsonb_build_object(
+    'quote_number', '[SMOKE] RVQ-' || v_suffix,
+    'customer_id', v_customer,
+    'status', 'sent',
+    'tier', 1,
+    'header_notes', 'fresh-sent-again',
+    'row_version_expected', v_quote_after),
+    v_sections, v_admin, 'rv-quote-sent-again-' || v_suffix);
+  SELECT row_version, sent_at
+    INTO v_quote_after_second, v_sent_at_after
+  FROM quotes WHERE id = v_quote;
+  IF v_q->>'status' <> 'saved'
+     OR (v_q->>'row_version')::bigint <> v_quote_after_second
+     OR v_quote_after_second <> v_quote_after + 1
+     OR (SELECT status FROM quotes WHERE id = v_quote) <> 'sent'
+     OR v_sent_at_after IS DISTINCT FROM v_sent_at_first
+     OR (SELECT commission_split FROM quotes WHERE id = v_quote) IS DISTINCT FROM v_split_after THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: repeated sent save reset sent_at, lost commission split, or missed exact N+1 token';
+  END IF;
+  v_quote_after := v_quote_after_second;
+
   -- The older token cannot mutate either the header or replaced children.
   BEGIN
-    PERFORM public.save_quote(v_quote, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1, 'header_notes', 'STALE-MUST-NOT-LAND', 'row_version_expected', v_quote_before), '[]'::jsonb, v_admin, 'rv-quote-stale-' || v_suffix);
+    PERFORM public.save_quote(v_quote, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'sent', 'tier', 1, 'header_notes', 'STALE-MUST-NOT-LAND', 'row_version_expected', v_quote_before), '[]'::jsonb, v_admin, 'rv-quote-stale-' || v_suffix);
     RAISE EXCEPTION 'SMOKE_FAIL: stale quote save succeeded';
   EXCEPTION WHEN OTHERS THEN
     v_error := SQLERRM;
     IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF v_error NOT LIKE 'QUOTE_STALE_WRITE:%' THEN RAISE EXCEPTION 'SMOKE_FAIL: stale quote raised %', v_error; END IF;
   END;
-  IF (SELECT row_version FROM quotes WHERE id = v_quote) <> v_quote_after OR (SELECT header_notes FROM quotes WHERE id = v_quote) <> 'fresh-second'
+  IF (SELECT row_version FROM quotes WHERE id = v_quote) <> v_quote_after OR (SELECT header_notes FROM quotes WHERE id = v_quote) <> 'fresh-sent-again'
      OR (SELECT count(*) FROM quote_sections WHERE quote_id = v_quote) <> 1 OR (SELECT count(*) FROM quote_items WHERE quote_id = v_quote) <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected stale quote changed header or children';
   END IF;
@@ -100,7 +156,7 @@ BEGIN
   UPDATE quotes SET commission_split = NULL WHERE id = v_quote;
   SELECT row_version INTO v_quote_after FROM quotes WHERE id = v_quote;
   BEGIN
-    PERFORM public.save_quote(v_quote, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1, 'commission_split_expected', '{"splits":[]}'::jsonb, 'commission_split', '{"splits":[]}'::jsonb, 'row_version_expected', v_quote_after), v_sections, v_admin, 'rv-quote-split-' || v_suffix);
+    PERFORM public.save_quote(v_quote, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'sent', 'tier', 1, 'commission_split_expected', '{"splits":[]}'::jsonb, 'commission_split', '{"splits":[]}'::jsonb, 'row_version_expected', v_quote_after), v_sections, v_admin, 'rv-quote-split-' || v_suffix);
     RAISE EXCEPTION 'SMOKE_FAIL: quote split conflict did not reject';
   EXCEPTION WHEN OTHERS THEN
     v_error := SQLERRM;
@@ -159,7 +215,7 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM <> 'NOT_CUSTOMER_OWNER' THEN RAISE EXCEPTION 'SMOKE_FAIL: customer ownership gate %', SQLERRM; END IF; END;
   PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_nonoffice, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_nonoffice::text, true);
-  BEGIN PERFORM public.save_quote(v_quote, jsonb_build_object('status', 'draft', 'tier', 1, 'row_version_expected', v_quote_after), v_sections, v_nonoffice, NULL); RAISE EXCEPTION 'SMOKE_FAIL: non-office quote save succeeded';
+  BEGIN PERFORM public.save_quote(v_quote, jsonb_build_object('status', 'sent', 'tier', 1, 'row_version_expected', v_quote_after), v_sections, v_nonoffice, NULL); RAISE EXCEPTION 'SMOKE_FAIL: non-office quote save succeeded';
   EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM <> 'Not authorized to save quotes' THEN RAISE EXCEPTION 'SMOKE_FAIL: quote role gate %', SQLERRM; END IF; END;
 
   -- Keep fixtures addressable after this privileged setup so the following
@@ -228,7 +284,7 @@ BEGIN
       'total_units_needed', 1, 'sort_order', 0))));
   v_q := public.save_quote(v_quote, jsonb_build_object(
     'quote_number', (SELECT quote_number FROM public.quotes WHERE id = v_quote),
-    'customer_id', v_customer, 'status', 'draft', 'tier', 1,
+    'customer_id', v_customer, 'status', 'sent', 'tier', 1,
     'header_notes', 'authenticated-rpc-child-write',
     'row_version_expected', v_quote_version),
     v_sections,
