@@ -16,8 +16,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedDraftPath, isParkedFallbackFile, fleetSummaryLine,
-  draftPathspec, normRepoPath, createOwnDraftPathsReader,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile, fleetSummaryLine,
+  draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
+  excludeInheritedFallbackPaths, parkedMainlinePathsFrom,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -140,22 +141,11 @@ const ownDraftPaths = createOwnDraftPathsReader({
   },
 });
 
-// Draft files tracked at a given commit, including a forward migration only when
-// its leading SQL comments explicitly mark it PARKED / NOT APPLIED / DO NOT APPLY.
+// Mainline parked drafts are name-only: never read every tree blob and never
+// re-list a forward migration just because historical comments remain on disk.
 function draftPathsInTree(rev) {
-  const out = [];
   const tree = git(["ls-tree", "-r", "--name-only", rev, "--", ...draftPathspec()]);
-  for (const line of tree.split("\n")) {
-    const p = line.trim();
-    if (!p) continue;
-    // Mainline contains historical migration comments. Only an unmerged
-    // worktree's own changed paths may surface a forward migration as parked.
-    if (p.startsWith("supabase/migrations/")) continue;
-    let content = "";
-    try { content = git(["show", `${rev}:${p}`]); } catch { continue; }
-    if (isParkedDraftPath(p, content)) out.push(p);
-  }
-  return out;
+  return parkedMainlinePathsFrom(tree.split("\n"));
 }
 
 // The mainline backlog, read straight from origin/main's tree rather than from any
@@ -165,6 +155,15 @@ function mainlineParkedPaths() {
     return new Set(draftPathsInTree("origin/main").map((p) => normRepoPath(p)));
   } catch { return new Set(); }
 }
+
+const originMainDraftPaths = hasOriginMain ? originMainDraftPathSet((args) => {
+  try { return git(args, projectDir).split("\n"); } catch { return null; }
+}) : null;
+const parkedFallbackNote = !hasOriginMain
+  ? "\n\nPARKED-SCAN DEGRADED: origin/main is unavailable, so a fallback uses conservative all-disk discovery and may include inherited historical files."
+  : !originMainDraftPaths
+    ? "\n\nPARKED-SCAN DEGRADED: origin/main exists but its draft tree is unreadable, so a fallback uses conservative all-disk discovery and may include inherited historical files."
+    : "";
 
 let fleetLine = "";
 try {
@@ -194,6 +193,7 @@ try {
     ];
     for (const { root, filter } of scans) {
       for (const d of listDraftsRecursive(path.join(e.path, ...root.split("/").filter(Boolean)), root)) {
+        if (originMainDraftPaths && excludeInheritedFallbackPaths([d.rel], originMainDraftPaths).length === 0) continue;
         if (filter(d.name, d.rel)) parkedPaths.add(normRepoPath(d.rel));
       }
     }
@@ -206,6 +206,7 @@ emit(
   `You are NOT the only session. Mason runs concurrent sessions/worktrees. ${siblings.length} other worktree(s):\n\n` +
   lines.join("\n") +
   fleetLine +
+  parkedFallbackNote +
   `\n\nBEFORE building a feature or claiming a fix "done / already shipped / already fixed":\n` +
   `  1. Confirm your task isn't already being handled in one of these (git log that branch).\n` +
   `  2. Verify live ship-state — mcp list_migrations + git ancestry — don't trust this session's picture alone.\n` +

@@ -72,6 +72,22 @@ This is local-only. It does not apply a migration, change live data, alter
 direct table permissions, deploy, push, or open a PR. Any live apply requires
 fresh exact-SHA review and the normal migration gate.
 
+Before any apply, run a read-only catalog preflight that lists the owners and
+effective EXECUTE privileges of the live `create_vendor_bill`,
+`update_vendor_bill`, and `close_accounting_period` functions, then verifies
+they are compatible with the database role that will own the new `SECURITY
+INVOKER` month-lock helper. The disposable baseline runs under one owner and
+cannot prove this live ownership boundary. This is a preflight requirement only;
+the candidate's SQL grant/ownership design is unchanged.
+
+This slice guarantees only `create_vendor_bill` and `update_vendor_bill` date
+writes. `record_vendor_payment`, `void_vendor_payment`, `void_vendor_bill`, and
+other mutators that only call `check_period_open` retain their pre-existing
+close race unless a separate, coherent, and independently proven protocol adds
+them. Sol adjudication retained this boundary: those AP-only cases are a MED
+residual, while a global protocol is a separate HIGH-risk lane because many
+financial mutators retain the same race. Do not widen this migration here.
+
 If an approved MCP apply succeeds, its server-assigned migration version will
 differ from this pre-apply disk timestamp. In the same post-apply closeout
 change, rename the disk migration to that assigned version, replace its

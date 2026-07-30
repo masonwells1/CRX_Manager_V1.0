@@ -42,6 +42,21 @@ and regression use its unique suffix, not this pre-apply timestamp. Durable
 local evidence:
 `docs/audits/2026-07-30-vendor-bill-period-close-lock-closeout.md`.
 
+**Pre-apply ownership/privilege check.** Before any apply, use a read-only
+catalog query to list the live owners and effective EXECUTE privileges of
+`create_vendor_bill`, `update_vendor_bill`, and `close_accounting_period`, and
+verify compatibility with the database role that will own the new `SECURITY
+INVOKER` month-lock helper. The disposable single-owner baseline cannot prove
+that live ownership boundary. This requires no SQL redesign or grant change.
+
+**Explicit scope residual.** This candidate guarantees only
+`create_vendor_bill` and `update_vendor_bill` date writes. `record_vendor_payment`,
+`void_vendor_payment`, `void_vendor_bill`, and other `check_period_open`-only
+mutators retain the pre-existing close race unless a separately proven coherent
+protocol adds them. Sol adjudication retained this boundary: these AP-only cases
+are a MED residual, while a global protocol is a separate HIGH-risk lane because
+many financial mutators retain the same race. Do not widen this migration here.
+
 ---
 
 ## 0d. RESOLVED LIVE 2026-07-29 — `profile_public_view` RLS bypass onto `profiles`
@@ -652,7 +667,7 @@ Branch `claude/nervous-dubinsky-39a725` (worktree `.claude/worktrees/stoic-heyro
 
 | File | Purpose | Why parked | What unblocks it |
 |---|---|---|---|
-| `supabase/migrations/20260729231031_vendor_bill_period_close_lock.sql` | Serializes governed vendor-bill create/update with accounting-period close using month locks | **PARKED / NOT APPLIED.** The pre-apply disk timestamp is above the recorded live high-water. It is intentionally visible to `/fleet` only because its leading SQL header explicitly says PARKED / DO NOT APPLY; ordinary forward migrations are not listed. | Fresh exact-SHA migration review, fresh live preflight, and Mason's explicit current-conversation approval. After MCP apply, complete B7 in the same change: rename to the server-assigned version, replace the parked-status header with applied-state wording while retaining its first-line purpose comment, and update migration history plus timestamped docs. |
+| `supabase/migrations/20260729231031_vendor_bill_period_close_lock.sql` | Serializes governed vendor-bill create/update with accounting-period close using month locks | **PARKED / NOT APPLIED.** The pre-apply disk timestamp is above the recorded live high-water. It is intentionally visible to `/fleet` only because its leading SQL header explicitly says PARKED / DO NOT APPLY; ordinary forward migrations are not listed. | Fresh exact-SHA migration review, fresh live preflight including the read-only ownership/EXECUTE compatibility check, and Mason's explicit current-conversation approval. After MCP apply, complete B7 in the same change: rename to the server-assigned version, replace the parked-status header with applied-state wording while retaining its first-line purpose comment, and update migration history plus timestamped docs. |
 | ~~`supabase/migrations/20260726201208_void_vendor_payment_vendor_liveness.sql`~~ (submitted `20260726210000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-26** (server version `20260726201208`) — no longer parked. Section 9 follow-up MEDIUM-1: `void_vendor_payment` now locks the vendor row (`deleted_at IS NULL … FOR UPDATE`) so it serializes with `delete_vendor`; a void against a soft-deleted vendor raises `VENDOR_DELETED`. Gate passed (both charters CLEAN) + Mason's in-chat approval; post-apply live body md5 matches disk exactly. | — | Done. Residual RESOLVED 2026-07-26: Mason approved the Deactivate/Reactivate reframe — `reactivate_vendor` RPC **APPLIED LIVE** (gate CLEAN, submitted `20260726213000`, server version `20260726212043`) + Vendors-page Show Inactive view and Reactivate button, giving `VENDOR_DELETED` a one-click remedy; the PR #236 review then caught (and 2026-07-26 same-day fix `20260726215154_vendors_inactive_admin_select` resolved, gate CLEAN + applied live) an RLS gap that hid inactive vendors from the new view. |
 | ~~`supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`~~ (submitted `20260722190000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-22** (server version `20260722202622`) — no longer parked. `save_quote`/`save_customer` reject a split overwrite when the client's `*_expected` snapshot no longer matches the stored value, echo the stored (trigger-enriched) split back, and canonicalize `save_quote`'s actor exception to `ACTOR_MISMATCH`. Proven live on both RPCs (conflict/rejection/matching-expected/omitted-key/actor-mismatch). | — | Done. |
 | `docs/audits/nightly-debug/parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md` | Release prebooked inventory when a scheduled quick-delivery is cancelled | — | **RESOLVED, applied live 2026-06-16** (`20260616151122_cancel_delivery_release_prebook_on_quick_cancel`). File header already says so — stale-looking filename, not a stale fix. |

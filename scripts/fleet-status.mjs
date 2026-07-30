@@ -20,9 +20,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   parseWorktreePorcelain, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedDraftPath, isParkedFallbackFile,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile,
   lastNonEmptyLine, firstCommentLine,
-  draftPathspec, normRepoPath, createOwnDraftPathsReader,
+  draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
+  excludeInheritedFallbackPaths, parkedMainlinePathsFrom,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
 
 // The repo root this script lives in (works no matter what cwd it's launched from).
@@ -101,7 +102,11 @@ try {
 
 let hasOriginMain = false;
 try { git(["rev-parse", "--verify", "--quiet", "origin/main"]); hasOriginMain = true; } catch { hasOriginMain = false; }
-if (!hasOriginMain) notes.push("origin/main not found locally — merge-state shown as unknown (try --fetch).");
+if (!hasOriginMain) notes.push("origin/main not found locally — merge-state is unknown and any degraded parked scan uses conservative all-disk discovery (inherited historical files may appear; try --fetch).");
+const originMainDraftPaths = hasOriginMain ? originMainDraftPathSet((args) => {
+  try { return git(args, repoRoot, 5000).split("\n"); } catch { return null; }
+}) : null;
+if (hasOriginMain && !originMainDraftPaths) notes.push("origin/main exists but its draft tree could not be read — degraded parked scans use conservative all-disk discovery and may include inherited historical files.");
 
 // Which worktree is "this window"? The one containing cwd, else the script's own repo.
 const cwdNorm = normPath(process.cwd());
@@ -219,7 +224,7 @@ for (const e of entries) {
     // session) — scan the whole checkout rather than risk reporting nothing. That can
     // re-surface drafts main has already retired, so say so instead of letting the number
     // move unexplained.
-    notes.push(`${label}: could not read its branch point, so every draft on its disk is listed — some may already be retired on main.`);
+    notes.push(`${label}: could not read its branch point, so it uses a degraded disk scan${originMainDraftPaths ? " after excluding paths inherited from origin/main" : " with no inherited-path filter"}.`);
     for (const { root, filter } of [
       { root: "scripts/.staging-migrations", filter: isParkedMigrationFile },
       { root: "docs/audits", filter: isDraftSqlName },
@@ -230,6 +235,7 @@ for (const e of entries) {
         const name = path.basename(full);
         if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
         const rel = `${root}/${path.relative(dir, full).replace(/\\/g, "/")}`;
+        if (originMainDraftPaths && excludeInheritedFallbackPaths([rel], originMainDraftPaths).length === 0) continue;
         if (!filter(name, full, rel)) continue;
         // Display path keeps its real casing — addParked lower-cases the KEY itself, and
         // normalizing here too would print Mason a lower-cased filename that no longer
@@ -246,28 +252,17 @@ for (const e of entries) {
 // where every checkout happens to be stale would report zero and hide real work.
 if (hasOriginMain) {
   try {
-    const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()],
-      repoRoot, 5000);
-    for (const line of tree.split("\n")) {
-      const p = line.trim();
-      if (!p) continue;
-      // A forward migration is parked only when it is owned by an unmerged branch.
-      // Mainline may preserve historical PARKED comments after an apply, so never
-      // re-list a supabase migration from origin/main as waiting for approval.
-      if (p.startsWith("supabase/migrations/")) continue;
+    const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()], repoRoot, 5000);
+    for (const p of parkedMainlinePathsFrom(tree.split("\n"))) {
       const name = p.slice(p.lastIndexOf("/") + 1);
       if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
-      let content = "";
-      try { content = git(["show", `origin/main:${p}`], repoRoot, 5000); } catch { continue; }
-      if (!isParkedDraftPath(p, content)) continue;
       const key = normRepoPath(p);
       const hit = parked.get(key);
       if (hit) {
         if (!hit.where.includes("origin/main")) hit.where.push("origin/main");
         continue;
       }
-      const comment = firstCommentLine(content, 120);
-      parked.set(key, { name: p, where: ["origin/main"], mtime: 0, comment });
+      parked.set(key, { name: p, where: ["origin/main"], mtime: 0, comment: "" });
     }
   } catch { /* fail-open: worktree scan above still reported what it could */ }
 }

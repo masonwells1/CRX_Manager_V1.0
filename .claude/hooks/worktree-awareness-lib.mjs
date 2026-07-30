@@ -91,9 +91,9 @@ export function hasExplicitParkedMigrationHeader(sqlText) {
     const line = raw.replace(/\r/g, "").trim();
     if (!line) continue;
     if (!line.startsWith("--")) break;
-    header.push(line);
+    header.push(line.replace(/^--\s?/, ""));
   }
-  return /\bPARKED\b|\bNOT\s+APPLIED\b|\bDO\s+NOT\s+APPLY\b/i.test(header.join("\n"));
+  return header.some((line) => /^(?:status:\s*)?(?:PARKED(?=\s*$|\s*(?:\/\s*(?:NOT\s+APPLIED|DO\s+NOT\s+APPLY)\b|[—:-]))|NOT\s+APPLIED(?=\s*$|\s*(?:\/\s*DO\s+NOT\s+APPLY\b|[—:-]))|DO\s+NOT\s+APPLY(?=\s*$|\s*[—:-]))/i.test(line));
 }
 
 // Repo-relative path, normalized for comparison (forward slashes, no leading "./",
@@ -130,7 +130,8 @@ export function isParkedDraftPath(repoRelPath, sqlText = "") {
 // branch-owned reader. Both /fleet and SessionStart call this helper.
 export function isParkedFallbackFile(repoRelPath, name, loadText = () => "") {
   if (!/\.sql$/i.test(String(name || ""))) return false;
-  return isParkedDraftPath(repoRelPath, loadText());
+  const p = normRepoPath(repoRelPath);
+  return isParkedDraftPath(p, p.startsWith("supabase/migrations/") ? loadText() : "");
 }
 
 // Which of the paths a worktree CHANGED since its branch point are parked drafts?
@@ -169,7 +170,8 @@ export function parkedDraftPathsFrom(changedPaths, existsOnDisk = () => true, re
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();
     if (!existsOnDisk(p)) continue;
-    if (!isParkedDraftPath(p, readText(p))) continue;
+    const normalized = normRepoPath(p);
+    if (!isParkedDraftPath(p, normalized.startsWith("supabase/migrations/") ? readText(p) : "")) continue;
     const key = normRepoPath(p);
     if (!out.has(key)) out.set(key, p);
   }
@@ -181,6 +183,31 @@ export function parkedDraftPathsFrom(changedPaths, existsOnDisk = () => true, re
 // supabase migrations out of the parked report.
 export function draftPathspec() {
   return DRAFT_ROOTS.map((r) => r.root.replace(/\/$/, ""));
+}
+
+// Injected tree reader used when a worktree's merge-base is unreadable. With a
+// usable origin/main tree, inherited paths are subtracted before the fallback
+// opens a file or evaluates its parked header. A null return means callers must
+// retain conservative all-disk discovery and say so loudly.
+export function originMainDraftPathSet(run) {
+  const lines = run(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
+  if (lines === null) return null;
+  return new Set((lines || []).map(normRepoPath).filter(Boolean));
+}
+
+export function excludeInheritedFallbackPaths(paths, originMainPaths) {
+  if (!originMainPaths) return [...(paths || [])];
+  return [...(paths || [])].filter((p) => !originMainPaths.has(normRepoPath(p)));
+}
+
+// Mainline can retain historical PARKED prose after an apply. It contributes
+// only staging/audit draft paths, classified from their names without git-show
+// content reads; forward migrations are always branch-owned-only.
+export function parkedMainlinePathsFrom(paths) {
+  return [...(paths || [])].filter((raw) => {
+    const p = String(raw || "").trim();
+    return p && !normRepoPath(p).startsWith("supabase/migrations/") && isParkedDraftPath(p);
+  });
 }
 
 // Builds the "what is THIS worktree pending?" reader that both the SessionStart hook and

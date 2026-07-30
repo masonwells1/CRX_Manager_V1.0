@@ -3,13 +3,13 @@
 // Run: node .claude/hooks/worktree-awareness-lib.test.mjs
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
   isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
-  hasExplicitParkedMigrationHeader, isParkedFallbackFile,
+  hasExplicitParkedMigrationHeader, isParkedFallbackFile, originMainDraftPathSet,
+  excludeInheritedFallbackPaths, parkedMainlinePathsFrom,
   createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
@@ -92,6 +92,8 @@ ok(!isParkedDraftPath("docs/audits/2026-07-01-review-final.sql"), "an audits .sq
 ok(!isParkedDraftPath("scripts/.staging-migrations/SUPERSEDED-old.sql"), "a SUPERSEDED draft is retired, not pending");
 ok(hasExplicitParkedMigrationHeader(PARKED_FORWARD_HEADER), "explicit parked header is recognized");
 ok(!hasExplicitParkedMigrationHeader("-- normal feature migration\nCREATE TABLE public.example();"), "ordinary leading comments do not park a migration");
+ok(!hasExplicitParkedMigrationHeader("-- This was previously parked for review\nSELECT 1;"), "historical parked prose is not a current status line");
+ok(!hasExplicitParkedMigrationHeader("-- PARKED migration notes appear later\nSELECT 1;"), "bare parked prose is not a current status line");
 ok(isParkedDraftPath(PARKED_FORWARD, PARKED_FORWARD_HEADER), "explicitly parked forward migration is surfaced");
 ok(!isParkedDraftPath("supabase/migrations/20260101000000_real.sql", "-- normal feature migration\nSELECT 1;"), "ordinary applied migration is not a parked draft");
 ok(isParkedFallbackFile(PARKED_FORWARD, "20260729231031_vendor_bill_period_close_lock.sql", () => PARKED_FORWARD_HEADER), "fallback finds an explicitly parked forward migration");
@@ -133,12 +135,30 @@ eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => "-- ordinary migrati
 // The pathspec both readers hand to git — it must cover exactly the two draft folders.
 eq(draftPathspec(), ["scripts/.staging-migrations", "docs/audits", "supabase/migrations"], "git includes only draft folders plus explicitly marked forward migrations");
 
-// Both full-disk consumers must route their supabase fallback through the same
-// tested helper; otherwise a missing merge-base can hide this exact parked file.
-const hookSource = readFileSync(new URL("./worktree-awareness.mjs", import.meta.url), "utf8");
-const fleetSource = readFileSync(new URL("../../scripts/fleet-status.mjs", import.meta.url), "utf8");
-ok(/root: "supabase\/migrations\/"/.test(hookSource) && hookSource.includes("isParkedFallbackFile"), "SessionStart fallback includes explicitly parked forward migrations through the shared guard");
-ok(/root: "supabase\/migrations"/.test(fleetSource) && fleetSource.includes("isParkedFallbackFile"), "fleet-status fallback includes explicitly parked forward migrations through the shared guard");
+// Merge-base failure uses the exact origin/main tree before fallback header reads.
+// This is an injected runtime fixture shared by both /fleet and SessionStart.
+const INHERITED_HISTORY = "supabase/migrations/20260510999999_old_historical_marker.sql";
+const ORDINARY_FORWARD = "supabase/migrations/20260730101010_ordinary_feature.sql";
+const LOCAL_ORDINARY_FORWARD = "supabase/migrations/20260730101011_local_ordinary_feature.sql";
+let originTreeCalls = 0;
+const inherited = originMainDraftPathSet((args) => {
+  originTreeCalls++;
+  ok(args[0] === "ls-tree" && args.includes("origin/main"), "fallback asks git for the exact origin/main tree");
+  return [INHERITED_HISTORY, ORDINARY_FORWARD];
+});
+eq(originTreeCalls, 1, "origin/main fallback tree is read once");
+eq(excludeInheritedFallbackPaths([INHERITED_HISTORY, PARKED_FORWARD, ORDINARY_FORWARD], inherited), [PARKED_FORWARD], "degraded fallback excludes inherited history and ordinary main paths before header matching");
+eq(excludeInheritedFallbackPaths([INHERITED_HISTORY, PARKED_FORWARD], null), [INHERITED_HISTORY, PARKED_FORWARD], "without origin/main the conservative all-disk fallback is retained");
+const fallbackHeaders = new Map([
+  [INHERITED_HISTORY, PARKED_FORWARD_HEADER],
+  [PARKED_FORWARD, PARKED_FORWARD_HEADER],
+  [LOCAL_ORDINARY_FORWARD, "-- ordinary feature migration\nSELECT 1;"],
+]);
+const degradedFallback = excludeInheritedFallbackPaths(
+  [INHERITED_HISTORY, PARKED_FORWARD, LOCAL_ORDINARY_FORWARD], inherited,
+).filter((p) => isParkedFallbackFile(p, p.slice(p.lastIndexOf("/") + 1), () => fallbackHeaders.get(p)));
+eq(degradedFallback, [PARKED_FORWARD], "degraded fallback finds only the branch-owned explicitly parked candidate");
+eq(parkedMainlinePathsFrom([DISPATCH, "docs/audits/PARKED-direct.sql", PARKED_FORWARD]), [DISPATCH, "docs/audits/PARKED-direct.sql"], "mainline classification is name-only and never re-lists forward migrations");
 
 // Path normalization the count key depends on.
 eq(normRepoPath("Docs\\Audits\\A.SQL"), "docs/audits/a.sql", "backslashes, case and separators normalize");
