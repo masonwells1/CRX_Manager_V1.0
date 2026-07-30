@@ -52,6 +52,10 @@ function hookOutput(result) {
   }), /shell mutation.*forbidden/i, "shell ledger write is denied");
   denied(run(integrityHook, stateDir, {
     tool_name: "PowerShell",
+    tool_input: { command: `git diff origin/main...HEAD --output=${paths.eventsPath}` },
+  }), /shell mutation.*forbidden/i, "Git output options cannot overwrite the shared ledger");
+  denied(run(integrityHook, stateDir, {
+    tool_name: "PowerShell",
     tool_input: {
       command: "node -e \"import('./scripts/factory-state-lib.mjs').then(m => m.appendFactoryEvent({}))\"",
     },
@@ -297,6 +301,28 @@ function hookOutput(result) {
     tool_name: "mcp__desktop_commander__start_process",
     tool_input: { command: "node scripts/generated-helper.mjs" },
   }), /direct commands and helper-process execution/i, "active lane cannot launch an opaque MCP helper process");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "exec",
+    tool_input: { code: "await tools.shell_command({command:'write something'})" },
+  }), /direct commands and helper-process execution/i, "active lane treats raw orchestration exec as opaque execution");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "node_repl",
+    tool_input: { code: "writeFileSync('src/forged.ts','forged')" },
+  }), /direct commands and helper-process execution/i, "active lane treats node_repl as opaque execution");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git diff origin/main...HEAD --output=src/forged.ts" },
+  }), /direct commands and helper-process execution/i, "active lane rejects output-writing options on otherwise read-only Git commands");
+  const structuredReadAllowed = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  });
+  assertions++;
+  assert.equal(structuredReadAllowed.stdout, "", "explicit structured read tools remain available in an active lane");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",

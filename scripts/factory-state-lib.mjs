@@ -230,7 +230,7 @@ function requiredText(value, label, max = 10_000) {
   return text;
 }
 
-const SECRET_BEARING_TEXT_RE = /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|GITHUB_TOKEN|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*\S+)/i;
+const SECRET_BEARING_TEXT_RE = /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|GITHUB_TOKEN|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}|(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*\S+)/i;
 
 export function rejectSecretBearingText(value, label = "evidence") {
   const text = String(value || "");
@@ -264,7 +264,7 @@ export function normalizeTicket(input) {
     throw new Error("forbiddenOutcome is required for high-risk work.");
   }
 
-  return {
+  const normalized = {
     schemaVersion: FACTORY_SCHEMA_VERSION,
     id: requiredText(input.id, "id", 100),
     version: Number.isInteger(input.version) && input.version > 0 ? input.version : 1,
@@ -285,6 +285,8 @@ export function normalizeTicket(input) {
     businessExample,
     forbiddenOutcome,
   };
+  rejectSecretBearingText(canonicalJson(normalized), "Ticket");
+  return normalized;
 }
 
 export function writeImmutableTicket(paths, input) {
@@ -519,6 +521,7 @@ export function appendFactoryEvent(paths, {
   expectedLastEventHash = "",
 } = {}) {
   authorizedFactoryWriter(paths);
+  rejectSecretBearingText(canonicalJson(payload), "Factory event");
   const lockFd = acquireLock(paths);
   try {
     const current = readEventLog(paths);

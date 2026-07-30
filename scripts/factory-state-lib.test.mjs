@@ -25,6 +25,7 @@ import {
   factoryHarnessSandboxArgs,
   loadFactorySnapshot,
   mintFactoryCliPermit,
+  normalizeTicket,
   readEventLog,
   recoverFactoryState,
   rejectSecretBearingText,
@@ -60,6 +61,11 @@ throws(
   () => rejectSecretBearingText("OPENAI_API_KEY=sk-this-must-not-persist", "proof"),
   /credential or secret/,
   "secret-shaped proof text is rejected before persistence",
+);
+throws(
+  () => rejectSecretBearingText("eyJabcdefghijk.abcdefghijklmnop.abcdefghijklmnop", "proof"),
+  /credential or secret/,
+  "raw JWT-shaped credentials are rejected before persistence",
 );
 eq(
   factoryReviewVerdict({ status: 0, stdout: `Review complete.\n${FACTORY_REVIEW_TOKEN}: CLEAN\n` }),
@@ -122,6 +128,30 @@ function ticket(id = "factory-test-1", overrides = {}) {
     forbiddenOutcome: "The split may not total more or less than $500.",
     ...overrides,
   };
+}
+
+throws(
+  () => normalizeTicket(ticket("secret-ticket", {
+    goal: "Use eyJabcdefghijk.abcdefghijklmnop.abcdefghijklmnop",
+  })),
+  /credential or secret/,
+  "secret-shaped ticket fields are rejected before ticket persistence",
+);
+
+{
+  const { root, paths } = fixture();
+  throws(
+    () => appendFactoryEvent(paths, {
+      type: "factory-intent",
+      jobId: null,
+      actorTool: "codex",
+      sessionId: "secret-event-test",
+      payload: { ownerRequest: "eyJabcdefghijk.abcdefghijklmnop.abcdefghijklmnop" },
+    }),
+    /credential or secret/,
+    "secret-shaped arbitrary event fields are rejected before ledger persistence",
+  );
+  rmSync(root, { recursive: true, force: true });
 }
 
 function append(paths, type, jobId, payload = {}, options = {}) {

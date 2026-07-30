@@ -340,6 +340,11 @@ question is accepted. Critical decisions fetch `origin/main`, and morning review
 fixed-prompt read-only Codex CLEAN receipt bound to the complete repository fingerprint. The Board
 shows that reviewer receipt beside harness proof. Merge, deployment, migration, live-data, and
 production authority remain exclusively with the existing `/ship`, GitHub, and owner gates.
+A fifth trusted Codex publication review then exposed two execution bypasses and a persistence gap:
+Git inspection accepted output-writing options, raw orchestration tools could evade mutation
+classification, and a raw JWT could enter tracked proof. Git reads now use a strict option/token
+allowlist, unknown non-read tools default to opaque execution, and all ticket/event payloads receive
+expanded cloud-token/JWT scanning before persistence.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

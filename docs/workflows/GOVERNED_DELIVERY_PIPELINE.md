@@ -90,7 +90,10 @@ An approval is valid only when all of these are true:
   all count as writes. Inside the active lane, source changes use structured Write/Edit/apply_patch
   calls whose targets are visible to the guards. Opaque shell writers, generated helper scripts, and
   MCP process launchers are denied; read commands remain available, and fixed verification harnesses
-  run only through the permit-bound `factory.mjs evidence run` broker.
+  run only through the permit-bound `factory.mjs evidence run` broker. Git inspection uses a strict
+  subcommand/token/option allowlist: output-writing, external-diff/text-conversion, paging/config
+  injection, and unknown flags are mutations. Unknown non-shell tools default to opaque execution;
+  only explicit structured read-only tools are exempt.
 - The board binds only to loopback and is read-only.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
@@ -120,6 +123,8 @@ job's immutable original base, proves that the landing commit is contained in cu
 and computes the commit's own tree/content fingerprint. The landing commit must contain the exact
 bytes that passed the accepted harness. The CLI has no arbitrary local-file evidence route, and
 production verification is bounded text whose secret-shaped content is rejected before persistence.
+The same persistence scan covers every ticket and ledger payload, including raw JWT/Supabase-key
+shapes and common GitHub, AWS, Google, Slack, Stripe, named-password, API-key, and access-token forms.
 
 Closeout is retry-safe. Its packet content is deterministic. If a lock or ledger interruption happens
 after the packet is created, the next supported closeout call reuses the byte-identical packet and

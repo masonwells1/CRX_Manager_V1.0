@@ -93,7 +93,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 205 focused assertions after publication-blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 217 focused assertions after publication-blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -185,6 +185,11 @@ recursive force-delete cleanup command.
   checks could use a stale local ref. The current repair states the ledger's real trust boundary,
   extends cross-session custody, requires the canonical scope-complete ticket question, adds an
   exact-content independent Codex CLEAN gate, and fetches `origin/main` at critical decisions.
+- Trusted Codex exact-head publication re-review `2026-07-30T17:51:45Z`: `BLOCKERS`; it found two
+  HIGH tool-boundary bypasses (`git --output` and raw orchestration tools) plus one MED secret-filter
+  gap for raw JWTs and other persisted fields. The current repair strictly allowlists Git read
+  tokens/options, defaults unknown non-read tools to opaque mutation, recognizes raw execution
+  surfaces, expands common cloud-token detection, and scans all ticket and event payloads.
   Publication remains parked until fresh exact-SHA Codex and Fable acceptance pass.
 
 The latest review capture is

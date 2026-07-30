@@ -65,7 +65,7 @@ if (governedSession
   deny("CRX FACTORY STATE GUARD: an active factory lane cannot modify its own governance implementation.");
 }
 
-const command = String(input.command || "");
+const command = String(input.command || input.code || input.script || input.source || "");
 if (!command) nothing();
 const commandNorm = norm(command);
 if (/crx_factory_permit/i.test(command) || commandNorm.includes("/crx-factory/permits/")) {
@@ -86,7 +86,7 @@ const mentionsState = commandNorm.includes(stateNorm)
   || commandNorm.includes("/crx-factory/")
   || commandNorm.includes("\\crx-factory\\");
 const derivesCommonDir = /git\s+rev-parse\s+--git-common-dir/i.test(command);
-const mutates = /(?:^|[;&|]\s*|\s)(?:remove-item|rm|del|erase|move-item|mv|copy-item|cp|set-content|add-content|out-file|new-item|writefile|appendfile|unlink|rename|truncate|tee)\b|(?:>>?|2>)|node\s+(?:-e|--eval)\b|python(?:\.exe)?\s+(?:-c|-)\b|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?/i.test(command);
+const mutates = /(?:^|[;&|]\s*|\s)(?:remove-item|rm|del|erase|move-item|mv|copy-item|cp|set-content|add-content|out-file|new-item|writefile|appendfile|unlink|rename|truncate|tee)\b|(?:>>?|2>)|node\s+(?:-e|--eval)\b|python(?:\.exe)?\s+(?:-c|-)\b|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:diff|show|log)\b[^\r\n;&|]*--output(?:=|\s)/i.test(command);
 const opaqueRepoMutation = /\bgit\s+(?:apply\b|checkout\s+--(?:\s|$)|restore\b)/i.test(command);
 const mentionsGovernanceTarget = /(?:^|[\\/\s"'`])(?:package\.json|scripts[\\/]factory(?:-[^\\/\s"'`]*)?\.mjs|\.claude[\\/]settings(?:\.local)?\.json|\.codex[\\/]hooks\.json|\.codex[\\/]hooks[\\/]codex-hook-adapter\.mjs|\.claude[\\/]hooks[\\/](?:factory-[^\\/\s"'`]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib)\.mjs)(?:$|[\s"'`])/i.test(commandNorm);
 

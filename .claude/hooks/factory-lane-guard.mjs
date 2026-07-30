@@ -63,7 +63,44 @@ function factoryCliInvocation(toolName, toolInput, projectDir) {
 const SHELL_MUTATION_RE = /(?:^|[;&|]\s*|\s)(?:set-content|add-content|out-file|new-item|remove-item|copy-item|move-item|rename-item|clear-content|sc|ni|rm|del|erase|mv|cp|copy|move|xcopy|robocopy|mkdir|md|rmdir|rd|touch|truncate|tee|patch|apply_patch)\b|(?:^|[^<])(?:>>?|[12]>>?)\s*(?!&)|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:add|am|apply|branch\s+(?:-[dDmM]|--delete|--move)|checkout|cherry-pick|clean|commit|merge|mv|rebase|reset|restore|rm|switch\s+-c|tag|push)\b|\bnpm(?:\.cmd)?\s+(?:install|uninstall|update|ci|publish)\b|\bnpx(?:\.cmd)?\b/i;
 const SAFE_NPM_RUN_RE = /^\s*npm(?:\.cmd)?\s+run\s+(?:test(?::[A-Za-z0-9:_-]+)?|lint|typecheck|build|verify-deps|check-doc-drift|check:agent-workflows|check:agent-guidance)\s*$/i;
 const SAFE_NODE_RE = /^\s*node(?:\.exe)?\s+(?:--check\s+\S+|scripts[\\/](?:factory-board|check-doc-drift|verify-deps)\.mjs(?:\s+--[A-Za-z0-9_-]+)*|scripts[\\/]sync-agent-workflows\.mjs\s+--check)\s*$/i;
-const SAFE_GIT_READ_RE = /^\s*git(?:\.exe)?(?:\s+-C\s+\S+)?\s+(?:status\b|diff\b|log\b|show\b|rev-parse\b|merge-base\b|cat-file\b|ls-files\b|remote\s+-v\b|branch\s+(?:--show-current|-vv|--list)\b|worktree\s+list\b)[^;&|<>]*$/i;
+const SAFE_GIT_TOKEN_RE = /^[A-Za-z0-9._/@^~:+,=\\/-]+$/;
+function isSafeGitRead(command) {
+  const normalized = String(command || "").trim();
+  if (!/^git(?:\.exe)?\s+/i.test(normalized)) return false;
+  if (/[\r\n;&|<>`$(){}[\]*?!%'"]/.test(normalized)) return false;
+  const tokens = normalized.split(/\s+/);
+  tokens.shift();
+  if (tokens[0] === "-C") {
+    if (!tokens[1] || !SAFE_GIT_TOKEN_RE.test(tokens[1])) return false;
+    tokens.splice(0, 2);
+  }
+  const subcommand = String(tokens.shift() || "").toLowerCase();
+  const args = tokens;
+  if (args.some((token) => !SAFE_GIT_TOKEN_RE.test(token))) return false;
+  if (args.some((token) =>
+    /^--?(?:output|ext-diff|textconv|paginate|exec-path|config-env)(?:=|$)/i.test(token)
+    || /^--?config(?:=|$)/i.test(token))) return false;
+  const allowedOptions = new Set([
+    "--short", "--branch", "--porcelain", "-s", "-b", "-sb",
+    "--stat", "--name-only", "--name-status", "--check", "--cached", "--staged",
+    "--quiet", "--exit-code", "--no-color", "--verify", "--show-toplevel",
+    "--git-common-dir", "--is-inside-work-tree", "--is-ancestor", "-e", "-t",
+    "-p", "--others", "--exclude-standard", "-z", "-v", "--show-current",
+    "-vv", "--list", "list", "--oneline", "--decorate",
+  ]);
+  const optionsSafe = args.every((token) =>
+    token === "--"
+    || !token.startsWith("-")
+    || allowedOptions.has(token)
+    || /^--max-count=\d+$/i.test(token)
+    || /^-n\d+$/i.test(token));
+  if (!optionsSafe) return false;
+  if (["status", "diff", "log", "show", "rev-parse", "merge-base", "cat-file", "ls-files"].includes(subcommand)) return true;
+  if (subcommand === "remote") return args.length === 1 && args[0] === "-v";
+  if (subcommand === "branch") return args.every((item) => ["--show-current", "-vv", "--list"].includes(item) || !item.startsWith("-"));
+  if (subcommand === "worktree") return args[0] === "list" && args.length === 1;
+  return false;
+}
 const SAFE_SHELL_READ_RE = /^\s*(?:rg|findstr|where(?:\.exe)?|ls|dir|pwd|Get-Location|Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|Measure-Object)(?:\s+[^;&|<>]*)?\s*$/i;
 const SAFE_VERSION_RE = /^\s*(?:node|npm|gh|git)(?:\.exe|\.cmd)?\s+--version\s*$/i;
 
@@ -75,7 +112,7 @@ function isShellMutation(toolName, toolInput) {
   if (/\$\(|`|\b(?:invoke-expression|iex)\b/i.test(command)) return true;
   if (SAFE_NPM_RUN_RE.test(command)
       || SAFE_NODE_RE.test(command)
-      || SAFE_GIT_READ_RE.test(command)
+      || isSafeGitRead(command)
       || SAFE_SHELL_READ_RE.test(command)
       || SAFE_VERSION_RE.test(command)) {
     return false;
@@ -91,13 +128,17 @@ function isBuildMutation(toolName, toolInput) {
 function isOpaqueExecutionTool(toolName) {
   const name = String(toolName || "");
   if (/^(?:Bash|PowerShell|shell_command)$/i.test(name)) return false;
-  return /(?:start|interact|execute|run|spawn).*(?:process|command|code)|(?:process|command|code).*(?:start|execute|run|spawn)|computer[_-]?use/i.test(name);
+  if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(name)) return false;
+  if (/^(?:Read|Glob|Grep|LS|WebSearch|WebFetch|TaskOutput|TaskList|TaskGet|TodoWrite|AskUserQuestion|view_image)$/i.test(name)) return false;
+  if (/^(?:collaboration[._-])?(?:list_agents|send_message|wait_agent)$/i.test(name)) return false;
+  if (/^(?:mcp[_-].*[_-])?(?:read|get|list|search|find|inspect|view|fetch)(?:[_-].*)?$/i.test(name)) return false;
+  return true;
 }
 
 function isActiveLaneShellRead(toolName, toolInput) {
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return true;
   const command = String(toolInput?.command || "").trim();
-  return SAFE_GIT_READ_RE.test(command)
+  return isSafeGitRead(command)
     || SAFE_SHELL_READ_RE.test(command)
     || SAFE_VERSION_RE.test(command)
     || /^\s*node(?:\.exe)?\s+--check\s+\S+\s*$/i.test(command);
