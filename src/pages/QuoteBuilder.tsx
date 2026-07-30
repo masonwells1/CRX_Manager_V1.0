@@ -38,6 +38,10 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import {
+  convertQuoteToOrderWithRowVersion,
+  createQuoteVersionWithRowVersion,
+} from '../lib/quoteLifecycleRpc';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -256,6 +260,8 @@ export default function QuoteBuilder() {
   // Unlike the dialog's open/closed state, this latch survives "Keep Editing".
   // Only a complete, stable Quote reload may clear it.
   const quoteVersionRecoveryRequiredRef = useRef(false);
+  const resetCreateVersionAfterReloadRef = useRef(false);
+  const resetConvertAfterReloadRef = useRef(false);
   // Once this tab has observed a numeric token, recovery must never downgrade
   // it to the frontend-first legacy tokenless contract.
   const quoteNumericVersionRequiredRef = useRef(false);
@@ -875,6 +881,14 @@ export default function QuoteBuilder() {
         // The rejected key may represent a committed save whose response was
         // lost. Rotate it only after a complete authoritative reload succeeds.
         resetSaveQuoteIdempotencyKey();
+        if (resetCreateVersionAfterReloadRef.current) {
+          createVersionIdem.resetKey();
+          resetCreateVersionAfterReloadRef.current = false;
+        }
+        if (resetConvertAfterReloadRef.current) {
+          convertQuoteIdem.resetKey();
+          resetConvertAfterReloadRef.current = false;
+        }
         setIsDirty(false);
         setStaleSaveOpen(false);
       }
@@ -893,7 +907,13 @@ export default function QuoteBuilder() {
       }));
     }
     return installedSnapshot;
-  }, [fetchQuote, quoteId, resetSaveQuoteIdempotencyKey]);
+  }, [
+    createVersionIdem,
+    convertQuoteIdem,
+    fetchQuote,
+    quoteId,
+    resetSaveQuoteIdempotencyKey,
+  ]);
 
   useEffect(() => {
     fetchReferenceData();
@@ -1891,14 +1911,15 @@ export default function QuoteBuilder() {
       // after a downstream email failure replays the same snapshot.
       const freezeVerKey = createVersionIdem.getKey();
       const previousRowVersion = quoteRowVersionRef.current;
-      const { data: freezeVer, error: freezeErr } = await supabase.rpc('create_quote_version', {
+      const { data: freezeVer, error: freezeErr } = await createQuoteVersionWithRowVersion({
         p_quote_id: quoteId,
         p_performed_by: profile.id,
         p_method: 'emailed',
         p_idempotency_key: freezeVerKey,
+        p_expected_row_version: previousRowVersion,
       });
       if (freezeErr) throw freezeErr;
-      const freezeResult = assertRpcResult<{ status?: string }>(freezeVer, 'create_quote_version');
+      const freezeResult = freezeVer;
       setStatus('sent');
       const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(
         quoteId,
@@ -2010,7 +2031,15 @@ export default function QuoteBuilder() {
       });
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'email_quote_to_grower' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to email the quote');
+      if (hasRpcCode(err, RpcErrorCodes.QUOTE_STALE_WRITE)
+        || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
+        resetCreateVersionAfterReloadRef.current = true;
+        quoteVersionRecoveryRequiredRef.current = true;
+        setStaleSaveOpen(true);
+        toast('error', 'The quote changed and the email was NOT sent. Reload the quote, then review and send it again.');
+      } else {
+        toast('error', err instanceof Error ? err.message : 'Failed to email the quote');
+      }
     } finally {
       setEmailingGrower(false);
     }
@@ -2029,14 +2058,15 @@ export default function QuoteBuilder() {
       // Create version snapshot via RPC
       const presVerIdemKey = createVersionIdem.getKey();
       const previousRowVersion = quoteRowVersionRef.current;
-      const { data: versionData, error } = await supabase.rpc('create_quote_version', {
+      const { data: versionData, error } = await createQuoteVersionWithRowVersion({
         p_quote_id: savedId,
         p_performed_by: profile.id,
         p_method: 'presented',
         p_idempotency_key: presVerIdemKey,
+        p_expected_row_version: previousRowVersion,
       });
       if (error) throw error;
-      const ver = assertRpcResult<{ version_number: number; status?: string }>(versionData, 'create_quote_version');
+      const ver = versionData;
       // Version creation can update the quote. Keep the committed sent status
       // even if the follow-up version read fails; that condition clears the
       // local token and tells the operator to refresh instead of faking failure.
@@ -2069,7 +2099,15 @@ export default function QuoteBuilder() {
       return rowVersionConfirmed;
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'create_quote_version' } });
-      toast('error', 'Failed to mark as presented');
+      if (hasRpcCode(err, RpcErrorCodes.QUOTE_STALE_WRITE)
+        || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
+        resetCreateVersionAfterReloadRef.current = true;
+        quoteVersionRecoveryRequiredRef.current = true;
+        setStaleSaveOpen(true);
+        toast('error', 'The quote changed before it could be marked presented. Reload and review it before trying again.');
+      } else {
+        toast('error', 'Failed to mark as presented');
+      }
       return false;
     }
   };
@@ -2413,16 +2451,18 @@ export default function QuoteBuilder() {
     try {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
       const idemKey = convertQuoteIdem.getKey();
-      const { data, error } = await supabase.rpc('convert_quote_to_order', {
+      const expectedRowVersion = quoteRowVersionRef.current;
+      const { data, error } = await convertQuoteToOrderWithRowVersion({
         p_quote_id: savedId,
         p_performed_by: profile!.id,
         p_idempotency_key: idemKey,
+        p_expected_row_version: expectedRowVersion,
       });
 
       if (error) throw error;
 
       convertQuoteIdem.resetKey();
-      const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[] }>(data, 'convert_quote_to_order');
+      const result = data;
       if (!result.order_id) {
         throw new Error('Order conversion completed without an order ID');
       }
@@ -2473,6 +2513,16 @@ export default function QuoteBuilder() {
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
+
+      if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
+        || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
+        resetConvertAfterReloadRef.current = true;
+        quoteVersionRecoveryRequiredRef.current = true;
+        setStaleSaveOpen(true);
+        toast('warning', 'The quote changed while conversion was starting. Its order outcome was left untouched; reload and review before retrying.');
+        setConverting(false);
+        return;
+      }
 
       // Lost-response-after-commit must not resurrect the booking (push-gate P1).
       let liveQuoteStatus: string | null = null;

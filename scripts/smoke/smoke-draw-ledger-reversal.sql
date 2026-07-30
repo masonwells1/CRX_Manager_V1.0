@@ -319,7 +319,12 @@ BEGIN
     price_per_unit, current_cost, total_units_needed, unit_size)
   VALUES (v_q2, v_sec, v_product, 10, 6, 300, 'gal');
 
-  SELECT convert_quote_to_order(v_q2) INTO v_res;
+  SELECT convert_quote_to_order(
+    v_q2,
+    NULL,
+    NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_q2)
+  ) INTO v_res;
   IF v_res->>'status' IS DISTINCT FROM 'created' THEN
     RAISE EXCEPTION 'S3: convert returned %, expected created', v_res;
   END IF;

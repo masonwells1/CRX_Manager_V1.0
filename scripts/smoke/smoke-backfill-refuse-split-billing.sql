@@ -96,7 +96,12 @@ BEGIN
   VALUES (v_quote, v_sec, v_product, 10, 6, 100, 'gal');
 
   -- Known-good order + order_items via the production RPC.
-  SELECT public.convert_quote_to_order(v_quote) INTO v_res;
+  SELECT public.convert_quote_to_order(
+    v_quote,
+    NULL,
+    NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_quote)
+  ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   v_order := (v_res->>'order_id')::uuid;
   SELECT id INTO v_oitem FROM public.order_items WHERE order_id = v_order LIMIT 1;
@@ -117,7 +122,12 @@ BEGIN
   INSERT INTO public.quote_items (quote_id, section_id, product_id,
     price_per_unit, current_cost, total_units_needed, unit_size)
   VALUES (v_quote_b, v_sec_b, v_product, 10, 6, 100, 'gal');
-  SELECT public.convert_quote_to_order(v_quote_b) INTO v_res;
+  SELECT public.convert_quote_to_order(
+    v_quote_b,
+    NULL,
+    NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_quote_b)
+  ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   v_order_b := (v_res->>'order_id')::uuid;
   SELECT id INTO v_oitem_b FROM public.order_items WHERE order_id = v_order_b LIMIT 1;

@@ -54,7 +54,12 @@ BEGIN
   VALUES (v_quote, v_sec, v_product, 10, 6, 300, 'gal');
 
   -- ---- whole conversion -> order created, quote 'accepted', draws = 300 ----
-  SELECT public.convert_quote_to_order(v_quote) INTO v_res;
+  SELECT public.convert_quote_to_order(
+    v_quote,
+    NULL,
+    NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_quote)
+  ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   IF v_res->>'status' IS DISTINCT FROM 'created' THEN
     RAISE EXCEPTION 'SMOKE_SETUP: convert returned %, expected created', v_res;
@@ -268,7 +273,12 @@ BEGIN
   END IF;
 
   -- ---- proof it is genuinely re-convertible: a NEW order is created ----
-  SELECT public.convert_quote_to_order(v_quote) INTO v_res;
+  SELECT public.convert_quote_to_order(
+    v_quote,
+    NULL,
+    NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_quote)
+  ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   IF v_res->>'status' IS DISTINCT FROM 'created' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: re-convert returned %, expected created (still stranded)', v_res;

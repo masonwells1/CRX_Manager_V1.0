@@ -43,7 +43,12 @@ BEGIN
     price_per_unit, current_cost, total_units_needed, unit_size)
   VALUES (v_quote, v_sec, v_product, 10, 6, 100, 'gal');
 
-  SELECT public.convert_quote_to_order(v_quote) INTO v_res;
+  SELECT public.convert_quote_to_order(
+    v_quote,
+    NULL,
+    NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_quote)
+  ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   v_order := (v_res->>'order_id')::uuid;
   SELECT public.cancel_order(

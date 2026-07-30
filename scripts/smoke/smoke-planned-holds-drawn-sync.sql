@@ -127,7 +127,13 @@ BEGIN
   END IF;
 
   -- (e) restore_quote_version: holds rebuilt to restored booked − drawn
-  PERFORM create_quote_version(v_q, v_admin, 'presented', NULL);
+  PERFORM create_quote_version(
+    v_q,
+    v_admin,
+    'presented',
+    NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_q)
+  );
   SELECT id INTO v_ver FROM quote_versions WHERE quote_id = v_q ORDER BY version_number DESC LIMIT 1;
   v_sections := jsonb_set(v_sections, '{1,items,0,total_units_needed}', to_jsonb(250));
   SELECT row_version INTO v_quote_version FROM quotes WHERE id = v_q;

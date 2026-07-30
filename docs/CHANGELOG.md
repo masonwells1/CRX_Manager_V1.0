@@ -62,12 +62,24 @@ result that crosses the migration boundary, so the next reviewed save cannot
 loop on the retired request. `save_quote`, quote-versioning, and conversion all
 preserve the owner check before replay while taking their idempotency advisory
 lock before the Quote row lock and rechecking ownership under that row lock.
+Quote-versioning and whole-Quote conversion now also accept the exact Quote
+`row_version` reviewed by the operator, compare it under that same row lock
+before any lifecycle mutation, and bind idempotent replay to both the requested
+pre-mutation token and the committed post-mutation token. A writer landing
+between load and either action therefore gets `QUOTE_STALE_WRITE` instead of
+creating a version or Order from a different Quote. The migration postflight
+requires exactly one public overload for both lifecycle RPCs. The frontend-first
+rollout bridge tries the versioned signature and falls back to the live legacy
+signature only for PostgREST's exact missing-function `PGRST202`; database,
+authentication, network, and stale-write failures never retry without the
+token. A rejected lifecycle key rotates only after a complete stable reload,
+and every registered smoke caller now supplies the current token.
 The disposable proof also demonstrates that the old reverse order deadlocks,
 so a future cross-operation regression cannot silently pass. The
 rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
 planned-hold synchronization helper chain too.
 Verification passed
-4,106 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
+4,110 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
 SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains
 unapplied; frontend-first deployment and live migration apply remain separate gates.

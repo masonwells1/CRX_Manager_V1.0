@@ -86,7 +86,10 @@ BEGIN
   VALUES (v_q, v_sec, v_prod_a, 10, 6, 100, 'gal');
 
   -- V1: snapshot @ A=100
-  PERFORM create_quote_version(v_q, v_admin, 'presented', NULL);
+  PERFORM create_quote_version(
+    v_q, v_admin, 'presented', NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_q)
+  );
   SELECT id INTO v_v1 FROM quote_versions WHERE quote_id = v_q
   ORDER BY version_number DESC LIMIT 1;
   IF v_v1 IS NULL THEN
@@ -96,14 +99,20 @@ BEGIN
   -- V2: snapshot that books ONLY product B (drawn product A absent)
   UPDATE quote_items SET product_id = v_prod_b, total_units_needed = 400
   WHERE quote_id = v_q;
-  PERFORM create_quote_version(v_q, v_admin, 'presented', NULL);
+  PERFORM create_quote_version(
+    v_q, v_admin, 'presented', NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_q)
+  );
   SELECT id INTO v_v2 FROM quote_versions WHERE quote_id = v_q
   ORDER BY version_number DESC LIMIT 1;
 
   -- V3: snapshot @ A=400 (legal: >= the 200 that will be drawn)
   UPDATE quote_items SET product_id = v_prod_a, total_units_needed = 400
   WHERE quote_id = v_q;
-  PERFORM create_quote_version(v_q, v_admin, 'presented', NULL);
+  PERFORM create_quote_version(
+    v_q, v_admin, 'presented', NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_q)
+  );
   SELECT id INTO v_v3 FROM quote_versions WHERE quote_id = v_q
   ORDER BY version_number DESC LIMIT 1;
   IF v_v1 = v_v2 OR v_v2 = v_v3 THEN
@@ -206,7 +215,10 @@ BEGIN
     price_per_unit, current_cost, total_units_needed, unit_size)
   VALUES (v_qc, v_sec, v_prod_a, 10, 6, 300, 'gal');
 
-  PERFORM create_quote_version(v_qc, v_admin, 'presented', NULL);
+  PERFORM create_quote_version(
+    v_qc, v_admin, 'presented', NULL,
+    (SELECT row_version FROM public.quotes WHERE id = v_qc)
+  );
   SELECT id INTO v_vc FROM quote_versions WHERE quote_id = v_qc
   ORDER BY version_number DESC LIMIT 1;
 

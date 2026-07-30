@@ -10,6 +10,7 @@ DECLARE
   v_q jsonb; v_q_replay jsonb; v_c jsonb; v_c_replay jsonb;
   v_quote_before bigint; v_customer_before bigint; v_quote_after bigint; v_quote_after_second bigint; v_quote_stale_draft bigint; v_customer_after bigint; v_customer_money_after bigint;
   v_prepay_before bigint; v_prepay_after bigint;
+  v_versions_before integer; v_orders_before integer;
   v_note_before text; v_admin_name text; v_addresses_before jsonb; v_error text;
   v_sent_at_first timestamptz; v_sent_at_after timestamptz; v_split_after jsonb;
   v_suffix text := substr(md5(random()::text), 1, 8);
@@ -322,6 +323,65 @@ BEGIN
     IF v_error NOT LIKE 'COMMISSION_SPLIT_CONFLICT:%' THEN RAISE EXCEPTION 'SMOKE_FAIL: customer split precedence was %', v_error; END IF;
   END;
 
+  -- Simulate a second writer advancing the quote after this action read its
+  -- token. Both lifecycle mutators must reject that stale token while holding
+  -- the real quote row lock, before creating a version or an order.
+  SELECT row_version,
+         (SELECT count(*) FROM public.quote_versions WHERE quote_id = v_quote),
+         (SELECT count(*) FROM public.orders WHERE quote_id = v_quote AND deleted_at IS NULL)
+    INTO v_quote_stale_draft, v_versions_before, v_orders_before
+  FROM public.quotes
+  WHERE id = v_quote;
+  UPDATE public.quotes SET updated_at = updated_at WHERE id = v_quote;
+
+  BEGIN
+    PERFORM public.create_quote_version(
+      v_quote, v_admin, 'emailed', 'rv-version-stale-' || v_suffix, v_quote_stale_draft);
+    RAISE EXCEPTION 'SMOKE_FAIL: stale quote token created a quote version';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'QUOTE_STALE_WRITE' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: stale quote-version action raised %', v_error;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.convert_quote_to_order(
+      v_quote, v_admin, 'rv-convert-stale-' || v_suffix, v_quote_stale_draft);
+    RAISE EXCEPTION 'SMOKE_FAIL: stale quote token converted a quote';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'QUOTE_STALE_WRITE' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: stale quote-conversion action raised %', v_error;
+    END IF;
+  END;
+  IF (SELECT count(*) FROM public.quote_versions WHERE quote_id = v_quote) <> v_versions_before
+     OR (SELECT count(*) FROM public.orders WHERE quote_id = v_quote AND deleted_at IS NULL) <> v_orders_before THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected stale lifecycle action changed downstream rows';
+  END IF;
+
+  -- The fresh action succeeds once, records the request/post versions in its
+  -- cache, and an exact replay returns the same version without another write.
+  SELECT row_version INTO v_quote_after FROM public.quotes WHERE id = v_quote;
+  v_q := public.create_quote_version(
+    v_quote, v_admin, 'emailed', 'rv-version-fresh-' || v_suffix, v_quote_after);
+  SELECT row_version INTO v_quote_after_second FROM public.quotes WHERE id = v_quote;
+  IF v_q->>'status' <> 'created'
+     OR v_quote_after_second <> v_quote_after + 1
+     OR (SELECT count(*) FROM public.quote_versions WHERE quote_id = v_quote) <> v_versions_before + 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: fresh quote-version action did not commit exactly once';
+  END IF;
+  v_q_replay := public.create_quote_version(
+    v_quote, v_admin, 'emailed', 'rv-version-fresh-' || v_suffix, v_quote_after);
+  IF v_q_replay->>'status' <> 'duplicate'
+     OR v_q_replay->>'version_id' IS DISTINCT FROM v_q->>'version_id'
+     OR (SELECT row_version FROM public.quotes WHERE id = v_quote) <> v_quote_after_second
+     OR (SELECT count(*) FROM public.quote_versions WHERE quote_id = v_quote) <> v_versions_before + 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: quote-version replay was not bound to the original versioned request';
+  END IF;
+  v_quote_after := v_quote_after_second;
+
   -- Auth and role gates still run before a stale payload can write.
   PERFORM set_config('request.jwt.claims', '{}'::text, true);
   PERFORM set_config('request.jwt.claim.sub', '', true);
@@ -373,7 +433,7 @@ BEGIN
   END;
   BEGIN
     PERFORM public.create_quote_version(
-      v_quote, v_rep, 'emailed', 'rv-version-nonowner-' || v_suffix);
+      v_quote, v_rep, 'emailed', 'rv-version-nonowner-' || v_suffix, v_quote_after);
     RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep created another rep''s quote version';
   EXCEPTION WHEN OTHERS THEN
     v_error := SQLERRM;
@@ -384,7 +444,7 @@ BEGIN
   END;
   BEGIN
     PERFORM public.convert_quote_to_order(
-      v_quote, v_rep, 'rv-convert-nonowner-' || v_suffix);
+      v_quote, v_rep, 'rv-convert-nonowner-' || v_suffix, v_quote_after);
     RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep converted another rep''s quote';
   EXCEPTION WHEN OTHERS THEN
     v_error := SQLERRM;

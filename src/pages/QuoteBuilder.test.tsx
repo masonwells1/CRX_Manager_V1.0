@@ -859,7 +859,9 @@ describe('QuoteBuilder', () => {
     renderQuoteBuilder(quote.id);
     fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Mark as Presented' }));
-    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('create_quote_version', expect.anything()));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('create_quote_version', expect.objectContaining({
+      p_expected_row_version: 8,
+    })));
     await waitFor(() => expect(screen.getByText('sent')).toBeInTheDocument());
     fireEvent.click(await screen.findByRole('button', { name: 'Revise Quote' }));
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
@@ -964,8 +966,60 @@ describe('QuoteBuilder', () => {
     expect(mockRpc).toHaveBeenCalledWith('create_quote_version', expect.objectContaining({
       p_quote_id: quote.id,
       p_method: 'emailed',
+      p_expected_row_version: 7,
     }));
     expect(mockToast).toHaveBeenCalledWith('success', expect.stringContaining('Quote emailed'));
+  });
+
+  it('holds a stale version action key until a stable reload, then retries with the refreshed quote token', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    let quoteReads = 0;
+    let createVersionCalls = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (++quoteReads <= 2
+            ? quote
+            : { ...quote, row_version: quoteReads <= 4 ? 8 : 9 })
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', email: 'grower@example.com', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'create_quote_version') {
+        createVersionCalls += 1;
+        return Promise.resolve(createVersionCalls === 1
+          ? { data: null, error: { message: 'QUOTE_STALE_WRITE' } }
+          : { data: { version_number: 2, status: 'created' }, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Email to Grower' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reload Quote' })).toBeInTheDocument());
+    expect(mockSendEmail).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Keep editing/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
+    expect(createVersionCalls).toBe(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Quote' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Quote' })).not.toBeInTheDocument());
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
+    await waitFor(() => expect(mockSendEmail).toHaveBeenCalledTimes(1));
+    expect(mockRpc).toHaveBeenCalledWith('create_quote_version', expect.objectContaining({
+      p_expected_row_version: 8,
+    }));
   });
 
   it('stops on an unconfirmed accepted save and safely resumes conversion after reload', async () => {
@@ -1030,7 +1084,7 @@ describe('QuoteBuilder', () => {
 
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith(
       'convert_quote_to_order',
-      expect.objectContaining({ p_quote_id: quote.id }),
+      expect.objectContaining({ p_quote_id: quote.id, p_expected_row_version: 9 }),
     ));
     expect(saveCalls).toBe(1);
     expect(mockToast).toHaveBeenCalledWith(
