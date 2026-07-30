@@ -96,6 +96,17 @@ for(const [k,v] of Object.entries(files)) if(!existsSync(v)) throw new Error(`mi
 function postBaselineMigrations(){
   const script=path.join(ROOT,'scripts/list-post-baseline-migrations.mjs');
   if(!existsSync(script)) throw new Error(`missing post-baseline migration enumerator: ${script}`);
+  // That script decides what is pending by reading the baseline's captured
+  // migration ledger and trusting the names inside it. The ledger is a manifest
+  // artifact with a recorded digest, so verify it instead of trusting the bytes on
+  // disk: splicing a post-baseline migration's stem into that COPY block removes
+  // it from the pending list, and this proof would go straight back to certifying
+  // a schema missing that migration while still printing a replay marker. Same
+  // hole as the high-water check above, entered from the other side.
+  // resolveBaseline performs the manifest hash comparison and throws on mismatch.
+  const history=path.basename(resolveBaseline('_migration_history.sql'));
+  const historyGeneration=history.slice(0,14);
+  if(historyGeneration!==manifest.migrations_high_water) throw new Error(`baseline migration-history artifact ${history} is generation ${historyGeneration} but migrations_high_water is ${manifest.migrations_high_water}; the enumerator would read a different ledger than the one just hash-verified.`);
   const r=spawnSync(process.execPath,[script],{cwd:ROOT,encoding:'utf8',maxBuffer:8*1024*1024});
   if(r.error||r.status!==0) throw new Error(`could not enumerate post-baseline migrations: ${r.error?.message||''}\n${r.stderr||r.stdout}`);
   return r.stdout.split(/\r?\n/).map(l=>l.trim()).filter(Boolean).map(rel=>{
