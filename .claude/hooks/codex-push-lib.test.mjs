@@ -453,6 +453,31 @@ assert.deepEqual(unknownPushOptions("git push -fu origin main"), [], "a bundle o
 assert.deepEqual(unknownPushOptions("git push origin main -- --not-an-option"), [], "everything after -- is a refspec");
 assert.deepEqual(unknownPushOptions("git status --weird"), [], "non-pushes are not scanned");
 
+// --- a harmless FIRST push must not hide a second one (Codex 2026-07-30, round 8)
+// A whole-command scan that stopped at the first match saw neither the abbreviated
+// option nor the inline variable on the second push. git accepts unambiguous
+// abbreviations of long options, so `--recurse-submodule` is a real command.
+assert.deepEqual(
+  unknownPushOptions(`git push origin feature && git push --recurse-submodule no ${CRX_URL} HEAD:main`),
+  ["--recurse-submodule"],
+  "a later push's unknown option is found",
+);
+assert.deepEqual(
+  unknownPushOptions(`git push origin feature; git push -Z origin main`),
+  ["-Z"],
+  "the scan crosses a `;` separator too",
+);
+assert.deepEqual(
+  pushSetsInlineEnv(`git push origin feature && HOME=/tmp/evil git push origin main`),
+  ["HOME"],
+  "a later push's inline variable is found",
+);
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_SSH_COMMAND="ssh" git push origin feature && git push origin main`),
+  [],
+  "a chained pair of clean pushes stays clean",
+);
+
 // --- `--repo` vs a positional destination -------------------------------------
 // git-push: "if both are specified, the command-line argument takes precedence".
 // Verified against git 2.54 on 2026-07-30.

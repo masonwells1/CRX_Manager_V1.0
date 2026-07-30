@@ -255,6 +255,57 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round eight: the guard read the first push and stopped, and staging had no fixed address
+
+Two findings, both real.
+
+**Only the first push in a chain was inspected.** Round seven's three new whole-command checks each
+ran once over the entire command, and a regex without `/g` stops at its first hit. So
+`git push origin feature && git push --recurse-submodule no <app repo URL> HEAD:main` reported no
+unknown options at all: the scan saw the innocent leading push and never reached the second one,
+which the per-push loop then processed without the destination check that had just been added. A
+probe confirmed it — the chained command resolved a destination of `origin`, while the second push
+examined alone resolved `no` and flagged `--recurse-submodule`. The same blindness affected the
+inline-variable check, which the review did not name: a chained `HOME=/tmp/evil git push` came back
+clean. Fixed in the shared library rather than at each call site: `eachPush()` walks *every* push in
+a command, and both whole-command scans iterate it, so a check added later inherits the fix instead
+of repeating the bug.
+
+**Staging had no fixed address.** `scripts/backup-claude-memory.mjs` accepted any destination, while
+`.gitignore` protects exactly one path (`docs/claude-memory/`) and the runbook says `<staging-dir>`
+without pinning it. An agent that picked any other directory inside this checkout would have written
+real names and real commission amounts into tracked, publishable files — and a public commit is not
+undone by a later delete. Staging now refuses a destination inside the public app repo (matched by
+remote, so both the HTTPS and SSH spellings count) unless git reports the path as ignored. The
+refusal is deliberately *not* "any git worktree": the genuine off-site flow stages into the private
+`CRX_Backups` clone, where the notes are tracked on purpose. One subtlety cost a red test and is now
+recorded in the code — `git check-ignore` on a directory that does not exist yet does not match a
+directory-only pattern, so the check asks about a file path beneath the destination instead.
+
+The repo probe itself then failed in a way worth recording, twice over. git exports `GIT_DIR` into
+every hook it runs, and it overrides `-C <dir>` discovery, so the first cut answered for the *hook's*
+repository rather than the destination's — the pre-commit hook caught it by refusing a harmless temp
+directory. The probe now runs with the git discovery variables scrubbed from the child environment.
+
+The same inherited variable did real damage through the new test's fixture: `git init` under an
+inherited `GIT_DIR` initialises **that** repository, not the directory named by `-C`, and when the
+inherited value is a linked worktree's admin directory it writes `core.bare = true` into the shared
+config — which is what happened here, breaking every worktree with "this operation must be run in a
+work tree" until `core.bare` was set back to false. No commits or refs were lost. Reproduced
+deliberately afterwards on a throwaway repo to confirm the mechanism, and the fixture now scrubs the
+same variables and asserts that `git init` landed where it was aimed before doing anything else.
+Running the suite with `GIT_DIR` pointed at a canary worktree now leaves that canary untouched, where
+before the fix it flipped it bare. **Never spawn git from a test without clearing the discovery
+environment.**
+
+Proven on the real checkout, not just the helper: pointing the CLI at `docs/scratch-notes-proof`
+inside this repo printed the refusal, exited 1, and created nothing, while the ignored
+`docs/claude-memory` destination staged all 188 notes and verified byte-for-byte. Four mutations —
+truncating the push scan to one hit (twice, once per caller), disabling the destination check, and
+widening it to every git repo — each turned the suite red on its own case, as did restoring the
+inherited `GIT_DIR`, and a sixth appeared on its own when the ignore probe first asked about the
+directory rather than a path inside it.
+
 ### Round seven: two more roads to the same place, and a backup that verified too little
 
 The seventh review pointed out that `GIT_CONFIG*` names a config *file*, while `HOME` and

@@ -21,6 +21,26 @@ export function isGitPush(cmd) {
   return GIT_PUSH_RE.test(String(cmd || ""));
 }
 
+// EVERY push in the command, not just the first. `String.match` without /g and
+// `RegExp.exec` on a non-global pattern both stop at the first hit, which meant a
+// whole-command check saw only the leading push — so `git push origin feature &&
+// git push --recurse-submodule no <CRX Manager URL> HEAD:main` reported no unknown
+// options and no inline variables at all, while the second push carried both
+// (Codex's eighth 2026-07-30 review; confirmed by probe the same day, which also
+// showed pushSetsInlineEnv blind to a chained second push, which the review did
+// not name). Every whole-command scan below iterates this instead.
+function eachPush(cmd) {
+  const text = String(cmd || "");
+  const scanner = new RegExp(GIT_PUSH_RE.source, "gi");
+  const found = [];
+  let match;
+  while ((match = scanner.exec(text)) !== null) {
+    found.push({ args: match[1] || "", index: match.index });
+    if (scanner.lastIndex === match.index) scanner.lastIndex += 1; // zero-width safety
+  }
+  return found;
+}
+
 function unquoteShellArg(value) {
   const text = String(value || "");
   if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
@@ -283,26 +303,31 @@ const PUSH_SHORT_OPTS_KNOWN = new Set(["v", "q", "d", "n", "f", "u", "o", "4", "
 // Any option in a push command that this guard's argv walk does not understand.
 // A non-empty result means the destination cannot be resolved safely.
 export function unknownPushOptions(cmd) {
-  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
-  const tokens = splitShellArgs(args);
   const unknown = [];
-  for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i];
-    if (token === "--") break;
-    if (token === "-" || !token.startsWith("-")) continue;
-    const eq = token.indexOf("=");
-    const bare = eq === -1 ? token : token.slice(0, eq);
-    if (bare.startsWith("--")) {
-      // `--no-force` is git's negation of `--force`; judge the base option.
-      const base = PUSH_OPTS_KNOWN.has(bare) ? bare : bare.replace(/^--no-/, "--");
-      if (!PUSH_OPTS_KNOWN.has(base)) unknown.push(bare);
-      else if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(base)) i += 1;
-      continue;
+  for (const push of eachPush(cmd)) {
+    const tokens = splitShellArgs(push.args);
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (token === "--") break;
+      if (token === "-" || !token.startsWith("-")) continue;
+      const eq = token.indexOf("=");
+      const bare = eq === -1 ? token : token.slice(0, eq);
+      if (bare.startsWith("--")) {
+        // `--no-force` is git's negation of `--force`; judge the base option.
+        // Note that git also accepts unambiguous ABBREVIATIONS of long options
+        // (`--recurse-submodule`), which do not match here and are therefore
+        // reported as unknown — the fail-closed direction, and how round eight's
+        // finding gets caught rather than parsed.
+        const base = PUSH_OPTS_KNOWN.has(bare) ? bare : bare.replace(/^--no-/, "--");
+        if (!PUSH_OPTS_KNOWN.has(base)) unknown.push(bare);
+        else if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(base)) i += 1;
+        continue;
+      }
+      for (const ch of bare.slice(1)) {
+        if (!PUSH_SHORT_OPTS_KNOWN.has(ch)) unknown.push(`-${ch}`);
+      }
+      if (eq === -1 && bare.includes("o")) i += 1;
     }
-    for (const ch of bare.slice(1)) {
-      if (!PUSH_SHORT_OPTS_KNOWN.has(ch)) unknown.push(`-${ch}`);
-    }
-    if (eq === -1 && bare.includes("o")) i += 1;
   }
   return unknown;
 }
@@ -457,22 +482,22 @@ export function pushUsesConfigRootEnv(cmd) {
 const INLINE_ENV_ALLOWED = new Set(["GIT_SSH_COMMAND", "GIT_TERMINAL_PROMPT"]);
 export function pushSetsInlineEnv(cmd) {
   const text = String(cmd || "");
-  const match = GIT_PUSH_RE.exec(text);
-  if (!match) return [];
-  // Assignments sit BEFORE the git binary, which is outside what
-  // GIT_PUSH_PREFIX_RE captures (that starts after it). Take the text up to the
-  // binary, trimmed to the current segment so an earlier chained command's
-  // arguments are not misread as this push's prefix.
-  const prefix = text.slice(0, match.index).split(/(?:&&|\|\|?|;|\r?\n)/).pop() || "";
   const names = [];
-  // splitShellArgs is not usable here: it only treats a quote as grouping when
-  // the token STARTS with one, so `GIT_SSH_COMMAND="ssh -o Foo=1"` came apart at
-  // the space and the fragment `Foo=1"` read as a second assignment. A token is
-  // really a run of unquoted characters and quoted spans, in any order.
-  for (const token of prefix.match(/(?:[^\s'"]|'[^']*'|"[^"]*")+/g) || []) {
-    const assignment = /^(?:'|")?([A-Za-z_][A-Za-z0-9_]*)=/.exec(token);
-    if (assignment && !INLINE_ENV_ALLOWED.has(assignment[1].toUpperCase())) {
-      names.push(assignment[1]);
+  for (const push of eachPush(text)) {
+    // Assignments sit BEFORE the git binary, which is outside what
+    // GIT_PUSH_PREFIX_RE captures (that starts after it). Take the text up to the
+    // binary, trimmed to the current segment so an earlier chained command's
+    // arguments are not misread as this push's prefix.
+    const prefix = text.slice(0, push.index).split(/(?:&&|\|\|?|;|\r?\n)/).pop() || "";
+    // splitShellArgs is not usable here: it only treats a quote as grouping when
+    // the token STARTS with one, so `GIT_SSH_COMMAND="ssh -o Foo=1"` came apart at
+    // the space and the fragment `Foo=1"` read as a second assignment. A token is
+    // really a run of unquoted characters and quoted spans, in any order.
+    for (const token of prefix.match(/(?:[^\s'"]|'[^']*'|"[^"]*")+/g) || []) {
+      const assignment = /^(?:'|")?([A-Za-z_][A-Za-z0-9_]*)=/.exec(token);
+      if (assignment && !INLINE_ENV_ALLOWED.has(assignment[1].toUpperCase())) {
+        names.push(assignment[1]);
+      }
     }
   }
   return names;

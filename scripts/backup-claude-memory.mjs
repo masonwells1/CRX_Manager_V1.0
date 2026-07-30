@@ -42,6 +42,7 @@ import {
   existsSync, mkdirSync, readdirSync, readFileSync, statSync,
   unlinkSync, writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -111,7 +112,69 @@ function isInside(child, parent) {
 // new, empty, or a previous snapshot written by THIS script — and pruning is
 // limited to files that snapshot's own manifest recorded. Anything else fails
 // BEFORE a single byte is written or deleted.
+// Its first check is destinationIsPublishable(), defined below.
+//
+// The notes carry real names and commission amounts, and `CRX_Manager_V1.0` is
+// PUBLIC. `.gitignore` covers the one documented directory (`docs/claude-memory/`),
+// but the runbook says "<staging-dir>" without pinning it, so an agent that picked
+// any other path inside this checkout would create tracked, publishable files —
+// and a public commit is not undoable by a later delete. Codex's eighth 2026-07-30
+// review found this. The off-site repo is deliberately unaffected: there the notes
+// ARE tracked on purpose, which is the whole point of the backup — so the refusal
+// is scoped to the app repo, not to "any git worktree".
+const PUBLIC_APP_REPO_RE = /[:/]masonwells1\/CRX_Manager_V1\.0(?:\.git)?$/i;
+function nearestExisting(dir) {
+  let current = path.resolve(dir);
+  for (let hops = 0; hops < 64; hops += 1) {
+    if (existsSync(current)) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+  return current;
+}
+// git exports GIT_DIR (and friends) into every hook it runs, and those override
+// `-C <dir>` discovery — so a probe run from inside a pre-commit hook answers for
+// the hook's repository, not the destination's. That is how this check first went
+// wrong: it refused a temp directory by reading THIS repo's remotes. Ask git about
+// the path on disk and nothing else.
+const GIT_DISCOVERY_ENV = [
+  "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX",
+  "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES",
+];
+function destinationIsPublishable(outDir) {
+  const probe = nearestExisting(outDir);
+  const env = { ...process.env };
+  for (const name of GIT_DISCOVERY_ENV) delete env[name];
+  const git = (args) => spawnSync("git", ["-C", probe, ...args], { encoding: "utf8", env });
+  const top = git(["rev-parse", "--show-toplevel"]);
+  if (top.status !== 0) return null;                       // not inside a git repo at all
+  const remotes = git(["remote", "-v"]);
+  const inAppRepo = String(remotes.stdout || "")
+    .split(/\r?\n/)
+    .some((line) => PUBLIC_APP_REPO_RE.test(line.trim().split(/\s+/)[1] || ""));
+  if (!inAppRepo) return null;
+  // Ask about a file INSIDE the destination, not the destination itself: a
+  // directory-only pattern (`docs/claude-memory/`) does not match a directory
+  // that does not exist yet, and staging into a not-yet-created directory is the
+  // normal case. A path beneath it matches either way — probed both ways on
+  // git 2.54 before relying on it.
+  // status 0 = ignored, 1 = not ignored, anything else = git could not answer.
+  // Fail CLOSED on "could not answer": inside the public repo, an unverifiable
+  // path is exactly the case this refusal exists for.
+  const probeFile = path.join(path.resolve(outDir), INDEX_FILE);
+  if (git(["check-ignore", "-q", probeFile]).status === 0) return null;
+  return (
+    `FAIL: refusing to stage into ${outDir} — it is inside the PUBLIC ${top.stdout.trim()} checkout\n` +
+    `      and git does not ignore it, so the notes (real names, real commission amounts)\n` +
+    `      would become publishable. Stage into the off-site backup clone, or into a path\n` +
+    `      this repo ignores (docs/claude-memory/). Nothing was written.`
+  );
+}
+
 function assertSafeDestination(outDir, source) {
+  const publishable = destinationIsPublishable(outDir);
+  if (publishable) return publishable;
   if (isInside(source, outDir)) {
     return `FAIL: refusing to stage into ${outDir} — the memory source lives inside it. Pick a dedicated directory.`;
   }

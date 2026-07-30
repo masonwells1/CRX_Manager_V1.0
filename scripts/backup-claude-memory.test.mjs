@@ -208,6 +208,93 @@ try {
     eq(quiet(() => stage(path.join(root, "from-no-index"), noIndex)), 1, `a source without ${INDEX_FILE} is refused`);
   }
 
+  // ── round 8: never stage into a publishable spot in the PUBLIC app repo ───
+  // The runbook says "<staging-dir>" without pinning it. A staging directory
+  // inside the public CRX checkout that .gitignore does not cover would put real
+  // names and commission amounts one `git add` away from a public commit — which
+  // a later delete does not undo. The refusal is scoped to the app repo BY REMOTE,
+  // because the genuine off-site flow stages into the PRIVATE backup clone, where
+  // the notes are tracked on purpose.
+  {
+    const notes = makeSource("repo-source", {
+      [INDEX_FILE]: "# Memory Index\n- [a](a.md) — hook\n",
+      "a.md": "---\nname: a\n---\n\nCommission split for a real person.\n",
+    });
+    // The scrubbed environment is NOT optional. git exports GIT_DIR into every
+    // hook it runs, and `git init` under an inherited GIT_DIR re-initialises THAT
+    // repository instead of the directory named by `-C` — which, the first time
+    // this suite ran inside the pre-commit hook, flipped the real CRX repo to
+    // core.bare=true and broke every worktree until it was set back. Never spawn
+    // git from a test without clearing these.
+    const cleanEnv = { ...process.env };
+    for (const name of [
+      "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX",
+      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES",
+    ]) delete cleanEnv[name];
+    const makeRepo = (name, remoteUrl, ignoreBody) => {
+      const dir = fresh(name);
+      const git = (...args) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", env: cleanEnv });
+      const init = git("init", "-q");
+      assert.equal(init.status, 0, `test fixture: git init failed in ${dir}: ${init.stderr}`);
+      const inside = git("rev-parse", "--show-toplevel").stdout.trim();
+      assert.ok(
+        inside && path.resolve(inside) === path.resolve(dir),
+        `test fixture: git init landed on ${inside}, not ${dir} — refusing to touch another repository`,
+      );
+      git("remote", "add", "origin", remoteUrl);
+      if (ignoreBody) writeFileSync(path.join(dir, ".gitignore"), ignoreBody);
+      return dir;
+    };
+
+    const publicRepo = makeRepo(
+      "public-app-repo",
+      "https://github.com/masonwells1/CRX_Manager_V1.0.git",
+      "docs/claude-memory/\n",
+    );
+    const exposed = path.join(publicRepo, "scratch-notes");
+    eq(quiet(() => stage(exposed, notes)), 1, "staging into an unignored path in the public app repo is refused");
+    ok(!readdirSafe(exposed), "the refusal happens before anything is written");
+
+    // The one documented, ignored destination still works.
+    const allowed = path.join(publicRepo, "docs", "claude-memory");
+    eq(quiet(() => stage(allowed, notes)), 0, "the ignored docs/claude-memory/ destination is still allowed");
+
+    // An SSH remote spelling of the same repo is the same repo.
+    const sshRepo = makeRepo("public-app-repo-ssh", "git@github.com:masonwells1/CRX_Manager_V1.0", "");
+    eq(
+      quiet(() => stage(path.join(sshRepo, "notes"), notes)), 1,
+      "the ssh spelling of the app remote is recognised as the same repo",
+    );
+
+    // The private off-site clone is a different repo — staging there is the point.
+    const backupRepo = makeRepo("private-backup-repo", "https://github.com/masonwells1/CRX_Backups.git", "");
+    eq(
+      quiet(() => stage(path.join(backupRepo, "claude-memory"), notes)), 0,
+      "staging into the private backup clone is allowed even though the files are tracked there",
+    );
+
+    // A plain directory outside any repo is unaffected.
+    eq(quiet(() => stage(path.join(root, "plain-destination"), notes)), 0, "a destination outside any repo still works");
+
+    // git exports GIT_DIR into every hook it runs, and it overrides `-C <dir>`
+    // discovery. The first cut of this check inherited it and answered for the
+    // HOOK's repository — which made an innocent destination look like the public
+    // app repo. Caught by the pre-commit hook itself; pinned here.
+    {
+      const inherited = process.env.GIT_DIR;
+      process.env.GIT_DIR = path.join(publicRepo, ".git");
+      try {
+        eq(
+          quiet(() => stage(path.join(root, "hook-env-destination"), notes)), 0,
+          "an inherited GIT_DIR does not decide which repo the destination is in",
+        );
+      } finally {
+        if (inherited === undefined) delete process.env.GIT_DIR;
+        else process.env.GIT_DIR = inherited;
+      }
+    }
+  }
+
   // ── the CLI still runs when invoked directly ──────────────────────────────
   // The module now exports its functions, which required suppressing the CLI on
   // import. Prove the command Mason actually runs did not become a no-op.
