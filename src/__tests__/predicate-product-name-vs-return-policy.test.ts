@@ -61,6 +61,12 @@ const MUST_MATCH: Array<[string, string]> = [
   ['ALL SALES FINAL, reversed word order', 'ITEM TWELVE ALL SALES FINAL'],
   ['ALL SALES ARE FINAL, with the filler verb', 'ITEM THIRTEEN ALL SALES ARE FINAL'],
   ['lower case still matches', 'item fourteen no return'],
+  // "NON-RETURN VALVE" is the technical name of a check valve and is excluded
+  // below; "NON-RETURNABLE VALVE" says the valve cannot be sent back, which is
+  // a policy assertion and must still flag. The valve exclusion is therefore
+  // narrowed to the RETURN/RETURNS spellings only.
+  ['NON-RETURNABLE VALVE is a policy, not the valve type', 'ITEM EIGHTEEN NON-RETURNABLE VALVE'],
+  ['NON-RETURNABLE VALVES, plural', 'ITEM NINETEEN NON-RETURNABLE VALVES'],
 ];
 
 // Near misses. Each of these contains the letters of a trigger phrase but does
@@ -123,7 +129,21 @@ describe('product-name-vs-return-policy predicate pattern', () => {
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('--'))
       .join('\n');
-    expect(body).not.toMatch(/\bp\.product_name\b(?![\s\S]{0,40}~\*)/);
-    expect(body).not.toMatch(/\bp\.sku\b/);
+
+    // Alias-agnostic on purpose: an earlier version of this test matched the
+    // literal spellings "p.product_name" and "p.sku", so renaming the alias or
+    // dropping the qualifier would have slipped a catalog name into the sweep
+    // output unnoticed. Match the bare column with any qualifier or none.
+    const NAME = /(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?\bproduct_name\b/gi;
+    const SKU = /(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?\bsku\b/gi;
+
+    // Exactly one product_name reference is permitted — the ~* filter that
+    // decides which rows are flagged. It is compared, never emitted.
+    const nameRefs = body.match(NAME) ?? [];
+    expect(nameRefs).toHaveLength(1);
+    expect(body).toMatch(/(?:\b[a-z_][a-z0-9_]*\s*\.\s*)?\bproduct_name\s*~\*/i);
+
+    // The SKU has no legitimate use here at all.
+    expect(body.match(SKU) ?? []).toHaveLength(0);
   });
 });

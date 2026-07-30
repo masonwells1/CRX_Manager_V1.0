@@ -48,6 +48,12 @@
 --   exclusion a perfectly returnable valve would be flagged forever, and the
 --   only way to quiet it would be to misclassify it or allowlist it.
 --
+--   The exclusion is deliberately narrowed to the RETURN/RETURNS spellings and
+--   does NOT cover RETURNABLE. "NON-RETURN VALVE" is the technical term;
+--   "NON-RETURNABLE VALVE" says the valve cannot be sent back, which is exactly
+--   the policy this predicate exists to catch. Applying the lookahead to both
+--   spellings would silently miss it — a false negative on the unsafe side.
+--
 --   Regression cases for the intended phrase set — and for the near-miss false
 --   positives — are asserted in
 --   src/__tests__/predicate-product-name-vs-return-policy.test.ts, which reads
@@ -70,7 +76,7 @@ WITH flagged AS (
          p.return_policy,
          p.is_active
     FROM public.products p
-   WHERE p.product_name ~* '(\m(no|non)[[:space:][:punct:]]*return(s|able)?\M(?![[:space:][:punct:]]*valves?\M))|(\mnot[[:space:][:punct:]]*returnable\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*(are[[:space:][:punct:]]*)?final\M)'
+   WHERE p.product_name ~* '(\m(no|non)[[:space:][:punct:]]*(return(s)?\M(?![[:space:][:punct:]]*valves?\M)|returnable\M))|(\mnot[[:space:][:punct:]]*returnable\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*(are[[:space:][:punct:]]*)?final\M)'
 )
 SELECT 'products:' || f.id::text AS violation_key,
        'product name asserts it cannot be returned but return_policy is '

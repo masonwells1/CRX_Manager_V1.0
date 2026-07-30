@@ -75,8 +75,14 @@ that has only ever seen zero. Cross-model review caught the first pattern matchi
 "NON RETURN"; every alternative is now word-anchored, and
 `src/__tests__/predicate-product-name-vs-return-policy.test.ts` pins the phrase set plus the
 near-miss false positives, reading the pattern out of the `.sql` file so the two cannot drift.
-The broadened pattern is behavior-identical on live data — still 0 violations, still all 21 under
-the mutation. Landed via PR #286.
+Two more review rounds sharpened it: "NON-RETURN VALVE" is a check valve rather than a merchandise
+policy and is excluded by a negative lookahead, but the exclusion is narrowed to RETURN/RETURNS
+only — "NON-RETURNABLE VALVE" does assert a policy, and applying the lookahead to both spellings
+silently missed it. The containment assertion is now alias-agnostic: it permits exactly one
+`product_name` reference (the `~*` filter itself), rejects any other qualifier or an unqualified
+column, and was mutation-tested by projecting the name through a different alias, which turns it
+red. Every version of the pattern is behavior-identical on live data — still 0 violations across
+604 products, still all 21 under the mutation. Landed via PR #286.
 
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `1442ee92 feat(products): Supplier Pricing Phase 3 Stage C return-policy classification`
