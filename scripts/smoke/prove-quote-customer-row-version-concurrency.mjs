@@ -12,9 +12,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const migration = path.join(root, 'supabase/migrations/20260730031925_quote_customer_row_version_guard.sql');
+const migration = path.join(root, 'supabase/migrations/20260730201230_quote_customer_row_version_guard.sql');
 const previous = path.join(root, 'supabase/migrations/20260722202622_commission_split_lost_update_guard.sql');
 const name = `crx-row-version-proof-${process.pid}-${Date.now().toString(36)}`;
+const createVersionSmokeFiles = [
+  'smoke-restore-version-drawn-guard.sql',
+  'smoke-planned-holds-drawn-sync.sql',
+];
+const convertQuoteSmokeFiles = [
+  'smoke-backfill-refuse-split-billing.sql',
+  'smoke-draw-ledger-reversal.sql',
+  'smoke-forbid-restore-cancelled-order.sql',
+  'smoke-order-draw-lock.sql',
+  'smoke-revert-quote-escape-hatch.sql',
+];
 
 function docker(args, input, allowFailure = false) {
   const result = spawnSync('docker', args, { cwd: root, input, encoding: 'utf8' });
@@ -28,6 +39,118 @@ function psql(sql, allowFailure = false) {
 }
 function scalar(sql) {
   return psql(sql).stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
+}
+
+function extractTempHelper(source, functionName) {
+  const start = source.indexOf(`CREATE OR REPLACE FUNCTION pg_temp.${functionName}(`);
+  const endMarker = '\n$helper$;';
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0 && end > start, `could not extract pg_temp.${functionName}`);
+  return source.slice(start, end + endMarker.length).replace(/\r\n/g, '\n');
+}
+
+function assertSmokeRolloutCompatibility() {
+  const smokeRoot = path.join(root, 'scripts/smoke');
+  const verifyGroup = (fileNames, helperName, exactSignature, dynamicCall, directCallPattern) => {
+    let canonicalHelper;
+    for (const fileName of fileNames) {
+      const source = readFileSync(path.join(smokeRoot, fileName), 'utf8');
+      const helper = extractTempHelper(source, helperName);
+      canonicalHelper ??= helper;
+      assert.equal(
+        helper.replace(/\s+/g, ' ').trim(),
+        canonicalHelper.replace(/\s+/g, ' ').trim(),
+        `${fileName} must use the canonical ${helperName} rollout helper`,
+      );
+      assert.ok(helper.includes(`to_regprocedure('${exactSignature}')`), `${fileName} must inspect the exact new catalog signature`);
+      assert.ok(helper.includes(dynamicCall), `${fileName} must dynamically dispatch to the new signature`);
+      assert.match(source.replace(helper, ''), new RegExp(`pg_temp\\.${helperName}\\(`), `${fileName} must call the rollout helper`);
+      assert.doesNotMatch(source.replace(helper, ''), directCallPattern, `${fileName} must not call a rollout-sensitive RPC directly`);
+    }
+    return canonicalHelper;
+  };
+
+  return {
+    createHelper: verifyGroup(
+      createVersionSmokeFiles,
+      'create_quote_version_smoke',
+      'public.create_quote_version(uuid,uuid,text,text,bigint)',
+      "'SELECT public.create_quote_version($1, $2, $3, $4, $5)'",
+      /(?:^|[^\w.])(?:public\.)?create_quote_version\(/m,
+    ),
+    convertHelper: verifyGroup(
+      convertQuoteSmokeFiles,
+      'convert_quote_to_order_smoke',
+      'public.convert_quote_to_order(uuid,uuid,text,bigint)',
+      "'SELECT public.convert_quote_to_order($1, $2, $3, $4)'",
+      /(?:^|[^\w.])(?:public\.)?convert_quote_to_order\(/m,
+    ),
+  };
+}
+
+function proveSmokeCatalogCompatibility(createHelper, convertHelper) {
+  const quoteId = '00000000-0000-0000-0000-000000000001';
+  const actorId = '00000000-0000-0000-0000-000000000002';
+  const legacyCreate = scalar(`
+BEGIN;
+CREATE OR REPLACE FUNCTION public.create_quote_version(uuid,uuid,text,text)
+RETURNS jsonb LANGUAGE sql AS $$ SELECT '{"shape":"legacy"}'::jsonb $$;
+${createHelper}
+SELECT pg_temp.create_quote_version_smoke('${quoteId}', '${actorId}', 'presented', NULL, 17)->>'shape';
+ROLLBACK;
+`);
+  assert.equal(legacyCreate, 'legacy', 'create_quote_version smoke helper must work against the legacy catalog');
+
+  const newCreate = scalar(`
+BEGIN;
+CREATE OR REPLACE FUNCTION public.create_quote_version(
+  p_quote_id uuid,
+  p_performed_by uuid,
+  p_method text,
+  p_idempotency_key text,
+  p_expected_row_version bigint DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE sql
+AS $$ SELECT jsonb_build_object('shape', 'new', 'expected', p_expected_row_version) $$;
+${createHelper}
+SELECT concat(
+  pg_temp.create_quote_version_smoke('${quoteId}', '${actorId}', 'presented', NULL, 17)->>'shape',
+  ':',
+  pg_temp.create_quote_version_smoke('${quoteId}', '${actorId}', 'presented', NULL, 17)->>'expected'
+);
+ROLLBACK;
+`);
+  assert.equal(newCreate, 'new:17', 'create_quote_version smoke helper must pass the token to the new catalog');
+
+  const legacyConvert = scalar(`
+BEGIN;
+CREATE OR REPLACE FUNCTION public.convert_quote_to_order(uuid,uuid,text)
+RETURNS jsonb LANGUAGE sql AS $$ SELECT '{"shape":"legacy"}'::jsonb $$;
+${convertHelper}
+SELECT pg_temp.convert_quote_to_order_smoke('${quoteId}', '${actorId}', NULL, 23)->>'shape';
+ROLLBACK;
+`);
+  assert.equal(legacyConvert, 'legacy', 'convert_quote_to_order smoke helper must work against the legacy catalog');
+
+  const newConvert = scalar(`
+BEGIN;
+CREATE OR REPLACE FUNCTION public.convert_quote_to_order(
+  p_quote_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text,
+  p_expected_row_version bigint DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE sql
+AS $$ SELECT jsonb_build_object('shape', 'new', 'expected', p_expected_row_version) $$;
+${convertHelper}
+SELECT concat(
+  pg_temp.convert_quote_to_order_smoke('${quoteId}', '${actorId}', NULL, 23)->>'shape',
+  ':',
+  pg_temp.convert_quote_to_order_smoke('${quoteId}', '${actorId}', NULL, 23)->>'expected'
+);
+ROLLBACK;
+`);
+  assert.equal(newConvert, 'new:23', 'convert_quote_to_order smoke helper must pass the token to the new catalog');
 }
 function asyncSql(sql, applicationName) {
   return new Promise((resolve, reject) => {
@@ -555,6 +678,7 @@ async function race(table, fn, reverseLockOrder) {
 async function main() {
   assertCanonicalContract();
   assertChildOwnershipContract();
+  const { createHelper, convertHelper } = assertSmokeRolloutCompatibility();
   try {
     docker(['run', '-d', '--rm', '--name', name, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data', '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', 'postgres:17-alpine']);
     await waitForHealthyPostgres();
@@ -574,6 +698,7 @@ CREATE OR REPLACE FUNCTION public.action_peer(p_key text) RETURNS void LANGUAGE 
 CREATE OR REPLACE FUNCTION public.action_reverse_peer(p_key text) RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM 1 FROM public.action_quotes WHERE id='one' FOR UPDATE; PERFORM pg_advisory_xact_lock(hashtextextended(p_key,0)); END $$;
 INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.customers VALUES ('one','original',1); INSERT INTO public.action_quotes VALUES ('one');
 `);
+    proveSmokeCatalogCompatibility(createHelper, convertHelper);
     // Exact pre-fix failure: the second whole-record writer wins.
     psql("UPDATE public.quotes SET value='newer' WHERE id='one'; UPDATE public.quotes SET value='stale' WHERE id='one'; UPDATE public.customers SET value='newer' WHERE id='one'; UPDATE public.customers SET value='stale' WHERE id='one';");
     assert.equal(scalar("SELECT value FROM public.quotes WHERE id='one'"), 'stale');
@@ -628,7 +753,7 @@ INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.custom
     psql("INSERT INTO public.quotes(id,value) VALUES ('new','inserted'); INSERT INTO public.customers(id,value) VALUES ('new','inserted');");
     assert.equal(scalar("SELECT row_version FROM public.quotes WHERE id='new'"), '1');
     assert.equal(scalar("SELECT row_version FROM public.customers WHERE id='new'"), '1');
-    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order,quote_ownership,quote_action_lock_order,lifecycle_token quote_ownership=direct,replay,version,convert,restore quote_action_lock_order=advisory-before-row lifecycle_action=writer-between-load-and-action-rejected restore_replay=payload-owner-current-token-bound reverse_order_deadlock=detected quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=payload-bound,current-token-verified insert_defaults=verified');
+    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order,quote_ownership,quote_action_lock_order,lifecycle_token quote_ownership=direct,replay,version,convert,restore quote_action_lock_order=advisory-before-row lifecycle_action=writer-between-load-and-action-rejected restore_replay=payload-owner-current-token-bound smoke_signature_compat=create-legacy,new;convert-legacy,new reverse_order_deadlock=detected quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=payload-bound,current-token-verified insert_defaults=verified');
   } finally {
     docker(['rm', '-f', name], undefined, true);
   }

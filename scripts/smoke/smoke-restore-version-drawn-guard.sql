@@ -59,6 +59,35 @@ BEGIN
 END;
 $helper$;
 
+CREATE OR REPLACE FUNCTION pg_temp.create_quote_version_smoke(
+  p_quote_id uuid,
+  p_performed_by uuid,
+  p_method text,
+  p_idempotency_key text,
+  p_expected_row_version bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $helper$
+DECLARE
+  v_result jsonb;
+BEGIN
+  IF to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.create_quote_version($1, $2, $3, $4, $5)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_method, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
+  RETURN public.create_quote_version(
+    p_quote_id,
+    p_performed_by,
+    p_method,
+    p_idempotency_key
+  );
+END;
+$helper$;
+
 DO $smoke$
 DECLARE
   v_admin uuid;
@@ -115,7 +144,7 @@ BEGIN
   VALUES (v_q, v_sec, v_prod_a, 10, 6, 100, 'gal');
 
   -- V1: snapshot @ A=100
-  PERFORM create_quote_version(
+  PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
     (SELECT row_version FROM public.quotes WHERE id = v_q)
   );
@@ -128,7 +157,7 @@ BEGIN
   -- V2: snapshot that books ONLY product B (drawn product A absent)
   UPDATE quote_items SET product_id = v_prod_b, total_units_needed = 400
   WHERE quote_id = v_q;
-  PERFORM create_quote_version(
+  PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
     (SELECT row_version FROM public.quotes WHERE id = v_q)
   );
@@ -138,7 +167,7 @@ BEGIN
   -- V3: snapshot @ A=400 (legal: >= the 200 that will be drawn)
   UPDATE quote_items SET product_id = v_prod_a, total_units_needed = 400
   WHERE quote_id = v_q;
-  PERFORM create_quote_version(
+  PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
     (SELECT row_version FROM public.quotes WHERE id = v_q)
   );
@@ -253,7 +282,7 @@ BEGIN
     price_per_unit, current_cost, total_units_needed, unit_size)
   VALUES (v_qc, v_sec, v_prod_a, 10, 6, 300, 'gal');
 
-  PERFORM create_quote_version(
+  PERFORM pg_temp.create_quote_version_smoke(
     v_qc, v_admin, 'presented', NULL,
     (SELECT row_version FROM public.quotes WHERE id = v_qc)
   );

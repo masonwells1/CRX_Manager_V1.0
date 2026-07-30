@@ -114,7 +114,7 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
       sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Address reads retain their existing boundary; writes are RPC-only through save_customer since 20260730031925.',
+    notes: 'Address reads retain their existing boundary; writes are RPC-only through save_customer since 20260730201230.',
   },
 
   // ─── Quotes ─────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
       sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Section reads retain their existing boundary; writes are RPC-only through save_quote since 20260730031925.',
+    notes: 'Section reads retain their existing boundary; writes are RPC-only through save_quote since 20260730201230.',
   },
   {
     table: 'quote_items',
@@ -143,7 +143,7 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
       sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Item reads are office-only since 20260727231652; writes are RPC-only through save_quote since 20260730031925.',
+    notes: 'Item reads are office-only since 20260727231652; writes are RPC-only through save_quote since 20260730201230.',
   },
   {
     table: 'quote_versions',

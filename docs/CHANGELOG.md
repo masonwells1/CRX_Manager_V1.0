@@ -14,8 +14,11 @@ production remains pre-migration.
 
 Rollback-only and structural proofs now cover stale restore rejection, direct
 and replay ownership, exact one-time token advancement, drawn-ledger
-compatibility, and planned-hold synchronization. The migration remains
-unapplied.
+compatibility, and planned-hold synchronization. Registered lifecycle smokes
+now dispatch against both the live legacy RPC signatures and the pending
+row-version signatures, and the candidate was restamped above the live
+migration ledger high-water without changing its SQL content. The migration
+remains unapplied.
 
 ## 2026-07-30 — Quote and Customer stale-save recovery was hardened before merge
 
@@ -104,9 +107,9 @@ version. The shared Quote type also represents `row_version` as optional during
 the intentional pre-migration window, and list-page conversion normalizes that
 absence to the legacy-compatible `null` token.
 Verification passed
-4,112 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
+4,127 tests with 123 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
-SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains
+SQL audit. Migration `20260730201230_quote_customer_row_version_guard.sql` remains
 unapplied; frontend-first deployment and live migration apply remain separate gates.
 
 ## 2026-07-30 — Vendor-bill accounting-period close lock applied

@@ -65,6 +65,35 @@ BEGIN
 END;
 $helper$;
 
+CREATE OR REPLACE FUNCTION pg_temp.create_quote_version_smoke(
+  p_quote_id uuid,
+  p_performed_by uuid,
+  p_method text,
+  p_idempotency_key text,
+  p_expected_row_version bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $helper$
+DECLARE
+  v_result jsonb;
+BEGIN
+  IF to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.create_quote_version($1, $2, $3, $4, $5)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_method, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
+  RETURN public.create_quote_version(
+    p_quote_id,
+    p_performed_by,
+    p_method,
+    p_idempotency_key
+  );
+END;
+$helper$;
+
 DO $smoke$
 DECLARE
   v_admin uuid; v_cust uuid; v_pa uuid; v_pb uuid; v_q uuid;
@@ -156,7 +185,7 @@ BEGIN
   END IF;
 
   -- (e) restore_quote_version: holds rebuilt to restored booked − drawn
-  PERFORM create_quote_version(
+  PERFORM pg_temp.create_quote_version_smoke(
     v_q,
     v_admin,
     'presented',

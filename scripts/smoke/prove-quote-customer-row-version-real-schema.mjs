@@ -15,7 +15,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-row-version-schema-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
-const candidate = path.join(ROOT, 'supabase', 'migrations', '20260730031925_quote_customer_row_version_guard.sql');
+const candidate = path.join(ROOT, 'supabase', 'migrations', '20260730201230_quote_customer_row_version_guard.sql');
 const smokeFiles = [
   path.join(ROOT, 'scripts', 'smoke', 'smoke-save-quote-customer-row-version.sql'),
   path.join(ROOT, 'scripts', 'smoke', 'smoke-save-quote-drawn-guard.sql'),

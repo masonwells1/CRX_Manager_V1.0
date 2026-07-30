@@ -1,4 +1,4 @@
--- Real rollback-only fixture proof for 20260730031925_quote_customer_row_version_guard.
+-- Real rollback-only fixture proof for 20260730201230_quote_customer_row_version_guard.
 -- Run only against a disposable restored schema or after the governed apply,
 -- as one transaction. PASS is exactly SMOKE_PASS_ROLLBACK; any other result
 -- is failure. The block calls the real save_quote/save_customer functions.

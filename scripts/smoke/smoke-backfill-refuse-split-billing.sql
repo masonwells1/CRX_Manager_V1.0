@@ -15,6 +15,33 @@
 -- while the fixed guard trusts only the private canonical-RPC claim.
 --
 -- One DO block, terminal exception -> nothing commits.
+CREATE OR REPLACE FUNCTION pg_temp.convert_quote_to_order_smoke(
+  p_quote_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text,
+  p_expected_row_version bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $helper$
+DECLARE
+  v_result jsonb;
+BEGIN
+  IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.convert_quote_to_order($1, $2, $3, $4)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
+  RETURN public.convert_quote_to_order(
+    p_quote_id,
+    p_performed_by,
+    p_idempotency_key
+  );
+END;
+$helper$;
+
 DO $smoke$
 DECLARE
   v_admin    uuid;
@@ -96,7 +123,7 @@ BEGIN
   VALUES (v_quote, v_sec, v_product, 10, 6, 100, 'gal');
 
   -- Known-good order + order_items via the production RPC.
-  SELECT public.convert_quote_to_order(
+  SELECT pg_temp.convert_quote_to_order_smoke(
     v_quote,
     NULL,
     NULL,
@@ -122,7 +149,7 @@ BEGIN
   INSERT INTO public.quote_items (quote_id, section_id, product_id,
     price_per_unit, current_cost, total_units_needed, unit_size)
   VALUES (v_quote_b, v_sec_b, v_product, 10, 6, 100, 'gal');
-  SELECT public.convert_quote_to_order(
+  SELECT pg_temp.convert_quote_to_order_smoke(
     v_quote_b,
     NULL,
     NULL,
