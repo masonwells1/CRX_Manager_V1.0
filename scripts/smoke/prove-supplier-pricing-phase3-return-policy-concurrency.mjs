@@ -408,10 +408,10 @@ $rls$;`);
   // and the empty restored table made every earlier read-based probe blind. This
   // runs the genuine article: the image's own auth.uid(), the dump's own
   // is_active_profile(), and the restored policy, with nothing stubbed.
-  // Everything this block adds -- the a003 deactivated profile and the a004
-  // driver, which nothing else here provides, and one product_families row --
-  // is rolled back, so the rest of this proof continues against exactly the
-  // schema it did before. It reuses the already-seeded a002 rather than seeding
+  // Everything this block adds -- the a003 deactivated profile, one b-series
+  // profile per declared role, and one product_families row, none of which
+  // anything else here provides -- is rolled back, so the rest continues on
+  // exactly the schema it did before. It reuses the already-seeded a002 rather than seeding
   // its own active profile, and a001/a002 deliberately stay outside this
   // transaction: the actor-binding fixtures below depend on both surviving it.
   // Do not move that seed in here.
