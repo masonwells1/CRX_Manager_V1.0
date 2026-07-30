@@ -139,9 +139,10 @@ BEGIN
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'SMOKE_FAIL: draw 200/500 reported fully_drawn: %', v_res;
   END IF;
-  -- draw_down_quote updates the quote once even for a partial draw. Before the
-  -- row-version migration this remains NULL; after it, advance the exact token.
-  v_quote_version := v_quote_version + 1;
+  -- Re-read the token after draw_down_quote. Converting the whole row to JSON
+  -- keeps this smoke compatible before the row_version column exists.
+  SELECT (to_jsonb(q)->>'row_version')::bigint INTO v_quote_version
+  FROM quotes q WHERE id = v_quote_id;
   v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_version);
   SELECT quantity_drawn INTO v_drawn FROM quote_product_draws
   WHERE quote_id = v_quote_id AND product_id = v_product_id;

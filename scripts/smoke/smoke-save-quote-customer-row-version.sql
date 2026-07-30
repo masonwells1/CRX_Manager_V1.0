@@ -8,7 +8,8 @@ DO $smoke$
 DECLARE
   v_admin uuid; v_rep uuid; v_nonoffice uuid; v_customer uuid; v_quote uuid; v_product uuid;
   v_q jsonb; v_q_replay jsonb; v_c jsonb; v_c_replay jsonb;
-  v_quote_before bigint; v_customer_before bigint; v_quote_after bigint; v_quote_after_second bigint; v_quote_stale_draft bigint; v_customer_after bigint;
+  v_quote_before bigint; v_customer_before bigint; v_quote_after bigint; v_quote_after_second bigint; v_quote_stale_draft bigint; v_customer_after bigint; v_customer_money_after bigint;
+  v_prepay_before bigint; v_prepay_after bigint;
   v_note_before text; v_admin_name text; v_addresses_before jsonb; v_error text;
   v_sent_at_first timestamptz; v_sent_at_after timestamptz; v_split_after jsonb;
   v_suffix text := substr(md5(random()::text), 1, 8);
@@ -222,6 +223,49 @@ BEGIN
      OR (SELECT jsonb_agg(jsonb_build_object('label', label, 'address_line', address_line) ORDER BY id) FROM customer_addresses WHERE customer_id = v_customer) IS DISTINCT FROM v_addresses_before THEN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected stale customer changed header or addresses';
   END IF;
+
+  -- A non-editor money-path update must also invalidate an open whole-record
+  -- editor. This is deliberately fail-closed: the typed header/address payload
+  -- stays untouched until the operator reloads the newly committed customer.
+  SELECT COALESCE(prepay_balance_cents, 0) INTO v_prepay_before
+  FROM customers WHERE id = v_customer;
+  UPDATE customers
+  SET prepay_balance_cents = COALESCE(prepay_balance_cents, 0) + 1
+  WHERE id = v_customer;
+  SELECT row_version, COALESCE(prepay_balance_cents, 0)
+    INTO v_customer_money_after, v_prepay_after
+  FROM customers WHERE id = v_customer;
+  IF v_customer_money_after <> v_customer_after + 1
+     OR v_prepay_after <> v_prepay_before + 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: customer money-path update did not advance the whole-record token exactly once';
+  END IF;
+  BEGIN
+    PERFORM public.save_customer(
+      v_customer,
+      jsonb_build_object(
+        'farm_name', 'MONEY-RACE-MUST-NOT-LAND',
+        'row_version_expected', v_customer_after),
+      jsonb_build_array(jsonb_build_object(
+        'label', 'main',
+        'address_line', 'MONEY-RACE-MUST-NOT-LAND',
+        'is_default', true)),
+      v_admin,
+      'rv-customer-money-race-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: customer editor stayed writable after a concurrent money-path update';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error NOT LIKE 'CUSTOMER_STALE_WRITE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: customer money-path race raised %', v_error;
+    END IF;
+  END;
+  IF (SELECT row_version FROM customers WHERE id = v_customer) <> v_customer_money_after
+     OR (SELECT COALESCE(prepay_balance_cents, 0) FROM customers WHERE id = v_customer) <> v_prepay_after
+     OR (SELECT farm_name FROM customers WHERE id = v_customer) <> '[SMOKE] RVC fresh ' || v_suffix
+     OR (SELECT jsonb_agg(jsonb_build_object('label', label, 'address_line', address_line) ORDER BY id) FROM customer_addresses WHERE customer_id = v_customer) IS DISTINCT FROM v_addresses_before THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected customer money-path race changed editor fields, addresses, money, or version';
+  END IF;
+  v_customer_after := v_customer_money_after;
 
   UPDATE customers SET default_commission_split = NULL WHERE id = v_customer;
   SELECT row_version INTO v_customer_after FROM customers WHERE id = v_customer;

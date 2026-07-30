@@ -110,11 +110,11 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
   {
     table: 'customer_addresses',
     access: {
-      admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'all', DELETE: 'all' },
-      sales_rep: { SELECT: 'all', INSERT: 'own', UPDATE: 'own', DELETE: 'none' },
+      admin:     { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+      sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Address read is open; write scoped to own customers for reps',
+    notes: 'Address reads retain their existing boundary; writes are RPC-only through save_customer since 20260730031925.',
   },
 
   // ─── Quotes ─────────────────────────────────────────────────────────
@@ -130,20 +130,20 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
   {
     table: 'quote_sections',
     access: {
-      admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'all', DELETE: 'all' },
-      sales_rep: { SELECT: 'all', INSERT: 'own', UPDATE: 'own', DELETE: 'own' },
+      admin:     { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+      sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Sections inherit access through quote ownership (created_by on parent quote)',
+    notes: 'Section reads retain their existing boundary; writes are RPC-only through save_quote since 20260730031925.',
   },
   {
     table: 'quote_items',
     access: {
-      admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'all', DELETE: 'all' },
-      sales_rep: { SELECT: 'all', INSERT: 'own', UPDATE: 'own', DELETE: 'own' },
+      admin:     { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+      sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Items inherit access through quote ownership. Office-only reads since 20260727231652 — a driver could previously read every quote line item and its pricing while being unable to read the parent quote.',
+    notes: 'Item reads are office-only since 20260727231652; writes are RPC-only through save_quote since 20260730031925.',
   },
   {
     table: 'quote_versions',
@@ -765,19 +765,17 @@ describe('RLS Contracts: Ownership Scope Consistency', () => {
     }
   });
 
-  it('quote child tables follow parent quote access pattern', () => {
-    const quotes = RLS_ACCESS_MATRIX.find(c => c.table === 'quotes')!;
-    const childTables = ['quote_sections', 'quote_items'];
+  it('parent save RPCs are the only application-role child-table write boundary', () => {
+    const childTables = ['customer_addresses', 'quote_sections', 'quote_items'];
 
     for (const tableName of childTables) {
       const child = RLS_ACCESS_MATRIX.find(c => c.table === tableName)!;
       for (const role of ALL_ROLES) {
-        // If role can INSERT quotes, they should be able to INSERT child rows
-        if (quotes.access[role].INSERT !== 'none') {
+        for (const operation of ['INSERT', 'UPDATE', 'DELETE'] as const) {
           expect(
-            child.access[role].INSERT,
-            `${tableName}.${role}: should be able to INSERT if can INSERT quotes`
-          ).not.toBe('none');
+            child.access[role][operation],
+            `${tableName}.${role}: ${operation} must remain RPC-only`
+          ).toBe('none');
         }
       }
     }
