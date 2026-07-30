@@ -70,6 +70,44 @@ function projections(body: string): string[] {
     .filter(Boolean);
 }
 
+// The complete set of names a projected expression may mention. Anything else
+// — another column, another function, a bare table alias — fails the audit.
+const ALLOWED_COLUMNS = new Set(['id', 'return_policy', 'is_active']);
+const ALLOWED_FUNCTIONS = new Set(['quote_literal']);
+const ALLOWED_CAST_TYPES = new Set(['text']);
+
+// Classify every identifier in a projected expression and return the ones that
+// are not on an allowlist. Blacklisting row-producing constructors was the
+// earlier design and it lost: json_build_object('row', p) passed every check
+// while serializing the whole products row, so an allowlist replaced it. The
+// decisive rule is the last one — a table alias may appear ONLY as a qualifier
+// immediately before a dot, because a bare alias IS the whole row.
+function auditExpression(expr: string): string[] {
+  const masked = expr.replace(/'[^']*'/g, "''");
+  const problems: string[] = [];
+
+  for (const m of masked.matchAll(/[a-z_][a-z0-9_]*/gi)) {
+    const ident = m[0];
+    const lower = ident.toLowerCase();
+    const before = masked.slice(0, m.index);
+    const after = masked.slice(m.index + ident.length);
+
+    if (/::\s*$/.test(before)) {
+      if (!ALLOWED_CAST_TYPES.has(lower)) problems.push(`cast to ${ident}`);
+    } else if (/^\s*\./.test(after)) {
+      // A qualifier. The column it qualifies is audited on the next iteration.
+    } else if (/\.\s*$/.test(before)) {
+      if (!ALLOWED_COLUMNS.has(lower)) problems.push(`column ${ident}`);
+    } else if (/^\s*\(/.test(after)) {
+      if (!ALLOWED_FUNCTIONS.has(lower)) problems.push(`function ${ident}`);
+    } else {
+      problems.push(`bare identifier ${ident}`);
+    }
+  }
+
+  return problems;
+}
+
 // CONTAINMENT: every fixture below is a SYNTHETIC string. The repo is public
 // and the predicate's own header forbids real product names or supplier SKUs in
 // tracked files, so these must never be copied out of the live catalog — not
@@ -102,6 +140,15 @@ const MUST_MATCH: Array<[string, string]> = [
   // spelling gets no exemption either: a valve marked "NO RETURN" is a policy.
   ['NO RETURN VALVE is a policy, not the valve type', 'ITEM TWENTY NO RETURN VALVE'],
   ['NO-RETURN VALVES, plural', 'ITEM TWENTYONE NO-RETURN VALVES'],
+  // Compound wording. The separator class spans whitespace and punctuation
+  // only, so an intervening WORD used to break the match entirely and the
+  // product kept the 'unknown' default with the sweep silent.
+  ['NO REFUNDS OR RETURNS', 'ITEM TWENTYTWO NO REFUNDS OR RETURNS'],
+  ['NO REFUND OR RETURN, singular', 'ITEM TWENTYTHREE NO REFUND OR RETURN'],
+  ['NO EXCHANGES OR RETURNS', 'ITEM TWENTYFOUR NO EXCHANGES OR RETURNS'],
+  ['NO CREDIT RETURNS, no connector word', 'ITEM TWENTYFIVE NO CREDIT RETURNS'],
+  ['NOT REFUNDABLE OR RETURNABLE', 'ITEM TWENTYSIX NOT REFUNDABLE OR RETURNABLE'],
+  ['NOT EXCHANGEABLE OR RETURNABLE', 'ITEM TWENTYSEVEN NOT EXCHANGEABLE OR RETURNABLE'],
 ];
 
 // Near misses. Each of these contains the letters of a trigger phrase but does
@@ -119,6 +166,10 @@ const MUST_NOT_MATCH: Array<[string, string]> = [
   ['NON RETURN VALVE, unhyphenated', 'ITEM SEVENTEEN NON RETURN VALVE'],
   ['NON-RETURN VALVES, plural', 'NON-RETURN VALVES 3/4 IN'],
   ['NONRETURN VALVE, run together', 'NONRETURN VALVE ASSY'],
+  // The intervening-word vocabulary is a closed list for this reason: any
+  // filler word between the negation and RETURN would flag these.
+  ['unrelated words between NO and RETURN', 'NO TILL SEED RETURN TRAY'],
+  ['"no" ending a word, plural', 'CASINO RETURNS DISPLAY'],
 ];
 
 describe('product-name-vs-return-policy predicate pattern', () => {
@@ -168,20 +219,17 @@ describe('product-name-vs-return-policy predicate pattern', () => {
 
     // Naming the columns is not enough. `SELECT p.*` emits product_name and sku
     // without spelling either one, so every check above stays green while the
-    // sweep leaks the whole catalog row. Blacklisting spellings turned into
+    // sweep leaks the whole catalog row. Enumerating the leak FORMS turned into
     // whack-a-mole — p.*, then a bare * mid-list, then row_to_json(p), then a
-    // lone alias, which Postgres expands to the entire row as a composite. So
-    // inspect the projections themselves and require each one to name a column.
+    // lone alias, then json_build_object('row', p), which is absent from any
+    // constructor blacklist and still serializes every products column. So the
+    // rule is inverted: each projected expression may mention only names that
+    // are explicitly allowed, and anything unrecognized fails closed.
     for (const item of projections(body)) {
-      const expr = item.split(/\bas\b/i)[0].replace(/'[^']*'/g, "''").trim();
-      // A wildcard anywhere in a projected item, qualified or not.
+      const expr = item.split(/\bas\b/i)[0].trim();
+      // A wildcard is not an identifier, so the audit cannot see it.
       expect(expr, `wildcard projection: ${item}`).not.toMatch(/\*/);
-      // Whole-row constructors.
-      expect(expr, `row-valued projection: ${item}`).not.toMatch(
-        /\b(?:row|row_to_json|to_json|to_jsonb|json_agg|jsonb_agg)\s*\(/i,
-      );
-      // A lone identifier is a table alias, i.e. the whole row.
-      expect(expr, `bare alias projection: ${item}`).not.toMatch(/^[a-z_][a-z0-9_]*$/i);
+      expect(auditExpression(expr), `unsafe projection: ${item}`).toEqual([]);
     }
   });
 });

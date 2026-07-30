@@ -59,6 +59,15 @@
 --   tidier (no|non). Widening the lookahead in either direction silently drops
 --   a real violation, which is a false negative on the unsafe side.
 --
+-- * A no-return assertion is often written as a compound: "NO REFUNDS OR
+--   RETURNS", "NOT REFUNDABLE OR RETURNABLE". The separator class only spans
+--   whitespace and punctuation, so an intervening WORD used to break the match
+--   and the product kept the 'unknown' default with the sweep silent — another
+--   false negative on the unsafe side. The NO and NOT alternatives therefore
+--   allow one optional refund/exchange/credit clause between the negation and
+--   the return word. The vocabulary is a closed list on purpose: allowing any
+--   intervening words would let "NO TILL ... RETURN TRAY" style names match.
+--
 --   Regression cases for the intended phrase set — and for the near-miss false
 --   positives — are asserted in
 --   src/__tests__/predicate-product-name-vs-return-policy.test.ts, which reads
@@ -81,7 +90,7 @@ WITH flagged AS (
          p.return_policy,
          p.is_active
     FROM public.products p
-   WHERE p.product_name ~* '(\mnon[[:space:][:punct:]]*(return(s)?\M(?![[:space:][:punct:]]*valves?\M)|returnable\M))|(\mno[[:space:][:punct:]]*return(s|able)?\M)|(\mnot[[:space:][:punct:]]*returnable\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*(are[[:space:][:punct:]]*)?final\M)'
+   WHERE p.product_name ~* '(\mnon[[:space:][:punct:]]*(return(s)?\M(?![[:space:][:punct:]]*valves?\M)|returnable\M))|(\mno[[:space:][:punct:]]*((refunds?|exchanges?|credits?)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?return(s|able)?\M)|(\mnot[[:space:][:punct:]]*((refundable|exchangeable)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?returnable\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*(are[[:space:][:punct:]]*)?final\M)'
 )
 SELECT 'products:' || f.id::text AS violation_key,
        'product name asserts it cannot be returned but return_policy is '

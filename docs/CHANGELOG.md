@@ -106,21 +106,28 @@ that has only ever seen zero. Cross-model review caught the first pattern matchi
 near-miss false positives, reading the pattern out of the `.sql` file so the two cannot drift.
 Review then hardened two separate things.
 
-The **phrase set** took two further rounds, each closing a false negative — the detector staying
+The **phrase set** took three further rounds, each closing a false negative — the detector staying
 silent on a product it should flag. "NON-RETURN VALVE" is a check valve rather than a merchandise
 policy and is excluded by a negative lookahead, but that exclusion is now narrowed twice: to
 RETURN/RETURNS and not RETURNABLE, and to the NON spelling and not NO. The equipment term is exactly
 "NON-RETURN VALVE" — both "NON-RETURNABLE VALVE" and "NO RETURN VALVE" assert a policy, and a wider
 lookahead dropped them silently. That is why NO and NON are separate alternatives rather than the
-tidier `(no|non)`.
+tidier `(no|non)`. The third round covered compound wording: the separators between the negation and
+the return word span whitespace and punctuation only, so an intervening WORD broke the match and
+"NO REFUNDS OR RETURNS" or "NOT REFUNDABLE OR RETURNABLE" went undetected. One optional
+refund/exchange/credit clause is now permitted there, from a closed vocabulary — allowing arbitrary
+filler words would flag names like "NO TILL SEED RETURN TRAY".
 
-The **containment guard** took two rounds of its own. These are output-safety fixes, not detection
-fixes: they govern what the sweep may emit into a public repo, and neither changes which products
-are flagged. It is now alias-agnostic (exactly one `product_name` reference is permitted, and only
-as the `~*` filter), and it validates the projected items themselves rather than blacklisting
-spellings — blacklisting became whack-a-mole as `p.*`, a bare `*` mid-list, `row_to_json(p)`, and a
-lone table alias each evaded the previous version in turn. All four now turn the guard red under
-mutation, and it returns green on restore.
+The **containment guard** took three rounds of its own. These are output-safety fixes, not detection
+fixes: they govern what the sweep may emit into a public repo, and none of them changes which
+products are flagged. It is now alias-agnostic (exactly one `product_name` reference is permitted,
+and only as the `~*` filter), and it audits the projected expressions themselves. Enumerating the
+leak forms became whack-a-mole — `p.*`, a bare `*` mid-list, `row_to_json(p)`, a lone table alias,
+and finally `json_build_object('row', p)`, which no constructor blacklist named while still
+serializing every column of the row. So the rule was inverted into an allowlist: a projected
+expression may mention only the three permitted columns, one permitted function, and a table alias
+used strictly as a qualifier before a dot. All six leak forms turn the guard red under mutation, and
+it returns green on restore.
 
 Across every revision the live result is unchanged: 0 violations across 604 products, all 21
 `no_return` products matched, and all 21 still detected under the classification-stripped mutation.
