@@ -23,9 +23,11 @@ import {
   pushContextIsAmbiguous,
   pushIsForced,
   pushUsesBulkMode,
+  pushUsesInlineConfig,
   destinationLooksLikeUrl,
   pushDestinationToken,
   repoIsGuardedApp,
+  rewritesReachGuardedApp,
   urlIsGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -77,6 +79,9 @@ for (const pushCmd of pushCommands) {
   }
   if (pushUsesBulkMode(pushCmd)) {
     deny("CODEX GATE: bulk push modes (`--all`/`--branches`/`--mirror`/`--prune`) can alter multiple remote refs and are always blocked. Push one explicit branch/refspec instead.");
+  }
+  if (pushUsesInlineConfig(pushCmd)) {
+    deny("CODEX GATE: pushes carrying inline git configuration (`git -c ...` / `--config-env`) are denied because those overrides silently change the push destination (e.g. `-c remote.origin.pushurl=...`) and the guard's own lookups cannot see them. Use `git -C <repo> push` instead.");
   }
   if (pushIsForced(pushCmd)) {
     deny("CODEX GATE: force-pushing any branch rewrites shared history and requires Mason's explicit approval. Use a normal push or a compensating commit.");
@@ -141,7 +146,25 @@ for (const pushCmd of pushCommands) {
     // gates the push instead of waving it through.
     remoteList = "";
   }
-  if (!urlIsGuardedApp(destinationUrl) && !repoIsGuardedApp(remoteList)) continue;
+  // Third answer to the same question: a configured URL rewrite
+  // (`url.<CRX Manager URL>.pushInsteadOf = crx:`) lets `git push crx: main`
+  // reach production behind an alias that classifies as unguarded on its own.
+  // If this checkout has any rewrite whose base is the app repo, the gate
+  // applies. An unreadable config gates too.
+  let urlRewrites = "";
+  try {
+    urlRewrites = git(["config", "--get-regexp", "^url\\..*insteadof$"], pushRepoDir);
+  } catch (_error) {
+    // `--get-regexp` exits 1 when nothing matches, which is the common case and
+    // means "no rewrites configured" — NOT a failure. An empty string is
+    // correctly read as "no rewrite reaches the app repo".
+    urlRewrites = "";
+  }
+  if (
+    !urlIsGuardedApp(destinationUrl) &&
+    !repoIsGuardedApp(remoteList) &&
+    !rewritesReachGuardedApp(urlRewrites)
+  ) continue;
 
   let baseSha = "";
   try {

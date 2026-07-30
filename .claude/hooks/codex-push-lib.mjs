@@ -10,7 +10,11 @@ import path from "node:path";
 const GIT_ARG = `(?:"[^"]*"|'[^']*'|\\S+)`;
 const GIT_BIN = `(?:"[^"]*[\\\\/]git(?:\\.exe)?"|'[^']*[\\\\/]git(?:\\.exe)?'|(?:\\S*[\\\\/])?git(?:\\.exe)?)`;
 const GIT_GLOBAL_OPTS =
-  `(?:\\s+(?:-C\\s+${GIT_ARG}|-c\\s+${GIT_ARG}|--git-dir(?:=${GIT_ARG}|\\s+${GIT_ARG})|--work-tree(?:=${GIT_ARG}|\\s+${GIT_ARG})|--no-pager|--literal-pathspecs|--exec-path(?:=${GIT_ARG})?))*`;
+  // `--config-env` must be listed here or the whole command stops looking like a
+  // push: without it `git --config-env=remote.origin.pushurl=VAR push origin main`
+  // failed `isGitPush` and skipped EVERY check in this guard (found while testing
+  // Codex's 2026-07-30 inline-config finding).
+  `(?:\\s+(?:-C\\s+${GIT_ARG}|-c\\s+${GIT_ARG}|--config-env(?:=${GIT_ARG}|\\s+${GIT_ARG})|--git-dir(?:=${GIT_ARG}|\\s+${GIT_ARG})|--work-tree(?:=${GIT_ARG}|\\s+${GIT_ARG})|--no-pager|--literal-pathspecs|--exec-path(?:=${GIT_ARG})?))*`;
 const GIT_PUSH_RE = new RegExp(`(?:^|\\s)${GIT_BIN}${GIT_GLOBAL_OPTS}\\s+push\\b([^;&|]*)`, "i");
 const GIT_PUSH_PREFIX_RE = new RegExp(`(?:^|\\s)${GIT_BIN}(${GIT_GLOBAL_OPTS})\\s+push\\b`, "i");
 export function isGitPush(cmd) {
@@ -271,6 +275,44 @@ export function destinationLooksLikeUrl(token) {
   const text = String(token ?? "");
   if (text.length === 0) return false;
   return text.includes(":") || text.includes("/") || text.includes("\\");
+}
+
+// Inline configuration overrides the guard cannot see. Codex's second 2026-07-30
+// review found this bypass: the destination is resolved with SEPARATE `git`
+// calls, which do not inherit `-c` values from the push command, so
+//   git -c remote.origin.pushurl=<CRX Manager URL> push origin HEAD:main
+// sends the push to production while every lookup the guard makes still
+// describes the checkout's ordinary, unrelated remote. Rather than trying to
+// replay arbitrary overrides (`-c` can rewrite pushurl, url.*.pushInsteadOf,
+// remote.pushDefault, and more), deny the form outright: `git -C <repo> push`
+// is inspectable and is the only form this repo's workflows use.
+//
+// `-C` (directory) and `-c` (config) differ only in case, so this must stay
+// case-SENSITIVE — matching `-C` here would deny every legitimate push.
+export function pushUsesInlineConfig(cmd) {
+  const text = String(cmd || "");
+  if (!isGitPush(text)) return false;
+  const prefix = text.match(GIT_PUSH_PREFIX_RE)?.[1] || "";
+  return /(?:^|\s)(?:-c(?:\s|=)|--config-env(?:\s|=))/.test(prefix);
+}
+
+// URL rewrites are the other way inline-free config can redirect a push:
+//   url.<CRX Manager URL>.pushInsteadOf = crx:
+// turns an innocuous-looking `git push crx: main` into a production push, and
+// the destination token alone ("crx:") classifies as unguarded. Accepts
+// `git config --get-regexp '^url\..*insteadof$'` output. Any rewrite whose BASE
+// is the app repo makes this checkout capable of reaching production under an
+// alias, so the gate applies. Fails CLOSED on unparseable input.
+export function rewritesReachGuardedApp(configOutput) {
+  const lines = String(configOutput ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return lines.some((line) => {
+    // `url.<base>.insteadof <alias>` — the base is everything between the
+    // leading `url.` and the trailing `.insteadof`/`.pushinsteadof` key part.
+    const key = line.split(/\s+/)[0] || "";
+    const match = key.match(/^url\.(.+)\.(?:push)?insteadof$/i);
+    if (!match) return true; // fail CLOSED: a line we cannot parse gates the push
+    return urlIsGuardedApp(match[1].replace(/\/+$/, ""));
+  });
 }
 
 // A push can also be risky by CONTENT even when no file's PATH matches the

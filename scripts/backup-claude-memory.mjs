@@ -138,6 +138,43 @@ function assertSafeDestination(outDir, source) {
   return { previous };
 }
 
+// Credential shapes that must never be snapshotted. Deliberately narrow: these
+// match the STRUCTURE of a real key, not the word "key", so an agent note that
+// merely discusses secrets does not fail the run. A false negative is possible;
+// this is a backstop under the human read, not a replacement for it.
+const SECRET_RES = [
+  [/-----BEGIN (?:RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/, "private key block"],
+  [/\bgh[pousr]_[A-Za-z0-9]{36,}\b/, "GitHub token"],
+  [/\bgithub_pat_[A-Za-z0-9_]{60,}\b/, "GitHub fine-grained PAT"],
+  [/\bsbp_[a-f0-9]{40,}\b/, "Supabase access token"],
+  [/\bsb_secret_[A-Za-z0-9_-]{20,}\b/, "Supabase secret key"],
+  [/\bAKIA[0-9A-Z]{16}\b/, "AWS access key id"],
+  [/\bsk-(?:ant-)?[A-Za-z0-9_-]{32,}\b/, "API secret key"],
+  [/\bxox[abposr]-[A-Za-z0-9-]{10,}\b/, "Slack token"],
+  // A service_role JWT is the single most dangerous string in this project: it
+  // bypasses every RLS policy. Match the JWT header shape, not the word.
+  [/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, "JWT (possible service_role key)"],
+  // Agent notes legitimately record connection-string SHAPES with the password
+  // written as a placeholder (`<pw>`, `${VAR}`, `…`). Those are documentation, not
+  // credentials, so the password segment must not start with a placeholder
+  // delimiter and must not contain one.
+  [/\bpostgres(?:ql)?:\/\/[^:\s]+:(?![<{$])[^@\s<>{}$]{6,}@/, "database URL with inline password"],
+];
+function scanForSecrets(source, names) {
+  const hits = [];
+  for (const name of names) {
+    const lines = readFileSync(path.join(source, name), "utf8").split(/\r?\n/);
+    lines.forEach((line, index) => {
+      for (const [re, label] of SECRET_RES) {
+        // Never echo the matched text — printing it would copy the credential
+        // into a terminal log, which is the thing this check exists to prevent.
+        if (re.test(line)) hits.push({ name, line: index + 1, label });
+      }
+    });
+  }
+  return hits;
+}
+
 function stage(outDir, sourceArg) {
   const source = sourceArg || discoverSource();
   if (!source) {
@@ -160,6 +197,24 @@ function stage(outDir, sourceArg) {
   }
   if (!names.includes(INDEX_FILE)) {
     console.error(`FAIL: source is missing ${INDEX_FILE} — that is not a memory dir: ${source}`);
+    return 1;
+  }
+
+  // Codex's 2026-07-30 review, second finding: the notes are copied verbatim into
+  // git history, and a private repo is access control, not content control — git
+  // history is permanent and readable to anyone who ever gets the repo. The notes
+  // are deliberately NOT encrypted (a cloud session has to be able to read them,
+  // which was the whole point), so the compensating control is that a credential
+  // must never enter the snapshot in the first place. This scan runs BEFORE any
+  // file is written and aborts the whole staging run, so nothing reaches a commit.
+  const secrets = scanForSecrets(source, names);
+  if (secrets.length > 0) {
+    console.error(
+      `FAIL: refusing to stage — ${secrets.length} possible secret(s) found in the memory notes.\n` +
+      secrets.slice(0, 10).map((hit) => `      ${hit.name}:${hit.line} — ${hit.label}`).join("\n") +
+      (secrets.length > 10 ? `\n      ... and ${secrets.length - 10} more` : "") +
+      `\n      Remove the credential from the note (and rotate it), then re-run. Nothing was written.`
+    );
     return 1;
   }
 

@@ -79,6 +79,37 @@ with a ghost commit carrying a real Phase 3C artifact, reachable only through a 
 `refs/remotes/origin/ghost` the server never had: the fixed scan fails and names the file, the
 old logic reported `PASS checked_commits=1` and missed it entirely.
 
+**1b. …and then Codex found the same hole a second way.** The round-2 review pointed out that the
+destination is resolved with *separate* `git` calls, which never inherit the push command's own
+inline configuration — so `git -c remote.origin.pushurl=<CRX Manager URL> push origin HEAD:main`
+routes the push to production while every lookup the guard makes faithfully describes the unrelated
+checkout. Replaying arbitrary overrides would mean reimplementing Git's config precedence inside a
+hook, so the form is denied outright instead: `git -C <repo> push` is inspectable and is the only
+form this repo's workflows use. The check is case-**sensitive**, because `-C` (directory) and `-c`
+(config) differ only in case and matching the wrong one would deny every legitimate push.
+
+Testing that turned up a worse sibling: `--config-env` was missing from the global-option list in
+`isGitPush`, so `git --config-env=remote.origin.pushurl=VAR push origin main` did not register as a
+push **at all** and skipped every check in the guard — force-push and delete-main included. It is now
+recognised, and denied. The third route, a configured URL rewrite
+(`url.<CRX Manager URL>.pushInsteadOf = crx:`, which turns `git push crx: main` into a production
+push behind an alias), is now checked as well: any rewrite whose base is the app repo makes the gate
+apply. Proven in the same throwaway repo — all three forms denied, the ordinary backup push still
+allowed, and removing the inline-config check lets the production push straight through while the
+plain URL bypass stays denied, which is what pins the denial on this specific check.
+
+**2b. The memory snapshot now refuses to stage a credential.** Codex also flagged (Medium) that the
+notes are copied verbatim into permanent Git history, and that a private repo is access control, not
+content control. Encryption was rejected deliberately — a cloud session has to be able to *read*
+these notes, which was the entire point of backing them up — so the compensating control is that a
+credential must never enter the snapshot at all. `scanForSecrets` runs before a single byte is
+written and aborts the run, matching credential *structure* (private-key blocks, GitHub/Supabase/AWS
+tokens, JWTs, inline database passwords) rather than the word "key", so notes that merely discuss
+secrets still stage. It never echoes the matched text — printing it would copy the credential into a
+terminal log. On its first run against the real 186-note memory directory it flagged exactly one
+line, which turned out to be a documented connection-string *shape* with a `<pw>` placeholder; the
+pattern was tightened to ignore placeholders and re-verified to still flag real passwords.
+
 **3. A mistyped backup destination could delete real documentation.** Staging *prunes* — it deletes
 top-level `.md` files the source no longer has — and it accepted any directory, so `--stage .` would
 have eaten this repo's docs. The destination is now accepted only when it is new, empty, or a

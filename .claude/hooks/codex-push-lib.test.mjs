@@ -20,6 +20,8 @@ import {
   urlIsGuardedApp,
   pushDestinationToken,
   destinationLooksLikeUrl,
+  pushUsesInlineConfig,
+  rewritesReachGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
 
@@ -200,6 +202,51 @@ assert.equal(destinationLooksLikeUrl("../sibling-repo"), true);
 assert.equal(destinationLooksLikeUrl("C:\\repos\\CRX_Manager_V1.0"), true);
 assert.equal(destinationLooksLikeUrl(""), false);
 assert.equal(destinationLooksLikeUrl(null), false);
+
+// 2026-07-30 (Codex pre-push review, round 2): inline config is a second bypass.
+// The guard resolves the destination with its OWN git calls, which never see a
+// `-c` override, so `-c remote.origin.pushurl=<app repo>` sends the push to
+// production while every lookup still describes the unrelated checkout.
+assert.equal(
+  pushUsesInlineConfig("git -c remote.origin.pushurl=git@github.com:masonwells1/CRX_Manager_V1.0.git push origin HEAD:main"),
+  true,
+);
+assert.equal(pushUsesInlineConfig("git -c http.sslVerify=false push origin main"), true);
+assert.equal(pushUsesInlineConfig("git --config-env=remote.origin.pushurl=VAR push origin main"), true);
+// `-C` (directory) differs from `-c` (config) only in case. Matching it would
+// deny every legitimate push this repo makes, so the check must stay case-sensitive.
+assert.equal(pushUsesInlineConfig("git -C /repo push origin main"), false, "-C is the directory flag, not config");
+assert.equal(pushUsesInlineConfig("git -C C:/CRX_Manager push -u origin feature"), false);
+assert.equal(pushUsesInlineConfig("git push origin main"), false);
+// A `-c` that is not part of a push command must not trip the check.
+assert.equal(pushUsesInlineConfig("git -c user.name=x commit -m nope"), false, "not a push");
+
+// A URL rewrite reaches production under an alias: `git push crx: main` looks
+// unguarded on its own, but resolves to the app repo.
+assert.equal(
+  rewritesReachGuardedApp("url.git@github.com:masonwells1/CRX_Manager_V1.0.git.pushinsteadof crx:"),
+  true,
+);
+assert.equal(
+  rewritesReachGuardedApp("url.https://github.com/masonwells1/CRX_Manager_V1.0.insteadof crx:"),
+  true,
+);
+assert.equal(
+  rewritesReachGuardedApp("url.git@github.com:masonwells1/CRX_Backups.git.pushinsteadof bk:"),
+  false,
+  "a rewrite pointing somewhere else is not this gate's business",
+);
+assert.equal(rewritesReachGuardedApp(""), false, "no rewrites configured is not a risk");
+assert.equal(rewritesReachGuardedApp(null), false);
+// One app-repo rewrite among several still gates.
+assert.equal(
+  rewritesReachGuardedApp(
+    "url.git@github.com:masonwells1/CRX_Backups.git.insteadof bk:\nurl.git@github.com:masonwells1/CRX_Manager_V1.0.git.pushinsteadof crx:",
+  ),
+  true,
+);
+// A malformed line yields an empty base, which fails CLOSED.
+assert.equal(rewritesReachGuardedApp("garbage"), true, "unparseable rewrite config gates");
 
 const base = "c".repeat(40);
 const codexProof = { codex_ran: true, verdict: "clean", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };
