@@ -49,7 +49,13 @@ export function isGitPush(cmd) {
 export function pushHiddenByShellComposition(cmd) {
   const text = String(cmd || "");
   if (isGitPush(text)) return false; // an ordinary push takes the normal path
-  const unwrapped = text.replace(/["']/g, "").replace(/[$`(){}]/g, " ");
+  const unwrapped = text
+    .replace(/`\r?\n/g, "")          // PowerShell line continuation
+    .replace(/`(?=[^\r\n])/g, "")    // PowerShell character escape: pu`sh
+    .replace(/\\\r?\n/g, "")         // POSIX shell line continuation
+    .replace(/\\(?=[^\r\n])/g, "")   // POSIX shell character escape: pu\sh
+    .replace(/["']/g, "")
+    .replace(/[$`(){}]/g, " ");
   return isGitPush(unwrapped);
 }
 
@@ -549,6 +555,7 @@ const EXECUTABLE_TRANSPORT_KEYS = [
   /^core\.gitproxy$/,
   /^remote\..+\.receivepack$/,
   /^remote\..+\.uploadpack$/,
+  /^remote\..+\.vcs$/,
   /^protocol\..+\.command$/,
   /^ssh\.variant$/,
 ];

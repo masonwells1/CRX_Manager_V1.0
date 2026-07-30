@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — push/backup guard round-23 transport bypasses closed
+
+Closed the final three HIGH findings from the independent review of the local push and agent-memory
+backup tooling. Shell-spliced spellings such as PowerShell ``git pu`sh`` and POSIX `git pu\sh` now
+enter the existing hidden-push denial path instead of skipping every force, destination, and proof
+check. The private-memory backup now accepts only explicit GitHub HTTPS/SSH push URLs, so a
+`file://github.com/...` filesystem path cannot masquerade as the approved off-site repository.
+Finally, `remote.<name>.vcs` joins the stored Git settings that are refused because they execute a
+remote-helper program rather than using the verified destination directly.
+
+Both helpers and their real hook/backup call sites have regression coverage. Each predicate and call
+site was mutation-tested to prove the suite fails when the protection is disconnected, and the
+actual hook plus a fresh private `CRX_Backups` clone were exercised on ordinary and denied paths.
+
 ## 2026-07-30 — two push guards were blocking pushes they had already cleared
 
 Backing up the agent memory ran into both of them, one after the other. Neither was catching a real

@@ -412,6 +412,18 @@ try {
       ok(!run.said.includes("relay://"), "without reprinting the URL");
       ok(!readdirSafe(landing), "and nothing is written");
     }
+    for (const [name, url] of [
+      ["file-scheme-repo", "file://github.com/masonwells1/CRX_Backups.git"],
+      ["http-scheme-repo", "http://github.com/masonwells1/CRX_Backups.git"],
+      ["git-scheme-repo", "git://github.com/masonwells1/CRX_Backups.git"],
+    ]) {
+      const repo = makeRepo(name, url, "");
+      const landing = path.join(repo, "claude-memory");
+      const run = captured(() => stage(landing, notes));
+      eq(run.value, 1, `${name}: a non-GitHub HTTPS/SSH backup transport is refused`);
+      ok(/explicit GitHub HTTPS or SSH URL/.test(run.said), `${name}: and the refusal names the required transport`);
+      ok(!readdirSafe(landing), `${name}: and nothing is written`);
+    }
     {
       const dest = path.join(backupRepo, "claude-memory-inherited-ssh");
       const previous = process.env.GIT_SSH_COMMAND;

@@ -390,13 +390,15 @@ assert.equal(
   const list = [
     "core.sshcommand=ssh -i /tmp/relay",
     "remote.backup.receivepack=/tmp/relay",
+    "remote.backup.vcs=relay",
     "remote.origin.url=git@github.com:masonwells1/CRX_Backups.git",
     "user.name=Mason",
   ].join("\n");
   const found = executableTransportSettings(list);
   assert.ok(found.includes("core.sshcommand"), "core.sshCommand is named");
   assert.ok(found.includes("remote.backup.receivepack"), "a stored receivepack is named");
-  assert.equal(found.length, 2, "and nothing innocent is swept up with them");
+  assert.ok(found.includes("remote.backup.vcs"), "a stored remote helper is named");
+  assert.equal(found.length, 3, "and nothing innocent is swept up with them");
 }
 assert.deepEqual(
   executableTransportSettings("user.name=Mason\nremote.origin.url=git@github.com:x/y.git"), [],
@@ -505,6 +507,22 @@ assert.equal(
 assert.equal(
   pushHiddenByShellComposition(`git p'us'h origin HEAD:main`), true,
   "including the single-quote spelling",
+);
+assert.equal(
+  pushHiddenByShellComposition("git pu`sh origin HEAD:main"), true,
+  "including a PowerShell backtick escape inside `push`",
+);
+assert.equal(
+  pushHiddenByShellComposition("git pu\\sh origin HEAD:main"), true,
+  "including a POSIX shell backslash escape inside `push`",
+);
+assert.equal(
+  pushHiddenByShellComposition("git pu\\\nsh origin HEAD:main"), true,
+  "including a POSIX shell line splice inside `push`",
+);
+assert.equal(
+  pushHiddenByShellComposition("git pu`\r\nsh origin HEAD:main"), true,
+  "including a PowerShell line splice inside `push`",
 );
 assert.equal(
   pushHiddenByShellComposition("$(git push origin HEAD:main)"), true,
@@ -1139,6 +1157,16 @@ assert.equal(pushDestinationToken("git push"), null);
       /quoting or command substitution/i,
       "and the backtick spelling of it",
     );
+    deniedBecause(
+      "git pu`sh origin HEAD:main",
+      /quoting or command substitution/i,
+      "and a PowerShell backtick escape cannot splice `push` past the hook",
+    );
+    deniedBecause(
+      "git pu\\sh origin HEAD:main",
+      /quoting or command substitution/i,
+      "and a POSIX shell backslash escape cannot splice `push` past the hook",
+    );
 
     // Round 18, end-to-end: git's remote-helper syntax hands delivery to an
     // arbitrary program, so `ext::…` names the production repo while every
@@ -1246,6 +1274,7 @@ assert.equal(pushDestinationToken("git push"), null);
     for (const [key, value] of [
       ["remote.origin.receivepack", "/tmp/relay"],
       ["core.sshCommand", "ssh -i /tmp/relay"],
+      ["remote.origin.vcs", "relay"],
     ]) {
       try {
         git(["config", key, value], work);

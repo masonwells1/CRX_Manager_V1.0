@@ -288,6 +288,18 @@ export function redactUrl(url) {
     .replace(/[?#].*$/, "");
 }
 
+// A local bare repository is a legitimate destination for the general push
+// guard, but never for the off-site memory backup. The backup must go directly
+// to GitHub over its ordinary HTTPS or SSH transports; accepting `file:`, `git:`
+// or plain HTTP here would let a URL that merely contains github.com canonicalize
+// as the private backup while actually naming a local path or weaker transport.
+export function backupUrlUsesApprovedGitHubTransport(url) {
+  const text = String(url ?? "").trim();
+  return /^https:\/\/github\.com\//i.test(text)
+    || /^ssh:\/\/git@github\.com\//i.test(text)
+    || /^git@github\.com:/i.test(text);
+}
+
 // `verb` only shapes the refusal wording. `--verify` runs this same check in the
 // snapshot's FINAL location, because that is the directory the runbook commits and
 // pushes from, and until round fifteen nothing checked it: the documented flow
@@ -436,6 +448,16 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
         `      itself, so git would hand the objects to a \`git-remote-<scheme>\` program that is\n` +
         `      free to ignore the address entirely. (The URL is not reproduced here.) Re-point the\n` +
         `      remote at a plain https:// or ssh:// GitHub URL and re-run. Nothing was written.`
+      );
+    }
+    const unapprovedBackupTransports = pushUrls.filter((url) => !backupUrlUsesApprovedGitHubTransport(url));
+    if (unapprovedBackupTransports.length > 0) {
+      return (
+        `FAIL: refusing to ${verb} — a push remote is not an explicit GitHub HTTPS or SSH URL.\n` +
+        `      (The URL is not reproduced here on purpose.) A local path, file:// URL, plain HTTP,\n` +
+        `      git:// URL, or transport alias is not a valid off-site backup destination. Re-point\n` +
+        `      every push remote at https://github.com/masonwells1/CRX_Backups.git or\n` +
+        `      git@github.com:masonwells1/CRX_Backups.git, then re-run. Nothing was written.`
       );
     }
     const inheritedTransport = environmentCarriesTransportOverride(process.env);
