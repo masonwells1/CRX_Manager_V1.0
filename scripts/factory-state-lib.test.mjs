@@ -319,8 +319,12 @@ function append(paths, type, jobId, payload = {}, options = {}) {
 {
   const fingerprintRepo = mkdtempSync(path.join(tmpdir(), "crx-factory-fingerprint-"));
   execFileSync("git", ["init"], { cwd: fingerprintRepo, stdio: "ignore" });
+  mkdirSync(path.join(fingerprintRepo, ".agents"), { recursive: true });
+  writeFileSync(path.join(fingerprintRepo, ".agents", "README.md"), "readme\n");
+  writeFileSync(path.join(fingerprintRepo, ".agents", "generated-manifest.json"), "{}\n");
+  writeFileSync(path.join(fingerprintRepo, "README.md"), "root readme\n");
   writeFileSync(path.join(fingerprintRepo, "source.txt"), "before\n");
-  execFileSync("git", ["add", "source.txt"], { cwd: fingerprintRepo, stdio: "ignore" });
+  execFileSync("git", ["add", "."], { cwd: fingerprintRepo, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-m", "init"], {
     cwd: fingerprintRepo,
     stdio: "ignore",

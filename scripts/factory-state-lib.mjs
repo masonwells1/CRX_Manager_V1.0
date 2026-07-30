@@ -488,7 +488,8 @@ export function repositoryContentFingerprint(cwd = process.cwd()) {
   const listed = git(
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
     repoRoot,
-  ).split("\0").filter(Boolean).filter((relative) => existsSync(path.join(repoRoot, relative))).sort();
+  ).split("\0").filter(Boolean).filter((relative) => existsSync(path.join(repoRoot, relative)))
+    .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
   if (listed.some((relative) => relative.includes("\n"))) {
     throw new Error("Repository fingerprint does not support newline characters in file names.");
   }
@@ -533,7 +534,7 @@ export function repositoryCommitFingerprint(cwd = process.cwd(), commitish = "HE
     const match = entry.match(/^(\d+)\s+(\w+)\s+([a-f0-9]+)\t([\s\S]+)$/);
     if (!match) throw new Error(`Could not parse Git tree entry for ${commitSha}.`);
     return { mode: match[1], type: match[2], objectId: match[3], relative: match[4] };
-  }).sort((left, right) => left.relative.localeCompare(right.relative));
+  }).sort((left, right) => Buffer.compare(Buffer.from(left.relative), Buffer.from(right.relative)));
   const hash = createHash("sha256");
   for (const entry of entries) {
     if (entry.type !== "blob") {
