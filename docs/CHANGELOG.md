@@ -136,6 +136,15 @@ expression may mention only the three permitted columns, one permitted function,
 used strictly as a qualifier before a dot. All six leak forms turn the guard red under mutation, and
 it returns green on restore.
 
+One review round corrected the sweep README rather than the detector. The new row had claimed this
+was the only data predicate and that everything else reads the catalog, which is false and unsafe to
+rely on: `fin-commission-split-sum` emits a customer farm name and raw commission-split JSON, and
+`fin-invoice-balance-identity` emits customer ids, invoice numbers, and cent amounts. An operator
+trusting that sentence could have pasted genuinely private output somewhere public. The README now
+splits the predicates into catalog and business-data groups, names all seven business-data ones
+(verified against their `FROM`/`JOIN` targets, not assumed), and says plainly that only
+`product-name-vs-return-policy` carries an enforced containment guard.
+
 Across every revision the live result is unchanged: 0 violations across 604 products, all 21
 `no_return` products matched, and all 21 still detected under the classification-stripped mutation.
 Landed via PR #286.
