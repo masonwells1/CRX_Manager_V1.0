@@ -1402,7 +1402,11 @@ export default function QuoteBuilder() {
         toast('error', 'Quote save completed without an ID. Refresh before making further changes.');
         return null;
       }
-      installAuthoritativeQuoteRowVersion(result.row_version, 'saved');
+      // The save committed, but conversion and other chained actions must not
+      // continue unless this tab can install the exact authoritative token.
+      if (!installAuthoritativeQuoteRowVersion(result.row_version, 'saved')) {
+        return null;
+      }
       // Advance the baseline snapshot ONLY when THIS tab saved its own split edit;
       // an untouched save keeps the old baseline (still shown in the editor) so a
       // later edit fail-closed-conflicts if another tab changed the split.
@@ -2382,6 +2386,9 @@ export default function QuoteBuilder() {
     // Save the quote first (sets status to 'accepted')
     const savedId = await saveQuote('accepted');
     if (!savedId) {
+      if (quoteVersionRecoveryRequiredRef.current) {
+        toast('error', 'The quote was saved, but the order was NOT created. Reload the quote, then try again.');
+      }
       setConverting(false);
       return;
     }

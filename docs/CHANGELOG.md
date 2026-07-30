@@ -46,6 +46,9 @@ mode survives recovery, so a post-migration tab cannot accept a tokenless reload
 Every email, including an already-sent Quote after a tab remount, now creates
 and confirms a version snapshot before sending the PDF. The version key is
 scoped to the signed-in user and Quote, so it cannot replay across Quotes. The
+Convert-to-Order chain also stops if its accepted-status save commits without
+an exact authoritative token; it cannot create an order while recovery is
+required. The
 rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
 planned-hold synchronization helper chain too.
 Verification passed
