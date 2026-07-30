@@ -226,6 +226,16 @@ function assertCanonicalContract() {
     .replace('SELECT status, commission_split, row_version\n      INTO v_old_status, v_old_commission_split, v_old_row_version', 'SELECT status, commission_split\n      INTO v_old_status, v_old_commission_split')
     .replace(extractQuoteRowVersionBlock(body), '')
     .replace(",\n    'row_version', (SELECT row_version FROM quotes WHERE id = v_quote_id)", '');
+  const stripQuoteOwnership = (body) => body
+    .replace('  v_cached_quote_id uuid;\n', '')
+    .replace(
+      /\n  -- Quote ownership gates run BEFORE the idempotency early-return\.[\s\S]*?\n  END IF;\n(?=\n  IF p_idempotency_key IS NOT NULL THEN)/,
+      '',
+    )
+    .replace(
+      /\n  IF p_idempotency_key IS NOT NULL THEN\n    v_existing := check_idempotency\(p_idempotency_key, 'save_quote'\);\n    IF v_existing IS NOT NULL THEN[\s\S]*?\n    END IF;\n  END IF;\n(?=\n  v_status :=)/,
+      "\n  IF p_idempotency_key IS NOT NULL THEN\n    v_existing := check_idempotency(p_idempotency_key, 'save_quote');\n    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;\n  END IF;\n",
+    );
   const stripCustomerToken = (body) => body
     .replace('  v_old_row_version bigint;\n', '')
     .replace('  v_expected_row_version bigint;\n', '')
@@ -234,7 +244,7 @@ function assertCanonicalContract() {
     .replace(",\n    'row_version', (SELECT row_version FROM customers WHERE id = v_customer_id)", '');
   const normalizeSqlLayout = (body) => body.replace(/\s+/g, ' ').trim();
   assert.equal(
-    normalizeSqlLayout(restoreVerifiedQuoteUpdateShape(restoreVerifiedValidationOrder(stripQuoteToken(currentQuote)))),
+    normalizeSqlLayout(restoreVerifiedQuoteUpdateShape(restoreVerifiedValidationOrder(stripQuoteOwnership(stripQuoteToken(currentQuote))))),
     normalizeSqlLayout(priorQuote),
     'save_quote changed outside the audited row-version delta',
   );
@@ -247,6 +257,8 @@ function assertCanonicalContract() {
   const customerVersion = current.indexOf('CUSTOMER_STALE_WRITE');
   assertQuoteValidationOrder(current);
   assert.ok(customerGuard >= 0 && customerGuard < customerVersion, 'customer split conflict must precede generic stale guard');
+
+  assertQuoteOwnershipContract(current);
 
   assert.match(
     currentQuote,
@@ -294,6 +306,28 @@ function assertCanonicalContract() {
   );
 }
 
+function assertQuoteOwnershipContract(source) {
+  const body = extractFunction(source, 'save_quote', 'save_customer');
+  const idempotencyLookup = body.indexOf("v_existing := check_idempotency(p_idempotency_key, 'save_quote');");
+  const directOwnerReject = body.indexOf("RAISE EXCEPTION 'NOT_QUOTE_OWNER';");
+  const replayOwnerReject = body.lastIndexOf("RAISE EXCEPTION 'NOT_QUOTE_OWNER';");
+  const replayReturn = body.indexOf('RETURN v_existing;', idempotencyLookup);
+  assert.ok(idempotencyLookup >= 0, 'save_quote idempotency lookup is missing');
+  assert.ok(directOwnerReject >= 0 && directOwnerReject < idempotencyLookup, 'quote target ownership must reject before idempotency lookup');
+  assert.ok(replayOwnerReject > idempotencyLookup && replayOwnerReject < replayReturn, 'cached quote ownership must reject before replay return');
+  assert.notEqual(directOwnerReject, replayOwnerReject, 'save_quote needs distinct direct-target and replay ownership gates');
+  assert.match(
+    body,
+    /p_quote_id IS NOT NULL[\s\S]*?WHERE id = p_quote_id\s+AND created_by = v_actor\s+FOR UPDATE[\s\S]*?RAISE EXCEPTION 'NOT_QUOTE_OWNER';/,
+    'sales-rep direct saves must lock and authorize quotes.created_by',
+  );
+  assert.match(
+    body,
+    /v_cached_quote_id := NULLIF\(v_existing->>'quote_id', ''\)::uuid;[\s\S]*?p_quote_id IS DISTINCT FROM v_cached_quote_id[\s\S]*?WHERE id = v_cached_quote_id\s+AND created_by = v_actor[\s\S]*?RAISE EXCEPTION 'NOT_QUOTE_OWNER';[\s\S]*?RETURN v_existing;/,
+    'idempotent replays must bind the cached quote target and re-check ownership',
+  );
+}
+
 function assertChildOwnershipContract() {
   const current = readFileSync(migration, 'utf8');
   const smoke = readFileSync(path.join(root, 'scripts/smoke/smoke-save-quote-customer-row-version.sql'), 'utf8');
@@ -307,6 +341,16 @@ function assertChildOwnershipContract() {
   }
   assert.match(smoke, /SET LOCAL ROLE authenticated;/, 'registered smoke must run direct-child probes as the normal app role');
   assert.match(smoke, /authenticated direct child DML succeeded/, 'registered smoke must reject every direct child DML verb');
+  assert.match(smoke, /non-owner sales rep quote save succeeded/, 'registered smoke must prove direct quote ownership');
+  assert.match(smoke, /non-owner sales rep received another actor''s quote replay/, 'registered smoke must prove replay ownership');
+
+  const ownershipBypass = current.replace('         AND created_by = v_actor\n       FOR UPDATE', '       FOR UPDATE');
+  assert.notEqual(ownershipBypass, current, 'failed to construct quote-ownership mutation');
+  assert.throws(
+    () => assertQuoteOwnershipContract(ownershipBypass),
+    /direct saves must lock and authorize quotes\.created_by/,
+    'ownership proof must reject a direct-target gate that omits created_by',
+  );
 
   const visit = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
@@ -383,7 +427,7 @@ INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.custom
     psql("INSERT INTO public.quotes(id,value) VALUES ('new','inserted'); INSERT INTO public.customers(id,value) VALUES ('new','inserted');");
     assert.equal(scalar("SELECT row_version FROM public.quotes WHERE id='new'"), '1');
     assert.equal(scalar("SELECT row_version FROM public.customers WHERE id='new'"), '1');
-    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=real insert_defaults=verified');
+    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order,quote_ownership quote_ownership=direct,replay quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=real insert_defaults=verified');
   } finally {
     docker(['rm', '-f', name], undefined, true);
   }

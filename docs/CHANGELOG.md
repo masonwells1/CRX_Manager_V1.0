@@ -28,7 +28,10 @@ post-migration proof, so row-version enforcement cannot mask its own
 partial draw rather than hand-advanced. The Customer rollback smoke also proves
 that a concurrent prepay-balance update invalidates an open whole-record editor
 without losing the committed money change, and the RLS contract matrix now
-records all three protected child tables as RPC-only. Verification passed
+records all three protected child tables as RPC-only. The elevated `save_quote`
+RPC now mirrors Quote ownership before mutation or idempotent replay, and its
+rollback proof rejects both non-owner paths without leaking or changing the
+target Quote. Verification passed
 4,045 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
 SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains

@@ -287,6 +287,50 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', v_rep::text, true);
   BEGIN PERFORM public.save_customer(v_customer, jsonb_build_object('farm_name', 'REP-MUST-NOT-OWN', 'row_version_expected', v_customer_after), '[]'::jsonb, v_rep, NULL); RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep customer save succeeded';
   EXCEPTION WHEN OTHERS THEN IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF; IF SQLERRM <> 'NOT_CUSTOMER_OWNER' THEN RAISE EXCEPTION 'SMOKE_FAIL: customer ownership gate %', SQLERRM; END IF; END;
+  BEGIN
+    PERFORM public.save_quote(
+      v_quote,
+      jsonb_build_object(
+        'quote_number', '[SMOKE] RVQ-' || v_suffix,
+        'customer_id', v_customer,
+        'status', 'sent',
+        'tier', 1,
+        'header_notes', 'REP-MUST-NOT-OWN',
+        'row_version_expected', v_quote_after),
+      v_sections,
+      v_rep,
+      'rv-quote-nonowner-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep quote save succeeded';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'NOT_QUOTE_OWNER' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: quote ownership gate %', v_error;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.save_quote(
+      NULL,
+      jsonb_build_object(
+        'quote_number', 'REPLAY-MUST-NOT-LEAK-' || v_suffix,
+        'customer_id', v_customer,
+        'status', 'draft',
+        'tier', 1),
+      '[]'::jsonb,
+      v_rep,
+      'rv-quote-create-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep received another actor''s quote replay';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'NOT_QUOTE_OWNER' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: quote replay ownership gate %', v_error;
+    END IF;
+  END;
+  IF (SELECT row_version FROM quotes WHERE id = v_quote) <> v_quote_after
+     OR (SELECT header_notes FROM quotes WHERE id = v_quote) <> 'fresh-sent-again' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected non-owner quote save/replay changed the quote';
+  END IF;
   PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_nonoffice, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_nonoffice::text, true);
   BEGIN PERFORM public.save_quote(v_quote, jsonb_build_object('status', 'sent', 'tier', 1, 'row_version_expected', v_quote_after), v_sections, v_nonoffice, NULL); RAISE EXCEPTION 'SMOKE_FAIL: non-office quote save succeeded';

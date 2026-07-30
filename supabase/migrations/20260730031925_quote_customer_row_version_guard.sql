@@ -108,6 +108,7 @@ DECLARE
     "sent": ["revised","accepted","declined","expired"],
     "revised": ["sent","accepted","declined","expired"]
   }'::jsonb;
+  v_cached_quote_id uuid;
   v_existing jsonb;
   v_result jsonb;
 BEGIN
@@ -125,9 +126,51 @@ BEGIN
     RAISE EXCEPTION 'Not authorized to save quotes';
   END IF;
 
+  -- Quote ownership gates run BEFORE the idempotency early-return. This
+  -- SECURITY DEFINER function must mirror quotes_update: admins may save any
+  -- quote, while a sales rep may save only a quote they created. Locking an
+  -- owned target here keeps that authorization stable through all later DML.
+  IF p_quote_id IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM profiles
+       WHERE id = v_actor AND role = 'admin' AND is_active = true
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM quotes
+       WHERE id = p_quote_id
+         AND created_by = v_actor
+       FOR UPDATE
+     ) THEN
+    RAISE EXCEPTION 'NOT_QUOTE_OWNER';
+  END IF;
+
   IF p_idempotency_key IS NOT NULL THEN
     v_existing := check_idempotency(p_idempotency_key, 'save_quote');
-    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
+    IF v_existing IS NOT NULL THEN
+      -- A create replay has no p_quote_id to authorize before the lookup, so
+      -- bind the cached result to its real target before releasing it. Existing
+      -- saves must also reject a key cached for a different quote.
+      v_cached_quote_id := NULLIF(v_existing->>'quote_id', '')::uuid;
+      IF v_cached_quote_id IS NULL THEN
+        RAISE EXCEPTION 'SAVE_QUOTE_RESULT_INVALID';
+      END IF;
+      IF p_quote_id IS NOT NULL
+         AND p_quote_id IS DISTINCT FROM v_cached_quote_id THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
+      END IF;
+      IF NOT EXISTS (
+           SELECT 1 FROM profiles
+           WHERE id = v_actor AND role = 'admin' AND is_active = true
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM quotes
+           WHERE id = v_cached_quote_id
+             AND created_by = v_actor
+         ) THEN
+        RAISE EXCEPTION 'NOT_QUOTE_OWNER';
+      END IF;
+      RETURN v_existing;
+    END IF;
   END IF;
 
   v_status := COALESCE(p_quote_payload->>'status', 'draft');
