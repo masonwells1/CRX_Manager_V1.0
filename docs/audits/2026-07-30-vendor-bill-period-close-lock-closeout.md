@@ -158,11 +158,20 @@ catalog comment.
 
 ## Disposable PostgreSQL 17 proof
 
-`node scripts/smoke/prove-vendor-bill-period-close-concurrency.mjs` restores
-the checked-in real schema baseline in a network-isolated Supabase PostgreSQL
-17 container. It uses disposable BEFORE INSERT/UPDATE proof barriers only after
-the actual RPC period checks, not replacement writer functions. The runner
-reproduces the baseline create-versus-close race, then proves candidate
+`npm run proof:vendor-bill-period-close` first runs the readiness helper's
+success/timeout unit test, then restores the checked-in real schema baseline in
+a network-isolated Supabase PostgreSQL 17 container. Before reproducing the old
+race, it replays in ledger order all 12 migrations that production had between
+the `20260727174805` baseline and this three-migration release. The proof then
+applies the three candidates in their exact live order, for 15 post-baseline
+migrations total. Markers
+`PRE_CANDIDATE_POST_BASELINE_REPLAY_PASS count=12` and
+`FULL_POST_BASELINE_REPLAY_PASS count=15` make those schema generations
+observable instead of silently testing a stale snapshot.
+
+The runner uses disposable BEFORE INSERT/UPDATE proof barriers only after the
+actual RPC period checks, not replacement writer functions. It reproduces the
+baseline create-versus-close race, then proves candidate
 create-writer-first and close-first schedules, update-writer-first and
 close-first schedules (including no idempotency/audit/activity side effects on
 the rejected update), and simultaneous opposite `Jan→Feb` / `Feb→Jan` updates
@@ -176,6 +185,12 @@ helper's ascending `ORDER BY` clause. Terminal markers include
 `CANDIDATE_UPDATE_CANONICAL_JAN_FIRST_PASS`,
 `CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS`, and
 `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
+
+The generated schema registry was refreshed from all six live-introspection
+queries after the migrations landed. Its high-water is now
+`20260730140808`; it records all three applied migration names and lists
+`accounting_periods_whole_calendar_month_check` as a loud, intentionally
+unparsed multi-column constraint for future hook and reviewer awareness.
 
 After applying the candidate in that disposable database, the runner also
 executes the existing Section 9 PO/AP, finance-charge month-dedup, and delivery

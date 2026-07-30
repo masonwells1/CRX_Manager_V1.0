@@ -43,6 +43,12 @@ overload retaining its owner, security mode, search path, two idempotency
 reads, month lock, and callable-role boundary. The security-integrity suite now
 guards `check_period_open` as an exact-empty-path, fully schema-qualified
 exception and separately pins `compute_season` to SECURITY INVOKER.
+The disposable PostgreSQL 17 proof now replays the 12 migrations between the
+trusted baseline and this release before reproducing the old race, then applies
+all three candidates in live order and completes the full concurrency matrix.
+Its owning npm command also runs the readiness helper unit test. The generated
+schema registry was refreshed from live introspection to high-water
+`20260730140808` and now records the whole-calendar-month constraint.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

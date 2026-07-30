@@ -5,7 +5,8 @@
  * writers call the real restored RPCs.
  */
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-vendor-period-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.141';
 const BASE = path.join(ROOT, 'supabase', 'baselines');
+const BASELINE_MANIFEST = JSON.parse(readFileSync(path.join(BASE, 'manifest.json'), 'utf8'));
 const MIGRATION_SUFFIX = '_vendor_bill_period_close_lock.sql';
 const IDEMPOTENCY_RECHECK_SUFFIX = '_close_accounting_period_idempotency_recheck.sql';
 const IMMUTABLE_DATE_MATH_SUFFIX = '_accounting_period_immutable_date_math.sql';
@@ -31,6 +33,12 @@ const immutableDateMathMatches = readdirSync(migrationDir)
   .filter((name) => /^\d{14}_/.test(name) && name.endsWith(IMMUTABLE_DATE_MATH_SUFFIX));
 assert.equal(immutableDateMathMatches.length, 1, `expected exactly one ${IMMUTABLE_DATE_MATH_SUFFIX} migration, found ${immutableDateMathMatches.join(', ') || 'none'}`);
 const IMMUTABLE_DATE_MATH_MIGRATION = path.join(migrationDir, immutableDateMathMatches[0]);
+const CANDIDATE_MIGRATIONS = [
+  MIGRATION,
+  IDEMPOTENCY_RECHECK_MIGRATION,
+  IMMUTABLE_DATE_MATH_MIGRATION,
+];
+const candidateMigrationPaths = new Set(CANDIDATE_MIGRATIONS.map((local) => path.resolve(local)));
 const SIBLING_SMOKES = [
   'smoke-section9-po-ap-high-remediation.sql',
   'smoke-finance-charge-month-dedup.sql',
@@ -97,6 +105,74 @@ function jsonResult(r, label) {
   return JSON.parse(line);
 }
 function applyFile(name) { return sql(`BEGIN;\n\\i /tmp/${name}\nCOMMIT;`); }
+function baselineArtifact(suffix) {
+  const hits = Object.keys(BASELINE_MANIFEST.artifacts ?? {}).filter((name) => name.endsWith(suffix));
+  assert.equal(hits.length, 1, `expected exactly one baseline artifact *${suffix}, found ${hits.join(', ') || 'none'}`);
+  const local = path.join(BASE, hits[0]);
+  assert.ok(existsSync(local), `baseline artifact is missing: ${local}`);
+  const actualSha = createHash('sha256').update(readFileSync(local)).digest('hex').toUpperCase();
+  assert.equal(
+    actualSha,
+    BASELINE_MANIFEST.artifacts[hits[0]].sha256,
+    `baseline artifact ${hits[0]} does not match its manifest SHA-256`,
+  );
+  return local;
+}
+function postBaselineMigrations() {
+  const script = path.join(ROOT, 'scripts', 'list-post-baseline-migrations.mjs');
+  assert.ok(existsSync(script), `post-baseline migration enumerator is missing: ${script}`);
+  const history = path.basename(baselineArtifact('_migration_history.sql'));
+  assert.equal(
+    history.slice(0, 14),
+    BASELINE_MANIFEST.migrations_high_water,
+    `baseline history ${history} does not match migrations_high_water ${BASELINE_MANIFEST.migrations_high_water}`,
+  );
+  const schemaArtifacts = Object.keys(BASELINE_MANIFEST.artifacts ?? {})
+    .filter((name) => name.endsWith('_public_schema.sql.br'));
+  assert.equal(schemaArtifacts.length, 1, `expected exactly one baseline schema artifact, found ${schemaArtifacts.join(', ') || 'none'}`);
+  assert.equal(
+    schemaArtifacts[0].slice(0, 14),
+    BASELINE_MANIFEST.migrations_high_water,
+    `baseline schema ${schemaArtifacts[0]} does not match migrations_high_water ${BASELINE_MANIFEST.migrations_high_water}`,
+  );
+  const result = spawnSync(process.execPath, [script], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  assert.equal(result.status, 0, `could not enumerate post-baseline migrations:\n${result.stderr || result.stdout}`);
+  return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((relative) => {
+    assert.match(relative, /^supabase\/migrations\/\d{14}_[^/]+\.sql$/, `unexpected post-baseline output: ${relative}`);
+    const local = path.join(ROOT, relative);
+    assert.ok(existsSync(local), `listed post-baseline migration is missing: ${relative}`);
+    return local;
+  });
+}
+const pendingMigrations = postBaselineMigrations();
+const candidateIndices = CANDIDATE_MIGRATIONS.map((local) =>
+  pendingMigrations.findIndex((pending) => path.resolve(pending) === path.resolve(local)));
+assert.ok(candidateIndices.every((index) => index >= 0), 'all three candidate migrations must be in the post-baseline replay');
+assert.deepEqual(
+  candidateIndices,
+  [candidateIndices[0], candidateIndices[0] + 1, candidateIndices[0] + 2],
+  'the three candidate migrations must be consecutive and in release order',
+);
+const preCandidateMigrations = pendingMigrations.slice(0, candidateIndices[0]);
+const postCandidateMigrations = pendingMigrations.slice(candidateIndices.at(-1) + 1);
+assert.ok(
+  [...preCandidateMigrations, ...postCandidateMigrations]
+    .every((local) => !candidateMigrationPaths.has(path.resolve(local))),
+  'candidate migration was classified into the surrounding replay',
+);
+function applyMigration(local, marker) {
+  const name = path.basename(local);
+  const remote = `${marker}_${name}`;
+  run(['cp', local, `${NAME}:/tmp/${remote}`]);
+  const ownsTransaction = /^[ \t]*BEGIN[ \t]*;/mi.test(readFileSync(local, 'utf8'));
+  if (ownsTransaction) sql(`\\i /tmp/${remote}`);
+  else applyFile(remote);
+  console.log(`POST_BASELINE_MIGRATION_APPLIED ${name}${ownsTransaction ? ' (self-transacted)' : ''}`);
+}
 
 try {
   run(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
@@ -110,16 +186,15 @@ try {
   }
   assert.ok(ok, 'PostgreSQL 17 did not start');
   adminSql('CREATE SCHEMA IF NOT EXISTS auth; CREATE TABLE IF NOT EXISTS auth.users(id uuid PRIMARY KEY);');
-  run(['cp', path.join(BASE, '20260727174805_extensions.sql'), `${NAME}:/tmp/extensions.sql`]);
-  run(['cp', path.join(BASE, '20260727174805_acl_lockdown.sql'), `${NAME}:/tmp/acl.sql`]);
-  run(['cp', path.join(BASE, '20260727174805_platform_overlay.sql'), `${NAME}:/tmp/overlay.sql`]);
-  run(['cp', path.join(BASE, '20260727174805_cron_jobs.sql'), `${NAME}:/tmp/cron.sql`]);
-  run(['cp', path.join(BASE, '20260727174805_migration_history.sql'), `${NAME}:/tmp/history.sql`]);
+  run(['cp', baselineArtifact('_extensions.sql'), `${NAME}:/tmp/extensions.sql`]);
+  run(['cp', baselineArtifact('_acl_lockdown.sql'), `${NAME}:/tmp/acl.sql`]);
   applyFile('extensions.sql');
   const decoded = spawnSync('node', ['scripts/decompress-schema-baseline.mjs'], { cwd: ROOT, maxBuffer: 60 * 1024 * 1024 });
   assert.equal(decoded.status, 0, decoded.stderr?.toString());
   run(psqlArgs(), { input: decoded.stdout });
   applyFile('acl.sql');
+  for (const local of preCandidateMigrations) applyMigration(local, 'pre_candidate');
+  console.log(`PRE_CANDIDATE_POST_BASELINE_REPLAY_PASS count=${preCandidateMigrations.length} baseline_high_water=${BASELINE_MANIFEST.migrations_high_water}`);
   // The concurrency contract is entirely in public/auth. The storage platform
   // overlay is intentionally not needed by these RPC paths on a networkless
   // disposable PostgreSQL image.
@@ -145,9 +220,9 @@ try {
   console.log('BASELINE_CREATE_CLOSE_RACE_REPRODUCED');
 
   sql(`DELETE FROM public.vendor_bills WHERE bill_number='proof-baseline-create'; DELETE FROM public.accounting_periods WHERE period_start='2025-01-01'; DROP TRIGGER proof_pause_bill ON public.vendor_bills; DROP FUNCTION public._proof_pause_bill();`);
-  run(['cp', MIGRATION, `${NAME}:/tmp/candidate.sql`]); console.log(applyFile('candidate.sql').stdout);
-  run(['cp', IDEMPOTENCY_RECHECK_MIGRATION, `${NAME}:/tmp/idempotency-recheck.sql`]); console.log(applyFile('idempotency-recheck.sql').stdout);
-  run(['cp', IMMUTABLE_DATE_MATH_MIGRATION, `${NAME}:/tmp/immutable-date-math.sql`]); console.log(applyFile('immutable-date-math.sql').stdout);
+  for (const local of CANDIDATE_MIGRATIONS) applyMigration(local, 'candidate');
+  for (const local of postCandidateMigrations) applyMigration(local, 'post_candidate');
+  console.log(`FULL_POST_BASELINE_REPLAY_PASS count=${pendingMigrations.length} baseline_high_water=${BASELINE_MANIFEST.migrations_high_water}`);
   // The candidate must be visibly present before the registered business chains
   // and two-session schedules run.
   assert.equal(scalar(`SELECT count(*) FROM pg_constraint WHERE conrelid='public.accounting_periods'::regclass AND conname='accounting_periods_whole_calendar_month_check'`), '1');
