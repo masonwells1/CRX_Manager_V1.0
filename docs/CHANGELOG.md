@@ -19,10 +19,14 @@ still does not require an existing vendor-bill completeness gate, direct
 authenticated-admin accounting-period writes remain an explicit boundary, and
 the broader non-vendor-bill writer race remains separate work.
 
-Follow-up candidate `20260730121951_close_accounting_period_idempotency_recheck`
-is intentionally **parked, not live**. It adds a post-month-lock same-key replay
-check to `close_accounting_period`; its deterministic PostgreSQL 17 proof uses
-database-observed lock readiness and passes concurrent same-key replay.
+Follow-up migration `20260730124308_close_accounting_period_idempotency_recheck`
+is now live (submitted as `20260730121951`, then B7-renamed to the server
+ledger version). It adds a post-month-lock same-key replay check to
+`close_accounting_period`; live catalog proof confirmed the exact single
+overload, owner/security/search-path/ACL shape and two idempotency reads, while
+the registered fixed-date delivery smoke reached expected `SMOKE_PASS_ROLLBACK`.
+The independently run post-follow-up all-20 invariant sweep is CLEAN: 7 raw/7
+allowlisted/0 new rows across the same 5 predicates.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

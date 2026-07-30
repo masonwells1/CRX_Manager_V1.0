@@ -103,10 +103,11 @@ APPLIED LIVE while preserving the first purpose comment, and its history/manual
 references record the same server-assigned version. The proof runner and source
 regression discover the unique stable suffix rather than embedding a timestamp.
 
-## Forward same-key replay candidate — not applied
+## Follow-up same-key replay — applied live
 
-`20260730121951_close_accounting_period_idempotency_recheck.sql` is a governed
-parked candidate, not a live change. It faithfully re-emits the live
+`20260730124308_close_accounting_period_idempotency_recheck.sql` is the B7
+renamed disk record of the live server-assigned ledger version `20260730124308`
+(submitted as `20260730121951_close_accounting_period_idempotency_recheck`). It faithfully re-emits the live
 `close_accounting_period` body with one addition: after the exclusive month
 advisory lock, it checks the same idempotency key again before the
 already-closed refusal. Its postflight asserts the one `jsonb` overload,
@@ -114,8 +115,19 @@ already-closed refusal. Its postflight asserts the one `jsonb` overload,
 execute path, and exact callable-role boundary. The disposable PostgreSQL 17
 proof now runs two same-key closes and proves identical JSON replay with one
 period row and one idempotency row. It observes PostgreSQL lock readiness for
-every schedule rather than using a 500 ms child-liveness guess. This candidate
-has not been applied, pushed, or deployed.
+every schedule rather than using a 500 ms child-liveness guess. Live postflight
+confirmed exactly one `close_accounting_period(date,uuid,text)` owned by
+`postgres`, SECURITY DEFINER with `search_path=public, pg_temp`, with only
+postgres/authenticated/service_role in its ACL (`anon=false`,
+`authenticated=true`, `service_role=true`) and exactly two idempotency reads,
+including the post-month-lock recheck. The registered fixed-date delivery
+rollback smoke returned expected `ERROR P0001 SMOKE_PASS_ROLLBACK` after apply.
+The independently executed post-follow-up all-20 invariant sweep is CLEAN:
+7 raw rows, all 7 approved allowlist rows, and 0 new/non-allowlisted findings
+across the same five predicates—actor-forgery (1), anon-exec-secdef (1),
+auth-bound-role-ungated (1), status-literals (3), and
+ungated-secdef-mutators (1). Ledger version `20260730124308` was independently
+confirmed exactly once.
 
 ## Disposable PostgreSQL 17 proof
 

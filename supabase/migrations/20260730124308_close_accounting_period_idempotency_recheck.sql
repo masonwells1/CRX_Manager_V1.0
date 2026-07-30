@@ -1,6 +1,6 @@
 -- Close-accounting-period same-key replay after month serialization.
--- PARKED / DO NOT APPLY without Mason's explicit current-conversation approval
--- and fresh exact-SHA migration review plus live preflight.
+-- APPLIED LIVE 2026-07-30 as Supabase ledger version 20260730124308
+-- (submitted as 20260730121951_close_accounting_period_idempotency_recheck).
 --
 -- Re-emits the live 20260730114102 function byte-for-byte except for the
 -- second idempotency lookup immediately after its exclusive month lock. A

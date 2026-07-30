@@ -15,7 +15,7 @@ const migration = readFileSync(join(migrationDir, migrationMatches[0]), 'utf8').
 const source = (...parts: string[]) => readFileSync(join(root, ...parts), 'utf8')
   .replace(/\r\n/g, '\n');
 const idempotencyRecheckMigration = source(
-  'supabase', 'migrations', '20260730121951_close_accounting_period_idempotency_recheck.sql',
+  'supabase', 'migrations', '20260730124308_close_accounting_period_idempotency_recheck.sql',
 );
 const smokeSpecs = JSON.parse(source('scripts', 'smoke', 'smoke-specs.json')) as {
   specs: Record<string, { chain: string; covers: string[] }>;
@@ -62,8 +62,8 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(lock).toBeLessThan(close.indexOf('INSERT INTO public.accounting_periods'));
   });
 
-  it('parks a forward same-key replay repair immediately after the exclusive month lock', () => {
-    expect(idempotencyRecheckMigration).toContain('PARKED / DO NOT APPLY');
+  it('keeps the applied same-key replay repair immediately after the exclusive month lock', () => {
+    expect(idempotencyRecheckMigration).toContain('APPLIED LIVE 2026-07-30 as Supabase ledger version 20260730124308');
     const close = recheckBody();
     const firstCheck = close.indexOf("check_idempotency(p_idempotency_key, 'close_accounting_period')");
     const lock = close.indexOf('_lock_accounting_months(ARRAY[v_period_start], true)');

@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-30** (post-apply B7 closeout: Supabase ledger row `20260730114102_vendor_bill_period_close_lock` is live. Targeted catalog, ACL, and whole-month-constraint verification passed; the Section 9 rollback-only business chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; all 20 standing invariant predicates had 0 non-allowlisted rows; and the local B8 same-key replay candidate remains parked. Earlier resolved and deferred claims below remain unchanged.)
+**Last verified: 2026-07-30** (post-apply B7 closeout: Supabase ledger rows `20260730114102_vendor_bill_period_close_lock` and `20260730124308_close_accounting_period_idempotency_recheck` are live. Targeted catalog/ACL/constraint proof passed; the fixed-date delivery rollback-only chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; the independent post-follow-up all-20 sweep is CLEAN with 7 raw/7 allowlisted/0 new rows across 5 predicates. Earlier resolved and deferred claims below remain unchanged.)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -49,16 +49,24 @@ predicates: actor-forgery (1), anon-exec-secdef (1), auth-bound-role-ungated
 (1), status-literals (3), and ungated-secdef-mutators /
 `log_failed_notification(...)` (1).
 
-**Forward candidate — NOT APPLIED.**
-`20260730121951_close_accounting_period_idempotency_recheck.sql` re-emits only
+**Follow-up applied live.**
+`20260730124308_close_accounting_period_idempotency_recheck.sql` is the B7
+renamed disk record of server ledger version `20260730124308` (submitted as
+`20260730121951_close_accounting_period_idempotency_recheck`). It re-emits only
 `close_accounting_period` with a second same-key idempotency replay check
 immediately after its exclusive month lock and before the already-closed
 refusal. It preserves the live signature, `postgres` owner, SECURITY DEFINER
 mode, `search_path=public, pg_temp`, helper execute path, and explicit
 authenticated/service-role-only ACL. The deterministic disposable PostgreSQL 17
 proof observes real lock readiness for every schedule and proves concurrent
-same-key callers return one identical committed result. This file is parked for
-fresh exact-SHA review and Mason approval; it has not been applied or deployed.
+same-key callers return one identical committed result. Post-apply live catalog
+proof confirmed exactly one matching overload, the asserted owner/security/path
+and ACL shape, and exactly two `check_idempotency` occurrences with the second
+after the month lock. The registered fixed-date delivery smoke returned expected
+`ERROR P0001 SMOKE_PASS_ROLLBACK`. The independent post-follow-up all-20
+invariant sweep is CLEAN: 7 raw rows, all 7 allowlisted, and 0 new findings
+across actor-forgery (1), anon-exec-secdef (1), auth-bound-role-ungated (1),
+status-literals (3), and ungated-secdef-mutators (1).
 
 **Vendor-bill candidate ACL preservation (local 2026-07-30).** The period-close
 candidate re-emits four SECURITY DEFINER public RPCs, so it now explicitly denies
@@ -707,7 +715,7 @@ Branch `claude/nervous-dubinsky-39a725` (worktree `.claude/worktrees/stoic-heyro
 | File | Purpose | Why parked | What unblocks it |
 |---|---|---|---|
 | ~~`supabase/migrations/20260730114102_vendor_bill_period_close_lock.sql`~~ (submitted `20260729231031_...`, B7-renamed to the server version) | Serializes governed vendor-bill create/update with accounting-period close using month locks | **APPLIED LIVE 2026-07-30** as Supabase ledger version `20260730114102` — no longer parked. Targeted catalog/ACL/constraint verification, the registered Section 9 rollback-only chain (`ERROR P0001 SMOKE_PASS_ROLLBACK`), and all 20 predicates with 0 non-allowlisted rows passed; raw approved output was 7 rows across 5 predicates. | Done. Residual boundaries remain explicit in §0f: direct authenticated-admin `accounting_periods` writes, no existing-vendor-bill close-completeness gate, and the wider pre-existing non-vendor-bill writer race. |
-| `supabase/migrations/20260730121951_close_accounting_period_idempotency_recheck.sql` | Same-key close replay after the exclusive month lock | **PARKED — NOT APPLIED.** Re-emits only `close_accounting_period` with a second `check_idempotency` immediately after `_lock_accounting_months(..., true)`, preserving live owner/signature/search path/ACL postflight. Deterministic PG17 proof passes concurrent same-key replay. | Needs fresh exact-SHA review and Mason approval before any live apply. |
+| ~~`supabase/migrations/20260730124308_close_accounting_period_idempotency_recheck.sql`~~ (submitted `20260730121951_...`, B7-renamed to the server version) | Same-key close replay after the exclusive month lock | **APPLIED LIVE 2026-07-30** as Supabase ledger version `20260730124308` — no longer parked. Exact overload/owner/SECURITY DEFINER/search-path/ACL proof passed; two idempotency reads including the post-lock recheck were observed; fixed-date delivery rollback smoke returned `ERROR P0001 SMOKE_PASS_ROLLBACK`. | Done. Independent post-follow-up all-20 sweep CLEAN: 7 raw/7 allowlisted/0 new rows across 5 predicates. |
 | ~~`supabase/migrations/20260726201208_void_vendor_payment_vendor_liveness.sql`~~ (submitted `20260726210000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-26** (server version `20260726201208`) — no longer parked. Section 9 follow-up MEDIUM-1: `void_vendor_payment` now locks the vendor row (`deleted_at IS NULL … FOR UPDATE`) so it serializes with `delete_vendor`; a void against a soft-deleted vendor raises `VENDOR_DELETED`. Gate passed (both charters CLEAN) + Mason's in-chat approval; post-apply live body md5 matches disk exactly. | — | Done. Residual RESOLVED 2026-07-26: Mason approved the Deactivate/Reactivate reframe — `reactivate_vendor` RPC **APPLIED LIVE** (gate CLEAN, submitted `20260726213000`, server version `20260726212043`) + Vendors-page Show Inactive view and Reactivate button, giving `VENDOR_DELETED` a one-click remedy; the PR #236 review then caught (and 2026-07-26 same-day fix `20260726215154_vendors_inactive_admin_select` resolved, gate CLEAN + applied live) an RLS gap that hid inactive vendors from the new view. |
 | ~~`supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`~~ (submitted `20260722190000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-22** (server version `20260722202622`) — no longer parked. `save_quote`/`save_customer` reject a split overwrite when the client's `*_expected` snapshot no longer matches the stored value, echo the stored (trigger-enriched) split back, and canonicalize `save_quote`'s actor exception to `ACTOR_MISMATCH`. Proven live on both RPCs (conflict/rejection/matching-expected/omitted-key/actor-mismatch). | — | Done. |
 | `docs/audits/nightly-debug/parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md` | Release prebooked inventory when a scheduled quick-delivery is cancelled | — | **RESOLVED, applied live 2026-06-16** (`20260616151122_cancel_delivery_release_prebook_on_quick_cancel`). File header already says so — stale-looking filename, not a stale fix. |
