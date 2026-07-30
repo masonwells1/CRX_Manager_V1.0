@@ -69,10 +69,46 @@ if(schemaHits.length!==1) throw new Error(`expected exactly one *_public_schema.
 const schemaArtifact=schemaHits[0];
 const baselineDumpSha=manifest.artifacts[schemaArtifact].decoded_sha256;
 if(!baselineDumpSha) throw new Error(`manifest.json entry ${schemaArtifact} has no decoded_sha256 to bind the dump against`);
+// The replay below asks the baseline tooling which migrations post-date
+// `migrations_high_water`, then trusts that answer to mean "everything the dump
+// is missing". That only holds while the high-water names the same generation as
+// the dump artifact. Bumping the high-water on its own -- without regenerating
+// the dump -- would empty the pending list, and the proof would quietly go back
+// to certifying the older schema while still printing a replay marker. These two
+// fields are the join between the artifact and the ledger, so assert they agree
+// rather than assuming the tooling always writes them together.
+const schemaArtifactGeneration=schemaArtifact.slice(0,14);
+if(schemaArtifactGeneration!==manifest.migrations_high_water) throw new Error(`baseline manifest is internally inconsistent: schema artifact ${schemaArtifact} is generation ${schemaArtifactGeneration} but migrations_high_water is ${manifest.migrations_high_water}. The post-baseline replay cannot determine what the dump is missing; regenerate supabase/baselines so both agree.`);
 const dumpSha=sha256(path.resolve(dump));
 if(dumpSha!==baselineDumpSha) throw new Error(`refusing to prove against an unbound schema dump: ${path.resolve(dump)} hashes to ${dumpSha}, but this baseline generation (${schemaArtifact}) requires ${baselineDumpSha}. Produce the accepted dump with \`node scripts/decompress-schema-baseline.mjs > public-schema.sql\`.`);
 const files={ extensions:resolveBaseline('_extensions.sql'), aclLockdown:resolveBaseline('_acl_lockdown.sql'), dump:path.resolve(dump), section9:resolveMigration('_section9_po_ap_high_remediation.sql'), stageA:resolveMigration('_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
 for(const [k,v] of Object.entries(files)) if(!existsSync(v)) throw new Error(`missing ${k}: ${v}`);
+// The baseline is a point-in-time snapshot, so every migration that landed after
+// its high-water is absent from the restored schema. Proving Phase 3 against that
+// older shape is a real hole and not a theoretical one: every marker below would
+// print identically while the schema being inspected sat behind production, so a
+// regression introduced by a later migration would pass here. Replay the pending
+// set instead, in ledger order, delegating "what is missing from the baseline" to
+// the same script the schema-baseline tooling already uses -- a second copy of
+// that rule here would be free to drift from the one that governs the baseline.
+// Shelled out rather than imported because the module prints the list from its
+// own top-level body, which would otherwise land in this proof's stdout.
+function postBaselineMigrations(){
+  const script=path.join(ROOT,'scripts/list-post-baseline-migrations.mjs');
+  if(!existsSync(script)) throw new Error(`missing post-baseline migration enumerator: ${script}`);
+  const r=spawnSync(process.execPath,[script],{cwd:ROOT,encoding:'utf8',maxBuffer:8*1024*1024});
+  if(r.error||r.status!==0) throw new Error(`could not enumerate post-baseline migrations: ${r.error?.message||''}\n${r.stderr||r.stdout}`);
+  return r.stdout.split(/\r?\n/).map(l=>l.trim()).filter(Boolean).map(rel=>{
+    // Validate the shape rather than trusting stdout: a future change to that
+    // script that prints a summary line must fail loudly here, not get copied
+    // into the container as a migration and applied.
+    if(!/^supabase\/migrations\/\d{14}_[^/]+\.sql$/.test(rel)) throw new Error(`unexpected line from list-post-baseline-migrations.mjs, not a migration path: ${rel}`);
+    const local=path.join(ROOT,rel);
+    if(!existsSync(local)) throw new Error(`post-baseline migration is listed but missing on disk: ${rel}`);
+    return local;
+  });
+}
+const pendingMigrations=postBaselineMigrations();
 function run(args,o={}){const r=spawnSync('docker',args,{cwd:ROOT,encoding:'utf8',input:o.input,maxBuffer:50*1024*1024});if(r.error||(!o.fail&&r.status!==0))throw new Error(`${r.error?.message||''}\n${r.stderr||r.stdout}`);return r}
 function psqlArgs(){return ['exec','-i',NAME,'psql','-U','postgres','-d','postgres','-X','-q','-A','-t','-v','ON_ERROR_STOP=1']}
 function sql(s,o={}){return run(psqlArgs(),{input:s,fail:o.fail})}
@@ -124,6 +160,27 @@ try {
   // not contain, and it cannot mask drift in a schema it did not come from.
   sql('\\i /tmp/aclLockdown.sql');
   console.log('PHASE3_BASELINE_ACL_LOCKDOWN_APPLIED');
+  // Bring the restored snapshot up to the migration set production actually has.
+  // Ordered after the ACL artifact because that is the order production saw: the
+  // lockdown belongs to the baseline generation, and each of these migrations
+  // issues its own REVOKEs afterwards. Non-idempotent statements are safe -- this
+  // is a fresh restore and each file is applied exactly once, as on production.
+  // Every migration's own terminal verification block runs as part of the replay,
+  // so a migration whose postflight assertions no longer hold on this schema
+  // fails here instead of being skipped.
+  for(const local of pendingMigrations){
+    const name=path.basename(local);
+    // A migration that opens its own transaction must not be wrapped in a second
+    // one: the inner COMMIT would end the outer transaction early and silently
+    // drop the rest of the file into autocommit. `BEGIN;` with a semicolon at the
+    // start of a line is the discriminator -- PL/pgSQL block openers inside a
+    // function body are a bare `BEGIN` with no semicolon, so they do not match.
+    const ownsTransaction=/^[ \t]*BEGIN[ \t]*;/mi.test(readFileSync(local,'utf8'));
+    file(local,`pending_${name}`);
+    if(ownsTransaction) sql(`\\i /tmp/pending_${name}`); else apply(`pending_${name}`);
+    console.log(`PHASE3_POST_BASELINE_MIGRATION_APPLIED ${name}${ownsTransaction?' (self-transacted)':''}`);
+  }
+  console.log(`PHASE3_POST_BASELINE_REPLAY_PASS count=${pendingMigrations.length} baseline_high_water=${manifest.migrations_high_water}`);
   // Both migrations arrive inside the dump, so neither one's postflight security
   // assertions have run in this container. The probes above only establish that
   // one table and one trigger name exist; they say nothing about SECURITY
