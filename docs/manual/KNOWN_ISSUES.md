@@ -63,10 +63,12 @@ observed if contention occurs.
 readers previously opened only migration-history `LOCAL CANDIDATE / NOT APPLIED` files,
 so a forward SQL file with an explicit leading parked header but no history row could
 produce a false clean zero. They now prefilter the immutable `origin/main` tree for
-forward SQL containing `PARKED`, inspect those possible headers, and report `PARKED
-STATE UNKNOWN` unless each header has the required candidate signal or an exact
-applied/retired/superseded history state. If the prefilter is unavailable, they fall
-back to a complete forward scan rather than claim the backlog is clear.
+all parser-accepted header phrases (`PARKED`, `NOT APPLIED`, and `DO NOT APPLY`), inspect
+those possible headers, and report `PARKED STATE UNKNOWN` unless each header has the
+required candidate signal or an exact applied/retired/superseded history state. Git's
+exit `1` means the healthy case of no prefilter matches and preserves a known empty set;
+only a real prefilter error falls back to a complete forward scan rather than claiming
+the backlog is clear.
 
 **Explicit scope residual.** This candidate guarantees only
 `create_vendor_bill` and `update_vendor_bill` date writes. `record_vendor_payment`,

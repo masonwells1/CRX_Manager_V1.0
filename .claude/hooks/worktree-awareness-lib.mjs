@@ -96,6 +96,33 @@ export function hasExplicitParkedMigrationHeader(sqlText) {
   return header.some((line) => /^(?:status:\s*)?(?:PARKED(?:\s+DRAFT)?(?:\s*$|\s*(?:\/|—|:|-)\s*(?:NOT\s+APPLIED|DO\s+NOT\s+APPLY)\b)|NOT\s+APPLIED(?=\s*$|\s*(?:\/|—|:|-)\s*DO\s+NOT\s+APPLY\b)|DO\s+NOT\s+APPLY(?=\s*$|\s*[—:-]))/i.test(line));
 }
 
+// Every parser-accepted explicit status header contains at least one of these
+// phrases. `git grep` is only a cheap complete prefilter: the SQL blob is still
+// opened and passed through hasExplicitParkedMigrationHeader before it counts.
+export const ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS = [
+  "grep", "-l", "-i",
+  "-e", "PARKED",
+  "-e", "NOT APPLIED",
+  "-e", "DO NOT APPLY",
+  "origin/main", "--", "supabase/migrations",
+];
+
+// `git grep` uses exit code 1 for the healthy case where no file matched. Both
+// runtime consumers share this wrapper so only a real error/timeout falls back
+// to a complete forward scan.
+export function originMainParkedMigrationPrefilter(runGrep) {
+  try {
+    const output = String(runGrep() || "");
+    return {
+      state: "known",
+      paths: output.split("\n").filter(Boolean).map((p) => p.replace(/^origin\/main:/i, "")),
+    };
+  } catch (error) {
+    if (Number(error?.status) === 1) return { state: "known", paths: [] };
+    return { state: "unknown", paths: null };
+  }
+}
+
 // Repo-relative path, normalized for comparison (forward slashes, no leading "./",
 // lowercased — Windows paths are case-insensitive and git reports forward slashes).
 export function normRepoPath(p) {
@@ -307,8 +334,8 @@ export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () =>
   }
 
   // `null` is the conservative unit-test/fallback mode: inspect every forward
-  // migration. Production passes a complete origin/main `git grep -il PARKED`
-  // result, which is sufficient because every explicit status header contains PARKED.
+  // migration. Production passes the complete shared origin/main grep prefilter,
+  // which covers every explicit status form accepted by the parser.
   const headerProbePaths = possibleParkedMigrationPaths === null ? mainlinePaths : possibleParkedMigrationPaths;
   const seenProbePaths = new Set();
   for (const raw of headerProbePaths || []) {

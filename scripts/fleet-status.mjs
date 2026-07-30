@@ -24,6 +24,7 @@ import {
   lastNonEmptyLine, firstCommentLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom,
+  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
 
 // The repo root this script lives in (works no matter what cwd it's launched from).
@@ -269,20 +270,16 @@ if (hasOriginMain) {
   try {
     const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()], repoRoot, 5000);
     const history = git(["show", "origin/main:docs/reference/migration-history.md"], repoRoot, 5000);
-    let possibleParkedMigrationPaths = null;
-    try {
-      possibleParkedMigrationPaths = git(["grep", "-l", "-i", "PARKED", "origin/main", "--", "supabase/migrations"], repoRoot, 5000)
-        .split("\n")
-        .filter(Boolean)
-        .map((p) => p.replace(/^origin\/main:/i, ""));
-    } catch { /* null falls back to a complete conservative forward scan */ }
+    const parkedPrefilter = originMainParkedMigrationPrefilter(
+      () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, repoRoot, 5000),
+    );
     const discovery = parkedMainlineDiscoveryFrom(tree.split("\n"), history, (p) => {
       try {
         const text = git(["show", `origin/main:${p}`], repoRoot, 5000);
         mainlineBlobCache.set(normRepoPath(p), text);
         return text;
       } catch { return null; }
-    }, possibleParkedMigrationPaths);
+    }, parkedPrefilter.paths);
     mainlineParkedState = discovery.state;
     mainlineParkedReason = discovery.reason;
     for (const p of discovery.paths) {

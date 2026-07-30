@@ -19,6 +19,7 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile, fleetSummaryLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom,
+  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -148,16 +149,12 @@ function mainlineParkedDiscovery() {
   try {
     const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
     const history = git(["show", "origin/main:docs/reference/migration-history.md"]);
-    let possibleParkedMigrationPaths = null;
-    try {
-      possibleParkedMigrationPaths = git(["grep", "-l", "-i", "PARKED", "origin/main", "--", "supabase/migrations"])
-        .split("\n")
-        .filter(Boolean)
-        .map((p) => p.replace(/^origin\/main:/i, ""));
-    } catch { /* null falls back to a complete conservative forward scan */ }
+    const parkedPrefilter = originMainParkedMigrationPrefilter(
+      () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS),
+    );
     return parkedMainlineDiscoveryFrom(tree.split("\n"), history, (p) => {
       try { return git(["show", `origin/main:${p}`]); } catch { return null; }
-    }, possibleParkedMigrationPaths);
+    }, parkedPrefilter.paths);
   } catch {
     return { state: "unknown", paths: new Set(), reason: "origin/main parked-state metadata is unreadable" };
   }

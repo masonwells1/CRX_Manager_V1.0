@@ -14,6 +14,7 @@ import {
   hasExplicitParkedMigrationHeader, isParkedFallbackFile, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
+  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
   createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
@@ -90,6 +91,8 @@ const DISPATCH = "scripts/.staging-migrations/workflow-waves-parked/PARKED-dispa
 const PARKED_FORWARD = "supabase/migrations/20260729231031_vendor_bill_period_close_lock.sql";
 const PARKED_FORWARD_HEADER = "-- Accounting-period close/write serialization.\n-- PARKED / DO NOT APPLY without Mason approval\n";
 const PARKED_DRAFT_HEADER = "-- Purpose comment stays first.\n-- PARKED DRAFT — NOT APPLIED until review\n";
+const NOT_APPLIED_HEADER = "-- NOT APPLIED\n";
+const DO_NOT_APPLY_HEADER = "-- DO NOT APPLY\n";
 ok(isParkedDraftPath(DISPATCH), "a staged .sql draft is a parked draft");
 ok(isParkedDraftPath("docs/audits/new-hunt/PARKED-brand-new.sql"), "an audits PARKED-*.sql is a parked draft");
 ok(isParkedDraftPath("docs/audits/2026-07-01-per-acre-draft.sql"), "an audits *draft*.sql is a parked draft");
@@ -97,6 +100,8 @@ ok(!isParkedDraftPath("docs/audits/2026-07-01-review-final.sql"), "an audits .sq
 ok(!isParkedDraftPath("scripts/.staging-migrations/SUPERSEDED-old.sql"), "a SUPERSEDED draft is retired, not pending");
 ok(hasExplicitParkedMigrationHeader(PARKED_FORWARD_HEADER), "explicit parked header is recognized");
 ok(hasExplicitParkedMigrationHeader(PARKED_DRAFT_HEADER), "PARKED DRAFT / NOT APPLIED status line is recognized");
+ok(hasExplicitParkedMigrationHeader(NOT_APPLIED_HEADER), "standalone NOT APPLIED status line is recognized");
+ok(hasExplicitParkedMigrationHeader(DO_NOT_APPLY_HEADER), "standalone DO NOT APPLY status line is recognized");
 ok(!hasExplicitParkedMigrationHeader("-- normal feature migration\nCREATE TABLE public.example();"), "ordinary leading comments do not park a migration");
 ok(!hasExplicitParkedMigrationHeader("-- This was previously parked for review\nSELECT 1;"), "historical parked prose is not a current status line");
 ok(!hasExplicitParkedMigrationHeader("-- PARKED migration notes appear later\nSELECT 1;"), "bare parked prose is not a current status line");
@@ -188,6 +193,8 @@ const APPLIED_HEADER = "supabase/migrations/20260729010101_applied_old_header.sq
 const SUPERSEDED_FORWARD = "supabase/migrations/SUPERSEDED-20260730235958_replaced.sql";
 const MAINLINE_ORDINARY_FORWARD = "supabase/migrations/20260730235960_ordinary_feature.sql";
 const ORPHAN_HEADER = "supabase/migrations/20260730235961_orphaned_parked_header.sql";
+const ORPHAN_NOT_APPLIED = "supabase/migrations/20260730235962_orphaned_not_applied.sql";
+const ORPHAN_DO_NOT_APPLY = "supabase/migrations/20260730235963_orphaned_do_not_apply.sql";
 const STALE_HEADERS = Array.from({ length: 76 }, (_unused, i) => `supabase/migrations/2025${String(i).padStart(10, "0")}_historical_${i}.sql`);
 const STALE_APPLIED_HISTORY = STALE_HEADERS.map((p, i) => {
   const filename = p.slice(p.lastIndexOf("/") + 1);
@@ -208,6 +215,8 @@ const mainlineTexts = new Map([
   [SUPERSEDED_FORWARD, PARKED_FORWARD_HEADER],
   [MAINLINE_ORDINARY_FORWARD, "-- ordinary feature migration\nSELECT 1;\n"],
   [ORPHAN_HEADER, PARKED_FORWARD_HEADER],
+  [ORPHAN_NOT_APPLIED, NOT_APPLIED_HEADER],
+  [ORPHAN_DO_NOT_APPLY, DO_NOT_APPLY_HEADER],
   ...STALE_HEADERS.map((p) => [p, PARKED_FORWARD_HEADER]),
 ]);
 const mainlinePaths = [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD, CANDIDATE_NO_HEADER, APPLIED_HEADER, SUPERSEDED_FORWARD, MAINLINE_ORDINARY_FORWARD, ...STALE_HEADERS];
@@ -251,6 +260,47 @@ const ambiguousHeaderDiscovery = parkedMainlineDiscoveryFrom(
   [PARKED_FORWARD, ORPHAN_HEADER],
 );
 eq(ambiguousHeaderDiscovery.state, "unknown", "a non-candidate, non-applied history row cannot silently clear an explicit parked header");
+
+for (const [path, header, label] of [
+  [ORPHAN_NOT_APPLIED, NOT_APPLIED_HEADER, "standalone NOT APPLIED"],
+  [ORPHAN_DO_NOT_APPLY, DO_NOT_APPLY_HEADER, "standalone DO NOT APPLY"],
+]) {
+  const standaloneOrphan = parkedMainlineDiscoveryFrom(
+    [PARKED_FORWARD, path],
+    mergedHistory,
+    (p) => p === path ? header : mainlineTexts.get(p),
+    [PARKED_FORWARD, path],
+  );
+  eq(standaloneOrphan.state, "unknown", `${label} orphan is PARKED STATE UNKNOWN, never a known zero`);
+}
+
+eq(
+  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS,
+  ["grep", "-l", "-i", "-e", "PARKED", "-e", "NOT APPLIED", "-e", "DO NOT APPLY", "origin/main", "--", "supabase/migrations"],
+  "shared origin/main prefilter covers every parser-accepted explicit status phrase",
+);
+const zeroMatchPrefilter = originMainParkedMigrationPrefilter(() => {
+  const error = new Error("no matches");
+  error.status = 1;
+  throw error;
+});
+eq(zeroMatchPrefilter.state, "known", "git grep exit 1 is a healthy known empty prefilter");
+eq(zeroMatchPrefilter.paths, [], "git grep exit 1 supplies a complete empty set, not a degraded scan");
+const zeroMatchReads = [];
+const zeroMatchDiscovery = parkedMainlineDiscoveryFrom(
+  [MAINLINE_ORDINARY_FORWARD],
+  "| # | Migration timestamp | Purpose |\n|---:|---|---|",
+  (p) => { zeroMatchReads.push(p); return mainlineTexts.get(p); },
+  zeroMatchPrefilter.paths,
+);
+eq(zeroMatchDiscovery.state, "known", "healthy zero-match prefilter preserves a known empty mainline state");
+eq(zeroMatchReads, [], "healthy zero-match prefilter opens no ordinary forward migration");
+const failedPrefilter = originMainParkedMigrationPrefilter(() => {
+  const error = new Error("git timeout");
+  error.status = 124;
+  throw error;
+});
+eq(failedPrefilter.paths, null, "real git failure leaves the conservative full-forward fallback enabled");
 
 const headerWithoutRow = validateParkedMigrationCrossReferences([PARKED_FORWARD], "| # | Migration timestamp | Purpose |\n|---:|---|---|", () => PARKED_FORWARD_HEADER);
 eq(headerWithoutRow.state, "unknown", "correction guard fails loud for a parked header without a candidate history row");
