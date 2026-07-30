@@ -98,7 +98,13 @@ try {
   // surface here rather than as a confusing error deep in the matrix below.
   const present=probe=>scalar(`SELECT (${probe})::text;`)==='true';
   const hasStageA=present(`to_regclass('public.product_families') IS NOT NULL`);
-  const hasSection9=present(`EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_po_items_recompute_on_order' AND NOT tgisinternal)`);
+  // Pinned to the relation, not just the trigger name: the same name attached to
+  // some other table would satisfy a name-only probe while leaving
+  // purchase_order_items untriggered, which is exactly the drift this asserts on.
+  const hasSection9=present(`EXISTS (
+    SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE t.tgname='trg_po_items_recompute_on_order' AND NOT t.tgisinternal
+       AND n.nspname='public' AND c.relname='purchase_order_items')`);
   console.log(`PHASE3_DUMP_STATE stage_a=${hasStageA?'present':'absent'} section09=${hasSection9?'present':'absent'} dump_sha256=${dumpSha}`);
   if(!hasStageA||!hasSection9) throw new Error(`the hash-bound baseline dump is missing schema this proof asserts against (stage_a=${hasStageA?'present':'absent'}, section09=${hasSection9?'present':'absent'}); regenerate supabase/baselines from a database at or past both migrations`);
   // The baseline dump needs its companion ACL artifact. A schema dump can only
@@ -134,6 +140,52 @@ try {
     sql(terminalAssertionBlock(local));
     console.log(`PHASE3_MIGRATION_POSTFLIGHT_ASSERTIONS_PASS ${label}`);
   }
+  // Section 9's own postflight block is weaker than its marker suggests: it counts
+  // pg_proc rows across three AP routine names and demands the total be 3, so a
+  // dropped routine paired with an extra overload of another still totals 3 and
+  // passes. It also never looks at the recompute trigger's binding. Nothing later
+  // in this proof exercises those objects, so without the assertions below a
+  // baseline carrying either drift would print a postflight-pass marker anyway.
+  // Assert full identity instead of counts: exact argument lists (which is what
+  // an overload changes), SECURITY DEFINER, search_path, and the trigger's
+  // relation/events/function as PostgreSQL itself renders them.
+  sql(`DO $sec9$
+DECLARE v_def text; v_norm text; v_expected text; v_actual text; v_count integer;
+BEGIN
+  SELECT count(*) INTO v_count FROM pg_trigger WHERE tgname='trg_po_items_recompute_on_order' AND NOT tgisinternal;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SECTION9_TRIGGER_COUNT_UNEXPECTED: %', v_count;
+  END IF;
+  SELECT pg_get_triggerdef(t.oid) INTO v_def
+    FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE t.tgname='trg_po_items_recompute_on_order' AND NOT t.tgisinternal
+     AND n.nspname='public' AND c.relname='purchase_order_items';
+  IF v_def IS NULL THEN
+    RAISE EXCEPTION 'SECTION9_TRIGGER_NOT_BOUND_TO_PURCHASE_ORDER_ITEMS';
+  END IF;
+  v_norm := btrim(regexp_replace(v_def,'\\s+',' ','g'));
+  v_expected := 'CREATE TRIGGER trg_po_items_recompute_on_order AFTER INSERT OR DELETE OR UPDATE OF purchase_order_id, product_id, quantity_ordered, quantity_received ON public.purchase_order_items FOR EACH ROW EXECUTE FUNCTION trg_po_items_recompute_on_order()';
+  IF v_norm <> v_expected THEN
+    RAISE EXCEPTION 'SECTION9_TRIGGER_DEFINITION_DRIFTED: %', v_norm;
+  END IF;
+
+  SELECT string_agg(sig,';' ORDER BY sig) INTO v_actual FROM (
+    SELECT p.proname||'('||pg_get_function_identity_arguments(p.oid)||') secdef='||p.prosecdef::text
+           ||' config='||coalesce(array_to_string(p.proconfig,','),'<none>') AS sig
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+     WHERE n.nspname='public'
+       AND p.proname IN ('create_vendor_bill','get_ap_aging','update_vendor_bill')
+  ) s;
+  v_expected :=
+    'create_vendor_bill(p_vendor_id uuid, p_purchase_order_id uuid, p_bill_number text, p_bill_date date, p_due_date date, p_payment_terms text, p_subtotal_cents bigint, p_adjustment_cents bigint, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp'
+    ||';get_ap_aging(p_as_of_date date) secdef=true config=search_path=public, pg_temp'
+    ||';update_vendor_bill(p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint, p_bill_date date, p_due_date date, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp';
+  IF coalesce(v_actual,'<none>') <> v_expected THEN
+    RAISE EXCEPTION 'SECTION9_AP_ROUTINE_IDENTITY_DRIFTED: %', coalesce(v_actual,'<none>');
+  END IF;
+END;
+$sec9$;`);
+  console.log('PHASE3_SECTION9_OBJECT_IDENTITY_PASS');
   // Stage A's own terminal block checks product_families grants and that no
   // policy targets anon, but it never asserts that RLS is still ENABLED. Every
   // later check in this proof runs as `postgres`, which bypasses RLS, so a dump
@@ -141,7 +193,7 @@ try {
   // only instrument that can see this: a permissive SELECT policy that admits
   // the reader reads identically whether RLS is enabled or disabled.
   sql(`DO $rls$
-DECLARE v_pol record; v_count integer;
+DECLARE v_pol record; v_count integer; v_qual text;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -161,19 +213,21 @@ BEGIN
   --
   -- Stage A created this policy as USING (true); 20260727174657 then tightened
   -- it to require an active profile, which is the state both the baseline and
-  -- production now carry. Assert that invariant -- gated on is_active_profile(),
-  -- never unconditionally open -- rather than the exact rendered text, which
-  -- carries PostgreSQL's own whitespace.
+  -- production now carry. Assert the WHOLE predicate, not the presence of a
+  -- substring: searching for 'is_active_profile' is fail-open, because
+  -- true OR is_active_profile() contains it and admits everyone. Only three
+  -- rendering artifacts are normalized away -- identifier quoting, schema
+  -- qualification, and PostgreSQL's own whitespace -- none of which can change
+  -- what the predicate admits.
+  v_qual := replace(btrim(regexp_replace(replace(replace(v_pol.qual,'"',''),'public.',''),'\\s+',' ','g')),'( ','(');
   IF v_pol.policyname <> 'product_families_select'
      OR v_pol.cmd <> 'SELECT'
      OR v_pol.permissive <> 'PERMISSIVE'
      OR v_pol.roles <> ARRAY['authenticated']::name[]
-     OR v_pol.qual IS NULL
-     OR btrim(v_pol.qual) = 'true'
-     OR position('is_active_profile' IN v_pol.qual) = 0
+     OR v_qual IS DISTINCT FROM '(SELECT is_active_profile() AS is_active_profile)'
      OR v_pol.with_check IS NOT NULL THEN
-    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_POLICY_IDENTITY_DRIFTED: % / % / % / % / qual=% / with_check=%',
-      v_pol.policyname, v_pol.cmd, v_pol.permissive, v_pol.roles, v_pol.qual, v_pol.with_check;
+    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_POLICY_IDENTITY_DRIFTED: % / % / % / % / qual=% / normalized=% / with_check=%',
+      v_pol.policyname, v_pol.cmd, v_pol.permissive, v_pol.roles, v_pol.qual, v_qual, v_pol.with_check;
   END IF;
 END;
 $rls$;`);
@@ -186,6 +240,32 @@ $rls$;`);
   assertExactFailure(sql(`BEGIN; SET LOCAL ROLE anon; SELECT count(*) FROM public.product_families; ROLLBACK;`,{fail:true}),'permission denied for table product_families','anon read of product_families');
   console.log('PHASE3_PRODUCT_FAMILIES_RLS_IN_FORCE_PASS');
   sql(`INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a001'),('00000000-0000-0000-0000-00000000a002') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a001','phase3-admin@example.invalid','admin',true),('00000000-0000-0000-0000-00000000a002','phase3-sales@example.invalid','sales_rep',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=true;`);
+  // Behavioral counterpart to the catalog assertion above: prove the predicate
+  // actually gates, by reading one real row as an active profile and then as a
+  // deactivated one. The catalog check alone cannot show that -- it reads text --
+  // and the empty restored table made every earlier read-based probe blind. This
+  // runs the genuine article: the image's own auth.uid(), the dump's own
+  // is_active_profile(), and the restored policy, with nothing stubbed. The whole
+  // fixture (a deactivated profile, which nothing else here provides, plus one
+  // product_families row) is rolled back, so the rest of this proof continues
+  // against exactly the schema it did before.
+  const rlsBehavior=sql(`BEGIN;
+INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a003') ON CONFLICT DO NOTHING;
+INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a003','phase3-deactivated@example.invalid','sales_rep',false) ON CONFLICT (id) DO UPDATE SET is_active=false;
+INSERT INTO public.product_families(name) VALUES ('[PROOF] Phase3 RLS gate');
+SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a002';
+SET LOCAL ROLE authenticated;
+SELECT 'PHASE3_RLS_ACTIVE_ROWS=' || count(*)::text FROM public.product_families;
+RESET ROLE;
+SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a003';
+SET LOCAL ROLE authenticated;
+SELECT 'PHASE3_RLS_DEACTIVATED_ROWS=' || count(*)::text FROM public.product_families;
+RESET ROLE;
+ROLLBACK;`).stdout;
+  assert.match(rlsBehavior,/PHASE3_RLS_ACTIVE_ROWS=1$/m,`active profile could not read the seeded product_families row: ${rlsBehavior}`);
+  assert.match(rlsBehavior,/PHASE3_RLS_DEACTIVATED_ROWS=0$/m,`deactivated profile could still read product_families -- the policy predicate does not gate: ${rlsBehavior}`);
+  assert.equal(scalar(`SELECT count(*)::text FROM public.product_families;`),'0','the rolled-back RLS behavior fixture leaked a product_families row');
+  console.log('PHASE3_PRODUCT_FAMILIES_ACTIVE_PROFILE_GATE_PASS');
   const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
   const source=readFileSync(files.stageA,'utf8'); for(const x of ['lock_phase3_product_policy_products','RETURN_POLICY_NO_RETURN','trigger_x_validate_phase3_return_item_policy'])assert.match(source,new RegExp(x));
   sql(`INSERT INTO public.products(product_name) VALUES ('[PROOF] Phase3 lock A'),('[PROOF] Phase3 lock B');`);
