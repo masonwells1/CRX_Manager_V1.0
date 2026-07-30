@@ -85,7 +85,9 @@ the exact key and pre-mutation token together until the whole action succeeds,
 while the RPC returns the authoritative post-mutation `row_version` on both the
 first response and a cached replay. Regression coverage proves both downstream
 email failure and a lost first RPC response replay without creating a second
-version.
+version. The shared Quote type also represents `row_version` as optional during
+the intentional pre-migration window, and list-page conversion normalizes that
+absence to the legacy-compatible `null` token.
 Verification passed
 4,112 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration

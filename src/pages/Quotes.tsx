@@ -186,7 +186,7 @@ export default function Quotes() {
         p_quote_id: convertTarget.id,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
-        p_expected_row_version: convertTarget.row_version,
+        p_expected_row_version: convertTarget.row_version ?? null,
       });
       if (error) throw error;
       convertQuoteIdem.resetKey();

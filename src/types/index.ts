@@ -670,7 +670,7 @@ export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined'
 
 export interface Quote {
   id: string;
-  row_version: number;
+  row_version?: number;
   quote_number: string;
   customer_id: string;
   created_by: string;
