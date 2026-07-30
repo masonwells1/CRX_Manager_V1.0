@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-30 (post-apply B7 closeout: Supabase ledger row `20260730114102_vendor_bill_period_close_lock` is live. Targeted catalog, ACL, and whole-month-constraint verification passed; the Section 9 rollback-only business chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; all 20 standing invariant predicates are clean after allowlist comparison. Operational counts below remain the separately dated 2026-07-18 snapshot.)
+**Last verified:** 2026-07-30 (post-apply B7 closeout: Supabase ledger row `20260730114102_vendor_bill_period_close_lock` is live. Targeted catalog, ACL, and whole-month-constraint verification passed; the Section 9 rollback-only business chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; all 20 standing invariant predicates had 0 non-allowlisted rows, with 7 approved raw rows across 5 predicates including `ungated-secdef-mutators/log_failed_notification(...)`. The separate `20260730121951_close_accounting_period_idempotency_recheck` candidate is parked, not live. Operational counts below remain the separately dated 2026-07-18 snapshot.)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## Recent production deployments

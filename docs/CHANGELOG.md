@@ -12,10 +12,17 @@ DEFINER routines, while `authenticated` and `service_role` retain their routes.
 The B7 rename completed from submitted timestamp `20260729231031` to the
 server-assigned ledger version. Post-apply catalog/ACL/constraint checks passed;
 the registered Section 9 rollback-only chain reached expected `SMOKE_PASS_ROLLBACK`;
-and all 20 standing invariants were clean after allowlist comparison. The close
+and all 20 standing invariants had 0 non-allowlisted rows; the raw approved
+output was 7 rows across 5 predicates, including
+`ungated-secdef-mutators/log_failed_notification(...)`. The close
 still does not require an existing vendor-bill completeness gate, direct
 authenticated-admin accounting-period writes remain an explicit boundary, and
 the broader non-vendor-bill writer race remains separate work.
+
+Follow-up candidate `20260730121951_close_accounting_period_idempotency_recheck`
+is intentionally **parked, not live**. It adds a post-month-lock same-key replay
+check to `close_accounting_period`; its deterministic PostgreSQL 17 proof uses
+database-observed lock readiness and passes concurrent same-key replay.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

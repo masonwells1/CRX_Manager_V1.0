@@ -14,6 +14,9 @@ if (migrationMatches.length !== 1) {
 const migration = readFileSync(join(migrationDir, migrationMatches[0]), 'utf8').replace(/\r\n/g, '\n');
 const source = (...parts: string[]) => readFileSync(join(root, ...parts), 'utf8')
   .replace(/\r\n/g, '\n');
+const idempotencyRecheckMigration = source(
+  'supabase', 'migrations', '20260730121951_close_accounting_period_idempotency_recheck.sql',
+);
 const smokeSpecs = JSON.parse(source('scripts', 'smoke', 'smoke-specs.json')) as {
   specs: Record<string, { chain: string; covers: string[] }>;
 };
@@ -22,6 +25,12 @@ function body(name: string) {
   const start = migration.indexOf(`CREATE OR REPLACE FUNCTION public.${name}`);
   expect(start).toBeGreaterThan(-1);
   return migration.slice(start, migration.indexOf('$function$;', start));
+}
+
+function recheckBody() {
+  const start = idempotencyRecheckMigration.indexOf('CREATE OR REPLACE FUNCTION public.close_accounting_period');
+  expect(start).toBeGreaterThan(-1);
+  return idempotencyRecheckMigration.slice(start, idempotencyRecheckMigration.indexOf('$function$;', start));
 }
 
 describe('vendor-bill accounting-period close serialization', () => {
@@ -51,6 +60,21 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(lock).toBeGreaterThan(close.indexOf('v_period_start := date_trunc'));
     expect(lock).toBeLessThan(close.indexOf('SELECT count(*) INTO v_unposted_count'));
     expect(lock).toBeLessThan(close.indexOf('INSERT INTO public.accounting_periods'));
+  });
+
+  it('parks a forward same-key replay repair immediately after the exclusive month lock', () => {
+    expect(idempotencyRecheckMigration).toContain('PARKED / DO NOT APPLY');
+    const close = recheckBody();
+    const firstCheck = close.indexOf("check_idempotency(p_idempotency_key, 'close_accounting_period')");
+    const lock = close.indexOf('_lock_accounting_months(ARRAY[v_period_start], true)');
+    const secondCheck = close.indexOf("check_idempotency(p_idempotency_key, 'close_accounting_period')", firstCheck + 1);
+    const alreadyClosed = close.indexOf('Period % to % is already closed');
+    expect(firstCheck).toBeGreaterThan(-1);
+    expect(lock).toBeGreaterThan(firstCheck);
+    expect(secondCheck).toBeGreaterThan(lock);
+    expect(secondCheck).toBeLessThan(alreadyClosed);
+    expect(idempotencyRecheckMigration).toContain('PERIOD_CLOSE_IDEMPOTENCY_RECHECK_SIGNATURE_OR_OWNER_DRIFT');
+    expect(idempotencyRecheckMigration).toContain('PERIOD_CLOSE_IDEMPOTENCY_RECHECK_ACL_DRIFT');
   });
 
   it('keeps the central closed-period reader narrow and tightly pinned', () => {
@@ -90,6 +114,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_JAN_FIRST_PASS'\)/);
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS'\)/);
     expect(proof).toMatch(/console\.log\('CANDIDATE_POSTFLIGHT_OWNER_AND_ACL_PASS'\)/);
+    expect(proof).toMatch(/console\.log\('CANDIDATE_CLOSE_SAME_KEY_REPLAY_PASS'\)/);
     expect(proof).toContain("acl.grantee = 0");
     expect(proof).toContain("has_function_privilege('anon', p.oid, 'EXECUTE')");
     expect(proof).toContain("has_function_privilege('service_role', p.oid, 'EXECUTE')");
@@ -97,7 +122,19 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toContain("'--network', 'none'");
     expect(proof).toContain('const BARRIER_SECONDS = 8;');
     expect(proof).toContain("const MIGRATION_SUFFIX = '_vendor_bill_period_close_lock.sql';");
-    expect(proof.match(/pg_sleep\(\$\{BARRIER_SECONDS\}\)/g)).toHaveLength(8);
+    expect(proof).toContain("const IDEMPOTENCY_RECHECK_SUFFIX = '_close_accounting_period_idempotency_recheck.sql';");
+    expect(proof).toContain('waitForDatabaseReadiness');
+    expect(proof).toContain("waitForBarrierWaiters(1, 'baseline writer trigger barrier')");
+    expect(proof).toContain("waitForSessionLock('same-key-second-close'");
+    expect(proof).not.toContain('await waiting(');
+    expect(proof).not.toContain('pause(500)');
+    expect(proof.match(/pg_sleep\(\$\{BARRIER_SECONDS\}\)/g)).toHaveLength(9);
+    const deliverySmoke = source('scripts', 'smoke', 'smoke-delivery-accounting-period-guard.sql');
+    expect(deliverySmoke).toContain("v_closed_date := DATE '1990-01-15';");
+    expect(deliverySmoke).toContain("v_open_date := DATE '1990-02-15';");
+    expect(deliverySmoke).toContain("v_second_open_date := DATE '1990-03-15';");
+    expect(deliverySmoke).toContain('enforce_delivery_accounting_period');
+    expect(deliverySmoke).not.toContain('CURRENT_DATE');
     const section9 = smokeSpecs.specs.section9_po_ap_high_remediation;
     expect(section9.chain).toBe('smoke-section9-po-ap-high-remediation.sql');
     expect(section9.covers).toEqual(expect.arrayContaining([

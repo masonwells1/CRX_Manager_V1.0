@@ -61,10 +61,11 @@ The Supabase ledger now records version `20260730114102` with name
 whole-calendar-month-constraint verification passed. The registered Section 9
 rollback-only business chain reached expected terminal `ERROR P0001
 SMOKE_PASS_ROLLBACK`, proving the closed-period update refusal while leaving no
-fixture data committed. All 20 standing invariant predicates are clean after
-allowlist comparison: only existing allowlisted keys remain (actor-forgery 1,
-anon-exec-secdef 1, auth-bound-role-ungated 1, status-literals 3); every other
-predicate returned 0.
+fixture data committed. All 20 standing invariant predicates have **0
+non-allowlisted rows**. The raw output contains seven approved allowlisted rows
+across five predicates: actor-forgery (1), anon-exec-secdef (1),
+auth-bound-role-ungated (1), status-literals (3), and
+ungated-secdef-mutators / `log_failed_notification(...)` (1).
 
 ## Caller and direct-reader classification
 
@@ -101,6 +102,20 @@ B7 closeout is complete: the disk migration is named
 APPLIED LIVE while preserving the first purpose comment, and its history/manual
 references record the same server-assigned version. The proof runner and source
 regression discover the unique stable suffix rather than embedding a timestamp.
+
+## Forward same-key replay candidate — not applied
+
+`20260730121951_close_accounting_period_idempotency_recheck.sql` is a governed
+parked candidate, not a live change. It faithfully re-emits the live
+`close_accounting_period` body with one addition: after the exclusive month
+advisory lock, it checks the same idempotency key again before the
+already-closed refusal. Its postflight asserts the one `jsonb` overload,
+`postgres` owner, SECURITY DEFINER mode, `search_path=public, pg_temp`, helper
+execute path, and exact callable-role boundary. The disposable PostgreSQL 17
+proof now runs two same-key closes and proves identical JSON replay with one
+period row and one idempotency row. It observes PostgreSQL lock readiness for
+every schedule rather than using a 500 ms child-liveness guess. This candidate
+has not been applied, pushed, or deployed.
 
 ## Disposable PostgreSQL 17 proof
 
@@ -139,7 +154,12 @@ new constraint and the disposable auth harness: every synthetic closed period
 now spans the complete calendar month; the product fixture avoids the unrelated
 governed price column; and each switched simulated actor updates both JWT claim
 representations used by the restored baseline. They add no pricing flag,
-production behavior, permission, or application code change.
+production behavior, permission, or application code change. The delivery
+guard uses three fixed, isolation-checked historical calendar months (January,
+February, and March 1990), so it no longer searches the trailing 365 days or
+branches on `CURRENT_DATE`; it still exercises the real `complete_delivery`,
+`enforce_delivery_accounting_period` trigger path, and `void_delivery`, then
+terminates with rollback-only cleanup.
 
 The removed catalog-only candidate smoke was not registered because repository
 policy correctly forbids treating an isolated shape probe as a business-chain
