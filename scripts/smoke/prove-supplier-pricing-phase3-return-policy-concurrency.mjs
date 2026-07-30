@@ -275,9 +275,14 @@ BEGIN
            ||' config='||coalesce(array_to_string(p.proconfig,','),'<none>')
            ||' returns='||pg_get_function_result(p.oid)
            ||' lang='||l.lanname
+           -- '+grant' marks WITH GRANT OPTION. Without it a holder could hand
+           -- EXECUTE on a money routine to anon and the grantee set here would
+           -- never name anon, so the delegation itself has to be in the string.
            ||' execgrantees='||coalesce((
-                SELECT string_agg(DISTINCT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,','
-                                  ORDER BY CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END)
+                SELECT string_agg(DISTINCT (CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END
+                                            ||CASE WHEN a.is_grantable THEN '+grant' ELSE '' END),','
+                                  ORDER BY (CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END
+                                            ||CASE WHEN a.is_grantable THEN '+grant' ELSE '' END))
                   FROM aclexplode(p.proacl) a
                  WHERE a.privilege_type='EXECUTE' AND a.grantee<>p.proowner
               ),CASE WHEN p.proacl IS NULL THEN '<default>' ELSE '<none>' END) AS sig
