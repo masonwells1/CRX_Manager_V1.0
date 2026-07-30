@@ -819,8 +819,9 @@ $function$;
 -- The existing quote-version and conversion RPCs are privileged writers. Keep
 -- their proven business logic intact behind owner-enforcing wrappers so a
 -- SECURITY DEFINER replay can never bypass the same ownership boundary as
--- save_quote. The wrapper locks the target before checking idempotency, making
--- the authorization stable through the inner mutation.
+-- save_quote. Each wrapper checks ownership before idempotency, then follows
+-- the canonical advisory-lock-before-row-lock order and rechecks ownership
+-- under the row lock before returning a replay or entering the inner mutation.
 ALTER FUNCTION public.create_quote_version(uuid, uuid, text, text)
   RENAME TO _create_quote_version_owner_impl;
 REVOKE ALL ON FUNCTION public._create_quote_version_owner_impl(uuid, uuid, text, text)
@@ -862,8 +863,7 @@ BEGIN
   SELECT created_by INTO v_quote_owner
   FROM public.quotes
   WHERE id = p_quote_id
-    AND deleted_at IS NULL
-  FOR UPDATE;
+    AND deleted_at IS NULL;
   IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found: %', p_quote_id; END IF;
   IF v_actor_role <> 'admin' AND v_quote_owner IS DISTINCT FROM v_actor THEN
     RAISE EXCEPTION 'NOT_QUOTE_OWNER';
@@ -871,22 +871,33 @@ BEGIN
 
   IF p_idempotency_key IS NOT NULL THEN
     v_existing := public.check_idempotency(p_idempotency_key, 'create_quote_version');
-    IF v_existing IS NOT NULL THEN
-      v_version_id := NULLIF(v_existing #>> '{}', '')::uuid;
-      IF v_version_id IS NULL OR NOT EXISTS (
-        SELECT 1
-        FROM public.quote_versions
-        WHERE id = v_version_id
-          AND quote_id = p_quote_id
-      ) THEN
-        RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
-      END IF;
-      RETURN jsonb_build_object(
-        'status', 'duplicate',
-        'version_id', v_version_id,
-        'message', 'Already processed'
-      );
+  END IF;
+
+  SELECT created_by INTO v_quote_owner
+  FROM public.quotes
+  WHERE id = p_quote_id
+    AND deleted_at IS NULL
+  FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found: %', p_quote_id; END IF;
+  IF v_actor_role <> 'admin' AND v_quote_owner IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'NOT_QUOTE_OWNER';
+  END IF;
+
+  IF v_existing IS NOT NULL THEN
+    v_version_id := NULLIF(v_existing #>> '{}', '')::uuid;
+    IF v_version_id IS NULL OR NOT EXISTS (
+      SELECT 1
+      FROM public.quote_versions
+      WHERE id = v_version_id
+        AND quote_id = p_quote_id
+    ) THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
     END IF;
+    RETURN jsonb_build_object(
+      'status', 'duplicate',
+      'version_id', v_version_id,
+      'message', 'Already processed'
+    );
   END IF;
 
   RETURN public._create_quote_version_owner_impl(
@@ -943,8 +954,7 @@ BEGIN
   SELECT created_by INTO v_quote_owner
   FROM public.quotes
   WHERE id = p_quote_id
-    AND deleted_at IS NULL
-  FOR UPDATE;
+    AND deleted_at IS NULL;
   IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found: %', p_quote_id; END IF;
   IF v_actor_role <> 'admin' AND v_quote_owner IS DISTINCT FROM v_actor THEN
     RAISE EXCEPTION 'NOT_QUOTE_OWNER';
@@ -952,18 +962,29 @@ BEGIN
 
   IF p_idempotency_key IS NOT NULL THEN
     v_existing := public.check_idempotency(p_idempotency_key, 'convert_quote_to_order');
-    IF v_existing IS NOT NULL THEN
-      v_existing_order_id := NULLIF(v_existing->>'order_id', '')::uuid;
-      IF v_existing_order_id IS NULL OR NOT EXISTS (
-        SELECT 1
-        FROM public.orders
-        WHERE id = v_existing_order_id
-          AND quote_id = p_quote_id
-      ) THEN
-        RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
-      END IF;
-      RETURN v_existing;
+  END IF;
+
+  SELECT created_by INTO v_quote_owner
+  FROM public.quotes
+  WHERE id = p_quote_id
+    AND deleted_at IS NULL
+  FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found: %', p_quote_id; END IF;
+  IF v_actor_role <> 'admin' AND v_quote_owner IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'NOT_QUOTE_OWNER';
+  END IF;
+
+  IF v_existing IS NOT NULL THEN
+    v_existing_order_id := NULLIF(v_existing->>'order_id', '')::uuid;
+    IF v_existing_order_id IS NULL OR NOT EXISTS (
+      SELECT 1
+      FROM public.orders
+      WHERE id = v_existing_order_id
+        AND quote_id = p_quote_id
+    ) THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
     END IF;
+    RETURN v_existing;
   END IF;
 
   RETURN public._convert_quote_to_order_owner_impl(

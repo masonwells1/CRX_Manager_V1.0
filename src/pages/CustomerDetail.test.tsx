@@ -2,12 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
-const { mockFrom, mockRpc, mockToast, dirtyStates } = vi.hoisted(() => ({
-  mockFrom: vi.fn(),
-  mockRpc: vi.fn(),
-  mockToast: vi.fn(),
-  dirtyStates: [] as boolean[],
-}));
+const {
+  mockFrom,
+  mockRpc,
+  mockToast,
+  mockResetIdempotencyKey,
+  customerIdempotencyState,
+  dirtyStates,
+} = vi.hoisted(() => {
+  const customerIdempotencyState = { generation: 0 };
+  return {
+    mockFrom: vi.fn(),
+    mockRpc: vi.fn(),
+    mockToast: vi.fn(),
+    mockResetIdempotencyKey: vi.fn(() => { customerIdempotencyState.generation += 1; }),
+    customerIdempotencyState,
+    dirtyStates: [] as boolean[],
+  };
+});
 
 type QueryResult = { data: unknown; error: unknown };
 
@@ -56,11 +68,16 @@ vi.mock('../lib/db', () => ({
   assertRpcResult: vi.fn((value) => value),
   checkMutationResult: vi.fn(),
   hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
-  RpcErrorCodes: { CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT' },
+  RpcErrorCodes: { CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
 }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ profile: { id: 'admin-1', role: 'admin', full_name: 'Admin' } }) }));
 vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
-vi.mock('../hooks/useIdempotencyKey', () => ({ useIdempotencyKey: () => ({ getKey: () => 'customer-stale-key', resetKey: vi.fn() }) }));
+vi.mock('../hooks/useIdempotencyKey', () => ({
+  useIdempotencyKey: () => ({
+    getKey: () => `customer-stale-key-${customerIdempotencyState.generation}`,
+    resetKey: mockResetIdempotencyKey,
+  }),
+}));
 vi.mock('../hooks/useUnsavedChanges', () => ({ useUnsavedChanges: (dirty: boolean) => { dirtyStates.push(dirty); return { state: 'unblocked', reset: vi.fn(), proceed: vi.fn() }; } }));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
@@ -90,6 +107,7 @@ function renderDetail() {
 describe('CustomerDetail stale whole-record save', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    customerIdempotencyState.generation = 0;
     dirtyStates.length = 0;
     let customerReads = 0;
     mockFrom.mockImplementation((table: string) => {
@@ -155,6 +173,32 @@ describe('CustomerDetail stale whole-record save', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Customer' })).not.toBeInTheDocument());
     expect(screen.getByDisplayValue('Newer Farm')).toBeInTheDocument();
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('stable saved customer'));
+  });
+
+  it('recovers a legacy cached save after the migration boundary and releases its unusable key', async () => {
+    let saveAttempts = 0;
+    mockRpc.mockImplementation(() => {
+      saveAttempts += 1;
+      return Promise.resolve(saveAttempts === 1
+        ? { data: null, error: { message: 'IDEMPOTENCY_PAYLOAD_CONFLICT' } }
+        : { data: { customer_id: original.id, row_version: 6 }, error: null });
+    });
+
+    renderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save Changes' }));
+
+    expect(await screen.findByRole('button', { name: 'Reload Customer' })).toBeInTheDocument();
+    expect(mockRpc).toHaveBeenLastCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-0',
+    }));
+    expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Customer' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Customer' })).not.toBeInTheDocument());
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenLastCalledWith('save_customer', expect.objectContaining({
+      p_idempotency_key: 'customer-stale-key-1',
+    })));
   });
 
   it('keeps the conflict dialog and local customer/address state when Reload cannot read addresses', async () => {

@@ -84,6 +84,13 @@ function extractFunction(source, functionName, nextName) {
   return source.slice(start, end).replace(/\r\n/g, '\n').trim();
 }
 
+function extractActionWrapper(source, functionName, endMarker) {
+  const start = source.indexOf(`CREATE FUNCTION public.${functionName}`);
+  const end = source.indexOf(endMarker, start);
+  assert.ok(start >= 0 && end > start, `could not extract ${functionName} wrapper`);
+  return source.slice(start, end).replace(/\r\n/g, '\n').trim();
+}
+
 function extractQuoteUpdate(body, whereId) {
   const matches = [...body.matchAll(/\n\s+UPDATE quotes SET[\s\S]*?\n\s+WHERE id = ([^;]+);/g)]
     .filter((match) => match[1].trim() === whereId)
@@ -292,6 +299,7 @@ function assertCanonicalContract() {
   assert.ok(customerGuard >= 0 && customerGuard < customerVersion, 'customer split conflict must precede generic stale guard');
 
   assertQuoteOwnershipContract(current);
+  assertQuoteActionLockOrder(current);
 
   assert.match(
     currentQuote,
@@ -362,6 +370,40 @@ function assertQuoteOwnershipContract(source) {
     body,
     /v_cached_quote_id := NULLIF\(v_existing->>'quote_id', ''\)::uuid;[\s\S]*?p_quote_id IS DISTINCT FROM v_cached_quote_id[\s\S]*?WHERE id = v_cached_quote_id\s+AND created_by = v_actor[\s\S]*?RAISE EXCEPTION 'NOT_QUOTE_OWNER';[\s\S]*?RETURN v_existing;/,
     'idempotent replays must bind the cached quote target and re-check ownership',
+  );
+}
+
+function assertQuoteActionLockOrder(source) {
+  const specs = [
+    ['create_quote_version', 'ALTER FUNCTION public.convert_quote_to_order', 'create_quote_version'],
+    ['convert_quote_to_order', '-- Self-contained ACL', 'convert_quote_to_order'],
+  ];
+  for (const [functionName, endMarker, operation] of specs) {
+    const body = extractActionWrapper(source, functionName, endMarker);
+    const firstOwnerRead = body.indexOf('SELECT created_by INTO v_quote_owner');
+    const firstOwnerReject = body.indexOf("RAISE EXCEPTION 'NOT_QUOTE_OWNER';");
+    const idempotencyLookup = body.indexOf(`v_existing := public.check_idempotency(p_idempotency_key, '${operation}');`);
+    const firstRowLock = body.indexOf('FOR UPDATE;');
+    const lockedOwnerRead = body.indexOf('SELECT created_by INTO v_quote_owner', firstOwnerRead + 1);
+    const lockedOwnerReject = body.indexOf("RAISE EXCEPTION 'NOT_QUOTE_OWNER';", firstOwnerReject + 1);
+    const replayReturn = functionName === 'create_quote_version'
+      ? body.indexOf("RETURN jsonb_build_object(\n      'status', 'duplicate'")
+      : body.indexOf('RETURN v_existing;');
+    assert.ok(firstOwnerRead >= 0 && firstOwnerReject > firstOwnerRead && firstOwnerReject < idempotencyLookup, `${functionName} must reject a non-owner before idempotency`);
+    assert.ok(idempotencyLookup >= 0 && firstRowLock > idempotencyLookup, `${functionName} must take the idempotency advisory lock before the quote row lock`);
+    assert.ok(lockedOwnerRead > idempotencyLookup && lockedOwnerRead < firstRowLock, `${functionName} must re-read the target before locking it`);
+    assert.ok(lockedOwnerReject > firstRowLock && lockedOwnerReject < replayReturn, `${functionName} must recheck ownership under lock before replay`);
+  }
+
+  const reversed = source.replace(
+    '  WHERE id = p_quote_id\n    AND deleted_at IS NULL;\n  IF NOT FOUND THEN',
+    '  WHERE id = p_quote_id\n    AND deleted_at IS NULL\n  FOR UPDATE;\n  IF NOT FOUND THEN',
+  );
+  assert.notEqual(reversed, source, 'failed to construct quote-action lock-order mutation');
+  assert.throws(
+    () => assertQuoteActionLockOrder(reversed),
+    /advisory lock before the quote row lock/,
+    'quote-action proof must reject row-lock-before-advisory order',
   );
 }
 
@@ -443,12 +485,15 @@ async function main() {
 CREATE TABLE public.quotes(id text PRIMARY KEY, value text NOT NULL, row_version bigint NOT NULL DEFAULT 1);
 CREATE TABLE public.customers(id text PRIMARY KEY, value text NOT NULL, row_version bigint NOT NULL DEFAULT 1);
 CREATE TABLE public.idempotency_keys(idempotency_key text NOT NULL, operation text NOT NULL, result jsonb NOT NULL, PRIMARY KEY(idempotency_key, operation));
+CREATE TABLE public.action_quotes(id text PRIMARY KEY);
 CREATE OR REPLACE FUNCTION public.bump_record_row_version() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.row_version := OLD.row_version + 1; RETURN NEW; END $$;
 CREATE TRIGGER quotes_bump BEFORE UPDATE ON public.quotes FOR EACH ROW EXECUTE FUNCTION public.bump_record_row_version();
 CREATE TRIGGER customers_bump BEFORE UPDATE ON public.customers FOR EACH ROW EXECUTE FUNCTION public.bump_record_row_version();
 CREATE OR REPLACE FUNCTION public.checked_quote(p_id text,p_value text,p_expected bigint,p_pause int,p_key text) RETURNS jsonb LANGUAGE plpgsql AS $$ DECLARE v bigint; v_cached jsonb; v_result jsonb; v_fingerprint text := md5(jsonb_build_object('id',p_id,'value',p_value,'expected',p_expected)::text); BEGIN SELECT result INTO v_cached FROM public.idempotency_keys WHERE idempotency_key=p_key AND operation='save_quote'; IF v_cached IS NOT NULL THEN IF v_cached->>'_request_fingerprint' IS DISTINCT FROM v_fingerprint THEN RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT'; END IF; SELECT row_version INTO v FROM public.quotes WHERE id=p_id FOR UPDATE; IF v IS DISTINCT FROM (v_cached->>'row_version')::bigint THEN RAISE EXCEPTION 'QUOTE_STALE_WRITE'; END IF; RETURN v_cached; END IF; SELECT row_version INTO v FROM public.quotes WHERE id=p_id FOR UPDATE; IF p_pause=1 THEN PERFORM pg_sleep(10); END IF; IF p_expected IS DISTINCT FROM v THEN RAISE EXCEPTION 'QUOTE_STALE_WRITE'; END IF; UPDATE public.quotes SET value=p_value WHERE id=p_id; SELECT jsonb_build_object('id',p_id,'row_version',row_version,'value',value,'_request_fingerprint',v_fingerprint) INTO v_result FROM public.quotes WHERE id=p_id; INSERT INTO public.idempotency_keys VALUES(p_key,'save_quote',v_result); RETURN v_result; END $$;
 CREATE OR REPLACE FUNCTION public.checked_customer(p_id text,p_value text,p_expected bigint,p_pause int,p_key text) RETURNS jsonb LANGUAGE plpgsql AS $$ DECLARE v bigint; v_cached jsonb; v_result jsonb; v_fingerprint text := md5(jsonb_build_object('id',p_id,'value',p_value,'expected',p_expected)::text); BEGIN SELECT result INTO v_cached FROM public.idempotency_keys WHERE idempotency_key=p_key AND operation='save_customer'; IF v_cached IS NOT NULL THEN IF v_cached->>'_request_fingerprint' IS DISTINCT FROM v_fingerprint THEN RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT'; END IF; SELECT row_version INTO v FROM public.customers WHERE id=p_id FOR UPDATE; IF v IS DISTINCT FROM (v_cached->>'row_version')::bigint THEN RAISE EXCEPTION 'CUSTOMER_STALE_WRITE'; END IF; RETURN v_cached; END IF; SELECT row_version INTO v FROM public.customers WHERE id=p_id FOR UPDATE; IF p_pause=1 THEN PERFORM pg_sleep(10); END IF; IF p_expected IS DISTINCT FROM v THEN RAISE EXCEPTION 'CUSTOMER_STALE_WRITE'; END IF; UPDATE public.customers SET value=p_value WHERE id=p_id; SELECT jsonb_build_object('id',p_id,'row_version',row_version,'value',value,'_request_fingerprint',v_fingerprint) INTO v_result FROM public.customers WHERE id=p_id; INSERT INTO public.idempotency_keys VALUES(p_key,'save_customer',v_result); RETURN v_result; END $$;
-INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.customers VALUES ('one','original',1);
+CREATE OR REPLACE FUNCTION public.action_wrapper(p_key text,p_pause boolean) RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM 1 FROM public.action_quotes WHERE id='one'; PERFORM pg_advisory_xact_lock(hashtextextended(p_key,0)); IF p_pause THEN PERFORM pg_sleep(10); END IF; PERFORM 1 FROM public.action_quotes WHERE id='one' FOR UPDATE; END $$;
+CREATE OR REPLACE FUNCTION public.action_peer(p_key text) RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(hashtextextended(p_key,0)); PERFORM 1 FROM public.action_quotes WHERE id='one' FOR UPDATE; END $$;
+INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.customers VALUES ('one','original',1); INSERT INTO public.action_quotes VALUES ('one');
 `);
     // Exact pre-fix failure: the second whole-record writer wins.
     psql("UPDATE public.quotes SET value='newer' WHERE id='one'; UPDATE public.quotes SET value='stale' WHERE id='one'; UPDATE public.customers SET value='newer' WHERE id='one'; UPDATE public.customers SET value='stale' WHERE id='one';");
@@ -478,10 +523,17 @@ INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.custom
     const customerAdvancedReplay = psql("SELECT public.checked_customer('one','fresh',2,0,'customer-replay')::text", true);
     assert.notEqual(customerAdvancedReplay.status, 0, 'customer replay must reject after a later writer advanced the token');
     assert.match(`${customerAdvancedReplay.stderr}${customerAdvancedReplay.stdout}`, /CUSTOMER_STALE_WRITE/);
+    const actionWrapperApp = 'quote-action-wrapper';
+    const actionWrapper = asyncSql("BEGIN; SET LOCAL statement_timeout='20s'; SELECT public.action_wrapper('shared-key',true); COMMIT;", actionWrapperApp);
+    await waitForPgSleep(actionWrapperApp);
+    const actionPeer = asyncSql("BEGIN; SET LOCAL statement_timeout='20s'; SELECT public.action_peer('shared-key'); COMMIT;", 'quote-action-peer');
+    const [wrapperResult, peerResult] = await Promise.all([actionWrapper, actionPeer]);
+    assert.equal(wrapperResult.code, 0, `quote action wrapper failed: ${wrapperResult.err}${wrapperResult.out}`);
+    assert.equal(peerResult.code, 0, `advisory-first peer failed: ${peerResult.err}${peerResult.out}`);
     psql("INSERT INTO public.quotes(id,value) VALUES ('new','inserted'); INSERT INTO public.customers(id,value) VALUES ('new','inserted');");
     assert.equal(scalar("SELECT row_version FROM public.quotes WHERE id='new'"), '1');
     assert.equal(scalar("SELECT row_version FROM public.customers WHERE id='new'"), '1');
-    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order,quote_ownership quote_ownership=direct,replay,version,convert quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=payload-bound,current-token-verified insert_defaults=verified');
+    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order,quote_ownership,quote_action_lock_order quote_ownership=direct,replay,version,convert quote_action_lock_order=advisory-before-row quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=payload-bound,current-token-verified insert_defaults=verified');
   } finally {
     docker(['rm', '-f', name], undefined, true);
   }

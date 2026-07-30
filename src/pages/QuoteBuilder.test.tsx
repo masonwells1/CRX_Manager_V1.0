@@ -18,7 +18,10 @@ const {
   mockNotifyLargeOrder,
   mockTrackBusinessEvent,
   mockSendOrderConfirmedEmail,
+  mockResetIdempotencyKey,
+  quoteIdempotencyState,
 } = vi.hoisted(() => {
+  const quoteIdempotencyState = { generation: 0 };
   return {
     mockFrom: vi.fn(),
     mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
@@ -30,6 +33,8 @@ const {
     mockNotifyLargeOrder: vi.fn(),
     mockTrackBusinessEvent: vi.fn(),
     mockSendOrderConfirmedEmail: vi.fn(),
+    mockResetIdempotencyKey: vi.fn(() => { quoteIdempotencyState.generation += 1; }),
+    quoteIdempotencyState,
   };
 });
 
@@ -111,7 +116,7 @@ vi.mock('../lib/db', () => ({
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
-  RpcErrorCodes: { QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT' },
+  RpcErrorCodes: { QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
   sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
 }));
 
@@ -129,7 +134,10 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
+  useIdempotencyKey: () => ({
+    getKey: () => `test-idem-key-${quoteIdempotencyState.generation}`,
+    resetKey: mockResetIdempotencyKey,
+  }),
 }));
 
 vi.mock('../hooks/useUnsavedChanges', () => ({
@@ -249,6 +257,7 @@ describe('QuoteBuilder', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    quoteIdempotencyState.generation = 0;
     dirtyStates.length = 0;
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
@@ -473,6 +482,48 @@ describe('QuoteBuilder', () => {
       }),
     }));
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.anything());
+  });
+
+  it('recovers a legacy cached save after the migration boundary and releases its unusable key', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    let saveAttempts = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name !== 'save_quote') return Promise.resolve({ data: null, error: null });
+      saveAttempts += 1;
+      return Promise.resolve(saveAttempts === 1
+        ? { data: null, error: { message: 'IDEMPOTENCY_PAYLOAD_CONFLICT' } }
+        : { data: { quote_id: quote.id, row_version: 8 }, error: null });
+    });
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+
+    expect(await screen.findByText('Reload Quote')).toBeInTheDocument();
+    expect(mockRpc).toHaveBeenLastCalledWith('save_quote', expect.objectContaining({
+      p_idempotency_key: 'test-idem-key-0',
+    }));
+    expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Reload Quote'));
+    await waitFor(() => expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument());
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('Save Draft'));
+    await waitFor(() => expect(mockRpc).toHaveBeenLastCalledWith('save_quote', expect.objectContaining({
+      p_idempotency_key: 'test-idem-key-1',
+    })));
   });
 
   it('keeps a pre-migration existing Quote save compatible when both tokens are absent', async () => {

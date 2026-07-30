@@ -56,7 +56,13 @@ confirmation email. The pending migration now owner-gates the privileged
 quote-version and conversion RPCs before mutation or idempotent replay. Quote
 and Customer save replays are bound to the complete request and release a
 cached token only while the target still has the exact post-save version; a
-later writer forces reload instead of releasing stale proof. The
+later writer forces reload instead of releasing stale proof. A complete recovery
+reload now rotates the possibly committed save key, including a legacy cached
+result that crosses the migration boundary, so the next reviewed save cannot
+loop on the retired request. Quote-version and conversion wrappers preserve the
+owner check before replay while taking their idempotency advisory lock before
+the Quote row lock, preventing a cross-operation key collision from reversing
+the canonical lock order. The
 rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
 planned-hold synchronization helper chain too.
 Verification passed

@@ -74,7 +74,10 @@ export default function CustomerDetail() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
-  const saveCustomerIdem = useIdempotencyKey('save_customer', profile?.id || '');
+  const {
+    getKey: getSaveCustomerIdempotencyKey,
+    resetKey: resetSaveCustomerIdempotencyKey,
+  } = useIdempotencyKey('save_customer', profile?.id || '');
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>({
@@ -258,6 +261,9 @@ export default function CustomerDetail() {
       // token as soon as this page has ever loaded one.
       installedSnapshot = await fetchCustomerSnapshot(customerRowVersionRef.current !== null);
       if (installedSnapshot) {
+        // The rejected key may represent a committed save whose response was
+        // lost. Rotate it only after a complete authoritative reload succeeds.
+        resetSaveCustomerIdempotencyKey();
         setIsDirty(false);
         setStaleSaveOpen(false);
       }
@@ -276,7 +282,7 @@ export default function CustomerDetail() {
       }));
     }
     return installedSnapshot;
-  }, [fetchCustomerSnapshot]);
+  }, [fetchCustomerSnapshot, resetSaveCustomerIdempotencyKey]);
 
   useEffect(() => {
     // Fetch all customers for parent selector
@@ -610,7 +616,7 @@ export default function CustomerDetail() {
         is_default: addr.is_default,
       }));
 
-      const idemKey = saveCustomerIdem.getKey();
+      const idemKey = getSaveCustomerIdempotencyKey();
       const { data, error } = await supabase.rpc('save_customer', {
         // save_customer accepts NULL p_customer_id to create a new customer
         // (live signature is nullable; generated type narrows it to string).
@@ -623,13 +629,14 @@ export default function CustomerDetail() {
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.CUSTOMER_STALE_WRITE)
-          || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)) {
+          || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)
+          || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
           setStaleSaveOpen(true);
         } else {
           toast('error', error.message);
         }
       } else {
-        saveCustomerIdem.resetKey();
+        resetSaveCustomerIdempotencyKey();
         const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null; row_version?: unknown }>(data, 'save_customer');
         const rowVersionResult = resolveAuthoritativeSaveRowVersion(
           customerRowVersionRef.current,

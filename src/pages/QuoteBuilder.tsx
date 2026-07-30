@@ -215,7 +215,10 @@ export default function QuoteBuilder() {
   const location = useLocation();
   const { toast } = useToast();
   const { profile } = useAuth();
-  const saveQuoteIdem = useIdempotencyKey('save_quote', profile?.id || '');
+  const {
+    getKey: getSaveQuoteIdempotencyKey,
+    resetKey: resetSaveQuoteIdempotencyKey,
+  } = useIdempotencyKey('save_quote', profile?.id || '');
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   const plannedHoldsIdem = useIdempotencyKey('create_planned_holds', profile?.id || '');
   const saveTemplateIdem = useIdempotencyKey('save_quote_template', profile?.id || '');
@@ -869,6 +872,9 @@ export default function QuoteBuilder() {
       // been loaded for this quote.
       installedSnapshot = await fetchQuote(quoteId, quoteNumericVersionRequiredRef.current);
       if (installedSnapshot) {
+        // The rejected key may represent a committed save whose response was
+        // lost. Rotate it only after a complete authoritative reload succeeds.
+        resetSaveQuoteIdempotencyKey();
         setIsDirty(false);
         setStaleSaveOpen(false);
       }
@@ -887,7 +893,7 @@ export default function QuoteBuilder() {
       }));
     }
     return installedSnapshot;
-  }, [fetchQuote, quoteId]);
+  }, [fetchQuote, quoteId, resetSaveQuoteIdempotencyKey]);
 
   useEffect(() => {
     fetchReferenceData();
@@ -1379,7 +1385,7 @@ export default function QuoteBuilder() {
     }));
 
     try {
-      const idemKey = saveQuoteIdem.getKey();
+      const idemKey = getSaveQuoteIdempotencyKey();
       const { data, error } = await supabase.rpc('save_quote', {
         p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
         p_quote_payload: quotePayload as Json,
@@ -1390,7 +1396,8 @@ export default function QuoteBuilder() {
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
-          || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)) {
+          || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)
+          || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
           quoteVersionRecoveryRequiredRef.current = true;
           setStaleSaveOpen(true);
           return null;
@@ -1399,7 +1406,7 @@ export default function QuoteBuilder() {
         return null;
       }
 
-      saveQuoteIdem.resetKey();
+      resetSaveQuoteIdempotencyKey();
       const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown }>(data, 'save_quote');
       const savedQuoteId = result.quote_id || quoteId;
       if (!savedQuoteId) {
