@@ -66,7 +66,7 @@ the canonical lock order. The
 rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
 planned-hold synchronization helper chain too.
 Verification passed
-4,045 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
+4,106 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
 SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains
 unapplied; frontend-first deployment and live migration apply remain separate gates.
