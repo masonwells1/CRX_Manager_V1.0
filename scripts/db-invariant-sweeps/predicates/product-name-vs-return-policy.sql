@@ -74,9 +74,16 @@
 -- * The negation does not always come first. "RETURNS NOT ACCEPTED" and
 --   "RETURN NOT ALLOWED" reject a return just as plainly, and every
 --   negation-first alternative misses them. A return-first alternative covers
---   that word order, again over a closed verb list (accepted/allowed/
---   permitted) so that an ordinary name like "RETURN LABEL NOT INCLUDED" does
---   not flag.
+--   that word order. It allows a run of auxiliaries before NOT and an optional
+--   BE after it, so "RETURNS WILL NOT BE ACCEPTED" and "RETURNS CANNOT BE
+--   ACCEPTED" match (CANNOT is read as CAN + NOT), over a closed verb list so
+--   that an ordinary name like "RETURN LABEL NOT INCLUDED" does not flag.
+--
+--   A phrase-matching detector can always be widened by another synonym; the
+--   list here is the reviewed set, and the live catalog is separately proven
+--   fully covered (all 21 no_return products match, nothing else does). Adding
+--   a phrase later is a one-line change plus a fixture — it does not need a
+--   migration, because this is a detector rather than a constraint.
 --
 --   Regression cases for the intended phrase set — and for the near-miss false
 --   positives — are asserted in
@@ -100,7 +107,7 @@ WITH flagged AS (
          p.return_policy,
          p.is_active
     FROM public.products p
-   WHERE p.product_name ~* '(\mnon[[:space:][:punct:]]*(return(s)?\M(?![[:space:][:punct:]]*valves?\M)|((refundable|exchangeable)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?returnable\M))|(\mno[[:space:][:punct:]]*((refunds?|exchanges?|credits?)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?return(s|able)?\M)|(\mnot[[:space:][:punct:]]*((refundable|exchangeable)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?returnable\M)|(\mreturns?[[:space:][:punct:]]*((are|is)[[:space:][:punct:]]*)?not[[:space:][:punct:]]*(accepted|allowed|permitted)\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*(are[[:space:][:punct:]]*)?final\M)'
+   WHERE p.product_name ~* '(\mnon[[:space:][:punct:]]*(return(s)?\M(?![[:space:][:punct:]]*valves?\M)|((refundable|exchangeable)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?returnable\M))|(\mno[[:space:][:punct:]]*((refunds?|exchanges?|credits?)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?return(s|able)?\M)|(\mnot[[:space:][:punct:]]*((refundable|exchangeable)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?returnable\M)|(\mreturns?[[:space:][:punct:]]*((are|is|will|would|shall|can|could|may|might|must|do|does|did)[[:space:][:punct:]]*)*not[[:space:][:punct:]]*(be[[:space:][:punct:]]*)?(accepted|acceptable|allowed|allowable|permitted|permissible|honored|honoured)\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*(are[[:space:][:punct:]]*)?final\M)'
 )
 SELECT 'products:' || f.id::text AS violation_key,
        'product name asserts it cannot be returned but return_policy is '

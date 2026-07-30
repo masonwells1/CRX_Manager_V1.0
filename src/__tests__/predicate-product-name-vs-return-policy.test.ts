@@ -158,6 +158,12 @@ const MUST_MATCH: Array<[string, string]> = [
   ['RETURNS NOT ACCEPTED', 'ITEM TWENTYEIGHT RETURNS NOT ACCEPTED'],
   ['RETURN NOT ALLOWED, singular', 'ITEM TWENTYNINE RETURN NOT ALLOWED'],
   ['RETURNS ARE NOT PERMITTED, with the filler verb', 'ITEM THIRTY RETURNS ARE NOT PERMITTED'],
+  // Auxiliaries and an optional BE. CANNOT is read as CAN + NOT.
+  ['RETURNS WILL NOT BE ACCEPTED', 'ITEM THIRTYTHREE RETURNS WILL NOT BE ACCEPTED'],
+  ['RETURNS CANNOT BE ACCEPTED', 'ITEM THIRTYFOUR RETURNS CANNOT BE ACCEPTED'],
+  ['RETURNS ARE NOT HONORED', 'ITEM THIRTYFIVE RETURNS ARE NOT HONORED'],
+  ['RETURN MAY NOT BE ALLOWED', 'ITEM THIRTYSIX RETURN MAY NOT BE ALLOWED'],
+  ['RETURNS ARE NOT ACCEPTABLE', 'ITEM THIRTYSEVEN RETURNS ARE NOT ACCEPTABLE'],
 ];
 
 // Near misses. Each of these contains the letters of a trigger phrase but does
@@ -183,6 +189,7 @@ const MUST_NOT_MATCH: Array<[string, string]> = [
   // in one name do not by themselves reject a return.
   ['RETURN and NOT with an unlisted verb', 'RETURN LABEL NOT INCLUDED'],
   ['RETURN as a plumbing term', 'RETURN LINE NOT PRESSURIZED'],
+  ['an auxiliary without a negation', 'RETURN WILL BE SCHEDULED'],
 ];
 
 describe('product-name-vs-return-policy predicate pattern', () => {

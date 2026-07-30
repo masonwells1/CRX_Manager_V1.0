@@ -119,7 +119,11 @@ refund/exchange/credit clause is now permitted there, from a closed vocabulary �
 filler words would flag names like "NO TILL SEED RETURN TRAY". The fourth round extended that clause
 to the NON spelling and added the opposite word order: "RETURNS NOT ACCEPTED" and "RETURN NOT
 ALLOWED" reject a return just as plainly, and every negation-first alternative missed them. The verb
-list is closed for the same reason — "RETURN LABEL NOT INCLUDED" must not flag.
+list is closed for the same reason — "RETURN LABEL NOT INCLUDED" must not flag. A fifth round widened
+that branch to auxiliaries ("RETURNS WILL NOT BE ACCEPTED", "RETURNS CANNOT BE ACCEPTED"). A
+phrase-matching detector can always be widened by another synonym, so the list is the reviewed set
+rather than a claim of completeness; the live catalog is separately proven fully covered, and adding
+a phrase later is a one-line change plus a fixture, not a migration.
 
 The **containment guard** took three rounds of its own. These are output-safety fixes, not detection
 fixes: they govern what the sweep may emit into a public repo, and none of them changes which
