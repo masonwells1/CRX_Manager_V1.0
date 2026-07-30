@@ -414,9 +414,16 @@ $rls$;`);
   // checking one extra role would leave the same hole one level down -- a
   // predicate narrowed to "sales_rep or driver" passes a two-role probe.
   const roleCheck=scalar(`SELECT coalesce(pg_get_constraintdef(c.oid),'<missing>') FROM pg_constraint c WHERE c.conname='profiles_role_check' AND c.conrelid='public.profiles'::regclass;`);
-  const declaredRoles=[...new Set([...roleCheck.matchAll(/'([a-z_]+)'::text/g)].map(m=>m[1]))].sort();
+  // Take EVERY quoted literal, then insist each one is a plain identifier. A
+  // narrower pattern would silently skip a role it did not match, which is the
+  // one failure mode this probe cannot afford: a skipped role is an unproven
+  // role that still reads as green.
+  const declaredRoles=[...new Set([...roleCheck.matchAll(/'([^']*)'::text/g)].map(m=>m[1]))].sort();
   if(!declaredRoles.length) throw new Error(`could not enumerate profiles roles from profiles_role_check, so the role-agnostic gate cannot be proven: ${roleCheck}`);
-  const roleProbes=declaredRoles.map((role,i)=>({role,id:`00000000-0000-0000-0000-0000000000b${i+1}`}));
+  const oddRoles=declaredRoles.filter(r=>!/^[a-z0-9_]{1,40}$/.test(r));
+  if(oddRoles.length) throw new Error(`profiles_role_check declares role(s) this probe cannot safely template into a fixture, so they would go unproven: ${oddRoles.join(', ')} -- teach this proof to handle them rather than skipping them`);
+  if(declaredRoles.length>99) throw new Error(`too many declared roles to allocate distinct probe uuids: ${declaredRoles.length}`);
+  const roleProbes=declaredRoles.map((role,i)=>({role,id:`00000000-0000-0000-0000-000000000b${String(i+1).padStart(2,'0')}`}));
   const rlsBehavior=sql(`BEGIN;
 INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a003'),${roleProbes.map(p=>`('${p.id}')`).join(',')} ON CONFLICT DO NOTHING;
 INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a003','phase3-deactivated@example.invalid','sales_rep',false),${roleProbes.map(p=>`('${p.id}','phase3-${p.role}@example.invalid','${p.role}',true)`).join(',')} ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=excluded.is_active;
