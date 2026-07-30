@@ -216,6 +216,31 @@ function destinationIsPublishable(outDir) {
     .filter((line) => /\(push\)\s*$/.test(line))
     .map((line) => line.trim().split(/\s+/)[1] || "")
     .filter(Boolean);
+
+  // A remote URL can carry a credential (`https://<token>@github.com/...`), and
+  // canonical identity deliberately ignores it — so a token-bearing URL was
+  // accepted and then printed for the runbook to reuse, putting it into terminal
+  // output, transcripts and shell history (Codex's twelfth 2026-07-30 review).
+  // Refuse the URL outright rather than print a redacted version of it: a remote
+  // that needs an inline token is misconfigured, and the fix (a credential helper,
+  // or SSH) is one command. `ssh://git@host/...` and `git@host:...` are the
+  // ordinary SSH spellings — a bare username is not a credential.
+  const credentialed = pushUrls.filter((url) => {
+    const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/]*)@/.exec(url);
+    if (!scheme) return false;
+    const userinfo = scheme[2];
+    return userinfo.includes(":") || !/^ssh$/i.test(scheme[1]);
+  });
+  if (credentialed.length > 0) {
+    return (
+      `FAIL: refusing to stage — a push remote in this checkout embeds a credential in its URL.\n` +
+      `      (The URL is not reproduced here on purpose.) The runbook prints and reuses the\n` +
+      `      verified push URL, so a token in it would end up in terminal output, transcripts\n` +
+      `      and shell history. Re-point the remote at the plain SSH or HTTPS URL and let a\n` +
+      `      credential helper supply the secret, then re-run. Nothing was written.`
+    );
+  }
+
   if (pushUrls.length > 0 && pushUrls.every((url) => canonicalRepoId(url) === BACKUP_REPO_ID)) {
     // Being the right repository is not the same as still being private. A
     // visibility flip on GitHub would silently turn every future snapshot into a

@@ -23,6 +23,8 @@ import {
   proofValid,
   repoIsGuardedApp,
   urlIsGuardedApp,
+  pushUsesTransportEnv,
+  environmentCarriesTransportOverride,
   pushDestinationToken,
   destinationLooksLikeUrl,
   pushUsesInlineConfig,
@@ -389,6 +391,48 @@ assert.deepEqual(
 // --- GIT_CONFIG* environment overrides (Codex 2026-07-30, round 3) ------------
 // Proven live: with `origin` pointing elsewhere, GIT_CONFIG_KEY_0=
 // remote.origin.pushurl redirected the push to a different repository.
+// ── round 12: transport variables, wherever they are written ────────────────
+assert.deepEqual(
+  pushUsesTransportEnv(`export GIT_SSH_COMMAND="sh -c evil"; git push origin HEAD:main`),
+  ["GIT_SSH_COMMAND"], "a prior-segment export is in scope",
+);
+assert.deepEqual(
+  pushUsesTransportEnv(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" git push origin HEAD:main`),
+  [], "the documented keepalive value is allowed wherever it appears",
+);
+assert.deepEqual(
+  pushUsesTransportEnv(`export GIT_SSH_COMMAND='ssh -o BatchMode=yes'; git push origin main`),
+  [], "single-quoted keepalive too",
+);
+assert.deepEqual(
+  pushUsesTransportEnv(`echo $GIT_SSH_COMMAND && git push origin main`),
+  ["GIT_SSH_COMMAND"], "a mention the guard cannot verify fails CLOSED",
+);
+assert.deepEqual(pushUsesTransportEnv(`git push origin main`), [], "an ordinary push names none");
+assert.deepEqual(pushUsesTransportEnv(`export GIT_SSH_COMMAND=evil; echo hi`), [], "not a push at all");
+assert.deepEqual(
+  environmentCarriesTransportOverride({ GIT_SSH_COMMAND: "sh -c evil", PATH: "/usr/bin" }),
+  ["GIT_SSH_COMMAND"], "an inherited arbitrary value is reported",
+);
+assert.deepEqual(
+  environmentCarriesTransportOverride({ GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20", GIT_TERMINAL_PROMPT: "0" }),
+  [], "inherited values in the sanctioned shapes are not",
+);
+assert.deepEqual(
+  environmentCarriesTransportOverride({ GIT_ASKPASS: "/tmp/x", GIT_PROXY_COMMAND: "/tmp/y" }).sort(),
+  ["GIT_ASKPASS", "GIT_PROXY_COMMAND"], "every offending name is listed, not just the first",
+);
+// Git exports GIT_EXEC_PATH into every hook it runs, so an inherited one says
+// nothing about intent. Treating it as an offender denied ordinary pushes.
+assert.deepEqual(
+  environmentCarriesTransportOverride({ GIT_EXEC_PATH: "C:/Program Files/Git/mingw64/libexec/git-core" }),
+  [], "an inherited GIT_EXEC_PATH is git's own export, not a finding",
+);
+assert.deepEqual(
+  pushUsesTransportEnv(`GIT_EXEC_PATH=/tmp/evil git push origin main`),
+  ["GIT_EXEC_PATH"], "writing it into the command is still a deliberate act",
+);
+
 const CRX_URL = "git@github.com:masonwells1/CRX_Manager_V1.0.git";
 assert.equal(
   pushUsesConfigEnv(`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=${CRX_URL} git -C /repo push origin main`),
@@ -769,6 +813,40 @@ assert.equal(pushDestinationToken("git push"), null);
       `git -C ${work} push ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git HEAD:main`,
       /codex/i,
       "the port-443 ssh endpoint does not disguise the production destination",
+    );
+
+    // Round 12, end-to-end: a transport variable set in a segment of its OWN.
+    // Every per-push-prefix detector reported clean while the push ran whatever
+    // that variable names — Codex's own probe demonstrated it.
+    deniedBecause(
+      `export GIT_SSH_COMMAND="sh -c 'ssh prod git-receive-pack repo.git'"; ${push}`,
+      /GIT_SSH_COMMAND/,
+      "a transport variable exported in an earlier segment is not out of scope",
+    );
+    deniedBecause(
+      `$env:GIT_SSH_COMMAND = "sh -c 'ssh prod git-receive-pack repo.git'"; ${push}`,
+      /GIT_SSH_COMMAND/,
+      "and its PowerShell spelling",
+    );
+    deniedBecause(`GIT_PROXY_COMMAND=/tmp/evil ${push}`, /GIT_PROXY_COMMAND/, "a proxy command is a command too");
+    deniedBecause(`export GIT_ASKPASS=/tmp/evil; ${push}`, /GIT_ASKPASS/, "so is an askpass helper");
+    // Inherited rather than written: unlike GIT_CONFIG*, sharing the environment
+    // does NOT neutralise this — it changes what the push runs, not what the
+    // guard reads.
+    {
+      const result = runHook(push, { GIT_SSH_COMMAND: "sh -c 'ssh prod git-receive-pack repo.git'" });
+      assert.equal(result.decision, "deny", "an inherited transport variable denies");
+      assert.match(result.reason || "", /GIT_SSH_COMMAND/, "and the denial names it");
+    }
+    assert.equal(
+      runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,
+      "allow",
+      "an inherited keepalive value in the documented shape still works",
+    );
+    assert.equal(
+      runHook(`export GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20"; ${push}`).decision,
+      "allow",
+      "and the same value written in an earlier segment",
     );
 
     // Controls: the guard must not have become a blanket denier. Both of these

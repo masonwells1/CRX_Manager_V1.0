@@ -638,6 +638,72 @@ export function pushSetsInlineEnv(cmd) {
   return names;
 }
 
+// The asymmetry argument above — "a variable set by an earlier command is
+// inherited by BOTH, so the guard reads what the push will read" — is true of
+// variables that select CONFIGURATION, and false of variables that select an
+// EXECUTABLE. GIT_SSH_COMMAND does not change one byte of what this guard
+// resolves; it changes what the push actually runs, and it can run
+// `git-receive-pack` against production no matter which destination git hands it.
+// So `export GIT_SSH_COMMAND="…"; git push origin HEAD:main` was clean by every
+// detector here while being a production push (Codex's twelfth 2026-07-30 review,
+// confirmed by its own read-only probe). These names are therefore checked across
+// the WHOLE command, not just the push's own prefix, and by VALUE — the sanctioned
+// keepalive shape keeps working wherever it is written, everything else is named
+// and denied.
+const TRANSPORT_ENV_NAMES = [
+  "GIT_SSH_COMMAND", "GIT_SSH", "GIT_SSH_VARIANT", "GIT_PROXY_COMMAND",
+  "GIT_ASKPASS", "SSH_ASKPASS", "GIT_EXEC_PATH", "GIT_CREDENTIAL_HELPER",
+  "GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL_FROM_USER", "GIT_TERMINAL_PROMPT",
+];
+const TRANSPORT_ENV_RE = new RegExp(
+  `(?<![A-Za-z0-9_])(${TRANSPORT_ENV_NAMES.join("|")})(?![A-Za-z0-9_])`, "gi",
+);
+function transportValueIsAllowed(name, rawValue) {
+  const shape = INLINE_ENV_ALLOWED.get(String(name).toUpperCase());
+  if (!shape) return false;
+  let value = String(rawValue ?? "");
+  const quoted = /^(['"])([\s\S]*)\1$/.exec(value.trim());
+  return shape.test(quoted ? quoted[2].trim() : value.trim());
+}
+export function pushUsesTransportEnv(cmd) {
+  const text = String(cmd || "");
+  if (!isGitPush(text)) return [];
+  const offenders = new Set();
+  for (const match of text.matchAll(TRANSPORT_ENV_RE)) {
+    // `NAME=value`, `export NAME=value`, and PowerShell's `$env:NAME = "value"`
+    // all leave `=` next. Anything else that merely NAMES one of these (`echo
+    // $GIT_SSH_COMMAND`, a value built up elsewhere) is unverifiable, so it is
+    // reported too — fail closed, as everywhere else in this guard.
+    const assign = /^\s*=\s*("[^"]*"|'[^']*'|[^\s;&|]*)/.exec(text.slice(match.index + match[1].length));
+    if (!assign || !transportValueIsAllowed(match[1], assign[1])) offenders.add(match[1]);
+  }
+  return [...offenders];
+}
+// And the same names arriving from the shell the push will inherit. Unlike
+// GIT_CONFIG*, an inherited transport variable is NOT neutralised by the guard
+// reading the same environment, for exactly the reason above.
+// Matched against the whole name, not searched for inside it — and NOT with the
+// /g/ pattern above, whose lastIndex advances on every `.test()` and would skip
+// every second variable.
+//
+// GIT_EXEC_PATH is excluded HERE and only here. Git exports it into the
+// environment of every hook it runs, so an ordinary push from a session that
+// started under a git hook inherits it from git itself — its presence carries no
+// signal at all, and treating it as one denied every ordinary feature-branch
+// push (caught by the tracked guard suite before this shipped). Written into a
+// command it is still a deliberate act, so `pushUsesTransportEnv` keeps checking
+// it. The residual risk is stated rather than hidden: a GIT_EXEC_PATH planted in
+// an earlier segment is indistinguishable from git's own export, so this rule
+// cannot see it.
+const INHERITED_TRANSPORT_ENV_NAME_SET = new Set(
+  TRANSPORT_ENV_NAMES.filter((name) => name !== "GIT_EXEC_PATH"),
+);
+export function environmentCarriesTransportOverride(env) {
+  return Object.keys(env || {}).filter(
+    (key) => INHERITED_TRANSPORT_ENV_NAME_SET.has(key.toUpperCase()) && !transportValueIsAllowed(key, env[key]),
+  );
+}
+
 // URL rewrites are the other way inline-free config can redirect a push:
 //   url.<CRX Manager URL>.pushInsteadOf = crx:
 // turns an innocuous-looking `git push crx: main` into a production push, and

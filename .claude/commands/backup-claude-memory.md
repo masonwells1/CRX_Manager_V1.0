@@ -20,6 +20,8 @@ It **fails** rather than shipping a bad backup if the source is empty, is missin
 
 The staging directory is checked before anything is written. If it sits inside a git checkout where the files would be committable, then **every push destination in that checkout** must be `masonwells1/CRX_Backups` — the notes may be tracked in exactly one repository, and every other case is refused: a wrong clone, a fork, no remote at all, a second remote pointing elsewhere, or a remote that fetches from the backup but pushes somewhere else (`git remote set-url --push` splits those two, and only the push URL says where a push lands). A path the repo ignores, or a directory outside git entirely, is always fine and skips these checks.
 
+A push remote whose URL embeds a credential (`https://<token>@github.com/…`) is refused outright, and the refusal does not reprint the URL — because the verified URL is printed and reused below, a token in it would land in terminal output, transcripts, and shell history. Use the plain SSH or HTTPS URL with a credential helper. A bare `git@` username is the ordinary SSH spelling, not a credential.
+
 When the destination is the backup clone the script also asks GitHub whether that repo is still private, and **refuses unless the answer is `PRIVATE`** — including when `gh` cannot answer at all. Publishing these notes cannot be undone, so an unproven-private destination parks rather than warns: fix the check (`gh auth status`, or reconnect) and re-run, or stage outside the repo if you only wanted a local copy. On success the script prints the exact push URL it verified — that is the destination step 4 pushes to.
 
 ### 2. Copy into a clone of the private repo

@@ -255,6 +255,40 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round twelve: a variable that picks a command is not a variable that picks a config
+
+Two blockers.
+
+**A transport variable set in a segment of its own was invisible.** The inline-environment rule
+inspects each push's own prefix — the right scope for a variable that has to be attached to the
+command to matter — and the inherited-environment rule deliberately covers only `GIT_CONFIG*`, on the
+documented reasoning that a variable set earlier is inherited by the guard too, so the guard reads the
+very config the push will use. That reasoning holds for variables that select *configuration* and
+fails for variables that select an *executable*. `GIT_SSH_COMMAND` changes nothing this guard
+resolves; it changes what the push runs, and it can run `git-receive-pack` against production no
+matter which destination git hands it. So `export GIT_SSH_COMMAND="…"; git push origin HEAD:main` was
+clean by every detector while being a production push — the reviewer's own read-only probe showed it.
+`GIT_SSH_COMMAND` and its relatives (`GIT_SSH`, `GIT_PROXY_COMMAND`, `GIT_ASKPASS`, `GIT_EXEC_PATH`,
+and the rest) are now checked across the whole command *and* in the inherited environment, by value —
+the sanctioned keepalive shape keeps working wherever it is written, and a mention the guard cannot
+verify fails closed like everything else here.
+
+One exception, found by the tracked guard suite before this shipped: git exports `GIT_EXEC_PATH` into
+the environment of every hook it runs, so an *inherited* one is git's own doing and says nothing about
+intent — reporting it denied ordinary feature-branch pushes. It is excluded from the inherited scan
+only; written into a command it is still a deliberate act and still denied.
+
+**A remote URL can carry a token, and this one got printed.** Canonical repository identity ignores
+credentials by design, so `https://<token>@github.com/masonwells1/CRX_Backups.git` was accepted — and
+the round-eleven change then echoed the verified URL for the runbook to reuse, putting the token into
+terminal output, transcripts, and shell history. A credential-bearing push remote is refused outright,
+and the refusal does not reproduce the URL. A bare `git@` username is the ordinary SSH spelling and is
+unaffected.
+
+Three mutations — disabling the whole-command scan, the inherited-environment scan, and the
+credential refusal — each turn the suites red on their own case; the third staged successfully while
+mutated, which is the finding itself.
+
 ### Round eleven: one repository has several hostnames, and fetching is not pushing
 
 Three findings, all real.

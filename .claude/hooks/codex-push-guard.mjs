@@ -27,10 +27,12 @@ import {
   pushUsesInlineConfig,
   pushUsesConfigEnv,
   pushUsesConfigRootEnv,
+  pushUsesTransportEnv,
   pushSetsInlineEnv,
   shellSegments,
   unknownPushOptions,
   environmentCarriesConfigOverride,
+  environmentCarriesTransportOverride,
   destinationLooksLikeUrl,
   pushDestinationToken,
   repoIsGuardedApp,
@@ -85,6 +87,23 @@ if (pushUsesConfigRootEnv(cmd)) {
 const inlineEnv = pushSetsInlineEnv(cmd);
 if (inlineEnv.length > 0) {
   deny(`CODEX GATE: this push sets environment variables inline (${inlineEnv.join(", ")}). The guard resolves the destination in its own environment, so any variable the push carries and the guard does not makes the two disagree. The only prefixes accepted are GIT_TERMINAL_PROMPT=0/1 and GIT_SSH_COMMAND in its exact documented keepalive shape (\`ssh\` with ServerAliveInterval/ServerAliveCountMax/BatchMode options and nothing else) — GIT_SSH_COMMAND is a command line git executes, so any other value can run git-receive-pack against production while this guard reads only the nominal destination.`);
+}
+// The rule above only inspects each push's OWN prefix, which is the right scope
+// for a variable that must be attached to the command to matter. A transport
+// variable is not that: `export GIT_SSH_COMMAND="…"; git push origin HEAD:main`
+// sets it in a segment of its own, and the push then looks entirely ordinary.
+// Checked across the whole command, and by value, so the sanctioned keepalive
+// shape still works wherever it is written.
+const transportEnv = pushUsesTransportEnv(cmd);
+if (transportEnv.length > 0) {
+  deny(`CODEX GATE: this command sets or names transport variables (${transportEnv.join(", ")}) somewhere other than the sanctioned keepalive form. GIT_SSH_COMMAND and its relatives are command lines git EXECUTES — they do not change what this guard resolves, so one set in an earlier segment can run git-receive-pack against production while the push itself looks ordinary. Unset it, or use the documented \`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=…"\` shape.`);
+}
+// And the same variables arriving from the surrounding shell. Unlike GIT_CONFIG*,
+// an inherited one is NOT neutralised by this guard sharing the environment: it
+// changes what the push runs, not what the guard reads.
+const inheritedTransport = environmentCarriesTransportOverride(process.env);
+if (inheritedTransport.length > 0) {
+  deny(`CODEX GATE: this shell already has transport variables set (${inheritedTransport.join(", ")}) whose values are outside the sanctioned keepalive shape. They select a command git executes, so the push could reach production regardless of the destination this guard inspected. Unset them before pushing.`);
 }
 // The destination is read by walking argv, and that walk has to know which
 // options swallow the following token. `--recurse-submodules no <url>` slipped

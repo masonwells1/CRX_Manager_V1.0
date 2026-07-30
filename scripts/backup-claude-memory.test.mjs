@@ -41,6 +41,15 @@ const quiet = (fn) => {
   console.log = () => {}; console.error = () => {};
   try { return fn(); } finally { console.log = log; console.error = error; }
 };
+// Same, but hands back what would have been printed — for checking that a refusal
+// does NOT reproduce something secret it was handed.
+const captured = (fn) => {
+  const { log, error } = console;
+  let said = "";
+  const sink = (...args) => { said += `${args.join(" ")}\n`; };
+  console.log = sink; console.error = sink;
+  try { return { value: fn(), said }; } finally { console.log = log; console.error = error; }
+};
 const readManifest = (dir) => JSON.parse(readFileSync(path.join(dir, MANIFEST), "utf8"));
 const writeManifest = (dir, manifest) => writeFileSync(path.join(dir, MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
 
@@ -372,6 +381,27 @@ try {
       eq(quiet(() => stage(landing, notes)), 1, "a private fetch URL does not excuse a public push URL");
       ok(!readdirSafe(landing), "and nothing is written when the push destination is wrong");
     }
+    // ── round 12: a remote URL can carry a token, and this one gets printed ───
+    // Canonical identity ignores credentials, so a token-bearing URL for the RIGHT
+    // repo was accepted — and then echoed for the runbook to reuse.
+    {
+      const tokened = makeRepo(
+        "tokened-backup-repo",
+        "https://ghp_EXAMPLETOKENVALUE0000000000@github.com/masonwells1/CRX_Backups.git",
+        "",
+      );
+      const landing = path.join(tokened, "claude-memory");
+      const run = captured(() => stage(landing, notes));
+      eq(run.value, 1, "a credential-bearing push URL is refused");
+      ok(!readdirSafe(landing), "and nothing is written");
+      ok(!/ghp_EXAMPLETOKENVALUE/.test(run.said), "and the refusal does not reprint the token");
+    }
+    // A bare `git@` username is the ordinary SSH spelling, not a credential.
+    {
+      const ssh = makeRepo("ssh-backup-repo", "git@github.com:masonwells1/CRX_Backups.git", "");
+      eq(quiet(() => stage(path.join(ssh, "claude-memory"), notes)), 0, "the plain ssh remote is still fine");
+    }
+
     // One good remote does not license a second, wrong one: `git push <name>` picks.
     {
       const extra = makeRepo("backup-plus-stray-repo", "https://github.com/masonwells1/CRX_Backups.git", "");
