@@ -430,6 +430,13 @@ function assertQuoteActionLockOrder(source) {
     assert.ok(replayExpectedBinding > lockedOwnerReject && replayPostVersionBinding > replayExpectedBinding && replayReturn > replayPostVersionBinding, `${functionName} replay must bind the request token and current post-mutation token`);
     assert.ok(freshVersionGuard > replayReturn && innerMutation > freshVersionGuard, `${functionName} must compare the locked current token before its inner mutation`);
     assert.match(body, /SET result = v_result \|\| jsonb_build_object\([\s\S]*?'_quote_id'[\s\S]*?'_expected_row_version'[\s\S]*?'_post_row_version'/, `${functionName} must persist lifecycle replay bindings`);
+    if (functionName === 'create_quote_version') {
+      assert.match(
+        body,
+        /v_result := v_result \|\| jsonb_build_object\(\s*'row_version', v_post_row_version\s*\);[\s\S]*?SET result = v_result \|\|/,
+        'create_quote_version must return and cache the authoritative post-mutation row version',
+      );
+    }
   }
 
   const reversed = source.replace(

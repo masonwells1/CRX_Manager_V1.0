@@ -368,6 +368,7 @@ BEGIN
     v_quote, v_admin, 'emailed', 'rv-version-fresh-' || v_suffix, v_quote_after);
   SELECT row_version INTO v_quote_after_second FROM public.quotes WHERE id = v_quote;
   IF v_q->>'status' <> 'created'
+     OR (v_q->>'row_version')::bigint <> v_quote_after_second
      OR v_quote_after_second <> v_quote_after + 1
      OR (SELECT count(*) FROM public.quote_versions WHERE quote_id = v_quote) <> v_versions_before + 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: fresh quote-version action did not commit exactly once';
@@ -376,6 +377,7 @@ BEGIN
     v_quote, v_admin, 'emailed', 'rv-version-fresh-' || v_suffix, v_quote_after);
   IF v_q_replay->>'status' <> 'duplicate'
      OR v_q_replay->>'version_id' IS DISTINCT FROM v_q->>'version_id'
+     OR (v_q_replay->>'row_version')::bigint <> v_quote_after_second
      OR (SELECT row_version FROM public.quotes WHERE id = v_quote) <> v_quote_after_second
      OR (SELECT count(*) FROM public.quote_versions WHERE quote_id = v_quote) <> v_versions_before + 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: quote-version replay was not bound to the original versioned request';

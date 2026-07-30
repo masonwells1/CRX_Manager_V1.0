@@ -946,6 +946,13 @@ BEGIN
   FROM public.quotes
   WHERE id = p_quote_id;
 
+  -- Return the committed token on both first success and cached replay. The
+  -- browser cannot infer N+1 from `status`: a lost response may make its retry
+  -- the first response it observes even though the mutation already committed.
+  v_result := v_result || jsonb_build_object(
+    'row_version', v_post_row_version
+  );
+
   IF p_idempotency_key IS NOT NULL THEN
     UPDATE public.idempotency_keys
     SET result = v_result || jsonb_build_object(

@@ -78,8 +78,16 @@ The disposable proof also demonstrates that the old reverse order deadlocks,
 so a future cross-operation regression cannot silently pass. The
 rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
 planned-hold synchronization helper chain too.
+Final retry review found one more lifecycle edge: a successful version snapshot
+followed by an email failure could reuse its idempotency key with the newer local
+token instead of the original reviewed token. Each version attempt now preserves
+the exact key and pre-mutation token together until the whole action succeeds,
+while the RPC returns the authoritative post-mutation `row_version` on both the
+first response and a cached replay. Regression coverage proves both downstream
+email failure and a lost first RPC response replay without creating a second
+version.
 Verification passed
-4,110 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
+4,112 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
 SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains
 unapplied; frontend-first deployment and live migration apply remain separate gates.

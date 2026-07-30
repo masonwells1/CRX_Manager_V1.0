@@ -230,7 +230,10 @@ export default function QuoteBuilder() {
   const rolloverIdem = useIdempotencyKey('rollover_quote_to_season', profile?.id || '');
   // Version idempotency is quote-specific. Reusing one key after navigating
   // between Quotes could otherwise replay a version created for another Quote.
-  const createVersionIdem = useIdempotencyKey(
+  const {
+    getKey: getCreateVersionIdempotencyKey,
+    resetKey: resetCreateVersionIdempotencyKey,
+  } = useIdempotencyKey(
     'create_quote_version',
     `${profile?.id || ''}:${id || ''}`,
   );
@@ -260,12 +263,34 @@ export default function QuoteBuilder() {
   // Unlike the dialog's open/closed state, this latch survives "Keep Editing".
   // Only a complete, stable Quote reload may clear it.
   const quoteVersionRecoveryRequiredRef = useRef(false);
+  const createVersionAttemptRef = useRef<{
+    key: string;
+    expectedRowVersion: number | null;
+  } | null>(null);
   const resetCreateVersionAfterReloadRef = useRef(false);
   const resetConvertAfterReloadRef = useRef(false);
   // Once this tab has observed a numeric token, recovery must never downgrade
   // it to the frontend-first legacy tokenless contract.
   const quoteNumericVersionRequiredRef = useRef(false);
   const [staleSaveOpen, setStaleSaveOpen] = useState(false);
+
+  const getCreateVersionAttempt = useCallback(() => {
+    const key = getCreateVersionIdempotencyKey();
+    if (createVersionAttemptRef.current?.key === key) {
+      return createVersionAttemptRef.current;
+    }
+    const attempt = {
+      key,
+      expectedRowVersion: quoteRowVersionRef.current,
+    };
+    createVersionAttemptRef.current = attempt;
+    return attempt;
+  }, [getCreateVersionIdempotencyKey]);
+
+  const resetCreateVersionAttempt = useCallback(() => {
+    createVersionAttemptRef.current = null;
+    resetCreateVersionIdempotencyKey();
+  }, [resetCreateVersionIdempotencyKey]);
 
   const [converting, setConverting] = useState(false);
   const [quoteCreatedAt, setQuoteCreatedAt] = useState<string | null>(null);
@@ -882,7 +907,7 @@ export default function QuoteBuilder() {
         // lost. Rotate it only after a complete authoritative reload succeeds.
         resetSaveQuoteIdempotencyKey();
         if (resetCreateVersionAfterReloadRef.current) {
-          createVersionIdem.resetKey();
+          resetCreateVersionAttempt();
           resetCreateVersionAfterReloadRef.current = false;
         }
         if (resetConvertAfterReloadRef.current) {
@@ -908,10 +933,10 @@ export default function QuoteBuilder() {
     }
     return installedSnapshot;
   }, [
-    createVersionIdem,
     convertQuoteIdem,
     fetchQuote,
     quoteId,
+    resetCreateVersionAttempt,
     resetSaveQuoteIdempotencyKey,
   ]);
 
@@ -1909,14 +1934,14 @@ export default function QuoteBuilder() {
       // snapshots the version and atomically sets status='sent'. Keep its
       // quote-scoped idempotency key until the whole send succeeds so a retry
       // after a downstream email failure replays the same snapshot.
-      const freezeVerKey = createVersionIdem.getKey();
       const previousRowVersion = quoteRowVersionRef.current;
+      const freezeAttempt = getCreateVersionAttempt();
       const { data: freezeVer, error: freezeErr } = await createQuoteVersionWithRowVersion({
         p_quote_id: quoteId,
         p_performed_by: profile.id,
         p_method: 'emailed',
-        p_idempotency_key: freezeVerKey,
-        p_expected_row_version: previousRowVersion,
+        p_idempotency_key: freezeAttempt.key,
+        p_expected_row_version: freezeAttempt.expectedRowVersion,
       });
       if (freezeErr) throw freezeErr;
       const freezeResult = freezeVer;
@@ -1924,7 +1949,7 @@ export default function QuoteBuilder() {
       const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(
         quoteId,
         previousRowVersion,
-        previousRowVersion === null ? null : previousRowVersion + (freezeResult.status === 'duplicate' ? 0 : 1),
+        previousRowVersion === null ? null : readRowVersion(freezeResult.row_version),
         'sent',
       );
       fetchVersions();
@@ -1935,7 +1960,7 @@ export default function QuoteBuilder() {
         // A new key makes the next same-tab attempt create and confirm a fresh
         // snapshot of the reloaded authoritative Quote instead of replaying the
         // mismatched version. A remount naturally receives a new key too.
-        createVersionIdem.resetKey();
+        resetCreateVersionAttempt();
         toast('error', 'The quote was frozen, but the email was NOT sent. Reload the quote, then email it again.');
         return;
       }
@@ -2014,7 +2039,7 @@ export default function QuoteBuilder() {
       // Codex round-8 P2: reset the version idem key only now that the whole send
       // succeeded — a failure before this point keeps the key so a retry replays the
       // same create_quote_version (returns 'duplicate') instead of snapshotting again.
-      createVersionIdem.resetKey();
+      resetCreateVersionAttempt();
       if (result.deduplicated) {
         toast('info', 'This quote was already emailed (duplicate send skipped).');
       } else {
@@ -2056,14 +2081,14 @@ export default function QuoteBuilder() {
     if (!savedId) return false;
     try {
       // Create version snapshot via RPC
-      const presVerIdemKey = createVersionIdem.getKey();
       const previousRowVersion = quoteRowVersionRef.current;
+      const presentAttempt = getCreateVersionAttempt();
       const { data: versionData, error } = await createQuoteVersionWithRowVersion({
         p_quote_id: savedId,
         p_performed_by: profile.id,
         p_method: 'presented',
-        p_idempotency_key: presVerIdemKey,
-        p_expected_row_version: previousRowVersion,
+        p_idempotency_key: presentAttempt.key,
+        p_expected_row_version: presentAttempt.expectedRowVersion,
       });
       if (error) throw error;
       const ver = versionData;
@@ -2074,10 +2099,10 @@ export default function QuoteBuilder() {
       const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(
         savedId,
         previousRowVersion,
-        previousRowVersion === null ? null : previousRowVersion + (ver.status === 'duplicate' ? 0 : 1),
+        previousRowVersion === null ? null : readRowVersion(ver.row_version),
         'presented',
       );
-      createVersionIdem.resetKey();
+      resetCreateVersionAttempt();
       setShowPreviewModal(false);
       if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
       setPreviewPdfUrl(null);

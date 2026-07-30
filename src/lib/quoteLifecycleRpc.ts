@@ -16,6 +16,7 @@ export type CreateQuoteVersionResult = {
   status?: string;
   version_id?: string;
   version_number?: number;
+  row_version?: number;
   message?: string;
 };
 

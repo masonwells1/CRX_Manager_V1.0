@@ -854,7 +854,7 @@ describe('QuoteBuilder', () => {
     mockFrom.mockImplementation((table: string) => buildChain({ data: table === 'quotes' ? (++quoteReads <= 2 ? quote : { row_version: 9 }) : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [], error: null }));
     mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote'
       ? { data: { quote_id: quote.id, row_version: ++quoteSaves === 1 ? 8 : 10 }, error: null }
-      : { data: { version_number: 1 }, error: null }));
+      : { data: { version_number: 1, row_version: 9 }, error: null }));
     vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:quote'), revokeObjectURL: vi.fn() });
     renderQuoteBuilder(quote.id);
     fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
@@ -892,7 +892,14 @@ describe('QuoteBuilder', () => {
                 : [],
       error: null,
     }));
-    mockRpc.mockResolvedValue({ data: { version_number: 1, status: 'created' }, error: null });
+    mockRpc.mockImplementation(() => Promise.resolve({
+      data: {
+        version_number: 1,
+        status: 'created',
+        row_version: recoveryReadMode === 'refrozen' ? 10 : 8,
+      },
+      error: null,
+    }));
 
     renderQuoteBuilder(quote.id);
     fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
@@ -954,7 +961,7 @@ describe('QuoteBuilder', () => {
     }));
     mockRpc.mockImplementation((name: string) => Promise.resolve(
       name === 'create_quote_version'
-        ? { data: { version_number: 2, status: 'created' }, error: null }
+        ? { data: { version_number: 2, status: 'created', row_version: 8 }, error: null }
         : { data: null, error: null },
     ));
 
@@ -969,6 +976,115 @@ describe('QuoteBuilder', () => {
       p_expected_row_version: 7,
     }));
     expect(mockToast).toHaveBeenCalledWith('success', expect.stringContaining('Quote emailed'));
+  });
+
+  it('replays the same version key and original token after the snapshot succeeds but email delivery fails', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    let quoteReads = 0;
+    let createVersionCalls = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (++quoteReads <= 2 ? quote : { ...quote, status: 'sent', row_version: 8 })
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', email: 'grower@example.com', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'create_quote_version') {
+        createVersionCalls += 1;
+        return Promise.resolve({
+          data: {
+            version_number: 1,
+            status: createVersionCalls === 1 ? 'created' : 'duplicate',
+            row_version: 8,
+          },
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    mockSendEmail
+      .mockRejectedValueOnce(new Error('email transport failed'))
+      .mockResolvedValueOnce({ deduplicated: false });
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Email to Grower' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'email transport failed'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
+    await waitFor(() => expect(mockSendEmail).toHaveBeenCalledTimes(2));
+
+    const versionCalls = mockRpc.mock.calls.filter(([name]) => name === 'create_quote_version');
+    expect(versionCalls).toHaveLength(2);
+    expect(versionCalls[0][1]).toEqual(expect.objectContaining({
+      p_expected_row_version: 7,
+    }));
+    expect(versionCalls[1][1]).toEqual(expect.objectContaining({
+      p_idempotency_key: versionCalls[0][1].p_idempotency_key,
+      p_expected_row_version: 7,
+    }));
+    expect(mockToast).toHaveBeenCalledWith('success', expect.stringContaining('Quote emailed'));
+  });
+
+  it('uses the cached post token when the first lifecycle response is lost', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    let quoteReads = 0;
+    let createVersionCalls = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (++quoteReads <= 2 ? quote : { ...quote, status: 'sent', row_version: 8 })
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', email: 'grower@example.com', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'create_quote_version') {
+        createVersionCalls += 1;
+        return Promise.resolve(createVersionCalls === 1
+          ? { data: null, error: { message: 'network response lost' } }
+          : {
+              data: {
+                version_number: 1,
+                status: 'duplicate',
+                row_version: 8,
+              },
+              error: null,
+            });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Email to Grower' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'Failed to email the quote'));
+    expect(mockSendEmail).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
+    await waitFor(() => expect(mockSendEmail).toHaveBeenCalledTimes(1));
+
+    const versionCalls = mockRpc.mock.calls.filter(([name]) => name === 'create_quote_version');
+    expect(versionCalls).toHaveLength(2);
+    expect(versionCalls[1][1]).toEqual(expect.objectContaining({
+      p_idempotency_key: versionCalls[0][1].p_idempotency_key,
+      p_expected_row_version: 7,
+    }));
+    expect(screen.queryByRole('button', { name: 'Reload Quote' })).not.toBeInTheDocument();
   });
 
   it('holds a stale version action key until a stable reload, then retries with the refreshed quote token', async () => {
@@ -996,7 +1112,7 @@ describe('QuoteBuilder', () => {
         createVersionCalls += 1;
         return Promise.resolve(createVersionCalls === 1
           ? { data: null, error: { message: 'QUOTE_STALE_WRITE' } }
-          : { data: { version_number: 2, status: 'created' }, error: null });
+          : { data: { version_number: 2, status: 'created', row_version: 9 }, error: null });
       }
       return Promise.resolve({ data: null, error: null });
     });
@@ -1118,7 +1234,7 @@ describe('QuoteBuilder', () => {
       name === 'save_quote'
         ? { data: { quote_id: quote.id, row_version: 8 }, error: null }
         : name === 'create_quote_version'
-          ? { data: { version_number: 1, status: 'created' }, error: null }
+          ? { data: { version_number: 1, status: 'created', row_version: 9 }, error: null }
           : { data: null, error: null },
     ));
 
