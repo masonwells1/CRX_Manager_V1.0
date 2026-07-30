@@ -64,6 +64,25 @@ move a reviewed exception to the exact-empty allowlist and keep every relation s
 
 ---
 
+## 2026-07-30 — SETTLED: active adversarial review uses independent Sol/high sessions
+
+**Decision (Mason, in chat):** Claude/Fable credits are nearly exhausted, so all active adversarial
+review gates now use `gpt-5.6-sol` at high reasoning effort. Claude/Fable review remains available
+only when Mason explicitly asks for it; it is not a mandatory factory, publication, migration, or
+overnight gate.
+
+**Why:** the independent check must remain hard and reproducible without consuming a second paid
+review pool that is no longer reliably available. This deliberately accepts the limitation that the
+builder and reviewer may share a model family. Independence now comes from a separate ephemeral,
+read-only review process with user configuration and project hooks disabled, plus exact
+base/SHA/content binding and deterministic fail-closed proof validation.
+
+**Operative rule:** factory acceptance, risky push/merge proof, migration review, and unattended
+review explicitly pin `model: gpt-5.6-sol` and `reasoning_effort: high`. A proof missing either value,
+or not bound to the exact reviewed bytes, is invalid. CodeRabbit remains the broad every-PR review.
+
+---
+
 ## 2026-07-28 — SETTLED: revoking anon EXECUTE ships in two halves, and the RLS role helpers are the risky half
 
 **Decision (Mason, in-chat — "ok continue and make it all live please", after the two-half split and

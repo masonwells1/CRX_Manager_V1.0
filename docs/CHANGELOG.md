@@ -376,6 +376,11 @@ ephemerally with user configuration disabled where supported, and the shared ris
 rejects proofs that do not record both `model: gpt-5.6-sol` and `reasoning_effort: high`. Claude review
 tools remain available only when Mason explicitly requests Claude; they are no longer a mandatory
 publication or factory gate.
+The first exact-SHA Sol/high acceptance correctly blocked publication because the factory imported
+review arguments from an editable proof wrapper and the repository policy still described a
+mandatory cross-model gate. The repair records Mason's Sol/high decision in the canonical policy,
+disables branch-controlled project hooks inside every independent reviewer invocation, and makes the
+factory guard protect the complete reviewer/proof trust chain from structured and shell self-edits.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

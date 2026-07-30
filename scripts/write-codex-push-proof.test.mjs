@@ -95,6 +95,8 @@ assert.deepEqual(
     "/repo/root",
     "-c",
     "approval_policy=never",
+    "--disable",
+    "hooks",
     "-",
   ],
 );
@@ -105,6 +107,7 @@ assert.equal(args[args.indexOf("--model") + 1], CODEX_REVIEW_MODEL);
 assert.ok(args.includes(`model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`));
 assert.ok(args.includes("--ignore-user-config"));
 assert.ok(args.includes("--ephemeral"));
+assert.equal(args[args.indexOf("--disable") + 1], "hooks", "project hooks stay disabled inside the independent reviewer");
 assert.equal(args[args.length - 1], "-", "Codex reads the fixed prompt from wrapper-owned stdin");
 
 // ── verdict parsing: DETERMINISTIC machine token, no prose heuristics ─────────

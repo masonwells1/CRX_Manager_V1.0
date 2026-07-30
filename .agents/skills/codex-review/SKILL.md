@@ -5,11 +5,11 @@ description: Run an independent gpt-5.6-sol high-effort code review DIRECTLY via
 
 # Codex Review (direct CLI — no paste loop)
 
-Drives the headless `codex` CLI so Claude can hand a diff to Codex, get structured
-findings back into this session, and act on them — replacing the manual prompt-doc +
-copy-paste handoff in `codex-cross-review`. Codex is a different vendor/model (the GPT-5.6
-family — `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`), so it catches failure classes
-Claude's own reviewers miss. **Sol** is the review/analysis agent and the live default;
+Drives the headless `codex` CLI so the active builder/orchestrator can hand a frozen diff to a
+separate ephemeral reviewer, get structured findings back into this session, and act on them —
+replacing the manual prompt-doc + copy-paste handoff in `codex-cross-review`. The reviewer is
+explicitly pinned to the strongest GPT-5.6 analysis tier and isolated from the builder session.
+**Sol** is the review/analysis agent and the live default;
 **Terra** is the builder; **Luna** takes low-risk work. Use Sol for any review.
 
 ## When to use which tool
@@ -113,8 +113,8 @@ Notes:
 
 1. Read back `.claude/session-state/codex-review-latest.txt`.
 2. Present findings to the user grouped by severity, each with its `file:line` and a
-   one-line "agree / disagree + why" from Claude's own view. **Be honest where Claude
-   disagrees** — the point of a second model is genuine disagreement.
+   one-line "agree / disagree + why" from the active session. **Be honest where the active
+   session disagrees** — the separate reviewer is valuable only when disagreement stays visible.
 3. For each **BLOCKER/HIGH**: drive it through the normal `/ship` fix path (parallel
    reviewer subagents → proof file → MCP apply for migrations → rolled-back smoke test).
    Re-run `/codex-review` after fixes until the verdict is SHIP or SHIP-WITH-FOLLOWUPS.

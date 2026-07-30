@@ -108,7 +108,9 @@ Keep full detail in the file, not the chat.
 
 ## Step 5 — Offer Codex cross-review (do not auto-run)
 
-If there are any BLOCKER or HIGH findings, offer to run `/codex-review` on them so a second, genuinely independent model (Codex `gpt-5.6-sol` — the in-workflow skeptics are same-model and only reduce false positives) validates before Mason acts (per his standing preference that major findings get a Codex pass). Wait for his go-ahead.
+If there are any BLOCKER or HIGH findings, offer to run `/codex-review` so a separate ephemeral
+Codex `gpt-5.6-sol` high-effort session validates them before Mason acts (the in-workflow skeptics
+only reduce false positives and do not satisfy this hard gate). Wait for his go-ahead.
 
 ## Hard rules
 - **Read-only.** No `Edit`/`Write` except the one report file. No `apply_migration`, no deploy, no `git commit`.

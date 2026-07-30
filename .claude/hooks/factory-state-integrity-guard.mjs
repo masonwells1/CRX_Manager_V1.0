@@ -55,7 +55,7 @@ if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(toolName)
     && (target.startsWith(stateNorm) || target.includes("/crx-factory/"))) {
   deny("CRX FACTORY STATE GUARD: direct edits to the shared factory ledger/tickets/evidence are forbidden. Use the validated scripts/factory.mjs entrypoint.");
 }
-const governanceTarget = /(?:^|\/)(?:package\.json|scripts\/factory(?:-[^/]*)?\.mjs|\.claude\/settings(?:\.local)?\.json|\.codex\/hooks\.json|\.codex\/hooks\/codex-hook-adapter\.mjs|\.claude\/hooks\/(?:factory-[^/]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib)\.mjs)$/;
+const governanceTarget = /(?:^|\/)(?:package\.json|scripts\/(?:factory(?:-[^/]*)?|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|\.claude\/settings(?:\.local)?\.json|\.codex\/hooks\.json|\.codex\/hooks\/(?:codex-hook-adapter|production-action-guard)\.mjs|\.claude\/hooks\/(?:factory-[^/]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib|codex-push-guard|codex-push-lib|pr-merge-guard|review-proof-guard)\.mjs)$/;
 if (target && target.startsWith(permitsNorm)) {
   deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
 }
@@ -88,7 +88,7 @@ const mentionsState = commandNorm.includes(stateNorm)
 const derivesCommonDir = /git\s+rev-parse\s+--git-common-dir/i.test(command);
 const mutates = /(?:^|[;&|]\s*|\s)(?:remove-item|rm|del|erase|move-item|mv|copy-item|cp|set-content|add-content|out-file|new-item|writefile|appendfile|unlink|rename|truncate|tee)\b|(?:>>?|2>)|node\s+(?:-e|--eval)\b|python(?:\.exe)?\s+(?:-c|-)\b|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:diff|show|log)\b[^\r\n;&|]*--output(?:=|\s)/i.test(command);
 const opaqueRepoMutation = /\bgit\s+(?:apply\b|checkout\s+--(?:\s|$)|restore\b)/i.test(command);
-const mentionsGovernanceTarget = /(?:^|[\\/\s"'`])(?:package\.json|scripts[\\/]factory(?:-[^\\/\s"'`]*)?\.mjs|\.claude[\\/]settings(?:\.local)?\.json|\.codex[\\/]hooks\.json|\.codex[\\/]hooks[\\/]codex-hook-adapter\.mjs|\.claude[\\/]hooks[\\/](?:factory-[^\\/\s"'`]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib)\.mjs)(?:$|[\s"'`])/i.test(commandNorm);
+const mentionsGovernanceTarget = /(?:^|[\\/\s"'`])(?:package\.json|scripts[\\/](?:factory(?:-[^\\/\s"'`]*)?|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|\.claude[\\/]settings(?:\.local)?\.json|\.codex[\\/]hooks\.json|\.codex[\\/]hooks[\\/](?:codex-hook-adapter|production-action-guard)\.mjs|\.claude[\\/]hooks[\\/](?:factory-[^\\/\s"'`]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib|codex-push-guard|codex-push-lib|pr-merge-guard|review-proof-guard)\.mjs)(?:$|[\s"'`])/i.test(commandNorm);
 
 if (governedSession && ((mentionsGovernanceTarget && mutates) || opaqueRepoMutation)) {
   deny("CRX FACTORY STATE GUARD: a governed lane cannot mutate its governance implementation through the shell.");

@@ -164,6 +164,11 @@ function hookOutput(result) {
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Write",
+    tool_input: { file_path: path.join(root, "scripts", "write-codex-push-proof.mjs") },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite the independent reviewer wrapper");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
     tool_input: { file_path: path.join(root, ".claude", "settings.json") },
   }), /cannot modify its own governance/i, "governed sessions cannot remove Claude guard wiring");
   denied(run(integrityHook, stateDir, {
@@ -181,6 +186,11 @@ function hookOutput(result) {
     tool_name: "PowerShell",
     tool_input: { command: "Set-Content .claude/hooks/ship-intent-reminder.mjs forged" },
   }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot shell-rewrite a trusted writer");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content scripts/write-codex-push-proof.mjs forged" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot shell-rewrite the independent reviewer wrapper");
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",

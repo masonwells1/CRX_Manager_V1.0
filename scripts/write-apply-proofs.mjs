@@ -18,7 +18,7 @@
 // There is deliberately NO way to stamp a proof without the Codex run:
 //   --codex-verdict <v> was REMOVED 2026-07-16 (scaffolding design review):
 //   a caller-supplied verdict let one command mint the second-model gate
-//   without any second model running.
+//   without any separate Sol/high reviewer process running.
 //   Unconditional reviewer-proof stamping was REMOVED the same day (Codex
 //   round-3 review of PR #142): a "clean, both reviewers ran" JSON written on
 //   the caller's say-so is assertion, not evidence. The subagent reviewers

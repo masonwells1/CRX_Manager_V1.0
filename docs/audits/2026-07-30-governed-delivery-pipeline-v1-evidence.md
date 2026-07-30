@@ -102,7 +102,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 245 focused assertions after publication-blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 247 focused assertions after publication-blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -223,6 +223,12 @@ recursive force-delete cleanup command.
 - Active adversarial-review policy is now Sol-only: factory acceptance, risky push/merge proof,
   unattended review, and migration review charters explicitly pin `gpt-5.6-sol` at high effort.
   Claude/Fable is not required and no Claude credits are consumed by these gates.
+- Trusted Codex exact-SHA Sol/high acceptance of commit `1dad1709` returned `BLOCKERS`: the factory
+  imported its reviewer arguments from a wrapper that an active lane could edit, project hooks were
+  still loadable inside the reviewer, and the repository's old cross-model wording contradicted
+  Mason's explicit Sol/high decision. The repair disables project hooks, protects the complete
+  reviewer/proof trust chain from lane self-editing, and records the new owner policy. A fresh
+  acceptance must evaluate the repaired commit before publication.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

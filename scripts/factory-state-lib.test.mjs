@@ -163,6 +163,7 @@ function ticket(id = "factory-test-1", overrides = {}) {
   ok(reviewArgs.includes("--ignore-user-config"), "independent reviewer does not load credentialed plugins or MCP configuration");
   ok(reviewArgs.includes("gpt-5.6-sol"), "isolated independent reviewer keeps the explicitly recorded model");
   ok(reviewArgs.includes('model_reasoning_effort="high"'), "all factory adversarial review runs Sol at explicit high effort");
+  assert.equal(reviewArgs[reviewArgs.indexOf("--disable") + 1], "hooks", "independent reviewer cannot load branch-controlled project hooks");
   throws(
     () => normalizeTicket(ticket("escaping-ticket", { allowedPaths: ["../outside"] })),
     /literal repository-relative/,

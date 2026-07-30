@@ -281,6 +281,8 @@ export function buildCodexExecArgs({ root, prompt }) {
     root,
     "-c",
     "approval_policy=never",
+    "--disable",
+    "hooks",
     "-",
   ];
 }
