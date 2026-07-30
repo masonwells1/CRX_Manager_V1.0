@@ -163,7 +163,7 @@ eq(parkedDraftPathsFrom([DISPATCH], (p) => p === DISPATCH).size, 1, "the existen
 eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => PARKED_FORWARD_HEADER).size, 1, "an explicitly parked forward migration is retained");
 eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => "-- ordinary migration\nSELECT 1;").size, 0, "a forward migration without the header is excluded");
 
-// The pathspec both readers hand to git — it must cover exactly the two draft folders.
+// The pathspec covers the two draft folders plus explicitly marked forward migrations.
 eq(draftPathspec(), ["scripts/.staging-migrations", "docs/audits", "supabase/migrations"], "git includes only draft folders plus explicitly marked forward migrations");
 
 // Merge-base failure uses the exact origin/main tree before fallback header reads.

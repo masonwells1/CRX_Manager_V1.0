@@ -50,7 +50,8 @@ BEGIN
   IF EXISTS (
     SELECT 1
     FROM public.accounting_periods ap
-    WHERE v_old_date BETWEEN ap.period_start AND ap.period_end
+    WHERE ap.period_start <= (date_trunc('month', v_old_date) + interval '1 month - 1 day')::date
+      AND ap.period_end >= date_trunc('month', v_old_date)::date
   ) OR EXISTS (
     SELECT 1
     FROM public.invoices i

@@ -23,8 +23,8 @@ Follow-up migration `20260730124308_close_accounting_period_idempotency_recheck`
 is now live (submitted as `20260730121951`, then B7-renamed to the server
 ledger version). It retains a post-month-lock same-key lookup as redundant
 defense in depth; the current `check_idempotency` helper's first key-only
-transaction advisory lock is what serializes same-key callers. Sol mutation
-testing removed the later block and the current behavioral proof still passed,
+transaction advisory lock is what serializes same-key callers. Sol adversarial
+mutation testing removed the later block and the current behavioral proof still passed,
 so source coverage structurally asserts the recheck while the runtime marker
 reports helper serialization. Live catalog proof confirmed the exact single
 overload, owner/security/search-path/ACL shape and two idempotency reads, while
@@ -43,9 +43,9 @@ overload retaining its owner, security mode, search path, two idempotency
 reads, month lock, and callable-role boundary. The security-integrity suite now
 guards `check_period_open` as an exact-empty-path, fully schema-qualified
 exception and separately pins `compute_season` to SECURITY INVOKER.
-The disposable PostgreSQL 17 proof now replays the 12 migrations between the
-trusted baseline and this release before reproducing the old race, then applies
-all three candidates in live order and completes the full concurrency matrix.
+The disposable PostgreSQL 17 proof now replays 12 pre-release migrations after
+the trusted baseline before reproducing the old race, then applies the 3 release
+candidates in live order (15 total) and completes the full concurrency matrix.
 Its owning npm command also runs the readiness helper unit test. The generated
 schema registry was refreshed from live introspection to high-water
 `20260730140808` and now records the whole-calendar-month constraint.
