@@ -2,6 +2,35 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
+
+Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but
+`.gitattributes` still pinned the pre-renumber `20260722222743` name. There is no
+`supabase/migrations/*` catch-all, so for six days the live file had **no** eol pin at all: it
+checked out CRLF on Windows while its stored blob stayed pure LF. That matters because Stage A
+carries 13 `digest(prosrc,'sha256')` self-checks against literals captured from the live (LF)
+database. A CRLF checkout stores CRLF in `pg_proc.prosrc`, the hashes stop matching, and the
+migration's own guard fires on any clean-Windows replay — exactly what the Phase 3 concurrency
+prover does. Production is unaffected; it was applied from the LF bytes.
+
+The fix is the one-line filename update, and it is safe precisely because the stored blob is
+already LF (0 carriage returns), so no reviewed or applied bytes move — only how Git writes the
+file to disk on checkout.
+
+Found while verifying a reported dead path in
+`scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs`, which the same
+renumber broke and which is fixed separately in PR #284. A full-repo sweep for the old timestamp
+turned up exactly these two executable references; the `.claude/schema-registry.json` and docs
+hits are correct as written, because the Supabase ledger records version `20260723193312` under
+the old **name** — changing them would have introduced drift. The lesson for the next renumber:
+grep the whole repo for the old timestamp, not just the migrations directory. Nothing asserts
+that a migration containing `digest(prosrc` has a matching `.gitattributes` pin, which is why
+this rotted invisibly; that pairing is the HARD guard worth adding.
+
+Proven by deleting the migration file and re-checking it out on both sides of the change: CRLF
+terminators before, 0 carriage returns after, matching the stored blob. A line-ending fix is
+never proven by reading `.gitattributes`.
+
 ## 2026-07-29 — `/fleet` can now tell a stalled loop from a finished one
 
 `/fleet` reported what *exists* — worktrees, branches, ledgers, counts — but never whether anything
