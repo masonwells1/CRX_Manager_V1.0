@@ -5,7 +5,7 @@ interface RecordVersionConflictDialogProps {
   open: boolean;
   entityLabel: 'quote' | 'customer';
   onKeepEditing: () => void;
-  onReload: () => void | Promise<void>;
+  onReload: () => Promise<boolean>;
 }
 
 /** Shared fail-closed UI; it never retries or merges a stale payload. */
@@ -26,7 +26,8 @@ export default function RecordVersionConflictDialog({ open, entityLabel, onKeepE
     setReloadFailed(false);
     setReloading(true);
     try {
-      await onReload();
+      const reloaded = await onReload();
+      if (!reloaded) setReloadFailed(true);
     } catch {
       setReloadFailed(true);
     } finally {

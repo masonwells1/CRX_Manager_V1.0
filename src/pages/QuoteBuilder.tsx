@@ -822,7 +822,7 @@ export default function QuoteBuilder() {
   }, [toast, navigate]);
 
   const reloadAfterStaleSave = useCallback(async () => {
-    if (!quoteId) return;
+    if (!quoteId) return false;
     suppressDirtyUntilReloadSettlesRef.current = true;
     let installedSnapshot = false;
     try {
@@ -845,6 +845,7 @@ export default function QuoteBuilder() {
         releaseDirtySuppression();
       }));
     }
+    return installedSnapshot;
   }, [fetchQuote, quoteId]);
 
   useEffect(() => {

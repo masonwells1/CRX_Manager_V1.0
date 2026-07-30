@@ -9,11 +9,14 @@ returned `row_version` as strictly as Quote saves, and that the reload dirty-sta
 suppression depended only on `requestAnimationFrame`. The shared version resolver
 now rejects missing or jumped Customer save tokens, both Quote and Customer reloads
 have an idempotent timer fallback, and the conflict dialog reports asynchronous
-reload failure without discarding the operator's edits. Lifecycle recovery warnings
-also name the action that actually committed.
+reload failure without discarding the operator's edits. A reload now locks every
+dialog close path until it settles, and the real `false` failure result is surfaced
+instead of only rejected promises. Lifecycle recovery warnings also name the action
+that actually committed.
 
 The candidate migration's catalog postflight now tolerates PostgreSQL's harmless
-default/search-path formatting while preserving the exact security requirements.
+default/search-path formatting, rejects a missing `DEFAULT 1`, and preserves the
+exact security requirements.
 Quote totals reuse the single authoritative aggregate, and the disposable race,
 source-shape, and phone-browser proofs were made deterministic. Verification passed
 4,042 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable

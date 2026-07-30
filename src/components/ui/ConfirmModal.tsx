@@ -48,10 +48,11 @@ export default function ConfirmModal({
     <Modal
       open={open}
       onClose={onClose}
+      closeDisabled={loading}
       title={title}
       footer={
         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-          <Button variant="ghost" onClick={onClose} className="min-h-11 w-full sm:w-auto">
+          <Button variant="ghost" onClick={onClose} disabled={loading} className="min-h-11 w-full sm:w-auto">
             {cancelLabel}
           </Button>
           <Button

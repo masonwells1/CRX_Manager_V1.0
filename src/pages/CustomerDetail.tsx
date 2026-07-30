@@ -271,6 +271,7 @@ export default function CustomerDetail() {
         releaseDirtySuppression();
       }));
     }
+    return installedSnapshot;
   }, [fetchCustomerSnapshot]);
 
   useEffect(() => {

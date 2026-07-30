@@ -149,6 +149,12 @@ try {
     copy(file, path.basename(file));
     expectRollbackMarker(file);
   }
+  psql('ALTER TABLE public.quotes ALTER COLUMN row_version DROP DEFAULT;');
+  const missingDefault = psql(readFileSync(candidate, 'utf8'), { allowFailure: true });
+  const missingDefaultOutput = `${missingDefault.stdout}\n${missingDefault.stderr}`;
+  assert.notEqual(missingDefault.status, 0, 'candidate migration accepted a pre-existing row_version without DEFAULT 1');
+  assert.match(missingDefaultOutput, /ROW_VERSION_SCHEMA_DRIFT/, `missing-default drift did not fail with ROW_VERSION_SCHEMA_DRIFT:\n${missingDefaultOutput}`);
+  assert.match(missingDefaultOutput, /quotes\.row_version/, `missing-default drift did not identify quotes.row_version:\n${missingDefaultOutput}`);
   console.log('ROW_VERSION_REAL_SCHEMA_RESTORE_PASS baseline=20260727174805 post_baseline_replay=through_candidate smoke_quote_customer=SMOKE_PASS_ROLLBACK quote_lifecycle=draft-sent-sent stale_before_lifecycle=QUOTE_STALE_WRITE smoke_planned_holds=SMOKE_PASS_ROLLBACK');
 } catch (error) {
   console.error(`ROW_VERSION_REAL_SCHEMA_RESTORE_FAIL ${error.stack ?? error.message}`);

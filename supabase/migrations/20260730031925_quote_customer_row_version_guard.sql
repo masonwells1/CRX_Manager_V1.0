@@ -29,6 +29,7 @@ BEGIN
     AND (
       a.atttypid <> 'int8'::regtype
       OR NOT a.attnotnull
+      OR d.adbin IS NULL
       OR regexp_replace(
         regexp_replace(pg_get_expr(d.adbin, d.adrelid), '::(pg_catalog\.)?(int8|bigint)', '', 'g'),
         E'[\\s''()]',

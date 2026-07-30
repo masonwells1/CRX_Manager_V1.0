@@ -83,7 +83,8 @@ test('network-isolated failed Quote Reload keeps the phone edit and conflict dia
   await quoteNotes.fill('Phone edit survives failed reload');
   await page.getByRole('button', { name: 'Save Draft' }).click();
   await page.getByRole('button', { name: 'Reload Quote' }).click();
-  await expect(page.getByRole('button', { name: 'Reload Quote' })).toBeVisible();
+  await expect(page.getByText(/Reload could not finish/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reload Quote' })).toBeEnabled();
   await expect(quoteNotes).toHaveValue('Phone edit survives failed reload');
   await expect(page.getByText(/Could not load the complete quote/)).toBeVisible();
   expect(observed.pageErrors).toEqual([]);
