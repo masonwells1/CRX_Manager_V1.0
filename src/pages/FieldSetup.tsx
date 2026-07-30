@@ -16,7 +16,7 @@ import { Layer, Source } from 'react-map-gl/mapbox';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult, rpcAuthErrorMessage } from '../lib/db';
 import { getCachedFieldsGeojson, type FieldsGeojsonRow } from '../lib/fieldsGeojsonCache';
 import { lookupPlss, type PlssLookupResult } from '../lib/plssLookup';
 import { CsbLookupError, findCsbFeatureAt, type CsbFeature } from '../lib/csbLookup';
@@ -567,7 +567,7 @@ export default function FieldSetup() {
       });
 
       if (error) {
-        toast('error', error.message);
+        toast('error', rpcAuthErrorMessage(error) ?? error.message);
       } else {
         saveFieldIdem.resetKey();
         assertRpcResult(data, 'save_field');
