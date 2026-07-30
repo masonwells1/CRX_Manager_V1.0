@@ -7,6 +7,12 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "save_field": {
+      "chain": "smoke-save-field-actor-binding.sql",
+      "description": "save_field actor-binding rollback proof: no-auth and forged actors fail before field writes, a legacy NULL actor is bound to the authenticated admin, request replay returns the same field without duplicate activity, and the sole SECURITY DEFINER overload retains its fixed search_path and narrow grants.",
+      "covers": ["save_field"],
+      "area": ["security", "idempotency"]
+    },
     "supplier_pricing_phase3_return_policy": {
       "chain": "smoke-supplier-pricing-phase3-return-policy.sql",
       "description": "Supplier Pricing Phase 3 Stage A rollback matrix: dormant unknown/default Product compatibility; full returnable create/approve/receive/restock/credit lifecycle; governed metadata refusal at requested/approved/received; exact no-return create/re-credit and direct return-items refusals; received cancellation inventory reversal; linked and unrelated-credit-memo unapply boundaries; reject/cancel/unapply reversal boundaries; and forced late-failure atomic rollback for requested, approved, received/restock, credit-issued, rejected, cancelled, and credit-memo-unapplied effects. The companion prove-supplier-pricing-phase3-return-policy-concurrency.mjs proves autocommit and explicit deferred-FK timing plus two independent-session sorted advisory-lock races for wrappers, direct return_items writes, unapply, and a regression-sensitive received-cancel versus approved-receive race on the same Product/inventory row.",

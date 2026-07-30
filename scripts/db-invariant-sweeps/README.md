@@ -41,6 +41,12 @@ This runner makes those queries **standing executable gates** that run **before*
 | `plpgsql-check.sql` | (h) 42703/42804/missing-relation static analysis | **ACTIVE** — extension installed 2026-06-10 (`20260610192229`); first scan: **30 errors / 11 live functions** (see `docs/audits/2026-06-10-error-prevention-execution-log.md` §4 — each needs its own /ship fix; treat that list as the baseline until fixed, do NOT allowlist) |
 | `commission-admin-active.sql` | commission payment admin RLS uses the active-aware `is_admin()` helper | **zero** (missing or role-only policies are violations) |
 | `returns-lifecycle-rpc-owned.sql` | return lifecycle fields, creation, and line mutations stay behind canonical RPCs/triggers | **zero** (catches direct `returns` INSERT policy/grant drift and direct `return_items` mutation policy/grant drift) |
+| `save-field-actor-binding.sql` | exact reviewed `save_field(uuid,jsonb,jsonb,uuid,text)` actor-binding body | **zero** (missing signature or any body drift fails closed) |
+
+The `save_field` predicate also has a disposable mutation proof that deliberately installs unsafe,
+late-guard, comment-only, and altered bodies and requires the predicate to fail closed. Run both
+that guard-of-the-guard and the rollback behavior smoke with
+`npm run proof:save-field-actor`.
 
 ## When it runs
 

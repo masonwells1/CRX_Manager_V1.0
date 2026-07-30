@@ -154,6 +154,13 @@ For every RPC the migration creates or modifies:
 5. **Run it** (post-apply, rolled back) and require `SMOKE_PASS_ROLLBACK`
    before claiming the fix/feature works.
 
+For the `save_field` actor-binding migration, the exact migration and rollback
+chain can be proven without contacting Supabase:
+
+```bash
+node scripts/smoke/prove-save-field-actor-binding.mjs
+```
+
 For new mutators, also adapt `smoke-auth-probe-template.sql` (placeholders
 documented in its header): no-auth → `AUTH_REQUIRED`, anon-key →
 `AUTH_REQUIRED` + zero rows written, wrong-role → `INSUFFICIENT_ROLE`, forged
