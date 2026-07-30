@@ -44,7 +44,7 @@ function makeRepo(changePath, changeContent) {
 }
 
 function proofPath(repo) {
-  return path.join(repo, ".claude", "session-state", "claude-review-push.json");
+  return path.join(repo, ".claude", "session-state", `codex-review-${git(repo, ["rev-parse", "HEAD"])}.json`);
 }
 
 function writeProof(repo, proof) {
@@ -141,14 +141,16 @@ try {
   assert.equal(
     evaluatePush(guardrailChange.repo).blocked,
     true,
-    "guardrail self-modification requires Claude proof even without risky content keywords",
+    "guardrail self-modification requires Sol proof even without risky content keywords",
   );
 
   const risky = makeRepo("supabase/migrations/20260713000000_test.sql", "select 1;\n");
   const now = Date.now();
   const valid = {
-    claude_ran: true,
+    codex_ran: true,
     verdict: "clean",
+    model: "gpt-5.6-sol",
+    reasoning_effort: "high",
     head_sha: risky.sha,
     base_sha: risky.base,
     timestamp: new Date(now).toISOString(),
@@ -269,7 +271,14 @@ try {
   writeProof(risky.repo, { ...valid, base_sha: "e".repeat(40) });
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "proof bound to a moved origin/main base is denied");
   // A proof with no base_sha at all fails closed once the guard resolves a base.
-  writeProof(risky.repo, { claude_ran: true, verdict: "clean", head_sha: risky.sha, timestamp: new Date(now).toISOString() });
+  writeProof(risky.repo, {
+    codex_ran: true,
+    verdict: "clean",
+    model: "gpt-5.6-sol",
+    reasoning_effort: "high",
+    head_sha: risky.sha,
+    timestamp: new Date(now).toISOString(),
+  });
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "base-less proof fails closed under base binding");
 
   writeProof(risky.repo, { ...valid, verdict: "ship" });
@@ -347,7 +356,7 @@ try {
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
-  }).blocked, true, "risky gh merge to main is denied without Claude proof");
+  }).blocked, true, "risky gh merge to main is denied without Sol proof");
   writeProof(risky.repo, valid);
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -488,6 +497,7 @@ try {
   // R5-3: a forged proof whose FILENAME falls outside the path-matcher charset
   // (contains a space) must not be loaded by Claude's push gate either.
   {
+    unlinkSync(proofPath(risky.repo));
     mkdirSync(path.join(risky.repo, ".claude", "session-state"), { recursive: true });
     writeFileSync(
       path.join(risky.repo, ".claude", "session-state", "codex-review-forged proof.json"),
@@ -497,6 +507,7 @@ try {
     const spacedProofGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:main`, projectRoot);
     assert.match(spacedProofGuard.stdout, /"permissionDecision":"deny"/, "space-named forged proof is not loaded by the proof loader");
     unlinkSync(path.join(risky.repo, ".claude", "session-state", "codex-review-forged proof.json"));
+    writeProof(risky.repo, valid);
   }
   // R5-4: doc patches that merely MENTION guard/proof paths are allowed;
   // patches whose DESTINATION is a proof or guard file stay denied.

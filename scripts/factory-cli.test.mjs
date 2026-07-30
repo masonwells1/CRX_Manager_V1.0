@@ -84,6 +84,7 @@ writeFileSync(ticketFile, JSON.stringify({
   goal: "Exercise the supported factory mutation path.",
   definitionOfDone: ["Lane reaches morning review with attached proof."],
   mustNotChange: ["Production."],
+  allowedPaths: ["feature.txt"],
   proofRequirements: ["Attached focused test output."],
   proofHarnesses: ["verify-deps"],
   deliveryGate: "Stop before commit.",
@@ -157,6 +158,7 @@ const summaryFile = path.join(fixtureDir, "summary.txt");
 writeFileSync(summaryFile, "The supported CLI completed the governed flow.");
 pass(run(["stage", "--job", jobId, "--stage", "verifying"]), "advance to verification");
 pass(run(["stage", "--job", jobId, "--stage", "in-review"]), "advance to review");
+writeFileSync(path.join(fixtureRepo, "feature.txt"), "real governed implementation change\n");
 const unverifiedProof = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", summaryFile]);
 assertions++;
 assert.notEqual(unverifiedProof.status, 0, "self-labeled attached file is not enough for morning review");
@@ -165,6 +167,12 @@ const noIndependentReview = run(["stage", "--job", jobId, "--stage", "awaiting-m
 assertions++;
 assert.notEqual(noIndependentReview.status, 0, "a passing branch harness cannot self-certify morning review");
 pass(run(["review", "run", "--job", jobId]), "run independent Codex review");
+const reviewReceipt = loadFactorySnapshot(paths).jobs[0].reviews[0];
+const reviewArtifact = JSON.parse(readFileSync(path.join(paths.evidenceDir, jobId, reviewReceipt.filename), "utf8"));
+assertions++;
+assert.equal("stdout" in reviewArtifact || "stderr" in reviewArtifact, false, "review receipt does not persist unrestricted process output");
+assertions++;
+assert.match(reviewArtifact.reportSummary, /CLEAN/, "review receipt persists only a bounded verdict summary");
 pass(run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", summaryFile]), "advance to morning review");
 
 const reviewQuestion = path.join(fixtureDir, "review-question.txt");
@@ -240,13 +248,23 @@ appendFactoryEvent(paths, {
     reviewQuestionHash: reviewed.jobs[0].reviewQuestionHash,
   },
 });
+let gitResult = spawnSync("git", ["add", "feature.txt"], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitResult.status, 0, gitResult.stderr);
+gitResult = spawnSync("git", [
+  "-c", "user.name=Factory Test",
+  "-c", "user.email=factory@example.invalid",
+  "commit", "-qm", "land real governed change",
+], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitResult.status, 0, gitResult.stderr);
+gitResult = spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitResult.status, 0, gitResult.stderr);
 const closeoutArgs = [
   "closeout", "write",
   "--job", jobId,
   "--landing-commit", gitHead(fixtureRepo),
 ];
 writeFileSync(path.join(fixtureRepo, "old.txt"), "old landing content\n");
-let gitResult = spawnSync("git", ["add", "old.txt"], { cwd: fixtureRepo, encoding: "utf8" });
+gitResult = spawnSync("git", ["add", "old.txt"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
 gitResult = spawnSync("git", ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "different ancestor"], {
   cwd: fixtureRepo,

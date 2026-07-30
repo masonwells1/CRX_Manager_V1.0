@@ -72,7 +72,7 @@ An approval is valid only when all of these are true:
 
 - exactly one decision is pending in that chat;
 - the immediately preceding assistant message in the transcript is byte-for-byte the stored question after newline normalization;
-- the ticket question is generated deterministically from the immutable ticket and includes its goal, done conditions, prohibitions, proof, delivery gate, and high-risk example/forbidden outcome;
+- the ticket question is generated deterministically from the immutable ticket and includes its goal, done conditions, prohibitions, exact allowed repository paths, proof, delivery gate, and high-risk example/forbidden outcome;
 - the morning question is generated deterministically from the exact behavior summary, harness receipts, independent-review receipt, and ticket hash, and says explicitly that acceptance is not landing or production;
 - Mason replies with an unqualified `yes`, `approved`, `approve it`, `go ahead`, or `do it`;
 - the session identifier matches; build-stage and evidence changes stay bound to the lane-start session;
@@ -88,7 +88,10 @@ An approval is valid only when all of these are true:
   factory intent. Native editing,
   MCP filesystem tools, shell file commands, redirects, Git mutation, and unknown repository scripts
   all count as writes. Inside the active lane, source changes use structured Write/Edit/apply_patch
-  calls whose targets are visible to the guards. Opaque shell writers, generated helper scripts, and
+  calls whose targets are visible to the guards. Every target is canonicalized and must stay inside
+  the worktree, avoid `.git`, ignored and secret-bearing paths, resolve through no escaping symlink,
+  and match an exact file or directory prefix approved in the ticket. Hidden or out-of-ticket targets
+  fail closed. Opaque shell writers, generated helper scripts, and
   MCP process launchers are denied; read commands remain available, and fixed verification harnesses
   run only through the permit-bound `factory.mjs evidence run` broker. Git inspection uses a strict
   subcommand/token/option allowlist: output-writing, external-diff/text-conversion, paging/config
@@ -115,9 +118,16 @@ process. The broker verifies that repository and shared factory state stayed fro
 disposable workspace, emergency-holds on detected indirect host mutation, and refuses secret-shaped
 harness output before it can become a Board artifact. It rechecks the repository fingerprint before
 morning review and closeout, so later source or test edits invalidate stale proof. A separate trusted
-Codex executable then performs a fixed-prompt, read-only review. Its unique terminal CLEAN verdict,
-model, fresh base, and complete repository fingerprint are persisted; any byte change invalidates the
-review. A passing branch-controlled harness without this independent verdict cannot reach morning review.
+Codex executable then performs a fixed-prompt, read-only review. The prompt includes the complete
+canonical approved ticket and its hash. The process receives only a small operating-system/tool-path
+environment allowlist, not inherited API, Supabase, GitHub, or application credentials. It runs
+ephemerally with user plugins/MCP configuration disabled and explicit `gpt-5.6-sol` / high reasoning.
+Its unique
+terminal CLEAN verdict, model, fresh base, and complete repository-content fingerprint are persisted;
+raw stdout/stderr are not—the receipt stores a bounded summary, byte counts, and hashes. A later commit
+may change Git's commit/tree identifiers while preserving the exact reviewed file fingerprint; any
+file-byte change still invalidates the review. A passing branch-controlled harness without this
+independent verdict cannot reach morning review.
 Morning presentation reruns both harness and independent-review validation and requires the original
 base to remain current after a fresh fetch. Once Mason accepts, factory custody ends and the ordinary
 `/ship` commit/PR guards become authoritative. After landing, closeout validates proof against the

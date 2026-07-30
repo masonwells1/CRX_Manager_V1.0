@@ -360,6 +360,22 @@ successful GitHub `Production` deployment for the exact landing SHA and HTTP 200
 app URL. Harness and review files are re-hashed at morning and closeout, while the two-phase packet
 records approved base, reviewer verdicts, landing SHA, and the pre-closeout ledger checkpoint and
 must itself land in `origin/main` before `live`.
+An eighth pass found four deeper lifecycle/isolation gaps. Review acceptance no longer requires the
+pre-commit HEAD SHA to equal the later landing commit; it requires the exact complete repository
+content fingerprint, with a regression that changes and commits a real tracked file. Tickets now
+approve literal file or directory prefixes, and active structured edits reject hidden targets,
+worktree or symlink escapes, `.git`, ignored/secret-bearing files, and anything outside that scope.
+The independent prompt carries the complete canonical ticket and hash. Its process is ephemeral,
+disables user plugins/MCP configuration, runs explicit `gpt-5.6-sol` at high reasoning, and receives a minimal
+tool/OS environment rather than inherited credentials. The Board receipt stores only a bounded CLEAN
+summary plus output hashes/counts—not raw process output.
+Mason then retired Claude/Fable from all active adversarial gates because those credits were nearly
+exhausted. Factory acceptance, risky push/merge proof, unattended overnight review, and migration
+review charters now pin `gpt-5.6-sol` with high reasoning explicitly. The trusted wrappers run
+ephemerally with user configuration disabled where supported, and the shared risky-change validator
+rejects proofs that do not record both `model: gpt-5.6-sol` and `reasoning_effort: high`. Claude review
+tools remain available only when Mason explicitly requests Claude; they are no longer a mandatory
+publication or factory gate.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

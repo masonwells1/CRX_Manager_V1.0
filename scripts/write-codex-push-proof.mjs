@@ -112,14 +112,12 @@ export function codexExecutable({
   return candidates[0].candidate;
 }
 
+export const CODEX_REVIEW_MODEL = "gpt-5.6-sol";
+export const CODEX_REVIEW_EFFORT = "high";
+
 // ── which Codex agent produced the verdict ───────────────────────────────────
-// Codex ships three 5.6 agents (sol = reviewer/default, terra = builder, luna =
-// low-risk). These gates deliberately pass no `-m`, so the run uses whatever
-// `model` the Codex config names — today `gpt-5.6-sol`. That is the right agent
-// for a review, but an unlabelled proof cannot be audited later: "a Codex ran"
-// is weaker evidence than "gpt-5.6-sol ran". Read the configured model and
-// record it ON the proof. Informational only — `proofValid` ignores unknown
-// fields, so a missing/unreadable model never fails the gate open or closed.
+// Legacy helper retained for callers that inspect workstation configuration.
+// Security proofs do not use it: every adversarial gate pins Sol/high explicitly.
 export function codexConfiguredModel({
   home = homedir(),
   env = process.env,
@@ -180,14 +178,22 @@ export function codexReviewProofVerdict({ status, stdout } = {}) {
 
 // ── proof shape ─────────────────────────────────────────────────────────────
 // Mirrors what codex-push-guard's `proofValid` (in codex-push-lib.mjs) accepts:
-// codex_ran:true, verdict clean, exact head_sha, ISO ts.
-export function buildCodexPushProof({ headSha, baseSha, verdict, model, timestamp = new Date().toISOString() }) {
+// codex_ran:true, Sol/high identity, verdict clean, exact head_sha/base_sha, ISO ts.
+export function buildCodexPushProof({
+  headSha,
+  baseSha,
+  verdict,
+  model = CODEX_REVIEW_MODEL,
+  reasoningEffort = CODEX_REVIEW_EFFORT,
+  timestamp = new Date().toISOString(),
+}) {
   return {
     codex_ran: true,
     verdict,
-    // Which Codex agent produced this verdict (gpt-5.6-sol/terra/luna). Audit
-    // trail only — never validated, so an older proof without it still passes.
-    ...(model ? { model } : {}),
+    // Required reviewer identity. proofValid rejects a different or missing
+    // model/effort so workstation defaults cannot silently weaken the gate.
+    model,
+    reasoning_effort: reasoningEffort,
     head_sha: headSha,
     // The origin/main the review was taken against. The push guard requires this
     // to still equal origin/main at push time, so a base that moved after review
@@ -205,8 +211,7 @@ function writeCodexPushProof({ root, headSha, baseSha, verdict }) {
   const proofPath = codexPushProofPath(root, headSha);
   mkdirSync(path.dirname(proofPath), { recursive: true });
   // Node write → clean UTF-8, no BOM (a BOM breaks the guard's JSON.parse).
-  const model = codexConfiguredModel();
-  writeFileSync(proofPath, `${JSON.stringify(buildCodexPushProof({ headSha, baseSha, verdict, model }), null, 2)}\n`, "utf8");
+  writeFileSync(proofPath, `${JSON.stringify(buildCodexPushProof({ headSha, baseSha, verdict }), null, 2)}\n`, "utf8");
   return proofPath;
 }
 
@@ -264,6 +269,12 @@ export function buildCodexExecArgs({ root, prompt }) {
   // shell:false, so its metacharacters can never reach a shell.
   return [
     "exec",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--model",
+    CODEX_REVIEW_MODEL,
+    "-c",
+    `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
     "--sandbox",
     "read-only",
     "-C",

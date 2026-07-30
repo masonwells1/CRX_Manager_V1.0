@@ -32,7 +32,7 @@ function run(hook, stateDir, payload) {
 
 function denied(result, pattern, message) {
   assertions++;
-  assert.match(result.stdout, pattern, message);
+  assert.match(`${result.stdout}\n${result.stderr}`, pattern, message);
 }
 
 function hookOutput(result) {
@@ -218,6 +218,7 @@ function hookOutput(result) {
     goal: "Prove one governed lane.",
     definitionOfDone: ["Approved lane can write."],
     mustNotChange: ["Production."],
+    allowedPaths: ["src/example.ts"],
     proofRequirements: ["Hook output."],
     proofHarnesses: ["verify-deps"],
     deliveryGate: "Stop before commit.",
@@ -286,6 +287,31 @@ function hookOutput(result) {
   });
   assertions++;
   assert.equal(allowed.stdout, "", "started governed lane permits scoped build edits");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "outside-ticket.ts") },
+  }), /outside the approved ticket paths/i, "active lane cannot widen its approved file scope");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Edit",
+    tool_input: { file_path: path.join(root, ".git", "config") },
+  }), /Git internals are not mutable/i, "active lane cannot edit Git configuration");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "node_modules", "factory-bypass.js") },
+  }), /ignored paths are outside factory proof/i, "active lane cannot persist changes in ignored paths");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "apply_patch",
+    tool_input: { patch: "*** Begin Patch\n*** End Patch\n" },
+  }), /did not expose an exact file target/i, "active lane fails closed when a structured mutation hides its target");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "..", "outside-worktree.txt") },
+  }), /escapes the worktree/i, "active lane cannot write outside its worktree");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
@@ -405,6 +431,7 @@ function hookOutput(result) {
     goal: "Enter existing ship gates after morning acceptance.",
     definitionOfDone: ["Normal landing workflow can proceed."],
     mustNotChange: ["Production without its existing gates."],
+    allowedPaths: ["src/landing.ts"],
     proofRequirements: ["Factory guard result."],
     proofHarnesses: ["verify-deps"],
     deliveryGate: "Use existing ship gates.",

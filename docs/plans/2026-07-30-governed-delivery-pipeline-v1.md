@@ -4,8 +4,8 @@ Date: 2026-07-30
 Status: IMPLEMENTED — second publication-blocker repair pass awaiting fresh exact-SHA acceptance
 Owner: Mason Wells
 Implementation driver: Codex
-Independent reviewers: Claude Fable low effort and trusted Codex high effort
-Publication gate: fresh exact-SHA Codex and Fable acceptance before the authorized feature-branch push and draft PR; no merge, deploy, live migration, or live-data change
+Independent reviewer: trusted `gpt-5.6-sol` at high reasoning effort
+Publication gate: fresh exact-SHA Sol high-effort acceptance before the authorized feature-branch push and draft PR; no merge, deploy, live migration, or live-data change
 
 ## Goal
 
@@ -21,7 +21,8 @@ Mason never runs commands, edits ticket files, reviews code, or operates a separ
 ## Definition of done
 
 - A factory-managed job begins from Mason's plain-English chat request.
-- The session drafts and presents one plain-English mission ticket.
+- The session drafts and presents one plain-English mission ticket, including the exact repository
+  files or directory prefixes the lane may change.
 - An unambiguous owner reply is recorded verbatim with timestamp, session identity, ticket ID, and ticket SHA-256.
 - Changing the ticket after approval changes its hash and invalidates the approval.
 - A deterministic lane-start guard refuses an unapproved, stale, ambiguous, held, or conflicting job.
@@ -30,7 +31,7 @@ Mason never runs commands, edits ticket files, reviews code, or operates a separ
 - One read-only local Factory Board shows job title, current plain-English stage, last activity, behavior summary, blocker/owner need, and attached evidence.
 - Approval or rejection of a finished job happens in chat; the board has no write controls.
 - Existing `/ship`, review, push, merge, migration, edge-function, deletion, secret, permission, and production gates are preserved.
-- Focused tests, agent-workflow parity tests, board rendering, and a Fable-low review of the final uncommitted diff pass.
+- Focused tests, agent-workflow parity tests, board rendering, and an independent `gpt-5.6-sol` high-effort review of the exact candidate pass.
 - Work stops before commit for Mason.
 
 ## Non-goals
@@ -182,6 +183,8 @@ cannot perform build writes.
 - `.claude/hooks/factory-lane-guard.mjs`
   - applies only to sessions explicitly bound to a factory job;
   - blocks build writes when ticket approval/hash, global hold, lane ownership, or worktree/base requirements fail;
+  - canonicalizes every structured mutation target and rejects worktree escapes, symlink escapes,
+    `.git`, ignored/secret-bearing paths, hidden targets, and paths outside the approved ticket scope;
   - does not weaken or replace any existing guard.
 - `.claude/hooks/factory-state-integrity-guard.mjs`
   - blocks direct writes, rewrites, deletion, or ad hoc script access to the shared factory state directory;
@@ -252,7 +255,7 @@ Run at minimum:
    - completed job with behavior proof;
    - narrow viewport without horizontal overflow.
 10. Run `git diff --check`.
-11. Run Fable-low against the exact uncommitted diff. Fix every confirmed BLOCKER/HIGH/MED/LOW, rerun affected proof, and re-review within the existing three-round cap.
+11. Run `gpt-5.6-sol` at high effort against the exact candidate SHA. Fix every confirmed BLOCKER/HIGH/MED/LOW, rerun affected proof, and re-review before publication.
 
 ## Pilot activation and scaling rule
 

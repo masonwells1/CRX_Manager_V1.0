@@ -6,12 +6,12 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
-  claudeProofValid,
   contentIsRisky,
   extractPatchDestinations,
   gitPushCwd,
   isGitPush,
   mainPushSource,
+  proofValid,
   pushContextIsAmbiguous,
   pushIsForced,
   pushUsesBulkMode,
@@ -27,7 +27,6 @@ const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 // (mcp__codex_apps__github_create_file) — Codex round-5.
 const GITHUB_TOOL = /(?:^|__)github_{1,2}/i;
 const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
-const CLAUDE_PROOF_RELATIVE = [".claude", "session-state", "claude-review-push.json"];
 const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof)\.mjs|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
@@ -141,8 +140,7 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
   // send the operator round a fetch-then-review loop, producing a proof this gate
   // rejects without ever saying which base it wanted.
   const expectedBase = baseSha || "<origin/main at review time>";
-  // run-claude-review.mjs derives base_sha from LOCAL origin/main
-  // (scripts/run-claude-review.mjs, `baseSha = rev-parse origin/main`) and never
+  // write-codex-push-proof.mjs derives base_sha from LOCAL origin/main and never
   // fetches. If that ref is stale, the wrapper mints a proof naming the old base
   // while this gate expects `expectedBase` — so following the guidance would loop
   // forever, rejected every time. Require the fetch first (Codex P2, 2026-07-25).
@@ -153,11 +151,11 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
   return denied(
     `CODEX PRODUCTION GATE: ${riskDescription}\n\n` +
     `${detail}\n\n` +
-    `${fetchFirst}Claude must actually review the exact diff in this session by running ` +
-    `node scripts/run-claude-review.mjs --scope base-main. ` +
-    `Only an unambiguous terminal FINAL_VERDICT: SHIP with no contradictory verdict or BLOCKER/HIGH/MED/LOW finding writes .claude/session-state/claude-review-push.json. ` +
+    `${fetchFirst}run the exact-SHA adversarial gate with ` +
+    `node scripts/write-codex-push-proof.mjs. It invokes gpt-5.6-sol at high reasoning in a read-only, ephemeral session. ` +
+    `Only an unambiguous terminal CODEX_PROOF_VERDICT: CLEAN writes .claude/session-state/codex-review-<SHA>.json. ` +
     `Required JSON: ` +
-    `{\"claude_ran\":true,\"verdict\":\"clean\",` +
+    `{\"codex_ran\":true,\"verdict\":\"clean\",\"model\":\"gpt-5.6-sol\",\"reasoning_effort\":\"high\",` +
     `\"head_sha\":\"${headSha || "<exact pushed SHA>"}\",\"base_sha\":\"${expectedBase}\",` +
     `\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
     `The proof is bound to both the exact pushed SHA and that exact base; future-dated, stale, base-moved, malformed, or BOM-corrupted proof is refused.`
@@ -168,7 +166,7 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
   let headSha = sourceSha || "";
   let baseSha = "";
   try {
-    // Resolve the exact base this change is gated against so the Claude proof can
+    // Resolve the exact base this change is gated against so the Sol proof can
     // be required to match the SAME base it was reviewed on; a moved base (e.g. a
     // sibling merge) forces a fresh review.
     //
@@ -253,11 +251,11 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
 
   if (risky.length === 0 && !contentFlagged) return { blocked: false };
 
-  // The change is risky, so a Claude proof is about to be demanded. That proof is
+  // The change is risky, so a Sol proof is about to be demanded. That proof is
   // only meaningful if the reviewed diff actually covers what will land on main.
   // When the head does not contain GitHub's current base, the merge result also
   // includes base-only commits that no review in this flow ever saw — and
-  // `run-claude-review.mjs --scope base-main` hands Claude the same merge-base
+  // `write-codex-push-proof.mjs` hands Sol the same merge-base
   // patch. Branch protection does not require up-to-date heads, so enforce it
   // here for risky merges rather than assuming it.
   if (authoritativeBaseSha) {
@@ -281,22 +279,22 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
   const riskDescription = risky.length > 0
     ? `the main-bound diff changes ${risky.length} risky file(s): ${risky.slice(0, 6).join(", ")}${risky.length > 6 ? ", ..." : ""}`
     : "the main-bound diff contains money or financial-audit identifiers even though its paths look ordinary";
-  const proofPath = path.join(repoDir, ...CLAUDE_PROOF_RELATIVE);
+  const proofPath = path.join(repoDir, ".claude", "session-state", `codex-review-${headSha}.json`);
   if (!existsSync(proofPath)) {
-    return proofRequirement(headSha, riskDescription, `Missing required Claude proof: ${proofPath}`, baseSha);
+    return proofRequirement(headSha, riskDescription, `Missing required Sol high-effort proof: ${proofPath}`, baseSha);
   }
 
   let proof;
   try {
     proof = JSON.parse(readFileSync(proofPath, "utf8"));
   } catch (error) {
-    return proofRequirement(headSha, riskDescription, `Claude proof could not be parsed: ${error?.message || error}`, baseSha);
+    return proofRequirement(headSha, riskDescription, `Sol proof could not be parsed: ${error?.message || error}`, baseSha);
   }
-  if (!claudeProofValid(proof, headSha, nowMs, baseSha)) {
+  if (!proofValid(proof, headSha, nowMs, baseSha)) {
     return proofRequirement(
       headSha,
       riskDescription,
-      `Claude proof is stale, future-dated, bound to a different HEAD or to a base other than ${baseSha}, has the wrong verdict/ran key, or is otherwise invalid.`,
+      `Sol proof is stale, future-dated, bound to a different HEAD or to a base other than ${baseSha}, lacks the required gpt-5.6-sol/high identity, has the wrong verdict/ran key, or is otherwise invalid.`,
       baseSha
     );
   }

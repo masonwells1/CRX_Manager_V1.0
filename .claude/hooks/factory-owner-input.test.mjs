@@ -50,6 +50,7 @@ function makeState(sessionId = "codex-thread-1") {
     goal: "Prove exact transcript-bound approval.",
     definitionOfDone: ["Approval is recorded only for the exact question."],
     mustNotChange: ["Production state."],
+    allowedPaths: ["src/"],
     proofRequirements: ["Read the verified event log."],
     proofHarnesses: ["verify-deps"],
     deliveryGate: "Stop before commit.",

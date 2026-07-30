@@ -1,6 +1,6 @@
 ---
 name: codex-review
-description: Run an independent Codex (gpt-5.6 sol/terra/luna) code review DIRECTLY via the headless `codex` CLI — no copy-paste. Use to cross-validate a branch, working-tree changes, or a commit before pushing, getting Codex's findings back into this session automatically so Claude can act on them. This SUPERSEDES the manual paste-doc workflow in codex-cross-review whenever the Codex CLI is available. Use when the user says "have Codex review this", "codex review before I push", "second opinion on this change", "cross-review", or before any prod push of a Codex-worthy change (migration / RLS-RPC security / money / edge fn).
+description: Run an independent gpt-5.6-sol high-effort code review DIRECTLY via the headless `codex` CLI — no copy-paste. Use to cross-validate a branch, working-tree changes, or a commit before pushing, getting findings back into this session automatically. This SUPERSEDES the manual paste-doc workflow in codex-cross-review whenever the Codex CLI is available. Use when the user says "have Codex review this", "codex review before I push", "second opinion on this change", "cross-review", or before any prod push of a Codex-worthy change (migration / RLS-RPC security / money / edge fn).
 ---
 
 # Codex Review (direct CLI — no paste loop)
@@ -79,6 +79,8 @@ cd "$(git rev-parse --show-toplevel)"
 mkdir -p .claude/session-state
 # $SCOPE is the flag chosen in Step 1 (unquoted so "--base main" splits into two args).
 "$CODEX" review $SCOPE \
+  -c 'model="gpt-5.6-sol"' \
+  -c 'model_reasoning_effort="high"' \
   --title "CRX review ($SCOPE): $(git rev-parse --abbrev-ref HEAD)" \
   -c approval_policy=never \
   2>&1 | tee .claude/session-state/codex-review-latest.txt
@@ -101,10 +103,9 @@ The failure classes `AGENTS.md` keeps Codex pointed at:
 - (5) Lifecycle violations per CLAUDE.md (quote/order/delivery/invoice/return state machines).
 
 Notes:
-- The base config (`~/.codex/config.toml`) already defaults to `model = "gpt-5.6-sol"` +
-  `model_reasoning_effort = "high"` — Sol at high is the review default, so no `-m` flag is needed.
-  Override per-run with `-c model="gpt-5.6-terra"` / `-c model_reasoning_effort="…"` only if asked.
-  Record which agent produced a verdict when it backs a security/money proof.
+- Every adversarial review explicitly pins `gpt-5.6-sol` with high reasoning. Do not inherit
+  the model or effort from user configuration and do not substitute Terra, Luna, or Claude.
+  Record the model and effort on every security/money proof.
 - A trailing `rmcp … DELETE returned HTTP 404` line is harmless MCP-session cleanup — ignore it.
 - This fires the synced `.codex/hooks.json` hooks (SessionStart/Stop) — expected, they're trusted.
 
@@ -157,7 +158,7 @@ To delegate a *task* (not a diff review) to Codex — e.g. "have Codex independe
 reproduce this bug" or a research spike — use `exec` instead of `review`:
 
 ```bash
-"$CODEX" exec --sandbox read-only -C "$(git rev-parse --show-toplevel)" "your task here" 2>&1 | tail -60
+"$CODEX" exec --model gpt-5.6-sol -c 'model_reasoning_effort="high"' --sandbox read-only -C "$(git rev-parse --show-toplevel)" "your task here" 2>&1 | tail -60
 ```
 
 Use `--sandbox read-only` for investigation; only escalate to `workspace-write` if Codex

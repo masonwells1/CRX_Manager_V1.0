@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   ACTIVE_STAGES,
@@ -135,6 +136,98 @@ function isOpaqueExecutionTool(toolName) {
   return true;
 }
 
+function structuredMutationTargets(toolName, toolInput) {
+  if (!/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(String(toolName || ""))) return [];
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  const targets = [
+    input.file_path,
+    input.filePath,
+    input.path,
+    input.target,
+    ...(Array.isArray(input.edits)
+      ? input.edits.flatMap((edit) => [edit?.file_path, edit?.filePath, edit?.path, edit?.target])
+      : []),
+  ].filter(Boolean).map(String);
+  const patchText = typeof toolInput === "string"
+    ? toolInput
+    : String(input.patch || input.input || "");
+  for (const match of patchText.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
+    targets.push(match[1].trim());
+  }
+  return [...new Set(targets)];
+}
+
+function nearestExistingPath(candidate) {
+  let current = candidate;
+  while (!existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return "";
+    current = parent;
+  }
+  return current;
+}
+
+function isInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function fixedGitExecutable() {
+  const candidates = process.platform === "win32"
+    ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
+    : ["/usr/bin/git", "/usr/local/bin/git"];
+  return candidates.find((candidate) => existsSync(candidate)) || "";
+}
+
+function ignoredByGit(projectDir, relative) {
+  const executable = fixedGitExecutable();
+  if (!executable) return true;
+  try {
+    execFileSync(executable, ["check-ignore", "--no-index", "--quiet", "--", relative], {
+      cwd: projectDir,
+      encoding: "utf8",
+      stdio: "ignore",
+      timeout: 10_000,
+    });
+    return true;
+  } catch (error) {
+    if (error?.status === 1) return false;
+    return true;
+  }
+}
+
+function structuredMutationBlockReason(toolName, toolInput, projectDir, allowedPaths) {
+  const targets = structuredMutationTargets(toolName, toolInput);
+  if (targets.length === 0) {
+    return "structured mutation did not expose an exact file target";
+  }
+  const root = path.resolve(projectDir);
+  const realRoot = realpathSync(root);
+  for (const rawTarget of targets) {
+    const absolute = path.resolve(root, rawTarget);
+    if (!isInside(root, absolute)) return `target escapes the worktree: ${rawTarget}`;
+    const relative = path.relative(root, absolute).replace(/\\/g, "/");
+    const lower = relative.toLowerCase();
+    if (!relative || lower === ".git" || lower.startsWith(".git/")) {
+      return `Git internals are not mutable lane content: ${relative || rawTarget}`;
+    }
+    if (/(?:^|\/)(?:\.env(?:\.|$)|[^/]*\.(?:pem|key|p12|pfx)|credentials?(?:\.|$)|secrets?(?:\.|$))/i.test(relative)) {
+      return `secret-bearing paths are forbidden: ${relative}`;
+    }
+    const existing = nearestExistingPath(absolute);
+    if (!existing || !isInside(realRoot, realpathSync(existing))) {
+      return `target resolves outside the worktree through a symlink: ${relative}`;
+    }
+    if (ignoredByGit(root, relative)) return `ignored paths are outside factory proof: ${relative}`;
+    const allowed = (allowedPaths || []).some((entry) => {
+      const normalized = String(entry).replace(/\\/g, "/").replace(/^\.\//, "");
+      return normalized.endsWith("/") ? relative.startsWith(normalized) : relative === normalized;
+    });
+    if (!allowed) return `target is outside the approved ticket paths: ${relative}`;
+  }
+  return "";
+}
+
 function isActiveLaneShellRead(toolName, toolInput) {
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return true;
   const command = String(toolInput?.command || "").trim();
@@ -215,6 +308,17 @@ if (governedJob.stage === "queued") {
   deny(`CRX FACTORY GATE: ticket ${governedJob.id} is approved but the deterministic lane-start check has not run. Start it through scripts/factory.mjs lane start.`);
 }
 if (ACTIVE_STAGES.has(governedJob.stage)) {
+  if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(String(payload?.tool_name || ""))) {
+    const blockReason = structuredMutationBlockReason(
+      payload?.tool_name,
+      payload?.tool_input,
+      projectDir,
+      governedJob.ticket?.allowedPaths,
+    );
+    if (blockReason) {
+      deny(`CRX FACTORY GATE: ${blockReason}. Update and re-approve the mission ticket before widening scope.`);
+    }
+  }
   if (shellMutation || opaqueExecution || !isActiveLaneShellRead(payload?.tool_name, payload?.tool_input)) {
     deny("CRX FACTORY GATE: direct commands and helper-process execution are disabled inside an active lane. Use structured Write/Edit/apply_patch operations, read-only shell inspection, or the permit-bound factory CLI (including evidence run for fixed harnesses) so every mutation target remains visible to the guards.");
   }

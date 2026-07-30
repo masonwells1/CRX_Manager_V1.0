@@ -17,10 +17,13 @@ import {
   APPROVAL_TTL_MS,
   appendFactoryEvent,
   buildFactorySnapshot,
+  buildFactoryReviewExecArgs,
   canonicalJson,
   consumeFactoryCliPermit,
   FACTORY_REVIEW_TOKEN,
+  factoryIndependentReviewPrompt,
   factoryReviewVerdict,
+  independentReviewerEnvironment,
   factoryHarnessDependencyHashForCommit,
   factoryHarnessSandboxArgs,
   loadFactorySnapshot,
@@ -121,6 +124,7 @@ function ticket(id = "factory-test-1", overrides = {}) {
     goal: "Show the correct business result.",
     definitionOfDone: ["The behavior runs and is observed."],
     mustNotChange: ["Inventory quantities stay unchanged."],
+    allowedPaths: ["src/"],
     proofRequirements: ["Attach command output and a screenshot."],
     proofHarnesses: ["verify-deps"],
     deliveryGate: "Stop before commit.",
@@ -129,6 +133,41 @@ function ticket(id = "factory-test-1", overrides = {}) {
     forbiddenOutcome: "The split may not total more or less than $500.",
     ...overrides,
   };
+}
+
+{
+  const normalizedTicket = normalizeTicket(ticket());
+  const reviewPrompt = factoryIndependentReviewPrompt({
+    id: normalizedTicket.id,
+    title: normalizedTicket.title,
+    ticketHash: ticketHash(normalizedTicket),
+    ticket: normalizedTicket,
+    baseSha: "b".repeat(40),
+  });
+  ok(reviewPrompt.includes(canonicalJson(normalizedTicket)), "independent reviewer receives the complete canonical approved ticket unchanged");
+  ok(reviewPrompt.includes(ticketHash(normalizedTicket)), "independent reviewer receives the exact approved ticket hash");
+  const reviewerEnv = independentReviewerEnvironment({
+    ...process.env,
+    OPENAI_API_KEY: "must-not-pass",
+    SUPABASE_SERVICE_ROLE_KEY: "must-not-pass",
+    GITHUB_TOKEN: "must-not-pass",
+  });
+  eq(reviewerEnv.OPENAI_API_KEY, undefined, "independent reviewer does not inherit OpenAI API keys");
+  eq(reviewerEnv.SUPABASE_SERVICE_ROLE_KEY, undefined, "independent reviewer does not inherit Supabase credentials");
+  eq(reviewerEnv.GITHUB_TOKEN, undefined, "independent reviewer does not inherit GitHub tokens");
+  const reviewArgs = buildFactoryReviewExecArgs({
+    root: repoRoot,
+    prompt: reviewPrompt,
+  });
+  ok(reviewArgs.includes("--ephemeral"), "independent reviewer leaves no Codex session transcript");
+  ok(reviewArgs.includes("--ignore-user-config"), "independent reviewer does not load credentialed plugins or MCP configuration");
+  ok(reviewArgs.includes("gpt-5.6-sol"), "isolated independent reviewer keeps the explicitly recorded model");
+  ok(reviewArgs.includes('model_reasoning_effort="high"'), "all factory adversarial review runs Sol at explicit high effort");
+  throws(
+    () => normalizeTicket(ticket("escaping-ticket", { allowedPaths: ["../outside"] })),
+    /literal repository-relative/,
+    "ticket path scope rejects traversal",
+  );
 }
 
 throws(
@@ -541,6 +580,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     headTreeSha: repository.headTreeSha,
     repositoryContentHash: repository.repositoryContentHash,
     repositoryFileCount: repository.repositoryFileCount,
+    reportSummary: `Independent Codex review returned ${FACTORY_REVIEW_TOKEN}: CLEAN.`,
+    stdoutSha256: sha256("fixture review"),
+    stdoutBytes: Buffer.byteLength("fixture review"),
+    stderrSha256: sha256(""),
+    stderrBytes: 0,
   };
   const reviewBytes = `${canonicalJson(reviewPayload)}\n`;
   const reviewFilename = `${sha256(reviewBytes).slice(0, 12)}-independent-codex-review.json`;

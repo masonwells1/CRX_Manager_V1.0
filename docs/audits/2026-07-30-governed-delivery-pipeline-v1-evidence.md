@@ -24,7 +24,8 @@ pipeline remains the delivery engine and all of its landing and production gates
 - One torn final JSONL line is visible as degraded but cannot advance a job; interior corruption fails closed.
 - Exact ticket approval requires the immediately preceding assistant transcript message to match the
   canonical question generated from the immutable ticket. That question includes the ticket goal,
-  completion conditions, prohibitions, proof, delivery gate, and any high-risk example/forbidden outcome.
+  completion conditions, prohibitions, exact allowed repository paths, proof, delivery gate, and any
+  high-risk example/forbidden outcome.
   The same session, ticket hash, freshly fetched `origin/main`, and a receipt no older than 24 hours are required.
 - The morning question is likewise canonical and includes the exact behavior summary, harness receipts,
   independent-review receipt, ticket hash, and a warning that acceptance is not merge/deploy/live.
@@ -57,6 +58,8 @@ pipeline remains the delivery engine and all of its landing and production gates
   opaque helper execution from other or fresh chats are denied. The winning lane
   uses structured target-visible edits and read-only shell inspection; opaque shell/helper/MCP process
   execution is denied, and fixed harnesses run only through the permit-bound factory CLI broker.
+  Structured targets are canonicalized and must remain in-worktree, non-ignored, non-secret,
+  non-`.git`, symlink-contained, and within the ticket's exact allowed paths.
 - A stale lock can be removed only after five minutes when its process is gone, with a backup retained.
   A torn final line has a backup-first repair path, and a failed ledger pause creates an emergency hold
   that still blocks lane writes.
@@ -99,7 +102,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 228 focused assertions after publication-blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 245 focused assertions after publication-blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -208,7 +211,18 @@ recursive force-delete cleanup command.
   before acceptance. The current repair uses exact-SHA GitHub Production status plus a fixed HTTP
   check, makes closeout two-phase with an exact packet-in-`origin/main` gate, expands the packet
   manifest, and reopens/re-hashes every harness and independent-review artifact.
-  Publication remains parked until fresh exact-SHA Codex and Fable acceptance pass.
+- Trusted Codex exact-head publication re-review `2026-07-30T18:50:19Z`: `BLOCKERS`; it found that a
+  real pre-commit code change could never match its later commit SHA at closeout, structured edits
+  were not worktree/ticket constrained, the independent prompt omitted approved ticket fields, and
+  the reviewer inherited the full environment while raw output was persisted. The current repair
+  binds review acceptance to the complete content fingerprint rather than mutable commit identity,
+  tests a real changed-and-committed file through closeout, enforces exact ticket path scope plus
+  escape/ignored/secret/Git-internal checks, sends the full canonical ticket and hash, supplies a
+  minimal reviewer environment, and persists only a bounded summary plus output hashes/counts.
+  Publication remains parked until fresh exact-SHA `gpt-5.6-sol` high-effort acceptance passes.
+- Active adversarial-review policy is now Sol-only: factory acceptance, risky push/merge proof,
+  unattended review, and migration review charters explicitly pin `gpt-5.6-sol` at high effort.
+  Claude/Fable is not required and no Claude credits are consumed by these gates.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -224,6 +238,6 @@ Phase 3 prover identity/RLS checks do not overlap the factory implementation.
 ## Remaining gate
 
 The latest repair pass remains unpushed. The next gates are full verification at frozen bytes,
-fresh exact-SHA Codex and Fable acceptance, then the explicitly authorized feature-branch push and
+fresh exact-SHA `gpt-5.6-sol` high-effort acceptance, then the explicitly authorized feature-branch push and
 draft PR. Merge, board installation/startup, deployment, migration, and all production actions remain
 undone.

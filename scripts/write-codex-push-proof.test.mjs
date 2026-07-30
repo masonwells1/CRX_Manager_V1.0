@@ -8,6 +8,8 @@ import {
   buildCodexPushProof,
   buildCodexReviewPrompt,
   CODEX_VERDICT_TOKEN,
+  CODEX_REVIEW_EFFORT,
+  CODEX_REVIEW_MODEL,
   codexExecutable,
   codexPushProofPath,
   codexReviewProofVerdict,
@@ -79,12 +81,30 @@ assert.ok(
 const args = buildCodexExecArgs({ root: "/repo/root", prompt });
 assert.deepEqual(
   args,
-  ["exec", "--sandbox", "read-only", "-C", "/repo/root", "-c", "approval_policy=never", "-"],
+  [
+    "exec",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--model",
+    "gpt-5.6-sol",
+    "-c",
+    'model_reasoning_effort="high"',
+    "--sandbox",
+    "read-only",
+    "-C",
+    "/repo/root",
+    "-c",
+    "approval_policy=never",
+    "-",
+  ],
 );
 // SECURITY: read-only sandbox; `-` requires the wrapper to feed its fixed prompt
 // directly through stdin with shell:false, so metacharacters can never execute.
-assert.equal(args[1], "--sandbox");
-assert.equal(args[2], "read-only");
+assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
+assert.equal(args[args.indexOf("--model") + 1], CODEX_REVIEW_MODEL);
+assert.ok(args.includes(`model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`));
+assert.ok(args.includes("--ignore-user-config"));
+assert.ok(args.includes("--ephemeral"));
 assert.equal(args[args.length - 1], "-", "Codex reads the fixed prompt from wrapper-owned stdin");
 
 // ── verdict parsing: DETERMINISTIC machine token, no prose heuristics ─────────
@@ -163,11 +183,15 @@ assert.equal(proof.codex_ran, true);
 assert.equal(proof.verdict, "clean");
 assert.equal(proof.head_sha, HEAD);
 assert.equal(proof.base_sha, BASE, "proof records the reviewed origin/main base");
+assert.equal(proof.model, CODEX_REVIEW_MODEL, "proof records mandatory Sol reviewer");
+assert.equal(proof.reasoning_effort, CODEX_REVIEW_EFFORT, "proof records mandatory high effort");
 assert.ok(proof.timestamp, "proof carries a timestamp");
 // The minted proof must PASS the guard's own validator for the exact head.
 assert.equal(proofValid(proof, HEAD, now), true, "minted proof validates against codex-push-guard's proofValid");
 // …and against the guard's full check including the base it gates on.
 assert.equal(proofValid(proof, HEAD, now, BASE), true, "minted proof validates against the exact head AND base");
+assert.equal(proofValid({ ...proof, model: "gpt-5.6-terra" }, HEAD, now, BASE), false, "non-Sol proof is rejected");
+assert.equal(proofValid({ ...proof, reasoning_effort: "medium" }, HEAD, now, BASE), false, "non-high proof is rejected");
 // …and be rejected for the wrong head / moved base / stale / bad verdict.
 assert.equal(proofValid(proof, "b".repeat(40), now), false, "wrong head_sha → invalid");
 assert.equal(proofValid(proof, HEAD, now, "d".repeat(40)), false, "moved origin/main base → invalid");

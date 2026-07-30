@@ -11,12 +11,10 @@
  *   findings for the finding-gate, or a staged diff + ask for the fix-gate).
  *   Passing the prompt via a FILE avoids argv-escaping landmines.
  * - Resolves the newest codex.exe (version-hashed dir) and falls back to the
- *   `codex` shim on PATH. Runs `codex exec --sandbox read-only -C <repoRoot>`
- *   with NO `-m`, so the review runs on whatever agent the Codex config names.
- *   That is deliberate: `gpt-5.6-sol` is the configured default and is the
- *   review agent of the three 5.6 agents (sol = reviewer, terra = builder,
- *   luna = low-risk). Pinning `-m` here would silently diverge from the config
- *   the rest of the harness follows.
+ *   `codex` shim on PATH. Runs an ephemeral, user-config-isolated
+ *   `codex exec --model gpt-5.6-sol -c model_reasoning_effort="high"`
+ *   review under the read-only sandbox. Adversarial reviews never inherit a
+ *   cheaper builder model or reasoning level from workstation configuration.
  *   with stdin closed (non-TTY stdin otherwise blocks "Reading additional input
  *   from stdin…" → hang). Prints Codex's output to stdout; exits with its code.
  *
@@ -67,7 +65,11 @@ function resolveCodex() {
 }
 
 const codex = resolveCodex()
-const args = ['exec', '--sandbox', 'read-only', '-C', repoRoot, prompt]
+const args = [
+  'exec', '--ephemeral', '--ignore-user-config',
+  '--model', 'gpt-5.6-sol', '-c', 'model_reasoning_effort="high"',
+  '--sandbox', 'read-only', '-C', repoRoot, prompt,
+]
 
 const res = spawnSync(codex, args, {
   encoding: 'utf8',

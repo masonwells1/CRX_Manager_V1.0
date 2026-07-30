@@ -29,7 +29,8 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import {
-  codexConfiguredModel,
+  CODEX_REVIEW_EFFORT,
+  CODEX_REVIEW_MODEL,
   codexExecutable,
   codexReviewProofVerdict,
   CODEX_VERDICT_TOKEN,
@@ -119,7 +120,9 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe) {
   // This does NOT weaken the gate: the child is still --sandbox read-only, and the
   // single-token / terminal-token / hash-binding / 30-min-expiry rules all still apply.
   const result = spawnSync(codexBin, [
-    'exec', '--sandbox', 'read-only', '-C', process.cwd(), '-c', 'approval_policy=never',
+    'exec', '--ephemeral', '--ignore-user-config',
+    '--model', CODEX_REVIEW_MODEL, '-c', `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
+    '--sandbox', 'read-only', '-C', process.cwd(), '-c', 'approval_policy=never',
     '--disable', 'hooks', prompt,
   ], {
     cwd: process.cwd(),
@@ -196,16 +199,18 @@ for (const name of names) {
   }, null, 2), { encoding: 'utf8' });
   console.log(`wrote ${reviewerFile}`);
   const codexFile = path.join(stateDir, `codex-review-mig-${safe}.json`);
-  // Record WHICH Codex agent produced the verdict (gpt-5.6-sol/terra/luna). No
-  // `-m` is passed above, so the run uses the configured default; naming it here
-  // makes the security proof auditable after the fact. Audit trail only.
-  const codexModel = codexConfiguredModel();
   writeFileSync(
     codexFile,
-    JSON.stringify({ queryHash, verdict: 'clean', model: codexModel, timestamp: ts }, null, 2),
+    JSON.stringify({
+      queryHash,
+      verdict: 'clean',
+      model: CODEX_REVIEW_MODEL,
+      reasoning_effort: CODEX_REVIEW_EFFORT,
+      timestamp: ts,
+    }, null, 2),
     { encoding: 'utf8' },
   );
-  console.log(`wrote ${codexFile} (all reviewer charters returned CLEAN machine verdicts from ${codexModel})`);
+  console.log(`wrote ${codexFile} (all reviewer charters returned CLEAN machine verdicts from ${CODEX_REVIEW_MODEL}/${CODEX_REVIEW_EFFORT})`);
 }
 
 process.exit(exitCode);
