@@ -29,6 +29,10 @@ const quoteLifecycleAnchors = [
     label: 'repeated-sent exact-version, sent_at preservation, and commission-split preservation',
     statement: "RAISE EXCEPTION 'SMOKE_FAIL: repeated sent save reset sent_at, lost commission split, or missed exact N+1 token';",
   },
+  {
+    label: 'stale draft after sent resolves as row-version conflict before lifecycle validation',
+    statement: "RAISE EXCEPTION 'SMOKE_FAIL: stale draft after sent raised % instead of QUOTE_STALE_WRITE', v_error;",
+  },
 ];
 
 function docker(args, options = {}) {
@@ -145,7 +149,7 @@ try {
     copy(file, path.basename(file));
     expectRollbackMarker(file);
   }
-  console.log('ROW_VERSION_REAL_SCHEMA_RESTORE_PASS baseline=20260727174805 post_baseline_replay=through_candidate smoke_quote_customer=SMOKE_PASS_ROLLBACK quote_lifecycle=draft-sent-sent smoke_planned_holds=SMOKE_PASS_ROLLBACK');
+  console.log('ROW_VERSION_REAL_SCHEMA_RESTORE_PASS baseline=20260727174805 post_baseline_replay=through_candidate smoke_quote_customer=SMOKE_PASS_ROLLBACK quote_lifecycle=draft-sent-sent stale_before_lifecycle=QUOTE_STALE_WRITE smoke_planned_holds=SMOKE_PASS_ROLLBACK');
 } catch (error) {
   console.error(`ROW_VERSION_REAL_SCHEMA_RESTORE_FAIL ${error.stack ?? error.message}`);
   process.exitCode = 1;

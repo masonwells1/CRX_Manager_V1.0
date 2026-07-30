@@ -88,6 +88,37 @@ function parseUpdateAssignments(update) {
   });
 }
 
+function extractQuoteValidationBlock(body) {
+  const match = body.match(/\n    IF v_status IS DISTINCT FROM v_old_status THEN[\s\S]*?\n    -- >>>LAYER2\n/);
+  assert.ok(match, 'could not extract canonical quote lifecycle/unplanning validation block');
+  return match[0];
+}
+
+function extractQuoteRowVersionBlock(body) {
+  const match = body.match(/\n    IF NOT \(p_quote_payload \? 'row_version_expected'\)[\s\S]*?\n    v_expected_row_version := \(p_quote_payload->>'row_version_expected'\)::bigint;\n    IF v_expected_row_version IS DISTINCT FROM v_old_row_version THEN[\s\S]*?\n    END IF;\n/);
+  assert.ok(match, 'could not extract quote row-version conflict block');
+  return match[0];
+}
+
+function assertQuoteValidationOrder(source) {
+  const body = extractFunction(source, 'save_quote', 'save_customer');
+  const anchors = {
+    split: body.indexOf("RAISE EXCEPTION 'COMMISSION_SPLIT_CONFLICT:"),
+    stale: body.indexOf("RAISE EXCEPTION 'QUOTE_STALE_WRITE:"),
+    lifecycle: body.indexOf("RAISE EXCEPTION 'Invalid status transition:"),
+    unplan: body.indexOf("RAISE EXCEPTION 'BOOKING_HAS_JOB_RESERVATION:"),
+    write: body.indexOf('\n  UPDATE quotes SET'),
+  };
+  for (const [name, position] of Object.entries(anchors)) {
+    assert.ok(position >= 0, `save_quote ${name} validation/write anchor is missing`);
+  }
+  assert.ok(anchors.split < anchors.stale, 'quote split conflict must precede generic stale guard');
+  assert.ok(anchors.stale < anchors.lifecycle, 'quote stale guard must precede lifecycle validation');
+  assert.ok(anchors.stale < anchors.unplan, 'quote stale guard must precede unplanning validation');
+  assert.ok(anchors.lifecycle < anchors.write, 'quote lifecycle validation must precede the parent write');
+  assert.ok(anchors.unplan < anchors.write, 'quote unplanning validation must precede the parent write');
+}
+
 function assertCanonicalQuoteUpdate(currentSource, priorSource) {
   const currentQuote = extractFunction(currentSource, 'save_quote', 'save_customer');
   const priorQuote = extractFunction(priorSource, 'save_quote', 'save_customer');
@@ -140,6 +171,12 @@ function assertCanonicalContract() {
     priorHeaderUpdate,
     priorTotalsUpdate,
   } = assertCanonicalQuoteUpdate(current, prior);
+  const priorValidationBlock = extractQuoteValidationBlock(priorQuote);
+  assert.equal(
+    extractQuoteValidationBlock(currentQuote),
+    priorValidationBlock,
+    'relocated quote lifecycle/unplanning validation contents changed',
+  );
   const restoreVerifiedQuoteUpdateShape = (body) => body
     .replace(
       /\n  -- One logical save must produce exactly one quote UPDATE\.[\s\S]*?\n  -- that lock order while ensuring the row-version trigger advances once\./,
@@ -150,11 +187,18 @@ function assertCanonicalContract() {
       '\n    v_quote_id := p_quote_id;',
       `${priorHeaderUpdate}\n\n    v_quote_id := p_quote_id;`,
     );
+  const restoreVerifiedValidationOrder = (body) => {
+    const withoutValidation = body.replace(priorValidationBlock, '');
+    assert.notEqual(withoutValidation, body, 'could not remove exact canonical lifecycle/unplanning block');
+    const marker = '\n    -- Lost-update guard (2026-07-22):';
+    assert.ok(withoutValidation.includes(marker), 'could not find canonical split-guard insertion point');
+    return withoutValidation.replace(marker, `${priorValidationBlock}${marker}`);
+  };
   const stripQuoteToken = (body) => body
     .replace('  v_old_row_version bigint;\n', '')
     .replace('  v_expected_row_version bigint;\n', '')
     .replace('SELECT status, commission_split, row_version\n      INTO v_old_status, v_old_commission_split, v_old_row_version', 'SELECT status, commission_split\n      INTO v_old_status, v_old_commission_split')
-    .replace(/\n    IF NOT \(p_quote_payload \? 'row_version_expected'\)[\s\S]*?\n    END IF;\n(?=\n    v_quote_id := p_quote_id;)/, '')
+    .replace(extractQuoteRowVersionBlock(body), '')
     .replace(",\n    'row_version', (SELECT row_version FROM quotes WHERE id = v_quote_id)", '');
   const stripCustomerToken = (body) => body
     .replace('  v_old_row_version bigint;\n', '')
@@ -164,7 +208,7 @@ function assertCanonicalContract() {
     .replace(",\n    'row_version', (SELECT row_version FROM customers WHERE id = v_customer_id)", '');
   const normalizeSqlLayout = (body) => body.replace(/\s+/g, ' ').trim();
   assert.equal(
-    normalizeSqlLayout(restoreVerifiedQuoteUpdateShape(stripQuoteToken(currentQuote))),
+    normalizeSqlLayout(restoreVerifiedQuoteUpdateShape(restoreVerifiedValidationOrder(stripQuoteToken(currentQuote)))),
     normalizeSqlLayout(priorQuote),
     'save_quote changed outside the audited row-version delta',
   );
@@ -173,11 +217,9 @@ function assertCanonicalContract() {
     normalizeSqlLayout(extractFunction(prior, 'save_customer')),
     'save_customer changed outside the audited row-version delta',
   );
-  const quoteGuard = current.indexOf('COMMISSION_SPLIT_CONFLICT');
-  const quoteVersion = current.indexOf('QUOTE_STALE_WRITE');
   const customerGuard = current.lastIndexOf('COMMISSION_SPLIT_CONFLICT');
   const customerVersion = current.indexOf('CUSTOMER_STALE_WRITE');
-  assert.ok(quoteGuard >= 0 && quoteGuard < quoteVersion, 'quote split conflict must precede generic stale guard');
+  assertQuoteValidationOrder(current);
   assert.ok(customerGuard >= 0 && customerGuard < customerVersion, 'customer split conflict must precede generic stale guard');
 
   assert.match(
@@ -200,6 +242,29 @@ function assertCanonicalContract() {
     () => assertCanonicalQuoteUpdate(corruptFirstSentAt, prior),
     /assignment mismatch for sent_at/,
     'canonical proof must reject a corrupted first-send sent_at branch',
+  );
+
+  const validationBlock = extractQuoteValidationBlock(currentQuote);
+  const lifecycleBeforeStale = current.replace(validationBlock, '').replace(
+    '\n    -- Lost-update guard (2026-07-22):',
+    `${validationBlock}\n    -- Lost-update guard (2026-07-22):`,
+  );
+  assert.throws(
+    () => assertQuoteValidationOrder(lifecycleBeforeStale),
+    /stale guard must precede lifecycle validation/,
+    'validation-order proof must reject lifecycle validation moved ahead of the stale guard',
+  );
+
+  const splitException = "RAISE EXCEPTION 'COMMISSION_SPLIT_CONFLICT: this quote''s commission split was changed elsewhere after you opened it — reload the quote and re-apply your change';";
+  const staleException = "RAISE EXCEPTION 'QUOTE_STALE_WRITE: quote changed after this page opened — reload to review the current quote before saving';";
+  const staleBeforeSplit = current
+    .replace(splitException, '-- split exception deliberately moved by mutation self-test')
+    .replace(staleException, `${staleException}\n      ${splitException}`);
+  assert.notEqual(staleBeforeSplit, current, 'failed to construct split/stale precedence mutation');
+  assert.throws(
+    () => assertQuoteValidationOrder(staleBeforeSplit),
+    /split conflict must precede generic stale guard/,
+    'validation-order proof must reject a generic stale guard moved ahead of split conflict',
   );
 }
 
@@ -285,7 +350,7 @@ INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.custom
     psql("INSERT INTO public.quotes(id,value) VALUES ('new','inserted'); INSERT INTO public.customers(id,value) VALUES ('new','inserted');");
     assert.equal(scalar("SELECT row_version FROM public.quotes WHERE id='new'"), '1');
     assert.equal(scalar("SELECT row_version FROM public.customers WHERE id='new'"), '1');
-    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved canonical_mutation_self_tests=status,sent_at quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=real insert_defaults=verified');
+    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=real insert_defaults=verified');
   } finally {
     docker(['rm', '-f', name], undefined, true);
   }

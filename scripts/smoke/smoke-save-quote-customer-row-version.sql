@@ -8,7 +8,7 @@ DO $smoke$
 DECLARE
   v_admin uuid; v_rep uuid; v_nonoffice uuid; v_customer uuid; v_quote uuid; v_product uuid;
   v_q jsonb; v_q_replay jsonb; v_c jsonb; v_c_replay jsonb;
-  v_quote_before bigint; v_customer_before bigint; v_quote_after bigint; v_quote_after_second bigint; v_customer_after bigint;
+  v_quote_before bigint; v_customer_before bigint; v_quote_after bigint; v_quote_after_second bigint; v_quote_stale_draft bigint; v_customer_after bigint;
   v_note_before text; v_admin_name text; v_addresses_before jsonb; v_error text;
   v_sent_at_first timestamptz; v_sent_at_after timestamptz; v_split_after jsonb;
   v_suffix text := substr(md5(random()::text), 1, 8);
@@ -86,6 +86,7 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: second same-session quote save did not advance exactly N+1 to N+2';
   END IF;
   v_quote_after := v_quote_after_second;
+  v_quote_stale_draft := v_quote_after;
 
   -- Exercise the canonical lifecycle assignments that were moved into the
   -- single consolidated UPDATE. A valid draft -> sent save must bump exactly
@@ -137,6 +138,35 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: repeated sent save reset sent_at, lost commission split, or missed exact N+1 token';
   END IF;
   v_quote_after := v_quote_after_second;
+
+  -- A tab that still holds the earlier draft snapshot must reach the generic
+  -- stale-write recovery path after another real save_quote call advances the
+  -- stored quote to sent. Lifecycle validation must not hide that conflict.
+  BEGIN
+    PERFORM public.save_quote(v_quote, jsonb_build_object(
+      'quote_number', '[SMOKE] RVQ-' || v_suffix,
+      'customer_id', v_customer,
+      'status', 'draft',
+      'tier', 1,
+      'header_notes', 'STALE-DRAFT-MUST-NOT-LAND',
+      'row_version_expected', v_quote_stale_draft),
+      '[]'::jsonb, v_admin, 'rv-quote-stale-draft-after-sent-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: stale draft after sent succeeded';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error NOT LIKE 'QUOTE_STALE_WRITE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: stale draft after sent raised % instead of QUOTE_STALE_WRITE', v_error;
+    END IF;
+  END;
+  IF (SELECT row_version FROM quotes WHERE id = v_quote) <> v_quote_after
+     OR (SELECT status FROM quotes WHERE id = v_quote) <> 'sent'
+     OR (SELECT header_notes FROM quotes WHERE id = v_quote) <> 'fresh-sent-again'
+     OR (SELECT sent_at FROM quotes WHERE id = v_quote) IS DISTINCT FROM v_sent_at_first
+     OR (SELECT count(*) FROM quote_sections WHERE quote_id = v_quote) <> 1
+     OR (SELECT count(*) FROM quote_items WHERE quote_id = v_quote) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected stale draft after sent changed status, header, children, timestamp, or version';
+  END IF;
 
   -- The older token cannot mutate either the header or replaced children.
   BEGIN

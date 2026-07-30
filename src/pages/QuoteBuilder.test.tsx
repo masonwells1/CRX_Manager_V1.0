@@ -411,6 +411,49 @@ describe('QuoteBuilder', () => {
     })));
   });
 
+  it('shows Reload/review for a stale draft save after another tab sent the quote', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote'
+      ? {
+          data: null,
+          error: {
+            code: 'P0001',
+            message: 'QUOTE_STALE_WRITE: quote changed after this page opened — reload to review the current quote before saving',
+          },
+        }
+      : { data: null, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    const header = await screen.findByDisplayValue(quote.header_notes);
+    fireEvent.change(header, { target: { value: 'Keep stale draft edit for review' } });
+    fireEvent.click(screen.getByText('Save Draft'));
+
+    expect(await screen.findByText('Reload Quote')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Keep stale draft edit for review')).toBeInTheDocument();
+    expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_payload: expect.objectContaining({
+        status: 'draft',
+        row_version_expected: 7,
+        header_notes: 'Keep stale draft edit for review',
+      }),
+    }));
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.anything());
+  });
+
   it('keeps a pre-migration existing Quote save compatible when both tokens are absent', async () => {
     const { quote, product, section, item } = makeQuoteFixture();
     mockFrom.mockImplementation((table: string) => buildChain({

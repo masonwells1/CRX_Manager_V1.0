@@ -135,6 +135,27 @@ BEGIN
       RAISE EXCEPTION 'Quote not found: %', p_quote_id;
     END IF;
 
+    -- Lost-update guard (2026-07-22): when the client passes the split it
+    -- originally loaded (commission_split_expected), reject a split overwrite
+    -- if a different value landed in between (stale-tab last-write-wins).
+    -- Callers that omit commission_split_expected behave exactly as before.
+    IF p_quote_payload ? 'commission_split_expected'
+       AND p_quote_payload->'commission_split' IS NOT NULL
+       AND COALESCE(v_old_commission_split, 'null'::jsonb) IS DISTINCT FROM COALESCE(p_quote_payload->'commission_split_expected', 'null'::jsonb)
+       AND COALESCE(v_old_commission_split, 'null'::jsonb) IS DISTINCT FROM p_quote_payload->'commission_split' THEN
+      RAISE EXCEPTION 'COMMISSION_SPLIT_CONFLICT: this quote''s commission split was changed elsewhere after you opened it — reload the quote and re-apply your change';
+    END IF;
+
+    IF NOT (p_quote_payload ? 'row_version_expected')
+       OR jsonb_typeof(p_quote_payload->'row_version_expected') <> 'number'
+       OR (p_quote_payload->>'row_version_expected') !~ '^(0|[1-9][0-9]*)$' THEN
+      RAISE EXCEPTION 'QUOTE_STALE_WRITE: quote changed after this page opened — reload to review the current quote before saving';
+    END IF;
+    v_expected_row_version := (p_quote_payload->>'row_version_expected')::bigint;
+    IF v_expected_row_version IS DISTINCT FROM v_old_row_version THEN
+      RAISE EXCEPTION 'QUOTE_STALE_WRITE: quote changed after this page opened — reload to review the current quote before saving';
+    END IF;
+
     IF v_status IS DISTINCT FROM v_old_status THEN
       IF NOT (
         v_allowed_transitions->v_old_status IS NOT NULL
@@ -160,27 +181,6 @@ BEGIN
       RAISE EXCEPTION 'BOOKING_HAS_JOB_RESERVATION: cannot unplan this booking — a scheduled job is still reserving product from it; cancel or reschedule the job first';
     END IF;
     -- >>>LAYER2
-
-    -- Lost-update guard (2026-07-22): when the client passes the split it
-    -- originally loaded (commission_split_expected), reject a split overwrite
-    -- if a different value landed in between (stale-tab last-write-wins).
-    -- Callers that omit commission_split_expected behave exactly as before.
-    IF p_quote_payload ? 'commission_split_expected'
-       AND p_quote_payload->'commission_split' IS NOT NULL
-       AND COALESCE(v_old_commission_split, 'null'::jsonb) IS DISTINCT FROM COALESCE(p_quote_payload->'commission_split_expected', 'null'::jsonb)
-       AND COALESCE(v_old_commission_split, 'null'::jsonb) IS DISTINCT FROM p_quote_payload->'commission_split' THEN
-      RAISE EXCEPTION 'COMMISSION_SPLIT_CONFLICT: this quote''s commission split was changed elsewhere after you opened it — reload the quote and re-apply your change';
-    END IF;
-
-    IF NOT (p_quote_payload ? 'row_version_expected')
-       OR jsonb_typeof(p_quote_payload->'row_version_expected') <> 'number'
-       OR (p_quote_payload->>'row_version_expected') !~ '^(0|[1-9][0-9]*)$' THEN
-      RAISE EXCEPTION 'QUOTE_STALE_WRITE: quote changed after this page opened — reload to review the current quote before saving';
-    END IF;
-    v_expected_row_version := (p_quote_payload->>'row_version_expected')::bigint;
-    IF v_expected_row_version IS DISTINCT FROM v_old_row_version THEN
-      RAISE EXCEPTION 'QUOTE_STALE_WRITE: quote changed after this page opened — reload to review the current quote before saving';
-    END IF;
 
     v_quote_id := p_quote_id;
 
