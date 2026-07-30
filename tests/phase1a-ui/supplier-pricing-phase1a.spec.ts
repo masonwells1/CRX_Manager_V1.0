@@ -423,12 +423,14 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
   const supplierEvidenceHeaders = new Map<string, number>();
   supplierEvidenceSheet!.getRow(1).eachCell((cell, column) => supplierEvidenceHeaders.set(String(cell.value), column));
   const evidenceRowsByProductAndSupplier = new Map<string, number>();
+  const actualEvidenceDetailOrder: string[] = [];
   for (let row = 2; row <= supplierEvidenceSheet!.actualRowCount; row += 1) {
     const productId = String(supplierEvidenceSheet!.getCell(row, supplierEvidenceHeaders.get('product_id')!).value);
     const supplier = String(supplierEvidenceSheet!.getCell(row, supplierEvidenceHeaders.get('supplier')!).value);
     const key = `${productId}\\u0000${supplier}`;
     expect(evidenceRowsByProductAndSupplier.has(key), `Duplicate Supplier Evidence row for ${productId} / ${supplier}`).toBe(false);
     evidenceRowsByProductAndSupplier.set(key, row);
+    actualEvidenceDetailOrder.push(key);
   }
   const expectedEvidenceRows = products.flatMap((product, index) => supplierMarketEvidence[index]!.suppliers.map((supplier) => ({
     productId: product.id,
@@ -436,6 +438,11 @@ test('real .xlsx round-trip plus ProductDetail quick pricing review', async ({ p
   })));
   const expectedEvidenceKeys = expectedEvidenceRows.map((row) => `${row.productId}\\u0000${row.vendor}`);
   expect(supplierEvidenceSheet!.actualRowCount - 1).toBe(expectedEvidenceRows.length);
+  // The mocked RPC deliberately returns Product evidence in reverse order. The
+  // export must join it by Product UUID, then write the detail rows grouped in
+  // Pricing Update order with each Product's generated supplier order intact.
+  // A set check alone would miss a regression that wrote the RPC response order.
+  expect(actualEvidenceDetailOrder).toEqual(expectedEvidenceKeys);
   expect([...evidenceRowsByProductAndSupplier.keys()].sort()).toEqual([...expectedEvidenceKeys].sort());
   for (const evidence of expectedEvidenceRows) {
     const key = `${evidence.productId}\\u0000${evidence.vendor}`;
