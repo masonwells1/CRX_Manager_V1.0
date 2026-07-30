@@ -49,6 +49,9 @@ all three candidates in live order and completes the full concurrency matrix.
 Its owning npm command also runs the readiness helper unit test. The generated
 schema registry was refreshed from live introspection to high-water
 `20260730140808` and now records the whole-calendar-month constraint.
+The live schema-integrity tripwire now guards the exact month-lock calls in
+both vendor-bill writers and period close, so a later function re-emission
+cannot silently reopen the race.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

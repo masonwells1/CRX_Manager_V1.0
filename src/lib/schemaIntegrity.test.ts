@@ -651,8 +651,9 @@ const SECURITY_DEFINER_FUNCTIONS_REQUIRING_EMPTY_SEARCH_PATH: string[] = [
 ];
 
 /**
- * Functions whose invoker mode is itself a security boundary. Keep them out of
- * SECURITY DEFINER path checks and prove the live mode directly instead.
+ * Functions whose invoker mode and public-only search_path are security
+ * boundaries. Keep them out of SECURITY DEFINER path checks and prove both
+ * live catalog properties directly instead.
  */
 const FUNCTIONS_REQUIRING_SECURITY_INVOKER: string[] = [
   'compute_season',
@@ -825,7 +826,7 @@ describe('Schema Integrity: SECURITY DEFINER pg_temp Contracts', () => {
     }
   });
 
-  it('security-invoker contracts are narrow and disjoint from definer contracts', () => {
+  it('public-path security-invoker contracts are narrow and disjoint from definer contracts', () => {
     expect(FUNCTIONS_REQUIRING_SECURITY_INVOKER).toEqual(['compute_season']);
     const definerSet = new Set([
       ...SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP,

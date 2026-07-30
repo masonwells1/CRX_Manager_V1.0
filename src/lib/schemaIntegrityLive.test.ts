@@ -445,6 +445,48 @@ interface FunctionBodyRow {
   proconfig: string[] | null;
 }
 
+const ACCOUNTING_MONTH_LOCK_CONTRACTS = [
+  {
+    name: 'create_vendor_bill',
+    call: /public\._lock_accounting_months\s*\(\s*ARRAY\s*\[\s*p_bill_date\s*\]\s*,\s*false\s*\)/i,
+  },
+  {
+    name: 'update_vendor_bill',
+    call: /public\._lock_accounting_months\s*\(\s*ARRAY\s*\[\s*v_bill\.bill_date\s*,\s*p_bill_date\s*\]\s*,\s*false\s*\)/i,
+  },
+  {
+    name: 'close_accounting_period',
+    call: /public\._lock_accounting_months\s*\(\s*ARRAY\s*\[\s*v_period_start\s*\]\s*,\s*true\s*\)/i,
+  },
+] as const;
+
+function relationReferencesFromFunctionBody(source: string) {
+  // EXTRACT(field FROM value) and SUBSTRING(value FROM start) use FROM as
+  // scalar syntax, not as a relation clause. Mask those calls before scanning
+  // the deliberately tiny exact-empty-search-path allowlist for table access.
+  const relationOnlySource = source.replace(
+    /\b(?:extract|substring)\s*\((?:[^()]|\([^()]*\))*\)/gi,
+    '',
+  );
+  return [
+    ...relationOnlySource.matchAll(
+      /\b(?:FROM|JOIN|UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+([a-z_][a-z0-9_.]*)/gi,
+    ),
+  ].map((match) => match[1].toLowerCase());
+}
+
+describe('Schema Integrity: relation reference scanner', () => {
+  it('ignores scalar FROM syntax but retains real relation clauses', () => {
+    expect(
+      relationReferencesFromFunctionBody(`
+        v_month := extract(month FROM p_date);
+        v_tail := substring(v_value FROM 2);
+        SELECT 1 FROM public.accounting_periods;
+      `),
+    ).toEqual(['public.accounting_periods']);
+  });
+});
+
 describe.skipIf(!isLiveDB)('Live DB: Mutating RPC Idempotency Bodies', () => {
   it('every mutating RPC has a canonical idempotency block in the live function body', async () => {
     const namesList = MUTATING_RPCS_WITH_IDEMPOTENCY.map((n) => `'${n}'`).join(',');
@@ -482,6 +524,39 @@ describe.skipIf(!isLiveDB)('Live DB: Mutating RPC Idempotency Bodies', () => {
         `  END IF;\n\n` +
         `Or carry "-- idempotency-body-check: exempt" if using a raw inline lookup ` +
         `(documented exception, see CLAUDE.md "Canonical Patterns for New RPCs").`,
+    ).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!isLiveDB)('Live DB: Accounting month lock callers', () => {
+  it('governed vendor-bill writers and period close retain their shared/exclusive lock calls', async () => {
+    const namesList = ACCOUNTING_MONTH_LOCK_CONTRACTS.map(({ name }) => `'${name}'`).join(',');
+    const result = (await queryInformationSchema(`
+      SELECT proname, prosrc, proconfig
+      FROM pg_proc
+      WHERE pronamespace = 'public'::regnamespace
+        AND proname IN (${namesList})
+    `)) as FunctionBodyRow[];
+
+    const findings: string[] = [];
+    for (const contract of ACCOUNTING_MONTH_LOCK_CONTRACTS) {
+      const rows = result.filter((row) => row.proname === contract.name);
+      if (rows.length !== 1) {
+        findings.push(`  ${contract.name}: expected exactly one function, found ${rows.length}`);
+      } else if (!contract.call.test(rows[0].prosrc)) {
+        findings.push(
+          `  ${contract.name}: live body is missing its required ` +
+            `_lock_accounting_months dates/mode contract`,
+        );
+      }
+    }
+
+    expect(
+      findings,
+      `Accounting-month lock audit failed for ${findings.length} function(s):\n` +
+        `${findings.join('\n')}\n\n` +
+        `create/update must retain shared month locks and close must retain its ` +
+        `exclusive month lock, or the period-close race reopens.`,
     ).toHaveLength(0);
   });
 });
@@ -552,11 +627,7 @@ describe.skipIf(!isLiveDB)('Live DB: SECURITY DEFINER exact-empty search_path Bo
           `  ${fnName}: search_path is not exactly empty (proconfig=${JSON.stringify(config)})`,
         );
       }
-      const relationReferences = [
-        ...row.prosrc.matchAll(
-          /\b(?:FROM|JOIN|UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+([a-z_][a-z0-9_.]*)/gi,
-        ),
-      ].map((match) => match[1].toLowerCase());
+      const relationReferences = relationReferencesFromFunctionBody(row.prosrc);
       const unqualifiedRelations = relationReferences.filter(
         (relation) =>
           !relation.startsWith('public.') &&
@@ -584,16 +655,16 @@ describe.skipIf(!isLiveDB)('Live DB: SECURITY DEFINER exact-empty search_path Bo
 });
 
 describe.skipIf(!isLiveDB)('Live DB: Required SECURITY INVOKER functions', () => {
-  it('every listed function remains SECURITY INVOKER', async () => {
+  it('every listed function remains SECURITY INVOKER with its pinned public search_path', async () => {
     const namesList = FUNCTIONS_REQUIRING_SECURITY_INVOKER
       .map((n) => `'${n}'`)
       .join(',');
     const result = (await queryInformationSchema(`
-      SELECT proname, prosecdef
+      SELECT proname, prosecdef, proconfig
       FROM pg_proc
       WHERE pronamespace = 'public'::regnamespace
         AND proname IN (${namesList})
-    `)) as Array<{ proname: string; prosecdef: boolean }>;
+    `)) as Array<{ proname: string; prosecdef: boolean; proconfig: string[] | null }>;
 
     const byName = new Map(result.map((r) => [r.proname, r]));
     const findings: string[] = [];
@@ -603,13 +674,26 @@ describe.skipIf(!isLiveDB)('Live DB: Required SECURITY INVOKER functions', () =>
         findings.push(`  ${fnName}: expected exactly one function, found ${rows.length}`);
       } else if (byName.get(fnName)?.prosecdef !== false) {
         findings.push(`  ${fnName}: unexpectedly SECURITY DEFINER`);
+      } else {
+        const config = byName.get(fnName)?.proconfig || [];
+        const searchPathSettings = config.filter((value) => /^search_path=/i.test(value));
+        if (
+          searchPathSettings.length !== 1 ||
+          searchPathSettings[0].toLowerCase() !== 'search_path=public'
+        ) {
+          findings.push(
+            `  ${fnName}: expected exactly search_path=public ` +
+              `(proconfig=${JSON.stringify(config)})`,
+          );
+        }
       }
     }
 
     expect(
       findings,
       `SECURITY INVOKER audit failed for ${findings.length} function(s):\n` +
-        `${findings.join('\n')}`,
+        `${findings.join('\n')}\n\n` +
+        `These advisor-safe invoker helpers must retain their deliberate public-only lookup path.`,
     ).toHaveLength(0);
   });
 });

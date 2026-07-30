@@ -11,9 +11,11 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-07-30 — Empty search_path is the narrow stronger SECURITY DEFINER variant
 
-**Decision:** `SECURITY DEFINER` functions normally use `public, pg_temp`; an exactly empty
-`search_path` is allowed only for a deliberately fully schema-qualified body with current
-source and migration-review proof. `check_period_open(date)` is the first explicit exception.
+**Decision (Mason, in-chat — "I approve pushing all of this and migrating and making it live",
+after the governed release packet and rule change were presented):** `SECURITY DEFINER`
+functions normally use `public, pg_temp`; an exactly empty `search_path` is allowed only for a
+deliberately fully schema-qualified body with current source and migration-review proof.
+`check_period_open(date)` is the first explicit exception.
 **Why:** an empty path removes mutable schema lookup entirely, while a separate live guard
 still fails if the function drifts to `public`, `pg_temp`, or any other non-empty path.
 **What this forbids/implies:** never remove a function from the pg_temp contract silently;

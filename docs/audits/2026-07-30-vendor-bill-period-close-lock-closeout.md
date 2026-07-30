@@ -191,6 +191,11 @@ queries after the migrations landed. Its high-water is now
 `20260730140808`; it records all three applied migration names and lists
 `accounting_periods_whole_calendar_month_check` as a loud, intentionally
 unparsed multi-column constraint for future hook and reviewer awareness.
+The live schema-integrity suite now also fails if any of
+`create_vendor_bill`, `update_vendor_bill`, or `close_accounting_period`
+loses its exact shared/exclusive `_lock_accounting_months` call in a future
+function re-emission. The adjacent invoker check pins `compute_season` to
+SECURITY INVOKER with exactly `search_path=public`.
 
 After applying the candidate in that disposable database, the runner also
 executes the existing Section 9 PO/AP, finance-charge month-dedup, and delivery

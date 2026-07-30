@@ -67,6 +67,7 @@ BEGIN
     json_build_object('sub', v_admin, 'role', 'authenticated')::text,
     true
   );
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   SELECT COALESCE(SUM(GREATEST(
     poi.quantity_ordered - COALESCE(poi.quantity_received, 0),

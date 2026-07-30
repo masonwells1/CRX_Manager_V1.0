@@ -194,5 +194,12 @@ describe('vendor-bill accounting-period close serialization', () => {
       'close_accounting_period',
       'check_period_open',
     ]));
+    const section9Smoke = source(
+      'scripts',
+      'smoke',
+      'smoke-section9-po-ap-high-remediation.sql',
+    );
+    expect(section9Smoke).toContain("'request.jwt.claims'");
+    expect(section9Smoke).toContain("'request.jwt.claim.sub'");
   });
 });
