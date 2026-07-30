@@ -134,6 +134,74 @@ export function normRepoPath(p) {
     .toLowerCase();
 }
 
+// `git cat-file --batch` buffers every requested blob before returning. The full
+// forward-migration fallback is currently about 10.5 MiB, so 32 MiB leaves room
+// for normal growth while retaining a deliberate finite fail-closed ceiling.
+export const ORIGIN_MAIN_CAT_FILE_MAX_BUFFER = 32 * 1024 * 1024;
+
+// Keep the batch input and output framing in one testable helper. `%(rest)`
+// echoes this exact path after Git's object header, so every returned record is
+// bound to the expected path and order instead of being assigned positionally.
+function originMainBatchPaths(paths) {
+  const unique = [];
+  const seen = new Set();
+  for (const raw of paths || []) {
+    const p = String(raw || "").trim();
+    const key = normRepoPath(p);
+    // The line-oriented Git batch protocol cannot safely represent these names.
+    // Treat them as unreadable rather than silently scanning a different path.
+    if (!p || !key || /\s/.test(p) || seen.has(key)) return null;
+    seen.add(key);
+    unique.push(p);
+  }
+  return unique;
+}
+
+export function originMainSqlBlobMap(paths, runBatch, maxBuffer = ORIGIN_MAIN_CAT_FILE_MAX_BUFFER) {
+  const uniquePaths = originMainBatchPaths(paths);
+  if (uniquePaths === null || !Number.isSafeInteger(maxBuffer) || maxBuffer < 1) return null;
+  if (uniquePaths.length === 0) return new Map();
+
+  let output;
+  try {
+    // The tab splits the object expression from `%(rest)`; the latter is checked
+    // below before a blob can be associated with a requested path.
+    const input = Buffer.from(`${uniquePaths.map((p) => `origin/main:${p}\t${p}`).join("\n")}\n`, "utf8");
+    output = runBatch(input, uniquePaths);
+  } catch {
+    return null;
+  }
+  if (!Buffer.isBuffer(output) || output.length > maxBuffer) return null;
+
+  const blobs = new Map();
+  let offset = 0;
+  for (const expectedPath of uniquePaths) {
+    const headerEnd = output.indexOf(0x0a, offset);
+    if (headerEnd < 0) return null;
+    const header = output.subarray(offset, headerEnd).toString("utf8");
+    const match = header.match(/^([0-9a-f]{40,64}) blob (\d+) (.+)$/);
+    if (!match || match[3] !== expectedPath) return null;
+    const size = Number(match[2]);
+    const bodyStart = headerEnd + 1;
+    const bodyEnd = bodyStart + size;
+    // A complete batch record is header LF, exactly `size` body bytes, then LF.
+    if (!Number.isSafeInteger(size) || bodyEnd >= output.length || output[bodyEnd] !== 0x0a) return null;
+    blobs.set(normRepoPath(expectedPath), output.subarray(bodyStart, bodyEnd).toString("utf8"));
+    offset = bodyEnd + 1;
+  }
+  // No extra, truncated, or unframed data may be ignored after the final record.
+  return offset === output.length ? blobs : null;
+}
+
+export function originMainForwardBlobPaths(treePaths, prefilterPaths) {
+  const candidates = prefilterPaths === null ? treePaths : prefilterPaths;
+  return (candidates || []).filter((p) => {
+    const normalized = normRepoPath(p);
+    const name = String(p || "").slice(String(p || "").lastIndexOf("/") + 1);
+    return normalized.startsWith("supabase/migrations/") && isParkedMigrationFile(name);
+  });
+}
+
 // The two folders a parked draft can live in, and the filename rule for each.
 // scripts/.staging-migrations holds only migrations, so any .sql there is a draft;
 // docs/audits holds ordinary audit prose too, so a .sql there must look like a draft.

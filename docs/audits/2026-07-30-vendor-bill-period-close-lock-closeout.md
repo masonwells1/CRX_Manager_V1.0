@@ -31,10 +31,14 @@ concurrent draft/unposted-invoice writer can still beat close's invoice
 completeness scan. This candidate is not a new AP close policy.
 
 `check_period_open` deliberately remains only the authoritative closed-period
-reader, with its established tighter `search_path = ''`. It does not acquire
-the new advisory lock, so the many unrelated callers do not inherit a new lock
-protocol or broader function contract. The two vendor-bill writers acquire their
-own governed shared locks immediately before calling it.
+reader, but this candidate makes a deliberate configuration hardening: the live
+function's `search_path = public, pg_temp` becomes `search_path = ''`. Its body
+is otherwise byte-unchanged, all relation references in that body are explicitly
+`public`-qualified, and the disposable PostgreSQL 17 proof passes with that
+configuration. It does not acquire the new advisory lock, so unrelated callers
+do not inherit a new lock protocol or broader function contract. The two
+vendor-bill writers acquire their own governed shared locks immediately before
+calling it.
 
 ## Read-only live preflight already observed
 

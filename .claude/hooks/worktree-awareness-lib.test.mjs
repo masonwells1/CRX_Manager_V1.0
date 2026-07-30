@@ -17,6 +17,7 @@ import {
   fallbackPathsAgainstOrigin, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
+  ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap, originMainForwardBlobPaths,
   createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
@@ -359,6 +360,50 @@ const failedPrefilter = originMainParkedMigrationPrefilter(() => {
 });
 eq(failedPrefilter.paths, null, "real git failure leaves the conservative full-forward fallback enabled");
 
+// A real prefilter failure must scan every forward SQL blob without depending on
+// spawnSync's tiny default output buffer. The production reader uses this same
+// injected batch framing helper with a 32 MiB finite ceiling.
+function catFileBatchRecord(repoPath, text) {
+  const body = Buffer.from(text, "utf8");
+  return Buffer.concat([
+    Buffer.from(`${"a".repeat(40)} blob ${body.length} ${repoPath}\n`, "utf8"),
+    body,
+    Buffer.from("\n", "utf8"),
+  ]);
+}
+function catFileBatch(paths, textForPath) {
+  return Buffer.concat(paths.map((p) => catFileBatchRecord(p, textForPath(p))));
+}
+const fullFallbackPaths = Array.from({ length: 840 }, (_unused, i) =>
+  `supabase/migrations/20260730${String(i).padStart(6, "0")}_full_fallback_${i}.sql`,
+);
+eq(originMainForwardBlobPaths(fullFallbackPaths, null).length, 840, "failed prefilter selects every forward SQL path for the conservative full scan");
+const fullFallbackText = (p) => `-- ordinary migration ${p}\n${"x".repeat(13000)}\n`;
+const fullFallbackBatch = catFileBatch(fullFallbackPaths, fullFallbackText);
+ok(fullFallbackBatch.length > 10 * 1024 * 1024, "forced full fallback fixture exceeds the observed 10 MiB-scale full-scan payload");
+let receivedBatchInput = "";
+const fullFallbackBlobs = originMainSqlBlobMap(fullFallbackPaths, (input, expectedPaths) => {
+  receivedBatchInput = input.toString("utf8");
+  eq(expectedPaths.length, 840, "batch reader receives every forced-fallback path");
+  return fullFallbackBatch;
+});
+eq(fullFallbackBlobs.size, 840, "bounded batch reader retains every forced-fallback blob");
+ok(receivedBatchInput.includes(`origin/main:${fullFallbackPaths[0]}\t${fullFallbackPaths[0]}`), "batch input binds each object request to its echoed path token");
+let fullFallbackReads = 0;
+const fullFallbackDiscovery = parkedMainlineDiscoveryFrom(
+  fullFallbackPaths,
+  "| # | Migration timestamp | Purpose |\n|---:|---|---|",
+  (p) => { fullFallbackReads++; return fullFallbackBlobs.get(normRepoPath(p)); },
+  null,
+);
+eq(fullFallbackDiscovery.state, "known", "complete forced fallback with ordinary SQL remains a known empty parked state");
+eq(fullFallbackReads, 840, "complete forced fallback scans every returned forward blob");
+eq(originMainSqlBlobMap(fullFallbackPaths, () => fullFallbackBatch, fullFallbackBatch.length - 1), null, "over-limit batch output fails conservatively");
+eq(originMainSqlBlobMap([fullFallbackPaths[0]], () => catFileBatch([fullFallbackPaths[1]], fullFallbackText)), null, "echoed path/order mismatch fails conservatively");
+eq(originMainSqlBlobMap([fullFallbackPaths[0]], () => catFileBatch([fullFallbackPaths[0]], fullFallbackText).subarray(0, -1)), null, "truncated batch delimiter fails conservatively");
+eq(originMainSqlBlobMap([fullFallbackPaths[0]], () => Buffer.concat([catFileBatch([fullFallbackPaths[0]], fullFallbackText), Buffer.from("trailer")])), null, "trailing unframed batch bytes fail conservatively");
+eq(ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, 32 * 1024 * 1024, "production batch ceiling is a deliberate 32 MiB");
+
 const headerWithoutRow = validateParkedMigrationCrossReferences([PARKED_FORWARD], "| # | Migration timestamp | Purpose |\n|---:|---|---|", () => PARKED_FORWARD_HEADER);
 eq(headerWithoutRow.state, "unknown", "correction guard fails loud for a parked header without a candidate history row");
 const oneCandidateHistory = [
@@ -384,6 +429,8 @@ const currentCrossReference = validateParkedMigrationCrossReferences(
   (p) => readFileSync(path.join(repoRoot, ...p.split("/")), "utf8"),
 );
 eq(currentCrossReference.state, "known", "repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row");
+const periodCloseCandidate = readFileSync(path.join(repoRoot, "supabase", "migrations", "20260729231031_vendor_bill_period_close_lock.sql"), "utf8");
+ok(/check_period_open[\s\S]*?SET search_path = ''[\s\S]*?FROM public\.accounting_periods/.test(periodCloseCandidate), "period-close candidate deliberately hardens check_period_open to an empty search path while retaining schema-qualified body references");
 
 // Path normalization the count key depends on.
 eq(normRepoPath("Docs\\Audits\\A.SQL"), "docs/audits/a.sql", "backslashes, case and separators normalize");

@@ -201,6 +201,9 @@ CREATE OR REPLACE FUNCTION public.check_period_open(p_date date)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
+-- Deliberate config-only hardening: the live function uses public, pg_temp;
+-- this candidate pins an empty search path. The unchanged body below refers only
+-- to public.accounting_periods and passed the disposable PostgreSQL 17 proof.
 SET search_path = ''
 AS $function$
 DECLARE

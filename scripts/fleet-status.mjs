@@ -25,6 +25,8 @@ import {
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
+  ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap as parseOriginMainSqlBlobMap,
+  originMainForwardBlobPaths,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
 
 // The repo root this script lives in (works no matter what cwd it's launched from).
@@ -37,43 +39,18 @@ function git(args, cwd = repoRoot, timeout = 5000) {
   });
 }
 
-// Read every prefiltered origin/main SQL blob in one Git process. The prefilter is
-// deliberately a safe superset; batching avoids one `git show` process per match.
+// Read every prefiltered origin/main SQL blob in one bounded Git process. The
+// shared parser validates echoed paths, record delimiters, and complete framing.
 function originMainSqlBlobMap(paths) {
-  const uniquePaths = [...new Set((paths || []).map((p) => String(p || "").trim()).filter(Boolean))];
-  if (uniquePaths.length === 0) return new Map();
-  const result = spawnSync("git", ["cat-file", "--batch"], {
-    cwd: repoRoot,
-    input: Buffer.from(`${uniquePaths.map((p) => `origin/main:${p}`).join("\n")}\n`, "utf8"),
-    timeout: 5000,
-    stdio: ["pipe", "pipe", "ignore"],
-  });
-  if (result.status !== 0 || !Buffer.isBuffer(result.stdout)) return null;
-  const output = result.stdout;
-  const blobs = new Map();
-  let offset = 0;
-  for (const p of uniquePaths) {
-    const headerEnd = output.indexOf(0x0a, offset);
-    if (headerEnd < 0) return null;
-    const header = output.subarray(offset, headerEnd).toString("utf8");
-    const match = header.match(/^[0-9a-f]+ blob (\d+)$/);
-    if (!match) return null;
-    const size = Number(match[1]);
-    const bodyStart = headerEnd + 1;
-    const bodyEnd = bodyStart + size;
-    if (!Number.isSafeInteger(size) || bodyEnd > output.length) return null;
-    blobs.set(normRepoPath(p), output.subarray(bodyStart, bodyEnd).toString("utf8"));
-    offset = bodyEnd + 1; // cat-file terminates each blob body with one newline.
-  }
-  return blobs;
-}
-
-function originMainForwardBlobPaths(treePaths, prefilterPaths) {
-  const candidates = prefilterPaths === null ? treePaths : prefilterPaths;
-  return (candidates || []).filter((p) => {
-    const normalized = normRepoPath(p);
-    const name = String(p || "").slice(String(p || "").lastIndexOf("/") + 1);
-    return normalized.startsWith("supabase/migrations/") && isParkedMigrationFile(name);
+  return parseOriginMainSqlBlobMap(paths, (input) => {
+    const result = spawnSync("git", ["cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"], {
+      cwd: repoRoot,
+      input,
+      timeout: 5000,
+      maxBuffer: ORIGIN_MAIN_CAT_FILE_MAX_BUFFER,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    return result.status === 0 ? result.stdout : null;
   });
 }
 

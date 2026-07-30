@@ -73,7 +73,11 @@ backlog is clear. The prefilter is anchored to an ASCII-space/tab SQL comment st
 which removes prose-only matches; it intentionally remains a safe superset because only
 the parser can enforce the first-comment-block window. Both readers load the remaining
 safe-superset SQL blobs through one `git cat-file --batch` process rather than spawning a
-separate `git show` for each candidate.
+separate `git show` for each candidate. That batch has a deliberate 32 MiB output ceiling
+(the observed complete 840-file fallback is about 10.5 MiB) and each returned record must
+echo its requested path in order, carry an exact body delimiter, and consume the entire
+output. Any Git size/framing/path failure produces `PARKED STATE UNKNOWN`; it never drops
+unreadable forward SQL and reports a false clean zero.
 
 **Explicit scope residual.** This candidate guarantees only
 `create_vendor_bill` and `update_vendor_bill` date writes. `record_vendor_payment`,
