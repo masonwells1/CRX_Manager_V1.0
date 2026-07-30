@@ -20,7 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   parseWorktreePorcelain, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedDraftPath,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedDraftPath, isParkedFallbackFile,
   lastNonEmptyLine, firstCommentLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
@@ -223,6 +223,7 @@ for (const e of entries) {
     for (const { root, filter } of [
       { root: "scripts/.staging-migrations", filter: isParkedMigrationFile },
       { root: "docs/audits", filter: isDraftSqlName },
+      { root: "supabase/migrations", filter: (name, full, rel) => isParkedFallbackFile(rel, name, () => readTextSafe(full)) },
     ]) {
       const dir = path.join(e.path, ...root.split("/"));
       for (const full of listFilesRecursive(dir)) {

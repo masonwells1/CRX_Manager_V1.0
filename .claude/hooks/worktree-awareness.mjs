@@ -16,7 +16,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedDraftPath, fleetSummaryLine,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedDraftPath, isParkedFallbackFile, fleetSummaryLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
@@ -188,6 +188,9 @@ try {
     const scans = [
       { root: "scripts/.staging-migrations/", filter: isParkedMigrationFile },
       { root: "docs/audits/", filter: isDraftSqlName },
+      { root: "supabase/migrations/", filter: (name, rel) => isParkedFallbackFile(rel, name, () => {
+        try { return readFileSync(path.join(e.path, ...rel.split("/")), "utf8"); } catch { return ""; }
+      }) },
     ];
     for (const { root, filter } of scans) {
       for (const d of listDraftsRecursive(path.join(e.path, ...root.split("/").filter(Boolean)), root)) {

@@ -74,10 +74,13 @@ fresh exact-SHA review and the normal migration gate.
 
 If an approved MCP apply succeeds, its server-assigned migration version will
 differ from this pre-apply disk timestamp. In the same post-apply closeout
-change, rename the disk migration to that assigned version and update migration
-history plus the timestamped documentation references. The proof runner and
-source regression discover the unique stable suffix rather than embedding a
-timestamp, but that does not remove the B7 rename-and-documentation obligation.
+change, rename the disk migration to that assigned version, replace its
+`PARKED / NOT APPLIED / DO NOT APPLY` status header with applied-state wording
+while preserving the first-line purpose comment, and update migration history
+plus the timestamped documentation references. That prevents an already-live
+branch from remaining on the parked list. The proof runner and source regression
+discover the unique stable suffix rather than embedding a timestamp, but that
+does not remove the B7 rename-and-documentation obligation.
 
 ## Disposable PostgreSQL 17 proof
 

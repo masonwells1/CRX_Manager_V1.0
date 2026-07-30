@@ -125,6 +125,14 @@ export function isParkedDraftPath(repoRelPath, sqlText = "") {
   return root ? root.isDraft(base, sqlText) : false;
 }
 
+// Full-disk fallback scans encounter many ordinary files. Reject non-SQL names
+// before reading them, then use the same explicit-header rule as the normal
+// branch-owned reader. Both /fleet and SessionStart call this helper.
+export function isParkedFallbackFile(repoRelPath, name, loadText = () => "") {
+  if (!/\.sql$/i.test(String(name || ""))) return false;
+  return isParkedDraftPath(repoRelPath, loadText());
+}
+
 // Which of the paths a worktree CHANGED since its branch point are parked drafts?
 //
 // 2026-07-29: the count was permanently wrong. It scanned the working tree of EVERY

@@ -3,12 +3,13 @@
 // Run: node .claude/hooks/worktree-awareness-lib.test.mjs
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
   isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
-  hasExplicitParkedMigrationHeader,
+  hasExplicitParkedMigrationHeader, isParkedFallbackFile,
   createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
@@ -93,6 +94,11 @@ ok(hasExplicitParkedMigrationHeader(PARKED_FORWARD_HEADER), "explicit parked hea
 ok(!hasExplicitParkedMigrationHeader("-- normal feature migration\nCREATE TABLE public.example();"), "ordinary leading comments do not park a migration");
 ok(isParkedDraftPath(PARKED_FORWARD, PARKED_FORWARD_HEADER), "explicitly parked forward migration is surfaced");
 ok(!isParkedDraftPath("supabase/migrations/20260101000000_real.sql", "-- normal feature migration\nSELECT 1;"), "ordinary applied migration is not a parked draft");
+ok(isParkedFallbackFile(PARKED_FORWARD, "20260729231031_vendor_bill_period_close_lock.sql", () => PARKED_FORWARD_HEADER), "fallback finds an explicitly parked forward migration");
+ok(!isParkedFallbackFile("supabase/migrations/20260101000000_real.sql", "20260101000000_real.sql", () => "-- normal feature migration\nSELECT 1;"), "fallback excludes an ordinary forward migration");
+let fallbackNonSqlReads = 0;
+ok(!isParkedFallbackFile("supabase/migrations/notes.md", "notes.md", () => { fallbackNonSqlReads++; return PARKED_FORWARD_HEADER; }), "fallback excludes non-SQL before reading content");
+eq(fallbackNonSqlReads, 0, "fallback preserves the cheap filename rejection before a read");
 ok(!isParkedDraftPath("docs/audits/notes.md"), "a non-sql audit file is not a draft");
 ok(!isParkedDraftPath(""), "an empty path is not a draft");
 ok(!isParkedDraftPath(null), "a missing path is not a draft, and does not throw");
@@ -126,6 +132,13 @@ eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => "-- ordinary migrati
 
 // The pathspec both readers hand to git — it must cover exactly the two draft folders.
 eq(draftPathspec(), ["scripts/.staging-migrations", "docs/audits", "supabase/migrations"], "git includes only draft folders plus explicitly marked forward migrations");
+
+// Both full-disk consumers must route their supabase fallback through the same
+// tested helper; otherwise a missing merge-base can hide this exact parked file.
+const hookSource = readFileSync(new URL("./worktree-awareness.mjs", import.meta.url), "utf8");
+const fleetSource = readFileSync(new URL("../../scripts/fleet-status.mjs", import.meta.url), "utf8");
+ok(/root: "supabase\/migrations\/"/.test(hookSource) && hookSource.includes("isParkedFallbackFile"), "SessionStart fallback includes explicitly parked forward migrations through the shared guard");
+ok(/root: "supabase\/migrations"/.test(fleetSource) && fleetSource.includes("isParkedFallbackFile"), "fleet-status fallback includes explicitly parked forward migrations through the shared guard");
 
 // Path normalization the count key depends on.
 eq(normRepoPath("Docs\\Audits\\A.SQL"), "docs/audits/a.sql", "backslashes, case and separators normalize");
