@@ -67,6 +67,10 @@ const MUST_MATCH: Array<[string, string]> = [
   // narrowed to the RETURN/RETURNS spellings only.
   ['NON-RETURNABLE VALVE is a policy, not the valve type', 'ITEM EIGHTEEN NON-RETURNABLE VALVE'],
   ['NON-RETURNABLE VALVES, plural', 'ITEM NINETEEN NON-RETURNABLE VALVES'],
+  // ...and the equipment term is "NON-RETURN VALVE" specifically, so the NO
+  // spelling gets no exemption either: a valve marked "NO RETURN" is a policy.
+  ['NO RETURN VALVE is a policy, not the valve type', 'ITEM TWENTY NO RETURN VALVE'],
+  ['NO-RETURN VALVES, plural', 'ITEM TWENTYONE NO-RETURN VALVES'],
 ];
 
 // Near misses. Each of these contains the letters of a trigger phrase but does
@@ -83,6 +87,7 @@ const MUST_NOT_MATCH: Array<[string, string]> = [
   ['NON-RETURN VALVE is equipment, not a policy', 'NON-RETURN VALVE KIT'],
   ['NON RETURN VALVE, unhyphenated', 'ITEM SEVENTEEN NON RETURN VALVE'],
   ['NON-RETURN VALVES, plural', 'NON-RETURN VALVES 3/4 IN'],
+  ['NONRETURN VALVE, run together', 'NONRETURN VALVE ASSY'],
 ];
 
 describe('product-name-vs-return-policy predicate pattern', () => {
@@ -145,5 +150,11 @@ describe('product-name-vs-return-policy predicate pattern', () => {
 
     // The SKU has no legitimate use here at all.
     expect(body.match(SKU) ?? []).toHaveLength(0);
+
+    // Naming the columns is not enough: `SELECT p.*` emits product_name and sku
+    // without spelling either one, so the checks above stay green while the
+    // sweep leaks the whole catalog row. Every column here is listed by hand.
+    expect(body).not.toMatch(/\b[a-z_][a-z0-9_]*\s*\.\s*\*/i);
+    expect(body).not.toMatch(/\bselect\s+(?:distinct\s+)?\*/i);
   });
 });
