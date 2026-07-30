@@ -97,6 +97,7 @@ DECLARE
   v_section jsonb;
   v_status text;
   v_old_status text;
+  v_quote_owner uuid;
   v_old_commission_split jsonb;
   v_old_row_version bigint;
   v_expected_row_version bigint;
@@ -135,17 +136,17 @@ BEGIN
     'performed_by', p_performed_by
   )::text);
 
-  -- Quote ownership gates run BEFORE the idempotency early-return. This
-  -- SECURITY DEFINER function must mirror quotes_update: admins may save any
-  -- quote, while a sales rep may save only a quote they created. Locking an
-  -- owned target here keeps that authorization stable through all later DML.
+  -- Quote ownership is checked before the idempotency lookup so a SECURITY
+  -- DEFINER replay cannot expose another rep's result. The check is deliberately
+  -- non-locking here: every idempotent Quote writer must take the advisory lock
+  -- before any Quote row lock. Ownership is checked again under the later row
+  -- lock before a replay return or direct mutation.
   IF p_quote_id IS NOT NULL
      AND NOT public.is_admin()
      AND NOT EXISTS (
        SELECT 1 FROM quotes
        WHERE id = p_quote_id
          AND created_by = v_actor
-       FOR UPDATE
      ) THEN
     RAISE EXCEPTION 'NOT_QUOTE_OWNER';
   END IF;
@@ -180,12 +181,18 @@ BEGIN
         RAISE EXCEPTION 'SAVE_QUOTE_RESULT_INVALID';
       END IF;
       v_cached_row_version := (v_existing->>'row_version')::bigint;
-      SELECT row_version
-        INTO v_old_row_version
+      SELECT created_by, row_version
+        INTO v_quote_owner, v_old_row_version
       FROM quotes
       WHERE id = v_cached_quote_id
       FOR UPDATE;
-      IF NOT FOUND OR v_old_row_version IS DISTINCT FROM v_cached_row_version THEN
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'QUOTE_STALE_WRITE: quote changed after the saved request completed — reload to review the current quote before continuing';
+      END IF;
+      IF NOT public.is_admin() AND v_quote_owner IS DISTINCT FROM v_actor THEN
+        RAISE EXCEPTION 'NOT_QUOTE_OWNER';
+      END IF;
+      IF v_old_row_version IS DISTINCT FROM v_cached_row_version THEN
         RAISE EXCEPTION 'QUOTE_STALE_WRITE: quote changed after the saved request completed — reload to review the current quote before continuing';
       END IF;
       RETURN v_existing;
@@ -200,11 +207,14 @@ BEGIN
     -- guard's job_product_draws check below can't be raced by a concurrent job
     -- schedule (_sync_quote_job_reservations locks the same row FOR UPDATE, so
     -- the two serialize). Was: SELECT status ... WHERE id = p_quote_id;
-    SELECT status, commission_split, row_version
-      INTO v_old_status, v_old_commission_split, v_old_row_version
+    SELECT created_by, status, commission_split, row_version
+      INTO v_quote_owner, v_old_status, v_old_commission_split, v_old_row_version
     FROM quotes WHERE id = p_quote_id FOR UPDATE;
     IF v_old_status IS NULL THEN
       RAISE EXCEPTION 'Quote not found: %', p_quote_id;
+    END IF;
+    IF NOT public.is_admin() AND v_quote_owner IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'NOT_QUOTE_OWNER';
     END IF;
 
     -- Lost-update guard (2026-07-22): when the client passes the split it
