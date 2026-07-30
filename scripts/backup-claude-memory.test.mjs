@@ -342,15 +342,49 @@ try {
       eq(quiet(() => stage(flipped, notes)), 1, "staging is refused when GitHub says the backup repo is public");
       ok(!readdirSafe(flipped), "and nothing is written when it is refused");
 
-      // Offline or without `gh`, the check cannot answer. That warns — it must not
-      // block a local snapshot — and the runbook carries the confirmation step.
+      // Round 11: offline or without `gh` the check cannot answer, and it used to
+      // warn and continue. Publication is permanent and this directory is what the
+      // runbook commits and pushes, so an unproven-private destination parks.
       __setVisibilityProbe(() => ({ reason: "gh unavailable: ENOENT" }));
+      const unproven = path.join(backupRepo, "claude-memory-offline");
       eq(
-        quiet(() => stage(path.join(backupRepo, "claude-memory-offline"), notes)), 0,
-        "an unanswerable visibility check warns rather than blocking the snapshot",
+        quiet(() => stage(unproven, notes)), 1,
+        "an unanswerable visibility check parks the snapshot rather than warning",
       );
+      ok(!readdirSafe(unproven), "and nothing is written when it cannot be proven private");
     } finally {
       __setVisibilityProbe(() => ({ visibility: "PRIVATE" }));
+    }
+
+    // ── round 11: a push can land somewhere the fetch URL never mentions ──────
+    // `git remote set-url --push` splits the two. Reading "any URL git mentions"
+    // accepted a clone that FETCHES from the private backup and PUSHES to a public
+    // repo — and the very next runbook step is a push.
+    {
+      const split = makeRepo("split-push-repo", "https://github.com/masonwells1/CRX_Backups.git", "");
+      const setUrl = spawnSync(
+        "git",
+        ["-C", split, "remote", "set-url", "--push", "origin", "https://github.com/masonwells1/CRX_Manager_V1.0.git"],
+        { encoding: "utf8", env: cleanEnv },
+      );
+      assert.equal(setUrl.status, 0, `test fixture: set-url --push failed: ${setUrl.stderr}`);
+      const landing = path.join(split, "claude-memory");
+      eq(quiet(() => stage(landing, notes)), 1, "a private fetch URL does not excuse a public push URL");
+      ok(!readdirSafe(landing), "and nothing is written when the push destination is wrong");
+    }
+    // One good remote does not license a second, wrong one: `git push <name>` picks.
+    {
+      const extra = makeRepo("backup-plus-stray-repo", "https://github.com/masonwells1/CRX_Backups.git", "");
+      const added = spawnSync(
+        "git",
+        ["-C", extra, "remote", "add", "mirror", "https://github.com/someone-else/notes.git"],
+        { encoding: "utf8", env: cleanEnv },
+      );
+      assert.equal(added.status, 0, `test fixture: remote add failed: ${added.stderr}`);
+      eq(
+        quiet(() => stage(path.join(extra, "claude-memory"), notes)), 1,
+        "every push destination must be the backup repo, not just one of them",
+      );
     }
   }
 

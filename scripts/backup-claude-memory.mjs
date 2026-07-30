@@ -202,17 +202,29 @@ function destinationIsPublishable(outDir) {
   if (git(["check-ignore", "-q", probeFile]).status === 0) return null;
 
   // Tracked, then. Only the private off-site repo may hold these notes.
-  const remotes = String(git(["remote", "-v"]).stdout || "")
+  //
+  // Read the PUSH destinations, not "any URL git mentions". A remote can fetch
+  // from one place and push to another (`git remote set-url --push`), so a clone
+  // whose fetch URL is the private backup and whose pushurl is a public repo
+  // passed a some()-over-every-URL check — and the runbook's next step is a push
+  // (Codex's eleventh 2026-07-30 review). `git remote -v` prints a `(fetch)` and a
+  // `(push)` line per remote; only the `(push)` line says where a push lands.
+  // Every push destination must be the backup repo: one wrong remote in the
+  // checkout is one wrong `git push <name>` away from publishing these notes.
+  const pushUrls = String(git(["remote", "-v"]).stdout || "")
     .split(/\r?\n/)
+    .filter((line) => /\(push\)\s*$/.test(line))
     .map((line) => line.trim().split(/\s+/)[1] || "")
     .filter(Boolean);
-  if (remotes.some((url) => canonicalRepoId(url) === BACKUP_REPO_ID)) {
+  if (pushUrls.length > 0 && pushUrls.every((url) => canonicalRepoId(url) === BACKUP_REPO_ID)) {
     // Being the right repository is not the same as still being private. A
     // visibility flip on GitHub would silently turn every future snapshot into a
     // publication, and nothing on disk would look different (Codex round 10). Ask
-    // GitHub while we are here. `gh` is not a hard dependency of this script and
-    // the machine may be offline, so an unanswerable check WARNS; an answer of
-    // "PUBLIC" refuses outright.
+    // GitHub while we are here — and PARK when the answer cannot be had. Warning
+    // and continuing was itself a finding (round eleven): publication is
+    // effectively permanent, so "probably still private" is not a good enough
+    // basis for staging into the very directory the runbook then commits and
+    // pushes. Staging anywhere git ignores, or outside a repo, never reaches here.
     const seen = ghVisibility();
     if (seen.visibility && seen.visibility.toUpperCase() !== "PRIVATE") {
       return (
@@ -222,19 +234,24 @@ function destinationIsPublishable(outDir) {
       );
     }
     if (!seen.visibility) {
-      console.error(
-        `WARNING: could not confirm masonwells1/CRX_Backups is still private (${seen.reason}).\n` +
-        `         Staging anyway — but confirm the repository is PRIVATE before committing or pushing.`
+      return (
+        `FAIL: refusing to stage — could not confirm masonwells1/CRX_Backups is still private\n` +
+        `      (${seen.reason}). This directory gets committed and pushed, and these notes name\n` +
+        `      real people and real money, so an unproven-private destination is a park, not a\n` +
+        `      warning. Fix the check (\`gh auth status\`, or come back online) and re-run — or\n` +
+        `      stage into a path outside the repo if you only wanted a local copy. Nothing was\n` +
+        `      written.`
       );
     }
+    console.log(`Destination verified: this checkout pushes only to ${pushUrls[0]}, which GitHub reports PRIVATE.`);
     return null;
   }
 
-  const where = remotes.some((url) => canonicalRepoId(url) === GUARDED_APP_REPO_ID)
+  const where = pushUrls.some((url) => canonicalRepoId(url) === GUARDED_APP_REPO_ID)
     ? `the PUBLIC CRX Manager checkout`
-    : remotes.length === 0
-      ? `a git checkout with no remote, so where it would end up cannot be determined`
-      : `a git checkout whose remote is ${remotes[0]}, not the off-site backup repo`;
+    : pushUrls.length === 0
+      ? `a git checkout with no push remote, so where it would end up cannot be determined`
+      : `a git checkout that pushes to ${pushUrls[0]}, not the off-site backup repo`;
   return (
     `FAIL: refusing to stage into ${outDir} — it is inside ${where}\n` +
     `      (${top.stdout.trim()}), and git does not ignore it, so the notes (real names,\n` +

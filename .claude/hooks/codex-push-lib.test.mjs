@@ -212,6 +212,25 @@ assert.equal(
   urlIsGuardedApp("ssh://git@github.com/masonwells1/CRX_Manager_V1.0.git"), true,
   "the ssh:// spelling is the same repo",
 );
+// Round 11: GitHub's documented port-443 SSH endpoint, for networks that block
+// port 22. Same repository, different hostname — on host name alone it read as
+// somewhere unrelated and the proof gate was skipped.
+assert.equal(
+  urlIsGuardedApp("ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git"), true,
+  "the port-443 ssh endpoint is the same repo",
+);
+assert.equal(
+  urlIsGuardedApp("git@ssh.github.com:masonwells1/CRX_Manager_V1.0.git"), true,
+  "and its scp-like spelling",
+);
+assert.equal(
+  urlIsGuardedApp("https://www.github.com/masonwells1/CRX_Manager_V1.0.git"), true,
+  "so is the www host",
+);
+assert.equal(
+  urlIsGuardedApp("ssh://git@ssh.github.com:443/masonwells1/CRX_Backups.git"), false,
+  "the alias does not make every repo on that host the app repo",
+);
 assert.equal(
   urlIsGuardedApp("https://github.com/masonwells1/CRX_Manager_V1.0.wiki.git"), false,
   "a different repo whose name merely starts the same is not the app repo",
@@ -741,6 +760,15 @@ assert.equal(pushDestinationToken("git push"), null);
       `git -C ${work} push origin $(git push ${CRX_URL} HEAD:main)`,
       /substitution/i,
       "and the $(...) spelling too",
+    );
+
+    // Round 11, end-to-end: GitHub's port-443 SSH endpoint reaches the production
+    // repo from a checkout with no CRX remote at all, and on hostname alone it read
+    // as somewhere unrelated — so the risky-diff proof gate was skipped entirely.
+    deniedBecause(
+      `git -C ${work} push ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git HEAD:main`,
+      /codex/i,
+      "the port-443 ssh endpoint does not disguise the production destination",
     );
 
     // Controls: the guard must not have become a blanket denier. Both of these

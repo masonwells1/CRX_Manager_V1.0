@@ -255,6 +255,37 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round eleven: one repository has several hostnames, and fetching is not pushing
+
+Three findings, all real.
+
+**GitHub's port-443 SSH endpoint was a different repository as far as the guard was
+concerned.** `ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git` is GitHub's own
+documented endpoint for networks that block port 22 — same repository, different hostname. Identity
+was decided on the hostname as written, so from a checkout with no CRX remote at all, a push straight
+to production read as somewhere unrelated and skipped the risky-diff proof gate entirely. Hostnames
+that serve github.com are folded onto `github.com` before identity is decided, pinned by unit cases
+and an end-to-end denial through the real hook.
+
+**A remote can fetch from one place and push to another.** `git remote set-url --push` splits the
+two, and the destination check read "any URL git mentions" — so a clone that fetches from the private
+backup and pushes to a public repo was accepted, and the next step in the runbook is a push. It now
+reads only the `(push)` lines, and requires *every* one of them to be the backup repo: a second,
+stray remote is one `git push <name>` away from publishing the notes. The script prints the exact URL
+it verified, and the runbook pushes to that rather than to an unqualified default.
+
+**"Probably still private" is not a basis for staging.** The visibility check warned and continued
+when GitHub could not be reached. Publishing these notes cannot be undone and the staged directory is
+what the runbook then commits and pushes, so an unprovable destination now parks. Staging into a path
+git ignores, or outside a repository, never reaches this check at all — a local snapshot is
+unaffected.
+
+Proven on the real backup clone: staging printed `pushes only to
+git@github.com:masonwells1/CRX_Backups.git, which GitHub reports PRIVATE` and wrote and verified
+**190 files (884.3 KB)**. Four mutations — dropping the host alias, reading fetch URLs again,
+accepting one good remote out of two, and restoring the warn-and-continue — each turn the suites red
+on their own case.
+
 ### Round ten: an escaped quote hid a push, and "not the public repo" was not an allowlist
 
 Two blockers, both real.

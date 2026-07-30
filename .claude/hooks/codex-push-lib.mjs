@@ -287,7 +287,21 @@ export function canonicalRepoId(url) {
   if (segments.length === 0 || !host) return null;
   segments[segments.length - 1] = segments[segments.length - 1].replace(/\.git$/i, "");
   if (!segments[segments.length - 1]) return null;
-  return `${host}/${segments.join("/")}`.toLowerCase();
+  return `${canonicalHost(host)}/${segments.join("/")}`.toLowerCase();
+}
+// One repository, several hostnames. `ssh://git@ssh.github.com:443/owner/repo.git`
+// is GitHub's documented endpoint for networks that block port 22 — it reaches the
+// exact same repository, but on host name alone it read as somewhere unrelated, so
+// a push to production through it skipped the proof gate entirely (Codex's eleventh
+// 2026-07-30 review). Fold every hostname that serves github.com onto `github.com`
+// BEFORE identity is decided.
+const HOST_ALIASES = new Map([
+  ["ssh.github.com", "github.com"],
+  ["www.github.com", "github.com"],
+]);
+function canonicalHost(host) {
+  const lower = String(host).toLowerCase().replace(/\.$/, "");
+  return HOST_ALIASES.get(lower) || lower;
 }
 const GUARDED_REPO_ID = "github.com/masonwells1/crx_manager_v1.0";
 // Accepts `git remote -v` output. Fails CLOSED: anything unparseable or empty is

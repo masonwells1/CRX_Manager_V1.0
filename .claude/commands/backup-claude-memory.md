@@ -18,7 +18,9 @@ The source dir is auto-discovered under `~/.claude/projects/*/memory` (it picks 
 
 It **fails** rather than shipping a bad backup if the source is empty, is missing `MEMORY.md`, or if any copy does not match. A failure means the snapshot is wrong — fix the source path, do not push.
 
-The staging directory is checked before anything is written. If it sits inside a git checkout where the files would be committable, that checkout must be `masonwells1/CRX_Backups` — the notes may be tracked in exactly one repository, and every other repo (a wrong clone, a fork, a checkout with no remote) is refused. A path the repo ignores, or a directory outside git entirely, is always fine. When the destination is the backup clone the script also asks GitHub whether that repo is still private and refuses if it is not; if `gh` cannot answer it warns instead, and confirming visibility before you commit is then on you.
+The staging directory is checked before anything is written. If it sits inside a git checkout where the files would be committable, then **every push destination in that checkout** must be `masonwells1/CRX_Backups` — the notes may be tracked in exactly one repository, and every other case is refused: a wrong clone, a fork, no remote at all, a second remote pointing elsewhere, or a remote that fetches from the backup but pushes somewhere else (`git remote set-url --push` splits those two, and only the push URL says where a push lands). A path the repo ignores, or a directory outside git entirely, is always fine and skips these checks.
+
+When the destination is the backup clone the script also asks GitHub whether that repo is still private, and **refuses unless the answer is `PRIVATE`** — including when `gh` cannot answer at all. Publishing these notes cannot be undone, so an unproven-private destination parks rather than warns: fix the check (`gh auth status`, or reconnect) and re-run, or stage outside the repo if you only wanted a local copy. On success the script prints the exact push URL it verified — that is the destination step 4 pushes to.
 
 ### 2. Copy into a clone of the private repo
 
@@ -34,7 +36,7 @@ This re-checks every file against the manifest that travelled with it. Never com
 
 ### 4. Commit and push
 
-Commit to `CRX_Backups` with a dated message and push. This is a **private** repo whose entire purpose is receiving backups, so it does not need the branch → PR path that `CRX_Manager_V1.0` requires — commit straight to its default branch.
+Commit to `CRX_Backups` with a dated message, then push **to the exact URL the staging step printed** (`Destination verified: this checkout pushes only to …`) rather than to an unqualified default. This is a **private** repo whose entire purpose is receiving backups, so it does not need the branch → PR path that `CRX_Manager_V1.0` requires — commit straight to its default branch.
 
 ### 5. Confirm — prove it landed remotely
 
