@@ -592,7 +592,10 @@ export function evaluateProductionAction({
   if (usesDynamicProcessEval(command)) {
     return denied("CODEX PRODUCTION GATE: Node eval/print modes are blocked because generated code can hide uninspected git or GitHub writes. Put ordinary diagnostic code in a reviewed script instead.");
   }
-  const shellMutatesPath = /(?:>|\b(?:set-content|add-content|out-file|remove-item|move-item|copy-item|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i.test(command);
+  if (/[\r\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
+    return denied("CODEX PRODUCTION GATE: multiline shell commands that reference the production/review harness are blocked.");
+  }
+  const shellMutatesPath = /(?:>|\b(?:set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|remove-item|move-item|copy-item|rename-item|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|mv|cp|del|erase|sed\s+-i|perl\s+-pi|apply_patch)\b)/i.test(command);
   if (shellMutatesPath && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
     return denied("CODEX PRODUCTION GATE: direct shell mutation of the production/review harness is blocked. Use the reviewed maintenance workflow with Mason's approval.");
   }

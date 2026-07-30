@@ -3,8 +3,8 @@
 Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
-Current `origin/main` at exact-proof freeze: `886fa4591dd72c82d9e8c8f0b09fd3c8b7355053`
-State: rebased onto current `origin/main`; ninth Sol/high publication-blocker repair candidate is unpushed
+Current `origin/main` at exact-proof freeze: `2fd55fea6ccc83400a68e5d9492a5df24d8a233c`
+State: rebased onto current `origin/main`; tenth Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -67,7 +67,8 @@ pipeline remains the delivery engine and all of its landing and production gates
   Structured mutation targets are canonicalized and must remain in-worktree, non-ignored, non-secret,
   non-`.git`, symlink-contained, and within the ticket's exact allowed paths. Structured and shell
   reads are separately constrained to stable, non-secret, non-ignored paths inside the worktree;
-  wildcard/dynamic shell reads fail closed, and secret-shaped added content is refused.
+  wildcard/dynamic shell reads fail closed, literal CR/LF cannot combine multiple shell commands,
+  alternate PowerShell item/property/ACL writers are mutations, and secret-shaped added content is refused.
 - A stale lock can be removed only after five minutes when its process is gone, with a backup retained.
   A torn final line has a backup-first repair path, and a failed ledger pause creates an emergency hold
   that still blocks lane writes.
@@ -111,14 +112,14 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 318 focused assertions after ninth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 322 focused assertions after tenth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
 | `npm run typecheck` | PASS |
 | `npm run lint` | PASS |
-| `npm run build` | PASS — 4,235 modules transformed |
-| `npm run test` | PASS — 307 files; 4,079 passed, 123 skipped |
+| `npm run build` | PASS — 4,238 modules transformed |
+| `npm run test` | PASS — 311 files; 4,127 passed, 123 skipped |
 | `npm run check-doc-drift` | PASS — all 38 wired hooks documented |
 | `node scripts/verify-deps.mjs` | PASS — lockfile unchanged; installed versions match |
 | `node scripts/agent-manifest-parity.test.mjs` | PASS — 18 assertions |
@@ -312,6 +313,14 @@ recursive force-delete cleanup command.
   is rewritten to the canonical absolute broker path, latches retain only a prompt SHA-256 plus
   rejection flag after a pre-persistence secret scan, and negated resume/restart phrases remain
   paused. Fresh exact-commit acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of rebased commit
+  `d00e50b6faa3f3a5deaec5ed37f19405032d0d66` returned `BLOCKERS`: a nominal `Get-Content`
+  command could contain a literal newline followed by `Set-Item`, while the read allowlist and
+  mutation registries did not consistently recognize that writer. Governed shell commands now
+  reject literal CR/LF before any read-only classification; the lane, integrity, and production
+  guards classify PowerShell item/property/ACL writers and aliases as mutations; and regressions
+  cover LF/CRLF read-then-write attempts against governance targets. Fresh exact-commit acceptance
+  is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -320,7 +329,8 @@ and tests are frozen.
 
 ## Moving-main check
 
-`origin/main` advanced from `aee913d` through `db9b5ef`, `c0d90ed`, `31cf0abe`, and `886fa459`.
+`origin/main` advanced from `aee913d` through `db9b5ef`, `c0d90ed`, `31cf0abe`, `886fa459`,
+and `2fd55fea`.
 The feature
 commits were rebased onto each current base before exact-SHA publication proof. The latest upstream
 vendor-bill accounting-period close work overlaps only policy/changelog/package surfaces; both

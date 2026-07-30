@@ -102,7 +102,8 @@ fingerprint before the ticket or morning decision is re-presented there.
   injection, and unknown flags are mutations. Unknown non-shell tools default to opaque execution;
   only explicit structured read-only tools are exempt. Structured reads and simple shell reads must
   stay inside the worktree and cannot target ignored or secret-bearing paths; dynamic, parent-relative,
-  wildcard shell paths, PowerShell providers/drives, and secret-shaped added content fail closed.
+  wildcard shell paths, PowerShell providers/drives, literal CR/LF command chaining, alternate
+  item/property/ACL writers, and secret-shaped added content fail closed.
   Shell `rg` is not exempt because
   its preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
 - During governed operation, any explicit shell `cwd` or `workdir` must resolve to the exact

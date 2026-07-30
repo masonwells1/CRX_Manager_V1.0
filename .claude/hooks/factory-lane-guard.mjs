@@ -95,7 +95,7 @@ function shellWorkingDirectoryBlockReason(toolName, toolInput, projectDir) {
   return "";
 }
 
-const SHELL_MUTATION_RE = /(?:^|[;&|]\s*|\s)(?:set-content|add-content|out-file|new-item|remove-item|copy-item|move-item|rename-item|clear-content|sc|ni|rm|del|erase|mv|cp|copy|move|xcopy|robocopy|mkdir|md|rmdir|rd|touch|truncate|tee|patch|apply_patch)\b|(?:^|[^<])(?:>>?|[12]>>?)\s*(?!&)|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:add|am|apply|branch\s+(?:-[dDmM]|--delete|--move)|checkout|cherry-pick|clean|commit|merge|mv|rebase|reset|restore|rm|switch\s+-c|tag|push)\b|\bnpm(?:\.cmd)?\s+(?:install|uninstall|update|ci|publish)\b|\bnpx(?:\.cmd)?\b/i;
+const SHELL_MUTATION_RE = /(?:^|[;&|]\s*|\s)(?:set-content|add-content|out-file|new-item|remove-item|copy-item|move-item|rename-item|clear-content|set-item|clear-item|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|del|erase|mv|cp|copy|move|xcopy|robocopy|mkdir|md|rmdir|rd|touch|truncate|tee|patch|apply_patch)\b|(?:^|[^<])(?:>>?|[12]>>?)\s*(?!&)|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:add|am|apply|branch\s+(?:-[dDmM]|--delete|--move)|checkout|cherry-pick|clean|commit|merge|mv|rebase|reset|restore|rm|switch\s+-c|tag|push)\b|\bnpm(?:\.cmd)?\s+(?:install|uninstall|update|ci|publish)\b|\bnpx(?:\.cmd)?\b/i;
 const SAFE_NPM_RUN_RE = /^\s*npm(?:\.cmd)?\s+run\s+(?:test(?::[A-Za-z0-9:_-]+)?|lint|typecheck|build|verify-deps|check-doc-drift|check:agent-workflows|check:agent-guidance)\s*$/i;
 const SAFE_NODE_RE = /^\s*node(?:\.exe)?\s+(?:--check\s+\S+|scripts[\\/](?:factory-board|check-doc-drift|verify-deps)\.mjs(?:\s+--[A-Za-z0-9_-]+)*|scripts[\\/]sync-agent-workflows\.mjs\s+--check)\s*$/i;
 const SAFE_GIT_TOKEN_RE = /^[A-Za-z0-9._/@^~:+,=\\/-]+$/;
@@ -135,7 +135,7 @@ function isSafeGitRead(command) {
   if (subcommand === "worktree") return args[0] === "list" && args.length === 1;
   return false;
 }
-const SAFE_SHELL_READ_RE = /^\s*(?:findstr|where(?:\.exe)?|ls|dir|pwd|Get-Location|Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|Measure-Object)(?:\s+[^;&|<>]*)?\s*$/i;
+const SAFE_SHELL_READ_RE = /^\s*(?:findstr|where(?:\.exe)?|ls|dir|pwd|Get-Location|Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|Measure-Object)(?:\s+[^\r\n;&|<>]*)?\s*$/i;
 const SAFE_VERSION_RE = /^\s*(?:node|npm|gh|git)(?:\.exe|\.cmd)?\s+--version\s*$/i;
 const SECRET_PATH_RE = /(?:^|[\s\\/'"])(?:\.env(?:\.|$)|[^\s\\/'"]*\.(?:pem|key|p12|pfx)|credentials?(?:\.|$)|secrets?(?:\.|$)|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.|$))/i;
 const POWERSHELL_PROVIDER_PATH_RE = /(?:^|[\s"'`])(?:[A-Za-z_][\w.-]*::|[A-Za-z_][\w.-]{1,}:|[A-Za-z]:(?![\\/]))/i;
@@ -144,6 +144,7 @@ function isShellMutation(toolName, toolInput) {
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return false;
   const command = String(toolInput?.command || "").trim();
   if (!command) return false;
+  if (/[\r\n]/.test(command)) return true;
   if (SHELL_MUTATION_RE.test(command)) return true;
   if (/\$\(|`|\b(?:invoke-expression|iex)\b/i.test(command)) return true;
   if (SAFE_NPM_RUN_RE.test(command)
@@ -288,6 +289,9 @@ function governedReadBlockReason(toolName, toolInput, projectDir) {
   }
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(name)) return "";
   const command = String(toolInput?.command || "").trim();
+  if (/[\r\n]/.test(command)) {
+    return "shell reads must contain exactly one command without line breaks";
+  }
   if (!SAFE_SHELL_READ_RE.test(command)) return "";
   if (SECRET_PATH_RE.test(command.replace(/\\/g, "/"))) {
     return "secret-bearing paths are not readable in a factory lane";
@@ -389,6 +393,7 @@ function structuredMutationBlockReason(toolName, toolInput, projectDir, allowedP
 function isActiveLaneShellRead(toolName, toolInput) {
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return true;
   const command = String(toolInput?.command || "").trim();
+  if (/[\r\n]/.test(command)) return false;
   return isSafeGitRead(command)
     || SAFE_SHELL_READ_RE.test(command)
     || SAFE_VERSION_RE.test(command)

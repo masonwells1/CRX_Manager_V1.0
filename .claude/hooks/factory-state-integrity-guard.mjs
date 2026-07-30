@@ -81,6 +81,9 @@ if (governedSession
 
 const command = String(input.command || input.code || input.script || input.source || "");
 if (!command) nothing();
+if (governedSession && /[\r\n]/.test(command)) {
+  deny("CRX FACTORY STATE GUARD: multiline shell commands are disabled inside a governed lane.");
+}
 const commandNorm = norm(command);
 if (/crx_factory_permit/i.test(command) || commandNorm.includes("/crx-factory/permits/")) {
   deny("CRX FACTORY STATE GUARD: agents cannot read, set, or forward trusted factory CLI permits.");
@@ -100,7 +103,7 @@ const mentionsState = commandNorm.includes(stateNorm)
   || commandNorm.includes("/crx-factory/")
   || commandNorm.includes("\\crx-factory\\");
 const derivesCommonDir = /git\s+rev-parse\s+--git-common-dir/i.test(command);
-const mutates = /(?:^|[;&|]\s*|\s)(?:remove-item|rm|del|erase|move-item|mv|copy-item|cp|set-content|add-content|out-file|new-item|writefile|appendfile|unlink|rename|truncate|tee)\b|(?:>>?|2>)|node\s+(?:-e|--eval)\b|python(?:\.exe)?\s+(?:-c|-)\b|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:diff|show|log)\b[^\r\n;&|]*--output(?:=|\s)/i.test(command);
+const mutates = /(?:^|[;&|]\s*|\s)(?:remove-item|move-item|copy-item|rename-item|set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|del|erase|mv|cp|writefile|appendfile|unlink|rename|truncate|tee)\b|(?:>>?|2>)|node\s+(?:-e|--eval)\b|python(?:\.exe)?\s+(?:-c|-)\b|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:diff|show|log)\b[^\r\n;&|]*--output(?:=|\s)/i.test(command);
 const opaqueRepoMutation = /\bgit\s+(?:apply\b|checkout\s+--(?:\s|$)|restore\b)/i.test(command);
 const mentionsGovernanceTarget = /(?:^|[\\/\s"'`])(?:package\.json|scripts[\\/](?:factory(?:-[^\\/\s"'`]*)?|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|\.claude[\\/]settings(?:\.local)?\.json|\.codex[\\/]hooks\.json|\.codex[\\/]hooks[\\/](?:codex-hook-adapter|production-action-guard)\.mjs|\.claude[\\/]hooks[\\/](?:factory-[^\\/\s"'`]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib|codex-push-guard|codex-push-lib|pr-merge-guard|review-proof-guard)\.mjs)(?:$|[\s"'`])/i.test(commandNorm);
 

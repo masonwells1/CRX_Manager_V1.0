@@ -1,7 +1,7 @@
 # CRX Governed Delivery Pipeline V1
 
 Date: 2026-07-30
-Status: IMPLEMENTED — ninth Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
+Status: IMPLEMENTED — tenth Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
 Owner: Mason Wells
 Implementation driver: Codex
 Independent reviewer: trusted `gpt-5.6-sol` at high reasoning effort
@@ -194,6 +194,8 @@ cannot perform build writes.
     `.git`, ignored/secret-bearing paths, hidden targets, and paths outside the approved ticket scope;
   - restricts governed reads to stable, non-secret paths inside the worktree and rejects secret-shaped
     added content;
+  - rejects literal CR/LF before shell read classification and treats PowerShell item/property/ACL
+    writers and their aliases as mutations;
   - does not weaken or replace any existing guard.
 - `.claude/hooks/factory-state-integrity-guard.mjs`
   - blocks direct writes, rewrites, deletion, or ad hoc script access to the shared factory state directory;

@@ -446,6 +446,13 @@ are rewritten to the canonical absolute broker path before execution. Intent rou
 persistence and latches store only the prompt SHA-256 plus a rejection flag. Negated resume/restart
 phrases leave the factory paused.
 
+A tenth exact-SHA Sol/high acceptance found that a command beginning with a permitted PowerShell
+read could include a literal newline followed by `Set-Item`, bypassing both the single-command
+assumption and incomplete mutation verb registries. Governed shell commands now reject CR/LF before
+read-only classification. The lane, shared-state integrity, and production guards also classify
+PowerShell item/property/ACL writers and their common aliases as mutations, with LF and CRLF
+read-then-write regressions pinned against governance targets.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

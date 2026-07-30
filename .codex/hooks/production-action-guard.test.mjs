@@ -132,6 +132,9 @@ try {
     "copy x .codex/hooks/production-action-guard.mjs>nul",
     "sed -i s/a/b/ .codex/hooks/production-action-guard.mjs",
     "printf x > .claude/hooks/codex-push-guard.mjs",
+    "Set-Item -Path .codex/hooks/production-action-guard.mjs -Value forged",
+    "si -Path .codex/hooks/production-action-guard.mjs -Value forged",
+    "Get-Content package.json\nSet-Item -Path .claude/hooks/factory-lane-guard.mjs -Value forged",
   ]) {
     assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked, true, `natural harness mutation denied: ${command}`);
   }

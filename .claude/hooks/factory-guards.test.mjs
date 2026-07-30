@@ -260,6 +260,21 @@ function hookOutput(result) {
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
+    tool_input: { command: "Set-Item -Path .claude/hooks/factory-lane-guard.mjs -Value forged" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot use alternate PowerShell writers against governance");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "si -Path .claude/hooks/factory-lane-guard.mjs -Value forged" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot use PowerShell writer aliases against governance");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Get-Content package.json\nSet-Item -Path .claude/hooks/factory-lane-guard.mjs -Value forged" },
+  }), /multiline shell commands are disabled/i, "governed sessions reject literal-newline read-then-write commands");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
     tool_input: { command: "Set-Content scripts/write-codex-push-proof.mjs forged" },
   }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot shell-rewrite the independent reviewer wrapper");
   denied(run(integrityHook, stateDir, {
@@ -421,6 +436,11 @@ function hookOutput(result) {
     tool_name: "PowerShell",
     tool_input: { command: "Set-Content src/example.ts repaired" },
   }), /direct commands and helper-process execution/i, "active lane refuses shell writers whose actual file targets are not broker-visible");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Get-Content package.json\r\nSet-Item -Path .claude/hooks/factory-lane-guard.mjs -Value forged" },
+  }), /direct commands and helper-process execution|exactly one command/i, "active lane rejects literal-newline commands before read-only classification");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
