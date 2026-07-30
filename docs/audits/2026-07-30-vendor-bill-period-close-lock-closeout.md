@@ -2,12 +2,15 @@
 
 ## Scope
 
-Forward migration `20260729231031_vendor_bill_period_close_lock.sql` closes the
+Live migration `20260730114102_vendor_bill_period_close_lock.sql` closes the
 governed-RPC race between `close_accounting_period` and `create_vendor_bill` /
 `update_vendor_bill`. It adds a whole-calendar-month constraint before deriving
 month keys, a non-public internal shared/exclusive transaction-lock helper in
 namespace `(73492010, year * 12 + month - 1)`, and re-emits the four current
-authoritative RPC bodies with the required serialization changes.
+authoritative RPC bodies with the required serialization changes. It was
+submitted as `20260729231031_vendor_bill_period_close_lock` and B7-renamed to
+the server-assigned ledger version after apply; the executable body was not
+changed by that rename.
 
 `create_vendor_bill` locks its vendor and optional purchase order, then takes
 its shared month lock before its authoritative period check.
@@ -46,15 +49,22 @@ and `service_role` retain EXECUTE. The non-public month-lock helper remains
 unexecutable by all four API roles. The apply-time postflight proves both
 boundaries instead of relying on `CREATE OR REPLACE` to preserve prior ACLs.
 
-## Read-only live preflight already observed
+## Live apply and postflight observed
 
 Root's fresh read-only production preflight observed PostgreSQL 17.6,
 `accounting_periods` with 9 total rows, zero closed rows, and zero non-whole
 month rows. The live Section 9 predicate had zero violations, and the exact
 existing fingerprints for `create_vendor_bill`, `update_vendor_bill`, and
 `close_accounting_period` matched the source baseline used for this candidate.
-This evidence does not authorize an apply; the migration remains parked pending
-fresh exact-SHA review and Mason's explicit approval.
+The Supabase ledger now records version `20260730114102` with name
+`20260729231031_vendor_bill_period_close_lock`. Targeted live catalog, ACL, and
+whole-calendar-month-constraint verification passed. The registered Section 9
+rollback-only business chain reached expected terminal `ERROR P0001
+SMOKE_PASS_ROLLBACK`, proving the closed-period update refusal while leaving no
+fixture data committed. All 20 standing invariant predicates are clean after
+allowlist comparison: only existing allowlisted keys remain (actor-forgery 1,
+anon-exec-secdef 1, auth-bound-role-ungated 1, status-literals 3); every other
+predicate returned 0.
 
 ## Caller and direct-reader classification
 
@@ -76,30 +86,7 @@ a BEFORE row trigger would acquire its row lock before its month lock and can
 deadlock with close's month-lock then upsert-row order. Reopen only relaxes a
 closed state and remains unchanged.
 
-## Boundary
-
-This is local-only. It does not apply a migration, change live data, alter
-direct table permissions, deploy, push, or open a PR. Any live apply requires
-fresh exact-SHA review and the normal migration gate.
-
-Before any apply, run a read-only catalog preflight that lists the owners and
-effective EXECUTE privileges of the live `create_vendor_bill`,
-`update_vendor_bill`, and `close_accounting_period` functions, then verifies
-they are compatible with the database role that will own the new `SECURITY
-INVOKER` month-lock helper. The disposable baseline runs under one owner and
-cannot prove this live ownership boundary. This is a preflight requirement only;
-the candidate's SQL grant/ownership design is unchanged.
-
-**Transactional apply-channel and blocker preflight.** This migration deliberately
-uses `SET LOCAL lock_timeout`, which only remains in force when the migration runner
-executes the file inside one transaction. Before an approved apply, confirm and record
-that the governed apply channel is transactional, then observe that transaction wrapper
-in the apply evidence; do not substitute a non-transactional SQL channel. Immediately
-before starting it, take a read-only blocker census of active locks/sessions touching
-the affected accounting-period, vendor-bill, and purchase-order paths (including this
-month-lock advisory namespace when visible). The census is only a snapshot, not a claim
-that contention cannot arrive later: this candidate sets a ten-second apply-time
-`SET LOCAL lock_timeout`, and that fail-closed timeout must still be observed if it fires.
+## Remaining boundaries
 
 This slice guarantees only `create_vendor_bill` and `update_vendor_bill` date
 writes. `record_vendor_payment`, `void_vendor_payment`, `void_vendor_bill`, and
@@ -109,15 +96,11 @@ them. Sol adjudication retained this boundary: those AP-only cases are a MED
 residual, while a global protocol is a separate HIGH-risk lane because many
 financial mutators retain the same race. Do not widen this migration here.
 
-If an approved MCP apply succeeds, its server-assigned migration version will
-differ from this pre-apply disk timestamp. In the same post-apply closeout
-change, rename the disk migration to that assigned version, replace its
-`PARKED / NOT APPLIED / DO NOT APPLY` status header with applied-state wording
-while preserving the first-line purpose comment, and update migration history
-plus the timestamped documentation references. That prevents an already-live
-branch from remaining on the parked list. The proof runner and source regression
-discover the unique stable suffix rather than embedding a timestamp, but that
-does not remove the B7 rename-and-documentation obligation.
+B7 closeout is complete: the disk migration is named
+`20260730114102_vendor_bill_period_close_lock.sql`, its leading status now says
+APPLIED LIVE while preserving the first purpose comment, and its history/manual
+references record the same server-assigned version. The proof runner and source
+regression discover the unique stable suffix rather than embedding a timestamp.
 
 ## Disposable PostgreSQL 17 proof
 

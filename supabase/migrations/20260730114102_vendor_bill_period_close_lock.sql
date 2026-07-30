@@ -1,6 +1,6 @@
 -- Accounting-period close/write serialization.
--- PARKED / DO NOT APPLY without Mason's explicit current-conversation approval
--- and the normal fresh exact-SHA migration review and live preflight.
+-- APPLIED LIVE 2026-07-30 as Supabase ledger version 20260730114102
+-- (submitted as 20260729231031_vendor_bill_period_close_lock).
 --
 -- Lock order: existing PO parent advisory lock 73492009 (when a PO path has
 -- one) precedes this dedicated two-int month namespace 73492010.  Month keys

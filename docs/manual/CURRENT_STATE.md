@@ -1,9 +1,11 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-29 (live post-apply read: **926 ledger rows**, high-water `20260729222311_bind_save_field_actor`. Six approved migrations are live in this closeout: profile-directory security at `20260729125227`, contact-sync search-path pins at `20260729125251`, exact-text application-service cost at `20260729125314`, profile-directory hardening at `20260729163243` (#276), Supplier Pricing return-policy classification at `20260729213733` (#282), and authenticated actor binding for `save_field` at `20260729222311`. The earlier profile, directory, contact-sync, and application-service postflights remain green. The final `save_field` migration passed its rollback-only live smoke: unauthenticated and forged actors were rejected, the signed-in actor was recorded, replay stayed idempotent, and zero smoke fixtures remained.)
+**Last verified:** 2026-07-30 (post-apply B7 closeout: Supabase ledger row `20260730114102_vendor_bill_period_close_lock` is live. Targeted catalog, ACL, and whole-month-constraint verification passed; the Section 9 rollback-only business chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; all 20 standing invariant predicates are clean after allowlist comparison. Operational counts below remain the separately dated 2026-07-18 snapshot.)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## Recent production deployments
+
+- **2026-07-30:** Accounting-period close write serialization is live via `20260730114102_vendor_bill_period_close_lock`. The post-apply catalog, ACL, and whole-month-constraint checks passed; the rollback-only business chain reached its expected `SMOKE_PASS_ROLLBACK` terminal. Residual hardening remains: direct authenticated-admin writes to `accounting_periods`, existing vendor-bill completeness at close, and the broader non-vendor-bill writer race.
 
 - **2026-07-28:** `process-document` Edge Function deployed v20 → v21 from merged PR #268
   (`7c096444`). Re-verified live 2026-07-29 by read-only `list_edge_functions`: version **21**,

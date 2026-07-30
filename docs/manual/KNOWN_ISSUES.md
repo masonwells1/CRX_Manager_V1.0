@@ -1,22 +1,21 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-29** (live post-apply read: **926 ledger rows**, high-water `20260729222311_bind_save_field_actor`. The six approved migrations applied in order: `20260729125227_secure_profile_public_directory`, `20260729125251_pin_contact_sync_search_path`, `20260729125314_application_service_cost_exact_text`, `20260729163243_harden_profile_directory_followups`, `20260729213733_supplier_pricing_phase3_stage_c`, then `20260729222311_bind_save_field_actor`. The earlier profile-directory postflights remain green. The final migration passed a rollback-only live smoke proving unauthenticated and forged actors are rejected, signed-in attribution and idempotent replay work, and zero smoke fixtures remain. Earlier resolved and deferred claims below remain unchanged.)
+**Last verified: 2026-07-30** (post-apply B7 closeout: Supabase ledger row `20260730114102_vendor_bill_period_close_lock` is live. Targeted catalog, ACL, and whole-month-constraint verification passed; the Section 9 rollback-only business chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; and all 20 standing invariant predicates are clean after allowlist comparison. Earlier resolved and deferred claims below remain unchanged.)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 0f. PARKED — vendor-bill versus accounting-period close race candidate
+## 0f. RESOLVED — vendor-bill versus accounting-period close race
 
-**Status: PARKED / NOT APPLIED.** A read-only 2026-07-29 preflight confirmed
+**Status: APPLIED LIVE 2026-07-30.** A read-only 2026-07-29 preflight confirmed
 the current production functions can interleave a vendor-bill period check with
 `close_accounting_period`; no accounting period is closed live today (9 rows,
 all open), so the exposure is dormant rather than an active historical-data
-incident. Candidate migration
-`20260729231031_vendor_bill_period_close_lock.sql` is local-only and must not
-be applied without Mason's explicit current-conversation approval, fresh
-exact-SHA migration review, and a fresh live preflight.
+incident. Migration `20260730114102_vendor_bill_period_close_lock.sql` is now
+the B7-renamed disk record of the live server-assigned ledger version
+`20260730114102` (submitted as `20260729231031_vendor_bill_period_close_lock`).
 
 The candidate enforces whole calendar-month rows, serializes governed close and
 vendor-bill RPCs with sorted transaction advisory locks, and has a restored
@@ -32,32 +31,23 @@ and only governed create/update vendor-bill RPCs join the new protocol, so a
 pre-existing concurrent draft/unposted-invoice writer can still beat close's
 invoice-completeness scan. Create intentionally completes its existing vendor,
 amount, and PO validation before its month lock, so those errors may precede a
-closed-period refusal. No permission change is included. If an approved MCP
-apply assigns a new live version, the same post-apply closeout must rename the
-disk migration, replace its PARKED / NOT APPLIED / DO NOT APPLY status header
-with applied-state wording while preserving its first-line purpose comment, and
-update migration history plus timestamped documentation references (B7). That
-prevents an already-live branch from remaining on the parked list; the runner
-and regression use its unique suffix, not this pre-apply timestamp. Durable
-local evidence:
+closed-period refusal. The live application also reasserted the established
+callable-role model for the four re-emitted SECURITY DEFINER routines: `PUBLIC`
+and `anon` are denied while `authenticated` and `service_role` retain EXECUTE;
+the new internal month-lock helper remains API-unexecutable. B7 is complete:
+the disk filename and header now match live applied state, so fleet discovery
+does not retain this migration as parked. The runner and regression use its
+unique suffix, not its submitted timestamp. Durable local evidence:
 `docs/audits/2026-07-30-vendor-bill-period-close-lock-closeout.md`.
 
-**Pre-apply ownership/privilege check.** Before any apply, use a read-only
-catalog query to list the live owners and effective EXECUTE privileges of
-`create_vendor_bill`, `update_vendor_bill`, and `close_accounting_period`, and
-verify compatibility with the database role that will own the new `SECURITY
-INVOKER` month-lock helper. The disposable single-owner baseline cannot prove
-that live ownership boundary. This requires no SQL redesign or grant change.
-
-**Transactional apply-channel and blocker preflight.** The candidate's existing
-`SET LOCAL lock_timeout` is meaningful only if the approved migration channel wraps the
-file in one transaction. Before apply, confirm and record that transactional wrapper,
-then observe it in the apply evidence; a non-transactional SQL channel is not an
-alternative. Take a read-only immediate-before-apply blocker census for active locks or
-sessions on the accounting-period, vendor-bill, and purchase-order paths (and the month
-advisory-lock namespace when visible). This is a snapshot only: the candidate sets a
-ten-second apply-time `SET LOCAL lock_timeout`, and that fail-closed timeout must be
-observed if contention occurs.
+**Live proof.** Targeted catalog/ACL/constraint verification passed after apply.
+The registered Section 9 rollback-only chain reached its expected terminal
+`ERROR P0001 SMOKE_PASS_ROLLBACK`; it proves the real closed-period bill-update
+refusal while rolling back every fixture. All 20 standing invariant predicates
+are clean after comparing their outputs to the approved allowlist: the only
+returned keys are existing allowlisted actor-forgery (1), anon-exec-secdef (1),
+auth-bound-role-ungated (1), and status-literals (3) keys; all other predicates
+returned 0.
 
 **Vendor-bill candidate ACL preservation (local 2026-07-30).** The period-close
 candidate re-emits four SECURITY DEFINER public RPCs, so it now explicitly denies
@@ -705,7 +695,7 @@ Branch `claude/nervous-dubinsky-39a725` (worktree `.claude/worktrees/stoic-heyro
 
 | File | Purpose | Why parked | What unblocks it |
 |---|---|---|---|
-| `supabase/migrations/20260729231031_vendor_bill_period_close_lock.sql` | Serializes governed vendor-bill create/update with accounting-period close using month locks | **PARKED / NOT APPLIED.** The pre-apply disk timestamp is above the recorded live high-water. It is intentionally visible to `/fleet` only because its leading SQL header explicitly says PARKED / DO NOT APPLY; ordinary forward migrations are not listed. | Fresh exact-SHA migration review, fresh live preflight including the read-only ownership/EXECUTE compatibility check, and Mason's explicit current-conversation approval. After MCP apply, complete B7 in the same change: rename to the server-assigned version, replace the parked-status header with applied-state wording while retaining its first-line purpose comment, and update migration history plus timestamped docs. |
+| ~~`supabase/migrations/20260730114102_vendor_bill_period_close_lock.sql`~~ (submitted `20260729231031_...`, B7-renamed to the server version) | Serializes governed vendor-bill create/update with accounting-period close using month locks | **APPLIED LIVE 2026-07-30** as Supabase ledger version `20260730114102` — no longer parked. Targeted catalog/ACL/constraint verification, the registered Section 9 rollback-only chain (`ERROR P0001 SMOKE_PASS_ROLLBACK`), and all 20 invariant predicates after allowlist comparison passed. | Done. Residual boundaries remain explicit in §0f: direct authenticated-admin `accounting_periods` writes, no existing-vendor-bill close-completeness gate, and the wider pre-existing non-vendor-bill writer race. |
 | ~~`supabase/migrations/20260726201208_void_vendor_payment_vendor_liveness.sql`~~ (submitted `20260726210000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-26** (server version `20260726201208`) — no longer parked. Section 9 follow-up MEDIUM-1: `void_vendor_payment` now locks the vendor row (`deleted_at IS NULL … FOR UPDATE`) so it serializes with `delete_vendor`; a void against a soft-deleted vendor raises `VENDOR_DELETED`. Gate passed (both charters CLEAN) + Mason's in-chat approval; post-apply live body md5 matches disk exactly. | — | Done. Residual RESOLVED 2026-07-26: Mason approved the Deactivate/Reactivate reframe — `reactivate_vendor` RPC **APPLIED LIVE** (gate CLEAN, submitted `20260726213000`, server version `20260726212043`) + Vendors-page Show Inactive view and Reactivate button, giving `VENDOR_DELETED` a one-click remedy; the PR #236 review then caught (and 2026-07-26 same-day fix `20260726215154_vendors_inactive_admin_select` resolved, gate CLEAN + applied live) an RLS gap that hid inactive vendors from the new view. |
 | ~~`supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`~~ (submitted `20260722190000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-22** (server version `20260722202622`) — no longer parked. `save_quote`/`save_customer` reject a split overwrite when the client's `*_expected` snapshot no longer matches the stored value, echo the stored (trigger-enriched) split back, and canonicalize `save_quote`'s actor exception to `ACTOR_MISMATCH`. Proven live on both RPCs (conflict/rejection/matching-expected/omitted-key/actor-mismatch). | — | Done. |
 | `docs/audits/nightly-debug/parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md` | Release prebooked inventory when a scheduled quick-delivery is cancelled | — | **RESOLVED, applied live 2026-06-16** (`20260616151122_cancel_delivery_release_prebook_on_quick_cancel`). File header already says so — stale-looking filename, not a stale fix. |

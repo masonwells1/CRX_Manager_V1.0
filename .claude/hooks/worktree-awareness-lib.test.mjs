@@ -429,7 +429,7 @@ const currentCrossReference = validateParkedMigrationCrossReferences(
   (p) => readFileSync(path.join(repoRoot, ...p.split("/")), "utf8"),
 );
 eq(currentCrossReference.state, "known", "repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row");
-const periodCloseCandidate = readFileSync(path.join(repoRoot, "supabase", "migrations", "20260729231031_vendor_bill_period_close_lock.sql"), "utf8");
+const periodCloseCandidate = readFileSync(path.join(repoRoot, "supabase", "migrations", "20260730114102_vendor_bill_period_close_lock.sql"), "utf8");
 ok(/check_period_open[\s\S]*?SET search_path = ''[\s\S]*?FROM public\.accounting_periods/.test(periodCloseCandidate), "period-close candidate deliberately hardens check_period_open to an empty search path while retaining schema-qualified body references");
 
 // Path normalization the count key depends on.

@@ -2,6 +2,21 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — Vendor-bill accounting-period close lock applied
+
+Live migration `20260730114102_vendor_bill_period_close_lock` now serializes
+governed vendor-bill create/update writes with accounting-period close through
+ordered transaction advisory locks. It preserves the established public RPC
+boundary: `PUBLIC` and `anon` cannot execute the four re-emitted SECURITY
+DEFINER routines, while `authenticated` and `service_role` retain their routes.
+The B7 rename completed from submitted timestamp `20260729231031` to the
+server-assigned ledger version. Post-apply catalog/ACL/constraint checks passed;
+the registered Section 9 rollback-only chain reached expected `SMOKE_PASS_ROLLBACK`;
+and all 20 standing invariants were clean after allowlist comparison. The close
+still does not require an existing vendor-bill completeness gate, direct
+authenticated-admin accounting-period writes remain an explicit boundary, and
+the broader non-vendor-bill writer race remains separate work.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but
