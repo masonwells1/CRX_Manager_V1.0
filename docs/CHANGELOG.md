@@ -106,7 +106,7 @@ that has only ever seen zero. Cross-model review caught the first pattern matchi
 near-miss false positives, reading the pattern out of the `.sql` file so the two cannot drift.
 Review then hardened two separate things.
 
-The **phrase set** took three further rounds, each closing a false negative — the detector staying
+The **phrase set** took four further rounds, each closing a false negative — the detector staying
 silent on a product it should flag. "NON-RETURN VALVE" is a check valve rather than a merchandise
 policy and is excluded by a negative lookahead, but that exclusion is now narrowed twice: to
 RETURN/RETURNS and not RETURNABLE, and to the NON spelling and not NO. The equipment term is exactly
@@ -116,7 +116,10 @@ tidier `(no|non)`. The third round covered compound wording: the separators betw
 the return word span whitespace and punctuation only, so an intervening WORD broke the match and
 "NO REFUNDS OR RETURNS" or "NOT REFUNDABLE OR RETURNABLE" went undetected. One optional
 refund/exchange/credit clause is now permitted there, from a closed vocabulary — allowing arbitrary
-filler words would flag names like "NO TILL SEED RETURN TRAY".
+filler words would flag names like "NO TILL SEED RETURN TRAY". The fourth round extended that clause
+to the NON spelling and added the opposite word order: "RETURNS NOT ACCEPTED" and "RETURN NOT
+ALLOWED" reject a return just as plainly, and every negation-first alternative missed them. The verb
+list is closed for the same reason — "RETURN LABEL NOT INCLUDED" must not flag.
 
 The **containment guard** took three rounds of its own. These are output-safety fixes, not detection
 fixes: they govern what the sweep may emit into a public repo, and none of them changes which

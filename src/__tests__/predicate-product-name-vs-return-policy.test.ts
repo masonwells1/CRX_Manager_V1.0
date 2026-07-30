@@ -149,6 +149,15 @@ const MUST_MATCH: Array<[string, string]> = [
   ['NO CREDIT RETURNS, no connector word', 'ITEM TWENTYFIVE NO CREDIT RETURNS'],
   ['NOT REFUNDABLE OR RETURNABLE', 'ITEM TWENTYSIX NOT REFUNDABLE OR RETURNABLE'],
   ['NOT EXCHANGEABLE OR RETURNABLE', 'ITEM TWENTYSEVEN NOT EXCHANGEABLE OR RETURNABLE'],
+  // The compound clause reaches the NON spelling too. Attaching it to the
+  // RETURNABLE arm leaves the RETURN/RETURNS arm and its valve lookahead alone.
+  ['NON REFUNDABLE OR RETURNABLE', 'ITEM THIRTYONE NON REFUNDABLE OR RETURNABLE'],
+  ['NON-EXCHANGEABLE OR RETURNABLE', 'ITEM THIRTYTWO NON-EXCHANGEABLE OR RETURNABLE'],
+  // The negation does not always come first. Every negation-first alternative
+  // misses these, and they reject a return just as plainly.
+  ['RETURNS NOT ACCEPTED', 'ITEM TWENTYEIGHT RETURNS NOT ACCEPTED'],
+  ['RETURN NOT ALLOWED, singular', 'ITEM TWENTYNINE RETURN NOT ALLOWED'],
+  ['RETURNS ARE NOT PERMITTED, with the filler verb', 'ITEM THIRTY RETURNS ARE NOT PERMITTED'],
 ];
 
 // Near misses. Each of these contains the letters of a trigger phrase but does
@@ -170,6 +179,10 @@ const MUST_NOT_MATCH: Array<[string, string]> = [
   // filler word between the negation and RETURN would flag these.
   ['unrelated words between NO and RETURN', 'NO TILL SEED RETURN TRAY'],
   ['"no" ending a word, plural', 'CASINO RETURNS DISPLAY'],
+  // The return-first verb list is closed for the same reason: RETURN and NOT
+  // in one name do not by themselves reject a return.
+  ['RETURN and NOT with an unlisted verb', 'RETURN LABEL NOT INCLUDED'],
+  ['RETURN as a plumbing term', 'RETURN LINE NOT PRESSURIZED'],
 ];
 
 describe('product-name-vs-return-policy predicate pattern', () => {
