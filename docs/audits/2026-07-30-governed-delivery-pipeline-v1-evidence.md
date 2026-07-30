@@ -109,7 +109,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 | `npm run typecheck` | PASS |
 | `npm run lint` | PASS |
 | `npm run build` | PASS — 4,235 modules transformed |
-| `npm run test` | PASS — 306 files; 4,066 passed, 118 skipped |
+| `npm run test` | PASS — 307 files; 4,079 passed, 123 skipped |
 | `npm run check-doc-drift` | PASS — all 38 wired hooks documented |
 | `node scripts/verify-deps.mjs` | PASS — lockfile unchanged; installed versions match |
 | `node scripts/agent-manifest-parity.test.mjs` | PASS — 18 assertions |
