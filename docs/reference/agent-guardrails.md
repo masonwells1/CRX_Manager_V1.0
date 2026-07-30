@@ -76,11 +76,15 @@ The CLI exposes no arbitrary local-file evidence attachment; morning review and 
 `factory.mjs evidence run`. The harness name must appear in the immutable approved ticket and the factory's fixed allowlist, its
 resolved npm script body must equal `origin/main`, and the evidence binds the script/body/package/base
 hashes plus its real zero exit, output, and a content fingerprint of every tracked and non-ignored
-repository file. The gate proves the tree stayed frozen during the harness and rechecks the content
-fingerprint before morning review and closeout, invalidating proof after any source/test edit. The
-broker also fingerprints shared factory state around the child harness and raises an emergency hold
-if the child indirectly mutates either protected surface. Secret-shaped harness output is rejected
-before persistence. While
+repository file. In production, the broker builds a pinned Docker dependency layer from
+`origin/main` with install scripts disabled, then runs the harness with no inherited credentials,
+no network, dropped capabilities, a read-only root/dependency layer, resource limits, and a
+disposable workspace containing only tracked/non-ignored bytes. The original checkout and ignored
+files are unavailable to the harness process. The gate proves the host tree stayed frozen, deletes
+the disposable workspace, and rechecks the content fingerprint before morning review and closeout,
+invalidating proof after any source/test edit. The broker also fingerprints shared factory state and
+raises an emergency hold if the contained child indirectly mutates a protected host surface.
+Secret-shaped harness output is rejected before persistence. While
 one pilot lane is active, other chats' build writes deny, even from a fresh session. Closeout also
 fingerprints the named landing commit and requires its content to equal the harness-proven bytes;
 production proof is bounded text and secret-shaped content is rejected. Lane start uses an

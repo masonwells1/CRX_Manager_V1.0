@@ -43,7 +43,7 @@ function allowWithPermit(payload, token) {
 function factoryCliInvocation(toolName, toolInput, projectDir) {
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return false;
   const command = String(toolInput?.command || "").trim().replace(/\\/g, "/");
-  if (/[;&|]/.test(command)) return false;
+  if (/[\r\n;&|<>`$(){}[\]*?!~%'"]/.test(command)) return false;
   const absolute = path.join(projectDir, "scripts", "factory.mjs").replace(/\\/g, "/");
   const match = command.match(new RegExp(
     `^node(?:\\.exe)?\\s+(?:[\"']?${absolute.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\"']?|scripts/factory\\.mjs)\\s+(.+)$`,
@@ -51,6 +51,7 @@ function factoryCliInvocation(toolName, toolInput, projectDir) {
   ));
   if (!match) return false;
   const action = match[1].trim();
+  if (!/^[A-Za-z0-9._:/\\@+=,-]+(?:\s+[A-Za-z0-9._:/\\@+=,-]+)*$/.test(action)) return false;
   return {
     action,
     status: /^status(?:\s|$)/i.test(action),

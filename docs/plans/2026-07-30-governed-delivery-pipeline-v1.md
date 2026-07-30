@@ -149,8 +149,11 @@ V1 board stages:
 Only deterministic events may move a job forward. Missing proof cannot produce
 `awaiting-morning-review`; missing production verification cannot produce `live`. A qualifying
 harness name must be in the immutable ticket and fixed factory allowlist, its npm script body must
-match `origin/main`, and its script/package/base/output hashes are captured and rechecked. While the
-single pilot lane is active, other and fresh chats cannot perform build writes.
+match `origin/main`, and its script/package/base/output hashes are captured and rechecked. The
+production harness runs without inherited credentials or network in a pinned container dependency
+layer built from `origin/main`; only a disposable copy of tracked/non-ignored bytes is writable, and
+that workspace is deleted after the run. While the single pilot lane is active, other and fresh chats
+cannot perform build writes.
 
 ## Planned repository changes
 

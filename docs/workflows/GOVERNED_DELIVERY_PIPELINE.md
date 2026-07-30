@@ -93,11 +93,15 @@ approved ticket through `factory.mjs evidence run`. The harness must also be in 
 allowlist (`test`, `test:factory`, `test:agent-workflows`, `typecheck`, `lint`, `build`,
 `verify-deps`, or `check-doc-drift`) and its script body must still equal `origin/main`. The CLI
 captures and hashes the name, resolved script body, package file, base SHA, zero exit, output, and a
-content fingerprint covering every tracked and non-ignored repository file. It verifies that the
-repository and shared factory state stayed frozen while the harness ran; detected indirect mutation
-creates an emergency hold. It rechecks the repository fingerprint before morning review and closeout,
-and refuses secret-shaped harness output before it can become a Board artifact, so later source or
-test edits invalidate stale proof. Morning review additionally
+content fingerprint covering every tracked and non-ignored repository file. In production, the
+broker builds a pinned Docker dependency layer from `origin/main` with install scripts disabled.
+The harness receives no inherited credentials, no network, no Linux capabilities, a read-only root
+and dependency layer, bounded resources, and only a disposable workspace copied from tracked and
+non-ignored repository bytes. The original checkout and ignored files are unavailable to the harness
+process. The broker verifies that repository and shared factory state stayed frozen, deletes the
+disposable workspace, emergency-holds on detected indirect host mutation, and refuses secret-shaped
+harness output before it can become a Board artifact. It rechecks the repository fingerprint before
+morning review and closeout, so later source or test edits invalidate stale proof. Morning review additionally
 requires the original base to remain current. After landing, closeout validates proof against the
 job's immutable original base, proves that the landing commit is contained in current `origin/main`,
 and computes the commit's own tree/content fingerprint. The landing commit must contain the exact

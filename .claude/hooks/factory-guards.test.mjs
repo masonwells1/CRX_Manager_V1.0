@@ -303,6 +303,16 @@ function hookOutput(result) {
   assertions++;
   assert.match(factoryCommandHook.updatedInput.command, /CRX_FACTORY_PERMIT/, "mutating factory CLI identity comes from the real hook session");
   denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/factory.mjs stage --job $(node scripts/generated-helper.mjs) --stage verifying" },
+  }), /direct commands and helper-process execution/i, "factory CLI permit rejects command substitution before the shell can execute it");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/factory.mjs stage --job lane-job`nnode scripts/generated-helper.mjs --stage verifying" },
+  }), /direct commands and helper-process execution/i, "factory CLI permit rejects multiline command injection");
+  denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "parallel.ts") },

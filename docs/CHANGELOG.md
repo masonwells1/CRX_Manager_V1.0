@@ -317,7 +317,17 @@ bytes; simultaneous lane starts use the ledger's compare-and-swap hash so only o
 local-file evidence attachment is removed; production verification is bounded text with credential
 patterns rejected. Active lanes may use structured file edits and fixed verification commands, but
 opaque shell/helper/MCP process execution is denied so a generated helper cannot hide its mutation
-targets from the guards. The focused suite covers these routes before another exact-SHA review.
+targets from the guards. A third trusted Codex publication review then found two remaining HIGH
+execution boundaries: command substitution could still reach the permit path, and a branch-modified
+harness dependency could execute directly on the credentialed workstation. Factory CLI recognition
+now accepts only a strict shell-metacharacter-free argument grammar. Production harnesses execute in
+a pinned Docker image whose dependency layer is built from `origin/main` with install scripts
+disabled; the harness gets no inherited credentials, no network, no Linux capabilities, a read-only
+container root, bounded resources, and only a disposable copy of tracked/non-ignored repository
+bytes. The original checkout and ignored files are exposed only to the separate no-network bootstrap
+container, never the harness process, and the disposable workspace is deleted after each run. Both a
+real contained factory test run and a real contained production build pass. The focused host suite
+now covers 192 adversarial assertions before another exact-SHA review.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

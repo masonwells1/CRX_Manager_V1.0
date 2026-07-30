@@ -7,11 +7,13 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readlinkSync,
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeSync,
@@ -19,7 +21,7 @@ import {
 } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,6 +40,7 @@ export const FACTORY_HARNESS_ALLOWLIST = new Set([
   "verify-deps",
   "check-doc-drift",
 ]);
+export const FACTORY_HARNESS_NODE_IMAGE = "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059";
 export const BOARD_STAGES = new Set([
   "needs-ticket-ok",
   "queued",
@@ -712,6 +715,9 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
           headTreeSha: String(event.payload.headTreeSha || ""),
           repositoryContentHash: String(event.payload.repositoryContentHash || ""),
           repositoryFileCount: Number(event.payload.repositoryFileCount || 0),
+          sandbox: event.payload.sandbox && typeof event.payload.sandbox === "object"
+            ? canonicalize(event.payload.sandbox)
+            : null,
         });
         break;
       default:
@@ -859,6 +865,281 @@ export function loadFactorySnapshot(paths, options) {
   return attachSnapshotPaths(buildFactorySnapshot(paths, options), paths);
 }
 
+function fixedDockerExecutable() {
+  const candidates = process.platform === "win32"
+    ? [
+        "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+        path.join(homedir(), "AppData", "Local", "Programs", "Docker", "Docker", "resources", "bin", "docker.exe"),
+        path.join(homedir(), "AppData", "Local", "Programs", "DockerDesktop", "resources", "bin", "docker.exe"),
+      ]
+    : ["/usr/bin/docker", "/usr/local/bin/docker"];
+  const resolved = candidates.find((candidate) => existsSync(candidate));
+  if (!resolved) {
+    throw new Error("Trusted Docker executable was not found in a fixed installation location.");
+  }
+  return resolved;
+}
+
+function runDocker(args, {
+  cwd = process.cwd(),
+  timeout = 15 * 60 * 1000,
+  maxBuffer = 20 * 1024 * 1024,
+} = {}) {
+  return spawnSync(fixedDockerExecutable(), args, {
+    cwd,
+    encoding: "utf8",
+    shell: false,
+    timeout,
+    maxBuffer,
+    env: {
+      SystemRoot: process.env.SystemRoot,
+      SYSTEMROOT: process.env.SYSTEMROOT,
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+      HOME: homedir(),
+      USERPROFILE: homedir(),
+    },
+  });
+}
+
+function requireSuccessfulProcess(result, label) {
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || "").trim().slice(-2_000);
+    throw new Error(`${label} failed with exit ${result.status}${detail ? `: ${detail}` : "."}`);
+  }
+  return result;
+}
+
+function isolatedHarnessTestMode(paths, cwd) {
+  const tempRoot = `${path.resolve(tmpdir()).toLowerCase()}${path.sep}`;
+  return process.env.CRX_FACTORY_TEST_MODE === "1"
+    && path.resolve(paths.stateDir).toLowerCase().startsWith(tempRoot)
+    && path.resolve(cwd).toLowerCase().startsWith(tempRoot);
+}
+
+function runIsolatedTestHarness(cwd, scriptName) {
+  const executable = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm";
+  const args = process.platform === "win32"
+    ? ["/d", "/s", "/c", `npm run ${scriptName}`]
+    : ["run", scriptName];
+  return spawnSync(executable, args, {
+    cwd,
+    encoding: "utf8",
+    shell: false,
+    timeout: 15 * 60 * 1000,
+    maxBuffer: 20 * 1024 * 1024,
+    env: process.env,
+  });
+}
+
+function baseHarnessDependencyBytes(cwd, commitish = "origin/main") {
+  const packageJson = execFileSync("git", ["show", `${commitish}:package.json`], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const packageLock = execFileSync("git", ["show", `${commitish}:package-lock.json`], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return { packageJson, packageLock };
+}
+
+export function factoryHarnessDependencyHashForCommit(cwd, commitish = "origin/main") {
+  const dependencies = baseHarnessDependencyBytes(cwd, commitish);
+  return sha256([
+    "factory-harness-image-v2",
+    FACTORY_HARNESS_NODE_IMAGE,
+    dependencies.packageJson,
+    dependencies.packageLock,
+  ].join("\0"));
+}
+
+function ensureFactoryHarnessImage(cwd) {
+  const dependencies = baseHarnessDependencyBytes(cwd);
+  const dependencyHash = factoryHarnessDependencyHashForCommit(cwd);
+  const imageTag = `crx-factory-harness:${dependencyHash.slice(0, 24)}`;
+  const context = mkdtempSync(path.join(tmpdir(), "crx-factory-harness-image-"));
+  try {
+    writeFileSync(path.join(context, "package.json"), dependencies.packageJson, "utf8");
+    writeFileSync(path.join(context, "package-lock.json"), dependencies.packageLock, "utf8");
+    writeFileSync(path.join(context, "Dockerfile"), [
+      `FROM ${FACTORY_HARNESS_NODE_IMAGE}`,
+      "WORKDIR /opt/crx",
+      "COPY package.json package-lock.json ./",
+      "RUN npm ci --ignore-scripts --no-audit --no-fund",
+      "RUN mkdir -p /opt/crx/node_modules/.vite /opt/crx/node_modules/.vite-temp && chmod 1777 /opt/crx/node_modules/.vite /opt/crx/node_modules/.vite-temp",
+      'ENV PATH="/opt/crx/node_modules/.bin:${PATH}"',
+      "",
+    ].join("\n"), "utf8");
+    requireSuccessfulProcess(
+      runDocker(["build", "--pull=false", "--network=default", "--tag", imageTag, context], {
+        cwd,
+        timeout: 20 * 60 * 1000,
+        maxBuffer: 64 * 1024 * 1024,
+      }),
+      "Trusted factory harness image build",
+    );
+  } finally {
+    const resolved = path.resolve(context);
+    const expectedPrefix = `${path.resolve(tmpdir()).toLowerCase()}${path.sep}crx-factory-harness-image-`;
+    if (resolved.toLowerCase().startsWith(expectedPrefix)) {
+      rmSync(resolved, { recursive: true, force: true });
+    }
+  }
+  const inspected = runDocker(["image", "inspect", "--format", "{{.Id}}", imageTag], { cwd, timeout: 30_000 });
+  requireSuccessfulProcess(inspected, "Factory harness image inspection");
+  const imageId = String(inspected.stdout || "").trim();
+  if (!/^sha256:[a-f0-9]{64}$/i.test(imageId)) {
+    throw new Error("Factory harness image inspection returned an invalid immutable image ID.");
+  }
+  return { dependencyHash, imageId, imageTag };
+}
+
+export function factoryHarnessSandboxArgs({
+  cwd,
+  scriptName,
+  imageId,
+  workspaceVolume,
+  containerName,
+}) {
+  const repoRoot = resolveRepoRoot(cwd);
+  const commonDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--git-common-dir"], repoRoot));
+  const gitDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--absolute-git-dir"], repoRoot));
+  const gitDirRelative = path.relative(commonDir, gitDir).replace(/\\/g, "/");
+  if (gitDirRelative === ".." || gitDirRelative.startsWith("../")) {
+    throw new Error("Repository Git directory escapes its common directory.");
+  }
+  const containerGitDir = gitDirRelative && gitDirRelative !== "."
+    ? `/git-common/${gitDirRelative}`
+    : "/git-common";
+  if (!FACTORY_HARNESS_ALLOWLIST.has(scriptName) || !/^[A-Za-z0-9:_-]+$/.test(scriptName)) {
+    throw new Error(`Harness ${scriptName} is not eligible for sandbox execution.`);
+  }
+  if (!/^sha256:[a-f0-9]{64}$/.test(imageId)
+      || !/^crx-factory-workspace-[a-f0-9]{32}$/.test(workspaceVolume)
+      || !/^crx-factory-workspace-[a-f0-9]{32}-run$/.test(containerName)) {
+    throw new Error("Factory harness sandbox identifiers are not canonical.");
+  }
+  return [
+    "run", "--rm",
+    "--name", containerName,
+    "--network", "none",
+    "--read-only",
+    "--cap-drop", "ALL",
+    "--security-opt", "no-new-privileges",
+    "--pids-limit", "512",
+    "--memory", "4g",
+    "--cpus", "4",
+    "--ulimit", "nofile=1024:1024",
+    "--hostname", "crx-factory",
+    "--env", "CI=1",
+    "--env", "HOME=/tmp",
+    "--env", "npm_config_cache=/tmp/npm-cache",
+    "--env", "NO_COLOR=1",
+    "--env", "CRX_FACTORY_SANDBOX=1",
+    "--env", `GIT_DIR=${containerGitDir}`,
+    "--env", "GIT_COMMON_DIR=/git-common",
+    "--env", "GIT_WORK_TREE=/workspace",
+    "--env", "GIT_CONFIG_NOSYSTEM=1",
+    "--env", "GIT_CONFIG_GLOBAL=/dev/null",
+    "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
+    "--tmpfs", "/opt/crx/node_modules/.vite:rw,nosuid,nodev,size=1g,mode=1777",
+    "--tmpfs", "/opt/crx/node_modules/.vite-temp:rw,nosuid,nodev,size=1g,mode=1777",
+    "--mount", `type=bind,source=${commonDir},target=/git-common,readonly`,
+    "--mount", `type=volume,source=${workspaceVolume},target=/workspace`,
+    "--workdir", "/workspace",
+    "--entrypoint", "npm",
+    imageId,
+    "run", scriptName,
+  ];
+}
+
+function bootstrapFactoryHarnessWorkspace(cwd, sandbox, workspaceVolume) {
+  const repoRoot = resolveRepoRoot(cwd);
+  const commonDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--git-common-dir"], repoRoot));
+  const gitDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--absolute-git-dir"], repoRoot));
+  const gitDirRelative = path.relative(commonDir, gitDir).replace(/\\/g, "/");
+  if (gitDirRelative === ".." || gitDirRelative.startsWith("../")) {
+    throw new Error("Repository Git directory escapes its common directory.");
+  }
+  const containerGitDir = gitDirRelative && gitDirRelative !== "."
+    ? `/git-common/${gitDirRelative}`
+    : "/git-common";
+  const containerName = `${workspaceVolume}-bootstrap`;
+  const bootstrapScript = [
+    "set -eu",
+    'git --git-dir="$GIT_DIR" --work-tree=/source ls-files --cached --others --exclude-standard -z | tar -C /source --null -T - -cf - | tar -C /workspace -xf -',
+    'printf "gitdir: %s\\n" "$GIT_DIR" > /workspace/.git',
+    "ln -s /opt/crx/node_modules /workspace/node_modules",
+  ].join("\n");
+  const args = [
+    "run", "--rm",
+    "--name", containerName,
+    "--network", "none",
+    "--read-only",
+    "--cap-drop", "ALL",
+    "--security-opt", "no-new-privileges",
+    "--pids-limit", "128",
+    "--memory", "1g",
+    "--cpus", "2",
+    "--env", `GIT_DIR=${containerGitDir}`,
+    "--env", "GIT_COMMON_DIR=/git-common",
+    "--env", "GIT_CONFIG_NOSYSTEM=1",
+    "--env", "GIT_CONFIG_GLOBAL=/dev/null",
+    "--mount", `type=bind,source=${repoRoot},target=/source,readonly`,
+    "--mount", `type=bind,source=${commonDir},target=/git-common,readonly`,
+    "--mount", `type=volume,source=${workspaceVolume},target=/workspace`,
+    "--entrypoint", "sh",
+    sandbox.imageId,
+    "-c", bootstrapScript,
+  ];
+  try {
+    requireSuccessfulProcess(
+      runDocker(args, { cwd, timeout: 5 * 60 * 1000, maxBuffer: 20 * 1024 * 1024 }),
+      "Factory harness disposable workspace bootstrap",
+    );
+  } finally {
+    runDocker(["container", "rm", "--force", containerName], { cwd, timeout: 30_000 });
+  }
+}
+
+export function runFactoryHarnessSandbox(cwd, scriptName) {
+  const sandbox = ensureFactoryHarnessImage(cwd);
+  const workspaceVolume = `crx-factory-workspace-${randomUUID().replaceAll("-", "")}`;
+  const containerName = `${workspaceVolume}-run`;
+  requireSuccessfulProcess(
+    runDocker(["volume", "create", workspaceVolume], { cwd, timeout: 30_000 }),
+    "Factory harness disposable workspace creation",
+  );
+  let result;
+  try {
+    bootstrapFactoryHarnessWorkspace(cwd, sandbox, workspaceVolume);
+    const args = factoryHarnessSandboxArgs({
+      cwd,
+      scriptName,
+      imageId: sandbox.imageId,
+      workspaceVolume,
+      containerName,
+    });
+    result = runDocker(args, {
+      cwd,
+      timeout: 15 * 60 * 1000,
+      maxBuffer: 20 * 1024 * 1024,
+    });
+  } finally {
+    runDocker(["container", "rm", "--force", containerName], { cwd, timeout: 30_000 });
+    requireSuccessfulProcess(
+      runDocker(["volume", "rm", "--force", workspaceVolume], { cwd, timeout: 30_000 }),
+      "Factory harness disposable workspace cleanup",
+    );
+  }
+  return { ...result, ...sandbox, networkMode: "none", workspaceMode: "disposable-volume" };
+}
+
 export function runHarnessEvidence(paths, {
   jobId,
   label,
@@ -877,17 +1158,9 @@ export function runHarnessEvidence(paths, {
   }
   const repositoryBefore = repositoryContentFingerprint(cwd);
   const factoryStateBefore = directoryContentFingerprint(paths.stateDir);
-  const executable = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm";
-  const args = process.platform === "win32"
-    ? ["/d", "/s", "/c", `npm run ${scriptName}`]
-    : ["run", scriptName];
-  const result = spawnSync(executable, args, {
-    cwd,
-    encoding: "utf8",
-    shell: false,
-    timeout: 15 * 60 * 1000,
-    maxBuffer: 20 * 1024 * 1024,
-  });
+  const result = isolatedHarnessTestMode(paths, cwd)
+    ? { ...runIsolatedTestHarness(cwd, scriptName), testSandbox: true }
+    : runFactoryHarnessSandbox(cwd, scriptName);
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(`Repository harness npm run ${scriptName} failed with exit ${result.status}.`);
@@ -920,6 +1193,19 @@ export function runHarnessEvidence(paths, {
     capturedAt: new Date().toISOString(),
     stdout: String(result.stdout || ""),
     stderr: String(result.stderr || ""),
+    sandbox: result.testSandbox ? {
+      mode: "isolated-test-fixture",
+    } : {
+      mode: "docker",
+      network: result.networkMode,
+      imageId: result.imageId,
+      imageTag: result.imageTag,
+      dependencyHash: result.dependencyHash,
+      repositoryMount: result.workspaceMode,
+      sourceExposure: "bootstrap-only",
+      dependencyMount: "immutable-image-layer",
+      inheritedEnvironment: false,
+    },
   };
   const bytes = `${canonicalJson(payload)}\n`;
   const hash = sha256(bytes);
@@ -946,6 +1232,7 @@ export function runHarnessEvidence(paths, {
     headTreeSha: payload.headTreeSha,
     repositoryContentHash: payload.repositoryContentHash,
     repositoryFileCount: payload.repositoryFileCount,
+    sandbox: payload.sandbox,
   };
 }
 
@@ -962,6 +1249,19 @@ export function validateCurrentHarnessEvidence(job, cwd = FACTORY_ROOT, {
     if (!job.ticket?.proofHarnesses?.includes(item.scriptName)) return false;
     if (item.baseSha !== job.baseSha) return false;
     if (requireCurrentBase && item.baseSha !== currentBaseSha) return false;
+    const isolatedTest = process.env.CRX_FACTORY_TEST_MODE === "1"
+      && path.resolve(cwd).toLowerCase().startsWith(`${path.resolve(tmpdir()).toLowerCase()}${path.sep}`)
+      && item.sandbox?.mode === "isolated-test-fixture";
+    const containedProductionRun = item.sandbox?.mode === "docker"
+      && item.sandbox?.network === "none"
+      && item.sandbox?.repositoryMount === "disposable-volume"
+      && item.sandbox?.sourceExposure === "bootstrap-only"
+      && item.sandbox?.dependencyMount === "immutable-image-layer"
+      && item.sandbox?.inheritedEnvironment === false
+      && /^sha256:[a-f0-9]{64}$/i.test(String(item.sandbox?.imageId || ""))
+      && item.sandbox?.dependencyHash === factoryHarnessDependencyHashForCommit(cwd, item.baseSha)
+      && item.sandbox?.imageTag === `crx-factory-harness:${item.sandbox.dependencyHash.slice(0, 24)}`;
+    if (!isolatedTest && !containedProductionRun) return false;
     const currentBody = packageJson.scripts?.[item.scriptName];
     return typeof currentBody === "string"
       && sha256(currentBody) === item.scriptBodyHash

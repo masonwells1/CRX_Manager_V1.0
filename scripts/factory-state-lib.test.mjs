@@ -19,6 +19,8 @@ import {
   buildFactorySnapshot,
   canonicalJson,
   consumeFactoryCliPermit,
+  factoryHarnessDependencyHashForCommit,
+  factoryHarnessSandboxArgs,
   loadFactorySnapshot,
   mintFactoryCliPermit,
   readEventLog,
@@ -57,6 +59,21 @@ throws(
   /credential or secret/,
   "secret-shaped proof text is rejected before persistence",
 );
+
+if (process.env.CRX_FACTORY_SANDBOX !== "1") {
+  const args = factoryHarnessSandboxArgs({
+    cwd: repoRoot,
+    scriptName: "verify-deps",
+    imageId: `sha256:${"1".repeat(64)}`,
+    workspaceVolume: `crx-factory-workspace-${"2".repeat(32)}`,
+    containerName: `crx-factory-workspace-${"2".repeat(32)}-run`,
+  });
+  ok(args.includes("none") && args.includes("--network"), "production harness sandbox disables network access");
+  ok(args.includes("--read-only") && args.includes("ALL"), "production harness sandbox removes root writes and Linux capabilities");
+  ok(args.some((item) => item.includes(`source=crx-factory-workspace-${"2".repeat(32)},target=/workspace`)), "production harness runs from a disposable workspace volume");
+  ok(!args.some((item) => item.includes("type=volume") && item.includes("node_modules")), "production harness dependencies stay inside the immutable image layer");
+  ok(!args.some((item) => /OPENAI|SUPABASE|VERCEL|GITHUB|TOKEN|KEY/i.test(item)), "production harness arguments do not forward credential-bearing environment names");
+}
 
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "crx-factory-state-"));
@@ -387,19 +404,32 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const packageJson = JSON.parse(packageBytes);
   const scriptBody = packageJson.scripts["verify-deps"];
   const repository = repositoryContentFingerprint(repoRoot);
+  const proofBaseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+  const proofDependencyHash = factoryHarnessDependencyHashForCommit(repoRoot, proofBaseSha);
   const landedJob = {
-    baseSha: "1111111111111111111111111111111111111111",
+    baseSha: proofBaseSha,
     ticket: { proofHarnesses: ["verify-deps"] },
     evidence: [{
       verified: true,
       kind: "harness",
       scriptName: "verify-deps",
-      baseSha: "1111111111111111111111111111111111111111",
+      baseSha: proofBaseSha,
       scriptBodyHash: sha256(scriptBody),
       baseScriptBodyHash: sha256(scriptBody),
       packageJsonHash: sha256(packageBytes),
       repositoryContentHash: repository.repositoryContentHash,
       repositoryFileCount: repository.repositoryFileCount,
+      sandbox: {
+        mode: "docker",
+        network: "none",
+        repositoryMount: "disposable-volume",
+        sourceExposure: "bootstrap-only",
+        dependencyMount: "immutable-image-layer",
+        inheritedEnvironment: false,
+        imageId: `sha256:${"1".repeat(64)}`,
+        imageTag: `crx-factory-harness:${proofDependencyHash.slice(0, 24)}`,
+        dependencyHash: proofDependencyHash,
+      },
     }],
   };
   throws(

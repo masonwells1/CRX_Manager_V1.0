@@ -3,8 +3,8 @@
 Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
-Current `origin/main`: `db9b5efc7a3c5ef0d9e9b1171ad8f5d0863c2544`
-State: rebased onto current `origin/main`; second publication-blocker repair pass is uncommitted and unpushed
+Current `origin/main` at exact-proof freeze: `31cf0abe760cdd845d047bd856e3401b76def44e`
+State: rebased onto current `origin/main`; third publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -35,10 +35,15 @@ pipeline remains the delivery engine and all of its landing and production gates
   CLI-executed repository harness is required before morning review. Its name is bound into the
   immutable ticket and fixed allowlist; its resolved script body must equal `origin/main`, and the
   command/body/package/base/output hashes plus the full tracked/non-ignored repository content
-  fingerprint are rechecked. The broker fingerprints both repository and shared factory state around
-  the harness, emergency-holds on indirect mutation, and refuses secret-shaped stdout/stderr before
-  persistence. Source or test edits after the harness invalidate it. The arbitrary local-file
-  evidence route has been removed.
+  fingerprint are rechecked. The production broker runs the harness without inherited credentials or
+  network in a pinned Docker image whose dependency layer is built only from `origin/main` with
+  install scripts disabled. The container root and trusted dependency layer are read-only,
+  capabilities are dropped, resources are bounded, and the harness receives only a disposable copy
+  of tracked and non-ignored repository bytes. Ignored files and the original checkout are unavailable
+  to the harness. The broker fingerprints both repository and shared factory state around the run,
+  emergency-holds on indirect host mutation, refuses secret-shaped stdout/stderr before persistence,
+  and deletes the disposable workspace. Source or test edits after the harness invalidate it. The
+  arbitrary local-file evidence route has been removed.
 - While one lane is active, native edits, MCP filesystem tools, shell writes/redirection, Git
   mutations, and unknown repository scripts from other or fresh chats are denied. The winning lane
   uses structured target-visible edits and read-only shell inspection; opaque shell/helper/MCP process
@@ -79,12 +84,14 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 185 focused assertions after publication-blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 192 focused assertions after publication-blocker remediation |
+| contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
+| contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
 | `npm run typecheck` | PASS |
 | `npm run lint` | PASS |
 | `npm run build` | PASS — 4,235 modules transformed |
-| `npm run test` | PASS — 305 files; 4,011 passed, 118 skipped |
+| `npm run test` | PASS — 306 files; 4,066 passed, 118 skipped |
 | `npm run check-doc-drift` | PASS — all 38 wired hooks documented |
 | `node scripts/verify-deps.mjs` | PASS — lockfile unchanged; installed versions match |
 | `node scripts/agent-manifest-parity.test.mjs` | PASS — 18 assertions |
@@ -157,7 +164,13 @@ recursive force-delete cleanup command.
   local evidence/proof files) plus one MED concurrent lane-start race. The current repair candidate
   binds the landing commit fingerprint, removes arbitrary-file evidence, rejects secret-shaped
   production text, denies opaque execution in active lanes, and makes lane start compare-and-swap
-  atomic. Publication remains parked until fresh exact-SHA Codex and Fable acceptance pass.
+  atomic.
+- Trusted Codex exact-head publication re-review `2026-07-30T16:41:12Z`: `BLOCKERS`; it found two
+  HIGH execution-boundary gaps: command substitution could receive a factory permit, and
+  branch-modified harness dependencies executed on the credentialed workstation. The current repair
+  uses a strict argument grammar and a credential-free, no-network Docker harness with pinned trusted
+  dependencies and a disposable source workspace. Publication remains parked until fresh exact-SHA
+  Codex and Fable acceptance pass.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -166,13 +179,13 @@ and tests are frozen.
 
 ## Moving-main check
 
-`origin/main` advanced once from `aee913d` to `db9b5ef`. The feature commit was rebased onto that
-current base before publication repair began. The duplicate generated map-date hunk disappeared;
-the upstream Phase 3 smoke-prover change does not overlap the factory implementation.
+`origin/main` advanced from `aee913d` through `db9b5ef` and `c0d90ed` to `31cf0abe`. The feature
+commits were rebased onto each current base before exact-SHA publication proof. The latest upstream
+Phase 3 prover identity/RLS checks do not overlap the factory implementation.
 
 ## Remaining gate
 
-The second repair pass remains uncommitted and unpushed. The next gates are full verification, a repair commit,
+The third repair pass remains unpushed. The next gates are full verification at frozen bytes,
 fresh exact-SHA Codex and Fable acceptance, then the explicitly authorized feature-branch push and
 draft PR. Merge, board installation/startup, deployment, migration, and all production actions remain
 undone.

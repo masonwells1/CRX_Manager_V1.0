@@ -357,6 +357,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         headTreeSha: evidence.headTreeSha,
         repositoryContentHash: evidence.repositoryContentHash,
         repositoryFileCount: evidence.repositoryFileCount,
+        sandbox: evidence.sandbox,
       },
     });
     process.stdout.write(`${JSON.stringify({
