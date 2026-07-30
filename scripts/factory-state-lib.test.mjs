@@ -44,6 +44,7 @@ import {
   validateCurrentHarnessEvidence,
   validateCurrentIndependentReview,
   validateLaneStart,
+  validateRepositoryScope,
   writeImmutableTicket,
 } from "./factory-state-lib.mjs";
 import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
@@ -498,8 +499,34 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   });
   const before = repositoryContentFingerprint(fingerprintRepo);
   const initialCommit = repositoryCommitFingerprint(fingerprintRepo, "HEAD");
+  const scopedJob = {
+    baseSha: initialCommit.commitSha,
+    ticket: { allowedPaths: ["source.txt"] },
+  };
+  eq(
+    validateRepositoryScope(scopedJob, fingerprintRepo, { requireCleanBase: true }).length,
+    0,
+    "factory lane starts only from a clean checkout at the approved base",
+  );
   eq(initialCommit.repositoryContentHash, before.repositoryContentHash, "commit fingerprint matches identical working-tree bytes");
   writeFileSync(path.join(fingerprintRepo, "source.txt"), "after\n");
+  eq(
+    validateRepositoryScope(scopedJob, fingerprintRepo).join(","),
+    "source.txt",
+    "current changes inside the approved ticket scope are accepted",
+  );
+  throws(
+    () => validateRepositoryScope(scopedJob, fingerprintRepo, { requireCleanBase: true }),
+    /clean checkout exactly at the approved/i,
+    "lane start rejects a dirty checkout even when the dirty path would be in scope",
+  );
+  writeFileSync(path.join(fingerprintRepo, "unrelated.txt"), "unrelated\n");
+  throws(
+    () => validateRepositoryScope(scopedJob, fingerprintRepo),
+    /outside the approved ticket paths.*unrelated\.txt/i,
+    "review rejects pre-existing or untracked changes outside the ticket scope",
+  );
+  rmSync(path.join(fingerprintRepo, "unrelated.txt"));
   const changed = repositoryContentFingerprint(fingerprintRepo);
   ok(before.repositoryContentHash !== changed.repositoryContentHash, "repository proof hash changes after source bytes change");
   ok(initialCommit.repositoryContentHash !== changed.repositoryContentHash, "unlanded source bytes do not match the old landing commit");
@@ -578,7 +605,10 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     id: "landed-job",
     baseSha: proofBaseSha,
     ticketHash: proofTicketHash,
-    ticket: { proofHarnesses: ["verify-deps"] },
+    ticket: {
+      proofHarnesses: ["verify-deps"],
+      allowedPaths: [".claude/", "docs/", "scripts/"],
+    },
     evidence: [{
       verified: true,
       kind: "harness",

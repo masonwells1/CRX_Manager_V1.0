@@ -403,6 +403,14 @@ still traverse non-filesystem providers such as `Env:`, exposing inherited crede
 secret-shaped path. Governed shell reads now reject provider-qualified names, named PowerShell
 drives, and drive-relative paths; focused regressions cover environment, registry, certificate,
 and relative-drive forms.
+A fifth exact-SHA Sol/high acceptance found two custody gaps: a newly approved lane could inherit
+unrelated changes already present in its worktree, and an independent reviewer could read ignored
+host files while reviewing in place. Lane start now requires a clean checkout exactly at the
+approved base, while evidence, owner-review, and closeout validation recompute the complete
+base-to-candidate path set and reject anything outside the ticket. Factory and push-proof review now
+run in disposable Git-free packets containing only exact base bytes, tracked/non-ignored candidate
+bytes, a precomputed diff, and a SHA manifest; ignored secrets, session state, host profile paths,
+and shared Git metadata are not exposed.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

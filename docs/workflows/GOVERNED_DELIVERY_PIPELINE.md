@@ -105,6 +105,13 @@ fingerprint before the ticket or morning decision is re-presented there.
   wildcard shell paths, PowerShell providers/drives, and secret-shaped added content fail closed.
   Shell `rg` is not exempt because
   its preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
+- A lane starts only from a clean checkout whose `HEAD` is the exact approved `origin/main` SHA.
+  Before evidence acceptance, owner review, and closeout, the factory recomputes committed,
+  working-tree, and untracked paths from that base and rejects any path outside the ticket.
+- Independent Sol review never runs in the host checkout. Trusted bootstrap creates a disposable,
+  Git-free packet containing exact base bytes, tracked/non-ignored candidate bytes, a precomputed
+  diff, and a SHA manifest. Ignored files, factory session state, host profile paths, and repository
+  Git metadata are not exposed to the reviewer.
 - The board binds only to loopback and is read-only.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.

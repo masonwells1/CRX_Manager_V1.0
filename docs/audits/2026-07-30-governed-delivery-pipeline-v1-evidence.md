@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `886fa4591dd72c82d9e8c8f0b09fd3c8b7355053`
-State: rebased onto current `origin/main`; fourth Sol/high publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; fifth Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -111,7 +111,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 278 focused assertions after fourth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 282 focused assertions after fifth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -262,6 +262,16 @@ recursive force-delete cleanup command.
   drives, and drive-relative paths before resolving any shell read. Regression coverage includes
   `Env:`, `Registry::`, `HKCU:`, `Cert:`, and `C:relative` forms. Fresh exact-commit acceptance is
   still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `f9e7c7ddda88e101ddcc7ba4d20feceda6b13043` returned `BLOCKERS`: a lane could begin with
+  unrelated pre-existing changes, and independent review still ran inside the real host checkout
+  where ignored secrets and session state were readable. Lane start now requires a clean checkout
+  exactly at the approved base. Evidence validation, owner review, and closeout independently
+  recompute all committed, working-tree, and untracked changes and reject any path outside the
+  ticket. Both factory and push-proof reviewers now run from disposable Git-free packets containing
+  only exact base bytes, tracked/non-ignored candidate bytes, a precomputed diff, and a SHA manifest;
+  ignored `.env`, session-state, host profile paths, and repository Git metadata are absent. Fresh
+  exact-commit acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

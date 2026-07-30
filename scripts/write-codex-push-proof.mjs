@@ -28,8 +28,21 @@
 // GitHub branch protection remains the external hard wall.
 
 import { spawnSync, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -66,6 +79,186 @@ const STATUS_UNAVAILABLE = "__GIT_STATUS_UNAVAILABLE__";
 export function worktreeIsClean(cwd) {
   const out = runGit(["status", "--short"], { cwd, fallback: STATUS_UNAVAILABLE });
   return out !== STATUS_UNAVAILABLE && out.trim() === "";
+}
+
+function fixedTarExecutable() {
+  const candidates = process.platform === "win32"
+    ? ["C:\\Windows\\System32\\tar.exe"]
+    : ["/usr/bin/tar", "/bin/tar"];
+  const executable = candidates.find((candidate) => existsSync(candidate));
+  if (!executable) throw new Error("A fixed trusted tar executable is required to build the sanitized review workspace.");
+  return executable;
+}
+
+function fixedGitExecutable() {
+  const candidates = process.platform === "win32"
+    ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
+    : ["/usr/bin/git", "/usr/local/bin/git"];
+  const executable = candidates.find((candidate) => existsSync(candidate));
+  if (!executable) throw new Error("A fixed trusted Git executable is required to build the sanitized review workspace.");
+  return executable;
+}
+
+function assertSanitizedReviewRoot(reviewRoot) {
+  const resolved = path.resolve(reviewRoot);
+  const prefix = `${path.resolve(tmpdir())}${path.sep}crx-codex-review-`;
+  if (!resolved.toLowerCase().startsWith(prefix.toLowerCase())) {
+    throw new Error("Refusing to operate on a review workspace outside the dedicated temporary prefix.");
+  }
+  return resolved;
+}
+
+function neutralizeSnapshotSymlinks(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    const stat = lstatSync(target);
+    if (stat.isSymbolicLink()) {
+      const linkTarget = readlinkSync(target);
+      unlinkSync(target);
+      writeFileSync(target, `SANITIZED_SYMLINK_TARGET:${linkTarget}\n`, "utf8");
+    } else if (stat.isDirectory()) {
+      neutralizeSnapshotSymlinks(target);
+    }
+  }
+}
+
+function copyCommitSnapshot(sourceRoot, commitSha, destination) {
+  mkdirSync(destination, { recursive: true });
+  const archive = execFileSync(fixedGitExecutable(), ["archive", "--format=tar", commitSha], {
+    cwd: sourceRoot,
+    encoding: null,
+    timeout: 120_000,
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  const extracted = spawnSync(fixedTarExecutable(), ["-xf", "-", "-C", destination], {
+    input: archive,
+    encoding: null,
+    shell: false,
+    timeout: 120_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (extracted.error || extracted.status !== 0) {
+    throw extracted.error || new Error(`Sanitized commit extraction failed with exit ${extracted.status}.`);
+  }
+  neutralizeSnapshotSymlinks(destination);
+}
+
+function copyWorkingTreeSnapshot(sourceRoot, destination) {
+  mkdirSync(destination, { recursive: true });
+  const listed = execFileSync(fixedGitExecutable(), ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+    cwd: sourceRoot,
+    encoding: "utf8",
+    timeout: 120_000,
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 256 * 1024 * 1024,
+  }).split("\0").filter(Boolean);
+  for (const relative of listed) {
+    const source = path.resolve(sourceRoot, relative);
+    const target = path.resolve(destination, relative);
+    const targetRelative = path.relative(destination, target);
+    if (targetRelative === ".." || targetRelative.startsWith(`..${path.sep}`) || path.isAbsolute(targetRelative)) {
+      throw new Error(`Repository path escapes the sanitized review workspace: ${relative}`);
+    }
+    if (!existsSync(source)) continue;
+    const stat = lstatSync(source);
+    mkdirSync(path.dirname(target), { recursive: true });
+    if (stat.isSymbolicLink()) {
+      writeFileSync(target, `SANITIZED_SYMLINK_TARGET:${readlinkSync(source)}\n`, "utf8");
+    } else if (stat.isFile()) {
+      copyFileSync(source, target);
+    } else {
+      throw new Error(`Unsupported repository entry in sanitized review workspace: ${relative}`);
+    }
+  }
+}
+
+export function createSanitizedReviewWorkspace({
+  sourceRoot,
+  baseRef = GUARDED_BASE,
+  candidateRef = "",
+} = {}) {
+  const source = resolveRepoRoot(sourceRoot);
+  const baseSha = runGit(["rev-parse", `${baseRef}^{commit}`], { cwd: source });
+  const headSha = runGit(["rev-parse", "HEAD"], { cwd: source });
+  if (!/^[a-f0-9]{40}$/i.test(baseSha) || !/^[a-f0-9]{40}$/i.test(headSha)) {
+    throw new Error("Could not bind the sanitized review workspace to exact base and HEAD commits.");
+  }
+  const reviewRoot = assertSanitizedReviewRoot(mkdtempSync(path.join(tmpdir(), "crx-codex-review-")));
+  const baseDir = path.join(reviewRoot, "BASE_SNAPSHOT");
+  const candidateDir = path.join(reviewRoot, "CANDIDATE_SNAPSHOT");
+  try {
+    copyCommitSnapshot(source, baseSha, baseDir);
+    if (candidateRef) {
+      const candidateSha = runGit(["rev-parse", `${candidateRef}^{commit}`], { cwd: source });
+      if (candidateSha !== headSha) throw new Error("Sanitized review candidate must be the exact current HEAD.");
+      copyCommitSnapshot(source, candidateSha, candidateDir);
+    } else {
+      copyWorkingTreeSnapshot(source, candidateDir);
+    }
+    const diff = spawnSync(fixedGitExecutable(), [
+      "diff",
+      "--no-index",
+      "--no-ext-diff",
+      "--binary",
+      "--src-prefix=base/",
+      "--dst-prefix=candidate/",
+      "--",
+      baseDir,
+      candidateDir,
+    ], {
+      cwd: reviewRoot,
+      encoding: "utf8",
+      shell: false,
+      timeout: 120_000,
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    if (diff.error || ![0, 1].includes(diff.status)) {
+      throw diff.error || new Error(`Sanitized review diff failed with exit ${diff.status}.`);
+    }
+    writeFileSync(path.join(reviewRoot, "REVIEW_DIFF.patch"), diff.stdout || "", "utf8");
+    writeFileSync(path.join(reviewRoot, "REVIEW_MANIFEST.json"), `${JSON.stringify({
+      schemaVersion: 1,
+      sourceExposure: "tracked-and-nonignored-snapshots-only",
+      gitMetadataExposure: "none",
+      baseSha,
+      headSha,
+      candidateMode: candidateRef ? "exact-head-commit" : "tracked-and-nonignored-working-tree",
+    }, null, 2)}\n`, "utf8");
+    return { root: reviewRoot, baseSha, headSha };
+  } catch (error) {
+    rmSync(reviewRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export function removeSanitizedReviewWorkspace(reviewRoot) {
+  rmSync(assertSanitizedReviewRoot(reviewRoot), { recursive: true, force: true });
+}
+
+export function codexReviewerEnvironment(env = process.env, reviewRoot = tmpdir()) {
+  const trustedPath = process.platform === "win32"
+    ? [
+        "C:\\Windows\\System32",
+        "C:\\Windows",
+        "C:\\Program Files\\Git\\cmd",
+        "C:\\Program Files\\PowerShell\\7",
+        "C:\\Program Files\\nodejs",
+      ].join(path.delimiter)
+    : ["/usr/local/bin", "/usr/bin", "/bin"].join(path.delimiter);
+  const allowed = {
+    PATH: trustedPath,
+    SystemRoot: env.SystemRoot,
+    SYSTEMROOT: env.SYSTEMROOT,
+    TEMP: reviewRoot,
+    TMP: reviewRoot,
+    LANG: env.LANG,
+    LC_ALL: env.LC_ALL,
+    TERM: env.TERM,
+    NO_COLOR: "1",
+    CRX_AGENT_SURFACE: "codex",
+  };
+  return Object.fromEntries(Object.entries(allowed).filter(([, value]) => value != null && value !== ""));
 }
 
 // ── Codex binary resolution (trusted, version-proof, no PATH fallback) ─────────
@@ -241,9 +434,13 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
   return [
     "You are performing an INDEPENDENT pre-push security review for CRX Manager.",
     "",
-    `Review only the changes this branch adds versus ${base} — the diff produced by:`,
-    `  git diff ${base}...HEAD`,
-    "Run that read-only git command yourself to see the changes. Do NOT modify anything,",
+    `Review only the changes the candidate snapshot adds versus ${base}.`,
+    "This directory is a sanitized, Git-free review packet:",
+    "  BASE_SNAPSHOT/ is the exact approved base tree.",
+    "  CANDIDATE_SNAPSHOT/ is the exact candidate tree.",
+    "  REVIEW_DIFF.patch is their precomputed binary diff.",
+    "  REVIEW_MANIFEST.json binds the packet to exact base and HEAD SHAs.",
+    "Inspect only this packet. Do not traverse outside this directory. Do NOT modify anything,",
     "push, deploy, or run any write/network command — this is a read-only review.",
     "",
     "Judge against the CRX red lines (see AGENTS.md): money as integer cents; Row Level",
@@ -388,9 +585,9 @@ export function run(argv = process.argv.slice(2)) {
   }
 
   const prompt = buildCodexReviewPrompt({ base: GUARDED_BASE });
-  const args = buildCodexExecArgs({ root, prompt });
 
   if (options.dryRun) {
+    const args = buildCodexExecArgs({ root: "<sanitized-review-workspace>", prompt });
     process.stdout.write(`[dry-run] Codex binary: ${codexBin}\n`);
     process.stdout.write(`[dry-run] Command: codex ${args.slice(0, -1).join(" ")} <review-prompt>\n`);
     process.stdout.write(`[dry-run] Review base (pinned): ${GUARDED_BASE}\n`);
@@ -405,21 +602,46 @@ export function run(argv = process.argv.slice(2)) {
   const headBefore = runGit(["rev-parse", "HEAD"], { cwd: root });
   const baseBefore = runGit(["rev-parse", GUARDED_BASE], { cwd: root });
   const cleanBefore = worktreeIsClean(root);
+  if (!cleanBefore) {
+    process.stderr.write("The push-proof reviewer requires a clean worktree before building its sanitized snapshot.\n");
+    clearCodexPushProof({ root, headSha: headBefore });
+    return 1;
+  }
 
-  const result = spawnSync(codexBin, args, {
-    cwd: root,
-    encoding: "utf8",
-    // Codex CLI 0.145 on Windows waits for "additional input" when a prompt is
-    // supplied as argv while stdin is redirected. Supplying the fixed prompt as
-    // the complete stdin payload (`codex exec -`) gives it one stream plus EOF.
-    // Native binary + shell:false still prevents shell interpretation.
-    stdio: ["pipe", "pipe", "pipe"],
-    input: `${prompt}\n`,
-    shell: false,
-    timeout: options.timeoutSec * 1000,
-    maxBuffer: 64 * 1024 * 1024,
-    windowsHide: true,
-  });
+  let reviewWorkspace;
+  let result;
+  try {
+    reviewWorkspace = createSanitizedReviewWorkspace({
+      sourceRoot: root,
+      baseRef: GUARDED_BASE,
+      candidateRef: headBefore,
+    });
+    if (reviewWorkspace.baseSha !== baseBefore || reviewWorkspace.headSha !== headBefore) {
+      throw new Error("Sanitized review workspace bindings do not match the guarded source refs.");
+    }
+    const args = buildCodexExecArgs({ root: reviewWorkspace.root, prompt });
+    result = spawnSync(codexBin, args, {
+      cwd: reviewWorkspace.root,
+      encoding: "utf8",
+      // Codex CLI 0.145 on Windows waits for "additional input" when a prompt is
+      // supplied as argv while stdin is redirected. Supplying the fixed prompt as
+      // the complete stdin payload (`codex exec -`) gives it one stream plus EOF.
+      // Native binary + shell:false still prevents shell interpretation.
+      stdio: ["pipe", "pipe", "pipe"],
+      input: `${prompt}\n`,
+      shell: false,
+      timeout: options.timeoutSec * 1000,
+      maxBuffer: 64 * 1024 * 1024,
+      windowsHide: true,
+      env: codexReviewerEnvironment(process.env, reviewWorkspace.root),
+    });
+  } catch (error) {
+    process.stderr.write(`Could not build or run the sanitized Codex review workspace: ${error.message}\n`);
+    clearCodexPushProof({ root, headSha: headBefore });
+    return 2;
+  } finally {
+    if (reviewWorkspace?.root) removeSanitizedReviewWorkspace(reviewWorkspace.root);
+  }
 
   const capturePath = captureReviewOutput(root, result);
   process.stdout.write(`Codex review captured to ${capturePath}\n`);

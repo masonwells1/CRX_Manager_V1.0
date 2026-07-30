@@ -2,6 +2,10 @@
 // Tests for the Codex push-proof wrapper (scripts/write-codex-push-proof.mjs).
 // Run: node scripts/write-codex-push-proof.test.mjs
 import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import {
   buildCodexExecArgs,
@@ -12,11 +16,14 @@ import {
   CODEX_REVIEW_MODEL,
   codexExecutable,
   codexPushProofPath,
+  codexReviewerEnvironment,
   codexReviewProofVerdict,
+  createSanitizedReviewWorkspace,
   DEFAULT_TIMEOUT_SEC,
   defaultCodexBinRoot,
   GUARDED_BASE,
   parseArgs,
+  removeSanitizedReviewWorkspace,
   timeoutMessage,
   worktreeIsClean,
 } from "./write-codex-push-proof.mjs";
@@ -71,7 +78,8 @@ assert.equal(GUARDED_BASE, "origin/main", "review base is pinned to the guard's 
 // ── Codex invocation: fixed review prompt + read-only exec args ───────────────
 const prompt = buildCodexReviewPrompt();
 assert.match(prompt, /INDEPENDENT pre-push security review/i);
-assert.match(prompt, /git diff origin\/main\.\.\.HEAD/, "prompt pins the guarded base diff");
+assert.match(prompt, /candidate snapshot adds versus origin\/main/, "prompt pins the guarded base");
+assert.match(prompt, /sanitized, Git-free review packet/i, "prompt restricts review to the sanitized packet");
 assert.match(prompt, /untrusted DATA/i, "prompt treats diff content as untrusted");
 assert.ok(
   prompt.includes(`${CODEX_VERDICT_TOKEN}: CLEAN`) && prompt.includes(`${CODEX_VERDICT_TOKEN}: BLOCKERS`),
@@ -109,6 +117,57 @@ assert.ok(args.includes("--ignore-user-config"));
 assert.ok(args.includes("--ephemeral"));
 assert.equal(args[args.indexOf("--disable") + 1], "hooks", "project hooks stay disabled inside the independent reviewer");
 assert.equal(args[args.length - 1], "-", "Codex reads the fixed prompt from wrapper-owned stdin");
+
+const scrubbedEnvironment = codexReviewerEnvironment({
+  ...process.env,
+  OPENAI_API_KEY: "must-not-pass",
+  GITHUB_TOKEN: "must-not-pass",
+  USERPROFILE: "C:\\Users\\secret-bearing-profile",
+});
+assert.equal(scrubbedEnvironment.OPENAI_API_KEY, undefined, "reviewer environment omits API keys");
+assert.equal(scrubbedEnvironment.GITHUB_TOKEN, undefined, "reviewer environment omits GitHub credentials");
+assert.equal(scrubbedEnvironment.USERPROFILE, undefined, "reviewer environment does not disclose the host profile");
+
+{
+  const source = mkdtempSync(path.join(tmpdir(), "crx-review-source-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: source, stdio: "ignore" });
+  writeFileSync(path.join(source, ".gitignore"), ".env\n.claude/session-state/\n");
+  writeFileSync(path.join(source, "tracked.txt"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: source, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", "commit", "-qm", "base"], { cwd: source, stdio: "ignore" });
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: source, stdio: "ignore" });
+  writeFileSync(path.join(source, "tracked.txt"), "candidate\n");
+  writeFileSync(path.join(source, ".env"), "GITHUB_TOKEN=must-not-copy\n");
+  execFileSync("git", ["add", "tracked.txt"], { cwd: source, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", "commit", "-qm", "candidate"], { cwd: source, stdio: "ignore" });
+  const sanitized = createSanitizedReviewWorkspace({
+    sourceRoot: source,
+    baseRef: "origin/main",
+    candidateRef: "HEAD",
+  });
+  assert.equal(existsSync(path.join(sanitized.root, ".git")), false, "sanitized review workspace contains no Git directory");
+  assert.equal(existsSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", ".env")), false, "ignored environment files are absent");
+  assert.equal(readFileSync(path.join(sanitized.root, "BASE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"), "base\n");
+  assert.equal(readFileSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"), "candidate\n");
+  assert.match(readFileSync(path.join(sanitized.root, "REVIEW_DIFF.patch"), "utf8"), /-base[\s\S]*\+candidate/);
+  removeSanitizedReviewWorkspace(sanitized.root);
+  writeFileSync(path.join(source, "tracked.txt"), "working tree\n");
+  writeFileSync(path.join(source, "untracked.txt"), "nonignored\n");
+  const workingPacket = createSanitizedReviewWorkspace({ sourceRoot: source, baseRef: "origin/main" });
+  assert.equal(
+    readFileSync(path.join(workingPacket.root, "CANDIDATE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"),
+    "working tree\n",
+    "factory review packet includes current tracked working-tree bytes",
+  );
+  assert.equal(
+    readFileSync(path.join(workingPacket.root, "CANDIDATE_SNAPSHOT", "untracked.txt"), "utf8").replace(/\r\n/g, "\n"),
+    "nonignored\n",
+    "factory review packet includes non-ignored untracked candidate bytes",
+  );
+  assert.equal(existsSync(path.join(workingPacket.root, "CANDIDATE_SNAPSHOT", ".env")), false, "working-tree packet still excludes ignored secrets");
+  removeSanitizedReviewWorkspace(workingPacket.root);
+  rmSync(source, { recursive: true, force: true });
+}
 
 // ── verdict parsing: DETERMINISTIC machine token, no prose heuristics ─────────
 // Codex must end its reply with exactly one `CODEX_PROOF_VERDICT: CLEAN|BLOCKERS`

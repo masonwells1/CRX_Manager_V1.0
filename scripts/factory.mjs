@@ -371,6 +371,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       jobId,
       sessionId: who.sessionId,
       currentBaseSha: baseSha,
+      cwd,
       nowMs: now().getTime(),
     });
     const laneEvent = appendAsActor(paths, {
