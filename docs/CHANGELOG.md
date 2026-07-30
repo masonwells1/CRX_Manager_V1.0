@@ -36,7 +36,11 @@ canonical active-admin helper, gave the controlled PostgreSQL race observer a
 real-time deadline and longer observation window without treating a missed
 sleep as success, and stopped committed lifecycle actions from showing a
 success toast when their follow-up version check instead requires recovery.
-Server-returned booking warnings remain visible in that recovery path.
+Server-returned booking warnings remain visible in that recovery path. The
+same recovery result now aborts customer email before a possibly stale local
+PDF leaves the app and returns `false` to stop the chained Book-as-Order
+conversion. The rollback smoke keeps its Quote planned so exact N+1 token
+assertions cover the planned-hold synchronization helper chain too.
 Verification passed
 4,045 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration

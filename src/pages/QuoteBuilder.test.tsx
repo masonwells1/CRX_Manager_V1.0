@@ -7,7 +7,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, dirtyStates, mockGenerateQuotePdf } = vi.hoisted(() => {
+const { mockFrom, mockRpc, mockToast, mockNavigate, dirtyStates, mockGenerateQuotePdf, mockSendEmail } = vi.hoisted(() => {
   return {
     mockFrom: vi.fn(),
     mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
@@ -15,6 +15,7 @@ const { mockFrom, mockRpc, mockToast, mockNavigate, dirtyStates, mockGenerateQuo
     mockNavigate: vi.fn(),
     dirtyStates: [] as boolean[],
     mockGenerateQuotePdf: vi.fn(() => ({ output: () => new Blob(['quote']) })),
+    mockSendEmail: vi.fn(),
   };
 });
 
@@ -135,7 +136,7 @@ vi.mock('../lib/notificationTriggers', () => ({ notifyLargeOrder: vi.fn(), notif
 vi.mock('../lib/metrics', () => ({ trackBusinessEvent: vi.fn() }));
 vi.mock('../lib/dateUtils', () => ({ localDatePlusDays: vi.fn(() => '2026-04-15'), localToday: vi.fn(() => '2026-03-16') }));
 vi.mock('../lib/quotePdf', () => ({ downloadQuotePdf: vi.fn(), generateQuotePdf: mockGenerateQuotePdf }));
-vi.mock('../lib/emailService', () => ({ sendEmail: vi.fn(), pdfToBase64: vi.fn(), buildEmailHtml: vi.fn(() => '<p>test</p>') }));
+vi.mock('../lib/emailService', () => ({ sendEmail: mockSendEmail, pdfToBase64: vi.fn(), buildEmailHtml: vi.fn(() => '<p>test</p>') }));
 vi.mock('../lib/rupCompliance', () => ({
   checkRUPCompliance: vi.fn().mockResolvedValue({ compliant: true, warnings: [], rupProductNames: [] }),
 }));
@@ -236,6 +237,7 @@ describe('QuoteBuilder', () => {
     dirtyStates.length = 0;
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+    mockSendEmail.mockResolvedValue({ deduplicated: false });
   });
 
   it('renders the Quote Builder heading for a new quote', async () => {
@@ -797,5 +799,73 @@ describe('QuoteBuilder', () => {
       p_quote_payload: expect.objectContaining({ row_version_expected: 9 }),
     })));
     expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
+  });
+
+  it('does not email a local PDF when the frozen quote token cannot be confirmed', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (++quoteReads <= 2 ? quote : { row_version: 9 })
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', email: 'grower@example.com', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockResolvedValue({ data: { version_number: 1, status: 'created' }, error: null });
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Email to Grower' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('save-protection version could not be confirmed'),
+    ));
+    expect(mockSendEmail).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalledWith('success', expect.stringContaining('Quote emailed'));
+  });
+
+  it('stops Book as Order when mark-presented cannot confirm the frozen quote token', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (++quoteReads <= 3 ? quote : { row_version: 10 })
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'save_quote'
+        ? { data: { quote_id: quote.id, row_version: 8 }, error: null }
+        : name === 'create_quote_version'
+          ? { data: { version_number: 1, status: 'created' }, error: null }
+          : { data: null, error: null },
+    ));
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Book as Order' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Book as Order' })[1]);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('save-protection version could not be confirmed'),
+    ));
+    expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything());
+    expect(mockToast).not.toHaveBeenCalledWith('success', expect.stringContaining('marked as presented'));
   });
 });

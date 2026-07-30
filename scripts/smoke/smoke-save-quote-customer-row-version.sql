@@ -39,8 +39,10 @@ BEGIN
     jsonb_build_object('product_id', v_product, 'calc_mode', 'units_direct', 'total_units_needed', 2, 'price_per_unit', 999, 'current_cost', 999, 'sort_order', 0))));
 
   -- New quote and exact idempotent replay: creation remains token-free and
-  -- returns the original result instead of another quote.
-  v_q := public.save_quote(NULL, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1), v_sections, v_admin, 'rv-quote-create-' || v_suffix);
+  -- returns the original result instead of another quote. Keep this fixture
+  -- planned so the exact token assertions also exercise the full planned-hold
+  -- synchronization helper chain.
+  v_q := public.save_quote(NULL, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1, 'is_planned', true), v_sections, v_admin, 'rv-quote-create-' || v_suffix);
   v_quote := (v_q->>'quote_id')::uuid;
   v_q_replay := public.save_quote(NULL, jsonb_build_object('quote_number', 'ignored-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1), '[]'::jsonb, v_admin, 'rv-quote-create-' || v_suffix);
   IF v_q_replay IS DISTINCT FROM v_q OR (SELECT count(*) FROM quotes WHERE id = v_quote) <> 1 THEN
@@ -49,8 +51,10 @@ BEGIN
   SELECT row_version INTO v_quote_before FROM quotes WHERE id = v_quote;
   -- The insert starts at the column default (1), then the one consolidated
   -- header/totals UPDATE advances it exactly once.
-  IF v_quote_before <> 2 OR (v_q->>'row_version')::bigint <> v_quote_before THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: new quote row_version %, expected returned token 2 after one consolidated update', v_quote_before;
+  IF v_quote_before <> 2
+     OR (v_q->>'row_version')::bigint <> v_quote_before
+     OR NOT (SELECT is_planned FROM quotes WHERE id = v_quote) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: new planned quote row_version %, expected returned token 2 after one consolidated update and planned-hold sync', v_quote_before;
   END IF;
 
   -- Fresh existing-row save proves header/sections/items and server math still

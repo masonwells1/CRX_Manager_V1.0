@@ -1854,13 +1854,17 @@ export default function QuoteBuilder() {
         if (freezeErr) throw freezeErr;
         const freezeResult = assertRpcResult<{ status?: string }>(freezeVer, 'create_quote_version');
         setStatus('sent');
-        await refreshQuoteRowVersionAfterMutation(
+        const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(
           quoteId,
           previousRowVersion,
           previousRowVersion === null ? null : previousRowVersion + (freezeResult.status === 'duplicate' ? 0 : 1),
           'sent',
         );
         fetchVersions();
+        // The snapshot/status change committed, but a missing or jumped token
+        // means the local lines may no longer match that frozen snapshot. Never
+        // send the locally rendered PDF until a reload proves what was frozen.
+        if (!rowVersionConfirmed) return;
       }
       // Same rich (download) PDF the customer would receive.
       const pdfData = {
@@ -2007,7 +2011,10 @@ export default function QuoteBuilder() {
       if (rowVersionConfirmed) {
         toast('success', `Quote marked as presented (V${ver.version_number})`);
       }
-      return true;
+      // Book-as-Order chains from this boolean. A committed sent transition
+      // with an unconfirmed token must stop before customer/order conversion,
+      // including during the supported pre-migration compatibility window.
+      return rowVersionConfirmed;
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'create_quote_version' } });
       toast('error', 'Failed to mark as presented');
