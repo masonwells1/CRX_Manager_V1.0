@@ -35,14 +35,24 @@
 --   collides with formulation codes; today it matches zero product names, so
 --   including it would buy nothing and cost false positives later.
 --
--- * Every alternative is anchored with \m (start-of-word). Without it, "no" would
---   match inside an ordinary word and a name like "MONO RETURN VALVE" would be
---   flagged. The phrase set covers both word orders of the final-sale wording
---   ("FINAL SALE" and "ALL SALES FINAL") and "NON RETURN" separated by a space,
---   a hyphen, or nothing at all. Regression cases for the intended phrase set —
---   and for the near-miss false positives — are asserted in
+-- * Every alternative is anchored with \m (start-of-word). Without it, "no"
+--   matches inside an ordinary word and a name ending "...NO RETURN" would be
+--   claimed by any word merely ending in "no". The phrase set covers both word
+--   orders of the final-sale wording ("FINAL SALE", "ALL SALES FINAL", and
+--   "ALL SALES ARE FINAL") and NO/NON RETURN separated by a space, a hyphen, or
+--   nothing at all.
+--
+-- * "NON-RETURN VALVE" is excluded by a negative lookahead. A non-return valve
+--   (equivalently a check valve) is a real piece of spray equipment, and its
+--   name is a hydraulic description, not a merchandise policy. Without the
+--   exclusion a perfectly returnable valve would be flagged forever, and the
+--   only way to quiet it would be to misclassify it or allowlist it.
+--
+--   Regression cases for the intended phrase set — and for the near-miss false
+--   positives — are asserted in
 --   src/__tests__/predicate-product-name-vs-return-policy.test.ts, which reads
---   this pattern out of this file so the two cannot drift apart.
+--   this pattern out of this file so the two cannot drift apart. Those fixtures
+--   are synthetic strings, never real catalog names (see CONTAINMENT below).
 --
 -- * Inactive products are in scope. is_active = false only stops new sales; a
 --   return can still be filed against a product sold before it was retired.
@@ -60,7 +70,7 @@ WITH flagged AS (
          p.return_policy,
          p.is_active
     FROM public.products p
-   WHERE p.product_name ~* '(\mno[[:space:][:punct:]]*returns?\M)|(\mnon[[:space:][:punct:]]*return(s|able)?\M)|(\mnot[[:space:][:punct:]]*returnable\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*final\M)'
+   WHERE p.product_name ~* '(\m(no|non)[[:space:][:punct:]]*return(s|able)?\M(?![[:space:][:punct:]]*valves?\M))|(\mnot[[:space:][:punct:]]*returnable\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*(are[[:space:][:punct:]]*)?final\M)'
 )
 SELECT 'products:' || f.id::text AS violation_key,
        'product name asserts it cannot be returned but return_policy is '

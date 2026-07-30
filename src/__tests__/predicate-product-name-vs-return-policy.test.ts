@@ -39,34 +39,44 @@ function toJsRegExp(posix: string): RegExp {
   return new RegExp(translated, 'i');
 }
 
+// CONTAINMENT: every fixture below is a SYNTHETIC string. The repo is public
+// and the predicate's own header forbids real product names or supplier SKUs in
+// tracked files, so these must never be copied out of the live catalog — not
+// even as "realistic" examples. "ITEM <n>" carries the same test signal.
 const MUST_MATCH: Array<[string, string]> = [
-  ['NO RETURN', 'ROUNDUP POWERMAX NO RETURN'],
-  ['NO-RETURN, hyphenated', 'ATRAZINE 4L NO-RETURN'],
-  ['NORETURN, run together', 'ATRAZINE 4L NORETURN'],
-  ['NO RETURNS, plural', 'DICAMBA NO RETURNS'],
-  ['NON RETURN, space separated', 'GLYPHO 41 NON RETURN'],
-  ['NON-RETURNABLE', 'PARAQUAT NON-RETURNABLE'],
-  ['NONRETURNABLE', 'PARAQUAT NONRETURNABLE'],
-  ['NOT RETURNABLE', 'UREA 46 NOT RETURNABLE'],
+  ['NO RETURN', 'ITEM ONE NO RETURN'],
+  ['NO-RETURN, hyphenated', 'ITEM TWO NO-RETURN'],
+  ['NORETURN, run together', 'ITEM THREE NORETURN'],
+  ['NO RETURNS, plural', 'ITEM FOUR NO RETURNS'],
+  ['NON RETURN, space separated', 'ITEM FIVE NON RETURN'],
+  ['NON-RETURNABLE', 'ITEM SIX NON-RETURNABLE'],
+  ['NONRETURNABLE', 'ITEM SEVEN NONRETURNABLE'],
+  ['NOT RETURNABLE', 'ITEM EIGHT NOT RETURNABLE'],
   // The separator class is [[:space:][:punct:]], which already covers the
   // hyphen — an automated reviewer read it as whitespace-only, so the
   // hyphenated form is pinned here rather than left to a comment thread.
-  ['NOT-RETURNABLE, hyphenated', 'UREA 46 NOT-RETURNABLE'],
-  ['NOTRETURNABLE, run together', 'UREA 46 NOTRETURNABLE'],
-  ['FINAL SALE', 'CLETHODIM FINAL SALE'],
-  ['ALL SALES FINAL, reversed word order', 'CLETHODIM ALL SALES FINAL'],
-  ['lower case still matches', 'clethodim no return'],
+  ['NOT-RETURNABLE, hyphenated', 'ITEM NINE NOT-RETURNABLE'],
+  ['NOTRETURNABLE, run together', 'ITEM TEN NOTRETURNABLE'],
+  ['FINAL SALE', 'ITEM ELEVEN FINAL SALE'],
+  ['ALL SALES FINAL, reversed word order', 'ITEM TWELVE ALL SALES FINAL'],
+  ['ALL SALES ARE FINAL, with the filler verb', 'ITEM THIRTEEN ALL SALES ARE FINAL'],
+  ['lower case still matches', 'item fourteen no return'],
 ];
 
 // Near misses. Each of these contains the letters of a trigger phrase but does
 // not assert a no-return policy; flagging one would send Mason chasing a
 // product that is perfectly returnable.
 const MUST_NOT_MATCH: Array<[string, string]> = [
-  ['"no" inside another word', 'MONO RETURN VALVE KIT'],
-  ['"no" inside another word, plural', 'TECHNO RETURNS SPRAYER'],
-  ['ordinary product name', 'GRAZON NEXT HL 2.5 GAL'],
-  ['bare NR formulation code is deliberately out of scope', 'LIBERTY 280 NR'],
+  ['"no" inside another word', 'MONO RETURN COMPONENT'],
+  ['"no" inside another word, plural', 'TECHNO RETURNS UNIT'],
+  ['ordinary product name', 'ITEM FIFTEEN 2.5 GAL'],
+  ['bare NR formulation code is deliberately out of scope', 'ITEM SIXTEEN 280 NR'],
   ['the word return alone is not an assertion', 'RETURN FREIGHT SURCHARGE'],
+  // A non-return valve is spray equipment; the phrase describes how it moves
+  // fluid, not whether Crop RX will take it back.
+  ['NON-RETURN VALVE is equipment, not a policy', 'NON-RETURN VALVE KIT'],
+  ['NON RETURN VALVE, unhyphenated', 'ITEM SEVENTEEN NON RETURN VALVE'],
+  ['NON-RETURN VALVES, plural', 'NON-RETURN VALVES 3/4 IN'],
 ];
 
 describe('product-name-vs-return-policy predicate pattern', () => {
