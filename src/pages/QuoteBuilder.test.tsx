@@ -865,6 +865,43 @@ describe('QuoteBuilder', () => {
     expect(mockRpc.mock.calls.filter(([name]) => name === 'create_quote_version')).toHaveLength(2);
   });
 
+  it('creates and confirms a new version before emailing an already-sent quote after remount', async () => {
+    const fixture = makeQuoteFixture('draft', 7);
+    const { product, section, item } = fixture;
+    const quote = { ...fixture.quote, status: 'sent' };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (++quoteReads <= 2 ? quote : { ...quote, row_version: 8 })
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', email: 'grower@example.com', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(
+      name === 'create_quote_version'
+        ? { data: { version_number: 2, status: 'created' }, error: null }
+        : { data: null, error: null },
+    ));
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Email to Grower' }));
+
+    await waitFor(() => expect(mockSendEmail).toHaveBeenCalledTimes(1));
+    expect(mockRpc).toHaveBeenCalledWith('create_quote_version', expect.objectContaining({
+      p_quote_id: quote.id,
+      p_method: 'emailed',
+    }));
+    expect(mockToast).toHaveBeenCalledWith('success', expect.stringContaining('Quote emailed'));
+  });
+
   it('stops Book as Order when mark-presented cannot confirm the frozen quote token', async () => {
     const { quote, product, section, item } = makeQuoteFixture('draft', 7);
     let quoteReads = 0;

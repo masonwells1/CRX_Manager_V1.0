@@ -43,8 +43,9 @@ conversion. A persistent reload-required latch also blocks retry clicks and
 direct conversion until a complete stable reload clears it; abort messages say
 plainly that the email was not sent or the order was not created. Numeric-token
 mode survives recovery, so a post-migration tab cannot accept a tokenless reload.
-An aborted email also requires a new confirmed version snapshot after reload;
-the app cannot send the current PDF against the older mismatched snapshot. The
+Every email, including an already-sent Quote after a tab remount, now creates
+and confirms a version snapshot before sending the PDF. The version key is
+scoped to the signed-in user and Quote, so it cannot replay across Quotes. The
 rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
 planned-hold synchronization helper chain too.
 Verification passed

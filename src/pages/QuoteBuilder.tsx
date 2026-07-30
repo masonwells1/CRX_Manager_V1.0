@@ -221,7 +221,12 @@ export default function QuoteBuilder() {
   const saveTemplateIdem = useIdempotencyKey('save_quote_template', profile?.id || '');
   const fromTemplateIdem = useIdempotencyKey('create_quote_from_template', profile?.id || '');
   const rolloverIdem = useIdempotencyKey('rollover_quote_to_season', profile?.id || '');
-  const createVersionIdem = useIdempotencyKey('create_quote_version', profile?.id || '');
+  // Version idempotency is quote-specific. Reusing one key after navigating
+  // between Quotes could otherwise replay a version created for another Quote.
+  const createVersionIdem = useIdempotencyKey(
+    'create_quote_version',
+    `${profile?.id || ''}:${id || ''}`,
+  );
   const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
   const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
   const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
@@ -251,10 +256,6 @@ export default function QuoteBuilder() {
   // Once this tab has observed a numeric token, recovery must never downgrade
   // it to the frontend-first legacy tokenless contract.
   const quoteNumericVersionRequiredRef = useRef(false);
-  // If an email freeze committed but could not be confirmed, a reload alone is
-  // insufficient: the reloaded Quote must be frozen into a new version before
-  // its current local PDF can be sent.
-  const quoteEmailRefreezeRequiredRef = useRef(false);
   const [staleSaveOpen, setStaleSaveOpen] = useState(false);
 
   const [converting, setConverting] = useState(false);
@@ -371,8 +372,8 @@ export default function QuoteBuilder() {
   const canEdit = ['draft', 'revised'].includes(currentStatus);
   // Codex round-7 P2: include 'sent' so a frozen sent quote can still be re-emailed —
   // "Preview Quote" is the only route to the Email-to-Grower button, and
-  // handleEmailToGrower explicitly supports re-sending an already-sent quote (it only
-  // freezes a version on the FIRST send from draft/revised).
+  // handleEmailToGrower explicitly supports re-sending an already-sent quote and
+  // creates a newly confirmed version snapshot before every send.
   const canSend = ['draft', 'revised', 'sent'].includes(currentStatus);
   const canConvert = ['sent', 'revised'].includes(currentStatus);
   // Both whole conversion and draw_down_quote accept sent/revised bookings.
@@ -1866,52 +1867,41 @@ export default function QuoteBuilder() {
     if (!profile) { toast('error', 'You must be signed in to send a quote.'); return; }
     setEmailingGrower(true);
     try {
-      // #2 (Codex P1): FREEZE the quote before sending so the grower's PDF is a
-      // permanent, reproducible record. On the FIRST email of an open quote
-      // (draft/revised) snapshot a version + move it to 'sent'; re-emailing a 'sent'
-      // quote just re-sends (already frozen). Snapshotting only changes status, not
-      // line items, so the PDF generated below is identical.
-      if (status === 'draft' || status === 'revised' || quoteEmailRefreezeRequiredRef.current) {
-        // create_quote_version snapshots the version AND atomically sets
-        // quotes.status='sent' (single RPC). Codex round-8 P2: NO separate
-        // saveQuote('sent') — that was redundant (the isDirty guard above already
-        // ensured no unsaved edits) and, if it failed after the version was created,
-        // left an orphan version + retried into a second one. Keep the version idem
-        // key UNRESET until the whole send succeeds so a retry after an email failure
-        // replays the SAME key (create_quote_version returns 'duplicate'), never a dup.
-        // If create_quote_version itself fails, freezeErr throws → catch aborts the
-        // send, preserving the frozen-record guarantee (round-4 P1).
-        const freezeVerKey = createVersionIdem.getKey();
-        const previousRowVersion = quoteRowVersionRef.current;
-        const { data: freezeVer, error: freezeErr } = await supabase.rpc('create_quote_version', {
-          p_quote_id: quoteId,
-          p_performed_by: profile.id,
-          p_method: 'emailed',
-          p_idempotency_key: freezeVerKey,
-        });
-        if (freezeErr) throw freezeErr;
-        const freezeResult = assertRpcResult<{ status?: string }>(freezeVer, 'create_quote_version');
-        setStatus('sent');
-        const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(
-          quoteId,
-          previousRowVersion,
-          previousRowVersion === null ? null : previousRowVersion + (freezeResult.status === 'duplicate' ? 0 : 1),
-          'sent',
-        );
-        fetchVersions();
-        // The snapshot/status change committed, but a missing or jumped token
-        // means the local lines may no longer match that frozen snapshot. Never
-        // send the locally rendered PDF until a reload proves what was frozen.
-        if (!rowVersionConfirmed) {
-          quoteEmailRefreezeRequiredRef.current = true;
-          // The first snapshot committed. A retry after reload must use a new
-          // key so it creates a new snapshot of the now-authoritative Quote
-          // instead of replaying the mismatched frozen version.
-          createVersionIdem.resetKey();
-          toast('error', 'The quote was frozen, but the email was NOT sent. Reload the quote, then email it again.');
-          return;
-        }
-        quoteEmailRefreezeRequiredRef.current = false;
+      // #2 (Codex P1): FREEZE the current saved Quote before every email so the
+      // grower's PDF always has a confirmed, reproducible version record. This
+      // includes re-emailing an already-sent Quote after a tab remount; an
+      // in-memory retry latch cannot protect that path. create_quote_version
+      // snapshots the version and atomically sets status='sent'. Keep its
+      // quote-scoped idempotency key until the whole send succeeds so a retry
+      // after a downstream email failure replays the same snapshot.
+      const freezeVerKey = createVersionIdem.getKey();
+      const previousRowVersion = quoteRowVersionRef.current;
+      const { data: freezeVer, error: freezeErr } = await supabase.rpc('create_quote_version', {
+        p_quote_id: quoteId,
+        p_performed_by: profile.id,
+        p_method: 'emailed',
+        p_idempotency_key: freezeVerKey,
+      });
+      if (freezeErr) throw freezeErr;
+      const freezeResult = assertRpcResult<{ status?: string }>(freezeVer, 'create_quote_version');
+      setStatus('sent');
+      const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(
+        quoteId,
+        previousRowVersion,
+        previousRowVersion === null ? null : previousRowVersion + (freezeResult.status === 'duplicate' ? 0 : 1),
+        'sent',
+      );
+      fetchVersions();
+      // The snapshot/status change committed, but a missing or jumped token
+      // means the local lines may no longer match that frozen snapshot. Never
+      // send the locally rendered PDF until a reload proves what was frozen.
+      if (!rowVersionConfirmed) {
+        // A new key makes the next same-tab attempt create and confirm a fresh
+        // snapshot of the reloaded authoritative Quote instead of replaying the
+        // mismatched version. A remount naturally receives a new key too.
+        createVersionIdem.resetKey();
+        toast('error', 'The quote was frozen, but the email was NOT sent. Reload the quote, then email it again.');
+        return;
       }
       // Same rich (download) PDF the customer would receive.
       const pdfData = {
