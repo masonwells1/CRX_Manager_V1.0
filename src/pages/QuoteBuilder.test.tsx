@@ -784,9 +784,10 @@ describe('QuoteBuilder', () => {
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
     let quoteReads = 0;
+    let quoteSaves = 0;
     mockFrom.mockImplementation((table: string) => buildChain({ data: table === 'quotes' ? (++quoteReads <= 2 ? quote : { row_version: 9 }) : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [], error: null }));
     mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote'
-      ? { data: { quote_id: quote.id, row_version: 8 }, error: null }
+      ? { data: { quote_id: quote.id, row_version: ++quoteSaves === 1 ? 8 : 10 }, error: null }
       : { data: { version_number: 1 }, error: null }));
     vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:quote'), revokeObjectURL: vi.fn() });
     renderQuoteBuilder(quote.id);
@@ -806,7 +807,7 @@ describe('QuoteBuilder', () => {
     let quoteReads = 0;
     mockFrom.mockImplementation((table: string) => buildChain({
       data: table === 'quotes'
-        ? (++quoteReads <= 2 ? quote : { row_version: 9 })
+        ? (++quoteReads <= 2 ? quote : { ...quote, status: 'sent', row_version: 9 })
         : table === 'quote_sections'
           ? [section]
           : table === 'quote_items'
@@ -828,8 +829,23 @@ describe('QuoteBuilder', () => {
       'warning',
       expect.stringContaining('save-protection version could not be confirmed'),
     ));
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('email was NOT sent'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Keep editing/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('email was NOT sent'),
+    ));
     expect(mockSendEmail).not.toHaveBeenCalled();
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.stringContaining('Quote emailed'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Quote' }));
+    await waitFor(() => expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
+    await waitFor(() => expect(mockSendEmail).toHaveBeenCalledTimes(1));
   });
 
   it('stops Book as Order when mark-presented cannot confirm the frozen quote token', async () => {
@@ -864,6 +880,17 @@ describe('QuoteBuilder', () => {
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'warning',
       expect.stringContaining('save-protection version could not be confirmed'),
+    ));
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('order was not created'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Keep editing/i }));
+    const retryBookButtons = screen.getAllByRole('button', { name: 'Book as Order' });
+    fireEvent.click(retryBookButtons[retryBookButtons.length - 1]);
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('order was not created'),
     ));
     expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything());
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.stringContaining('marked as presented'));

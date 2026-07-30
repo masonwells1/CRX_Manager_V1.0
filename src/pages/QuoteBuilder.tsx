@@ -245,6 +245,9 @@ export default function QuoteBuilder() {
   const [saving, setSaving] = useState(false);
   // Kept locally rather than in generated DB types until post-apply regeneration.
   const quoteRowVersionRef = useRef<number | null>(null);
+  // Unlike the dialog's open/closed state, this latch survives "Keep Editing".
+  // Only a complete, stable Quote reload may clear it.
+  const quoteVersionRecoveryRequiredRef = useRef(false);
   const [staleSaveOpen, setStaleSaveOpen] = useState(false);
 
   const [converting, setConverting] = useState(false);
@@ -598,6 +601,8 @@ export default function QuoteBuilder() {
 
   const clearQuoteRowVersionWithRefreshWarning = useCallback((action: string) => {
     quoteRowVersionRef.current = null;
+    quoteVersionRecoveryRequiredRef.current = true;
+    setStaleSaveOpen(true);
     toast('warning', `The quote was ${action}, but its save-protection version could not be confirmed. Refresh before editing, revising, or converting it.`);
   }, [toast]);
 
@@ -613,6 +618,7 @@ export default function QuoteBuilder() {
     // The direct lifecycle update committed, but a jumped/missing token could
     // belong to another writer. Do not adopt it: preserve local edits and make
     // the next whole-record save fail closed until the operator reloads.
+    quoteVersionRecoveryRequiredRef.current = true;
     setStaleSaveOpen(true);
     toast('warning', `The quote was ${action}, but another edit may have completed at the same time. Your current edits were kept; reload before saving, revising, or converting it.`);
     return false;
@@ -767,6 +773,7 @@ export default function QuoteBuilder() {
     // The complete snapshot is now known-good. Install its related form state
     // together so React never observes an error-path partial reload.
     quoteRowVersionRef.current = finalRowVersion;
+    quoteVersionRecoveryRequiredRef.current = false;
     setQuoteId(q.id);
     setQuoteNumber(q.quote_number);
     setCustomerId(q.customer_id);
@@ -1354,6 +1361,7 @@ export default function QuoteBuilder() {
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
           || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)) {
+          quoteVersionRecoveryRequiredRef.current = true;
           setStaleSaveOpen(true);
           return null;
         }
@@ -1820,6 +1828,11 @@ export default function QuoteBuilder() {
   // The Edge Function records the send in email_log and dedupes on the idempotency key.
   const handleEmailToGrower = async () => {
     if (!quoteId) { toast('warning', 'Save the quote before emailing it.'); return; }
+    if (quoteVersionRecoveryRequiredRef.current) {
+      setStaleSaveOpen(true);
+      toast('error', 'The email was NOT sent. Reload the quote, then email it again.');
+      return;
+    }
     // Codex P1: an existing quote with unsaved edits still has quoteId, so the
     // emailed PDF would render local edits the DB + version history don't have —
     // the grower would get an unreproducible quote. Block until saved.
@@ -1864,7 +1877,10 @@ export default function QuoteBuilder() {
         // The snapshot/status change committed, but a missing or jumped token
         // means the local lines may no longer match that frozen snapshot. Never
         // send the locally rendered PDF until a reload proves what was frozen.
-        if (!rowVersionConfirmed) return;
+        if (!rowVersionConfirmed) {
+          toast('error', 'The quote was frozen, but the email was NOT sent. Reload the quote, then email it again.');
+          return;
+        }
       }
       // Same rich (download) PDF the customer would receive.
       const pdfData = {
@@ -2261,6 +2277,11 @@ export default function QuoteBuilder() {
   };
 
   const handleConvertToOrder = async () => {
+    if (quoteVersionRecoveryRequiredRef.current) {
+      setStaleSaveOpen(true);
+      toast('error', 'The order was not created. Reload the quote, then try Convert to Order again.');
+      return;
+    }
     // Guardrail: check for stale quote before converting
     if (quoteCreatedAt) {
       const fresh = checkStaleQuote(quoteCreatedAt);
@@ -2500,6 +2521,11 @@ export default function QuoteBuilder() {
   const handleBookAsOrder = async () => {
     setBookingAsOrder(true);
     try {
+      if (quoteVersionRecoveryRequiredRef.current) {
+        setStaleSaveOpen(true);
+        toast('error', 'The order was not created. Reload the quote, then try Book as Order again.');
+        return;
+      }
       // A lost mark-sent response leaves the DB sent while the UI thinks draft —
       // resume the chain from the true state (push-gate P2).
       let alreadyMarkedSent = false;
@@ -2523,7 +2549,12 @@ export default function QuoteBuilder() {
 
       if (!alreadyMarkedSent) {
         const markedSent = await handleMarkPresented();
-        if (!markedSent) return;
+        if (!markedSent) {
+          if (quoteVersionRecoveryRequiredRef.current) {
+            toast('error', 'The quote was frozen, but the order was not created. Reload the quote, then try Book as Order again.');
+          }
+          return;
+        }
       }
       setConfirmBookAsOrderOpen(false);
       await handleConvertToOrder();
