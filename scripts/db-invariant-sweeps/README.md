@@ -42,11 +42,35 @@ This runner makes those queries **standing executable gates** that run **before*
 | `commission-admin-active.sql` | commission payment admin RLS uses the active-aware `is_admin()` helper | **zero** (missing or role-only policies are violations) |
 | `returns-lifecycle-rpc-owned.sql` | return lifecycle fields, creation, and line mutations stay behind canonical RPCs/triggers | **zero** (catches direct `returns` INSERT policy/grant drift and direct `return_items` mutation policy/grant drift) |
 | `save-field-actor-binding.sql` | exact reviewed `save_field(uuid,jsonb,jsonb,uuid,text)` actor-binding body | **zero** (missing signature or any body drift fails closed) |
+| `product-name-vs-return-policy.sql` | a product whose **name** asserts it cannot be returned is classified `return_policy = 'no_return'` | **zero** (a business-**data** predicate — emits the product **id** only, never the name or SKU; see *Output containment* below) |
 
 The `save_field` predicate also has a disposable mutation proof that deliberately installs unsafe,
 late-guard, comment-only, and altered bodies and requires the predicate to fail closed. Run both
 that guard-of-the-guard and the rollback behavior smoke with
 `npm run proof:save-field-actor`.
+
+## Output containment (the repo is public)
+
+`CRX_Manager_V1.0` is a **public** GitHub repository. Predicates split into two groups by what their
+output contains, and the difference decides where that output may be pasted:
+
+- **Catalog predicates** read `pg_proc` / `pg_policy` / `pg_constraint` and emit function and policy
+  identities. Their output is safe to paste into a tracked file, an issue, or a PR comment.
+- **Business-data predicates** read customer, invoice, quote, commission, and product rows. Several
+  of them deliberately emit human-readable business detail so a finding is actionable — for example
+  `fin-commission-split-sum.sql` emits a customer `farm_name` and the raw `commission_split` JSON,
+  and `fin-invoice-balance-identity.sql` emits customer ids, invoice numbers, and cent amounts. That
+  is correct for triage and **wrong for anywhere public**. Today the business-data predicates are
+  `fin-allocations-bounded`, `fin-ar-statement-balance`, `fin-commission-split-sum`,
+  `fin-invoice-balance-identity`, `fin-prepay-balance`, `fin-quote-override-survival`, and
+  `product-name-vs-return-policy`.
+
+**Never paste raw business-data sweep output into a tracked file, a commit message, an issue, or a
+PR comment.** Read it in the session, act on it, and record only the `violation_key` — and only when
+that key is an opaque id. `product-name-vs-return-policy` is written so its key always is one: it
+projects the product id and never the name or SKU, enforced by a test that audits the projected
+expressions themselves (`src/__tests__/predicate-product-name-vs-return-policy.test.ts`). The other
+business-data predicates carry no such guard, so treat their whole output as private.
 
 ## When it runs
 
