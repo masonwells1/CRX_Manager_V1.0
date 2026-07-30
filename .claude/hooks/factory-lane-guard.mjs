@@ -107,6 +107,7 @@ function isSafeGitRead(command) {
 const SAFE_SHELL_READ_RE = /^\s*(?:findstr|where(?:\.exe)?|ls|dir|pwd|Get-Location|Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|Measure-Object)(?:\s+[^;&|<>]*)?\s*$/i;
 const SAFE_VERSION_RE = /^\s*(?:node|npm|gh|git)(?:\.exe|\.cmd)?\s+--version\s*$/i;
 const SECRET_PATH_RE = /(?:^|[\s\\/'"])(?:\.env(?:\.|$)|[^\s\\/'"]*\.(?:pem|key|p12|pfx)|credentials?(?:\.|$)|secrets?(?:\.|$)|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.|$))/i;
+const POWERSHELL_PROVIDER_PATH_RE = /(?:^|[\s"'`])(?:[A-Za-z_][\w.-]*::|[A-Za-z_][\w.-]{1,}:|[A-Za-z]:(?![\\/]))/i;
 
 function isShellMutation(toolName, toolInput) {
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return false;
@@ -255,6 +256,9 @@ function governedReadBlockReason(toolName, toolInput, projectDir) {
   if (!SAFE_SHELL_READ_RE.test(command)) return "";
   if (SECRET_PATH_RE.test(command.replace(/\\/g, "/"))) {
     return "secret-bearing paths are not readable in a factory lane";
+  }
+  if (POWERSHELL_PROVIDER_PATH_RE.test(command)) {
+    return "PowerShell provider paths are not readable in a factory lane";
   }
   if (/(?:^|[\s\\/])\.\.(?:[\\/]|$)|[$%~*?[\]{}()]|\\\\/.test(command)) {
     return "shell reads must use stable paths inside the worktree";

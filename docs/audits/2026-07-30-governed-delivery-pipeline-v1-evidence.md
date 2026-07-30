@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `886fa4591dd72c82d9e8c8f0b09fd3c8b7355053`
-State: rebased onto current `origin/main`; third Sol/high publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; fourth Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -111,7 +111,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 272 focused assertions after third Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 278 focused assertions after fourth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -254,6 +254,14 @@ recursive force-delete cleanup command.
   preserves cross-tool operation only through an explicit owner-chat transfer event, constrains
   reads and added content, and gives runtime harnesses only a sanitized disposable Git snapshot.
   Fresh exact-commit acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `2e9ef43fec1761693e416257322c65fa7c3ff192` returned `BLOCKERS`: PowerShell's non-filesystem
+  providers remained reachable through otherwise read-only `Get-Content`, `Get-Item`, and
+  `Get-ChildItem` commands, so `Env:` could expose inherited credentials without touching a
+  secret-shaped filesystem path. The repair rejects provider-qualified names, named PowerShell
+  drives, and drive-relative paths before resolving any shell read. Regression coverage includes
+  `Env:`, `Registry::`, `HKCU:`, `Cert:`, and `C:relative` forms. Fresh exact-commit acceptance is
+  still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

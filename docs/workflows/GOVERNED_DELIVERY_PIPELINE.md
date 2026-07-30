@@ -102,7 +102,8 @@ fingerprint before the ticket or morning decision is re-presented there.
   injection, and unknown flags are mutations. Unknown non-shell tools default to opaque execution;
   only explicit structured read-only tools are exempt. Structured reads and simple shell reads must
   stay inside the worktree and cannot target ignored or secret-bearing paths; dynamic, parent-relative,
-  wildcard shell paths and secret-shaped added content fail closed. Shell `rg` is not exempt because
+  wildcard shell paths, PowerShell providers/drives, and secret-shaped added content fail closed.
+  Shell `rg` is not exempt because
   its preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
 - The board binds only to loopback and is read-only.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.

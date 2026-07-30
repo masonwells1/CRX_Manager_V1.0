@@ -398,6 +398,11 @@ approval/fingerprint). Governed reads now stay inside tracked/non-secret worktre
 dynamic shell reads and secret-shaped additions fail closed, and branch-controlled harness code sees
 only a new sanitized Git repository inside its disposable volume—not shared Git objects, config,
 other worktrees, or factory state.
+A fourth exact-SHA Sol/high acceptance found that nominally read-only PowerShell commands could
+still traverse non-filesystem providers such as `Env:`, exposing inherited credentials without a
+secret-shaped path. Governed shell reads now reject provider-qualified names, named PowerShell
+drives, and drive-relative paths; focused regressions cover environment, registry, certificate,
+and relative-drive forms.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

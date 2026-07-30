@@ -149,6 +149,20 @@ function hookOutput(result) {
     tool_name: "PowerShell",
     tool_input: { command: "Get-Content .*" },
   }), /shell reads must use stable paths/i, "wildcard shell reads cannot sweep ignored secrets");
+  for (const command of [
+    "Get-Content Env:GITHUB_TOKEN",
+    "Get-ChildItem Env:",
+    "Get-Item 'HKCU:\\Software'",
+    "Get-ChildItem Registry::HKEY_CURRENT_USER",
+    "Get-ChildItem Cert:\\CurrentUser\\My",
+    "Get-Content C:relative-path.txt",
+  ]) {
+    denied(run(laneHook, stateDir, {
+      thread_id: sessionId,
+      tool_name: "PowerShell",
+      tool_input: { command },
+    }), /PowerShell provider paths are not readable/i, `factory intent rejects PowerShell provider read: ${command}`);
+  }
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Read",
