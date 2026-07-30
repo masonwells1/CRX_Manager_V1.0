@@ -10,6 +10,9 @@ const migration = readFileSync(join(
 ), 'utf8').replace(/\r\n/g, '\n');
 const source = (...parts: string[]) => readFileSync(join(root, ...parts), 'utf8')
   .replace(/\r\n/g, '\n');
+const smokeSpecs = JSON.parse(source('scripts', 'smoke', 'smoke-specs.json')) as {
+  specs: Record<string, { chain: string; covers: string[] }>;
+};
 
 function body(name: string) {
   const start = migration.indexOf(`CREATE OR REPLACE FUNCTION public.${name}`);
@@ -26,7 +29,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(helper).toContain('SELECT DISTINCT');
     expect(helper).toContain('ORDER BY 1');
     expect(migration).toContain('REVOKE ALL ON FUNCTION public._lock_accounting_months(date[], boolean)');
-    expect(migration).toContain('FROM PUBLIC, anon, authenticated;');
+    expect(migration).toContain('FROM PUBLIC, anon, authenticated, service_role;');
   });
 
   it('requires accounting_periods rows to be exactly one calendar month', () => {
@@ -42,17 +45,21 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(lock).toBeLessThan(close.indexOf('INSERT INTO public.accounting_periods'));
   });
 
-  it('takes the shared month lock before check_period_open reads a closed period', () => {
+  it('keeps the central closed-period reader narrow and tightly pinned', () => {
     const check = body('check_period_open(');
-    expect(check.indexOf('_lock_accounting_months(ARRAY[p_date], false)'))
-      .toBeLessThan(check.indexOf('FROM public.accounting_periods'));
+    expect(check).toContain("SET search_path = ''");
+    expect(check).not.toContain('_lock_accounting_months');
   });
 
   it('holds writer shared locks across the actual period checks in safe order', () => {
     const create = body('create_vendor_bill(');
     expect(create.indexOf('FROM public.vendors')).toBeLessThan(create.indexOf('check_period_open(p_bill_date)'));
     expect(create.indexOf('FROM public.purchase_orders')).toBeLessThan(create.indexOf('check_period_open(p_bill_date)'));
-    expect(create.indexOf('check_period_open(p_bill_date)')).toBeLessThan(create.indexOf('INSERT INTO public.vendor_bills'));
+    const createLock = create.indexOf('_lock_accounting_months(ARRAY[p_bill_date], false)');
+    const createCheck = create.indexOf('check_period_open(p_bill_date)');
+    expect(createLock).toBeGreaterThan(create.indexOf('FROM public.purchase_orders'));
+    expect(createLock).toBeLessThan(createCheck);
+    expect(createCheck).toBeLessThan(create.indexOf('INSERT INTO public.vendor_bills'));
 
     const update = body('update_vendor_bill(');
     const row = update.indexOf('FOR UPDATE;');
@@ -64,7 +71,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(oldCheck).toBeLessThan(newCheck);
   });
 
-  it('keeps the restored-schema create/update concurrency proof registered', () => {
+  it('keeps the restored-schema concurrency proof and registered business chain', () => {
     const proof = source(
       'scripts', 'smoke', 'prove-vendor-bill-period-close-concurrency.mjs',
     );
@@ -76,7 +83,13 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS'\)/);
     expect(proof).toContain("classid=73492010");
     expect(proof).toContain("'--network', 'none'");
-    const registry = source('scripts', 'smoke', 'smoke-specs.json');
-    expect(registry).not.toContain('vendor_bill_period_close_lock');
+    const section9 = smokeSpecs.specs.section9_po_ap_high_remediation;
+    expect(section9.chain).toBe('smoke-section9-po-ap-high-remediation.sql');
+    expect(section9.covers).toEqual(expect.arrayContaining([
+      'create_vendor_bill',
+      'update_vendor_bill',
+      'close_accounting_period',
+      'check_period_open',
+    ]));
   });
 });

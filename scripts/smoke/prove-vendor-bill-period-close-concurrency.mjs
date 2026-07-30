@@ -15,7 +15,6 @@ const NAME = `crx-vendor-period-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.141';
 const BASE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATION = path.join(ROOT, 'supabase', 'migrations', '20260730031031_vendor_bill_period_close_lock.sql');
-const SMOKE = path.join(ROOT, 'scripts', 'smoke', 'smoke-vendor-bill-period-close-lock.sql');
 const SIBLING_SMOKES = [
   'smoke-section9-po-ap-high-remediation.sql',
   'smoke-finance-charge-month-dedup.sql',
@@ -100,12 +99,9 @@ try {
 
   sql(`DELETE FROM public.vendor_bills WHERE bill_number='proof-baseline-create'; DELETE FROM public.accounting_periods WHERE period_start='2025-01-01'; DROP TRIGGER proof_pause_bill ON public.vendor_bills; DROP FUNCTION public._proof_pause_bill();`);
   run(['cp', MIGRATION, `${NAME}:/tmp/candidate.sql`]); console.log(applyFile('candidate.sql').stdout);
-  run(['cp', SMOKE, `${NAME}:/tmp/smoke.sql`]);
-  // The candidate must be visibly present before testing its live schedules.
+  // The candidate must be visibly present before the registered business chains
+  // and two-session schedules run.
   assert.equal(scalar(`SELECT count(*) FROM pg_constraint WHERE conrelid='public.accounting_periods'::regclass AND conname='accounting_periods_whole_calendar_month_check'`), '1');
-  const smoke = sql('\\i /tmp/smoke.sql', { fail: true });
-  assert.match(`${smoke.stdout}\n${smoke.stderr}`, /SMOKE_PASS_ROLLBACK/, 'registered rollback smoke did not pass');
-  console.log('SMOKE_PASS_ROLLBACK');
   sql(`INSERT INTO public.products(product_name) VALUES ('[PROOF] sibling smoke product ${process.pid}');`);
   for (const sibling of SIBLING_SMOKES) {
     run(['cp', path.join(ROOT, 'scripts', 'smoke', sibling), `${NAME}:/tmp/${sibling}`]);

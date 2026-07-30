@@ -98,7 +98,10 @@ BEGIN
   END IF;
 
   -- Take this after required business row locks (vendor then optional PO), but
-  -- before notification/audit/idempotency side effects and the bill INSERT.
+  -- before the authoritative period check, notification/audit/idempotency side
+  -- effects, and the bill INSERT. check_period_open stays a narrow reader for
+  -- its many existing callers; this governed writer owns its shared lock.
+  PERFORM public._lock_accounting_months(ARRAY[p_bill_date], false);
   PERFORM public.check_period_open(p_bill_date);
 
   IF p_purchase_order_id IS NOT NULL AND v_po_total_cents > 0 THEN
@@ -192,19 +195,17 @@ END;
 $function$;
 
 REVOKE ALL ON FUNCTION public._lock_accounting_months(date[], boolean)
-  FROM PUBLIC, anon, authenticated;
+  FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.check_period_open(p_date date)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = ''
 AS $function$
 DECLARE
   v_period record;
 BEGIN
-  PERFORM public._lock_accounting_months(ARRAY[p_date], false);
-
   SELECT id, period_start, period_end
     INTO v_period
     FROM public.accounting_periods

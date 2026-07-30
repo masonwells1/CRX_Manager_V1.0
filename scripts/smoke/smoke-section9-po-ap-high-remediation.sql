@@ -22,7 +22,6 @@ DECLARE
   v_secondary_after numeric;
   v_status text;
   v_old_date date := CURRENT_DATE - 400;
-  v_closed_period uuid;
   v_err text;
   v_suffix text := substr(md5(random()::text), 1, 8);
 BEGIN
@@ -370,21 +369,14 @@ BEGIN
   SET bill_date = v_old_date,
       due_date = v_old_date + 30
   WHERE id = v_bill;
-  INSERT INTO public.accounting_periods (
-    period_start,
-    period_end,
-    status,
-    closed_by,
-    closed_at,
-    notes
-  ) VALUES (
-    date_trunc('month', v_old_date)::date,
+  -- Close through the real accounting RPC. This makes the registered PO/AP
+  -- business chain cover close_accounting_period and the update's authoritative
+  -- check_period_open refusal, rather than creating a closed row as a probe.
+  PERFORM public.close_accounting_period(
     (date_trunc('month', v_old_date) + interval '1 month - 1 day')::date,
-    'closed',
     v_admin,
-    now(),
-    '[SMOKE] Section 9 old bill period'
-  ) RETURNING id INTO v_closed_period;
+    'smk-s9-close-old-period-' || v_suffix
+  );
 
   BEGIN
     PERFORM public.update_vendor_bill(
@@ -400,7 +392,7 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err NOT LIKE '%closed%' AND v_err NOT LIKE '%CLOSED%' THEN
+    IF v_err NOT LIKE 'Date % falls in closed accounting period%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong closed-old-period error: %', v_err;
     END IF;
   END;

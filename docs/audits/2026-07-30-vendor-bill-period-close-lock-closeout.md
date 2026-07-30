@@ -9,16 +9,18 @@ month keys, a non-public internal shared/exclusive transaction-lock helper in
 namespace `(73492010, year * 12 + month - 1)`, and re-emits the three current
 authoritative RPC bodies with only the required lock ordering changes.
 
-`create_vendor_bill` locks its vendor and optional purchase order before the
-shared period check. `update_vendor_bill` locks its bill row, then takes the
-deduplicated ascending old/new month locks before both checks. The close takes
-the exclusive lock after authorization, idempotency replay, and month
-validation, but before its invoice completeness scan and upsert. No vendor-bill
-or PO completeness gate was added.
+`create_vendor_bill` locks its vendor and optional purchase order, then takes
+its shared month lock before its authoritative period check.
+`update_vendor_bill` locks its bill row, then takes the deduplicated ascending
+old/new month locks before both checks. The close takes the exclusive lock after
+authorization, idempotency replay, and month validation, but before its invoice
+completeness scan and upsert. No vendor-bill or PO completeness gate was added.
 
-`check_period_open` is deliberately re-emitted with
-`search_path = public, pg_temp`, matching the project `AGENTS.md` hard rule for
-security-definer functions; it is not an accidental body-only change.
+`check_period_open` deliberately remains only the authoritative closed-period
+reader, with its established tighter `search_path = ''`. It does not acquire
+the new advisory lock, so the many unrelated callers do not inherit a new lock
+protocol or broader function contract. The two vendor-bill writers acquire their
+own governed shared locks immediately before calling it.
 
 ## Read-only live preflight already observed
 
@@ -36,9 +38,9 @@ The raw source token scan has 31 `check_period_open` hits. Two are comments
 only: `_save_invoice_scoped_impl` and `enforce_invoice_draft_on_insert`. The 29
 executable calls classify as 26 active/delegating mutators, one read-only
 `preview_finance_charges`, trigger `enforce_delivery_accounting_period`, and
-hard-disabled `apply_remaining_prepayments` (unreachable call). This candidate
-relies on the helper-side shared lock for those existing callers; only the two
-vendor-bill paths need pre-locking because a bill update touches old+new months.
+hard-disabled `apply_remaining_prepayments` (unreachable call). They retain
+their existing reader-only protocol. Only the two governed vendor-bill writers
+need the new pre-lock because an update can touch both its old and new months.
 
 Direct `accounting_periods` participants include `close_accounting_period`,
 `reopen_accounting_period`, `check_period_open`, dashboards,
@@ -79,5 +81,24 @@ helper's ascending `ORDER BY` clause. Terminal markers include
 
 After applying the candidate in that disposable database, the runner also
 executes the existing Section 9 PO/AP, finance-charge month-dedup, and delivery
-accounting-period guard rollback chains. Their terminal markers prove the new
-whole-month constraint did not invalidate those registered fixture paths.
+accounting-period guard rollback chains. The Section 9 chain is the registered
+business-chain proof for all four touched RPCs: it creates a real vendor bill,
+closes its historical month through `close_accounting_period`, and proves
+`check_period_open` rejects the subsequent `update_vendor_bill` before a
+rewrite. Its closed-period error assertion is the stable authoritative
+`Date ... falls in closed accounting period` message. The remaining two chains
+prove the new whole-month constraint did not invalidate their registered
+fixture paths.
+
+The fixture-only delivery edits are intentional compatibility repairs for that
+new constraint and the disposable auth harness: every synthetic closed period
+now spans the complete calendar month; the product fixture avoids the unrelated
+governed price column; and each switched simulated actor updates both JWT claim
+representations used by the restored baseline. They add no pricing flag,
+production behavior, permission, or application code change.
+
+The removed catalog-only candidate smoke was not registered because repository
+policy correctly forbids treating an isolated shape probe as a business-chain
+gate. `npm run proof:vendor-bill-period-close` remains the explicit,
+network-isolated two-session lock proof; the registered Section 9 chain supplies
+the rollback-only business proof after apply.
