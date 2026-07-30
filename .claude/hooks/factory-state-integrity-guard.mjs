@@ -32,9 +32,23 @@ try {
 const stateDir = path.resolve(factoryPaths.stateDir);
 const stateNorm = norm(stateDir);
 const permitsNorm = norm(path.resolve(factoryPaths.permitsDir));
-const input = payload?.tool_input || {};
+const rawInput = payload?.tool_input;
+const input = rawInput && typeof rawInput === "object" ? rawInput : {};
 const toolName = String(payload?.tool_name || "");
-const target = norm(input.file_path || input.filePath || input.path || input.target || "");
+const structuredTargets = [
+  input.file_path,
+  input.filePath,
+  input.path,
+  input.target,
+  ...(Array.isArray(input.edits)
+    ? input.edits.flatMap((edit) => [edit?.file_path, edit?.filePath, edit?.path, edit?.target])
+    : []),
+].filter(Boolean).map((value) => norm(value));
+const patchText = typeof rawInput === "string" ? rawInput : String(input.patch || input.input || "");
+for (const match of patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/gm)) {
+  structuredTargets.push(norm(match[1].trim()));
+}
+const targets = [...new Set(structuredTargets)];
 const projectDir = path.resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 const sessionId = String(payload?.session_id || payload?.thread_id || payload?.conversation_id || "").trim();
 let governedSession = false;
@@ -52,16 +66,16 @@ if (sessionId) {
 }
 
 if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(toolName)
-    && (target.startsWith(stateNorm) || target.includes("/crx-factory/"))) {
+    && targets.some((target) => target.startsWith(stateNorm) || target.includes("/crx-factory/"))) {
   deny("CRX FACTORY STATE GUARD: direct edits to the shared factory ledger/tickets/evidence are forbidden. Use the validated scripts/factory.mjs entrypoint.");
 }
 const governanceTarget = /(?:^|\/)(?:package\.json|scripts\/(?:factory(?:-[^/]*)?|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|\.claude\/settings(?:\.local)?\.json|\.codex\/hooks\.json|\.codex\/hooks\/(?:codex-hook-adapter|production-action-guard)\.mjs|\.claude\/hooks\/(?:factory-[^/]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib|codex-push-guard|codex-push-lib|pr-merge-guard|review-proof-guard)\.mjs)$/;
-if (target && target.startsWith(permitsNorm)) {
+if (targets.some((target) => target.startsWith(permitsNorm))) {
   deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
 }
 if (governedSession
     && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(toolName)
-    && governanceTarget.test(target)) {
+    && targets.some((target) => governanceTarget.test(target))) {
   deny("CRX FACTORY STATE GUARD: an active factory lane cannot modify its own governance implementation.");
 }
 

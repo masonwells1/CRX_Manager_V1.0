@@ -332,6 +332,37 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     /origin\/main moved/,
     "moved base invalidates approval",
   );
+  append(paths, "evidence-attached", written.ticket.id, {
+    label: "old proof",
+    kind: "harness",
+    filename: "old-proof.json",
+    sha256: "1".repeat(64),
+    verified: true,
+    ticketHash: written.hash,
+  });
+  append(paths, "independent-review-attached", written.ticket.id, {
+    reviewer: "codex",
+    model: "gpt-5.6-sol",
+    verdict: "clean",
+    filename: "old-review.json",
+    sha256: "2".repeat(64),
+    ticketHash: written.hash,
+  });
+  append(paths, "ticket-revision-requested", written.ticket.id, { ownerReply: "Change the scope." });
+  const revised = writeImmutableTicket(paths, ticket(written.ticket.id, {
+    version: 2,
+    goal: "Prove a materially revised governed lane.",
+  }));
+  append(paths, "ticket-drafted", revised.ticket.id, {
+    ticketFile: revised.filename,
+    ticketHash: revised.hash,
+    ticketVersion: 2,
+    title: revised.ticket.title,
+  });
+  const revisedSnapshot = loadFactorySnapshot(paths);
+  eq(revisedSnapshot.jobs[0].evidence.length, 0, "a revised ticket cannot inherit earlier harness receipts");
+  eq(revisedSnapshot.jobs[0].reviews.length, 0, "a revised ticket cannot inherit an earlier CLEAN review");
+  eq(revisedSnapshot.jobs[0].baseSha, "", "a revised ticket requires a fresh base-bound presentation");
   rmSync(root, { recursive: true, force: true });
 }
 
@@ -479,6 +510,7 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   throws(
     () => runHarnessEvidence(paths, {
       jobId: "state-mutation-proof",
+      ticketHash: "a".repeat(64),
       label: "must fail",
       scriptName: "verify-deps",
       cwd: harnessRepo,
@@ -499,6 +531,7 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const repository = repositoryContentFingerprint(repoRoot);
   const proofBaseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
   const proofDependencyHash = factoryHarnessDependencyHashForCommit(repoRoot, proofBaseSha);
+  const proofTicketHash = "f".repeat(64);
   const proofRoot = mkdtempSync(path.join(tmpdir(), "crx-factory-artifact-proof-"));
   const proofPaths = resolveFactoryPaths(repoRoot, {
     CRX_FACTORY_TEST_MODE: "1",
@@ -507,6 +540,7 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const proofPayload = {
     scriptName: "verify-deps",
     baseSha: proofBaseSha,
+    ticketHash: proofTicketHash,
     repositoryContentHash: repository.repositoryContentHash,
     repositoryFileCount: repository.repositoryFileCount,
   };
@@ -517,12 +551,14 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const landedJob = {
     id: "landed-job",
     baseSha: proofBaseSha,
+    ticketHash: proofTicketHash,
     ticket: { proofHarnesses: ["verify-deps"] },
     evidence: [{
       verified: true,
       kind: "harness",
       scriptName: "verify-deps",
       baseSha: proofBaseSha,
+      ticketHash: proofTicketHash,
       scriptBodyHash: sha256(scriptBody),
       baseScriptBodyHash: sha256(scriptBody),
       packageJsonHash: sha256(packageBytes),
@@ -552,6 +588,13 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false, paths: proofPaths }),
     "post-landing closeout accepts proof bound to the job's immutable original base",
   );
+  landedJob.ticketHash = "e".repeat(64);
+  throws(
+    () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false, paths: proofPaths }),
+    /every ticket-required/,
+    "a revised ticket hash invalidates previous harness evidence",
+  );
+  landedJob.ticketHash = proofTicketHash;
   landedJob.ticket.proofHarnesses = ["verify-deps", "build"];
   throws(
     () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false, paths: proofPaths }),
@@ -575,8 +618,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
 
   const reviewPayload = {
     reviewer: "codex",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "high",
     verdict: "clean",
     baseSha: proofBaseSha,
+    ticketHash: proofTicketHash,
     headSha: repository.headSha,
     headTreeSha: repository.headTreeSha,
     repositoryContentHash: repository.repositoryContentHash,
@@ -592,7 +638,6 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   writeFileSync(path.join(proofPaths.evidenceDir, "landed-job", reviewFilename), reviewBytes);
   landedJob.reviews = [{
     ...reviewPayload,
-    model: "test-reviewer",
     filename: reviewFilename,
     sha256: sha256(reviewBytes),
   }];
@@ -600,6 +645,13 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     validateCurrentIndependentReview(landedJob, repoRoot, { paths: proofPaths }),
     "independent review validation reopens the ledger-bound review artifact",
   );
+  landedJob.ticketHash = "e".repeat(64);
+  throws(
+    () => validateCurrentIndependentReview(landedJob, repoRoot, { paths: proofPaths }),
+    /exact repository bytes/,
+    "a revised ticket hash invalidates the previous independent review receipt",
+  );
+  landedJob.ticketHash = proofTicketHash;
   writeFileSync(path.join(proofPaths.evidenceDir, "landed-job", reviewFilename), `${reviewBytes}tampered`);
   throws(
     () => validateCurrentIndependentReview(landedJob, repoRoot, { paths: proofPaths }),

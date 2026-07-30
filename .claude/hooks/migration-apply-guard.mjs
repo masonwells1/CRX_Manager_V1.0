@@ -25,6 +25,9 @@ import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 import { sessionProofDirs } from "./codex-push-lib.mjs";
 
+const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
+const REQUIRED_CODEX_EFFORT = "high";
+
 function out(decision, reason) {
   const payload = decision === "block"
     ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
@@ -197,7 +200,7 @@ if (validProof) {
   //   1. Exact content binding: the proof's queryHash must be present and
   //      match the transmitted SQL (interactively it's optional-but-checked;
   //      unattended, an unbound proof could apply edited-after-review SQL).
-  //   2. A recorded Codex verdict (second-model gate actually ran — Mason's
+  //   2. A recorded Codex Sol/high verdict (separate reviewer gate actually ran — Mason's
   //      "ran, not queued" rule).
   //   3. A FRESH Codex output artifact on disk (<30 min): /codex-review tees
   //      its output to .claude/session-state/codex-review-latest.txt. A
@@ -236,6 +239,8 @@ if (validProof) {
     // .claude/session-state/codex-review-mig-<safeName>.json:
     //   { "queryHash": <sha256 of the EXACT transmitted SQL>,
     //     "verdict": "clean" | "ship" | "ship-with-followups",
+    //     "model": "gpt-5.6-sol",
+    //     "reasoning_effort": "high",
     //     "timestamp": <ISO-8601, <30 min old> }
     // Write it ONLY after an ACTUAL /codex-review run on this migration this
     // session — a fabricated file violates Mason's codex-gate rule and is the
@@ -253,15 +258,20 @@ if (validProof) {
       if (!codexProof) codexProof = candidate;
       const okVerdict = ["clean", "ship", "ship-with-followups"].includes(String(candidate.verdict || "").toLowerCase());
       const okHash = !!currentHash && String(candidate.queryHash || "") === currentHash;
+      const okIdentity = candidate.model === REQUIRED_CODEX_MODEL
+        && candidate.reasoning_effort === REQUIRED_CODEX_EFFORT;
       let okFresh = false;
       try {
         const candidateAge = now - new Date(candidate.timestamp).getTime();
         okFresh = candidateAge >= 0 && candidateAge <= MAX_AGE_MS;
       } catch { okFresh = false; }
-      if (okVerdict && okHash && okFresh) { codexProof = candidate; break; }
+      if (okVerdict && okHash && okIdentity && okFresh) { codexProof = candidate; break; }
     }
     const cvOk = codexProof && ["clean", "ship", "ship-with-followups"].includes(String(codexProof.verdict || "").toLowerCase());
     const cvHashOk = codexProof && currentHash && String(codexProof.queryHash || "") === currentHash;
+    const cvIdentityOk = codexProof
+      && codexProof.model === REQUIRED_CODEX_MODEL
+      && codexProof.reasoning_effort === REQUIRED_CODEX_EFFORT;
     // Freshness = age inside [0, 30min]; a FUTURE-dated timestamp must not
     // count as fresh (Codex P2 round 5 — clock skew / typo / fabrication).
     let cvFresh = false;
@@ -269,10 +279,10 @@ if (validProof) {
       const cvAge = now - new Date(codexProof.timestamp).getTime();
       cvFresh = !!codexProof && cvAge >= 0 && cvAge <= MAX_AGE_MS;
     } catch { cvFresh = false; }
-    if (!cvOk || !cvHashOk || !cvFresh) {
+    if (!cvOk || !cvHashOk || !cvIdentityOk || !cvFresh) {
       out("block",
-        `MIGRATION APPLY GUARD (hands-free run): the second-model gate is not satisfied for ` +
-        `"${migName || "(unnamed)"}" (${!codexProof ? "no Codex proof file" : !cvOk ? "verdict is not clean/ship" : !cvHashOk ? "queryHash does not match the transmitted SQL" : "proof timestamp is not within the last 30 minutes"}). ` +
+        `MIGRATION APPLY GUARD (hands-free run): the Sol high-effort gate is not satisfied for ` +
+        `"${migName || "(unnamed)"}" (${!codexProof ? "no Codex proof file" : !cvOk ? "verdict is not clean/ship" : !cvHashOk ? "queryHash does not match the transmitted SQL" : !cvIdentityOk ? `proof must record model=${REQUIRED_CODEX_MODEL} and reasoning_effort=${REQUIRED_CODEX_EFFORT}` : "proof timestamp is not within the last 30 minutes"}). ` +
         `Autonomous applies require a fresh, content-bound Codex verdict (Mason's settled 2026-07-13 ` +
         `policy). Run: node scripts/write-apply-proofs.mjs ${migName || "<migName>"} — it runs the ` +
         `trusted Codex CLI itself and mints the content-bound proof ONLY on a CLEAN machine verdict. ` +

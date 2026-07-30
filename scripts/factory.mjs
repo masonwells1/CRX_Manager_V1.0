@@ -415,6 +415,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       jobId,
       reviewer: review.reviewer,
       model: review.model,
+      reasoningEffort: review.reasoningEffort,
       verdict: review.verdict,
       sha256: review.sha256,
     })}\n`);
@@ -459,6 +460,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     }
     const evidence = runHarnessEvidence(paths, {
       jobId,
+      ticketHash: job.ticketHash,
       label: required(flags, "label"),
       scriptName: harness,
       cwd,
@@ -484,6 +486,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         headTreeSha: evidence.headTreeSha,
         repositoryContentHash: evidence.repositoryContentHash,
         repositoryFileCount: evidence.repositoryFileCount,
+        ticketHash: evidence.ticketHash,
         sandbox: evidence.sandbox,
       },
     });

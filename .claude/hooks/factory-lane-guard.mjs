@@ -151,7 +151,7 @@ function structuredMutationTargets(toolName, toolInput) {
   const patchText = typeof toolInput === "string"
     ? toolInput
     : String(input.patch || input.input || "");
-  for (const match of patchText.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
+  for (const match of patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/gm)) {
     targets.push(match[1].trim());
   }
   return [...new Set(targets)];

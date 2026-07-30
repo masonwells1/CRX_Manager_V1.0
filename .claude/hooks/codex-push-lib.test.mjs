@@ -103,6 +103,12 @@ assert.deepEqual(riskyFiles(["src/pages/Home.tsx", "supabase/migrations/1.sql"])
 // gate machinery — editing them must itself require the second-model verdict.
 assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
+assert.deepEqual(riskyFiles(["scripts/overnight-codex-gate.mjs"]), ["scripts/overnight-codex-gate.mjs"]);
+assert.deepEqual(
+  riskyFiles(["scripts/factory.mjs", "scripts/factory-state-lib.mjs"]),
+  ["scripts/factory.mjs", "scripts/factory-state-lib.mjs"],
+  "authoritative factory brokers always require Sol/high review",
+);
 // Codex round-8 (PR #142): the hook-registration surfaces — a PR that
 // de-registers a guard by editing only these must still require the verdict.
 assert.deepEqual(riskyFiles([".claude/settings.json"]), [".claude/settings.json"]);

@@ -213,7 +213,7 @@ export function canonicalMorningReviewQuestion(job) {
     .map((item) => `- ${item.label}: ${item.scriptName} (${item.sha256.slice(0, 12)})`);
   const reviews = (job.reviews || [])
     .filter((item) => item.verdict === "clean")
-    .map((item) => `- ${item.reviewer}/${item.model}: CLEAN (${item.sha256.slice(0, 12)})`);
+    .map((item) => `- ${item.reviewer}/${item.model}/${item.reasoningEffort}: CLEAN (${item.sha256.slice(0, 12)})`);
   return [
     `Accept factory job "${job.title}" (${job.id}, ticket ${job.ticketHash.slice(0, 12)}) into the existing /ship landing gates?`,
     "",
@@ -772,6 +772,23 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.stage = "needs-ticket-ok";
         job.sessionId = event.sessionId;
         job.actorTool = event.actorTool;
+        // A revised ticket is a new authorization boundary. Keep the append-only
+        // history on disk, but never carry proof or decision state from the
+        // previous ticket hash into the active snapshot.
+        job.evidence = [];
+        job.reviews = [];
+        job.laneSessionId = "";
+        job.baseSha = "";
+        job.approvalExpiresAt = "";
+        job.approvalReply = "";
+        job.questionHash = "";
+        job.questionText = "";
+        job.reviewQuestionHash = "";
+        job.reviewQuestionText = "";
+        job.reviewBaseSha = "";
+        job.reviewExpiresAt = "";
+        job.behaviorSummary = "";
+        job.blocker = "";
         job.ticketHash = String(event.payload.ticketHash || "");
         job.ticketFile = String(event.payload.ticketFile || "");
         const loaded = readTicket(paths, job.ticketFile);
@@ -853,6 +870,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
           headTreeSha: String(event.payload.headTreeSha || ""),
           repositoryContentHash: String(event.payload.repositoryContentHash || ""),
           repositoryFileCount: Number(event.payload.repositoryFileCount || 0),
+          ticketHash: String(event.payload.ticketHash || ""),
           sandbox: event.payload.sandbox && typeof event.payload.sandbox === "object"
             ? canonicalize(event.payload.sandbox)
             : null,
@@ -862,6 +880,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.reviews.push({
           reviewer: String(event.payload.reviewer || ""),
           model: String(event.payload.model || ""),
+          reasoningEffort: String(event.payload.reasoningEffort || ""),
           verdict: String(event.payload.verdict || ""),
           filename: String(event.payload.filename || ""),
           sha256: String(event.payload.sha256 || ""),
@@ -870,6 +889,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
           headTreeSha: String(event.payload.headTreeSha || ""),
           repositoryContentHash: String(event.payload.repositoryContentHash || ""),
           repositoryFileCount: Number(event.payload.repositoryFileCount || 0),
+          ticketHash: String(event.payload.ticketHash || ""),
         });
         break;
       default:
@@ -1296,11 +1316,15 @@ export function runFactoryHarnessSandbox(cwd, scriptName) {
 
 export function runHarnessEvidence(paths, {
   jobId,
+  ticketHash: approvedTicketHash,
   label,
   scriptName,
   cwd = FACTORY_ROOT,
 }) {
   authorizedFactoryWriter(paths);
+  if (!/^[a-f0-9]{64}$/i.test(String(approvedTicketHash || ""))) {
+    throw new Error("Harness evidence requires the exact approved ticket hash.");
+  }
   const packageJson = JSON.parse(readFileSync(path.join(cwd, "package.json"), "utf8"));
   if (!packageJson.scripts?.[scriptName]) throw new Error(`Unknown repository harness npm script: ${scriptName}`);
   if (!FACTORY_HARNESS_ALLOWLIST.has(scriptName)) {
@@ -1341,6 +1365,7 @@ export function runHarnessEvidence(paths, {
     scriptBodyHash: sha256(String(packageJson.scripts[scriptName])),
     baseScriptBodyHash: sha256(String(basePackageJson.scripts[scriptName])),
     baseSha: currentOriginMain(cwd),
+    ticketHash: approvedTicketHash,
     packageJsonHash: sha256(readFileSync(path.join(cwd, "package.json"))),
     ...repositoryAfter,
     exitCode: result.status,
@@ -1381,6 +1406,7 @@ export function runHarnessEvidence(paths, {
     scriptBodyHash: payload.scriptBodyHash,
     baseScriptBodyHash: payload.baseScriptBodyHash,
     baseSha: payload.baseSha,
+    ticketHash: payload.ticketHash,
     packageJsonHash: payload.packageJsonHash,
     headSha: payload.headSha,
     headTreeSha: payload.headTreeSha,
@@ -1424,6 +1450,7 @@ export function validateCurrentHarnessEvidence(job, cwd = FACTORY_ROOT, {
     job.evidence.find((item) => {
       if (item.verified !== true || item.kind !== "harness") return false;
       if (item.scriptName !== requiredHarness || !FACTORY_HARNESS_ALLOWLIST.has(item.scriptName)) return false;
+      if (item.ticketHash !== job.ticketHash) return false;
       if (item.baseSha !== job.baseSha) return false;
       if (requireCurrentBase && item.baseSha !== currentBaseSha) return false;
       const isolatedTest = process.env.CRX_FACTORY_TEST_MODE === "1"
@@ -1449,6 +1476,7 @@ export function validateCurrentHarnessEvidence(job, cwd = FACTORY_ROOT, {
       if (!metadataMatches) return false;
       const artifact = readBoundEvidenceArtifact(paths, job, item, `Harness proof ${item.scriptName}`);
       return artifact.scriptName === item.scriptName
+        && artifact.ticketHash === job.ticketHash
         && artifact.repositoryContentHash === item.repositoryContentHash
         && Number(artifact.repositoryFileCount) === item.repositoryFileCount
         && artifact.baseSha === item.baseSha;
@@ -1538,7 +1566,9 @@ export function runIndependentReviewEvidence(paths, {
   env = process.env,
 }) {
   authorizedFactoryWriter(paths);
-  if (!job?.ticket || !job?.baseSha) throw new Error("A ticket-approved factory job is required for independent review.");
+  if (!job?.ticket || !job?.baseSha || !/^[a-f0-9]{64}$/i.test(String(job?.ticketHash || ""))) {
+    throw new Error("A ticket-approved factory job with its exact ticket hash is required for independent review.");
+  }
   const baseSha = refreshOriginMain(cwd, env);
   if (baseSha !== job.baseSha) {
     throw new Error("origin/main moved after ticket approval; park and re-present before independent review.");
@@ -1549,9 +1579,10 @@ export function runIndependentReviewEvidence(paths, {
     && path.resolve(cwd).toLowerCase().startsWith(`${path.resolve(tmpdir()).toLowerCase()}${path.sep}`);
   let result;
   let model;
+  const reasoningEffort = FACTORY_REVIEW_EFFORT;
   if (isolatedTest) {
     result = { status: 0, stdout: `Independent fixture review completed.\n${FACTORY_REVIEW_TOKEN}: CLEAN\n`, stderr: "" };
-    model = "factory-test-reviewer";
+    model = FACTORY_REVIEW_MODEL;
   } else {
     const reviewer = codexExecutable({ home: homedir() });
     model = FACTORY_REVIEW_MODEL;
@@ -1587,8 +1618,10 @@ export function runIndependentReviewEvidence(paths, {
     schemaVersion: FACTORY_SCHEMA_VERSION,
     reviewer: "codex",
     model,
+    reasoningEffort,
     verdict,
     baseSha,
+    ticketHash: job.ticketHash,
     ...repositoryAfter,
     capturedAt: new Date().toISOString(),
     reportSummary: `Independent Codex review returned ${FACTORY_REVIEW_TOKEN}: CLEAN.`,
@@ -1607,10 +1640,12 @@ export function runIndependentReviewEvidence(paths, {
   return {
     reviewer: payload.reviewer,
     model: payload.model,
+    reasoningEffort: payload.reasoningEffort,
     verdict: payload.verdict,
     filename,
     sha256: hash,
     baseSha: payload.baseSha,
+    ticketHash: payload.ticketHash,
     headSha: payload.headSha,
     headTreeSha: payload.headTreeSha,
     repositoryContentHash: payload.repositoryContentHash,
@@ -1625,8 +1660,11 @@ export function validateCurrentIndependentReview(job, cwd = FACTORY_ROOT, {
   const repository = repositoryFingerprint || repositoryContentFingerprint(cwd);
   const accepted = job.reviews?.find((review) =>
     review.reviewer === "codex"
+    && review.model === FACTORY_REVIEW_MODEL
+    && review.reasoningEffort === FACTORY_REVIEW_EFFORT
     && review.verdict === "clean"
     && review.baseSha === job.baseSha
+    && review.ticketHash === job.ticketHash
     && review.repositoryContentHash === repository.repositoryContentHash
     && Number(review.repositoryFileCount) === repository.repositoryFileCount
     && /^[a-f0-9]{64}$/i.test(review.sha256),
@@ -1636,7 +1674,10 @@ export function validateCurrentIndependentReview(job, cwd = FACTORY_ROOT, {
   }
   const artifact = readBoundEvidenceArtifact(paths, job, accepted, "Independent Codex review");
   if (artifact.reviewer !== accepted.reviewer
+      || artifact.model !== FACTORY_REVIEW_MODEL
+      || artifact.reasoningEffort !== FACTORY_REVIEW_EFFORT
       || artifact.verdict !== accepted.verdict
+      || artifact.ticketHash !== job.ticketHash
       || artifact.repositoryContentHash !== accepted.repositoryContentHash
       || Number(artifact.repositoryFileCount) !== accepted.repositoryFileCount
       || artifact.reportSummary !== `Independent Codex review returned ${FACTORY_REVIEW_TOKEN}: CLEAN.`

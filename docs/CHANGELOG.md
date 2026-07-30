@@ -381,6 +381,13 @@ review arguments from an editable proof wrapper and the repository policy still 
 mandatory cross-model gate. The repair records Mason's Sol/high decision in the canonical policy,
 disables branch-controlled project hooks inside every independent reviewer invocation, and makes the
 factory guard protect the complete reviewer/proof trust chain from structured and shell self-edits.
+A second exact-SHA Sol/high acceptance found four more trust gaps: revised tickets retained old
+receipts, the live-migration consumer did not validate reviewer model/effort, patch payloads could
+hide governance destinations, and future factory-broker edits were absent from the risky registry.
+Ticket revisions now clear active proof/decision state and every harness/review receipt binds the
+ticket hash; migration apply requires recorded Sol/high identity; patch, input, raw patch, and move
+destinations are inspected; and the authoritative factory CLI/state broker is both risky and
+protected.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

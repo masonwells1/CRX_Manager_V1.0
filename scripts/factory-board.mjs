@@ -44,7 +44,7 @@ function jobCard(job) {
     ...job.evidence,
     ...(job.reviews || []).map((item) => ({
       label: `Independent ${item.reviewer} review: ${item.verdict.toUpperCase()}`,
-      kind: item.model || "review",
+      kind: item.model ? `${item.model}/${item.reasoningEffort || "unknown effort"}` : "review",
       filename: item.filename,
     })),
   ];
@@ -197,6 +197,7 @@ export function projectFactoryBoardState(snapshot) {
       reviews: (job.reviews || []).map((item) => ({
         reviewer: item.reviewer,
         model: item.model,
+        reasoningEffort: item.reasoningEffort,
         verdict: item.verdict,
         filename: item.filename,
         sha256: item.sha256,

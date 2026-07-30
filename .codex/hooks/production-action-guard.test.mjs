@@ -115,6 +115,11 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/write-codex-push-proof.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "repo\\scripts\\write-codex-push-proof.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/write-codex-push-proof.mjs" } }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/factory.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "scripts/factory-state-lib.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/factory-state-lib.mjs" } }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/write-apply-proofs.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/overnight-codex-gate.mjs" } }).blocked, true);
   for (const command of [
     "rm .claude/hooks/review-proof-guard.mjs",
     "rm .claude/hooks/codex-push-guard.mjs;ls",

@@ -77,7 +77,7 @@ candidate digest to a file first, then:
 # Build the prompt file: per finding — title, file, one-line evidence, impact, severity.
 # Keep it to <=3-4 findings per call (more times out at high reasoning).
 cat > .claude/session-state/finding-gate-prompt.txt <<'EOF'
-Independent second-model gate for the CRX overnight bug hunt. READ-ONLY repo + migration access (the sandbox CANNOT reach the live DB, so ground against repo/migration files). For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
+Independent Sol/high gate for the CRX overnight bug hunt. READ-ONLY repo + migration access (the sandbox CANNOT reach the live DB, so ground against repo/migration files). For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
 <paste the 3-4 candidate findings here>
 EOF
 node scripts/overnight-codex-gate.mjs .claude/session-state/finding-gate-prompt.txt \

@@ -7,7 +7,7 @@
 // ONLY when ALL charters return CLEAN with the file content unchanged — mints
 // BOTH proofs the guard checks: migration-review-<name>.json (reviewer half,
 // every listed reviewer = a run that genuinely happened) and
-// codex-review-mig-<name>.json (second-model half). Written with Node (clean
+// codex-review-mig-<name>.json (separate Sol/high half). Written with Node (clean
 // UTF-8, no BOM — a BOM blocks the guard hook's JSON parse).
 //
 // queryHash is computed from the on-disk migration file (CRLF→LF normalized) —
@@ -17,7 +17,7 @@
 //
 // There is deliberately NO way to stamp a proof without the Codex run:
 //   --codex-verdict <v> was REMOVED 2026-07-16 (scaffolding design review):
-//   a caller-supplied verdict let one command mint the second-model gate
+//   a caller-supplied verdict let one command mint the Sol/high gate
 //   without any separate Sol/high reviewer process running.
 //   Unconditional reviewer-proof stamping was REMOVED the same day (Codex
 //   round-3 review of PR #142): a "clean, both reviewers ran" JSON written on
@@ -41,7 +41,7 @@ const rawArgs = process.argv.slice(2);
 if (rawArgs.includes('--codex-verdict')) {
   console.error(
     '--codex-verdict was removed (2026-07-16): a CLI-supplied verdict let a session\n' +
-    'mint the second-model gate without Codex actually running. Just pass the\n' +
+    'mint the Sol/high gate without Codex actually running. Just pass the\n' +
     'migration name(s) — the wrapper now always runs the trusted Codex CLI itself\n' +
     'and only mints on a CLEAN machine verdict.'
   );

@@ -153,6 +153,16 @@ function hookOutput(result) {
   }), /cannot modify its own governance/i, "governed sessions cannot rewrite the factory implementation");
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
+    tool_name: "apply_patch",
+    tool_input: { input: "*** Begin Patch\n*** Update File: scripts/factory.mjs\n@@\n-old\n+new\n*** End Patch\n" },
+  }), /cannot modify its own governance/i, "governed sessions cannot hide a governance rewrite in an input patch payload");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "apply_patch",
+    tool_input: "*** Begin Patch\n*** Update File: src/example.ts\n*** Move to: .claude/hooks/factory-lane-guard.mjs\n@@\n-old\n+new\n*** End Patch\n",
+  }), /cannot modify its own governance/i, "governed sessions cannot move an approved file over a governance target");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
     tool_name: "Edit",
     tool_input: { file_path: path.join(root, "package.json") },
   }), /cannot modify its own governance/i, "governed sessions cannot rewrite npm harness definitions");

@@ -179,7 +179,7 @@ export function extractPatchDestinations(text) {
   return out;
 }
 
-// A changed file is "risky" (needs an independent second-model verdict) when it
+// A changed file is "risky" (needs a separate Sol/high verdict) when it
 // touches migrations, edge functions, money/RLS-shaped code, or the guardrail
 // machinery that decides whether a change can reach main. Guard hooks, CI,
 // Husky, and the review wrapper are explicit here so a self-modification cannot
@@ -197,6 +197,8 @@ const RISKY_PATH_RES = [
   /(^|\/)\.husky\//i,
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
+  /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
+  /(^|\/)scripts\/factory(?:-state-lib)?\.mjs$/i,
   // Reviewer charters are executable review instructions for the migration
   // proof gate (write-apply-proofs runs each .claude/agents/<reviewer>.md as a
   // machine-verdict Codex run) — editing one weakens the gate, so charter
