@@ -24,6 +24,7 @@ import {
   pushIsForced,
   pushUsesBulkMode,
   pushUsesInlineConfig,
+  pushUsesConfigEnv,
   destinationLooksLikeUrl,
   pushDestinationToken,
   repoIsGuardedApp,
@@ -46,6 +47,14 @@ if (!isGitPush(cmd)) passthrough();
 if (pushContextIsAmbiguous(cmd)) {
   deny("CODEX GATE: directory-changing or GIT_DIR/GIT_WORK_TREE-prefixed pushes cannot be bound safely to the inspected worktree. Use `git -C <repo> push`.");
 }
+// Checked against the WHOLE command, not the per-push segments below: an
+// environment variable is set in its own segment (`export GIT_CONFIG_KEY_0=...;
+// git push ...`), so a per-segment check never sees it. Found by probing the
+// guard after writing the per-segment version, which passed its unit tests and
+// still let the chained form through.
+if (pushUsesConfigEnv(cmd)) {
+  deny("CODEX GATE: pushes carrying GIT_CONFIG* environment variables are denied. Those variables rewrite git configuration for that one command only (e.g. GIT_CONFIG_KEY_0=remote.origin.pushurl), so the push can land in a different repository than the one this guard inspected. Use `git -C <repo> push` with the repository's own configuration.");
+}
 
 // Claude's shell cwd can persist across tool calls. The hook payload's cwd is
 // therefore the authoritative repository context for this specific push; the
@@ -56,6 +65,11 @@ const projectDir = path.resolve(
 function git(args, cwd) {
   const env = { ...process.env };
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
+  // Defence in depth for the GIT_CONFIG* bypass denied above: if this hook is
+  // ever invoked with those variables already in its OWN environment, they would
+  // rewrite the answers to the very lookups used to classify the destination.
+  // Strip them so the guard always reads the repository's real configuration.
+  for (const key of Object.keys(env)) if (/^GIT_CONFIG(_|$)/i.test(key)) delete env[key];
   return execFileSync("git", args, {
     cwd,
     env,

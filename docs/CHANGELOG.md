@@ -22,16 +22,30 @@ after every check had passed. Four pushes failed this way, each printing the hoo
 `✅ … pushing to GitHub` line first. That line prints *before* the upload; it is not evidence, and a
 push is only confirmed by `git ls-remote --heads origin <branch>`.
 
-The scan now excludes what the remote already has, which is the set Git itself would upload. An
-unreachable remote falls back to the old full walk, so the guard fails toward *more* scanning, never
-less. Same branch: 748s → 318s, 2,114 commits → 0. Mutation-tested both ways — a synthetic commit
-carrying a private artifact still exits 1 and names the file, and a benign commit passes with
-`checked_commits=1`, proving the narrowed scan still inspects the genuinely new commit rather than
-skipping everything.
+**This one was attempted twice and shipped neither time. The slow scan stands.** The first draft
+narrowed the scan by asking the *local* `refs/remotes/<remote>/*` what the server already had; Codex
+rejected it, correctly — those refs go stale when a remote branch is deleted without `--prune`, they
+survive a `remote set-url` to a different server, and `git update-ref` can write one by hand, so a
+commit carrying a private artifact could reach the remote unscanned. The second draft asked the
+server itself with `git ls-remote`, which is authoritative and cost 748s → 318s and 2,114 commits → 0
+on the same branch.
 
-The first draft of that narrowing asked the *local* `refs/remotes/<remote>/*` what the server had.
-Codex's pre-push review rejected it (see below) and it was replaced by `git ls-remote`, which asks
-the server itself.
+That second draft was reverted too, because it broke a deliberate pre-existing contract. The packet
+test asserts that a remote name or URL — attacker-controllable metadata handed to the hook by Git —
+**never enters Git's argv**, and that a new ref always gets the full ancestry scan. `git ls-remote`
+requires the remote in argv, so the two cannot both hold. Restoring the draft reproduces the failure
+exactly: `AssertionError: remote URLs are accepted as opaque hook metadata and never enter Git ref
+argv` at `supplier-pricing-phase3-private-artifacts.test.mjs:517` — a suite CI runs. Weakening a
+security assertion so a speed optimization can pass is the wrong trade to make quietly, so the
+optimization went and the contract stayed.
+
+**Practical consequence:** pushing a *brand-new* branch still takes ~12 minutes and can still die
+with SIGPIPE. The workaround is unchanged — push with SSH keepalives
+(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=60 -o TCPKeepAlive=yes"`) and
+confirm with `git ls-remote --heads origin <branch>`, never with the hook's `✅` line. Pushing an
+*existing* branch is unaffected: it diffs against the known remote sha and is fast. Making new-branch
+pushes fast requires deciding, deliberately, whether to relax the never-in-argv rule; that is a
+design decision for Mason, not a side effect of a backup task.
 
 **The Codex risky-file gate policed every repository, and matched on filename substrings.** Its path
 patterns include an unanchored `/policy|grant/i`, so the memory note
@@ -71,13 +85,12 @@ old single-check logic let the migration-carrying push through.
 **2. Local remote-tracking refs do not prove what the server holds.** `refs/remotes/origin/*` goes
 stale when a remote branch is deleted without `--prune`, can point at a different URL after `remote
 set-url`, and can be written directly with `git update-ref`. Excluding on them would let a commit
-carrying a private artifact reach GitHub unscanned. The scan now asks the remote itself with
-`git ls-remote --heads --tags`, feeding the exclusions through `--stdin` so a repo with many refs
-cannot overflow the Windows command line, and `--ignore-missing` so a server SHA this clone lacks is
-skipped rather than failing the whole scan. Unreachable remote → exclude nothing → full walk. Proven
-with a ghost commit carrying a real Phase 3C artifact, reachable only through a hand-written
-`refs/remotes/origin/ghost` the server never had: the fixed scan fails and names the file, the
-old logic reported `PASS checked_commits=1` and missed it entirely.
+carrying a private artifact reach GitHub unscanned. Proven with a ghost commit carrying a real Phase
+3C artifact, reachable only through a hand-written `refs/remotes/origin/ghost` the server never had:
+the draft reported `PASS checked_commits=1` and missed it entirely. The replacement — asking the
+server itself with `git ls-remote` — was then reverted in turn for conflicting with the
+never-in-argv contract, as described above. Net effect: the scan is unchanged from `main`, and this
+finding is closed by *not* having shipped the thing it was about.
 
 **1b. …and then Codex found the same hole a second way.** The round-2 review pointed out that the
 destination is resolved with *separate* `git` calls, which never inherit the push command's own
@@ -119,6 +132,47 @@ nesting in either direction is refused before a single byte is written. Proven: 
 of unrelated docs fails with both files intact, a fresh directory and a re-stage both succeed, a
 hand-written note survives pruning, and all three nesting cases refuse. Running the pre-fix code
 against that same docs folder destroyed both files.
+
+### Round three: one finding was decisive, one was a false alarm, and testing it found a different bug
+
+The third proof run returned `BLOCKERS` again. Verifying each one against real Git rather than
+against reasoning changed the outcome of two of the three.
+
+**The blocker was real and decisive.** Codex pointed at the exact line where the `ls-remote`
+optimization contradicted the packet test's never-in-argv assertion, and noted that CI runs that
+suite. Restoring the change reproduced the failure at the cited line. The optimization was reverted;
+see the top of this entry.
+
+**`--repo=<URL> HEAD:main` is not a bypass — but testing it uncovered one.** The claim was that this
+form reaches `main` while the guard stands down. Git's own documentation says the positional argument
+wins when both are given, and git 2.54 confirms it: `git push --repo=<dest> HEAD:main` responds
+"set the remote as upstream … HEAD:main", i.e. it read the *refspec* as the repository. So that
+command never targets main and the guard is right to stand down. The mirror image, however, was a
+genuine hole: `pushDestinationToken` returned `--repo`'s value **eagerly**, so
+`git push --repo=<harmless> <CRX Manager URL> HEAD:main` classified as unguarded while Git sent it to
+production. Destination resolution now matches Git — remember `--repo`, keep scanning, let a
+positional win. Isolated in a throwaway repo whose own remotes are unrelated (so the second-line
+check cannot mask it) and carrying a migration: denied by name; reverting to the eager return lets it
+straight through; a genuinely unrelated destination stays allowed.
+
+**`GIT_CONFIG_*` really does redirect a push, and it was demonstrated, not argued.** With `origin`
+configured to point at `nowhere.git`,
+`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=<other repo> git -C <repo> push origin <branch>`
+pushed to the *other* repository — `* [new branch] feature -> probe` — while every lookup the guard
+makes still reported the configured `origin`. The variables live in the command string, not in the
+hook's environment, so the guard cannot see them by reading its own config. The form is now denied,
+and `GIT_CONFIG*` is additionally stripped from the environment of the guard's own Git calls.
+Transport variables are deliberately *not* denied: `GIT_SSH_COMMAND` changes how a connection is
+made, not which repository is written, and the keepalive push workaround this repo depends on sets
+it.
+
+That last fix was wrong on its first attempt in a way its unit tests could not see. Written as a
+per-push check, it ran against the *segments* the guard splits a chained command into — so
+`export GIT_CONFIG_KEY_0=…; git push …` put the assignment in one segment and the push in another,
+and the check never saw it. Every unit test passed. Driving the hook end-to-end with its own stdin
+protocol caught it in one run, and the check moved to the whole command. The unit tests now cover the
+chained forms too, but the lesson is the older one: a guard is only proven by running it, and a test
+that exercises the helper instead of the hook can be green while the hook is open.
 
 ## 2026-07-29 — agent memory is now backed up off-site, and permanently barred from this public repo
 

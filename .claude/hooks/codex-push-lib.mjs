@@ -255,18 +255,30 @@ const PUSH_OPTS_WITH_VALUE = new Set(["--receive-pack", "--exec", "--repo", "-o"
 export function pushDestinationToken(cmd) {
   const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
   const tokens = splitShellArgs(args);
+  // `--repo=<url>` names a destination, but git-push documents that "if both are
+  // specified, the command-line argument takes precedence" — and git 2.54 really
+  // does behave that way (verified 2026-07-30: `git push --repo=<dest> HEAD:main`
+  // reports "set the remote as upstream ... HEAD:main", i.e. the POSITIONAL was
+  // read as the repository). Returning `--repo` eagerly therefore reported the
+  // wrong destination for `git push --repo=<harmless> <CRX Manager URL> HEAD:main`
+  // — the guard would classify the push as unguarded while git sent it to
+  // production. Remember `--repo` but keep scanning, and let a positional win.
+  let repoOpt = null;
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
-    if (token === "--") return tokens[i + 1] ?? null;
+    if (token === "--") return tokens[i + 1] ?? repoOpt;
     if (!token.startsWith("-")) return token;
     const eq = token.indexOf("=");
     const bare = eq === -1 ? token : token.slice(0, eq);
-    // `--repo=<url>` / `--repo <url>` names the destination explicitly and
-    // overrides the positional one.
-    if (bare === "--repo") return (eq === -1 ? tokens[i + 1] : token.slice(eq + 1)) || null;
+    if (bare === "--repo") {
+      const value = eq === -1 ? tokens[i + 1] : token.slice(eq + 1);
+      if (repoOpt === null && value) repoOpt = value;
+      if (eq === -1) i += 1;
+      continue;
+    }
     if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(bare)) i += 1;
   }
-  return null;
+  return repoOpt;
 }
 
 // Git treats a destination as a URL/path unless it is a bare remote name, and a
@@ -294,6 +306,29 @@ export function pushUsesInlineConfig(cmd) {
   if (!isGitPush(text)) return false;
   const prefix = text.match(GIT_PUSH_PREFIX_RE)?.[1] || "";
   return /(?:^|\s)(?:-c(?:\s|=)|--config-env(?:\s|=))/.test(prefix);
+}
+
+// Environment-variable configuration is the same bypass as `-c`, wearing a
+// different hat. Codex's third 2026-07-30 review found it and a live test
+// confirmed it (2026-07-30): with `origin` configured to point at nowhere.git,
+//   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl \
+//   GIT_CONFIG_VALUE_0=<other repo> git -C <repo> push origin <branch>
+// pushed to the OTHER repo — "* [new branch] feature -> probe" — while every
+// lookup this guard makes still reported the configured `origin`. The variables
+// live in the command string, not in the hook's own environment, so the guard
+// cannot see them by inspecting its own config. Deny the form.
+//
+// Only GIT_CONFIG* is denied. Transport variables (GIT_SSH_COMMAND and friends)
+// change HOW a connection is made, not WHICH repository is written, and the
+// documented keepalive push workaround for this repo sets GIT_SSH_COMMAND —
+// denying it would break the normal push path to close nothing.
+export function pushUsesConfigEnv(cmd) {
+  const text = String(cmd || "");
+  if (!isGitPush(text)) return false;
+  // Covers `VAR=x git push`, `export VAR=x; git push`, `set VAR=x`, and the
+  // PowerShell `$env:VAR = "x"` form. Bare `GIT_CONFIG=` (a config file path)
+  // counts too — it redirects config just as effectively.
+  return /(?:^|[;&|(\r\n]|\s)(?:\$env:)?GIT_CONFIG(?:_COUNT|_KEY_\d+|_VALUE_\d+|_GLOBAL|_SYSTEM|_NOSYSTEM)?\s*=/i.test(text);
 }
 
 // URL rewrites are the other way inline-free config can redirect a push:

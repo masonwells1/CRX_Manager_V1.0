@@ -1778,54 +1778,8 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
   return { checked_path_count: visible.size, checked_commit_count: checkedCommits.length, checked_ignored_count: worktree.ignoredCount, worktree_scan_duration_ms: worktree.durationMs, scanned_candidate_count: budget.candidates, scanned_logical_bytes: budget.logicalBytes };
 }
 
-// The commits a push actually uploads are the ones the remote does not already
-// have. Replaying the branch's ENTIRE history instead cost 748s / 2,114 commits
-// / 51,932 paths / 1.6 GB to push a ONE-commit branch (measured 2026-07-29).
-// That matters for more than speed: Git opens the `git-receive-pack` connection
-// BEFORE running this hook, so GitHub dropped the idle connection long before
-// the scan finished and every new-branch push died with SIGPIPE (exit 141) —
-// after the scan had passed. The guard was blocking pushes it had cleared.
-//
-// Narrowing to the genuinely-outgoing commits is safe ONLY against commits the
-// server demonstrably already has. Local `refs/remotes/<remote>/*` do NOT prove
-// that (Codex pre-push review 2026-07-30): they go stale when a remote branch is
-// deleted without `--prune`, they can point at a different URL after `remote
-// set-url`, and `git update-ref` can write one directly. Excluding on them would
-// let a commit carrying a private artifact reach the remote unscanned.
-//
-// So ask the REMOTE what it actually holds — `git ls-remote` is authoritative
-// and costs one round trip on a connection the push is about to open anyway.
-// If the remote cannot be reached or reports nothing, we exclude nothing and
-// fall back to the full-history walk: MORE scanning, never less.
-const REMOTE_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
-function remoteExclusionRevs(remoteName, root, execute) {
-  if (typeof remoteName !== 'string' || remoteName.length === 0) return [];
-  let lines;
-  try {
-    lines = gitLines(['ls-remote', '--heads', '--tags', '--', remoteName], root, execute);
-  } catch (_error) {
-    return [];
-  }
-  const revs = new Set();
-  for (const line of lines) {
-    const sha = line.split(/\s+/)[0];
-    if (REMOTE_SHA_RE.test(sha)) revs.add(`^${sha.toLowerCase()}`);
-  }
-  return [...revs];
-}
-function outgoingCommitsForNewRemoteRef(localSha, root, execute, remoteName) {
-  const head = assertCommitSha(localSha, 'local');
-  const args = ['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, head];
-  const exclusions = remoteExclusionRevs(remoteName, root, execute);
-  if (exclusions.length === 0) return gitLines(args, root, execute);
-  // Feed exclusions on stdin so a repo with many remote refs cannot overflow the
-  // command line. `--ignore-missing` drops server SHAs this clone does not have
-  // (a branch pushed from another machine) instead of failing the whole scan;
-  // `head` itself is already proven present by the caller's `cat-file -t`.
-  const output = gitOutput([...args, '--ignore-missing', '--stdin'], root, execute, {
-    input: `${exclusions.join('\n')}\n`,
-  });
-  return String(output).trim().split(/\r?\n/).filter(Boolean);
+function outgoingCommitsForNewRemoteRef(localSha, root, execute) {
+  return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local')], root, execute);
 }
 function peeledCommitSha(objectSha, root, execute) {
   try {
@@ -1899,10 +1853,10 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });
     objectViolations.push(...inspected.violations);
     if (inspected.commit === null) continue;
-    if (isZeroSha(remoteSha)) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute, remoteName));
+    if (isZeroSha(remoteSha)) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
     else {
       const remoteCommit = peeledCommitSha(assertCommitSha(remoteSha, 'remote'), root, execute);
-      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute, remoteName));
+      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
       else ranges.push(`${remoteCommit}..${inspected.commit}`);
     }
   }

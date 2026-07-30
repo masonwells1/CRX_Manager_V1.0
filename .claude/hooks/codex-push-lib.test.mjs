@@ -21,6 +21,7 @@ import {
   pushDestinationToken,
   destinationLooksLikeUrl,
   pushUsesInlineConfig,
+  pushUsesConfigEnv,
   rewritesReachGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -306,5 +307,48 @@ assert.deepEqual(
   ["src/a.ts", "src/b.ts"],
   "unified-diff headers are destinations; body mentions are not",
 );
+
+// --- GIT_CONFIG* environment overrides (Codex 2026-07-30, round 3) ------------
+// Proven live: with `origin` pointing elsewhere, GIT_CONFIG_KEY_0=
+// remote.origin.pushurl redirected the push to a different repository.
+const CRX_URL = "git@github.com:masonwells1/CRX_Manager_V1.0.git";
+assert.equal(
+  pushUsesConfigEnv(`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=${CRX_URL} git -C /repo push origin main`),
+  true,
+);
+assert.equal(pushUsesConfigEnv("GIT_CONFIG_COUNT=2 git push origin main"), true);
+// The assignment can sit in its own command segment. The guard therefore checks
+// this against the WHOLE command rather than the per-push segments it splits out
+// — the per-segment version passed every other case here and still let this one
+// through when probed end-to-end.
+assert.equal(pushUsesConfigEnv("GIT_CONFIG_COUNT=1 && git push origin main"), true, "chained with &&");
+assert.equal(pushUsesConfigEnv("GIT_CONFIG_KEY_0=remote.origin.pushurl\ngit push origin main"), true, "chained with a newline");
+assert.equal(pushUsesConfigEnv("export GIT_CONFIG_KEY_0=remote.origin.pushurl; git push origin main"), true);
+assert.equal(pushUsesConfigEnv("GIT_CONFIG_GLOBAL=/tmp/evil git push origin main"), true);
+assert.equal(pushUsesConfigEnv("GIT_CONFIG_SYSTEM=/tmp/evil git push origin main"), true);
+assert.equal(pushUsesConfigEnv("GIT_CONFIG=/tmp/evil git push origin main"), true, "bare GIT_CONFIG redirects config too");
+assert.equal(pushUsesConfigEnv('$env:GIT_CONFIG_COUNT = "1"; git push origin main'), true, "PowerShell env form");
+// Must not fire on ordinary pushes, or on the documented keepalive workaround.
+assert.equal(pushUsesConfigEnv("git -C C:/CRX_Manager push origin feature"), false);
+assert.equal(pushUsesConfigEnv('GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" git -C /repo push origin feature'), false, "transport env is not a destination override");
+assert.equal(pushUsesConfigEnv("GIT_CONFIG_COUNT=1 git commit -m x"), false, "not a push");
+assert.equal(pushUsesConfigEnv(""), false);
+assert.equal(pushUsesConfigEnv(null), false);
+// A variable that merely ENDS in the name is not an override.
+assert.equal(pushUsesConfigEnv("MY_GIT_CONFIG_COUNT=1 git push origin main"), false);
+
+// --- `--repo` vs a positional destination -------------------------------------
+// git-push: "if both are specified, the command-line argument takes precedence".
+// Verified against git 2.54 on 2026-07-30.
+assert.equal(
+  pushDestinationToken(`git push --repo=https://example.invalid/harmless.git ${CRX_URL} HEAD:main`),
+  CRX_URL,
+  "a positional destination overrides --repo, exactly as git does",
+);
+assert.equal(pushDestinationToken(`git push --repo=${CRX_URL}`), CRX_URL, "--repo still names the destination when there is no positional");
+assert.equal(pushDestinationToken(`git push --repo ${CRX_URL}`), CRX_URL, "separate-argument --repo form");
+assert.equal(pushDestinationToken(`git push --repo=${CRX_URL} -- origin main`), "origin", "after `--` the positional still wins");
+assert.equal(pushDestinationToken("git push origin main"), "origin");
+assert.equal(pushDestinationToken("git push"), null);
 
 console.log("OK - codex push shared library checks passed.");
