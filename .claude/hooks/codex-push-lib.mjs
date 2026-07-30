@@ -328,7 +328,13 @@ export function pushUsesConfigEnv(cmd) {
   // Covers `VAR=x git push`, `export VAR=x; git push`, `set VAR=x`, and the
   // PowerShell `$env:VAR = "x"` form. Bare `GIT_CONFIG=` (a config file path)
   // counts too — it redirects config just as effectively.
-  return /(?:^|[;&|(\r\n]|\s)(?:\$env:)?GIT_CONFIG(?:_COUNT|_KEY_\d+|_VALUE_\d+|_GLOBAL|_SYSTEM|_NOSYSTEM)?\s*=/i.test(text);
+  //
+  // The leading boundary must include quote characters. Codex's fourth
+  // 2026-07-30 review caught that `env 'GIT_CONFIG_COUNT=1' git push ...` slipped
+  // through the earlier class: the shell strips the quotes and Git sees the
+  // assignment, but the detector saw a `'` where it demanded whitespace. `_` is
+  // still not in the class, so an unrelated `MY_GIT_CONFIG_COUNT=1` stays allowed.
+  return /(?:^|[;&|(\r\n'"]|\s)(?:\$env:)?GIT_CONFIG(?:_COUNT|_KEY_\d+|_VALUE_\d+|_GLOBAL|_SYSTEM|_NOSYSTEM)?\s*=/i.test(text);
 }
 
 // URL rewrites are the other way inline-free config can redirect a push:

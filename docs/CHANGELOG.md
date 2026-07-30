@@ -174,6 +174,41 @@ protocol caught it in one run, and the check moved to the whole command. The uni
 chained forms too, but the lesson is the older one: a guard is only proven by running it, and a test
 that exercises the helper instead of the hook can be green while the hook is open.
 
+### Round four: the same lesson again, one layer down
+
+The fourth proof run returned `BLOCKERS` on three findings. All three were real.
+
+**The `GIT_CONFIG*` denial had a hole the size of a quote mark.** The detector required whitespace or
+a command separator before the variable name, so `env 'GIT_CONFIG_COUNT=1' 'GIT_CONFIG_KEY_0=…' git -C <repo> push origin main`
+did not match: the shell strips the quotes and Git applies the variable, but the guard saw a `'` where
+it demanded a space. Driving the real hook against the real CRX Manager checkout with that command
+returned **ALLOWED** — Codex's finding reproduced end-to-end, not merely accepted. The boundary class
+now includes quote characters; `MY_GIT_CONFIG_COUNT=1` still passes, because `_` is not in the class.
+Reverting the one character reopens the hole and the suite goes red on it.
+
+**The tests moved from the helper to the hook.** Codex asked for full-hook quoted-environment
+coverage and was right to: round three's near-miss was precisely a green helper over an open hook.
+`codex-push-lib.test.mjs` now builds a throwaway repository whose `origin` points at a local bare
+repo, then drives `codex-push-guard.mjs` over its stdin protocol — five redirect forms denied
+(single-quoted, double-quoted, bare, own-segment, PowerShell), and two controls that must stay
+allowed: an ordinary push to that unrelated remote, and the documented `GIT_SSH_COMMAND` keepalive.
+
+**The memory backup scanned one copy of a file and shipped another.** Staging read each note once to
+scan it for credentials and a second time to copy it. A memory written between those two reads landed
+in the permanent snapshot having never been scanned. Every note is now read exactly once, and the
+same bytes are handed to the scan and to the writer — `scanForSecrets` takes buffers rather than
+paths, which is what makes the double read impossible rather than merely unlikely.
+
+**`--verify` reported success on a directory containing nothing but `{}`.** `manifest.files ?? []`
+made the comparison loop run zero times, so "verified" meant "there was nothing to check" — the
+opposite of what the command exists for, and the failure mode a restore would hit at the worst
+possible moment. Verification now validates the manifest before trusting it: the snapshot kind, a
+non-empty entry list, well-formed entries, `MEMORY.md` present, and `file_count`/`total_bytes`
+agreeing with the entries. A new `scripts/backup-claude-memory.test.mjs` (31 assertions, wired into
+`npm run test:correction-guards`) covers staging, verification, tamper and extra-file detection, the
+secret scan, and the CLI itself; removing the hardening turns the `{}` case red with the exact
+symptom Codex described.
+
 ## 2026-07-29 — agent memory is now backed up off-site, and permanently barred from this public repo
 
 162 stale agent-memory notes had been sitting untracked in the main checkout since 2026-07-26,

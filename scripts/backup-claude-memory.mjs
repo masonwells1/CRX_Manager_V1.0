@@ -45,9 +45,13 @@ import {
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const MANIFEST = "manifest.json";
 const INDEX_FILE = "MEMORY.md";
+// One spelling of the manifest kind, shared by the writer and both readers, so a
+// rename can never leave a validator silently accepting the old value.
+const SNAPSHOT_KIND = "claude-agent-memory-snapshot";
 
 function usage(msg) {
   if (msg) console.error(`USAGE ERROR: ${msg}\n`);
@@ -132,7 +136,7 @@ function assertSafeDestination(outDir, source) {
   } catch {
     return `FAIL: ${MANIFEST} in ${outDir} is not valid JSON — refusing to treat it as a snapshot. Nothing was changed.`;
   }
-  if (previous?.kind !== "claude-agent-memory-snapshot" || !Array.isArray(previous.files)) {
+  if (previous?.kind !== SNAPSHOT_KIND || !Array.isArray(previous.files)) {
     return `FAIL: ${MANIFEST} in ${outDir} is not a memory snapshot manifest. Nothing was changed.`;
   }
   return { previous };
@@ -160,10 +164,15 @@ const SECRET_RES = [
   // delimiter and must not contain one.
   [/\bpostgres(?:ql)?:\/\/[^:\s]+:(?![<{$])[^@\s<>{}$]{6,}@/, "database URL with inline password"],
 ];
-function scanForSecrets(source, names) {
+// Scans BUFFERS, not paths. Codex's fourth 2026-07-30 review found a race in the
+// earlier path-based version: staging read every file once to scan it and a
+// second time to copy it, so a memory written between those two reads could land
+// in the permanent snapshot having never been scanned. The caller now reads each
+// file exactly once and hands the same bytes to this scan and to the writer.
+function scanForSecrets(entries) {
   const hits = [];
-  for (const name of names) {
-    const lines = readFileSync(path.join(source, name), "utf8").split(/\r?\n/);
+  for (const { name, buf } of entries) {
+    const lines = buf.toString("utf8").split(/\r?\n/);
     lines.forEach((line, index) => {
       for (const [re, label] of SECRET_RES) {
         // Never echo the matched text — printing it would copy the credential
@@ -207,7 +216,14 @@ function stage(outDir, sourceArg) {
   // which was the whole point), so the compensating control is that a credential
   // must never enter the snapshot in the first place. This scan runs BEFORE any
   // file is written and aborts the whole staging run, so nothing reaches a commit.
-  const secrets = scanForSecrets(source, names);
+  //
+  // Read every note ONCE, here, and carry those exact bytes through the scan and
+  // the copy below. Reading again at copy time would leave a window in which a
+  // concurrent session could add a credential to a note after it was cleared
+  // (Codex round-4, 2026-07-30). The notes are a few hundred KB; holding them in
+  // memory costs nothing and closes the window completely.
+  const entries = names.map((name) => ({ name, buf: readFileSync(path.join(source, name)) }));
+  const secrets = scanForSecrets(entries);
   if (secrets.length > 0) {
     console.error(
       `FAIL: refusing to stage — ${secrets.length} possible secret(s) found in the memory notes.\n` +
@@ -229,8 +245,8 @@ function stage(outDir, sourceArg) {
 
   const files = [];
   let totalBytes = 0;
-  for (const name of names) {
-    const buf = readFileSync(path.join(source, name));
+  for (const { name, buf } of entries) {
+    // `buf` is the SAME buffer the secret scan above inspected — not a re-read.
     const dest = path.join(outDir, name);
     writeFileSync(dest, buf);
     // Re-read what actually landed: a short write must fail the run, not ship.
@@ -262,7 +278,7 @@ function stage(outDir, sourceArg) {
     path.join(outDir, MANIFEST),
     `${JSON.stringify(
       {
-        kind: "claude-agent-memory-snapshot",
+        kind: SNAPSHOT_KIND,
         source,
         completed_at: new Date().toISOString(),
         file_count: files.length,
@@ -295,8 +311,42 @@ function verify(dir) {
     return 1;
   }
 
+  // Validate the manifest ITSELF before trusting anything it says. Codex's
+  // fourth 2026-07-30 review pointed out that a directory containing nothing but
+  // `{}` as its manifest passed: `manifest.files ?? []` made the comparison loop
+  // run zero times and the run reported OK. "Verified" then meant "there was
+  // nothing to check", which is the opposite of what this command is for.
+  if (manifest?.kind !== SNAPSHOT_KIND) {
+    console.error(`FAIL: ${MANIFEST} is not a ${SNAPSHOT_KIND} manifest (kind: ${JSON.stringify(manifest?.kind)})`);
+    return 1;
+  }
+  if (!Array.isArray(manifest.files) || manifest.files.length === 0) {
+    console.error(`FAIL: ${MANIFEST} lists no files — an empty snapshot is never valid.`);
+    return 1;
+  }
+  const malformed = manifest.files.filter(
+    (entry) => !entry || typeof entry.name !== "string" || !Number.isInteger(entry.bytes) || typeof entry.sha256 !== "string",
+  );
+  if (malformed.length > 0) {
+    console.error(`FAIL: ${MANIFEST} has ${malformed.length} entr(ies) missing name/bytes/sha256.`);
+    return 1;
+  }
+  if (!manifest.files.some((entry) => entry.name === INDEX_FILE)) {
+    console.error(`FAIL: ${MANIFEST} does not list ${INDEX_FILE} — that is not a memory snapshot.`);
+    return 1;
+  }
+  if (manifest.file_count !== manifest.files.length) {
+    console.error(`FAIL: ${MANIFEST} says file_count=${manifest.file_count} but lists ${manifest.files.length} files.`);
+    return 1;
+  }
+  const declaredBytes = manifest.files.reduce((sum, entry) => sum + entry.bytes, 0);
+  if (manifest.total_bytes !== declaredBytes) {
+    console.error(`FAIL: ${MANIFEST} says total_bytes=${manifest.total_bytes} but its entries sum to ${declaredBytes}.`);
+    return 1;
+  }
+
   const problems = [];
-  for (const entry of manifest.files ?? []) {
+  for (const entry of manifest.files) {
     const file = path.join(dir, entry.name);
     if (!existsSync(file)) {
       problems.push(`missing: ${entry.name}`);
@@ -307,7 +357,7 @@ function verify(dir) {
     else if (sha256(buf) !== entry.sha256) problems.push(`content differs: ${entry.name}`);
   }
   const extra = mdFiles(dir).filter(
-    (n) => !(manifest.files ?? []).some((e) => e.name === n)
+    (n) => !manifest.files.some((e) => e.name === n)
   );
   for (const name of extra) problems.push(`not in manifest: ${name}`);
 
@@ -317,7 +367,7 @@ function verify(dir) {
     return 1;
   }
   console.log(
-    `OK: ${(manifest.files ?? []).length} files match ${MANIFEST} ` +
+    `OK: ${manifest.files.length} files match ${MANIFEST} ` +
     `(snapshot taken ${manifest.completed_at}).`
   );
   return 0;
@@ -345,13 +395,23 @@ function main(argv) {
   return stageDir ? stage(stageDir, flag("--source")) : verify(verifyDir);
 }
 
+// Exported so the tests can call the real functions rather than re-implementing
+// them. Importing this file must therefore NOT run the CLI, hence the
+// invoked-directly check below.
+export { scanForSecrets, stage, verify, SNAPSHOT_KIND, MANIFEST, INDEX_FILE };
+
+const invokedDirectly =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
 // Exit 1 means "the snapshot is not trustworthy" — a check ran and failed. An
 // unexpected crash (permissions, a dangling symlink, a short read) is a
 // different thing and must not wear the same code, or the runbook's exit
 // contract is a lie and a broken environment reads as a failed verification.
-try {
-  process.exit(main(process.argv.slice(2)));
-} catch (error) {
-  console.error(`FAIL: ${error?.message ?? error}`);
-  process.exit(3);
+if (invokedDirectly) {
+  try {
+    process.exit(main(process.argv.slice(2)));
+  } catch (error) {
+    console.error(`FAIL: ${error?.message ?? error}`);
+    process.exit(3);
+  }
 }

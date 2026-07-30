@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
+import { scratchHookEnvironment } from "./git-test-env.mjs";
 import {
   claudeProofValid,
   contentIsRisky,
@@ -336,6 +341,14 @@ assert.equal(pushUsesConfigEnv(""), false);
 assert.equal(pushUsesConfigEnv(null), false);
 // A variable that merely ENDS in the name is not an override.
 assert.equal(pushUsesConfigEnv("MY_GIT_CONFIG_COUNT=1 git push origin main"), false);
+// Quoted assignments. The shell strips the quotes and Git still applies the
+// variable, so a detector that demands whitespace before the name is open.
+// Codex round-4 (2026-07-30) probed exactly this and got `false`.
+assert.equal(pushUsesConfigEnv(`env 'GIT_CONFIG_COUNT=1' 'GIT_CONFIG_KEY_0=remote.origin.pushurl' 'GIT_CONFIG_VALUE_0=${CRX_URL}' git -C /repo push origin main`), true, "single-quoted env assignment");
+assert.equal(pushUsesConfigEnv(`env "GIT_CONFIG_COUNT=1" git -C /repo push origin main`), true, "double-quoted env assignment");
+assert.equal(pushUsesConfigEnv("env 'GIT_CONFIG_GLOBAL=/tmp/evil' git push origin main"), true, "quoted GIT_CONFIG_GLOBAL");
+assert.equal(pushUsesConfigEnv("GIT_CONFIG_COUNT='1' git push origin main"), true, "quoted VALUE, unquoted name");
+assert.equal(pushUsesConfigEnv("env 'MY_GIT_CONFIG_COUNT=1' git push origin main"), false, "quoting does not turn an unrelated variable into an override");
 
 // --- `--repo` vs a positional destination -------------------------------------
 // git-push: "if both are specified, the command-line argument takes precedence".
@@ -350,5 +363,71 @@ assert.equal(pushDestinationToken(`git push --repo ${CRX_URL}`), CRX_URL, "separ
 assert.equal(pushDestinationToken(`git push --repo=${CRX_URL} -- origin main`), "origin", "after `--` the positional still wins");
 assert.equal(pushDestinationToken("git push origin main"), "origin");
 assert.equal(pushDestinationToken("git push"), null);
+
+// ── full-hook end-to-end: the guard itself, driven over stdin ────────────────
+// Codex round-4 (2026-07-30) asked for these specifically, and it was right to:
+// the helper assertions above were all green while an earlier version of this
+// same check sat in the wrong place in the hook and let the chained form
+// through. Exercising the HOOK is the only thing that proves the gate closed.
+{
+  const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "codex-push-guard.mjs");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "codex-push-guard-env-"));
+  const work = path.join(tmp, "work");
+  const dest = path.join(tmp, "dest.git");
+  const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: scratchHookEnvironment(cwd, process.env) });
+
+  const runHook = (command) => {
+    const res = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ cwd: work, tool_input: { command } }),
+      encoding: "utf8",
+      env: scratchHookEnvironment(work, process.env),
+    });
+    assert.equal(res.status, 0, `guard exited ${res.status}: ${res.stderr}`);
+    const out = (res.stdout || "").trim();
+    if (!out) return { decision: "allow", reason: "" };
+    const hook = JSON.parse(out).hookSpecificOutput;
+    return { decision: hook.permissionDecision, reason: hook.permissionDecisionReason };
+  };
+
+  try {
+    mkdirSync(work, { recursive: true });
+    const init = git(["init", "-q", "--bare", dest], tmp);
+    assert.equal(init.status, 0, `bare init failed: ${init.stderr}`);
+    git(["init", "-q", "-b", "main"], work);
+    git(["config", "user.email", "test@example.com"], work);
+    git(["config", "user.name", "test"], work);
+    writeFileSync(path.join(work, "seed.txt"), "seed\n");
+    git(["add", "seed.txt"], work);
+    const seeded = git(["commit", "-qm", "seed"], work);
+    assert.equal(seeded.status, 0, `scratch commit failed: ${seeded.stderr}`);
+    // `origin` deliberately points at a local bare repo, NOT the app repo, so the
+    // control case below reaches the end of the guard and is genuinely allowed.
+    git(["remote", "add", "origin", dest], work);
+
+    const push = `git -C ${work} push origin main`;
+    const denied = (command, message) => {
+      const result = runHook(command);
+      assert.equal(result.decision, "deny", `${message} — got ${result.decision}`);
+      assert.match(result.reason, /GIT_CONFIG/, `${message} — denial should name the variable class`);
+    };
+
+    denied(`env 'GIT_CONFIG_COUNT=1' 'GIT_CONFIG_KEY_0=remote.origin.pushurl' 'GIT_CONFIG_VALUE_0=${CRX_URL}' ${push}`, "single-quoted env assignments");
+    denied(`env "GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=remote.origin.pushurl" ${push}`, "double-quoted env assignments");
+    denied(`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=${CRX_URL} ${push}`, "bare env assignments");
+    denied(`export GIT_CONFIG_KEY_0=remote.origin.pushurl; ${push}`, "assignment in its own command segment");
+    denied(`$env:GIT_CONFIG_COUNT = "1"; ${push}`, "PowerShell env form");
+
+    // Controls: the guard must not have become a blanket denier. Both of these
+    // run all the way through the destination lookups against the scratch repo.
+    assert.equal(runHook(push).decision, "allow", "an ordinary push to an unrelated remote stays allowed");
+    assert.equal(
+      runHook(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" ${push}`).decision,
+      "allow",
+      "the documented SSH keepalive workaround is a transport option, not a destination override",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
 console.log("OK - codex push shared library checks passed.");
