@@ -106,7 +106,7 @@ that has only ever seen zero. Cross-model review caught the first pattern matchi
 near-miss false positives, reading the pattern out of the `.sql` file so the two cannot drift.
 Review then hardened two separate things.
 
-The **phrase set** took four further rounds, each closing a false negative — the detector staying
+The **phrase set** took six further rounds, each closing a false negative — the detector staying
 silent on a product it should flag. "NON-RETURN VALVE" is a check valve rather than a merchandise
 policy and is excluded by a negative lookahead, but that exclusion is now narrowed twice: to
 RETURN/RETURNS and not RETURNABLE, and to the NON spelling and not NO. The equipment term is exactly
@@ -114,13 +114,17 @@ RETURN/RETURNS and not RETURNABLE, and to the NON spelling and not NO. The equip
 lookahead dropped them silently. That is why NO and NON are separate alternatives rather than the
 tidier `(no|non)`. The third round covered compound wording: the separators between the negation and
 the return word span whitespace and punctuation only, so an intervening WORD broke the match and
-"NO REFUNDS OR RETURNS" or "NOT REFUNDABLE OR RETURNABLE" went undetected. One optional
-refund/exchange/credit clause is now permitted there, from a closed vocabulary — allowing arbitrary
-filler words would flag names like "NO TILL SEED RETURN TRAY". The fourth round extended that clause
+"NO REFUNDS OR RETURNS" or "NOT REFUNDABLE OR RETURNABLE" went undetected. A repeating
+refund/exchange/credit clause is now permitted there, from a closed vocabulary — the repetition
+because these lists usually run to three items ("NO REFUNDS, EXCHANGES, OR RETURNS"), the closed
+vocabulary because allowing arbitrary filler words would flag names like "NO TILL SEED RETURN TRAY".
+The fourth round extended that clause
 to the NON spelling and added the opposite word order: "RETURNS NOT ACCEPTED" and "RETURN NOT
 ALLOWED" reject a return just as plainly, and every negation-first alternative missed them. The verb
 list is closed for the same reason — "RETURN LABEL NOT INCLUDED" must not flag. A fifth round widened
-that branch to auxiliaries ("RETURNS WILL NOT BE ACCEPTED", "RETURNS CANNOT BE ACCEPTED"). A
+that branch to auxiliaries ("RETURNS WILL NOT BE ACCEPTED", "RETURNS CANNOT BE ACCEPTED"), and a
+sixth made the compound clause repeat rather than fire once, which is what finally caught the
+three-item lists. A
 phrase-matching detector can always be widened by another synonym, so the list is the reviewed set
 rather than a claim of completeness; the live catalog is separately proven fully covered, and adding
 a phrase later is a one-line change plus a fixture, not a migration.

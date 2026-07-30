@@ -64,12 +64,16 @@
 --   whitespace and punctuation, so an intervening WORD used to break the match
 --   and the product kept the 'unknown' default with the sweep silent — another
 --   false negative on the unsafe side. All three negation alternatives — NO,
---   NOT and NON — therefore allow one optional refund/exchange/credit clause
---   between the negation and the return word. The vocabulary is a closed list
---   on purpose: allowing any intervening words would let "NO TILL ... RETURN
---   TRAY" style names match. On the NON alternative the clause is attached to
---   the RETURNABLE arm only, leaving the RETURN/RETURNS arm and its valve
---   lookahead exactly as described above.
+--   NOT and NON — therefore allow refund/exchange/credit clauses between the
+--   negation and the return word. The clause group REPEATS, because the list is
+--   often three items long ("NO REFUNDS, EXCHANGES, OR RETURNS"); allowing only
+--   one clause left that ordinary wording unmatched. The vocabulary is a closed
+--   list on purpose: allowing any intervening words would let "NO TILL ...
+--   RETURN TRAY" style names match, and the closed list is what keeps "NO
+--   REFUNDS ON TILLAGE RETURN TRAY" from flagging even with repetition on. On
+--   the NON alternative the clause is attached to the RETURNABLE arm only,
+--   leaving the RETURN/RETURNS arm and its valve lookahead exactly as described
+--   above.
 --
 -- * The negation does not always come first. "RETURNS NOT ACCEPTED" and
 --   "RETURN NOT ALLOWED" reject a return just as plainly, and every
@@ -107,7 +111,7 @@ WITH flagged AS (
          p.return_policy,
          p.is_active
     FROM public.products p
-   WHERE p.product_name ~* '(\mnon[[:space:][:punct:]]*(return(s)?\M(?![[:space:][:punct:]]*valves?\M)|((refundable|exchangeable)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?returnable\M))|(\mno[[:space:][:punct:]]*((refunds?|exchanges?|credits?)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?return(s|able)?\M)|(\mnot[[:space:][:punct:]]*((refundable|exchangeable)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)?returnable\M)|(\mreturns?[[:space:][:punct:]]*((are|is|will|would|shall|can|could|may|might|must|do|does|did)[[:space:][:punct:]]*)*not[[:space:][:punct:]]*(be[[:space:][:punct:]]*)?(accepted|acceptable|allowed|allowable|permitted|permissible|honored|honoured)\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*(are[[:space:][:punct:]]*)?final\M)'
+   WHERE p.product_name ~* '(\mnon[[:space:][:punct:]]*(return(s)?\M(?![[:space:][:punct:]]*valves?\M)|((refundable|exchangeable)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)*returnable\M))|(\mno[[:space:][:punct:]]*((refunds?|exchanges?|credits?)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)*return(s|able)?\M)|(\mnot[[:space:][:punct:]]*((refundable|exchangeable)[[:space:][:punct:]]*(or|and)?[[:space:][:punct:]]*)*returnable\M)|(\mreturns?[[:space:][:punct:]]*((are|is|will|would|shall|can|could|may|might|must|do|does|did)[[:space:][:punct:]]*)*not[[:space:][:punct:]]*(be[[:space:][:punct:]]*)?(accepted|acceptable|allowed|allowable|permitted|permissible|honored|honoured)\M)|(\mfinal[[:space:][:punct:]]*sales?\M)|(\msales?[[:space:][:punct:]]*(are[[:space:][:punct:]]*)?final\M)'
 )
 SELECT 'products:' || f.id::text AS violation_key,
        'product name asserts it cannot be returned but return_policy is '

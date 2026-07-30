@@ -164,6 +164,12 @@ const MUST_MATCH: Array<[string, string]> = [
   ['RETURNS ARE NOT HONORED', 'ITEM THIRTYFIVE RETURNS ARE NOT HONORED'],
   ['RETURN MAY NOT BE ALLOWED', 'ITEM THIRTYSIX RETURN MAY NOT BE ALLOWED'],
   ['RETURNS ARE NOT ACCEPTABLE', 'ITEM THIRTYSEVEN RETURNS ARE NOT ACCEPTABLE'],
+  // The clause list is usually longer than one item, so the clause group has to
+  // repeat. With a single optional clause every one of these stayed unmatched.
+  ['NO REFUNDS, EXCHANGES, OR RETURNS', 'ITEM THIRTYEIGHT NO REFUNDS, EXCHANGES, OR RETURNS'],
+  ['NO REFUNDS OR EXCHANGES OR RETURNS', 'ITEM THIRTYNINE NO REFUNDS OR EXCHANGES OR RETURNS'],
+  ['NOT REFUNDABLE, EXCHANGEABLE OR RETURNABLE', 'ITEM FORTY NOT REFUNDABLE, EXCHANGEABLE OR RETURNABLE'],
+  ['NON REFUNDABLE, EXCHANGEABLE OR RETURNABLE', 'ITEM FORTYONE NON REFUNDABLE, EXCHANGEABLE OR RETURNABLE'],
 ];
 
 // Near misses. Each of these contains the letters of a trigger phrase but does
@@ -184,6 +190,9 @@ const MUST_NOT_MATCH: Array<[string, string]> = [
   // The intervening-word vocabulary is a closed list for this reason: any
   // filler word between the negation and RETURN would flag these.
   ['unrelated words between NO and RETURN', 'NO TILL SEED RETURN TRAY'],
+  // Repeating the clause group widened the reach; the closed vocabulary is what
+  // stops it running away. An unlisted word after a listed one still blocks.
+  ['a listed clause followed by an unlisted word', 'NO REFUNDS ON TILLAGE RETURN TRAY'],
   ['"no" ending a word, plural', 'CASINO RETURNS DISPLAY'],
   // The return-first verb list is closed for the same reason: RETURN and NOT
   // in one name do not by themselves reject a return.
