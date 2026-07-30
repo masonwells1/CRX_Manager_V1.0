@@ -25,7 +25,7 @@ These mostly run when Claude Code tries to Write or Edit a file — they refuse 
 | `review-proof-guard.mjs` | Native Write/Edit, MCP filesystem paths, or shell commands that directly name `.claude/session-state/claude-review-push.json` or `codex-review-*.json`; wired for both Claude and Codex. Legitimate review wrappers — `scripts/run-claude-review.mjs` (Claude proof), `scripts/write-codex-push-proof.mjs` (Codex push proof), and `scripts/write-apply-proofs.mjs` (migration proof pair — machine-minted 2026-07-16: every stamp executes EACH required reviewer charter, `rls-security-reviewer` + `migration-drift-reviewer`, as its own trusted-Codex machine-verdict run and mints only when ALL return CLEAN; the caller-supplied `--codex-verdict <v>` form and the say-so reviewer-only stamp were both removed) — derive the path internally and never name it in the tool command, so they pass. | Prevents accidental or one-line self-certification of the second-model review gate. |
 | `pr-merge-guard.mjs` (+ shared `codex-push-lib.mjs`) | PR merges into `main` — `gh pr merge`, `gh api PUT .../pulls/N/merge`, or a GitHub-MCP `merge_pull_request` tool call (GraphQL `mergePullRequest` is denied outright as unresolvable). Added 2026-07-16: the 2026-07-14 `protect-main` ruleset moved the landing action from `git push` to PR merge, and `codex-push-guard`'s Codex gate never followed. Raw REST merges outside gh (`curl`/`wget`/`Invoke-RestMethod`/fetch naming `.../pulls/<n>/merge`) are denied outright — the guard cannot resolve their PR context, so they fail closed (Codex finding on this guard's own PR, 2026-07-16). Resolves the PR via `gh pr view` (fail closed if unresolvable), denies merges into `master`/`production`, requires a fully green pipeline (`mergeStateStatus` CLEAN + every check successful; for a NON-risky diff `--auto` is exempt from the green requirement because GitHub itself enforces the required checks; for a RISKY diff `--auto` is denied outright — auto-merge lands later-pushed commits after this gate has run, with a stale proof — Codex round-4 finding on this guard’s own PR), classifies the PR diff with the SAME risky-path/risky-content rules as the push gate, and — for risky diffs — requires the same fresh (<30 min), head- and base-bound `codex-review-<sha>.json` proof minted only by `scripts/write-codex-push-proof.mjs`. Non-risky green merges pass (the standing 2026-06-16 landing authorization stays intact). Tests: `.claude/hooks/pr-merge-guard.test.mjs`. | A Claude session one-click-merging un-Codex-reviewed money/RLS/migration code to production — the post-branch-protection twin of the "has codex reviewed all of these?" gap. |
 | `factory-state-integrity-guard.mjs` | Direct state paths and shell mutations; direct imports/calls of the state library; inline code and governance self-edits in an active lane. Protected governance includes both Claude settings manifests (including hook-disabling `.claude/settings.local.json`), Codex wiring, trusted writers/imports, factory scripts, and `package.json`; governed shell sessions also deny named in-place writers and opaque `git apply`/checkout/restore routes. Agents cannot invoke the owner/identity hooks directly or read, inject, or forward one-time CLI permits. The library separately restricts mutation to exact canonical entrypoints and call stacks. | Defense-in-depth against forged approvals, identities, proofs, stages, or self-disabled hooks inside the agent-tool boundary; it is not an operating-system cryptographic sandbox |
-| `factory-lane-guard.mjs` | Native edits, MCP filesystem writers, shell file commands/redirection, Git mutation, and unknown repository scripts in a session that requested factory/autonomous work until its immutable ticket has an exact chat approval and deterministic lane-start validation passes; the same write classification enforces global pause and one-active-lane. Mutating factory CLI commands receive a 30-second, one-use permit bound to the real hook session. | Turns “approve before autonomous work” and session identity into an enforced lane boundary shared by Claude and Codex |
+| `factory-lane-guard.mjs` | Native edits, MCP filesystem writers, shell file commands/redirection, Git mutation, and unknown repository scripts in a session that requested factory/autonomous work until its immutable ticket has an exact chat approval and deterministic lane-start validation passes; the same write classification enforces global pause and one-active-lane. Inside the winning lane, only structured target-visible edits, read-only shell inspection, and the canonical permit-bound CLI remain available; fixed harnesses run through the CLI broker, while opaque shell/helper/MCP process execution denies. Mutating factory CLI commands receive a 30-second, one-use permit bound to the real hook session. | Turns “approve before autonomous work” and session identity into an enforced lane boundary shared by Claude and Codex |
 
 ### Bash/PowerShell PreToolUse Hook (`.claude/hooks/`)
 Runs on the `Bash|PowerShell` matcher, before a shell command executes. Deterministic regex, hard-blocking (not advisory).
@@ -72,18 +72,25 @@ and hash-chained under an exclusive writer lock. One incomplete trailing event i
 degraded warning and cannot advance state; any interior corruption or broken chain fails closed.
 Approval receipts expire after 24 hours and bind the exact question, ticket, session, and
 `origin/main`. Build-stage and evidence changes remain bound to the session that started the lane.
-Copied evidence is informational; morning review and closeout require `factory.mjs evidence run`.
-The harness name must appear in the immutable approved ticket and the factory's fixed allowlist, its
+The CLI exposes no arbitrary local-file evidence attachment; morning review and closeout require
+`factory.mjs evidence run`. The harness name must appear in the immutable approved ticket and the factory's fixed allowlist, its
 resolved npm script body must equal `origin/main`, and the evidence binds the script/body/package/base
 hashes plus its real zero exit, output, and a content fingerprint of every tracked and non-ignored
 repository file. The gate proves the tree stayed frozen during the harness and rechecks the content
-fingerprint before morning review and closeout, invalidating proof after any source/test edit. While
-one pilot lane is active, other chats' build writes deny, even from a fresh session.
+fingerprint before morning review and closeout, invalidating proof after any source/test edit. The
+broker also fingerprints shared factory state around the child harness and raises an emergency hold
+if the child indirectly mutates either protected surface. Secret-shaped harness output is rejected
+before persistence. While
+one pilot lane is active, other chats' build writes deny, even from a fresh session. Closeout also
+fingerprints the named landing commit and requires its content to equal the harness-proven bytes;
+production proof is bounded text and secret-shaped content is rejected. Lane start uses an
+expected-last-event compare-and-swap under the ledger lock so concurrent starts have one winner.
 
 Governed lanes cannot edit any trusted factory writer, its imported hook libraries, the Claude/Codex
 hook manifests (including `.claude/settings.local.json`), the Codex adapter, `package.json`, or the
 factory scripts themselves. Named in-place shell writers and opaque Git apply/checkout/restore routes
-deny in governed sessions so a patch cannot silently rewrite those controls. If state
+deny in governed sessions; an active lane also cannot execute generated helpers or opaque process
+tools, so mutation targets remain visible to structured edit guards. If state
 verification fails, only repository mutations deny; reads and the canonical status/recovery CLI remain
 available so the failure can be diagnosed without disabling every agent window.
 

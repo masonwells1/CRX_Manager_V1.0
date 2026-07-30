@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
-  currentOriginMain,
   loadFactorySnapshot,
   mintFactoryCliPermit,
   resolveFactoryPaths,
@@ -22,15 +21,32 @@ for (const name of Object.keys(process.env)) {
 const script = path.join(root, "scripts", "factory.mjs");
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-cli-"));
 const fixtureDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-fixture-"));
+const fixtureRepo = path.join(fixtureDir, "repo");
+mkdirSync(fixtureRepo, { recursive: true });
+writeFileSync(path.join(fixtureRepo, "package.json"), `${JSON.stringify({
+  scripts: {
+    "verify-deps": "node -e \"process.stdout.write('FACTORY_TEST_HARNESS_PASS')\"",
+  },
+}, null, 2)}\n`);
+for (const args of [
+  ["init", "-q", "-b", "main"],
+  ["add", "package.json"],
+  ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"],
+  ["update-ref", "refs/remotes/origin/main", "HEAD"],
+]) {
+  const result = spawnSync("git", args, { cwd: fixtureRepo, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+}
 const env = {
   ...process.env,
   CRX_FACTORY_TEST_MODE: "1",
   CRX_FACTORY_TEST_STATE_DIR: stateDir,
   CRX_FACTORY_TEST_CLOSEOUT_DIR: path.join(fixtureDir, "closeout"),
+  CRX_FACTORY_TEST_REPO_DIR: fixtureRepo,
 };
 process.env.CRX_FACTORY_TEST_MODE = "1";
 process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
-const paths = resolveFactoryPaths(root, env);
+const paths = resolveFactoryPaths(fixtureRepo, env);
 const sessionId = "cli-thread";
 const jobId = "cli-integration-job";
 let assertions = 0;
@@ -46,6 +62,12 @@ function run(args, identity = { sessionId, actorTool: "codex" }) {
     },
     encoding: "utf8",
   });
+}
+
+function gitHead(cwd) {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
 }
 
 function pass(result, message) {
@@ -72,6 +94,13 @@ const missingPermit = spawnSync(process.execPath, [script, "ticket", "draft", "-
 });
 assertions++;
 assert.notEqual(missingPermit.status, 0, "mutating CLI refuses a direct invocation without a trusted hook permit");
+const unsafeTestRepo = spawnSync(process.execPath, [script, "status", "--json"], {
+  cwd: root,
+  env: { ...env, CRX_FACTORY_TEST_REPO_DIR: root },
+  encoding: "utf8",
+});
+assertions++;
+assert.notEqual(unsafeTestRepo.status, 0, "test repository override cannot escape the temporary test boundary");
 pass(run(["ticket", "draft", "--file", ticketFile]), "draft ticket");
 
 const questionFile = path.join(fixtureDir, "question.txt");
@@ -103,9 +132,14 @@ appendFactoryEvent(paths, {
 });
 pass(run(["lane", "start", "--job", jobId]), "start lane");
 
-const proofFile = path.join(fixtureDir, "proof.txt");
-writeFileSync(proofFile, "FACTORY_CLI_PROOF_PASS\n");
-pass(run(["evidence", "attach", "--job", jobId, "--file", proofFile, "--label", "CLI proof", "--kind", "test"]), "attach evidence");
+const arbitraryEvidence = run([
+  "evidence", "attach",
+  "--job", jobId,
+  "--file", path.join(fixtureDir, "proof.txt"),
+  "--label", "Untrusted local file",
+]);
+assertions++;
+assert.notEqual(arbitraryEvidence.status, 0, "factory CLI exposes no arbitrary-file evidence attachment route");
 const crossSessionEvidence = run(
   ["evidence", "run", "--job", jobId, "--harness", "verify-deps", "--label", "Wrong session"],
   { sessionId: "other-thread", actorTool: "claude" },
@@ -133,7 +167,7 @@ const snapshot = loadFactorySnapshot(paths);
 assertions++;
 assert.equal(snapshot.jobs[0].stage, "awaiting-morning-review");
 assertions++;
-assert.equal(snapshot.jobs[0].evidence.length, 2);
+assert.equal(snapshot.jobs[0].evidence.length, 1);
 assertions++;
 assert.equal(snapshot.jobs[0].evidence.filter((item) => item.verified).length, 1);
 assertions++;
@@ -172,14 +206,34 @@ appendFactoryEvent(paths, {
     reviewQuestionHash: reviewed.jobs[0].reviewQuestionHash,
   },
 });
-const productionProof = path.join(fixtureDir, "production-proof.txt");
-writeFileSync(productionProof, "Production behavior verified after landing.\n");
+const productionProof = "Production behavior verified after landing.";
 const closeoutArgs = [
   "closeout", "write",
   "--job", jobId,
-  "--landing-commit", currentOriginMain(root),
-  "--production-proof-file", productionProof,
+  "--landing-commit", gitHead(fixtureRepo),
+  "--production-proof", productionProof,
 ];
+writeFileSync(path.join(fixtureRepo, "old.txt"), "old landing content\n");
+let gitResult = spawnSync("git", ["add", "old.txt"], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitResult.status, 0, gitResult.stderr);
+gitResult = spawnSync("git", ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "different ancestor"], {
+  cwd: fixtureRepo,
+  encoding: "utf8",
+});
+assert.equal(gitResult.status, 0, gitResult.stderr);
+const differentAncestor = gitHead(fixtureRepo);
+gitResult = spawnSync("git", ["reset", "--soft", "HEAD^"], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitResult.status, 0, gitResult.stderr);
+gitResult = spawnSync("git", ["reset"], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitResult.status, 0, gitResult.stderr);
+rmSync(path.join(fixtureRepo, "old.txt"));
+const wrongLanding = run(closeoutArgs.map((value) => value === gitHead(fixtureRepo) ? differentAncestor : value));
+assertions++;
+assert.notEqual(wrongLanding.status, 0, "closeout refuses an origin/main ancestor whose content differs from the proven bytes");
+const secretProof = run(closeoutArgs.map((value) =>
+  value === productionProof ? "OPENAI_API_KEY=sk-this-must-never-be-persisted" : value));
+assertions++;
+assert.notEqual(secretProof.status, 0, "closeout refuses secret-shaped production proof text");
 writeFileSync(paths.lockPath, `${JSON.stringify({
   pid: process.pid,
   createdAt: new Date().toISOString(),
@@ -202,8 +256,7 @@ const repeatedCloseout = run(closeoutArgs);
 pass(repeatedCloseout, "repeat an already successful closeout");
 assertions++;
 assert.equal(JSON.parse(repeatedCloseout.stdout).alreadyClosed, true, "successful closeout retry is idempotent");
-const forgedProof = path.join(fixtureDir, "different-production-proof.txt");
-writeFileSync(forgedProof, "Different proof must not replace the ledger record.\n");
+const forgedProof = "Different proof must not replace the ledger record.";
 const conflictingCloseout = run(closeoutArgs.map((value) => value === productionProof ? forgedProof : value));
 assertions++;
 assert.notEqual(conflictingCloseout.status, 0, "idempotent closeout refuses conflicting proof");

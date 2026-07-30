@@ -3,6 +3,8 @@
 import assert from "node:assert/strict";
 import {
   appendFileSync,
+  existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -21,9 +23,12 @@ import {
   mintFactoryCliPermit,
   readEventLog,
   recoverFactoryState,
+  rejectSecretBearingText,
+  repositoryCommitFingerprint,
   repositoryContentFingerprint,
   resolveFactoryPaths,
   resolveHookFactoryPaths,
+  runHarnessEvidence,
   setEmergencyFactoryHold,
   clearEmergencyFactoryHold,
   sha256,
@@ -45,6 +50,13 @@ let pass = 0;
 const ok = (value, message) => { assert.ok(value, message); pass++; };
 const eq = (actual, expected, message) => { assert.deepEqual(actual, expected, message); pass++; };
 const throws = (fn, pattern, message) => { assert.throws(fn, pattern, message); pass++; };
+
+eq(rejectSecretBearingText("HTTP 200; behavior verified.", "proof"), "HTTP 200; behavior verified.", "ordinary proof text is accepted");
+throws(
+  () => rejectSecretBearingText("OPENAI_API_KEY=sk-this-must-not-persist", "proof"),
+  /credential or secret/,
+  "secret-shaped proof text is rejected before persistence",
+);
 
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "crx-factory-state-"));
@@ -111,6 +123,31 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     /expired before use/,
     "expired CLI permit is refused",
   );
+  rmSync(root, { recursive: true, force: true });
+}
+
+{
+  const { root, paths } = fixture();
+  const staleSnapshot = loadFactorySnapshot(paths);
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    actorTool: "codex",
+    sessionId: "lane-race-winner",
+    payload: { ownerRequest: "start one lane" },
+  }, { expectedLastEventHash: staleSnapshot.lastEventHash });
+  throws(
+    () => appendFactoryEvent(paths, {
+      type: "factory-intent",
+      jobId: null,
+      actorTool: "codex",
+      sessionId: "lane-race-loser",
+      payload: { ownerRequest: "start another lane" },
+    }, { expectedLastEventHash: staleSnapshot.lastEventHash }),
+    /changed after this decision/,
+    "stale lifecycle compare-and-swap refuses a second concurrent writer",
+  );
+  eq(loadFactorySnapshot(paths).factoryIntentSessions, ["lane-race-winner"], "only the compare-and-swap winner reaches the ledger");
   rmSync(root, { recursive: true, force: true });
 }
 
@@ -289,17 +326,56 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     stdio: "ignore",
   });
   const before = repositoryContentFingerprint(fingerprintRepo);
+  const initialCommit = repositoryCommitFingerprint(fingerprintRepo, "HEAD");
+  eq(initialCommit.repositoryContentHash, before.repositoryContentHash, "commit fingerprint matches identical working-tree bytes");
   writeFileSync(path.join(fingerprintRepo, "source.txt"), "after\n");
   const changed = repositoryContentFingerprint(fingerprintRepo);
   ok(before.repositoryContentHash !== changed.repositoryContentHash, "repository proof hash changes after source bytes change");
+  ok(initialCommit.repositoryContentHash !== changed.repositoryContentHash, "unlanded source bytes do not match the old landing commit");
   execFileSync("git", ["add", "source.txt"], { cwd: fingerprintRepo, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-m", "after"], {
     cwd: fingerprintRepo,
     stdio: "ignore",
   });
   const committed = repositoryContentFingerprint(fingerprintRepo);
+  const landed = repositoryCommitFingerprint(fingerprintRepo, "HEAD");
   eq(committed.repositoryContentHash, changed.repositoryContentHash, "repository proof hash survives committing identical content");
+  eq(landed.repositoryContentHash, changed.repositoryContentHash, "landing commit fingerprint binds the exact proven content");
   rmSync(fingerprintRepo, { recursive: true, force: true });
+}
+
+{
+  const { root, paths } = fixture();
+  const harnessRepo = mkdtempSync(path.join(tmpdir(), "crx-factory-harness-state-"));
+  writeFileSync(path.join(harnessRepo, "package.json"), `${JSON.stringify({
+    scripts: {
+      "verify-deps": "node -e \"require('node:fs').writeFileSync(process.env.FACTORY_MUTATE_TARGET,'forged')\"",
+    },
+  })}\n`);
+  for (const args of [
+    ["init", "-q", "-b", "main"],
+    ["add", "package.json"],
+    ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"],
+    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+  ]) {
+    execFileSync("git", args, { cwd: harnessRepo, stdio: "ignore" });
+  }
+  mkdirSync(paths.stateDir, { recursive: true });
+  process.env.FACTORY_MUTATE_TARGET = path.join(paths.stateDir, "forged.txt");
+  throws(
+    () => runHarnessEvidence(paths, {
+      jobId: "state-mutation-proof",
+      label: "must fail",
+      scriptName: "verify-deps",
+      cwd: harnessRepo,
+    }),
+    /factory is held for review/,
+    "trusted harness broker detects indirect mutation of factory state",
+  );
+  ok(existsSync(paths.emergencyHoldPath), "indirect harness mutation creates an emergency hold");
+  delete process.env.FACTORY_MUTATE_TARGET;
+  rmSync(harnessRepo, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true });
 }
 
 {

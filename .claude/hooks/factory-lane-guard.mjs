@@ -86,12 +86,33 @@ function isBuildMutation(toolName, toolInput) {
   return isBuildActionUnderHold(toolName, toolInput) || isShellMutation(toolName, toolInput);
 }
 
+function isOpaqueExecutionTool(toolName) {
+  const name = String(toolName || "");
+  if (/^(?:Bash|PowerShell|shell_command)$/i.test(name)) return false;
+  return /(?:start|interact|execute|run|spawn).*(?:process|command|code)|(?:process|command|code).*(?:start|execute|run|spawn)|computer[_-]?use/i.test(name);
+}
+
+function isActiveLaneShellRead(toolName, toolInput) {
+  if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return true;
+  const command = String(toolInput?.command || "").trim();
+  return SAFE_GIT_READ_RE.test(command)
+    || SAFE_SHELL_READ_RE.test(command)
+    || SAFE_VERSION_RE.test(command)
+    || /^\s*node(?:\.exe)?\s+--check\s+\S+\s*$/i.test(command);
+}
+
 let payload;
 try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { nothing(); }
 
 const sessionId = String(payload?.session_id || payload?.thread_id || payload?.conversation_id || "").trim();
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const buildMutation = isBuildMutation(payload?.tool_name, payload?.tool_input);
+const shellMutation = isShellMutation(payload?.tool_name, payload?.tool_input);
+const opaqueExecution = isOpaqueExecutionTool(payload?.tool_name);
+const shellOutsideInspection = /^(?:Bash|PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""))
+  && !isActiveLaneShellRead(payload?.tool_name, payload?.tool_input);
+const buildMutation = isBuildMutation(payload?.tool_name, payload?.tool_input)
+  || opaqueExecution
+  || shellOutsideInspection;
 const factoryCli = factoryCliInvocation(payload?.tool_name, payload?.tool_input, projectDir);
 const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type || payload?.tool_surface || "claude").toLowerCase().includes("codex")
   ? "codex"
@@ -150,6 +171,11 @@ if (governedJob.stage === "needs-ticket-ok") {
 if (governedJob.stage === "queued") {
   deny(`CRX FACTORY GATE: ticket ${governedJob.id} is approved but the deterministic lane-start check has not run. Start it through scripts/factory.mjs lane start.`);
 }
-if (ACTIVE_STAGES.has(governedJob.stage)) nothing();
+if (ACTIVE_STAGES.has(governedJob.stage)) {
+  if (shellMutation || opaqueExecution || !isActiveLaneShellRead(payload?.tool_name, payload?.tool_input)) {
+    deny("CRX FACTORY GATE: direct commands and helper-process execution are disabled inside an active lane. Use structured Write/Edit/apply_patch operations, read-only shell inspection, or the permit-bound factory CLI (including evidence run for fixed harnesses) so every mutation target remains visible to the guards.");
+  }
+  nothing();
+}
 
 deny(`CRX FACTORY GATE: job ${governedJob.id} is ${governedJob.stage}. Further build writes are parked until Mason disposes the job in chat.`);

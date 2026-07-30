@@ -272,13 +272,26 @@ function hookOutput(result) {
   });
   assertions++;
   assert.equal(allowed.stdout, "", "started governed lane permits scoped build edits");
-  const shellAllowed = run(laneHook, stateDir, {
+  denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "Set-Content src/example.ts repaired" },
-  });
-  assertions++;
-  assert.equal(shellAllowed.stdout, "", "started governed lane permits ordinary scoped shell writes");
+  }), /direct commands and helper-process execution/i, "active lane refuses shell writers whose actual file targets are not broker-visible");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/generated-helper.mjs" },
+  }), /direct commands and helper-process execution/i, "active lane cannot execute an agent-authored helper script");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__desktop_commander__start_process",
+    tool_input: { command: "node scripts/generated-helper.mjs" },
+  }), /direct commands and helper-process execution/i, "active lane cannot launch an opaque MCP helper process");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "npm run test:factory" },
+  }), /permit-bound factory CLI/i, "active lane runs fixed harnesses only through the trusted factory broker");
   const factoryCommand = run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
@@ -322,13 +335,11 @@ function hookOutput(result) {
     tool_name: "PowerShell",
     tool_input: { command: "Set-Content src/example.ts forged" },
   }), /globally paused/i, "global hold blocks shell source writes");
-  const verificationAllowed = run(laneHook, stateDir, {
+  denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "npm run test:factory" },
-  });
-  assertions++;
-  assert.equal(verificationAllowed.stdout, "", "global hold leaves approved verification harnesses available");
+  }), /globally paused/i, "global hold blocks direct harness execution; status and read-only inspection remain available");
 }
 
 {

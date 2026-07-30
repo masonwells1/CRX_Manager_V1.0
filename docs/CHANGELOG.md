@@ -311,7 +311,13 @@ writes across ticket/pause/one-lane gates; fingerprints every tracked and non-ig
 before and after a harness and rechecks it before review/closeout; redacts status identity; and requires
 each mutating CLI call to consume a 30-second, single-use permit minted from the real PreToolUse
 session. Direct permit injection, reading, forwarding, hook invocation, and identity-flag overrides
-fail closed. The focused suite now covers these routes before a fresh exact-SHA publication review.
+fail closed. A second trusted Codex publication review then found four more trust-boundary gaps.
+Closeout now fingerprints the actual landing commit and requires it to contain the exact harness-proven
+bytes; simultaneous lane starts use the ledger's compare-and-swap hash so only one can win; arbitrary
+local-file evidence attachment is removed; production verification is bounded text with credential
+patterns rejected. Active lanes may use structured file edits and fixed verification commands, but
+opaque shell/helper/MCP process execution is denied so a generated helper cannot hide its mutation
+targets from the guards. The focused suite covers these routes before another exact-SHA review.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

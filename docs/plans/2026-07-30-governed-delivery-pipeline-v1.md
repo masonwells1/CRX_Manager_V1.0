@@ -1,7 +1,7 @@
 # CRX Governed Delivery Pipeline V1
 
 Date: 2026-07-30
-Status: IMPLEMENTED — publication-blocker repairs awaiting fresh exact-SHA acceptance
+Status: IMPLEMENTED — second publication-blocker repair pass awaiting fresh exact-SHA acceptance
 Owner: Mason Wells
 Implementation driver: Codex
 Independent reviewers: Claude Fable low effort and trusted Codex high effort
@@ -163,7 +163,7 @@ single pilot lane is active, other and fresh chats cannot perform build writes.
   - event replay and stage derivation;
   - ticket and evidence validation.
 - `scripts/factory.mjs`
-  - agent-facing commands for draft, present, inspect, lane start, stage, evidence attach, packet validate, disposition, hold, and board snapshot/server;
+  - agent-facing commands for draft, present, inspect, lane start, stage, allowlisted harness evidence, packet validate, disposition, recovery, and board snapshot/server;
   - every mutating command writes validated events; owner never runs it.
 - `scripts/factory-state-lib.test.mjs`
 - `scripts/factory-cli.test.mjs`

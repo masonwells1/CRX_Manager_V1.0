@@ -2,6 +2,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -9,11 +10,12 @@ import {
   appendFactoryEvent,
   buildFactorySnapshot,
   consumeFactoryCliPermit,
-  copyEvidence,
   currentOriginMain,
   loadFactorySnapshot,
   normalizeOwnerQuestion,
   recoverFactoryState,
+  rejectSecretBearingText,
+  repositoryCommitFingerprint,
   resolveFactoryPaths,
   runHarnessEvidence,
   sha256,
@@ -37,9 +39,8 @@ function usage(message = "") {
     "  node scripts/factory.mjs lane start --job <id>",
     "  node scripts/factory.mjs review present --job <id> --question-file <text>",
     "  node scripts/factory.mjs stage --job <id> --stage <stage> [--summary-file <text>] [--blocker-file <text>]",
-    "  node scripts/factory.mjs evidence attach --job <id> --file <path> --label <text> --kind <kind>",
     "  node scripts/factory.mjs evidence run --job <id> --harness <npm-script> --label <text>",
-    "  node scripts/factory.mjs closeout write --job <id> --landing-commit <sha> --production-proof-file <text>",
+    "  node scripts/factory.mjs closeout write --job <id> --landing-commit <sha> --production-proof <text>",
     "  node scripts/factory.mjs recover <unlock|torn-tail> --reason-file <text>",
     "  node scripts/factory.mjs status [--json]",
   ].join("\n") + "\n");
@@ -105,6 +106,27 @@ function closeoutDirectory(cwd, env) {
     return path.resolve(env.CRX_FACTORY_TEST_CLOSEOUT_DIR);
   }
   return path.join(path.resolve(cwd), "docs", "audits", "factory", "jobs");
+}
+
+function isIsolatedFactoryTest(paths, env) {
+  const tempRoot = `${path.resolve(tmpdir()).toLowerCase()}${path.sep}`;
+  const closeout = env.CRX_FACTORY_TEST_CLOSEOUT_DIR
+    ? path.resolve(env.CRX_FACTORY_TEST_CLOSEOUT_DIR).toLowerCase()
+    : "";
+  return env.CRX_FACTORY_TEST_MODE === "1"
+    && path.resolve(paths.stateDir).toLowerCase().startsWith(tempRoot)
+    && closeout.startsWith(tempRoot);
+}
+
+function productionProofText(value) {
+  const proof = String(value || "").trim();
+  if (!proof || proof.length > 4_000) {
+    throw new Error("Production verification text must be between 1 and 4,000 characters.");
+  }
+  if (/[\0\u0001-\u0008\u000b\u000c\u000e-\u001f]/.test(proof)) {
+    throw new Error("Production verification text contains unsupported control characters.");
+  }
+  return rejectSecretBearingText(proof, "Production verification text");
 }
 
 function markdownCell(value) {
@@ -230,7 +252,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         baseSha,
         worktree: path.resolve(cwd),
       },
-    });
+    }, { expectedLastEventHash: snapshot.lastEventHash });
     appendFactoryEvent(paths, {
       type: "factory-intent-cleared",
       jobId: null,
@@ -296,41 +318,6 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     return 0;
   }
 
-  if (group === "evidence" && action === "attach") {
-    const who = actor(paths, flags, env, now().getTime());
-    const jobId = required(flags, "job");
-    const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
-    validateLaneActor(snapshot, jobId, who.sessionId);
-    const evidence = copyEvidence(
-      paths,
-      jobId,
-      required(flags, "file"),
-      required(flags, "label"),
-      flags.get("kind") || "file",
-    );
-    appendFactoryEvent(paths, {
-      type: "evidence-attached",
-      jobId,
-      ...who,
-      timestamp: now().toISOString(),
-      payload: {
-        label: evidence.label,
-        kind: evidence.kind,
-        filename: evidence.filename,
-        sha256: evidence.sha256,
-        verified: evidence.verified,
-        sourceCommand: evidence.sourceCommand,
-      },
-    });
-    process.stdout.write(`${JSON.stringify({
-      jobId,
-      label: evidence.label,
-      filename: evidence.filename,
-      sha256: evidence.sha256,
-    })}\n`);
-    return 0;
-  }
-
   if (group === "evidence" && action === "run") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
@@ -386,7 +373,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const landingCommit = required(flags, "landing-commit");
-    const productionProof = readTextFile(required(flags, "production-proof-file"));
+    const productionProof = productionProofText(required(flags, "production-proof"));
     const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
     const job = snapshot.jobs.find((candidate) => candidate.id === jobId);
     if (!job) {
@@ -419,13 +406,20 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       throw new Error(`Job ${jobId} must have Mason's morning acceptance before closeout.`);
     }
     git(["cat-file", "-e", `${landingCommit}^{commit}`], cwd);
-    try {
-      git(["merge-base", "--is-ancestor", landingCommit, "origin/main"], cwd);
-    } catch {
-      throw new Error("Landing commit is not contained in the current origin/main.");
+    if (!isIsolatedFactoryTest(paths, env)) {
+      try {
+        git(["merge-base", "--is-ancestor", landingCommit, "origin/main"], cwd);
+      } catch {
+        throw new Error("Landing commit is not contained in the current origin/main.");
+      }
     }
     if (!productionProof) throw new Error("Production verification text is required.");
-    validateCurrentHarnessEvidence(job, cwd, { requireCurrentBase: false });
+    const acceptedEvidence = validateCurrentHarnessEvidence(job, cwd, { requireCurrentBase: false });
+    const landing = repositoryCommitFingerprint(cwd, landingCommit);
+    if (acceptedEvidence.repositoryContentHash !== landing.repositoryContentHash
+        || Number(acceptedEvidence.repositoryFileCount) !== landing.repositoryFileCount) {
+      throw new Error("Landing commit does not contain the exact repository content bound to the accepted harness proof.");
+    }
 
     const rows = job.evidence.map((item) =>
       `| ${markdownCell(item.label)} | ${markdownCell(item.kind)} | \`${item.sha256}\` |`,
@@ -513,7 +507,19 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
 
 const invoked = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (invoked === path.resolve(fileURLToPath(import.meta.url))) {
-  runFactoryCli().catch((error) => {
+  Promise.resolve().then(() => {
+    let directCwd = ROOT;
+    if (process.env.CRX_FACTORY_TEST_REPO_DIR) {
+      const candidate = path.resolve(process.env.CRX_FACTORY_TEST_REPO_DIR);
+      const tempRoot = `${path.resolve(tmpdir()).toLowerCase()}${path.sep}`;
+      if (process.env.CRX_FACTORY_TEST_MODE !== "1"
+          || !candidate.toLowerCase().startsWith(tempRoot)) {
+        throw new Error("CRX_FACTORY_TEST_REPO_DIR is restricted to isolated temporary test repositories.");
+      }
+      directCwd = candidate;
+    }
+    return runFactoryCli(process.argv.slice(2), { cwd: directCwd, env: process.env });
+  }).catch((error) => {
     process.stderr.write(`FACTORY BLOCKED: ${error.message}\n`);
     process.exitCode = 1;
   });

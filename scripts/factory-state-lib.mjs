@@ -160,6 +160,16 @@ function requiredText(value, label, max = 10_000) {
   return text;
 }
 
+const SECRET_BEARING_TEXT_RE = /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|GITHUB_TOKEN|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*\S+)/i;
+
+export function rejectSecretBearingText(value, label = "evidence") {
+  const text = String(value || "");
+  if (SECRET_BEARING_TEXT_RE.test(text)) {
+    throw new Error(`${label} appears to contain a credential or secret.`);
+  }
+  return text;
+}
+
 function requiredStringArray(value, label, { min = 1, max = 30 } = {}) {
   if (!Array.isArray(value) || value.length < min || value.length > max) {
     throw new Error(`${label} must contain ${min}-${max} items.`);
@@ -478,26 +488,27 @@ export function repositoryContentFingerprint(cwd = process.cwd()) {
   const listed = git(
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
     repoRoot,
-  ).split("\0").filter(Boolean).sort();
+  ).split("\0").filter(Boolean).filter((relative) => existsSync(path.join(repoRoot, relative))).sort();
+  if (listed.some((relative) => relative.includes("\n"))) {
+    throw new Error("Repository fingerprint does not support newline characters in file names.");
+  }
+  const objectIds = listed.length === 0 ? [] : execFileSync("git", ["hash-object", "--stdin-paths"], {
+    cwd: repoRoot,
+    input: `${listed.join("\n")}\n`,
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "ignore"],
+    maxBuffer: 256 * 1024 * 1024,
+  }).trim().split(/\r?\n/);
+  if (objectIds.length !== listed.length) {
+    throw new Error("Git did not return one content object ID for every repository file.");
+  }
   const hash = createHash("sha256");
   let fileCount = 0;
-  for (const relative of listed) {
-    const fullPath = path.join(repoRoot, relative);
-    if (!existsSync(fullPath)) continue;
-    const info = lstatSync(fullPath);
+  for (let index = 0; index < listed.length; index++) {
+    const relative = listed[index];
     const normalized = relative.replace(/\\/g, "/");
     hash.update(`path:${Buffer.byteLength(normalized)}:${normalized}\0`);
-    if (info.isSymbolicLink()) {
-      const target = readlinkSync(fullPath);
-      hash.update(`symlink:${Buffer.byteLength(target)}:${target}\0`);
-    } else if (info.isFile()) {
-      const bytes = readFileSync(fullPath);
-      hash.update(`file:${bytes.length}:`);
-      hash.update(bytes);
-      hash.update("\0");
-    } else {
-      hash.update(`type:${info.mode}\0`);
-    }
+    hash.update(`blob:${objectIds[index]}\0`);
     fileCount++;
   }
   return {
@@ -506,6 +517,68 @@ export function repositoryContentFingerprint(cwd = process.cwd()) {
     repositoryContentHash: hash.digest("hex"),
     repositoryFileCount: fileCount,
   };
+}
+
+export function repositoryCommitFingerprint(cwd = process.cwd(), commitish = "HEAD") {
+  const repoRoot = resolveRepoRoot(cwd);
+  const commitSha = git(["rev-parse", `${commitish}^{commit}`], repoRoot);
+  const treeSha = git(["rev-parse", `${commitSha}^{tree}`], repoRoot);
+  const raw = execFileSync("git", ["ls-tree", "-r", "-z", "--full-tree", commitSha], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const entries = raw.split("\0").filter(Boolean).map((entry) => {
+    const match = entry.match(/^(\d+)\s+(\w+)\s+([a-f0-9]+)\t([\s\S]+)$/);
+    if (!match) throw new Error(`Could not parse Git tree entry for ${commitSha}.`);
+    return { mode: match[1], type: match[2], objectId: match[3], relative: match[4] };
+  }).sort((left, right) => left.relative.localeCompare(right.relative));
+  const hash = createHash("sha256");
+  for (const entry of entries) {
+    if (entry.type !== "blob") {
+      throw new Error(`Unsupported ${entry.type} entry ${entry.relative} in landing commit.`);
+    }
+    const normalized = entry.relative.replace(/\\/g, "/");
+    hash.update(`path:${Buffer.byteLength(normalized)}:${normalized}\0`);
+    hash.update(`blob:${entry.objectId}\0`);
+  }
+  return {
+    commitSha,
+    treeSha,
+    repositoryContentHash: hash.digest("hex"),
+    repositoryFileCount: entries.length,
+  };
+}
+
+function directoryContentFingerprint(root) {
+  const base = path.resolve(root);
+  const listed = [];
+  function visit(directory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      const relative = path.relative(base, fullPath).replace(/\\/g, "/");
+      if (entry.isDirectory()) visit(fullPath);
+      else listed.push({ fullPath, relative });
+    }
+  }
+  if (existsSync(base)) visit(base);
+  listed.sort((left, right) => left.relative.localeCompare(right.relative));
+  const hash = createHash("sha256");
+  for (const item of listed) {
+    const info = lstatSync(item.fullPath);
+    hash.update(`path:${Buffer.byteLength(item.relative)}:${item.relative}\0`);
+    if (info.isSymbolicLink()) {
+      const target = readlinkSync(item.fullPath);
+      hash.update(`symlink:${Buffer.byteLength(target)}:${target}\0`);
+    } else {
+      const bytes = readFileSync(item.fullPath);
+      hash.update(`file:${bytes.length}:`);
+      hash.update(bytes);
+      hash.update("\0");
+    }
+  }
+  return hash.digest("hex");
 }
 
 export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
@@ -785,29 +858,6 @@ export function loadFactorySnapshot(paths, options) {
   return attachSnapshotPaths(buildFactorySnapshot(paths, options), paths);
 }
 
-export function copyEvidence(paths, jobId, sourceFile, label, kind = "file") {
-  authorizedFactoryWriter(paths);
-  const safeJob = safeId(jobId);
-  const source = path.resolve(sourceFile);
-  if (!existsSync(source) || !statSync(source).isFile()) throw new Error(`Evidence file not found: ${source}`);
-  const jobDir = path.join(paths.evidenceDir, safeJob);
-  mkdirSync(jobDir, { recursive: true });
-  const bytes = readFileSync(source);
-  const hash = sha256(bytes);
-  const filename = `${hash.slice(0, 12)}-${path.basename(source).replace(/[^A-Za-z0-9._-]/g, "_")}`;
-  const target = path.join(jobDir, filename);
-  if (!existsSync(target)) copyFileSync(source, target);
-  return {
-    label: requiredText(label, "evidence label", 200),
-    kind,
-    filename,
-    sha256: hash,
-    fullPath: target,
-    verified: false,
-    sourceCommand: "",
-  };
-}
-
 export function runHarnessEvidence(paths, {
   jobId,
   label,
@@ -825,6 +875,7 @@ export function runHarnessEvidence(paths, {
     throw new Error(`Harness ${scriptName} differs from its reviewed origin/main script body.`);
   }
   const repositoryBefore = repositoryContentFingerprint(cwd);
+  const factoryStateBefore = directoryContentFingerprint(paths.stateDir);
   const executable = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm";
   const args = process.platform === "win32"
     ? ["/d", "/s", "/c", `npm run ${scriptName}`]
@@ -840,9 +891,19 @@ export function runHarnessEvidence(paths, {
   if (result.status !== 0) {
     throw new Error(`Repository harness npm run ${scriptName} failed with exit ${result.status}.`);
   }
+  try {
+    rejectSecretBearingText(result.stdout, "Harness stdout");
+    rejectSecretBearingText(result.stderr, "Harness stderr");
+  } catch (error) {
+    setEmergencyFactoryHold(paths, `Harness ${scriptName} emitted secret-shaped output.`);
+    throw error;
+  }
   const repositoryAfter = repositoryContentFingerprint(cwd);
-  if (repositoryAfter.repositoryContentHash !== repositoryBefore.repositoryContentHash) {
-    throw new Error(`Repository content changed while npm run ${scriptName} executed; rerun the harness on frozen bytes.`);
+  const factoryStateAfter = directoryContentFingerprint(paths.stateDir);
+  if (repositoryAfter.repositoryContentHash !== repositoryBefore.repositoryContentHash
+      || factoryStateAfter !== factoryStateBefore) {
+    setEmergencyFactoryHold(paths, `Harness ${scriptName} mutated protected repository or factory-state bytes.`);
+    throw new Error(`Protected repository or factory-state content changed while npm run ${scriptName} executed; the factory is held for review.`);
   }
   const payload = {
     schemaVersion: FACTORY_SCHEMA_VERSION,

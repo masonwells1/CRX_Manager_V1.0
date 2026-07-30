@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main`: `db9b5efc7a3c5ef0d9e9b1171ad8f5d0863c2544`
-State: rebased onto current `origin/main`; publication-blocker repairs are uncommitted and unpushed
+State: rebased onto current `origin/main`; second publication-blocker repair pass is uncommitted and unpushed
 
 ## Owner-facing result
 
@@ -29,21 +29,29 @@ pipeline remains the delivery engine and all of its landing and production gates
 - State writes are restricted to canonical process/call-stack entrypoints; direct paths, state-library
   imports, inline-code bypasses, and governance self-edits in an active lane are denied. This is
   defense-in-depth inside the agent tool boundary, not a claim of operating-system cryptographic isolation.
-- Legal stage transitions and evidence writes are bound to the lane-start session. A successful
+- Legal stage transitions and evidence writes are bound to the lane-start session. Lane start uses
+  an expected-last-event compare-and-swap under the exclusive ledger lock, so simultaneous starts
+  cannot both win. A successful
   CLI-executed repository harness is required before morning review. Its name is bound into the
   immutable ticket and fixed allowlist; its resolved script body must equal `origin/main`, and the
   command/body/package/base/output hashes plus the full tracked/non-ignored repository content
-  fingerprint are rechecked. Source or test edits after the harness invalidate it. Copied or
-  self-labeled files do not qualify.
+  fingerprint are rechecked. The broker fingerprints both repository and shared factory state around
+  the harness, emergency-holds on indirect mutation, and refuses secret-shaped stdout/stderr before
+  persistence. Source or test edits after the harness invalidate it. The arbitrary local-file
+  evidence route has been removed.
 - While one lane is active, native edits, MCP filesystem tools, shell writes/redirection, Git
-  mutations, and unknown repository scripts from other or fresh chats are denied.
+  mutations, and unknown repository scripts from other or fresh chats are denied. The winning lane
+  uses structured target-visible edits and read-only shell inspection; opaque shell/helper/MCP process
+  execution is denied, and fixed harnesses run only through the permit-bound factory CLI broker.
 - A stale lock can be removed only after five minutes when its process is gone, with a backup retained.
   A torn final line has a backup-first repair path, and a failed ledger pause creates an emergency hold
   that still blocks lane writes.
 - Morning chat acceptance produces only `approved-to-land`, never `live`.
-- Live closeout requires an accepted job, a landing commit contained in `origin/main`, production-verification
-  text, proof still bound to the job's immutable original base, and a new durable content-hashed packet
-  under `docs/audits/factory/jobs/`. The successful closeout path is exercised end-to-end.
+- Live closeout requires an accepted job, a landing commit contained in `origin/main`, bounded
+  secret-scanned production-verification text, proof still bound to the job's immutable original
+  base, and a new durable content-hashed packet under `docs/audits/factory/jobs/`. The named landing
+  commit's own content fingerprint must equal the harness-proven bytes. The successful closeout path
+  is exercised end-to-end.
 - A chat can clear its recorded factory intent and return to the normal guarded workflow without
   starting a lane or abandoning the chat.
 - Only a real owner chat prompt can resume a global or emergency hold. The agent CLI has no
@@ -71,7 +79,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 170 focused assertions after publication-blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 185 focused assertions after publication-blocker remediation |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
 | `npm run typecheck` | PASS |
 | `npm run lint` | PASS |
@@ -143,7 +151,13 @@ recursive force-delete cleanup command.
   issues: shell writes bypassed ticket/pause/one-lane enforcement, harness proof did not bind source
   content, and mutating CLI identity trusted caller flags. The current repair candidate closes all
   three with broad write classification, repository-content-bound proof, and hook-minted one-time
-  identity permits. Publication remains parked until fresh exact-SHA Codex and Fable acceptance pass.
+  identity permits.
+- Trusted Codex exact-head publication re-review `2026-07-30T16:04:45Z`: `BLOCKERS`; it found three
+  HIGH issues (landing commit not bound to proven bytes, indirect helper execution, and arbitrary
+  local evidence/proof files) plus one MED concurrent lane-start race. The current repair candidate
+  binds the landing commit fingerprint, removes arbitrary-file evidence, rejects secret-shaped
+  production text, denies opaque execution in active lanes, and makes lane start compare-and-swap
+  atomic. Publication remains parked until fresh exact-SHA Codex and Fable acceptance pass.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -158,7 +172,7 @@ the upstream Phase 3 smoke-prover change does not overlap the factory implementa
 
 ## Remaining gate
 
-The repair remains uncommitted and unpushed. The next gates are full verification, a repair commit,
+The second repair pass remains uncommitted and unpushed. The next gates are full verification, a repair commit,
 fresh exact-SHA Codex and Fable acceptance, then the explicitly authorized feature-branch push and
 draft PR. Merge, board installation/startup, deployment, migration, and all production actions remain
 undone.

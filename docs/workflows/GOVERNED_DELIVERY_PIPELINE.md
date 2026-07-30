@@ -78,7 +78,10 @@ An approval is valid only when all of these are true:
 - One active build lane at a time. While it is building, verifying, or in review, build writes from
   every other chat are denied, including fresh chats with no prior factory intent. Native editing,
   MCP filesystem tools, shell file commands, redirects, Git mutation, and unknown repository scripts
-  all count as writes; read commands and fixed verification harnesses remain available.
+  all count as writes. Inside the active lane, source changes use structured Write/Edit/apply_patch
+  calls whose targets are visible to the guards. Opaque shell writers, generated helper scripts, and
+  MCP process launchers are denied; read commands remain available, and fixed verification harnesses
+  run only through the permit-bound `factory.mjs evidence run` broker.
 - The board binds only to loopback and is read-only.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
@@ -91,17 +94,22 @@ allowlist (`test`, `test:factory`, `test:agent-workflows`, `typecheck`, `lint`, 
 `verify-deps`, or `check-doc-drift`) and its script body must still equal `origin/main`. The CLI
 captures and hashes the name, resolved script body, package file, base SHA, zero exit, output, and a
 content fingerprint covering every tracked and non-ignored repository file. It verifies that the
-content stayed frozen while the harness ran and rechecks that fingerprint before morning review and
-closeout, so later source or test edits invalidate stale proof. Morning review additionally
+repository and shared factory state stayed frozen while the harness ran; detected indirect mutation
+creates an emergency hold. It rechecks the repository fingerprint before morning review and closeout,
+and refuses secret-shaped harness output before it can become a Board artifact, so later source or
+test edits invalidate stale proof. Morning review additionally
 requires the original base to remain current. After landing, closeout validates proof against the
-job's immutable original base while separately proving that the landing commit is contained in
-current `origin/main`. A copied file or self-declared evidence kind is informational and does not
-satisfy the gate.
+job's immutable original base, proves that the landing commit is contained in current `origin/main`,
+and computes the commit's own tree/content fingerprint. The landing commit must contain the exact
+bytes that passed the accepted harness. The CLI has no arbitrary local-file evidence route, and
+production verification is bounded text whose secret-shaped content is rejected before persistence.
 
 Closeout is retry-safe. Its packet content is deterministic. If a lock or ledger interruption happens
 after the packet is created, the next supported closeout call reuses the byte-identical packet and
 finishes the ledger event. A conflicting packet or production-proof retry fails closed; retrying a
 completed closeout returns the already-recorded packet without appending another `live` event.
+Lane start uses the ledger's expected-last-event hash under the same exclusive writer lock, so two
+simultaneous starts cannot both pass a stale “no active lane” snapshot.
 
 If the ledger cannot record Mason's plain-English pause, the owner hook writes a separate emergency
 hold marker that the lane guard reads before another build mutation. The hold remains until recovery
