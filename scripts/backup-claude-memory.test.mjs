@@ -343,6 +343,29 @@ try {
       quiet(() => stage(path.join(ignoringStranger, "claude-memory"), notes)), 0,
       "an ignored destination is allowed even in an unrelated repo",
     );
+    // Round 13: ignore rules are per-path. A repo that ignores the index file and
+    // nothing else left every other note, and the manifest, tracked and
+    // publishable — while the one-file probe read the destination as safe.
+    const partialIgnorer = makeRepo(
+      "stranger-that-ignores-one-file",
+      "https://github.com/someone-else/notes.git",
+      `claude-memory/${INDEX_FILE}\n`,
+    );
+    const partial = path.join(partialIgnorer, "claude-memory");
+    eq(
+      quiet(() => stage(partial, notes)), 1,
+      "ignoring only the index file does not license the rest of the snapshot",
+    );
+    ok(!readdirSafe(partial), "and nothing is written when it is refused");
+    const manifestOnlyIgnorer = makeRepo(
+      "stranger-that-ignores-the-manifest",
+      "https://github.com/someone-else/notes.git",
+      "claude-memory/manifest.json\n",
+    );
+    eq(
+      quiet(() => stage(path.join(manifestOnlyIgnorer, "claude-memory"), notes)), 1,
+      "ignoring only the manifest does not license the notes either",
+    );
 
     // Being the right repository is not the same as still being private.
     try {

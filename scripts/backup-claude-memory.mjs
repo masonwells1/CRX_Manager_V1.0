@@ -182,24 +182,40 @@ function ghVisibility() {
   return visibility ? { visibility } : { reason: "gh returned no visibility field" };
 }
 
-function destinationIsPublishable(outDir) {
+function destinationIsPublishable(outDir, names) {
   const probe = nearestExisting(outDir);
   const env = { ...process.env };
   for (const name of GIT_DISCOVERY_ENV) delete env[name];
-  const git = (args) => spawnSync("git", ["-C", probe, ...args], { encoding: "utf8", env });
+  const git = (args, input) => spawnSync("git", ["-C", probe, ...args], { encoding: "utf8", env, input });
   const top = git(["rev-parse", "--show-toplevel"]);
   if (top.status !== 0) return null;                       // not inside a git repo at all
 
-  // Ask about a file INSIDE the destination, not the destination itself: a
+  // Ask about files INSIDE the destination, not the destination itself: a
   // directory-only pattern (`docs/claude-memory/`) does not match a directory
   // that does not exist yet, and staging into a not-yet-created directory is the
   // normal case. A path beneath it matches either way — probed both ways on
   // git 2.54 before relying on it.
-  // status 0 = ignored, 1 = not ignored, anything else = git could not answer.
-  // Fail CLOSED on "could not answer": an unverifiable path inside a repository is
-  // exactly the case this refusal exists for.
-  const probeFile = path.join(path.resolve(outDir), INDEX_FILE);
-  if (git(["check-ignore", "-q", probeFile]).status === 0) return null;
+  //
+  // EVERY file this run will write has to be ignored, not just one. Probing only
+  // MEMORY.md meant a repository that ignores that single name — and nothing else —
+  // read as safe, leaving every other note and the manifest tracked and publishable
+  // (Codex's thirteenth 2026-07-30 review). Ignore rules are per-path, so "this one
+  // is ignored" says nothing about the other 189. Anything short of all-ignored
+  // falls through to repository validation below, which refuses unless the checkout
+  // is the private backup repo — so a partially-ignored path fails CLOSED, as does
+  // a git that cannot answer at all.
+  //
+  // `-z` on both sides is required, not tidiness: without it git C-quotes any
+  // path it considers unusual — every Windows path, because of the backslashes —
+  // and the echoed lines then match nothing, which read as "none ignored".
+  const wanted = [MANIFEST, ...(names ?? [])].map((name) => path.resolve(outDir, name));
+  const answer = git(["check-ignore", "-z", "--stdin"], `${wanted.join("\0")}\0`);
+  if (answer.status === 0 || answer.status === 1) {
+    const ignored = new Set(
+      String(answer.stdout || "").split("\0").filter(Boolean).map((line) => path.resolve(line)),
+    );
+    if (wanted.length > 0 && wanted.every((file) => ignored.has(file))) return null;
+  }
 
   // Tracked, then. Only the private off-site repo may hold these notes.
   //
@@ -286,8 +302,8 @@ function destinationIsPublishable(outDir) {
   );
 }
 
-function assertSafeDestination(outDir, source) {
-  const publishable = destinationIsPublishable(outDir);
+function assertSafeDestination(outDir, source, names) {
+  const publishable = destinationIsPublishable(outDir, names);
   if (publishable) return publishable;
   if (isInside(source, outDir)) {
     return `FAIL: refusing to stage into ${outDir} — the memory source lives inside it. Pick a dedicated directory.`;
@@ -411,7 +427,7 @@ function stage(outDir, sourceArg) {
     return 1;
   }
 
-  const destination = assertSafeDestination(outDir, source);
+  const destination = assertSafeDestination(outDir, source, names);
   if (typeof destination === "string") {
     console.error(destination);
     return 1;

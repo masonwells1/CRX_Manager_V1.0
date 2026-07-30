@@ -328,6 +328,28 @@ assert.equal(
 );
 // A malformed line yields an empty base, which fails CLOSED.
 assert.equal(rewritesReachGuardedApp("garbage"), true, "unparseable rewrite config gates");
+// insteadOf is a PREFIX substitution: `ghm:CRX_Manager_V1.0.git` expands to the
+// production repo even though the base names no repository on its own.
+assert.equal(
+  rewritesReachGuardedApp("url.git@github.com:masonwells1/.insteadof ghm:"),
+  true,
+  "an owner-level prefix rewrite reaches production",
+);
+assert.equal(
+  rewritesReachGuardedApp("url.https://github.com/masonwells1/.pushinsteadof ghm:"),
+  true,
+  "the https spelling of the same prefix too",
+);
+assert.equal(
+  rewritesReachGuardedApp("url.https://github.com/.insteadof gh:"),
+  true,
+  "a base naming only a host resolves nowhere and fails CLOSED",
+);
+assert.equal(
+  rewritesReachGuardedApp("url.git@github.com:someoneelse/.insteadof other:"),
+  false,
+  "a prefix under a different owner cannot complete to the app repo",
+);
 
 const base = "c".repeat(40);
 const codexProof = { codex_ran: true, verdict: "clean", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };

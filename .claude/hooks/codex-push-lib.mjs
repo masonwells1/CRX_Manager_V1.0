@@ -719,8 +719,27 @@ export function rewritesReachGuardedApp(configOutput) {
     const key = line.split(/\s+/)[0] || "";
     const match = key.match(/^url\.(.+)\.(?:push)?insteadof$/i);
     if (!match) return true; // fail CLOSED: a line we cannot parse gates the push
-    return urlIsGuardedApp(match[1].replace(/\/+$/, ""));
+    return rewriteBaseReachesGuardedApp(match[1]);
   });
+}
+// insteadOf is a PREFIX substitution, not an exact-URL alias: git replaces the
+// matched alias text with the base and keeps whatever followed. So
+//   url.git@github.com:masonwells1/.insteadOf = ghm:
+// turns `git push ghm:CRX_Manager_V1.0.git` into a production push while the base
+// itself is not a repository URL at all — comparing the base to the app repo by
+// identity returned false and the gate was skipped (Codex's thirteenth 2026-07-30
+// review, confirmed by its own read-only expansion). A base is dangerous when the
+// app repo's canonical identity STARTS at it: an exact match, or a shorter path
+// (`github.com/masonwells1`) that any suffix can complete. Bases that name no
+// repository at all (`https://github.com/`, a bare host) fail CLOSED. Comparing
+// canonical ids rather than raw text gates slightly more than git would rewrite,
+// which is the safe direction.
+function rewriteBaseReachesGuardedApp(rawBase) {
+  const base = String(rawBase ?? "").trim().replace(/\/+$/, "");
+  if (urlIsGuardedApp(base)) return true;
+  const id = canonicalRepoId(base);
+  if (!id) return true;
+  return id === GUARDED_REPO_ID || GUARDED_REPO_ID.startsWith(`${id}/`);
 }
 
 // A push can also be risky by CONTENT even when no file's PATH matches the

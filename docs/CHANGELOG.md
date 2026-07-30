@@ -255,6 +255,32 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round thirteen: insteadOf is a prefix, and ignoring one file is not ignoring the snapshot
+
+Two blockers.
+
+**A prefix rewrite reached production while the base named no repository.** `url.<base>.insteadOf` is
+a *prefix* substitution: git replaces the matched alias text and keeps whatever followed it. So
+`url.git@github.com:masonwells1/.insteadOf = ghm:` turns `git push ghm:CRX_Manager_V1.0.git` into a
+production push, while the base — `git@github.com:masonwells1/` — is not a repository URL at all and
+compared as "somewhere else", skipping the independent-review gate in any fork or unrelated checkout.
+The reviewer expanded it read-only to confirm. A base is now dangerous when the app repo's canonical
+identity *starts* at it: an exact match, or a shorter path any suffix can complete. A base naming only
+a host completes to nothing and fails closed.
+
+**Ignoring `MEMORY.md` licensed the whole snapshot.** The staging destination check asked
+`git check-ignore` about one file. Ignore rules are per-path, so a repository that ignores that single
+name — and not the other 189 notes or `manifest.json` — read as a safe destination, leaving real names
+and commission amounts tracked and publishable in a repo that is not the private backup. Every file
+the run will write, plus the manifest, must now be ignored before repository validation is skipped;
+anything less falls through to that validation and is refused. The probe uses `-z` on both sides,
+because without it git C-quotes every Windows path and the echoed lines match nothing — which reads as
+"none ignored" and, in the other direction, would have refused the one destination that is correct.
+
+Two mutations — restoring the identity-only rewrite comparison and the single-file ignore probe — each
+turn the suites red on their own case; the second staged successfully while mutated, which is the
+finding.
+
 ### Round twelve: a variable that picks a command is not a variable that picks a config
 
 Two blockers.
