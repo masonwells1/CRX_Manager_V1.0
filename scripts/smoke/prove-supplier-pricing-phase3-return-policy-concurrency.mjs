@@ -260,8 +260,16 @@ BEGIN
   -- assertion available, but these routines are under active change (the
   -- in-flight vendor-bill period-close work rewrites two of the three), so a
   -- hash would fail this proof on every legitimate AP edit and train whoever
-  -- hits it to update the literal without reading the diff. The properties
-  -- asserted below are the ones a body swap cannot fake while staying callable.
+  -- hits it to update the literal without reading the diff.
+  --
+  -- Be clear about what that leaves uncovered: this asserts the routines'
+  -- INTERFACE and REACHABILITY -- signature, overload set, definer rights,
+  -- resolved search_path, return type, language, who may call them -- and not
+  -- their behavior. A rewritten body that keeps all of those intact passes
+  -- here, so actor-forgery, idempotency and money-arithmetic drift are NOT
+  -- detected by this block. Those are covered, where they are covered at all,
+  -- by the behavioral proofs later in this file; this block's job is to stop a
+  -- drifted baseline from reaching them wearing the right signature.
   SELECT string_agg(sig,';' ORDER BY sig) INTO v_actual FROM (
     SELECT p.proname||'('||pg_get_function_identity_arguments(p.oid)||') secdef='||p.prosecdef::text
            ||' config='||coalesce(array_to_string(p.proconfig,','),'<none>')
@@ -394,17 +402,24 @@ $rls$;`);
   // / is_applicator() helpers", all of which DO test role. If a future edit
   // copies one of those bodies too faithfully and the predicate starts
   // requiring a role, both controls above still behave exactly as asserted
-  // (active sales_rep reads, inactive sales_rep does not) while every admin,
-  // driver, applicator and entity_recipient silently loses read access to
-  // product_families. The catalog assertion cannot see it either: the policy
-  // text still reads is_active_profile(); the drift is inside the function
-  // body. A third control with a different role is the only witness. driver is
-  // used deliberately -- it is the role least likely to be admitted by an
-  // incidental role test, so a predicate narrowed to admin, to sales_rep, or to
-  // both fails here.
+  // (active sales_rep reads, inactive sales_rep does not) while the roles that
+  // were dropped silently lose read access to product_families. The catalog
+  // assertion cannot see it either: the policy text still reads
+  // is_active_profile(); the drift is inside the function body.
+  //
+  // So probe EVERY role, and take the role list from the database rather than a
+  // literal here: profiles_role_check is the definition of "every role", so a
+  // migration that adds a sixth role automatically gets a control, and one that
+  // is not admitted by the gate fails this proof instead of shipping. Spot-
+  // checking one extra role would leave the same hole one level down -- a
+  // predicate narrowed to "sales_rep or driver" passes a two-role probe.
+  const roleCheck=scalar(`SELECT coalesce(pg_get_constraintdef(c.oid),'<missing>') FROM pg_constraint c WHERE c.conname='profiles_role_check' AND c.conrelid='public.profiles'::regclass;`);
+  const declaredRoles=[...new Set([...roleCheck.matchAll(/'([a-z_]+)'::text/g)].map(m=>m[1]))].sort();
+  if(!declaredRoles.length) throw new Error(`could not enumerate profiles roles from profiles_role_check, so the role-agnostic gate cannot be proven: ${roleCheck}`);
+  const roleProbes=declaredRoles.map((role,i)=>({role,id:`00000000-0000-0000-0000-0000000000b${i+1}`}));
   const rlsBehavior=sql(`BEGIN;
-INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a003'),('00000000-0000-0000-0000-00000000a004') ON CONFLICT DO NOTHING;
-INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a003','phase3-deactivated@example.invalid','sales_rep',false),('00000000-0000-0000-0000-00000000a004','phase3-driver@example.invalid','driver',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=excluded.is_active;
+INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a003'),${roleProbes.map(p=>`('${p.id}')`).join(',')} ON CONFLICT DO NOTHING;
+INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a003','phase3-deactivated@example.invalid','sales_rep',false),${roleProbes.map(p=>`('${p.id}','phase3-${p.role}@example.invalid','${p.role}',true)`).join(',')} ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=excluded.is_active;
 INSERT INTO public.product_families(name) VALUES ('[PROOF] Phase3 RLS gate');
 SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a002';
 SET LOCAL ROLE authenticated;
@@ -414,14 +429,15 @@ SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a003';
 SET LOCAL ROLE authenticated;
 SELECT 'PHASE3_RLS_DEACTIVATED_ROWS=' || count(*)::text FROM public.product_families;
 RESET ROLE;
-SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a004';
+${roleProbes.map(p=>`SET LOCAL "request.jwt.claim.sub" = '${p.id}';
 SET LOCAL ROLE authenticated;
-SELECT 'PHASE3_RLS_OTHER_ROLE_ROWS=' || count(*)::text FROM public.product_families;
-RESET ROLE;
+SELECT 'PHASE3_RLS_ROLE_${p.role}_ROWS=' || count(*)::text FROM public.product_families;
+RESET ROLE;`).join('\n')}
 ROLLBACK;`).stdout;
   assert.match(rlsBehavior,/PHASE3_RLS_ACTIVE_ROWS=1$/m,`active profile could not read the seeded product_families row: ${rlsBehavior}`);
   assert.match(rlsBehavior,/PHASE3_RLS_DEACTIVATED_ROWS=0$/m,`deactivated profile could still read product_families -- the policy predicate does not gate: ${rlsBehavior}`);
-  assert.match(rlsBehavior,/PHASE3_RLS_OTHER_ROLE_ROWS=1$/m,`an active driver could not read product_families -- the gate is no longer role-agnostic, so non-sales_rep staff have silently lost access: ${rlsBehavior}`);
+  for(const p of roleProbes) assert.match(rlsBehavior,new RegExp(`PHASE3_RLS_ROLE_${p.role}_ROWS=1$`,'m'),`an active ${p.role} could not read product_families -- the gate is no longer role-agnostic, so ${p.role} staff have silently lost access: ${rlsBehavior}`);
+  console.log(`PHASE3_RLS_ROLE_AGNOSTIC_GATE_PASS roles=${declaredRoles.join(',')}`);
   assert.equal(scalar(`SELECT count(*)::text FROM public.product_families;`),'0','the rolled-back RLS behavior fixture leaked a product_families row');
   console.log('PHASE3_PRODUCT_FAMILIES_ACTIVE_PROFILE_GATE_PASS');
   const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
