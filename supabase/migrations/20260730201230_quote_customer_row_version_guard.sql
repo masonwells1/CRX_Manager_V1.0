@@ -908,6 +908,8 @@ BEGIN
   IF v_existing IS NOT NULL THEN
     IF jsonb_typeof(v_existing) IS DISTINCT FROM 'object'
        OR v_existing->>'_quote_id' IS DISTINCT FROM p_quote_id::text
+       OR v_existing->>'_actor_id' IS DISTINCT FROM v_actor::text
+       OR v_existing->>'_method' IS DISTINCT FROM p_method
        OR COALESCE(v_existing->>'_expected_row_version', '') !~ '^[1-9][0-9]*$'
        OR (v_existing->>'_expected_row_version')::bigint IS DISTINCT FROM p_expected_row_version
        OR COALESCE(v_existing->>'_post_row_version', '') !~ '^[1-9][0-9]*$'
@@ -926,6 +928,8 @@ BEGIN
     END IF;
     RETURN (v_existing
       - '_quote_id'
+      - '_actor_id'
+      - '_method'
       - '_expected_row_version'
       - '_post_row_version')
       || jsonb_build_object('status', 'duplicate', 'message', 'Already processed');
@@ -957,6 +961,8 @@ BEGIN
     UPDATE public.idempotency_keys
     SET result = v_result || jsonb_build_object(
       '_quote_id', p_quote_id,
+      '_actor_id', v_actor,
+      '_method', p_method,
       '_expected_row_version', p_expected_row_version,
       '_post_row_version', v_post_row_version
     )

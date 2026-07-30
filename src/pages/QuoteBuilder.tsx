@@ -2517,9 +2517,6 @@ export default function QuoteBuilder() {
       ? quoteId
       : await saveQuote('accepted');
     if (!savedId) {
-      if (quoteVersionRecoveryRequiredRef.current) {
-        toast('error', 'The quote was saved, but the order was NOT created. Reload the quote, then try again.');
-      }
       setConverting(false);
       return;
     }
@@ -2733,9 +2730,6 @@ export default function QuoteBuilder() {
       if (!alreadyMarkedSent) {
         const markedSent = await handleMarkPresented();
         if (!markedSent) {
-          if (quoteVersionRecoveryRequiredRef.current) {
-            toast('error', 'The quote was frozen, but the order was not created. Reload the quote, then try Book as Order again.');
-          }
           return;
         }
       }

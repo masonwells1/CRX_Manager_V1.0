@@ -2,6 +2,21 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — Final Quote lifecycle replay review closed two operator-safety gaps
+
+The pending row-version migration now binds `create_quote_version` idempotent
+replays to both the authenticated actor and the requested delivery method. A
+lost response can therefore be retried with the original key, but that key
+cannot be reused to turn a cached Presented snapshot into an Emailed snapshot
+or replay another actor's request. The rollback smoke proves that a changed
+method fails with `IDEMPOTENCY_PAYLOAD_CONFLICT` and leaves both the Quote token
+and version count unchanged.
+
+Quote-to-Order flows also stopped adding a generic recovery toast after
+`saveQuote` or Mark Presented returns failure. Those lower-level paths already
+report the accurate outcome; removing the duplicate message prevents a rejected
+write from being described to the operator as saved or frozen.
+
 ## 2026-07-30 — Quote-version restore joins row-version boundary
 
 `restore_quote_version` is now wrapped inside the pending Quote/Customer

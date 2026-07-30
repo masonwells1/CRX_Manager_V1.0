@@ -382,6 +382,21 @@ BEGIN
      OR (SELECT count(*) FROM public.quote_versions WHERE quote_id = v_quote) <> v_versions_before + 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: quote-version replay was not bound to the original versioned request';
   END IF;
+  BEGIN
+    PERFORM public.create_quote_version(
+      v_quote, v_admin, 'presented', 'rv-version-fresh-' || v_suffix, v_quote_after);
+    RAISE EXCEPTION 'SMOKE_FAIL: quote-version replay accepted a different method';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'IDEMPOTENCY_PAYLOAD_CONFLICT' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: method-bound quote-version replay raised %', v_error;
+    END IF;
+  END;
+  IF (SELECT row_version FROM public.quotes WHERE id = v_quote) <> v_quote_after_second
+     OR (SELECT count(*) FROM public.quote_versions WHERE quote_id = v_quote) <> v_versions_before + 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected quote-version method replay changed state';
+  END IF;
   v_quote_after := v_quote_after_second;
 
   -- Restoration is a whole-Quote writer too. A writer between snapshot load

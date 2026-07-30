@@ -607,6 +607,11 @@ function assertQuoteActionLockOrder(source) {
         /v_result := v_result \|\| jsonb_build_object\(\s*'row_version', v_post_row_version\s*\);[\s\S]*?SET result = v_result \|\|/,
         'create_quote_version must return and cache the authoritative post-mutation row version',
       );
+      assert.match(
+        body,
+        /v_existing->>'_actor_id' IS DISTINCT FROM v_actor::text[\s\S]*?v_existing->>'_method' IS DISTINCT FROM p_method[\s\S]*?SET result = v_result \|\| jsonb_build_object\([\s\S]*?'_actor_id', v_actor,[\s\S]*?'_method', p_method,/,
+        'create_quote_version replay must bind the authenticated actor and requested version method',
+      );
     }
   }
 

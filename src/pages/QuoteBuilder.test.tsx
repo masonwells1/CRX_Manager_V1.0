@@ -1184,10 +1184,7 @@ describe('QuoteBuilder', () => {
       'warning',
       expect.stringContaining('save-protection version could not be confirmed'),
     ));
-    expect(mockToast).toHaveBeenCalledWith(
-      'error',
-      expect.stringContaining('order was NOT created'),
-    );
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('quote was saved'));
     expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything());
 
     reloaded = true;
@@ -1246,17 +1243,12 @@ describe('QuoteBuilder', () => {
       'warning',
       expect.stringContaining('save-protection version could not be confirmed'),
     ));
-    expect(mockToast).toHaveBeenCalledWith(
-      'error',
-      expect.stringContaining('order was not created'),
-    );
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('quote was frozen'));
     fireEvent.click(screen.getByRole('button', { name: /Keep editing/i }));
     const retryBookButtons = screen.getAllByRole('button', { name: 'Book as Order' });
     fireEvent.click(retryBookButtons[retryBookButtons.length - 1]);
-    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
-      'error',
-      expect.stringContaining('order was not created'),
-    ));
+    await waitFor(() => expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything()));
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('quote was frozen'));
     expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything());
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.stringContaining('marked as presented'));
   });
