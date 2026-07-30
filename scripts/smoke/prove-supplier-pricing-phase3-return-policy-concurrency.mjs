@@ -285,15 +285,32 @@ BEGIN
                                             ||CASE WHEN a.is_grantable THEN '+grant' ELSE '' END))
                   FROM aclexplode(p.proacl) a
                  WHERE a.privilege_type='EXECUTE' AND a.grantee<>p.proowner
-              ),CASE WHEN p.proacl IS NULL THEN '<default>' ELSE '<none>' END) AS sig
+              ),CASE WHEN p.proacl IS NULL THEN '<default>' ELSE '<none>' END)
+           -- A SECURITY DEFINER routine executes AS ITS OWNER, so ownership is
+           -- part of the security identity, not bookkeeping: transferring these
+           -- to an unsafe role changes what they can do while leaving the ACL
+           -- untouched. The owner is not compared by name because the restored
+           -- container owns as postgres and live owns as supabase_admin, so pin
+           -- membership of the trusted set instead and name the owner only when
+           -- it has left that set -- that way the failure says who took it.
+           ||' owner='||CASE WHEN pg_get_userbyid(p.proowner) IN ('postgres','supabase_admin')
+                             THEN '<trusted>' ELSE pg_get_userbyid(p.proowner) END
+           -- The grantee list above is the DIRECT grants only. anon could still
+           -- reach a routine by inheriting a role that holds EXECUTE, which adds
+           -- no anon ACL entry at all, so ask the effective question too. A
+           -- missing anon role renders a value that cannot match, rather than
+           -- quietly reporting "not executable".
+           ||' anonexec='||CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon')
+                                THEN has_function_privilege('anon',p.oid,'EXECUTE')::text
+                                ELSE '<no-anon-role>' END AS sig
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
      WHERE n.nspname='public'
        AND p.proname IN ('create_vendor_bill','get_ap_aging','update_vendor_bill')
   ) s;
   v_expected :=
-    'create_vendor_bill(p_vendor_id uuid, p_purchase_order_id uuid, p_bill_number text, p_bill_date date, p_due_date date, p_payment_terms text, p_subtotal_cents bigint, p_adjustment_cents bigint, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=uuid lang=plpgsql execgrantees=authenticated,service_role'
-    ||';get_ap_aging(p_as_of_date date) secdef=true config=search_path=public, pg_temp returns=TABLE(vendor_id uuid, vendor_name text, current_amount bigint, days_31_60 bigint, days_61_90 bigint, over_90 bigint, total_outstanding bigint, bill_count integer) lang=plpgsql execgrantees=authenticated,service_role'
-    ||';update_vendor_bill(p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint, p_bill_date date, p_due_date date, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=jsonb lang=plpgsql execgrantees=authenticated,service_role';
+    'create_vendor_bill(p_vendor_id uuid, p_purchase_order_id uuid, p_bill_number text, p_bill_date date, p_due_date date, p_payment_terms text, p_subtotal_cents bigint, p_adjustment_cents bigint, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=uuid lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false'
+    ||';get_ap_aging(p_as_of_date date) secdef=true config=search_path=public, pg_temp returns=TABLE(vendor_id uuid, vendor_name text, current_amount bigint, days_31_60 bigint, days_61_90 bigint, over_90 bigint, total_outstanding bigint, bill_count integer) lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false'
+    ||';update_vendor_bill(p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint, p_bill_date date, p_due_date date, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=jsonb lang=plpgsql execgrantees=authenticated,service_role owner=<trusted> anonexec=false';
   IF coalesce(v_actual,'<none>') <> v_expected THEN
     RAISE EXCEPTION 'SECTION9_AP_ROUTINE_IDENTITY_DRIFTED: %', coalesce(v_actual,'<none>');
   END IF;
