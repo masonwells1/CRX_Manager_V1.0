@@ -271,7 +271,9 @@ recursive force-delete cleanup command.
   ticket. Both factory and push-proof reviewers now run from disposable Git-free packets containing
   only exact base bytes, tracked/non-ignored candidate bytes, a precomputed diff, and a SHA manifest;
   ignored `.env`, session-state, host profile paths, and repository Git metadata are absent. Fresh
-  exact-commit acceptance is still required.
+  exact-commit acceptance is still required. The first real sanitized-packet launch failed closed
+  because Codex correctly refused a Git-free directory; the trusted wrapper now supplies
+  `--skip-git-repo-check` while retaining read-only sandboxing, disabled hooks, and fixed stdin.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

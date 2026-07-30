@@ -410,7 +410,9 @@ approved base, while evidence, owner-review, and closeout validation recompute t
 base-to-candidate path set and reject anything outside the ticket. Factory and push-proof review now
 run in disposable Git-free packets containing only exact base bytes, tracked/non-ignored candidate
 bytes, a precomputed diff, and a SHA manifest; ignored secrets, session state, host profile paths,
-and shared Git metadata are not exposed.
+and shared Git metadata are not exposed. The trusted Codex invocation uses the explicit
+`--skip-git-repo-check` compatibility flag because the packet deliberately contains no `.git`;
+read-only sandboxing, disabled hooks, fixed stdin, and exact SHA binding remain enforced.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

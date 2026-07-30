@@ -91,6 +91,7 @@ assert.deepEqual(
   args,
   [
     "exec",
+    "--skip-git-repo-check",
     "--ephemeral",
     "--ignore-user-config",
     "--model",
@@ -115,6 +116,7 @@ assert.equal(args[args.indexOf("--model") + 1], CODEX_REVIEW_MODEL);
 assert.ok(args.includes(`model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`));
 assert.ok(args.includes("--ignore-user-config"));
 assert.ok(args.includes("--ephemeral"));
+assert.ok(args.includes("--skip-git-repo-check"), "Git-free sanitized packets use the explicit trusted no-repository mode");
 assert.equal(args[args.indexOf("--disable") + 1], "hooks", "project hooks stay disabled inside the independent reviewer");
 assert.equal(args[args.length - 1], "-", "Codex reads the fixed prompt from wrapper-owned stdin");
 

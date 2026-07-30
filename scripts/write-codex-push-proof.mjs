@@ -466,6 +466,7 @@ export function buildCodexExecArgs({ root, prompt }) {
   // shell:false, so its metacharacters can never reach a shell.
   return [
     "exec",
+    "--skip-git-repo-check",
     "--ephemeral",
     "--ignore-user-config",
     "--model",
