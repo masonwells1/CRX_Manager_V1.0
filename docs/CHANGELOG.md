@@ -52,7 +52,11 @@ required. After a stable reload, an accepted Quote remains convertible: the
 server safely resumes it when no Order exists or returns the existing Order.
 The existing-Order replay opens that Order without re-saving the accepted Quote
 or repeating creation telemetry, admin alerts, credit checks, or customer
-confirmation email. The
+confirmation email. The pending migration now owner-gates the privileged
+quote-version and conversion RPCs before mutation or idempotent replay. Quote
+and Customer save replays are bound to the complete request and release a
+cached token only while the target still has the exact post-save version; a
+later writer forces reload instead of releasing stale proof. The
 rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
 planned-hold synchronization helper chain too.
 Verification passed

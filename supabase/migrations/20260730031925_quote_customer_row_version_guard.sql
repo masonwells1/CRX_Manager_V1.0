@@ -109,8 +109,10 @@ DECLARE
     "revised": ["sent","accepted","declined","expired"]
   }'::jsonb;
   v_cached_quote_id uuid;
+  v_cached_row_version bigint;
   v_existing jsonb;
   v_result jsonb;
+  v_request_fingerprint text;
 BEGIN
   v_actor := auth.uid();
   IF v_actor IS NULL THEN
@@ -125,6 +127,13 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'Not authorized to save quotes';
   END IF;
+
+  v_request_fingerprint := md5(jsonb_build_object(
+    'quote_id', p_quote_id,
+    'quote_payload', p_quote_payload,
+    'sections', p_sections,
+    'performed_by', p_performed_by
+  )::text);
 
   -- Quote ownership gates run BEFORE the idempotency early-return. This
   -- SECURITY DEFINER function must mirror quotes_update: admins may save any
@@ -160,8 +169,24 @@ BEGIN
            SELECT 1 FROM quotes
            WHERE id = v_cached_quote_id
              AND created_by = v_actor
-         ) THEN
+      ) THEN
         RAISE EXCEPTION 'NOT_QUOTE_OWNER';
+      END IF;
+      IF v_existing->>'_request_fingerprint' IS DISTINCT FROM v_request_fingerprint THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
+      END IF;
+      IF jsonb_typeof(v_existing->'row_version') <> 'number'
+         OR (v_existing->>'row_version') !~ '^(0|[1-9][0-9]*)$' THEN
+        RAISE EXCEPTION 'SAVE_QUOTE_RESULT_INVALID';
+      END IF;
+      v_cached_row_version := (v_existing->>'row_version')::bigint;
+      SELECT row_version
+        INTO v_old_row_version
+      FROM quotes
+      WHERE id = v_cached_quote_id
+      FOR UPDATE;
+      IF NOT FOUND OR v_old_row_version IS DISTINCT FROM v_cached_row_version THEN
+        RAISE EXCEPTION 'QUOTE_STALE_WRITE: quote changed after the saved request completed — reload to review the current quote before continuing';
       END IF;
       RETURN v_existing;
     END IF;
@@ -492,6 +517,7 @@ BEGIN
   v_result := jsonb_build_object(
     'status', 'saved',
     'quote_id', v_quote_id,
+    '_request_fingerprint', v_request_fingerprint,
     'commission_split', (SELECT commission_split FROM quotes WHERE id = v_quote_id),
     'row_version', (SELECT row_version FROM quotes WHERE id = v_quote_id),
     'server_totals', jsonb_build_object(
@@ -525,9 +551,11 @@ DECLARE
   v_result jsonb;
   v_existing jsonb;
   v_cached_customer_id uuid;
+  v_cached_row_version bigint;
   v_old_commission_split jsonb;
   v_old_row_version bigint;
   v_expected_row_version bigint;
+  v_request_fingerprint text;
 BEGIN
   v_actor := auth.uid();
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
@@ -543,6 +571,13 @@ BEGIN
   IF v_actor_role IS NULL THEN
     RAISE EXCEPTION 'INSUFFICIENT_ROLE';
   END IF;
+
+  v_request_fingerprint := md5(jsonb_build_object(
+    'customer_id', p_customer_id,
+    'customer_payload', p_customer_payload,
+    'addresses', p_addresses,
+    'performed_by', p_performed_by
+  )::text);
 
   -- Ownership gates run BEFORE the idempotency early-return (Codex P2, 2026-07-17):
   -- check_idempotency is not actor/customer-scoped, so a cached result must never
@@ -597,6 +632,22 @@ BEGIN
           AND assigned_sales_rep = v_actor
       ) THEN
         RAISE EXCEPTION 'NOT_CUSTOMER_OWNER';
+      END IF;
+      IF v_existing->>'_request_fingerprint' IS DISTINCT FROM v_request_fingerprint THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
+      END IF;
+      IF jsonb_typeof(v_existing->'row_version') <> 'number'
+         OR (v_existing->>'row_version') !~ '^(0|[1-9][0-9]*)$' THEN
+        RAISE EXCEPTION 'SAVE_CUSTOMER_RESULT_INVALID';
+      END IF;
+      v_cached_row_version := (v_existing->>'row_version')::bigint;
+      SELECT row_version
+        INTO v_old_row_version
+      FROM customers
+      WHERE id = v_cached_customer_id
+      FOR UPDATE;
+      IF NOT FOUND OR v_old_row_version IS DISTINCT FROM v_cached_row_version THEN
+        RAISE EXCEPTION 'CUSTOMER_STALE_WRITE: customer changed after the saved request completed — reload to review the current customer before continuing';
       END IF;
       RETURN v_existing;
     END IF;
@@ -752,6 +803,7 @@ BEGIN
   v_result := jsonb_build_object(
     'status', 'saved',
     'customer_id', v_customer_id,
+    '_request_fingerprint', v_request_fingerprint,
     'default_commission_split', (SELECT default_commission_split FROM customers WHERE id = v_customer_id),
     'row_version', (SELECT row_version FROM customers WHERE id = v_customer_id)
   );
@@ -763,6 +815,169 @@ BEGIN
   RETURN v_result;
 END;
 $function$;
+
+-- The existing quote-version and conversion RPCs are privileged writers. Keep
+-- their proven business logic intact behind owner-enforcing wrappers so a
+-- SECURITY DEFINER replay can never bypass the same ownership boundary as
+-- save_quote. The wrapper locks the target before checking idempotency, making
+-- the authorization stable through the inner mutation.
+ALTER FUNCTION public.create_quote_version(uuid, uuid, text, text)
+  RENAME TO _create_quote_version_owner_impl;
+REVOKE ALL ON FUNCTION public._create_quote_version_owner_impl(uuid, uuid, text, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._create_quote_version_owner_impl(uuid, uuid, text, text)
+  TO service_role;
+
+CREATE FUNCTION public.create_quote_version(
+  p_quote_id uuid,
+  p_performed_by uuid,
+  p_method text DEFAULT 'presented',
+  p_idempotency_key text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid;
+  v_actor_role text;
+  v_quote_owner uuid;
+  v_existing jsonb;
+  v_version_id uuid;
+BEGIN
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+
+  SELECT role INTO v_actor_role
+  FROM public.profiles
+  WHERE id = v_actor
+    AND is_active = true
+    AND role IN ('admin', 'sales_rep');
+  IF v_actor_role IS NULL THEN RAISE EXCEPTION 'INSUFFICIENT_ROLE'; END IF;
+
+  SELECT created_by INTO v_quote_owner
+  FROM public.quotes
+  WHERE id = p_quote_id
+    AND deleted_at IS NULL
+  FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found: %', p_quote_id; END IF;
+  IF v_actor_role <> 'admin' AND v_quote_owner IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'NOT_QUOTE_OWNER';
+  END IF;
+
+  IF p_idempotency_key IS NOT NULL THEN
+    v_existing := public.check_idempotency(p_idempotency_key, 'create_quote_version');
+    IF v_existing IS NOT NULL THEN
+      v_version_id := NULLIF(v_existing #>> '{}', '')::uuid;
+      IF v_version_id IS NULL OR NOT EXISTS (
+        SELECT 1
+        FROM public.quote_versions
+        WHERE id = v_version_id
+          AND quote_id = p_quote_id
+      ) THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
+      END IF;
+      RETURN jsonb_build_object(
+        'status', 'duplicate',
+        'version_id', v_version_id,
+        'message', 'Already processed'
+      );
+    END IF;
+  END IF;
+
+  RETURN public._create_quote_version_owner_impl(
+    p_quote_id,
+    p_performed_by,
+    p_method,
+    p_idempotency_key
+  );
+END;
+$function$;
+
+REVOKE EXECUTE ON FUNCTION public.create_quote_version(uuid, uuid, text, text)
+  FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.create_quote_version(uuid, uuid, text, text)
+  TO authenticated, service_role;
+
+ALTER FUNCTION public.convert_quote_to_order(uuid, uuid, text)
+  RENAME TO _convert_quote_to_order_owner_impl;
+REVOKE ALL ON FUNCTION public._convert_quote_to_order_owner_impl(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._convert_quote_to_order_owner_impl(uuid, uuid, text)
+  TO service_role;
+
+CREATE FUNCTION public.convert_quote_to_order(
+  p_quote_id uuid,
+  p_performed_by uuid DEFAULT NULL,
+  p_idempotency_key text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid;
+  v_actor_role text;
+  v_quote_owner uuid;
+  v_existing jsonb;
+  v_existing_order_id uuid;
+BEGIN
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+
+  SELECT role INTO v_actor_role
+  FROM public.profiles
+  WHERE id = v_actor
+    AND is_active = true
+    AND role IN ('admin', 'sales_rep');
+  IF v_actor_role IS NULL THEN RAISE EXCEPTION 'INSUFFICIENT_ROLE'; END IF;
+
+  SELECT created_by INTO v_quote_owner
+  FROM public.quotes
+  WHERE id = p_quote_id
+    AND deleted_at IS NULL
+  FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found: %', p_quote_id; END IF;
+  IF v_actor_role <> 'admin' AND v_quote_owner IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'NOT_QUOTE_OWNER';
+  END IF;
+
+  IF p_idempotency_key IS NOT NULL THEN
+    v_existing := public.check_idempotency(p_idempotency_key, 'convert_quote_to_order');
+    IF v_existing IS NOT NULL THEN
+      v_existing_order_id := NULLIF(v_existing->>'order_id', '')::uuid;
+      IF v_existing_order_id IS NULL OR NOT EXISTS (
+        SELECT 1
+        FROM public.orders
+        WHERE id = v_existing_order_id
+          AND quote_id = p_quote_id
+      ) THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
+      END IF;
+      RETURN v_existing;
+    END IF;
+  END IF;
+
+  RETURN public._convert_quote_to_order_owner_impl(
+    p_quote_id,
+    p_performed_by,
+    p_idempotency_key
+  );
+END;
+$function$;
+
+REVOKE EXECUTE ON FUNCTION public.convert_quote_to_order(uuid, uuid, text)
+  FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.convert_quote_to_order(uuid, uuid, text)
+  TO authenticated, service_role;
 
 -- Self-contained ACL restatement for the two re-emitted SECDEF mutators
 -- (matches live 2026-07-22: anon/PUBLIC denied, authenticated + service_role allowed).
@@ -847,12 +1062,42 @@ BEGIN
     RAISE EXCEPTION 'ROW_VERSION_CUSTOMER_SECURITY_POSTFLIGHT_FAILED';
   END IF;
 
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    WHERE p.oid = 'public.create_quote_version(uuid,uuid,text,text)'::regprocedure
+      AND p.prosecdef
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS setting
+        WHERE regexp_replace(setting, '\s+', '', 'g') = 'search_path=public,pg_temp'
+      )
+  ) OR NOT EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    WHERE p.oid = 'public.convert_quote_to_order(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS setting
+        WHERE regexp_replace(setting, '\s+', '', 'g') = 'search_path=public,pg_temp'
+      )
+  ) THEN
+    RAISE EXCEPTION 'ROW_VERSION_QUOTE_ACTION_SECURITY_POSTFLIGHT_FAILED';
+  END IF;
+
   IF NOT has_function_privilege('authenticated', 'public.save_quote(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.save_quote(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE')
      OR has_function_privilege('anon', 'public.save_quote(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE')
      OR NOT has_function_privilege('authenticated', 'public.save_customer(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.save_customer(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE')
-     OR has_function_privilege('anon', 'public.save_customer(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE') THEN
+     OR has_function_privilege('anon', 'public.save_customer(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.create_quote_version(uuid,uuid,text,text)'::regprocedure, 'EXECUTE')
+     OR has_function_privilege('anon', 'public.create_quote_version(uuid,uuid,text,text)'::regprocedure, 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)'::regprocedure, 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.convert_quote_to_order(uuid,uuid,text)'::regprocedure, 'EXECUTE')
+     OR has_function_privilege('anon', 'public.convert_quote_to_order(uuid,uuid,text)'::regprocedure, 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._convert_quote_to_order_owner_impl(uuid,uuid,text)'::regprocedure, 'EXECUTE') THEN
     RAISE EXCEPTION 'ROW_VERSION_RPC_ACL_POSTFLIGHT_FAILED';
   END IF;
 

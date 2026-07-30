@@ -44,10 +44,20 @@ BEGIN
   -- synchronization helper chain.
   v_q := public.save_quote(NULL, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1, 'is_planned', true), v_sections, v_admin, 'rv-quote-create-' || v_suffix);
   v_quote := (v_q->>'quote_id')::uuid;
-  v_q_replay := public.save_quote(NULL, jsonb_build_object('quote_number', 'ignored-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1), '[]'::jsonb, v_admin, 'rv-quote-create-' || v_suffix);
+  v_q_replay := public.save_quote(NULL, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1, 'is_planned', true), v_sections, v_admin, 'rv-quote-create-' || v_suffix);
   IF v_q_replay IS DISTINCT FROM v_q OR (SELECT count(*) FROM quotes WHERE id = v_quote) <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: quote idempotent creation replay changed outcome';
   END IF;
+  BEGIN
+    PERFORM public.save_quote(NULL, jsonb_build_object('quote_number', 'CONFLICT-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1), '[]'::jsonb, v_admin, 'rv-quote-create-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: quote idempotent replay accepted a different payload';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'IDEMPOTENCY_PAYLOAD_CONFLICT' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: quote payload-bound replay raised %', v_error;
+    END IF;
+  END;
   SELECT row_version INTO v_quote_before FROM quotes WHERE id = v_quote;
   -- The insert starts at the column default (1), then the one consolidated
   -- header/totals UPDATE advances it exactly once.
@@ -186,6 +196,16 @@ BEGIN
      OR (SELECT count(*) FROM quote_sections WHERE quote_id = v_quote) <> 1 OR (SELECT count(*) FROM quote_items WHERE quote_id = v_quote) <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected stale quote changed header or children';
   END IF;
+  BEGIN
+    PERFORM public.save_quote(NULL, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1, 'is_planned', true), v_sections, v_admin, 'rv-quote-create-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: quote creation replay returned a cached token after later writes';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error NOT LIKE 'QUOTE_STALE_WRITE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: advanced quote replay raised %', v_error;
+    END IF;
+  END;
 
   -- Split-specific conflict remains first even with a current whole-record token.
   UPDATE quotes SET commission_split = NULL WHERE id = v_quote;
@@ -202,10 +222,20 @@ BEGIN
   -- New customer, address insert, and exact replay stay valid and token-free.
   v_c := public.save_customer(NULL, jsonb_build_object('farm_name', '[SMOKE] RVC ' || v_suffix, 'assigned_sales_rep', v_admin, 'assigned_tier', 1), jsonb_build_array(jsonb_build_object('label', 'main', 'address_line', '1 Fresh Rd', 'is_default', true)), v_admin, 'rv-customer-create-' || v_suffix);
   v_customer := (v_c->>'customer_id')::uuid;
-  v_c_replay := public.save_customer(NULL, jsonb_build_object('farm_name', 'ignored-' || v_suffix, 'assigned_sales_rep', v_admin), '[]'::jsonb, v_admin, 'rv-customer-create-' || v_suffix);
+  v_c_replay := public.save_customer(NULL, jsonb_build_object('farm_name', '[SMOKE] RVC ' || v_suffix, 'assigned_sales_rep', v_admin, 'assigned_tier', 1), jsonb_build_array(jsonb_build_object('label', 'main', 'address_line', '1 Fresh Rd', 'is_default', true)), v_admin, 'rv-customer-create-' || v_suffix);
   IF v_c_replay IS DISTINCT FROM v_c OR (SELECT count(*) FROM customer_addresses WHERE customer_id = v_customer) <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: customer idempotent creation/address behavior regressed';
   END IF;
+  BEGIN
+    PERFORM public.save_customer(NULL, jsonb_build_object('farm_name', 'CONFLICT-' || v_suffix, 'assigned_sales_rep', v_admin), '[]'::jsonb, v_admin, 'rv-customer-create-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: customer idempotent replay accepted a different payload';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'IDEMPOTENCY_PAYLOAD_CONFLICT' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: customer payload-bound replay raised %', v_error;
+    END IF;
+  END;
   SELECT row_version INTO v_customer_before FROM customers WHERE id = v_customer;
   v_c := public.save_customer(v_customer, jsonb_build_object('farm_name', '[SMOKE] RVC fresh ' || v_suffix, 'row_version_expected', v_customer_before), jsonb_build_array(jsonb_build_object('label', 'main', 'address_line', '2 Fresh Rd', 'is_default', true)), v_admin, 'rv-customer-fresh-' || v_suffix);
   SELECT row_version INTO v_customer_after FROM customers WHERE id = v_customer;
@@ -270,6 +300,16 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected customer money-path race changed editor fields, addresses, money, or version';
   END IF;
   v_customer_after := v_customer_money_after;
+  BEGIN
+    PERFORM public.save_customer(NULL, jsonb_build_object('farm_name', '[SMOKE] RVC ' || v_suffix, 'assigned_sales_rep', v_admin, 'assigned_tier', 1), jsonb_build_array(jsonb_build_object('label', 'main', 'address_line', '1 Fresh Rd', 'is_default', true)), v_admin, 'rv-customer-create-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: customer creation replay returned a cached token after later writes';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error NOT LIKE 'CUSTOMER_STALE_WRITE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: advanced customer replay raised %', v_error;
+    END IF;
+  END;
 
   UPDATE customers SET default_commission_split = NULL WHERE id = v_customer;
   SELECT row_version INTO v_customer_after FROM customers WHERE id = v_customer;
@@ -329,6 +369,28 @@ BEGIN
     IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF v_error <> 'NOT_QUOTE_OWNER' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: quote replay ownership gate %', v_error;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.create_quote_version(
+      v_quote, v_rep, 'emailed', 'rv-version-nonowner-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep created another rep''s quote version';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'NOT_QUOTE_OWNER' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: quote-version ownership gate %', v_error;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.convert_quote_to_order(
+      v_quote, v_rep, 'rv-convert-nonowner-' || v_suffix);
+    RAISE EXCEPTION 'SMOKE_FAIL: non-owner sales rep converted another rep''s quote';
+  EXCEPTION WHEN OTHERS THEN
+    v_error := SQLERRM;
+    IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_error <> 'NOT_QUOTE_OWNER' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: quote-conversion ownership gate %', v_error;
     END IF;
   END;
   IF (SELECT row_version FROM quotes WHERE id = v_quote) <> v_quote_after
