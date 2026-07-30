@@ -3,7 +3,7 @@
 Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
-Current `origin/main` at exact-proof freeze: `31cf0abe760cdd845d047bd856e3401b76def44e`
+Current `origin/main` at exact-proof freeze: `886fa4591dd72c82d9e8c8f0b09fd3c8b7355053`
 State: rebased onto current `origin/main`; latest publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
@@ -244,9 +244,11 @@ and tests are frozen.
 
 ## Moving-main check
 
-`origin/main` advanced from `aee913d` through `db9b5ef` and `c0d90ed` to `31cf0abe`. The feature
+`origin/main` advanced from `aee913d` through `db9b5ef`, `c0d90ed`, `31cf0abe`, and `886fa459`.
+The feature
 commits were rebased onto each current base before exact-SHA publication proof. The latest upstream
-Phase 3 prover identity/RLS checks do not overlap the factory implementation.
+vendor-bill accounting-period close work overlaps only policy/changelog/package surfaces; both
+entries and harness definitions were retained during reconciliation.
 
 ## Remaining gate
 
