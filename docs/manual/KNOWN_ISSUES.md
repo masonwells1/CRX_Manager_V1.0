@@ -7,6 +7,28 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## 0c. PARKED — vendor-bill versus accounting-period close race candidate
+
+**Status: PARKED / NOT APPLIED.** A read-only 2026-07-29 preflight confirmed
+the current production functions can interleave a vendor-bill period check with
+`close_accounting_period`; no accounting period is closed live today (9 rows,
+all open), so the exposure is dormant rather than an active historical-data
+incident. Candidate migration
+`20260730031031_vendor_bill_period_close_lock.sql` is local-only and must not
+be applied without Mason's explicit current-conversation approval, fresh
+exact-SHA migration review, and a fresh live preflight.
+
+The candidate enforces whole calendar-month rows, serializes governed close and
+vendor-bill RPCs with sorted transaction advisory locks, and has a restored
+PostgreSQL 17 proof covering baseline reproduction, create/update winning
+orders, canonical month acquisition, and the affected Section 9, finance, and
+delivery rollback smokes. Direct authenticated-admin writes to
+`accounting_periods` remain a deliberately recorded UI-unreachable residual
+boundary; no permission change is included. Durable local evidence:
+`docs/audits/2026-07-30-vendor-bill-period-close-lock-closeout.md`.
+
+---
+
 ## 0d. RESOLVED LIVE 2026-07-29 — `profile_public_view` RLS bypass onto `profiles`
 
 **Status: RESOLVED LIVE.** Closed by `supabase/migrations/20260729125227_secure_profile_public_directory.sql` (PR #269), applied 2026-07-29. Live postflight confirmed `security_invoker=true`, RLS enabled, 11/11 profiles backfilled, authenticated write privileges removed, and anonymous reads denied.

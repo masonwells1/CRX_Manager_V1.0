@@ -69,7 +69,7 @@ BEGIN
   LIMIT 1;
 
   SELECT gs::date INTO v_open_date
-  FROM generate_series(CURRENT_DATE, CURRENT_DATE - 365, interval '-1 day') AS gs
+  FROM generate_series(CURRENT_DATE - 1, CURRENT_DATE - 365, interval '-1 day') AS gs
   WHERE NOT EXISTS (
     SELECT 1 FROM public.accounting_periods ap
     WHERE gs::date BETWEEN ap.period_start AND ap.period_end
@@ -78,8 +78,9 @@ BEGIN
   LIMIT 1;
 
   SELECT gs::date INTO v_second_open_date
-  FROM generate_series(CURRENT_DATE, CURRENT_DATE - 365, interval '-1 day') AS gs
+  FROM generate_series(CURRENT_DATE - 1, CURRENT_DATE - 365, interval '-1 day') AS gs
   WHERE gs::date <> v_open_date
+    AND date_trunc('month', gs::date) <> date_trunc('month', v_open_date)
     AND NOT EXISTS (
       SELECT 1 FROM public.accounting_periods ap
       WHERE gs::date BETWEEN ap.period_start AND ap.period_end
@@ -110,7 +111,9 @@ BEGIN
   INSERT INTO public.accounting_periods (
     period_start, period_end, status, closed_by, closed_at, notes
   ) VALUES (
-    v_closed_date, v_closed_date, 'closed', v_admin, now(),
+    date_trunc('month', v_closed_date)::date,
+    (date_trunc('month', v_closed_date) + interval '1 month - 1 day')::date,
+    'closed', v_admin, now(),
     '[SMOKE] complete_delivery closed-period guard'
   ) RETURNING id INTO v_closed_period;
 
@@ -119,10 +122,10 @@ BEGIN
   RETURNING id INTO v_customer;
 
   INSERT INTO public.products (
-    product_name, unit_size, current_cost, epa_registration, product_form
+    product_name, unit_size, epa_registration, product_form
   ) VALUES (
     '[SMOKE] Delivery Period Product ' || v_suffix,
-    'GL', 6, '[SMOKE]-DEL-PERIOD-' || v_suffix, 'liquid'
+    'GL', '[SMOKE]-DEL-PERIOD-' || v_suffix, 'liquid'
   ) RETURNING id INTO v_product;
 
   INSERT INTO public.inventory (
@@ -271,6 +274,7 @@ BEGIN
     json_build_object('sub', v_unauthorized, 'role', 'authenticated')::text,
     true
   );
+  PERFORM set_config('request.jwt.claim.sub', v_unauthorized::text, true);
 
   BEGIN
     PERFORM public.complete_delivery(
@@ -297,6 +301,7 @@ BEGIN
     json_build_object('sub', v_admin, 'role', 'authenticated')::text,
     true
   );
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   SELECT count(*) INTO v_count
   FROM public.idempotency_keys
@@ -370,7 +375,9 @@ BEGIN
   INSERT INTO public.accounting_periods (
     period_start, period_end, status, closed_by, closed_at, notes
   ) VALUES (
-    v_open_date, v_open_date, 'closed', v_admin, now(),
+    date_trunc('month', v_open_date)::date,
+    (date_trunc('month', v_open_date) + interval '1 month - 1 day')::date,
+    'closed', v_admin, now(),
     '[SMOKE] void_delivery closed-period guard'
   ) RETURNING id INTO v_open_period;
 

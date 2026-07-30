@@ -16,6 +16,20 @@ the exclusive lock after authorization, idempotency replay, and month
 validation, but before its invoice completeness scan and upsert. No vendor-bill
 or PO completeness gate was added.
 
+`check_period_open` is deliberately re-emitted with
+`search_path = public, pg_temp`, matching the project `AGENTS.md` hard rule for
+security-definer functions; it is not an accidental body-only change.
+
+## Read-only live preflight already observed
+
+Root's fresh read-only production preflight observed PostgreSQL 17.6,
+`accounting_periods` with 9 total rows, zero closed rows, and zero non-whole
+month rows. The live Section 9 predicate had zero violations, and the exact
+existing fingerprints for `create_vendor_bill`, `update_vendor_bill`, and
+`close_accounting_period` matched the source baseline used for this candidate.
+This evidence does not authorize an apply; the migration remains parked pending
+fresh exact-SHA review and Mason's explicit approval.
+
 ## Caller and direct-reader classification
 
 The raw source token scan has 31 `check_period_open` hits. Two are comments
@@ -62,3 +76,8 @@ helper's ascending `ORDER BY` clause. Terminal markers include
 `CANDIDATE_UPDATE_CANONICAL_JAN_FIRST_PASS`,
 `CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS`, and
 `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
+
+After applying the candidate in that disposable database, the runner also
+executes the existing Section 9 PO/AP, finance-charge month-dedup, and delivery
+accounting-period guard rollback chains. Their terminal markers prove the new
+whole-month constraint did not invalidate those registered fixture paths.

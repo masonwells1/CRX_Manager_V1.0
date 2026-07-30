@@ -16,6 +16,11 @@ const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.141';
 const BASE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATION = path.join(ROOT, 'supabase', 'migrations', '20260730031031_vendor_bill_period_close_lock.sql');
 const SMOKE = path.join(ROOT, 'scripts', 'smoke', 'smoke-vendor-bill-period-close-lock.sql');
+const SIBLING_SMOKES = [
+  'smoke-section9-po-ap-high-remediation.sql',
+  'smoke-finance-charge-month-dedup.sql',
+  'smoke-delivery-accounting-period-guard.sql',
+];
 const ADMIN = '00000000-0000-0000-0000-0000000000a1';
 const KEY = 818181;
 
@@ -50,7 +55,13 @@ function applyFile(name) { return sql(`BEGIN;\n\\i /tmp/${name}\nCOMMIT;`); }
 try {
   run(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
   let ok = false;
-  for (let i = 0; i < 60; i += 1) { if (run(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { fail: true }).status === 0) { ok = true; break; } Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500); }
+  for (let i = 0; i < 60; i += 1) {
+    if (run(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { fail: true }).status === 0) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+      if (run(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { fail: true }).status === 0) { ok = true; break; }
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+  }
   assert.ok(ok, 'PostgreSQL 17 did not start');
   adminSql('CREATE SCHEMA IF NOT EXISTS auth; CREATE TABLE IF NOT EXISTS auth.users(id uuid PRIMARY KEY);');
   run(['cp', path.join(BASE, '20260727174805_extensions.sql'), `${NAME}:/tmp/extensions.sql`]);
@@ -68,7 +79,7 @@ try {
   // disposable PostgreSQL image.
   // Migration-ledger restoration is unrelated to function execution in this
   // disposable proof and needs Supabase's platform schema, so omit it here.
-  sql(`${claims()} INSERT INTO auth.users(id) VALUES ('${ADMIN}') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('${ADMIN}','period-proof@example.invalid','admin',true) ON CONFLICT (id) DO UPDATE SET role='admin',is_active=true;`);
+  sql(`${claims()} INSERT INTO auth.users(id) VALUES ('${ADMIN}'),('00000000-0000-0000-0000-0000000000a2') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('${ADMIN}','period-proof@example.invalid','admin',true),('00000000-0000-0000-0000-0000000000a2','period-proof-applicator@example.invalid','applicator',true) ON CONFLICT (id) DO UPDATE SET is_active=true;`);
 
   const vendor = scalar(`INSERT INTO public.vendors(name) VALUES ('[PROOF] period vendor ${process.pid}') RETURNING id;`);
   const date = '2025-01-15', end = '2025-01-31', monthKey = 2025 * 12 + 1 - 1;
@@ -95,6 +106,13 @@ try {
   const smoke = sql('\\i /tmp/smoke.sql', { fail: true });
   assert.match(`${smoke.stdout}\n${smoke.stderr}`, /SMOKE_PASS_ROLLBACK/, 'registered rollback smoke did not pass');
   console.log('SMOKE_PASS_ROLLBACK');
+  sql(`INSERT INTO public.products(product_name) VALUES ('[PROOF] sibling smoke product ${process.pid}');`);
+  for (const sibling of SIBLING_SMOKES) {
+    run(['cp', path.join(ROOT, 'scripts', 'smoke', sibling), `${NAME}:/tmp/${sibling}`]);
+    const siblingResult = sql(`${claims()}\n\\i /tmp/${sibling}`, { fail: true });
+    assert.match(`${siblingResult.stdout}\n${siblingResult.stderr}`, /SMOKE_PASS_ROLLBACK/, `${sibling} did not reach rollback marker`);
+    console.log(`SIBLING_${sibling.replace(/[^A-Za-z0-9]+/g, '_').toUpperCase()}_PASS`);
+  }
 
   // Candidate writer-first: its actual check owns shared 73492010/month while
   // the proof trigger pauses before INSERT; close must wait on that advisory key.

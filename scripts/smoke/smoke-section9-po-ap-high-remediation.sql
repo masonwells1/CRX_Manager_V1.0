@@ -378,8 +378,8 @@ BEGIN
     closed_at,
     notes
   ) VALUES (
-    v_old_date,
-    v_old_date,
+    date_trunc('month', v_old_date)::date,
+    (date_trunc('month', v_old_date) + interval '1 month - 1 day')::date,
     'closed',
     v_admin,
     now(),

@@ -42,6 +42,12 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(lock).toBeLessThan(close.indexOf('INSERT INTO public.accounting_periods'));
   });
 
+  it('takes the shared month lock before check_period_open reads a closed period', () => {
+    const check = body('check_period_open(');
+    expect(check.indexOf('_lock_accounting_months(ARRAY[p_date], false)'))
+      .toBeLessThan(check.indexOf('FROM public.accounting_periods'));
+  });
+
   it('holds writer shared locks across the actual period checks in safe order', () => {
     const create = body('create_vendor_bill(');
     expect(create.indexOf('FROM public.vendors')).toBeLessThan(create.indexOf('check_period_open(p_bill_date)'));
@@ -70,5 +76,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS'\)/);
     expect(proof).toContain("classid=73492010");
     expect(proof).toContain("'--network', 'none'");
+    const registry = source('scripts', 'smoke', 'smoke-specs.json');
+    expect(registry).not.toContain('vendor_bill_period_close_lock');
   });
 });

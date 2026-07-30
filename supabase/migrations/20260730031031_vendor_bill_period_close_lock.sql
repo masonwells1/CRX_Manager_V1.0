@@ -1,9 +1,13 @@
 -- Accounting-period close/write serialization.
+-- PARKED / DO NOT APPLY without Mason's explicit current-conversation approval
+-- and the normal fresh exact-SHA migration review and live preflight.
 --
 -- Lock order: existing PO parent advisory lock 73492009 (when a PO path has
 -- one) precedes this dedicated two-int month namespace 73492010.  Month keys
 -- are deduplicated and acquired ascending before period checks.  This avoids a
 -- close/write TOCTOU and reverse-direction vendor-bill update deadlocks.
+
+SET LOCAL lock_timeout = '10s';
 
 ALTER TABLE public.accounting_periods
   ADD CONSTRAINT accounting_periods_whole_calendar_month_check
