@@ -16,6 +16,7 @@ import {
   reviewStateDirectoryMentioned,
   extractPatchDestinations,
   proofValid,
+  repoIsGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
 
@@ -132,6 +133,28 @@ assert.deepEqual(
 assert.deepEqual(riskyFiles(["scripts/write-codex-push-proof.mjs"]), ["scripts/write-codex-push-proof.mjs"]);
 assert.equal(contentIsRisky("+ const total_cents = 100"), true);
 assert.equal(contentIsRisky("+ const title = 'ordinary'"), false);
+
+// 2026-07-29: the risky-file gate reasons about THIS app's migrations, RLS and
+// money code, so it only applies to THIS repo. It used to run against any repo
+// the session pushed to, and blocked a backup snapshot because a markdown note
+// was named `project_policy-grantee-...` (the `/policy|grant/i` pattern is
+// unanchored). Scope by remote URL; do NOT weaken the patterns.
+assert.equal(repoIsGuardedApp("origin\tgit@github.com:masonwells1/CRX_Manager_V1.0.git (push)"), true);
+assert.equal(repoIsGuardedApp("origin\thttps://github.com/masonwells1/CRX_Manager_V1.0 (push)"), true);
+assert.equal(repoIsGuardedApp("origin\tgit@github.com:masonwells1/CRX_Backups.git (push)"), false);
+assert.equal(repoIsGuardedApp("origin\tgit@github.com:masonwells1/FarmRx.git (push)"), false);
+// A second remote pointing at the app repo still gates the push.
+assert.equal(
+  repoIsGuardedApp("backup\tgit@github.com:masonwells1/CRX_Backups.git (push)\norigin\tgit@github.com:masonwells1/CRX_Manager_V1.0.git (push)"),
+  true,
+);
+// Fails CLOSED: an empty/unreadable remote list must gate, never wave through.
+assert.equal(repoIsGuardedApp(""), true);
+assert.equal(repoIsGuardedApp(null), true);
+assert.equal(repoIsGuardedApp(undefined), true);
+// A look-alike repo name must NOT be mistaken for the real one.
+assert.equal(repoIsGuardedApp("origin\tgit@github.com:someoneelse/CRX_Manager_V1.0.git (push)"), false);
+assert.equal(repoIsGuardedApp("origin\tgit@github.com:masonwells1/CRX_Manager_V1.0_fork.git (push)"), false);
 
 const base = "c".repeat(40);
 const codexProof = { codex_ran: true, verdict: "clean", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };

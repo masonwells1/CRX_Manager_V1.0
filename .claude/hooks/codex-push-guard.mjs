@@ -23,6 +23,7 @@ import {
   pushContextIsAmbiguous,
   pushIsForced,
   pushUsesBulkMode,
+  repoIsGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
 
@@ -91,6 +92,25 @@ for (const pushCmd of pushCommands) {
   if (srcRef === "DELETE") {
     deny("CODEX GATE: `git push origin :main` DELETES the production main branch. Never do this. If a bad commit landed, use the /rollback runbook (compensating commit / Vercel promote-previous) instead.");
   }
+
+  // Everything above here (force-push, bulk modes, deleting main) is destructive
+  // in ANY repository and stays global. What follows is the risky-file / Codex
+  // proof gate, and that one is specific to the CRX Manager production app: it
+  // reasons about supabase migrations, RLS policies, and money code that only
+  // exist here. On 2026-07-29 it blocked a snapshot push to the private
+  // masonwells1/CRX_Backups repo because a MARKDOWN NOTE was named
+  // `project_policy-grantee-disk-vs-live-drift.md` and the path pattern
+  // `/policy|grant/i` is unanchored. Scope the gate to the app repo rather than
+  // loosening the patterns, so its strength here is unchanged.
+  let remoteList = "";
+  try {
+    remoteList = git(["remote", "-v"], pushRepoDir);
+  } catch (_error) {
+    // Fail CLOSED: repoIsGuardedApp("") is true, so a broken remote lookup
+    // gates the push instead of waving it through.
+    remoteList = "";
+  }
+  if (!repoIsGuardedApp(remoteList)) continue;
 
   let baseSha = "";
   try {

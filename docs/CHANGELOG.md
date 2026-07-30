@@ -2,6 +2,51 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — two push guards were blocking pushes they had already cleared
+
+Backing up the agent memory ran into both of them, one after the other. Neither was catching a real
+problem; both were misfiring, and one of them was misfiring in the worst possible way — after
+passing.
+
+**The containment scan replayed the whole branch instead of the new commits.** Pushing a *new*
+branch takes a different code path in `check-supplier-pricing-phase3-private-artifacts.mjs`: with no
+remote counterpart to diff against, `outgoingCommitsForNewRemoteRef` walked the branch's entire
+history. Measured on a **one-commit** branch: 748 seconds, 2,114 commits, 51,932 paths, 1.6 GB — and
+then it **passed**, because there was nothing to find. Every one of those commits had been scanned by
+this same hook when it was originally pushed.
+
+The cost was not just time. `GIT_TRACE` shows Git opens the `ssh … git-receive-pack` connection
+*before* it runs the pre-push hook. GitHub dropped the idle connection long before a 12-minute hook
+finished, so Git then wrote the pack to a dead socket and the push died with SIGPIPE (exit 141) —
+after every check had passed. Four pushes failed this way, each printing the hook's cheerful
+`✅ … pushing to GitHub` line first. That line prints *before* the upload; it is not evidence, and a
+push is only confirmed by `git ls-remote --heads origin <branch>`.
+
+The scan now excludes what the remote already has (`--not --remotes=<remote>`), which is the set Git
+itself would upload. An unrecognised remote falls back to the old full walk, so the guard fails
+toward *more* scanning, never less. Same branch: 748s → 318s, 2,114 commits → 0. Mutation-tested both
+ways — a synthetic commit carrying a private artifact still exits 1 and names the file, and a benign
+commit passes with `checked_commits=1`, proving the narrowed scan still inspects the genuinely new
+commit rather than skipping everything.
+
+**The Codex risky-file gate policed every repository, and matched on filename substrings.** Its path
+patterns include an unanchored `/policy|grant/i`, so the memory note
+`project_policy-grantee-disk-vs-live-drift.md` — a markdown file — was classified as an RLS/permission
+change and blocked the snapshot push to the *private* `CRX_Backups` repo, which has no migrations, no
+RLS and no production surface. The gate simply had no notion of which GitHub repository was being
+pushed to.
+
+The fix scopes the gate by the push repository's own remotes rather than loosening the patterns, so
+its strength on this repo is unchanged. It fails closed: an empty or unreadable remote list is
+treated as the app repo and gates the push. Force-push, bulk-push and "delete main" remain global —
+those are destructive in any repository. Mutation-tested to red on both halves: making the empty-list
+case fail *open* breaks the unit tests, and skipping the repo check for every repo makes an app-repo
+push carrying that same filename stop being denied — proving the new check is what denies it.
+
+The lesson worth keeping: a guard that is slow enough to break the thing it guards is a broken guard,
+and neither of these announced itself as a failure. One reported success and lost the push anyway;
+the other blocked a file for its *name*.
+
 ## 2026-07-29 — agent memory is now backed up off-site, and permanently barred from this public repo
 
 162 stale agent-memory notes had been sitting untracked in the main checkout since 2026-07-26,

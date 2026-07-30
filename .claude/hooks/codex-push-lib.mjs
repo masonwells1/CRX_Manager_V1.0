@@ -214,6 +214,23 @@ export function riskyFiles(files) {
   return (files || []).filter((f) => RISKY_PATH_RES.some((re) => re.test(String(f || ""))));
 }
 
+// This gate exists to protect the CRX Manager production app repo. It has no
+// remit over OTHER repositories, and on 2026-07-29 that gap bit: the unanchored
+// `/policy|grant/i` path pattern above matched a MARKDOWN NOTE named
+// `project_policy-grantee-disk-vs-live-drift.md` and blocked a snapshot push to
+// the private masonwells1/CRX_Backups backup repo — a repo with no migrations,
+// no RLS, and no production surface. Scope the gate by the repository's own
+// remotes so it keeps FULL strength on the app repo (the path patterns are
+// deliberately untouched) and stops policing unrelated ones.
+export const GUARDED_REPO_RE = /[:/]masonwells1\/CRX_Manager_V1\.0(?:\.git)?$/i;
+// Accepts `git remote -v` output. Fails CLOSED: anything unparseable or empty is
+// treated as the guarded repo, so a broken remote lookup cannot skip the gate.
+export function repoIsGuardedApp(remoteListOutput) {
+  const lines = String(remoteListOutput ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return true;
+  return lines.some((line) => GUARDED_REPO_RE.test(line.split(/\s+/)[1] || ""));
+}
+
 // A push can also be risky by CONTENT even when no file's PATH matches the
 // patterns above — e.g. a helper file outside the usual risky paths that still
 // touches cents-math or writes financial_audit_log / prepay / payment-allocation

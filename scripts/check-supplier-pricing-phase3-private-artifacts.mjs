@@ -1778,8 +1778,36 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
   return { checked_path_count: visible.size, checked_commit_count: checkedCommits.length, checked_ignored_count: worktree.ignoredCount, worktree_scan_duration_ms: worktree.durationMs, scanned_candidate_count: budget.candidates, scanned_logical_bytes: budget.logicalBytes };
 }
 
-function outgoingCommitsForNewRemoteRef(localSha, root, execute) {
-  return gitLines(['rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`, assertCommitSha(localSha, 'local')], root, execute);
+// The commits a push actually uploads are the ones the remote does not already
+// have. Replaying the branch's ENTIRE history instead cost 748s / 2,114 commits
+// / 51,932 paths / 1.6 GB to push a ONE-commit branch (measured 2026-07-29).
+// That matters for more than speed: Git opens the `git-receive-pack` connection
+// BEFORE running this hook, so GitHub dropped the idle connection long before
+// the scan finished and every new-branch push died with SIGPIPE (exit 141) —
+// after the scan had passed. The guard was blocking pushes it had cleared.
+//
+// Narrowing to the genuinely-outgoing commits is safe: anything already
+// reachable from a remote-tracking ref was scanned by this same hook when it was
+// pushed, and re-scanning it cannot un-expose an artifact that is already on the
+// remote. When we cannot identify the remote we keep the old full-history walk,
+// so an unrecognised remote fails toward MORE scanning, never less.
+function remoteExclusionArgs(remoteName, root, execute) {
+  if (typeof remoteName !== 'string' || remoteName.length === 0) return [];
+  let configured;
+  try {
+    configured = gitLines(['remote'], root, execute);
+  } catch (_error) {
+    return [];
+  }
+  if (!configured.includes(remoteName)) return [];
+  return ['--not', `--remotes=${remoteName}`];
+}
+function outgoingCommitsForNewRemoteRef(localSha, root, execute, remoteName) {
+  return gitLines([
+    'rev-list', '--reverse', `--max-count=${MAX_HISTORY_COMMITS + 1}`,
+    assertCommitSha(localSha, 'local'),
+    ...remoteExclusionArgs(remoteName, root, execute),
+  ], root, execute);
 }
 function peeledCommitSha(objectSha, root, execute) {
   try {
@@ -1853,10 +1881,10 @@ export async function checkPrePushPrivateArtifactContainment({ root = REPO_ROOT,
     const inspected = await inspectOutgoingRefObject({ localRef, localSha, root, execute, budget: outgoingBudget });
     objectViolations.push(...inspected.violations);
     if (inspected.commit === null) continue;
-    if (isZeroSha(remoteSha)) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
+    if (isZeroSha(remoteSha)) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute, remoteName));
     else {
       const remoteCommit = peeledCommitSha(assertCommitSha(remoteSha, 'remote'), root, execute);
-      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute));
+      if (remoteCommit === null) commits.push(...outgoingCommitsForNewRemoteRef(inspected.commit, root, execute, remoteName));
       else ranges.push(`${remoteCommit}..${inspected.commit}`);
     }
   }
