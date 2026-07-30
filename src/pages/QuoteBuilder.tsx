@@ -2387,8 +2387,14 @@ export default function QuoteBuilder() {
       }
     }
 
-    // Save the quote first (sets status to 'accepted')
-    const savedId = await saveQuote('accepted');
+    // A normally open Quote must first commit its accepted status. An already
+    // accepted Quote is the recovery/idempotent-resume path: it is read-only in
+    // this UI, and rewriting its sections could disturb an Order that another
+    // attempt already created. Let the server RPC either create the missing
+    // Order or return the existing one without another whole-Quote save.
+    const savedId = status === 'accepted' && quoteId
+      ? quoteId
+      : await saveQuote('accepted');
     if (!savedId) {
       if (quoteVersionRecoveryRequiredRef.current) {
         toast('error', 'The quote was saved, but the order was NOT created. Reload the quote, then try again.');
@@ -2410,36 +2416,48 @@ export default function QuoteBuilder() {
 
       convertQuoteIdem.resetKey();
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[] }>(data, 'convert_quote_to_order');
-      toast('success', `Order ${result.order_number || ''} created`);
+      if (!result.order_id) {
+        throw new Error('Order conversion completed without an order ID');
+      }
+      const alreadyConverted = result.status === 'already_converted';
+      if (alreadyConverted) {
+        toast('info', 'This booking was already converted — opening the existing order.');
+      } else {
+        toast('success', `Order ${result.order_number || ''} created`);
+      }
 
-      // Show inventory warnings (non-blocking — order was still created)
+      // Show any inventory warnings returned by the server.
       if (result.warnings && result.warnings.length > 0) {
         result.warnings.forEach((w) => toast('warning', `Inventory: ${w}`));
       }
-      trackBusinessEvent('quote_converted_to_order', {
-        message: `Quote converted → Order ${result.order_number || ''}`,
-        data: { orderId: result.order_id ?? '', orderNumber: result.order_number ?? '', quoteId: savedId },
-      });
-      notifyLargeOrder(result.order_id!, result.order_number || '', selectedCustomer?.farm_name || 'customer', totals.totalPrice);
-      // Wave A.2 / P1-7: send the customer "Order Confirmed" email at the
-      // creation site (orders are born at status='confirmed' — there is no
-      // transition to gate on). Fire-and-forget; helper swallows its own errors.
-      sendOrderConfirmedEmail(result.order_id!);
+      // A server replay for an accepted Quote returns the existing Order. Do
+      // not emit creation telemetry, alerts, or customer email a second time.
+      if (!alreadyConverted) {
+        trackBusinessEvent('quote_converted_to_order', {
+          message: `Quote converted → Order ${result.order_number || ''}`,
+          data: { orderId: result.order_id, orderNumber: result.order_number ?? '', quoteId: savedId },
+        });
+        notifyLargeOrder(result.order_id, result.order_number || '', selectedCustomer?.farm_name || 'customer', totals.totalPrice);
+        // Wave A.2 / P1-7: send the customer "Order Confirmed" email at the
+        // creation site (orders are born at status='confirmed' — there is no
+        // transition to gate on). Fire-and-forget; helper swallows its own errors.
+        sendOrderConfirmedEmail(result.order_id);
 
-      // Phase 3.3: Credit limit check — warn (not block) if exceeded
-      if (customerId) {
-        try {
-          const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
-            p_customer_id: customerId,
-          });
-          const cl = assertRpcResult<{ exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null>(creditCheck, 'check_customer_credit_limit');
-          if (cl && cl.exceeded) {
-            const fmtCl = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
-            toast('warning', `Credit limit warning: ${selectedCustomer?.farm_name || 'Customer'} outstanding AR ${fmtCl(cl.outstanding_ar ?? 0)} exceeds limit ${fmtCl(cl.credit_limit ?? 0)}`);
-            notifyCreditLimitExceeded(selectedCustomer?.farm_name || 'Customer', cl.outstanding_ar ?? 0, cl.credit_limit ?? 0, customerId);
+        // Phase 3.3: Credit limit check — warn (not block) if exceeded
+        if (customerId) {
+          try {
+            const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
+              p_customer_id: customerId,
+            });
+            const cl = assertRpcResult<{ exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null>(creditCheck, 'check_customer_credit_limit');
+            if (cl && cl.exceeded) {
+              const fmtCl = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+              toast('warning', `Credit limit warning: ${selectedCustomer?.farm_name || 'Customer'} outstanding AR ${fmtCl(cl.outstanding_ar ?? 0)} exceeds limit ${fmtCl(cl.credit_limit ?? 0)}`);
+              notifyCreditLimitExceeded(selectedCustomer?.farm_name || 'Customer', cl.outstanding_ar ?? 0, cl.credit_limit ?? 0, customerId);
+            }
+          } catch {
+            // Non-blocking — credit limit check should not prevent navigation
           }
-        } catch {
-          // Non-blocking — credit limit check should not prevent navigation
         }
       }
 

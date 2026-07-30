@@ -50,7 +50,9 @@ Convert-to-Order chain also stops if its accepted-status save commits without
 an exact authoritative token; it cannot create an order while recovery is
 required. After a stable reload, an accepted Quote remains convertible: the
 server safely resumes it when no Order exists or returns the existing Order.
-The
+The existing-Order replay opens that Order without re-saving the accepted Quote
+or repeating creation telemetry, admin alerts, credit checks, or customer
+confirmation email. The
 rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
 planned-hold synchronization helper chain too.
 Verification passed

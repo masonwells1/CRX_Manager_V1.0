@@ -7,7 +7,18 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, dirtyStates, mockGenerateQuotePdf, mockSendEmail } = vi.hoisted(() => {
+const {
+  mockFrom,
+  mockRpc,
+  mockToast,
+  mockNavigate,
+  dirtyStates,
+  mockGenerateQuotePdf,
+  mockSendEmail,
+  mockNotifyLargeOrder,
+  mockTrackBusinessEvent,
+  mockSendOrderConfirmedEmail,
+} = vi.hoisted(() => {
   return {
     mockFrom: vi.fn(),
     mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
@@ -16,6 +27,9 @@ const { mockFrom, mockRpc, mockToast, mockNavigate, dirtyStates, mockGenerateQuo
     dirtyStates: [] as boolean[],
     mockGenerateQuotePdf: vi.fn(() => ({ output: () => new Blob(['quote']) })),
     mockSendEmail: vi.fn(),
+    mockNotifyLargeOrder: vi.fn(),
+    mockTrackBusinessEvent: vi.fn(),
+    mockSendOrderConfirmedEmail: vi.fn(),
   };
 });
 
@@ -132,8 +146,9 @@ vi.mock('../hooks/useUnsavedChanges', () => ({
 }));
 
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
-vi.mock('../lib/notificationTriggers', () => ({ notifyLargeOrder: vi.fn(), notifyCreditLimitExceeded: vi.fn() }));
-vi.mock('../lib/metrics', () => ({ trackBusinessEvent: vi.fn() }));
+vi.mock('../lib/notificationTriggers', () => ({ notifyLargeOrder: mockNotifyLargeOrder, notifyCreditLimitExceeded: vi.fn() }));
+vi.mock('../lib/metrics', () => ({ trackBusinessEvent: mockTrackBusinessEvent }));
+vi.mock('../lib/orderConfirmedEmail', () => ({ sendOrderConfirmedEmail: mockSendOrderConfirmedEmail }));
 vi.mock('../lib/dateUtils', () => ({ localDatePlusDays: vi.fn(() => '2026-04-15'), localToday: vi.fn(() => '2026-03-16') }));
 vi.mock('../lib/quotePdf', () => ({ downloadQuotePdf: vi.fn(), generateQuotePdf: mockGenerateQuotePdf }));
 vi.mock('../lib/emailService', () => ({ sendEmail: mockSendEmail, pdfToBase64: vi.fn(), buildEmailHtml: vi.fn(() => '<p>test</p>') }));
@@ -932,7 +947,7 @@ describe('QuoteBuilder', () => {
       }
       if (name === 'convert_quote_to_order') {
         return Promise.resolve({
-          data: { status: 'created', order_id: 'order-1', order_number: 'O-1', warnings: [] },
+          data: { status: 'already_converted', order_id: 'order-1', warnings: [] },
           error: null,
         });
       }
@@ -966,7 +981,15 @@ describe('QuoteBuilder', () => {
       'convert_quote_to_order',
       expect.objectContaining({ p_quote_id: quote.id }),
     ));
-    expect(saveCalls).toBe(2);
+    expect(saveCalls).toBe(1);
+    expect(mockToast).toHaveBeenCalledWith(
+      'info',
+      expect.stringContaining('already converted'),
+    );
+    expect(mockTrackBusinessEvent).not.toHaveBeenCalled();
+    expect(mockNotifyLargeOrder).not.toHaveBeenCalled();
+    expect(mockSendOrderConfirmedEmail).not.toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith('/orders/order-1');
   });
 
   it('stops Book as Order when mark-presented cannot confirm the frozen quote token', async () => {
