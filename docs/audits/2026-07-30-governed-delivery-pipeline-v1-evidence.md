@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `886fa4591dd72c82d9e8c8f0b09fd3c8b7355053`
-State: rebased onto current `origin/main`; latest publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; third Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -36,9 +36,14 @@ pipeline remains the delivery engine and all of its landing and production gates
   defense-in-depth inside the supported agent tool boundary, not a same-Windows-user cryptographic
   security boundary. The ledger/Board never authorizes merge, deploy, migration, live-data, or
   production actions; existing `/ship`, GitHub, and owner hard gates remain authoritative.
-- Legal stage transitions and evidence writes are bound to the lane-start session. Lane start uses
-  an expected-last-event compare-and-swap under the exclusive ledger lock, so simultaneous starts
-  cannot both win. Successful output from every
+- Legal stage transitions and evidence writes are bound to the lane-start session. Every mutating
+  CLI permit is bound to the terminal ledger hash observed by the hook, and every resulting append
+  uses that expected-last-event compare-and-swap under the exclusive ledger lock. A stale command,
+  simultaneous start, or parallel session therefore cannot overwrite or rewind newer state. Ticket
+  revision/presentation and morning-review presentation also enforce eligible stages and current
+  custody during both command handling and ledger replay. Cross-tool transfer requires Mason's
+  explicit plain-English request through the real owner-input hook and revokes the old decision
+  fingerprint/approval before re-presentation. Successful output from every
   CLI-executed repository harness named in the ticket is required before morning review. Each name is bound into the
   immutable ticket and fixed allowlist; its resolved script body must equal `origin/main`, and the
   command/body/package/base/output hashes plus the full tracked/non-ignored repository content
@@ -46,8 +51,9 @@ pipeline remains the delivery engine and all of its landing and production gates
   network in a pinned Docker image whose dependency layer is built only from `origin/main` with
   install scripts disabled. The container root and trusted dependency layer are read-only,
   capabilities are dropped, resources are bounded, and the harness receives only a disposable copy
-  of tracked and non-ignored repository bytes. Ignored files and the original checkout are unavailable
-  to the harness. The broker fingerprints both repository and shared factory state around the run,
+  of tracked and non-ignored repository bytes plus a newly initialized sanitized Git snapshot.
+  Ignored files, the original checkout, and the shared Git common directory are unavailable while
+  branch-controlled harness code runs. The broker fingerprints both repository and shared factory state around the run,
   emergency-holds on indirect host mutation, refuses secret-shaped stdout/stderr before persistence,
   and deletes the disposable workspace. Source or test edits after the harness invalidate it. The
   arbitrary local-file evidence route has been removed. A separate fixed-prompt, read-only Codex run
@@ -58,8 +64,10 @@ pipeline remains the delivery engine and all of its landing and production gates
   opaque helper execution from other or fresh chats are denied. The winning lane
   uses structured target-visible edits and read-only shell inspection; opaque shell/helper/MCP process
   execution is denied, and fixed harnesses run only through the permit-bound factory CLI broker.
-  Structured targets are canonicalized and must remain in-worktree, non-ignored, non-secret,
-  non-`.git`, symlink-contained, and within the ticket's exact allowed paths.
+  Structured mutation targets are canonicalized and must remain in-worktree, non-ignored, non-secret,
+  non-`.git`, symlink-contained, and within the ticket's exact allowed paths. Structured and shell
+  reads are separately constrained to stable, non-secret, non-ignored paths inside the worktree;
+  wildcard/dynamic shell reads fail closed, and secret-shaped added content is refused.
 - A stale lock can be removed only after five minutes when its process is gone, with a backup retained.
   A torn final line has a backup-first repair path, and a failed ledger pause creates an emergency hold
   that still blocks lane writes.
@@ -96,13 +104,14 @@ pipeline remains the delivery engine and all of its landing and production gates
   that are still ambiguous fail closed with a plain-English explanation.
 - Every mutating factory CLI invocation consumes a short-lived, single-use permit minted from the real
   PreToolUse session. Direct CLI execution, forged `--session`/`--tool`, direct hook invocation, and
-  permit read/set/forward routes fail closed. Status JSON exposes no session or ticket identity.
+  permit read/set/forward routes fail closed. The permit includes the exact terminal ledger hash and
+  becomes invalid after any intervening event. Status JSON exposes no session or ticket identity.
 
 ## Automated proof
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 254 focused assertions after publication-blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 272 focused assertions after third Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -235,7 +244,16 @@ recursive force-delete cleanup command.
   from the risky/protected registry. The repair clears active receipts on revision, binds every
   harness/review artifact to the exact ticket hash, validates Sol/high at migration consumption,
   inspects patch/input/raw/move destinations, and protects the authoritative factory broker. Fresh
-  exact-commit acceptance is still required.
+   exact-commit acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `ffa549fc7c1307d3786c918e8a6623b641055583` returned `BLOCKERS`: a parallel chat could obtain a
+  permit and rewind/take over an existing job, governed lanes could read secret-bearing files and
+  copy secret-shaped material into approved output, and branch-controlled harness code could see the
+  entire shared Git directory. The current repair binds every permit/append to the exact terminal
+  ledger hash, validates custody plus eligible transitions in the hook, CLI, and replay layer,
+  preserves cross-tool operation only through an explicit owner-chat transfer event, constrains
+  reads and added content, and gives runtime harnesses only a sanitized disposable Git snapshot.
+  Fresh exact-commit acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -252,7 +270,7 @@ entries and harness definitions were retained during reconciliation.
 
 ## Remaining gate
 
-The latest repair pass remains unpushed. The next gates are full verification at frozen bytes,
-fresh exact-SHA `gpt-5.6-sol` high-effort acceptance, then the explicitly authorized feature-branch push and
-draft PR. Merge, board installation/startup, deployment, migration, and all production actions remain
-undone.
+The latest repair pass remains unpushed. Full host verification and the real contained Docker
+factory harness are green at the repaired bytes. The next gate is fresh exact-SHA `gpt-5.6-sol`
+high-effort acceptance, then the explicitly authorized feature-branch push and draft PR. Merge,
+board installation/startup, deployment, migration, and all production actions remain undone.

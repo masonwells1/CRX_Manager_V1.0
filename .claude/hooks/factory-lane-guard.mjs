@@ -8,6 +8,7 @@ import {
   FACTORY_CUSTODY_STAGES,
   loadFactorySnapshot,
   mintFactoryCliPermit,
+  rejectSecretBearingText,
   resolveHookFactoryPaths,
 } from "../../scripts/factory-state-lib.mjs";
 import { isBuildActionUnderHold } from "./hold-latch-lib.mjs";
@@ -58,6 +59,7 @@ function factoryCliInvocation(toolName, toolInput, projectDir) {
     action,
     status: /^status(?:\s|$)/i.test(action),
     recovery: /^recover\s+(?:unlock|torn-tail)(?:\s|$)/i.test(action),
+    jobId: action.match(/(?:^|\s)--job\s+([A-Za-z0-9._:@+=,-]+)/i)?.[1] || "",
   };
 }
 
@@ -104,6 +106,7 @@ function isSafeGitRead(command) {
 }
 const SAFE_SHELL_READ_RE = /^\s*(?:findstr|where(?:\.exe)?|ls|dir|pwd|Get-Location|Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|Measure-Object)(?:\s+[^;&|<>]*)?\s*$/i;
 const SAFE_VERSION_RE = /^\s*(?:node|npm|gh|git)(?:\.exe|\.cmd)?\s+--version\s*$/i;
+const SECRET_PATH_RE = /(?:^|[\s\\/'"])(?:\.env(?:\.|$)|[^\s\\/'"]*\.(?:pem|key|p12|pfx)|credentials?(?:\.|$)|secrets?(?:\.|$)|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.|$))/i;
 
 function isShellMutation(toolName, toolInput) {
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return false;
@@ -157,6 +160,40 @@ function structuredMutationTargets(toolName, toolInput) {
   return [...new Set(targets)];
 }
 
+function structuredMutationContent(toolInput) {
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  const direct = [
+    input.content,
+    input.new_string,
+    input.newString,
+    ...(Array.isArray(input.edits)
+      ? input.edits.flatMap((edit) => [edit?.content, edit?.new_string, edit?.newString])
+      : []),
+  ].filter((value) => typeof value === "string");
+  const patchText = typeof toolInput === "string"
+    ? toolInput
+    : String(input.patch || input.input || "");
+  const additions = patchText
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+    .map((line) => line.slice(1));
+  return [...direct, ...additions].join("\n");
+}
+
+function structuredReadTargets(toolName, toolInput) {
+  if (!/^(?:Read|Glob|Grep|LS)$/i.test(String(toolName || ""))) return [];
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  return [
+    input.file_path,
+    input.filePath,
+    input.path,
+    input.cwd,
+    input.root,
+    input.directory,
+    input.search_path,
+  ].filter(Boolean).map(String);
+}
+
 function nearestExistingPath(candidate) {
   let current = candidate;
   while (!existsSync(current)) {
@@ -170,6 +207,66 @@ function nearestExistingPath(candidate) {
 function isInside(root, candidate) {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function readTargetBlockReason(rawTarget, projectDir, { allowGlob = false } = {}) {
+  const root = path.resolve(projectDir);
+  const text = String(rawTarget || "").trim();
+  if (!text) return "";
+  if (/[\0\r\n$%~]/.test(text)) return `read target is dynamic or ambiguous: ${text}`;
+  if (SECRET_PATH_RE.test(text.replace(/\\/g, "/"))) {
+    return `secret-bearing paths are not readable in a factory lane: ${text}`;
+  }
+  const stablePrefix = allowGlob ? text.split(/[*?[\]{}]/, 1)[0] || "." : text;
+  const absolute = path.resolve(root, stablePrefix);
+  if (!isInside(root, absolute)) return `read target escapes the worktree: ${text}`;
+  const existing = nearestExistingPath(absolute);
+  if (!existing || !isInside(realpathSync(root), realpathSync(existing))) {
+    return `read target resolves outside the worktree through a symlink: ${text}`;
+  }
+  if (!allowGlob) {
+    const relative = path.relative(root, absolute).replace(/\\/g, "/");
+    if (relative && ignoredByGit(root, relative)) {
+      return `ignored paths are not readable in a factory lane: ${relative}`;
+    }
+  }
+  return "";
+}
+
+function governedReadBlockReason(toolName, toolInput, projectDir) {
+  const name = String(toolName || "");
+  if (/^(?:Read|Glob|Grep|LS)$/i.test(name)) {
+    const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+    if (/^Glob$/i.test(name) && SECRET_PATH_RE.test(String(input.pattern || "").replace(/\\/g, "/"))) {
+      return "secret-bearing glob patterns are not readable in a factory lane";
+    }
+    const targets = structuredReadTargets(name, input);
+    if (/^Read$/i.test(name) && targets.length === 0) {
+      return "structured read did not expose an exact file target";
+    }
+    for (const target of targets) {
+      const reason = readTargetBlockReason(target, projectDir, { allowGlob: /^Glob$/i.test(name) });
+      if (reason) return reason;
+    }
+    return "";
+  }
+  if (!/^(?:Bash|PowerShell|shell_command)$/i.test(name)) return "";
+  const command = String(toolInput?.command || "").trim();
+  if (!SAFE_SHELL_READ_RE.test(command)) return "";
+  if (SECRET_PATH_RE.test(command.replace(/\\/g, "/"))) {
+    return "secret-bearing paths are not readable in a factory lane";
+  }
+  if (/(?:^|[\s\\/])\.\.(?:[\\/]|$)|[$%~*?[\]{}()]|\\\\/.test(command)) {
+    return "shell reads must use stable paths inside the worktree";
+  }
+  const absoluteTargets = [...command.matchAll(
+    /(?:^|\s)["']?([A-Za-z]:[\\/][^\s"';&|<>]+|\/[^\s"';&|<>]+)["']?/g,
+  )].map((match) => match[1]);
+  for (const target of absoluteTargets) {
+    const reason = readTargetBlockReason(target, projectDir);
+    if (reason) return reason;
+  }
+  return "";
 }
 
 function fixedGitExecutable() {
@@ -211,7 +308,7 @@ function structuredMutationBlockReason(toolName, toolInput, projectDir, allowedP
     if (!relative || lower === ".git" || lower.startsWith(".git/")) {
       return `Git internals are not mutable lane content: ${relative || rawTarget}`;
     }
-    if (/(?:^|\/)(?:\.env(?:\.|$)|[^/]*\.(?:pem|key|p12|pfx)|credentials?(?:\.|$)|secrets?(?:\.|$))/i.test(relative)) {
+    if (SECRET_PATH_RE.test(relative)) {
       return `secret-bearing paths are forbidden: ${relative}`;
     }
     const existing = nearestExistingPath(absolute);
@@ -224,6 +321,14 @@ function structuredMutationBlockReason(toolName, toolInput, projectDir, allowedP
       return normalized.endsWith("/") ? relative.startsWith(normalized) : relative === normalized;
     });
     if (!allowed) return `target is outside the approved ticket paths: ${relative}`;
+  }
+  const mutationContent = structuredMutationContent(toolInput);
+  if (mutationContent) {
+    try {
+      rejectSecretBearingText(mutationContent, "structured mutation");
+    } catch {
+      return "structured mutation appears to contain credential or secret material";
+    }
   }
   return "";
 }
@@ -262,11 +367,23 @@ try {
   if (factoryCli?.status || !buildMutation) nothing();
   if (factoryCli?.recovery) {
     if (!sessionId) deny("CRX FACTORY GATE: recovery requires a verifiable chat session.");
-    const permit = mintFactoryCliPermit(paths, { sessionId, actorTool });
+    const permit = mintFactoryCliPermit(paths, {
+      sessionId,
+      actorTool,
+      expectedLastEventHash: "0".repeat(64),
+    });
     allowWithPermit(payload, permit.token);
   }
   deny(`CRX FACTORY GATE: shared factory state could not be verified (${error.message}). Factory-managed build writes fail closed.`);
 }
+
+const otherCustody = snapshot.jobs.find((job) =>
+  FACTORY_CUSTODY_STAGES.has(job.stage)
+  && (job.laneSessionId || job.sessionId) !== sessionId,
+);
+const factoryCliJob = factoryCli?.jobId
+  ? snapshot.jobs.find((job) => job.id === factoryCli.jobId)
+  : null;
 
 if (factoryCli) {
   if (factoryCli.status) nothing();
@@ -274,13 +391,21 @@ if (factoryCli) {
   if (snapshot.held && !factoryCli.recovery) {
     deny(`CRX FACTORY GATE: the factory is globally paused${snapshot.holdReason ? ` (${snapshot.holdReason})` : ""}. Only status and canonical recovery remain available.`);
   }
-  const permit = mintFactoryCliPermit(paths, { sessionId, actorTool });
+  if (!factoryCli.recovery && otherCustody) {
+    deny(`CRX FACTORY GATE: pilot job ${otherCustody.id} is under factory custody at ${otherCustody.stage} in another chat. Factory commands cannot seize or rewind another chat's job.`);
+  }
+  if (!factoryCli.recovery
+      && factoryCliJob
+      && (factoryCliJob.laneSessionId || factoryCliJob.sessionId) !== sessionId) {
+    deny(`CRX FACTORY GATE: factory job ${factoryCliJob.id} belongs to another chat session.`);
+  }
+  const permit = mintFactoryCliPermit(paths, {
+    sessionId,
+    actorTool,
+    expectedLastEventHash: snapshot.lastEventHash,
+  });
   allowWithPermit(payload, permit.token);
 }
-const otherCustody = snapshot.jobs.find((job) =>
-  FACTORY_CUSTODY_STAGES.has(job.stage)
-  && (job.laneSessionId || job.sessionId) !== sessionId,
-);
 if (buildMutation && otherCustody) {
   deny(`CRX FACTORY GATE: pilot job ${otherCustody.id} is under factory custody at ${otherCustody.stage} in another chat. The one-lane pilot blocks cross-session repository writes and opaque helper execution from ticket presentation through owner disposition.`);
 }
@@ -293,6 +418,10 @@ const governedJob = sessionJobs.find((job) =>
   || ["needs-ticket-ok", "queued", "awaiting-morning-review", "parked"].includes(job.stage),
 );
 if (!hasIntent && !governedJob) nothing();
+const readBlockReason = governedReadBlockReason(payload?.tool_name, payload?.tool_input, projectDir);
+if (readBlockReason) {
+  deny(`CRX FACTORY GATE: ${readBlockReason}. Use tracked, non-secret files inside the governed worktree.`);
+}
 if (!buildMutation) nothing();
 
 if (snapshot.held) {

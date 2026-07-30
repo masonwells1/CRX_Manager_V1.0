@@ -237,6 +237,12 @@ function requiredText(value, label, max = 10_000) {
   return text;
 }
 
+function requiredHash(value, label) {
+  const hash = String(value || "").trim();
+  if (!/^[a-f0-9]{64}$/i.test(hash)) throw new Error(`${label} must be a SHA-256 hash.`);
+  return hash.toLowerCase();
+}
+
 const SECRET_BEARING_TEXT_RE = /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|GITHUB_TOKEN|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}|(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*\S+)/i;
 
 export function rejectSecretBearingText(value, label = "evidence") {
@@ -412,6 +418,7 @@ function authorizedFactoryWriter(paths) {
 export function mintFactoryCliPermit(paths, {
   sessionId,
   actorTool,
+  expectedLastEventHash,
   nowMs = Date.now(),
 }) {
   authorizedFactoryWriter(paths);
@@ -422,6 +429,7 @@ export function mintFactoryCliPermit(paths, {
     token,
     sessionId: requiredText(sessionId, "permit sessionId", 200),
     actorTool: requiredText(actorTool, "permit actorTool", 40),
+    expectedLastEventHash: requiredHash(expectedLastEventHash, "permit expectedLastEventHash"),
     issuedAt: new Date(nowMs).toISOString(),
     expiresAt: new Date(nowMs + FACTORY_CLI_PERMIT_TTL_MS).toISOString(),
   });
@@ -459,10 +467,15 @@ export function consumeFactoryCliPermit(paths, token, {
     }
     requiredText(permit.sessionId, "permit sessionId", 200);
     requiredText(permit.actorTool, "permit actorTool", 40);
+    requiredHash(permit.expectedLastEventHash, "permit expectedLastEventHash");
     if (!Number.isFinite(Date.parse(permit.expiresAt)) || Date.parse(permit.expiresAt) <= nowMs) {
       throw new Error("The factory CLI permit expired before use.");
     }
-    return { sessionId: permit.sessionId, actorTool: permit.actorTool };
+    return {
+      sessionId: permit.sessionId,
+      actorTool: permit.actorTool,
+      expectedLastEventHash: permit.expectedLastEventHash,
+    };
   } finally {
     try { unlinkSync(consuming); } catch { /* best-effort cleanup after atomic consumption */ }
   }
@@ -733,6 +746,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       continue;
     }
     if (!event.jobId) continue;
+    const existed = jobs.has(event.jobId);
     const job = jobs.get(event.jobId) || {
       id: event.jobId,
       title: event.jobId,
@@ -769,6 +783,14 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
 
     switch (event.type) {
       case "ticket-drafted": {
+        if (existed) {
+          if (job.sessionId !== event.sessionId || (job.laneSessionId && job.laneSessionId !== event.sessionId)) {
+            throw new Error(`Ticket revision for ${job.id} crossed factory session custody.`);
+          }
+          if (!new Set(["needs-ticket-ok", "rejected", "parked"]).has(job.stage)) {
+            throw new Error(`Ticket revision for ${job.id} is invalid while the job is ${job.stage}.`);
+          }
+        }
         job.stage = "needs-ticket-ok";
         job.sessionId = event.sessionId;
         job.actorTool = event.actorTool;
@@ -798,6 +820,16 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         break;
       }
       case "ticket-presented":
+        if (!job.ticketHash || job.sessionId !== event.sessionId
+            || (job.laneSessionId && job.laneSessionId !== event.sessionId)) {
+          throw new Error(`Ticket presentation for ${job.id} crossed factory session custody.`);
+        }
+        if (!new Set(["needs-ticket-ok", "queued", "parked"]).has(job.stage)) {
+          throw new Error(`Ticket presentation for ${job.id} is invalid while the job is ${job.stage}.`);
+        }
+        if (String(event.payload.ticketHash || "") !== job.ticketHash) {
+          throw new Error(`Ticket presentation for ${job.id} does not match its current ticket hash.`);
+        }
         job.stage = "needs-ticket-ok";
         job.sessionId = event.sessionId;
         job.actorTool = event.actorTool;
@@ -817,16 +849,47 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.blocker = String(event.payload.ownerReply || "Owner requested changes.");
         break;
       case "lane-started":
+        if (job.stage !== "queued" || job.sessionId !== event.sessionId) {
+          throw new Error(`Lane start for ${job.id} is not bound to its approved chat session.`);
+        }
         job.stage = "building";
         job.laneSessionId = event.sessionId;
         break;
       case "review-presented":
+        if (job.stage !== "awaiting-morning-review"
+            || job.sessionId !== event.sessionId) {
+          throw new Error(`Morning review presentation for ${job.id} crossed factory session custody.`);
+        }
         job.sessionId = event.sessionId;
         job.actorTool = event.actorTool;
         job.reviewQuestionHash = String(event.payload.questionHash || "");
         job.reviewQuestionText = String(event.payload.questionText || "");
         job.reviewBaseSha = String(event.payload.baseSha || "");
         job.reviewExpiresAt = String(event.payload.expiresAt || "");
+        break;
+      case "job-session-transferred":
+        if (!new Set(["needs-ticket-ok", "queued", "parked", "awaiting-morning-review"]).has(job.stage)) {
+          throw new Error(`Factory job ${job.id} cannot transfer chat custody while it is ${job.stage}.`);
+        }
+        if (job.sessionId === event.sessionId) {
+          throw new Error(`Factory job ${job.id} is already bound to this chat session.`);
+        }
+        job.sessionId = event.sessionId;
+        job.actorTool = event.actorTool;
+        job.approvalExpiresAt = "";
+        job.approvalReply = "";
+        if (job.stage === "awaiting-morning-review") {
+          job.reviewQuestionHash = "";
+          job.reviewQuestionText = "";
+          job.reviewBaseSha = "";
+          job.reviewExpiresAt = "";
+        } else {
+          job.stage = "needs-ticket-ok";
+          job.laneSessionId = "";
+          job.questionHash = "";
+          job.questionText = "";
+          job.baseSha = "";
+        }
         break;
       case "job-stage":
         if (!BOARD_STAGES.has(event.payload.stage)) throw new Error(`Unknown board stage ${event.payload.stage}.`);
@@ -1180,16 +1243,7 @@ export function factoryHarnessSandboxArgs({
   workspaceVolume,
   containerName,
 }) {
-  const repoRoot = resolveRepoRoot(cwd);
-  const commonDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--git-common-dir"], repoRoot));
-  const gitDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--absolute-git-dir"], repoRoot));
-  const gitDirRelative = path.relative(commonDir, gitDir).replace(/\\/g, "/");
-  if (gitDirRelative === ".." || gitDirRelative.startsWith("../")) {
-    throw new Error("Repository Git directory escapes its common directory.");
-  }
-  const containerGitDir = gitDirRelative && gitDirRelative !== "."
-    ? `/git-common/${gitDirRelative}`
-    : "/git-common";
+  resolveRepoRoot(cwd);
   if (!FACTORY_HARNESS_ALLOWLIST.has(scriptName) || !/^[A-Za-z0-9:_-]+$/.test(scriptName)) {
     throw new Error(`Harness ${scriptName} is not eligible for sandbox execution.`);
   }
@@ -1215,15 +1269,11 @@ export function factoryHarnessSandboxArgs({
     "--env", "npm_config_cache=/tmp/npm-cache",
     "--env", "NO_COLOR=1",
     "--env", "CRX_FACTORY_SANDBOX=1",
-    "--env", `GIT_DIR=${containerGitDir}`,
-    "--env", "GIT_COMMON_DIR=/git-common",
-    "--env", "GIT_WORK_TREE=/workspace",
     "--env", "GIT_CONFIG_NOSYSTEM=1",
     "--env", "GIT_CONFIG_GLOBAL=/dev/null",
     "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
     "--tmpfs", "/opt/crx/node_modules/.vite:rw,nosuid,nodev,size=1g,mode=1777",
     "--tmpfs", "/opt/crx/node_modules/.vite-temp:rw,nosuid,nodev,size=1g,mode=1777",
-    "--mount", `type=bind,source=${commonDir},target=/git-common,readonly`,
     "--mount", `type=volume,source=${workspaceVolume},target=/workspace`,
     "--workdir", "/workspace",
     "--entrypoint", "npm",
@@ -1246,8 +1296,15 @@ function bootstrapFactoryHarnessWorkspace(cwd, sandbox, workspaceVolume) {
   const containerName = `${workspaceVolume}-bootstrap`;
   const bootstrapScript = [
     "set -eu",
-    'git --git-dir="$GIT_DIR" --work-tree=/source ls-files --cached --others --exclude-standard -z | tar -C /source --null -T - -cf - | tar -C /workspace -xf -',
-    'printf "gitdir: %s\\n" "$GIT_DIR" > /workspace/.git',
+    "git -C /workspace init -q --initial-branch=factory-snapshot",
+    'git --git-dir="$SOURCE_GIT_DIR" archive --format=tar origin/main | tar -C /workspace -xf -',
+    "git -C /workspace -c core.autocrlf=false add -A",
+    'git -C /workspace -c user.name="CRX Factory" -c user.email="factory@invalid.local" commit -qm "sanitized origin/main snapshot"',
+    'git -C /workspace update-ref refs/remotes/origin/main "$(git -C /workspace rev-parse HEAD)"',
+    'find /workspace -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +',
+    'git --git-dir="$SOURCE_GIT_DIR" --work-tree=/source ls-files --cached --others --exclude-standard -z | tar -C /source --null -T - -cf - | tar -C /workspace -xf -',
+    "git -C /workspace -c core.autocrlf=false add -A",
+    'git -C /workspace -c user.name="CRX Factory" -c user.email="factory@invalid.local" commit --allow-empty -qm "sanitized candidate snapshot"',
     "ln -s /opt/crx/node_modules /workspace/node_modules",
   ].join("\n");
   const args = [
@@ -1260,8 +1317,7 @@ function bootstrapFactoryHarnessWorkspace(cwd, sandbox, workspaceVolume) {
     "--pids-limit", "128",
     "--memory", "1g",
     "--cpus", "2",
-    "--env", `GIT_DIR=${containerGitDir}`,
-    "--env", "GIT_COMMON_DIR=/git-common",
+    "--env", `SOURCE_GIT_DIR=${containerGitDir}`,
     "--env", "GIT_CONFIG_NOSYSTEM=1",
     "--env", "GIT_CONFIG_GLOBAL=/dev/null",
     "--mount", `type=bind,source=${repoRoot},target=/source,readonly`,
@@ -1383,6 +1439,7 @@ export function runHarnessEvidence(paths, {
       repositoryMount: result.workspaceMode,
       sourceExposure: "bootstrap-only",
       dependencyMount: "immutable-image-layer",
+      gitMetadataExposure: "sanitized-workspace-only",
       inheritedEnvironment: false,
     },
   };
@@ -1461,6 +1518,7 @@ export function validateCurrentHarnessEvidence(job, cwd = FACTORY_ROOT, {
         && item.sandbox?.repositoryMount === "disposable-volume"
         && item.sandbox?.sourceExposure === "bootstrap-only"
         && item.sandbox?.dependencyMount === "immutable-image-layer"
+        && item.sandbox?.gitMetadataExposure === "sanitized-workspace-only"
         && item.sandbox?.inheritedEnvironment === false
         && /^sha256:[a-f0-9]{64}$/i.test(String(item.sandbox?.imageId || ""))
         && item.sandbox?.dependencyHash === factoryHarnessDependencyHashForCommit(cwd, item.baseSha)

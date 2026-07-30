@@ -99,6 +99,12 @@ function intentClearIntent(prompt) {
   ].some((pattern) => pattern.test(text));
 }
 
+function custodyTransferIntent(prompt) {
+  const text = String(prompt || "").toLowerCase();
+  return /\b(?:transfer|move)\b.{0,40}\b(?:factory\s+)?(?:job|ticket|review)\b.{0,40}\b(?:here|this chat|this tool)\b/.test(text)
+    || /\b(?:take over|re-present)\b.{0,40}\b(?:factory\s+)?(?:job|ticket|review|decision)\b/.test(text);
+}
+
 async function main() {
   let payload;
   try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
@@ -111,6 +117,43 @@ async function main() {
     ? "codex"
     : "claude";
   const paths = resolveHookFactoryPaths(projectDir);
+
+  if (custodyTransferIntent(prompt)) {
+    if (!sessionId) {
+      emit("CRX Factory could not bind this custody-transfer request to a chat session, so it changed nothing.");
+    }
+    const snapshot = loadFactorySnapshot(paths);
+    const transferableStages = new Set(["needs-ticket-ok", "queued", "parked", "awaiting-morning-review"]);
+    const candidates = snapshot.jobs.filter((job) =>
+      transferableStages.has(job.stage)
+      && job.sessionId !== sessionId
+      && (!prompt.toLowerCase().includes(job.id.toLowerCase())
+        ? !snapshot.jobs.some((candidate) =>
+            candidate.id !== job.id
+            && transferableStages.has(candidate.stage)
+            && candidate.sessionId !== sessionId
+            && prompt.toLowerCase().includes(candidate.id.toLowerCase()))
+        : true),
+    );
+    if (candidates.length !== 1) {
+      emit("CRX Factory recorded no custody transfer because the request did not identify exactly one transferable job. Name the job shown on the Factory Board and ask to move it to this chat.");
+    }
+    const job = candidates[0];
+    appendFactoryEvent(paths, {
+      type: "job-session-transferred",
+      jobId: job.id,
+      actorTool,
+      sessionId,
+      timestamp: new Date().toISOString(),
+      payload: {
+        ownerReply: prompt.slice(0, 500),
+        priorStage: job.stage,
+      },
+    }, { expectedLastEventHash: snapshot.lastEventHash });
+    emit(job.stage === "awaiting-morning-review"
+      ? `CRX Factory moved ${job.id}'s pending morning decision to this chat at Mason's explicit request. Revalidate proof and present the canonical morning question here; no build custody transferred.`
+      : `CRX Factory moved ${job.id} to this chat at Mason's explicit request and revoked any prior ticket approval. Re-present the canonical ticket question here before work starts.`);
+  }
 
   const requestedHold = holdIntent(prompt);
   if (requestedHold) {

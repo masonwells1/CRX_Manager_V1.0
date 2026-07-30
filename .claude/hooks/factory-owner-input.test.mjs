@@ -185,6 +185,19 @@ function runShipHook(state, payload) {
 }
 
 {
+  const state = makeState("original-transfer-thread");
+  const result = runHook(state, {
+    prompt: `take over factory ticket ${state.jobId} in this chat`,
+    thread_id: "new-transfer-thread",
+  });
+  ok(result.stdout.includes("moved") && result.stdout.includes("revoked"), "explicit owner language transfers a pending ticket through chat");
+  const transferred = buildFactorySnapshot(state.paths).jobs[0];
+  equal(transferred.sessionId, "new-transfer-thread", "owner-authorized transfer binds the job to the new chat");
+  equal(transferred.stage, "needs-ticket-ok", "owner-authorized transfer requires a fresh ticket presentation and approval");
+  equal(transferred.questionHash, "", "owner-authorized transfer invalidates the old decision fingerprint");
+}
+
+{
   const state = makeState("qualified-thread");
   const transcript = path.join(state.dir, "qualified.jsonl");
   writeFileSync(transcript, `${JSON.stringify({ role: "assistant", content: state.question })}\n`);

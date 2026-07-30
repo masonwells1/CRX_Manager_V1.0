@@ -79,7 +79,7 @@ function required(flags, name) {
   return value;
 }
 
-function actor(paths, flags, env, nowMs) {
+function actor(paths, flags, env, nowMs, { recovery = false } = {}) {
   const who = consumeFactoryCliPermit(paths, env.CRX_FACTORY_PERMIT, { nowMs });
   const claimedTool = String(flags.get("tool") || "").toLowerCase();
   const claimedSession = String(flags.get("session") || "");
@@ -89,7 +89,29 @@ function actor(paths, flags, env, nowMs) {
   if (claimedSession && claimedSession !== who.sessionId) {
     throw new Error("--session does not match the trusted PreToolUse identity.");
   }
+  if (!recovery) {
+    const snapshot = loadFactorySnapshot(paths, { nowMs });
+    if (snapshot.lastEventHash !== who.expectedLastEventHash) {
+      throw new Error("Factory state changed after this command was authorized; retry from the current board state.");
+    }
+  }
   return who;
+}
+
+function stableSnapshot(paths, who, options) {
+  const snapshot = loadFactorySnapshot(paths, options);
+  if (snapshot.lastEventHash !== who.expectedLastEventHash) {
+    throw new Error("Factory state changed after this command was authorized; retry from the current board state.");
+  }
+  return snapshot;
+}
+
+function appendAsActor(paths, event, who, expectedLastEventHash = who.expectedLastEventHash) {
+  return appendFactoryEvent(paths, {
+    ...event,
+    sessionId: who.sessionId,
+    actorTool: who.actorTool,
+  }, { expectedLastEventHash });
 }
 
 function readTextFile(filename) {
@@ -274,11 +296,20 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "ticket" && action === "draft") {
     const who = actor(paths, flags, env, now().getTime());
     const source = JSON.parse(readFileSync(path.resolve(required(flags, "file")), "utf8"));
+    const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
+    const existing = snapshot.jobs.find((candidate) => candidate.id === String(source?.id || ""));
+    if (existing) {
+      if (existing.sessionId !== who.sessionId || (existing.laneSessionId && existing.laneSessionId !== who.sessionId)) {
+        throw new Error(`Factory job ${existing.id} belongs to another chat session.`);
+      }
+      if (!new Set(["needs-ticket-ok", "rejected", "parked"]).has(existing.stage)) {
+        throw new Error(`Factory job ${existing.id} cannot be revised while it is ${existing.stage}.`);
+      }
+    }
     const written = writeImmutableTicket(paths, source);
-    appendFactoryEvent(paths, {
+    appendAsActor(paths, {
       type: "ticket-drafted",
       jobId: written.ticket.id,
-      ...who,
       timestamp: now().toISOString(),
       payload: {
         ticketFile: written.filename,
@@ -286,7 +317,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         ticketVersion: written.ticket.version,
         title: written.ticket.title,
       },
-    });
+    }, who);
     process.stdout.write(`${JSON.stringify({
       jobId: written.ticket.id,
       ticketHash: written.hash,
@@ -298,15 +329,20 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "ticket" && action === "present") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const snapshot = loadFactorySnapshot(paths);
+    const snapshot = stableSnapshot(paths, who);
     const job = snapshot.jobs.find((candidate) => candidate.id === jobId);
     if (!job?.ticketHash) throw new Error(`Draft ticket ${jobId} before presenting it.`);
+    if (job.sessionId !== who.sessionId || (job.laneSessionId && job.laneSessionId !== who.sessionId)) {
+      throw new Error(`Factory job ${jobId} belongs to another chat session.`);
+    }
+    if (!new Set(["needs-ticket-ok", "queued", "parked"]).has(job.stage)) {
+      throw new Error(`Factory job ${jobId} cannot be presented while it is ${job.stage}.`);
+    }
     const questionText = canonicalTicketApprovalQuestion(job.ticket);
     const baseSha = refreshOriginMain(cwd, env);
-    const event = appendFactoryEvent(paths, {
+    const event = appendAsActor(paths, {
       type: "ticket-presented",
       jobId,
-      ...who,
       timestamp: now().toISOString(),
       payload: {
         ticketHash: job.ticketHash,
@@ -314,7 +350,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         questionHash: sha256(questionText),
         baseSha,
       },
-    });
+    }, who);
     process.stdout.write(`${JSON.stringify({
       jobId,
       questionHash: event.payload.questionHash,
@@ -328,7 +364,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "lane" && action === "start") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
+    const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
     const baseSha = refreshOriginMain(cwd, env);
     const job = validateLaneStart({
       snapshot,
@@ -337,24 +373,22 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       currentBaseSha: baseSha,
       nowMs: now().getTime(),
     });
-    appendFactoryEvent(paths, {
+    const laneEvent = appendAsActor(paths, {
       type: "lane-started",
       jobId,
-      ...who,
       timestamp: now().toISOString(),
       payload: {
         ticketHash: job.ticketHash,
         baseSha,
         worktree: path.resolve(cwd),
       },
-    }, { expectedLastEventHash: snapshot.lastEventHash });
-    appendFactoryEvent(paths, {
+    }, who, snapshot.lastEventHash);
+    appendAsActor(paths, {
       type: "factory-intent-cleared",
       jobId: null,
-      ...who,
       timestamp: now().toISOString(),
       payload: { reason: `Lane ${jobId} started.` },
-    });
+    }, who, laneEvent.eventHash);
     process.stdout.write(`FACTORY LANE STARTED — ${job.title}\n`);
     return 0;
   }
@@ -362,10 +396,13 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "review" && action === "present") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
+    const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
     const job = snapshot.jobs.find((candidate) => candidate.id === jobId);
     if (!job || job.stage !== "awaiting-morning-review") {
       throw new Error(`Job ${jobId} must be awaiting morning review before its decision question is presented.`);
+    }
+    if (job.sessionId !== who.sessionId) {
+      throw new Error(`Factory job ${jobId} belongs to another chat session.`);
     }
     const questionText = canonicalMorningReviewQuestion(job);
     const baseSha = refreshOriginMain(cwd, env);
@@ -374,10 +411,9 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     }
     validateCurrentHarnessEvidence(job, cwd, { paths });
     validateCurrentIndependentReview(job, cwd, { paths });
-    appendFactoryEvent(paths, {
+    appendAsActor(paths, {
       type: "review-presented",
       jobId,
-      ...who,
       timestamp: now().toISOString(),
       payload: {
         ticketHash: job.ticketHash,
@@ -386,7 +422,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         baseSha,
         expiresAt: new Date(now().getTime() + APPROVAL_TTL_MS).toISOString(),
       },
-    });
+    }, who);
     process.stdout.write(`${JSON.stringify({
       jobId,
       questionHash: sha256(questionText),
@@ -399,18 +435,17 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "review" && action === "run") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
+    const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
     const job = validateLaneActor(snapshot, jobId, who.sessionId, {
       allowedStages: new Set(["in-review"]),
     });
     const review = runIndependentReviewEvidence(paths, { job, cwd, env });
-    appendFactoryEvent(paths, {
+    appendAsActor(paths, {
       type: "independent-review-attached",
       jobId,
-      ...who,
       timestamp: now().toISOString(),
       payload: review,
-    });
+    }, who);
     process.stdout.write(`${JSON.stringify({
       jobId,
       reviewer: review.reviewer,
@@ -428,20 +463,19 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     const stage = required(flags, "stage");
     const behaviorSummary = flags.get("summary-file") ? readTextFile(flags.get("summary-file")) : "";
     const blocker = flags.get("blocker-file") ? readTextFile(flags.get("blocker-file")) : "";
-    const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
+    const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
     if (stage === "awaiting-morning-review") refreshOriginMain(cwd, env);
     validateStageChange(snapshot, jobId, stage, { sessionId: who.sessionId, cwd, behaviorSummary, blocker });
-    appendFactoryEvent(paths, {
+    appendAsActor(paths, {
       type: "job-stage",
       jobId,
-      ...who,
       timestamp: now().toISOString(),
       payload: {
         stage,
         behaviorSummary,
         blocker,
       },
-    });
+    }, who);
     process.stdout.write(`FACTORY STAGE — ${jobId}: ${stage}\n`);
     return 0;
   }
@@ -449,7 +483,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "evidence" && action === "run") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
+    const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
     const job = validateLaneActor(snapshot, jobId, who.sessionId);
     if (job.baseSha !== refreshOriginMain(cwd, env)) {
       throw new Error("origin/main moved after ticket approval; park and re-present the job before minting proof.");
@@ -465,10 +499,9 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       scriptName: harness,
       cwd,
     });
-    appendFactoryEvent(paths, {
+    appendAsActor(paths, {
       type: "evidence-attached",
       jobId,
-      ...who,
       timestamp: now().toISOString(),
       payload: {
         label: evidence.label,
@@ -489,7 +522,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         ticketHash: evidence.ticketHash,
         sandbox: evidence.sandbox,
       },
-    });
+    }, who);
     process.stdout.write(`${JSON.stringify({
       jobId,
       label: evidence.label,
@@ -506,7 +539,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     const requestedLandingCommit = required(flags, "landing-commit");
     git(["cat-file", "-e", `${requestedLandingCommit}^{commit}`], cwd);
     const landingCommit = git(["rev-parse", `${requestedLandingCommit}^{commit}`], cwd);
-    const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
+    const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
     const job = snapshot.jobs.find((candidate) => candidate.id === jobId);
     if (!job) {
       throw new Error(`Job ${jobId} must have Mason's morning acceptance before closeout.`);
@@ -594,10 +627,9 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         paths,
         env,
       });
-      appendFactoryEvent(paths, {
+      appendAsActor(paths, {
         type: "job-stage",
         jobId,
-        ...who,
         timestamp: now().toISOString(),
         payload: {
           stage: "live",
@@ -609,7 +641,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
           closeoutPacketHash: job.closeoutPacketHash,
           closeoutCommit,
         },
-      });
+      }, who, snapshot.lastEventHash);
       process.stdout.write(`${JSON.stringify({
         jobId,
         closeoutPacket: recordedPath,
@@ -680,10 +712,9 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     } else {
       writeFileSync(outputPath, body, { encoding: "utf8", flag: "wx" });
     }
-    appendFactoryEvent(paths, {
+    appendAsActor(paths, {
       type: "closeout-prepared",
       jobId,
-      ...who,
       timestamp: now().toISOString(),
       payload: {
         landingCommit,
@@ -693,7 +724,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         ledgerCheckpointHash: snapshot.lastEventHash,
         independentReviewHash: acceptedReview.sha256,
       },
-    });
+    }, who, snapshot.lastEventHash);
     process.stdout.write(`${JSON.stringify({
       jobId,
       closeoutPacket: outputPath,
@@ -705,20 +736,20 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   }
 
   if (group === "recover" && ["unlock", "torn-tail"].includes(action)) {
-    const who = actor(paths, flags, env, now().getTime());
+    const who = actor(paths, flags, env, now().getTime(), { recovery: true });
     const reason = readTextFile(required(flags, "reason-file"));
     const recovered = recoverFactoryState(paths, { mode: action, reason, nowMs: now().getTime() });
-    appendFactoryEvent(paths, {
+    const recoveredSnapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
+    appendAsActor(paths, {
       type: "factory-recovered",
       jobId: null,
-      ...who,
       timestamp: now().toISOString(),
       payload: {
         mode: recovered.mode,
         reason,
         backup: path.basename(recovered.backup),
       },
-    });
+    }, who, recoveredSnapshot.lastEventHash);
     process.stdout.write(`FACTORY RECOVERED — ${action}; backup ${recovered.backup}\n`);
     return 0;
   }

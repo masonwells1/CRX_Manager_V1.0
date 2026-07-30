@@ -388,6 +388,16 @@ Ticket revisions now clear active proof/decision state and every harness/review 
 ticket hash; migration apply requires recorded Sol/high identity; patch, input, raw patch, and move
 destinations are inspected; and the authoritative factory CLI/state broker is both risky and
 protected.
+A third exact-SHA Sol/high acceptance found that factory-command permits were issued before
+cross-session custody checks, ticket presentation could rewind an existing job, governed reads could
+reach secret-bearing files, and runtime harnesses could inspect the shared Git directory. The repair
+binds every permit and resulting append to the exact terminal ledger hash, validates session custody
+and eligible transitions in the hook, CLI, and replay layer, and permits cross-tool takeover only
+after Mason explicitly requests it through the real owner-input hook (which revokes the old
+approval/fingerprint). Governed reads now stay inside tracked/non-secret worktree paths, wildcard or
+dynamic shell reads and secret-shaped additions fail closed, and branch-controlled harness code sees
+only a new sanitized Git repository inside its disposable volume—not shared Git objects, config,
+other worktrees, or factory state.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

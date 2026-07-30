@@ -134,6 +134,26 @@ function hookOutput(result) {
   });
   assertions++;
   assert.equal(readAllowed.stdout, "", "factory intent keeps shell reads available");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Get-Content .env" },
+  }), /secret-bearing paths are not readable/i, "factory intent cannot read ignored environment files");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Get-Content '.env.local'" },
+  }), /secret-bearing paths are not readable/i, "quoting does not bypass the secret-path read guard");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Get-Content .*" },
+  }), /shell reads must use stable paths/i, "wildcard shell reads cannot sweep ignored secrets");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "..", "outside-worktree.txt") },
+  }), /read target escapes the worktree/i, "factory intent cannot read outside the governed worktree");
   const gitReadAllowed = run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
@@ -269,6 +289,11 @@ function hookOutput(result) {
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
   }), /under factory custody/i, "fresh chats cannot execute a prebuilt helper while a ticket decision is pending");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-parallel-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: `node scripts/factory.mjs ticket present --job ${ticket.ticket.id}` },
+  }), /cannot seize or rewind|belongs to another chat/i, "fresh chats cannot obtain a permit to re-present another session's ticket");
   appendFactoryEvent(paths, {
     type: "ticket-approved",
     jobId: ticket.ticket.id,
@@ -321,7 +346,25 @@ function hookOutput(result) {
     thread_id: sessionId,
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "node_modules", "factory-bypass.js") },
-  }), /ignored paths are outside factory proof/i, "active lane cannot persist changes in ignored paths");
+  }), /ignored paths are outside factory proof|resolves outside the worktree through a symlink/i, "active lane cannot persist changes in ignored dependency paths");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, ".env.local") },
+  }), /secret-bearing paths are not readable/i, "active lane cannot read secret-bearing structured paths");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Get-Content ..\\outside-worktree.txt" },
+  }), /shell reads must use stable paths inside the worktree/i, "active lane cannot escape through a shell read");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: {
+      file_path: path.join(root, "src", "example.ts"),
+      content: "-----BEGIN PRIVATE KEY-----\nforged-secret-material\n-----END PRIVATE KEY-----",
+    },
+  }), /credential or secret material/i, "active lane cannot copy secret-shaped content into an approved source file");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "apply_patch",

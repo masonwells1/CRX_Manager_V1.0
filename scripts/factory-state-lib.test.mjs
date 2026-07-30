@@ -103,6 +103,7 @@ if (process.env.CRX_FACTORY_SANDBOX !== "1") {
   ok(args.includes("none") && args.includes("--network"), "production harness sandbox disables network access");
   ok(args.includes("--read-only") && args.includes("ALL"), "production harness sandbox removes root writes and Linux capabilities");
   ok(args.some((item) => item.includes(`source=crx-factory-workspace-${"2".repeat(32)},target=/workspace`)), "production harness runs from a disposable workspace volume");
+  ok(!args.some((item) => item.includes("/git-common") || item.startsWith("GIT_DIR=") || item.startsWith("GIT_COMMON_DIR=")), "branch-controlled harness code cannot see the shared Git directory");
   ok(!args.some((item) => item.includes("type=volume") && item.includes("node_modules")), "production harness dependencies stay inside the immutable image layer");
   ok(!args.some((item) => /OPENAI|SUPABASE|VERCEL|GITHUB|TOKEN|KEY/i.test(item)), "production harness arguments do not forward credential-bearing environment names");
 }
@@ -211,12 +212,13 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const issued = mintFactoryCliPermit(paths, {
     sessionId: "trusted-session",
     actorTool: "codex",
+    expectedLastEventHash: "0".repeat(64),
     nowMs: 1_000,
   });
   eq(
     consumeFactoryCliPermit(paths, issued.token, { nowMs: 2_000 }),
-    { sessionId: "trusted-session", actorTool: "codex" },
-    "one-time CLI permit returns hook-bound identity",
+    { sessionId: "trusted-session", actorTool: "codex", expectedLastEventHash: "0".repeat(64) },
+    "one-time CLI permit returns hook-bound identity and ledger checkpoint",
   );
   throws(
     () => consumeFactoryCliPermit(paths, issued.token, { nowMs: 2_001 }),
@@ -226,12 +228,36 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const expired = mintFactoryCliPermit(paths, {
     sessionId: "trusted-session",
     actorTool: "codex",
+    expectedLastEventHash: "0".repeat(64),
     nowMs: 1_000,
   });
   throws(
     () => consumeFactoryCliPermit(paths, expired.token, { nowMs: 60_000 }),
     /expired before use/,
     "expired CLI permit is refused",
+  );
+  rmSync(root, { recursive: true, force: true });
+}
+
+{
+  const { root, paths } = fixture();
+  const written = writeImmutableTicket(paths, ticket("custody-replay"));
+  append(paths, "ticket-drafted", written.ticket.id, {
+    ticketFile: written.filename,
+    ticketHash: written.hash,
+    ticketVersion: 1,
+    title: written.ticket.title,
+  }, { sessionId: "owning-session" });
+  append(paths, "ticket-presented", written.ticket.id, {
+    ticketHash: written.hash,
+    questionText: "Approve?",
+    questionHash: "a".repeat(64),
+    baseSha: "b".repeat(40),
+  }, { sessionId: "other-session" });
+  throws(
+    () => loadFactorySnapshot(paths),
+    /crossed factory session custody/,
+    "ledger replay rejects cross-session ticket takeover even if a forged event reaches disk",
   );
   rmSync(root, { recursive: true, force: true });
 }
@@ -572,6 +598,7 @@ function append(paths, type, jobId, payload = {}, options = {}) {
         repositoryMount: "disposable-volume",
         sourceExposure: "bootstrap-only",
         dependencyMount: "immutable-image-layer",
+        gitMetadataExposure: "sanitized-workspace-only",
         inheritedEnvironment: false,
         imageId: `sha256:${"1".repeat(64)}`,
         imageTag: `crx-factory-harness:${proofDependencyHash.slice(0, 24)}`,

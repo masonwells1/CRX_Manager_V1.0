@@ -27,7 +27,8 @@ paths, factory-internal imports, inline code execution, and governance self-edit
 Every mutating CLI call additionally consumes a 30-second, single-use permit minted by the real
 PreToolUse hook from that tool call's actual chat identity. Agent-supplied `--session`, `--tool`, or
 permit values cannot create or override identity, and the permit-minting hook cannot be launched as
-an agent command.
+an agent command. The permit also records the exact terminal ledger hash seen by the hook. Command
+handling and the final append both fail if any intervening event changes that checkpoint.
 These are defense-in-depth controls inside the supported Claude/Codex tool model, not a cryptographic
 security boundary against another arbitrary process running as Mason's Windows account. The hash chain
 detects accidental/torn/tampered history when the reader has an honest prior hash; it does not provide
@@ -78,7 +79,10 @@ An approval is valid only when all of these are true:
 - the session identifier matches; build-stage and evidence changes stay bound to the lane-start session;
 - for a mission ticket, a fresh `git fetch origin main` still matches the recorded base and the receipt has not expired after 24 hours.
 
-“Yes, but…”, “yes, except…”, or similar language is a revision request. A reply in another tool or a new chat does not carry over; the ticket or morning decision must be re-presented there.
+“Yes, but…”, “yes, except…”, or similar language is a revision request. A reply in another tool or a
+new chat does not carry over. Mason may explicitly ask the new chat to take over the named factory
+job; only that real owner-prompt hook may transfer custody, and it revokes the old approval/question
+fingerprint before the ticket or morning decision is re-presented there.
 
 ## Pilot limits
 
@@ -96,8 +100,10 @@ An approval is valid only when all of these are true:
   run only through the permit-bound `factory.mjs evidence run` broker. Git inspection uses a strict
   subcommand/token/option allowlist: output-writing, external-diff/text-conversion, paging/config
   injection, and unknown flags are mutations. Unknown non-shell tools default to opaque execution;
-  only explicit structured read-only tools are exempt. Shell `rg` is not exempt because its
-  preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
+  only explicit structured read-only tools are exempt. Structured reads and simple shell reads must
+  stay inside the worktree and cannot target ignored or secret-bearing paths; dynamic, parent-relative,
+  wildcard shell paths and secret-shaped added content fail closed. Shell `rg` is not exempt because
+  its preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
 - The board binds only to loopback and is read-only.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
@@ -113,8 +119,10 @@ content fingerprint covering every tracked and non-ignored repository file. In p
 broker builds a pinned Docker dependency layer from `origin/main` with install scripts disabled.
 The harness receives no inherited credentials, no network, no Linux capabilities, a read-only root
 and dependency layer, bounded resources, and only a disposable workspace copied from tracked and
-non-ignored repository bytes. The original checkout and ignored files are unavailable to the harness
-process. The broker verifies that repository and shared factory state stayed frozen, deletes the
+  non-ignored repository bytes. Trusted bootstrap creates a new sanitized Git repository inside that
+  disposable volume, then removes the shared Git-directory mount before branch-controlled harness code
+  starts. The original checkout, ignored files, other worktrees, shared factory state, and shared Git
+  metadata/objects are unavailable to the harness process. The broker verifies that repository and shared factory state stayed frozen, deletes the
 disposable workspace, emergency-holds on detected indirect host mutation, and refuses secret-shaped
 harness output before it can become a Board artifact. It rechecks the repository fingerprint before
 morning review and closeout, so later source or test edits invalidate stale proof. A separate trusted
@@ -149,8 +157,10 @@ record `live` only after the exact packet bytes are committed into `origin/main`
 exact-SHA deployment and canonical URL first and records the packet-containing commit. Conflicting
 packet or landing retries fail closed; retrying a completed closeout returns the already-recorded
 packet without appending another `live` event.
-Lane start uses the ledger's expected-last-event hash under the same exclusive writer lock, so two
-simultaneous starts cannot both pass a stale “no active lane” snapshot.
+All mutating factory commands use the permit's expected-last-event hash under the same exclusive
+writer lock, so two simultaneous starts or a stale presentation/revision command cannot both pass an
+older snapshot. The CLI and ledger replay independently enforce current session custody and eligible
+ticket/review transitions.
 
 If the ledger cannot record Mason's plain-English pause, the owner hook writes a separate emergency
 hold marker that the lane guard reads before another build mutation. The hold remains until recovery

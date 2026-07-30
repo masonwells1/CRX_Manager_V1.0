@@ -55,7 +55,10 @@ let assertions = 0;
 
 function run(args, identity = { sessionId, actorTool: "codex" }) {
   const readOnly = args[0] === "status";
-  const permit = readOnly ? null : mintFactoryCliPermit(paths, identity);
+  const permit = readOnly ? null : mintFactoryCliPermit(paths, {
+    ...identity,
+    expectedLastEventHash: loadFactorySnapshot(paths).lastEventHash,
+  });
   return spawnSync(process.execPath, [script, ...args], {
     cwd: root,
     env: {
@@ -109,6 +112,40 @@ pass(run(["ticket", "draft", "--file", ticketFile]), "draft ticket");
 const questionFile = path.join(fixtureDir, "question.txt");
 const draftedTicket = loadFactorySnapshot(paths).jobs[0].ticket;
 writeFileSync(questionFile, canonicalTicketApprovalQuestion(draftedTicket));
+const stalePermit = mintFactoryCliPermit(paths, {
+  sessionId,
+  actorTool: "codex",
+  expectedLastEventHash: loadFactorySnapshot(paths).lastEventHash,
+});
+appendFactoryEvent(paths, {
+  type: "factory-intent",
+  jobId: null,
+  actorTool: "codex",
+  sessionId: "ledger-race-thread",
+  payload: { prompt: "change the ledger after permit issuance" },
+});
+const staleInvocation = spawnSync(process.execPath, [script, "ticket", "present", "--job", jobId], {
+  cwd: root,
+  env: { ...env, CRX_FACTORY_PERMIT: stalePermit.token },
+  encoding: "utf8",
+});
+assertions++;
+assert.notEqual(staleInvocation.status, 0, "CLI refuses a permit minted against an older terminal ledger hash");
+assertions++;
+assert.match(staleInvocation.stderr, /state changed after this command was authorized/i, "stale permit failure explains the ledger race");
+appendFactoryEvent(paths, {
+  type: "factory-intent-cleared",
+  jobId: null,
+  actorTool: "codex",
+  sessionId: "ledger-race-thread",
+  payload: { reason: "test cleanup" },
+});
+const crossSessionPresentation = run(
+  ["ticket", "present", "--job", jobId],
+  { sessionId: "other-thread", actorTool: "claude" },
+);
+assertions++;
+assert.notEqual(crossSessionPresentation.status, 0, "another chat cannot take ownership by re-presenting an existing ticket");
 const spoofedIdentity = run([
   "ticket", "present",
   "--job", jobId,
@@ -136,6 +173,9 @@ appendFactoryEvent(paths, {
   },
 });
 pass(run(["lane", "start", "--job", jobId]), "start lane");
+const rewindActiveLane = run(["ticket", "present", "--job", jobId]);
+assertions++;
+assert.notEqual(rewindActiveLane.status, 0, "the owning chat cannot rewind an active lane through ticket presentation");
 
 const arbitraryEvidence = run([
   "evidence", "attach",

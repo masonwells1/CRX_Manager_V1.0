@@ -1,7 +1,7 @@
 # CRX Governed Delivery Pipeline V1
 
 Date: 2026-07-30
-Status: IMPLEMENTED — second publication-blocker repair pass awaiting fresh exact-SHA acceptance
+Status: IMPLEMENTED — third Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
 Owner: Mason Wells
 Implementation driver: Codex
 Independent reviewer: trusted `gpt-5.6-sol` at high reasoning effort
@@ -125,7 +125,10 @@ An approval receipt binds:
 
 The lane-start validator recomputes the ticket hash and refuses a mismatch. It refuses missing/unknown session identity, an approval recorded in another session, an expired receipt, or a current `origin/main` different from the receipt's base SHA. There is no normal fallback that erases session binding.
 
-If Mason answers from the other tool or a new chat, the owner-input hook records no approval. It responds with additional context telling the current session to re-present the exact ticket in this chat. Re-presentation is zero-training for Mason and creates a new current-session question fingerprint; he still answers in ordinary words.
+If Mason answers from the other tool or a new chat, the owner-input hook records no approval. Mason
+may explicitly ask that chat to take over the named factory job. Only the real owner-prompt hook can
+record this custody transfer; it revokes any prior approval/question fingerprint, after which the
+session re-presents the canonical ticket or morning question and Mason still answers in ordinary words.
 
 ### Durable closeout
 
@@ -153,7 +156,9 @@ harness name must be in the immutable ticket and fixed factory allowlist, its np
 match `origin/main`, and its script/package/base/output hashes are captured and rechecked. The
 production harness runs without inherited credentials or network in a pinned container dependency
 layer built from `origin/main`; only a disposable copy of tracked/non-ignored bytes is writable, and
-that workspace is deleted after the run. While the single pilot lane is active, other and fresh chats
+trusted bootstrap initializes sanitized Git metadata inside that copy before the shared Git mount is
+removed. Branch-controlled harness code cannot read shared Git objects/configuration, other worktrees,
+or factory state, and the workspace is deleted after the run. While the single pilot lane is active, other and fresh chats
 cannot perform build writes.
 
 ## Planned repository changes
@@ -178,13 +183,17 @@ cannot perform build writes.
   - ignores machine-generated prompts;
   - records only unambiguous approval/rejection when exactly one ticket is pending for that session and the immediately preceding transcript question matches the recorded presentation fingerprint;
   - treats qualifications or changed scope as revision requests, never approval;
-  - refuses cross-session, missing-transcript, stale-base, or expired approval binding and directs the session to re-present;
+  - refuses cross-session, missing-transcript, stale-base, or expired approval binding;
+  - transfers eligible ticket/review custody only after Mason explicitly asks through a real owner prompt,
+    revoking the old approval/fingerprint before re-presentation;
   - handles natural-language global factory hold/resume.
 - `.claude/hooks/factory-lane-guard.mjs`
   - applies only to sessions explicitly bound to a factory job;
   - blocks build writes when ticket approval/hash, global hold, lane ownership, or worktree/base requirements fail;
   - canonicalizes every structured mutation target and rejects worktree escapes, symlink escapes,
     `.git`, ignored/secret-bearing paths, hidden targets, and paths outside the approved ticket scope;
+  - restricts governed reads to stable, non-secret paths inside the worktree and rejects secret-shaped
+    added content;
   - does not weaken or replace any existing guard.
 - `.claude/hooks/factory-state-integrity-guard.mjs`
   - blocks direct writes, rewrites, deletion, or ad hoc script access to the shared factory state directory;
