@@ -13,6 +13,10 @@ import {
   mintFactoryCliPermit,
   resolveFactoryPaths,
 } from "./factory-state-lib.mjs";
+import {
+  productionComparisonAccepts,
+  selectCurrentProductionDeployment,
+} from "./factory.mjs";
 import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
@@ -53,6 +57,37 @@ const sessionId = "cli-thread";
 const jobId = "cli-integration-job";
 let assertions = 0;
 
+function base64(value) {
+  return Buffer.from(String(value), "utf8").toString("base64");
+}
+
+{
+  const deployments = [
+    { id: 10, sha: "a".repeat(40), environment: "Production", created_at: "2026-07-30T10:00:00.000Z" },
+    { id: 11, sha: "b".repeat(40), environment: "Production", created_at: "2026-07-30T11:00:00.000Z" },
+  ];
+  const rollback = selectCurrentProductionDeployment(deployments, [
+    { id: 21, state: "success", created_at: "2026-07-30T11:01:00.000Z" },
+  ]);
+  assertions++;
+  assert.equal(rollback.deployment.sha, "b".repeat(40), "production proof selects the newest deployment, including a rollback SHA");
+  assertions++;
+  assert.equal(productionComparisonAccepts("behind"), false, "a deployed rollback behind the landing commit is rejected");
+  assertions++;
+  assert.equal(productionComparisonAccepts("identical"), true, "the exact landing commit is accepted");
+  assertions++;
+  assert.equal(productionComparisonAccepts("ahead"), true, "a current deployed descendant is accepted");
+  assertions++;
+  assert.throws(
+    () => selectCurrentProductionDeployment(deployments, [
+      { id: 30, state: "success", created_at: "2026-07-30T11:01:00.000Z" },
+      { id: 31, state: "inactive", created_at: "2026-07-30T11:02:00.000Z" },
+    ]),
+    /not currently successful/i,
+    "a newer inactive status overrides historical success",
+  );
+}
+
 function run(args, identity = { sessionId, actorTool: "codex" }) {
   const readOnly = args[0] === "status";
   const permit = readOnly ? null : mintFactoryCliPermit(paths, {
@@ -80,8 +115,7 @@ function pass(result, message) {
   assert.equal(result.status, 0, `${message}: ${result.stderr}`);
 }
 
-const ticketFile = path.join(fixtureDir, "ticket.json");
-writeFileSync(ticketFile, JSON.stringify({
+const ticketJson = JSON.stringify({
   id: jobId,
   title: "CLI integration proof",
   goal: "Exercise the supported factory mutation path.",
@@ -92,14 +126,19 @@ writeFileSync(ticketFile, JSON.stringify({
   proofHarnesses: ["verify-deps"],
   deliveryGate: "Stop before commit.",
   riskAreas: [],
-}));
-const missingPermit = spawnSync(process.execPath, [script, "ticket", "draft", "--file", ticketFile], {
+});
+const missingPermit = spawnSync(process.execPath, [script, "ticket", "draft", "--ticket-base64", base64(ticketJson)], {
   cwd: root,
   env,
   encoding: "utf8",
 });
 assertions++;
 assert.notEqual(missingPermit.status, 0, "mutating CLI refuses a direct invocation without a trusted hook permit");
+const arbitraryTicketFile = path.join(fixtureDir, "ticket.json");
+writeFileSync(arbitraryTicketFile, ticketJson);
+const fileTicket = run(["ticket", "draft", "--file", arbitraryTicketFile]);
+assertions++;
+assert.notEqual(fileTicket.status, 0, "factory CLI exposes no caller-selected ticket file read");
 const unsafeTestRepo = spawnSync(process.execPath, [script, "status", "--json"], {
   cwd: root,
   env: { ...env, CRX_FACTORY_TEST_REPO_DIR: root },
@@ -107,7 +146,7 @@ const unsafeTestRepo = spawnSync(process.execPath, [script, "status", "--json"],
 });
 assertions++;
 assert.notEqual(unsafeTestRepo.status, 0, "test repository override cannot escape the temporary test boundary");
-pass(run(["ticket", "draft", "--file", ticketFile]), "draft ticket");
+pass(run(["ticket", "draft", "--ticket-base64", base64(ticketJson)]), "draft ticket");
 
 const questionFile = path.join(fixtureDir, "question.txt");
 const draftedTicket = loadFactorySnapshot(paths).jobs[0].ticket;
@@ -194,16 +233,25 @@ assert.notEqual(crossSessionEvidence.status, 0, "another session cannot attach l
 const inventedHarness = run(["evidence", "run", "--job", jobId, "--harness", "check:agent-guidance", "--label", "Invented proof"]);
 assertions++;
 assert.notEqual(inventedHarness.status, 0, "non-ticket/non-allowlisted harness is refused");
-const summaryFile = path.join(fixtureDir, "summary.txt");
-writeFileSync(summaryFile, "The supported CLI completed the governed flow.");
+const secretBlocker = run([
+  "stage", "--job", jobId, "--stage", "parked",
+  "--blocker-base64", base64("GITHUB_TOKEN=secret-shaped-value"),
+]);
+assertions++;
+assert.notEqual(secretBlocker.status, 0, "base64 text arguments cannot persist secret-shaped content");
+const summaryText = "The supported CLI completed the governed flow.";
+const summaryArgs = ["--summary-base64", base64(summaryText)];
 pass(run(["stage", "--job", jobId, "--stage", "verifying"]), "advance to verification");
 pass(run(["stage", "--job", jobId, "--stage", "in-review"]), "advance to review");
 writeFileSync(path.join(fixtureRepo, "feature.txt"), "real governed implementation change\n");
-const unverifiedProof = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", summaryFile]);
+const arbitrarySummary = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", path.join(fixtureDir, "summary.txt")]);
+assertions++;
+assert.notEqual(arbitrarySummary.status, 0, "factory CLI exposes no caller-selected summary file read");
+const unverifiedProof = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", ...summaryArgs]);
 assertions++;
 assert.notEqual(unverifiedProof.status, 0, "self-labeled attached file is not enough for morning review");
 pass(run(["evidence", "run", "--job", jobId, "--harness", "verify-deps", "--label", "Dependency harness"]), "run repository harness");
-const noIndependentReview = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", summaryFile]);
+const noIndependentReview = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", ...summaryArgs]);
 assertions++;
 assert.notEqual(noIndependentReview.status, 0, "a passing branch harness cannot self-certify morning review");
 pass(run(["review", "run", "--job", jobId]), "run independent Codex review");
@@ -213,7 +261,7 @@ assertions++;
 assert.equal("stdout" in reviewArtifact || "stderr" in reviewArtifact, false, "review receipt does not persist unrestricted process output");
 assertions++;
 assert.match(reviewArtifact.reportSummary, /CLEAN/, "review receipt persists only a bounded verdict summary");
-pass(run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", summaryFile]), "advance to morning review");
+pass(run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", ...summaryArgs]), "advance to morning review");
 
 const reviewQuestion = path.join(fixtureDir, "review-question.txt");
 writeFileSync(reviewQuestion, canonicalMorningReviewQuestion(loadFactorySnapshot(paths).jobs[0]));
@@ -340,7 +388,7 @@ for (const requiredPacketText of [
   `Approved base: \`${approvedBase}\``,
   "Pre-closeout ledger checkpoint:",
   "## Independent review manifest",
-  "Exact-SHA Production deployment:",
+  "Current Production deployment:",
 ]) {
   assertions++;
   assert.equal(packetText.includes(requiredPacketText), true, `closeout packet records ${requiredPacketText}`);

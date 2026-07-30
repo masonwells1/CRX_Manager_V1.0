@@ -421,6 +421,13 @@ literal shell-read operand is checked for worktree containment, ignored/secret p
 escape. Repository and landing fingerprints now bind Git mode and object type in addition to path
 and blob identity, preventing a regular-file proof from validating a symlink or executable-mode
 change.
+A seventh exact-SHA Sol/high acceptance found that permit-bound summary/blocker file flags could
+read arbitrary host files and that closeout accepted historical deployment success after rollback.
+The factory CLI no longer accepts caller-selected ticket, summary, blocker, or recovery files;
+bounded canonical base64 carries the text directly, and secret-shaped operational text is rejected
+before persistence. Closeout now selects the newest Production deployment, requires its newest
+status to be `success`, and uses GitHub compare ancestry to prove the currently deployed SHA is the
+landing commit or a descendant.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

@@ -19,6 +19,7 @@ import {
   recoverFactoryState,
   refreshOriginMain,
   repositoryCommitFingerprint,
+  rejectSecretBearingText,
   resolveFactoryPaths,
   runHarnessEvidence,
   runIndependentReviewEvidence,
@@ -39,15 +40,15 @@ function usage(message = "") {
     "Agent-facing CRX Factory CLI. Mason never runs this command.",
     "",
     "Usage:",
-    "  node scripts/factory.mjs ticket draft --file <ticket.json>",
+    "  node scripts/factory.mjs ticket draft --ticket-base64 <base64-json>",
     "  node scripts/factory.mjs ticket present --job <id>",
     "  node scripts/factory.mjs lane start --job <id>",
     "  node scripts/factory.mjs review run --job <id>",
     "  node scripts/factory.mjs review present --job <id>",
-    "  node scripts/factory.mjs stage --job <id> --stage <stage> [--summary-file <text>] [--blocker-file <text>]",
+    "  node scripts/factory.mjs stage --job <id> --stage <stage> [--summary-base64 <base64-text>] [--blocker-base64 <base64-text>]",
     "  node scripts/factory.mjs evidence run --job <id> --harness <npm-script> --label <text>",
     "  node scripts/factory.mjs closeout write --job <id> --landing-commit <sha>",
-    "  node scripts/factory.mjs recover <unlock|torn-tail> --reason-file <text>",
+    "  node scripts/factory.mjs recover <unlock|torn-tail> --reason-base64 <base64-text>",
     "  node scripts/factory.mjs status [--json]",
   ].join("\n") + "\n");
   process.exit(2);
@@ -58,6 +59,9 @@ function parseArgs(argv) {
   const flags = new Map();
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
+    if (/^--(?:file|summary-file|blocker-file|reason-file)$/.test(arg)) {
+      usage(`${arg} is disabled; factory commands do not read caller-selected files.`);
+    }
     if (!arg.startsWith("--")) {
       positionals.push(arg);
       continue;
@@ -114,8 +118,19 @@ function appendAsActor(paths, event, who, expectedLastEventHash = who.expectedLa
   }, { expectedLastEventHash });
 }
 
-function readTextFile(filename) {
-  return readFileSync(path.resolve(filename), "utf8").trim();
+function decodeBase64Text(flags, name, { maxBytes = 20_000, rejectSecrets = true } = {}) {
+  const encoded = required(flags, name);
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error(`--${name} must be canonical base64.`);
+  }
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.length === 0 || bytes.length > maxBytes || bytes.toString("base64") !== encoded) {
+    throw new Error(`--${name} is empty, non-canonical, or exceeds ${maxBytes} bytes.`);
+  }
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+  if (!text) throw new Error(`--${name} decodes to empty text.`);
+  if (rejectSecrets) rejectSecretBearingText(text, `--${name}`);
+  return text;
 }
 
 function git(args, cwd) {
@@ -164,11 +179,38 @@ function fixedGitHubExecutable() {
   return resolved;
 }
 
+function newestFirst(left, right) {
+  const leftTime = Date.parse(String(left?.created_at || left?.updated_at || "")) || 0;
+  const rightTime = Date.parse(String(right?.created_at || right?.updated_at || "")) || 0;
+  return rightTime - leftTime || Number(right?.id || 0) - Number(left?.id || 0);
+}
+
+export function selectCurrentProductionDeployment(deployments, statuses) {
+  const production = Array.isArray(deployments)
+    ? deployments.filter((item) =>
+      /^[a-f0-9]{40}$/i.test(String(item?.sha || ""))
+      && String(item?.environment || "").toLowerCase() === "production")
+      .sort(newestFirst)
+    : [];
+  const deployment = production[0];
+  if (!deployment) throw new Error("GitHub has no current Production deployment record.");
+  const latestStatus = Array.isArray(statuses) ? [...statuses].sort(newestFirst)[0] : null;
+  if (!latestStatus || String(latestStatus.state || "").toLowerCase() !== "success") {
+    throw new Error("The newest Production deployment is not currently successful.");
+  }
+  return { deployment, status: latestStatus };
+}
+
+export function productionComparisonAccepts(status) {
+  return ["ahead", "identical"].includes(String(status || "").toLowerCase());
+}
+
 async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
   if (isIsolatedFactoryTest(paths, env)) {
     return {
       repository: FACTORY_GITHUB_REPOSITORY,
       landingCommit,
+      deployedCommit: landingCommit,
       deploymentId: 1,
       deploymentStatusId: 1,
       deploymentState: "success",
@@ -182,7 +224,7 @@ async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
   try {
     deployments = JSON.parse(execFileSync(fixedGitHubExecutable(), [
       "api",
-      `repos/${FACTORY_GITHUB_REPOSITORY}/deployments?sha=${landingCommit}&per_page=20`,
+      `repos/${FACTORY_GITHUB_REPOSITORY}/deployments?environment=Production&per_page=50`,
     ], {
       cwd,
       encoding: "utf8",
@@ -190,39 +232,47 @@ async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
       timeout: 30_000,
     }));
   } catch {
-    throw new Error("Could not read GitHub deployment records for the exact landing commit.");
+    throw new Error("Could not read current GitHub Production deployment records.");
   }
-  const productionDeployments = Array.isArray(deployments)
-    ? deployments.filter((item) =>
-      item?.sha === landingCommit
-      && String(item?.environment || "").toLowerCase() === "production")
-    : [];
-  let accepted = null;
-  for (const deployment of productionDeployments) {
-    let statuses;
-    try {
-      statuses = JSON.parse(execFileSync(fixedGitHubExecutable(), [
-        "api",
-        `repos/${FACTORY_GITHUB_REPOSITORY}/deployments/${deployment.id}/statuses?per_page=20`,
-      ], {
-        cwd,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 30_000,
-      }));
-    } catch {
-      continue;
-    }
-    const success = Array.isArray(statuses)
-      ? statuses.find((status) => String(status?.state || "").toLowerCase() === "success")
-      : null;
-    if (success) {
-      accepted = { deployment, status: success };
-      break;
-    }
+  const newestProduction = Array.isArray(deployments)
+    ? [...deployments].filter((item) =>
+      /^[a-f0-9]{40}$/i.test(String(item?.sha || ""))
+      && String(item?.environment || "").toLowerCase() === "production").sort(newestFirst)[0]
+    : null;
+  if (!newestProduction?.id) {
+    throw new Error("GitHub has no current Production deployment record.");
   }
-  if (!accepted) {
-    throw new Error("The exact landing commit has no successful GitHub Production deployment.");
+  let statuses;
+  try {
+    statuses = JSON.parse(execFileSync(fixedGitHubExecutable(), [
+      "api",
+      `repos/${FACTORY_GITHUB_REPOSITORY}/deployments/${newestProduction.id}/statuses?per_page=20`,
+    ], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 30_000,
+    }));
+  } catch {
+    throw new Error("Could not read the current Production deployment status.");
+  }
+  const accepted = selectCurrentProductionDeployment(deployments, statuses);
+  let comparison;
+  try {
+    comparison = JSON.parse(execFileSync(fixedGitHubExecutable(), [
+      "api",
+      `repos/${FACTORY_GITHUB_REPOSITORY}/compare/${landingCommit}...${accepted.deployment.sha}`,
+    ], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 30_000,
+    }));
+  } catch {
+    throw new Error("Could not prove that the current Production deployment contains the landing commit.");
+  }
+  if (!productionComparisonAccepts(comparison?.status)) {
+    throw new Error("The current Production deployment is not the landing commit or a proven descendant.");
   }
   let response;
   try {
@@ -240,6 +290,7 @@ async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
   return {
     repository: FACTORY_GITHUB_REPOSITORY,
     landingCommit,
+    deployedCommit: String(accepted.deployment.sha),
     deploymentId: Number(accepted.deployment.id),
     deploymentStatusId: Number(accepted.status.id),
     deploymentState: "success",
@@ -295,7 +346,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
 
   if (group === "ticket" && action === "draft") {
     const who = actor(paths, flags, env, now().getTime());
-    const source = JSON.parse(readFileSync(path.resolve(required(flags, "file")), "utf8"));
+    const source = JSON.parse(decodeBase64Text(flags, "ticket-base64", { maxBytes: 100_000, rejectSecrets: false }));
     const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
     const existing = snapshot.jobs.find((candidate) => candidate.id === String(source?.id || ""));
     if (existing) {
@@ -462,8 +513,8 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const stage = required(flags, "stage");
-    const behaviorSummary = flags.get("summary-file") ? readTextFile(flags.get("summary-file")) : "";
-    const blocker = flags.get("blocker-file") ? readTextFile(flags.get("blocker-file")) : "";
+    const behaviorSummary = flags.get("summary-base64") ? decodeBase64Text(flags, "summary-base64") : "";
+    const blocker = flags.get("blocker-base64") ? decodeBase64Text(flags, "blocker-base64") : "";
     const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
     if (stage === "awaiting-morning-review") refreshOriginMain(cwd, env);
     validateStageChange(snapshot, jobId, stage, { sessionId: who.sessionId, cwd, behaviorSummary, blocker });
@@ -680,7 +731,8 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       "## Production verification",
       "",
       `- GitHub repository: \`${productionVerification.repository}\``,
-      `- Exact-SHA Production deployment: \`${productionVerification.deploymentId}\``,
+      `- Current Production deployment: \`${productionVerification.deploymentId}\``,
+      `- Currently deployed commit: \`${productionVerification.deployedCommit}\` (landing or proven descendant)`,
       `- Deployment status: \`${productionVerification.deploymentState}\` (status \`${productionVerification.deploymentStatusId}\`)`,
       `- Canonical URL: ${productionVerification.productionUrl}`,
       `- Canonical URL response: HTTP ${productionVerification.httpStatus}`,
@@ -738,7 +790,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
 
   if (group === "recover" && ["unlock", "torn-tail"].includes(action)) {
     const who = actor(paths, flags, env, now().getTime(), { recovery: true });
-    const reason = readTextFile(required(flags, "reason-file"));
+    const reason = decodeBase64Text(flags, "reason-base64");
     const recovered = recoverFactoryState(paths, { mode: action, reason, nowMs: now().getTime() });
     const recoveredSnapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
     appendAsActor(paths, {

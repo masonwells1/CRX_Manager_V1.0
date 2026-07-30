@@ -118,6 +118,13 @@ fingerprint before the ticket or morning decision is re-presented there.
 - Governed Git reads cannot redirect to another checkout with `git -C`; shell-read operands are
   individually checked for containment, ignored/secret paths, and symlink escape. Exact repository
   fingerprints bind Git mode and object type as well as path and blob bytes.
+- Permit-bound factory commands never read caller-selected files. Ticket JSON and short
+  summary/blocker/recovery text travel as bounded canonical base64; secret-shaped operational text
+  is rejected before it can enter the ledger or board.
+- A job becomes `live` only when the newest GitHub Production deployment has a newest status of
+  `success` and GitHub compare proves its deployed SHA is the recorded landing commit or a
+  descendant. Historical success followed by `inactive`, or a rollback to an older SHA, fails
+  closed even when the canonical URL still returns HTTP 200.
 - The board binds only to loopback and is read-only.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
@@ -188,8 +195,8 @@ decision; it does not brick unrelated read-only work.
 Do not edit or delete a lock or ledger by hand. Use the validated agent-facing recovery route:
 
 ```
-node scripts/factory.mjs recover unlock --reason-file <plain-text-reason>
-node scripts/factory.mjs recover torn-tail --reason-file <plain-text-reason>
+node scripts/factory.mjs recover unlock --reason-base64 <base64-plain-text-reason>
+node scripts/factory.mjs recover torn-tail --reason-base64 <base64-plain-text-reason>
 ```
 
 Unlock refuses locks younger than five minutes or owned by a live process and preserves a backup.

@@ -571,7 +571,7 @@ function hookOutput(result) {
   const recoveryResult = run(laneHook, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "PowerShell",
-    tool_input: { command: "node scripts/factory.mjs recover torn-tail --reason-file reason.txt --session diagnostic-thread --tool codex" },
+    tool_input: { command: "node scripts/factory.mjs recover torn-tail --reason-base64 cmVjb3Zlcnk= --session diagnostic-thread --tool codex" },
   });
   assertions++;
   const recoveryHook = hookOutput(recoveryResult);

@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `886fa4591dd72c82d9e8c8f0b09fd3c8b7355053`
-State: rebased onto current `origin/main`; sixth Sol/high publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; seventh Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -111,7 +111,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 295 focused assertions after sixth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 303 focused assertions after seventh Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -282,6 +282,15 @@ recursive force-delete cleanup command.
   only after success; the lane guard honors it for writes and mutating factory commands. Governed
   Git reads cannot redirect with `-C`, every literal shell operand passes worktree/ignored/secret/
   symlink checks, and fingerprints bind path, mode, object type, and blob identity. Fresh
+  exact-commit acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `da0b71c65d731f8185c464193305b2b891484133` returned `BLOCKERS`: permit-bound CLI
+  `--summary-file`/`--blocker-file` inputs could read arbitrary host files, and closeout could accept
+  a historical successful deployment after rollback. All caller-selected factory file inputs are
+  removed; ticket, summary, blocker, and recovery text now use bounded canonical base64 arguments,
+  with secret-shaped operational text rejected before persistence. Production verification selects
+  the newest Production deployment, requires its newest status to be `success`, and uses GitHub's
+  compare result to prove the currently deployed SHA is the landing commit or a descendant. Fresh
   exact-commit acceptance is still required.
 
 The latest review capture is
