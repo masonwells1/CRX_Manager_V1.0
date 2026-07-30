@@ -64,8 +64,14 @@ function assertSmokeRolloutCompatibility() {
       );
       assert.ok(helper.includes(`to_regprocedure('${exactSignature}')`), `${fileName} must inspect the exact new catalog signature`);
       assert.ok(helper.includes(dynamicCall), `${fileName} must dynamically dispatch to the new signature`);
-      assert.match(source.replace(helper, ''), new RegExp(`pg_temp\\.${helperName}\\(`), `${fileName} must call the rollout helper`);
-      assert.doesNotMatch(source.replace(helper, ''), directCallPattern, `${fileName} must not call a rollout-sensitive RPC directly`);
+      const callSites = source.replace(helper, '');
+      assert.match(callSites, new RegExp(`pg_temp\\.${helperName}\\(`), `${fileName} must call the rollout helper`);
+      assert.doesNotMatch(callSites, directCallPattern, `${fileName} must not call a rollout-sensitive RPC directly`);
+      assert.doesNotMatch(
+        callSites,
+        /\bSELECT\s+(?:[a-z_][a-z0-9_]*\.)?row_version\b/i,
+        `${fileName} must not resolve the pending row_version column on the legacy catalog`,
+      );
     }
     return canonicalHelper;
   };
@@ -95,8 +101,16 @@ function proveSmokeCatalogCompatibility(createHelper, convertHelper) {
 BEGIN;
 CREATE OR REPLACE FUNCTION public.create_quote_version(uuid,uuid,text,text)
 RETURNS jsonb LANGUAGE sql AS $$ SELECT '{"shape":"legacy"}'::jsonb $$;
+CREATE TEMP TABLE legacy_quotes(id uuid PRIMARY KEY);
+INSERT INTO legacy_quotes VALUES ('${quoteId}');
 ${createHelper}
-SELECT pg_temp.create_quote_version_smoke('${quoteId}', '${actorId}', 'presented', NULL, 17)->>'shape';
+SELECT pg_temp.create_quote_version_smoke(
+  '${quoteId}',
+  '${actorId}',
+  'presented',
+  NULL,
+  (SELECT (to_jsonb(q)->>'row_version')::bigint FROM legacy_quotes q WHERE q.id = '${quoteId}')
+)->>'shape';
 ROLLBACK;
 `);
   assert.equal(legacyCreate, 'legacy', 'create_quote_version smoke helper must work against the legacy catalog');
@@ -112,11 +126,25 @@ CREATE OR REPLACE FUNCTION public.create_quote_version(
 )
 RETURNS jsonb LANGUAGE sql
 AS $$ SELECT jsonb_build_object('shape', 'new', 'expected', p_expected_row_version) $$;
+CREATE TEMP TABLE new_quotes(id uuid PRIMARY KEY, row_version bigint NOT NULL);
+INSERT INTO new_quotes VALUES ('${quoteId}', 17);
 ${createHelper}
 SELECT concat(
-  pg_temp.create_quote_version_smoke('${quoteId}', '${actorId}', 'presented', NULL, 17)->>'shape',
+  pg_temp.create_quote_version_smoke(
+    '${quoteId}',
+    '${actorId}',
+    'presented',
+    NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM new_quotes q WHERE q.id = '${quoteId}')
+  )->>'shape',
   ':',
-  pg_temp.create_quote_version_smoke('${quoteId}', '${actorId}', 'presented', NULL, 17)->>'expected'
+  pg_temp.create_quote_version_smoke(
+    '${quoteId}',
+    '${actorId}',
+    'presented',
+    NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM new_quotes q WHERE q.id = '${quoteId}')
+  )->>'expected'
 );
 ROLLBACK;
 `);
@@ -126,8 +154,15 @@ ROLLBACK;
 BEGIN;
 CREATE OR REPLACE FUNCTION public.convert_quote_to_order(uuid,uuid,text)
 RETURNS jsonb LANGUAGE sql AS $$ SELECT '{"shape":"legacy"}'::jsonb $$;
+CREATE TEMP TABLE legacy_quotes(id uuid PRIMARY KEY);
+INSERT INTO legacy_quotes VALUES ('${quoteId}');
 ${convertHelper}
-SELECT pg_temp.convert_quote_to_order_smoke('${quoteId}', '${actorId}', NULL, 23)->>'shape';
+SELECT pg_temp.convert_quote_to_order_smoke(
+  '${quoteId}',
+  '${actorId}',
+  NULL,
+  (SELECT (to_jsonb(q)->>'row_version')::bigint FROM legacy_quotes q WHERE q.id = '${quoteId}')
+)->>'shape';
 ROLLBACK;
 `);
   assert.equal(legacyConvert, 'legacy', 'convert_quote_to_order smoke helper must work against the legacy catalog');
@@ -142,11 +177,23 @@ CREATE OR REPLACE FUNCTION public.convert_quote_to_order(
 )
 RETURNS jsonb LANGUAGE sql
 AS $$ SELECT jsonb_build_object('shape', 'new', 'expected', p_expected_row_version) $$;
+CREATE TEMP TABLE new_quotes(id uuid PRIMARY KEY, row_version bigint NOT NULL);
+INSERT INTO new_quotes VALUES ('${quoteId}', 23);
 ${convertHelper}
 SELECT concat(
-  pg_temp.convert_quote_to_order_smoke('${quoteId}', '${actorId}', NULL, 23)->>'shape',
+  pg_temp.convert_quote_to_order_smoke(
+    '${quoteId}',
+    '${actorId}',
+    NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM new_quotes q WHERE q.id = '${quoteId}')
+  )->>'shape',
   ':',
-  pg_temp.convert_quote_to_order_smoke('${quoteId}', '${actorId}', NULL, 23)->>'expected'
+  pg_temp.convert_quote_to_order_smoke(
+    '${quoteId}',
+    '${actorId}',
+    NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM new_quotes q WHERE q.id = '${quoteId}')
+  )->>'expected'
 );
 ROLLBACK;
 `);

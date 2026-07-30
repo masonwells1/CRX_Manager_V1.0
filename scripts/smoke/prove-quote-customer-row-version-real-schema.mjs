@@ -21,6 +21,15 @@ const smokeFiles = [
   path.join(ROOT, 'scripts', 'smoke', 'smoke-save-quote-drawn-guard.sql'),
   path.join(ROOT, 'scripts', 'smoke', 'smoke-planned-holds-drawn-sync.sql'),
 ];
+const legacyLifecycleSmokeFiles = [
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-backfill-refuse-split-billing.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-draw-ledger-reversal.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-forbid-restore-cancelled-order.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-order-draw-lock.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-planned-holds-drawn-sync.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-restore-version-drawn-guard.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-revert-quote-escape-hatch.sql'),
+];
 const quoteLifecycleAnchors = [
   {
     label: 'draft-to-sent exact-version, sent_at, and commission-split',
@@ -95,7 +104,7 @@ function expectRollbackMarker(file) {
 }
 
 try {
-  for (const file of [candidate, ...smokeFiles]) assert.ok(readFileSync(file, 'utf8').length > 0, `missing required artifact ${file}`);
+  for (const file of [candidate, ...smokeFiles, ...legacyLifecycleSmokeFiles]) assert.ok(readFileSync(file, 'utf8').length > 0, `missing required artifact ${file}`);
   const quoteSmokeSql = readFileSync(smokeFiles[0], 'utf8');
   assertQuoteLifecycleCoverage(quoteSmokeSql);
   proveQuoteLifecycleAnchorMutationResistance(quoteSmokeSql);
@@ -129,23 +138,45 @@ try {
   psql('CREATE SCHEMA IF NOT EXISTS supabase_migrations; CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (version text PRIMARY KEY, name text NOT NULL, statements text[]);');
   apply('20260727174805_migration_history.sql');
   const migrations = selectedMigrations();
-  for (const [index, migration] of migrations.entries()) {
+  assert.equal(migrations.at(-1), candidate, 'candidate must be the final ledger-selected migration');
+  for (const [index, migration] of migrations.slice(0, -1).entries()) {
     const name = `migration-${index}.sql`;
     copy(migration, name);
     apply(name);
   }
   psql(`
+    ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned_until timestamptz;
+    CREATE TABLE IF NOT EXISTS auth.sessions (user_id uuid);
+    CREATE TABLE IF NOT EXISTS auth.refresh_tokens (user_id varchar);
+    GRANT DELETE ON auth.sessions, auth.refresh_tokens TO postgres;
+  `, { user: 'supabase_admin' });
+  psql(`
     INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
       ('00000000-0000-4000-8000-000000000001', 'row-version-admin@example.invalid', '{"full_name":"Row Version Admin","role":"admin"}'),
       ('00000000-0000-4000-8000-000000000002', 'row-version-sales@example.invalid', '{"full_name":"Row Version Sales","role":"sales_rep"}'),
-      ('00000000-0000-4000-8000-000000000003', 'row-version-driver@example.invalid', '{"full_name":"Row Version Driver","role":"driver"}')
+      ('00000000-0000-4000-8000-000000000003', 'row-version-driver@example.invalid', '{"full_name":"Row Version Driver","role":"driver"}'),
+      ('00000000-0000-4000-8000-000000000004', 'row-version-backup-admin@example.invalid', '{"full_name":"Row Version Backup Admin","role":"admin"}')
     ON CONFLICT (id) DO NOTHING;
     INSERT INTO public.profiles (id, email, role, is_active) VALUES
       ('00000000-0000-4000-8000-000000000001', 'row-version-admin@example.invalid', 'admin', true),
       ('00000000-0000-4000-8000-000000000002', 'row-version-sales@example.invalid', 'sales_rep', true),
-      ('00000000-0000-4000-8000-000000000003', 'row-version-driver@example.invalid', 'driver', true)
+      ('00000000-0000-4000-8000-000000000003', 'row-version-driver@example.invalid', 'driver', true),
+      ('00000000-0000-4000-8000-000000000004', 'row-version-backup-admin@example.invalid', 'admin', true)
     ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, is_active = true;
   `);
+  for (const file of legacyLifecycleSmokeFiles) {
+    copy(file, `legacy-${path.basename(file)}`);
+    const legacyResult = psql(`\\i /tmp/legacy-${path.basename(file)}`, { allowFailure: true });
+    const legacyOutput = `${legacyResult.stdout}\n${legacyResult.stderr}`;
+    assert.notEqual(legacyResult.status, 0, `${path.basename(file)} unexpectedly committed on the legacy catalog`);
+    assert.match(
+      legacyOutput,
+      /SMOKE_PASS_ROLLBACK/,
+      `${path.basename(file)} did not reach SMOKE_PASS_ROLLBACK on the legacy catalog:\n${legacyOutput}`,
+    );
+  }
+  copy(candidate, 'candidate.sql');
+  apply('candidate.sql');
   for (const file of smokeFiles) {
     copy(file, path.basename(file));
     expectRollbackMarker(file);
@@ -156,7 +187,7 @@ try {
   assert.notEqual(missingDefault.status, 0, 'candidate migration accepted a pre-existing row_version without DEFAULT 1');
   assert.match(missingDefaultOutput, /ROW_VERSION_SCHEMA_DRIFT/, `missing-default drift did not fail with ROW_VERSION_SCHEMA_DRIFT:\n${missingDefaultOutput}`);
   assert.match(missingDefaultOutput, /quotes\.row_version/, `missing-default drift did not identify quotes.row_version:\n${missingDefaultOutput}`);
-  console.log('ROW_VERSION_REAL_SCHEMA_RESTORE_PASS baseline=20260727174805 post_baseline_replay=through_candidate smoke_quote_customer=SMOKE_PASS_ROLLBACK quote_lifecycle=draft-sent-sent stale_before_lifecycle=QUOTE_STALE_WRITE smoke_drawn_guard=SMOKE_PASS_ROLLBACK smoke_planned_holds=SMOKE_PASS_ROLLBACK');
+  console.log('ROW_VERSION_REAL_SCHEMA_RESTORE_PASS baseline=20260727174805 post_baseline_replay=through_candidate legacy_lifecycle_smokes=7/7 smoke_quote_customer=SMOKE_PASS_ROLLBACK quote_lifecycle=draft-sent-sent stale_before_lifecycle=QUOTE_STALE_WRITE smoke_drawn_guard=SMOKE_PASS_ROLLBACK smoke_planned_holds=SMOKE_PASS_ROLLBACK');
 } catch (error) {
   console.error(`ROW_VERSION_REAL_SCHEMA_RESTORE_FAIL ${error.stack ?? error.message}`);
   process.exitCode = 1;

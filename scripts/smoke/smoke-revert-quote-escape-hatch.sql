@@ -63,6 +63,7 @@ BEGIN
 
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- [E2E] marker keeps the live-testdata guard satisfied; terminal rollback removes it.
   INSERT INTO public.customers (farm_name)
@@ -83,9 +84,9 @@ BEGIN
   -- ---- whole conversion -> order created, quote 'accepted', draws = 300 ----
   SELECT pg_temp.convert_quote_to_order_smoke(
     v_quote,
+    v_admin,
     NULL,
-    NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_quote)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_quote)
   ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   IF v_res->>'status' IS DISTINCT FROM 'created' THEN
@@ -194,10 +195,10 @@ BEGIN
   );
 
   INSERT INTO public.commissions (
-    order_id, customer_id, recipient, split_percentage,
+    order_id, customer_id, recipient, recipient_user_id, split_percentage,
     commission_amount, order_profit, order_date, status, paid_date
   ) VALUES (
-    v_order1, v_customer, 'B2 paid history', 100,
+    v_order1, v_customer, 'B2 paid history', v_admin, 100,
     1, 1, CURRENT_DATE, 'paid', CURRENT_DATE
   ) RETURNING id INTO v_commission;
   BEGIN
@@ -214,10 +215,10 @@ BEGIN
   DELETE FROM public.commissions WHERE id = v_commission;
 
   INSERT INTO public.commissions (
-    order_id, customer_id, recipient, split_percentage,
+    order_id, customer_id, recipient, recipient_user_id, split_percentage,
     commission_amount, order_profit, order_date, status
   ) VALUES (
-    v_order1, v_customer, 'B2 batched history', 100,
+    v_order1, v_customer, 'B2 batched history', v_admin, 100,
     1, 1, CURRENT_DATE, 'pending'
   ) RETURNING id INTO v_commission;
   INSERT INTO public.commission_payments (
@@ -302,9 +303,9 @@ BEGIN
   -- ---- proof it is genuinely re-convertible: a NEW order is created ----
   SELECT pg_temp.convert_quote_to_order_smoke(
     v_quote,
+    v_admin,
     NULL,
-    NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_quote)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_quote)
   ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   IF v_res->>'status' IS DISTINCT FROM 'created' THEN

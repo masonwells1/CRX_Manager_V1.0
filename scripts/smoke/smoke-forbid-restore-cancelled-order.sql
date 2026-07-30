@@ -55,6 +55,7 @@ BEGIN
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: active admin required'; END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- [E2E] marker satisfies the live-testdata guard; terminal rollback removes it.
   INSERT INTO public.customers (farm_name)
@@ -72,9 +73,9 @@ BEGIN
 
   SELECT pg_temp.convert_quote_to_order_smoke(
     v_quote,
+    v_admin,
     NULL,
-    NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_quote)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_quote)
   ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   v_order := (v_res->>'order_id')::uuid;

@@ -93,6 +93,7 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- --------------------------------------------------------------------
   -- 1. Fixtures (txn-local; rolled back at the end)
@@ -101,8 +102,8 @@ BEGIN
   VALUES ('[SMOKE] Draw Lock Farm ' || v_suffix)
   RETURNING id INTO v_customer;
 
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size)
-  VALUES ('[SMOKE] Draw Lock Product ' || v_suffix, 6, 10, 'gal')
+  INSERT INTO products (product_name, unit_size)
+  VALUES ('[SMOKE] Draw Lock Product ' || v_suffix, 'gal')
   RETURNING id INTO v_product;
 
   -- --------------------------------------------------------------------
@@ -216,9 +217,9 @@ BEGIN
 
   SELECT pg_temp.convert_quote_to_order_smoke(
     v_q2,
+    v_admin,
     NULL,
-    NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_q2)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q2)
   ) INTO v_res;
   IF v_res->>'status' IS DISTINCT FROM 'created' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) convert returned %, expected created', v_res;
@@ -265,8 +266,8 @@ BEGIN
 
   -- (f) Adding a product with no inventory snapshot creates that row before
   -- prebooking, so the ledger and physical snapshot cannot diverge.
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size)
-  VALUES ('[SMOKE] Draw Lock New Product ' || v_suffix, 3, 7, 'gal')
+  INSERT INTO products (product_name, unit_size)
+  VALUES ('[SMOKE] Draw Lock New Product ' || v_suffix, 'gal')
   RETURNING id INTO v_product_2;
   PERFORM update_order_items(v_o2,
     jsonb_build_array(

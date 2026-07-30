@@ -170,7 +170,10 @@ BEGIN
       jsonb_build_object('product_id', v_pb, 'calc_mode', 'units_direct', 'total_units_needed', 100, 'price_per_unit', 8, 'current_cost', 4, 'sort_order', 1))),
     jsonb_build_object('section_name', 'Late', 'sort_order', 1, 'items', jsonb_build_array(
       jsonb_build_object('product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0))));
-  SELECT row_version INTO v_quote_version FROM quotes WHERE id = v_q;
+  SELECT (to_jsonb(q)->>'row_version')::bigint
+  INTO v_quote_version
+  FROM quotes q
+  WHERE q.id = v_q;
   v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_version);
   v_res := save_quote(v_q, v_payload, v_sections, v_admin, NULL);
   IF v_res->>'status' IS DISTINCT FROM 'saved' THEN
@@ -190,11 +193,14 @@ BEGIN
     v_admin,
     'presented',
     NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_q)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
   );
   SELECT id INTO v_ver FROM quote_versions WHERE quote_id = v_q ORDER BY version_number DESC LIMIT 1;
   v_sections := jsonb_set(v_sections, '{1,items,0,total_units_needed}', to_jsonb(250));
-  SELECT row_version INTO v_quote_version FROM quotes WHERE id = v_q;
+  SELECT (to_jsonb(q)->>'row_version')::bigint
+  INTO v_quote_version
+  FROM quotes q
+  WHERE q.id = v_q;
   v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_version);
   v_res := save_quote(v_q, v_payload, v_sections, v_admin, NULL);
   SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0) INTO v_pa_total
@@ -204,7 +210,7 @@ BEGIN
   END IF;
   v_res := pg_temp.restore_quote_version_smoke(
     v_q, v_ver, v_admin, NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_q)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
   );
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e) restore returned %', v_res;
@@ -217,7 +223,10 @@ BEGIN
 
   -- (f) plan switched off: save_quote releases everything transactionally.
   UPDATE quotes SET is_planned = false WHERE id = v_q;
-  SELECT row_version INTO v_quote_version FROM quotes WHERE id = v_q;
+  SELECT (to_jsonb(q)->>'row_version')::bigint
+  INTO v_quote_version
+  FROM quotes q
+  WHERE q.id = v_q;
   v_payload := v_payload || jsonb_build_object('status', 'revised', 'row_version_expected', v_quote_version);
   v_res := save_quote(v_q, v_payload, v_sections, v_admin, NULL);
   SELECT count(*) INTO v_cnt FROM inventory_holds WHERE source_id = v_q AND is_active = true;

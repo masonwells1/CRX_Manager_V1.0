@@ -121,6 +121,7 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- ── fixtures ─────────────────────────────────────────────────────────────
   INSERT INTO customers (farm_name)
@@ -348,9 +349,9 @@ BEGIN
 
   SELECT pg_temp.convert_quote_to_order_smoke(
     v_q2,
+    v_admin,
     NULL,
-    NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_q2)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q2)
   ) INTO v_res;
   IF v_res->>'status' IS DISTINCT FROM 'created' THEN
     RAISE EXCEPTION 'S3: convert returned %, expected created', v_res;

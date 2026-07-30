@@ -76,6 +76,7 @@ BEGIN
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: active admin required'; END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- Provenance cannot be forged through a direct Data API table insert. The
   -- governed SECURITY DEFINER creator still writes as owner.
@@ -125,9 +126,9 @@ BEGIN
   -- Known-good order + order_items via the production RPC.
   SELECT pg_temp.convert_quote_to_order_smoke(
     v_quote,
+    v_admin,
     NULL,
-    NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_quote)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_quote)
   ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   v_order := (v_res->>'order_id')::uuid;
@@ -151,9 +152,9 @@ BEGIN
   VALUES (v_quote_b, v_sec_b, v_product, 10, 6, 100, 'gal');
   SELECT pg_temp.convert_quote_to_order_smoke(
     v_quote_b,
+    v_admin,
     NULL,
-    NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_quote_b)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_quote_b)
   ) INTO v_res;
   PERFORM set_config('app.admin_override', 'false', true);
   v_order_b := (v_res->>'order_id')::uuid;

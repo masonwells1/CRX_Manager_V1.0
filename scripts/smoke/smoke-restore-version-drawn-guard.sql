@@ -120,6 +120,7 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- --------------------------------------------------------------------
   -- 1. Fixtures (txn-local; rolled back at the end)
@@ -127,11 +128,11 @@ BEGIN
   INSERT INTO customers (farm_name)
   VALUES ('[SMOKE] Restore Guard Farm ' || v_suffix)
   RETURNING id INTO v_customer;
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size)
-  VALUES ('[SMOKE] Restore Guard A ' || v_suffix, 6, 10, 'gal')
+  INSERT INTO products (product_name, unit_size)
+  VALUES ('[SMOKE] Restore Guard A ' || v_suffix, 'gal')
   RETURNING id INTO v_prod_a;
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size)
-  VALUES ('[SMOKE] Restore Guard B ' || v_suffix, 4, 8, 'gal')
+  INSERT INTO products (product_name, unit_size)
+  VALUES ('[SMOKE] Restore Guard B ' || v_suffix, 'gal')
   RETURNING id INTO v_prod_b;
 
   INSERT INTO quotes (quote_number, customer_id, created_by, status, commission_split)
@@ -146,7 +147,7 @@ BEGIN
   -- V1: snapshot @ A=100
   PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_q)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
   );
   SELECT id INTO v_v1 FROM quote_versions WHERE quote_id = v_q
   ORDER BY version_number DESC LIMIT 1;
@@ -159,7 +160,7 @@ BEGIN
   WHERE quote_id = v_q;
   PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_q)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
   );
   SELECT id INTO v_v2 FROM quote_versions WHERE quote_id = v_q
   ORDER BY version_number DESC LIMIT 1;
@@ -169,7 +170,7 @@ BEGIN
   WHERE quote_id = v_q;
   PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_q)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
   );
   SELECT id INTO v_v3 FROM quote_versions WHERE quote_id = v_q
   ORDER BY version_number DESC LIMIT 1;
@@ -197,7 +198,7 @@ BEGIN
   BEGIN
     PERFORM pg_temp.restore_quote_version_smoke(
       v_q, v_v1, v_admin, NULL,
-      (SELECT row_version FROM public.quotes WHERE id = v_q)
+      (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
     );
     RAISE EXCEPTION 'SMOKE_FAIL: (a) restoring below the drawn ledger was ALLOWED';
   EXCEPTION WHEN OTHERS THEN
@@ -223,7 +224,7 @@ BEGIN
   BEGIN
     PERFORM pg_temp.restore_quote_version_smoke(
       v_q, v_v2, v_admin, NULL,
-      (SELECT row_version FROM public.quotes WHERE id = v_q)
+      (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
     );
     RAISE EXCEPTION 'SMOKE_FAIL: (b) restoring a version without the drawn product was ALLOWED';
   EXCEPTION WHEN OTHERS THEN
@@ -244,7 +245,7 @@ BEGIN
   -- --------------------------------------------------------------------
   v_res := pg_temp.restore_quote_version_smoke(
     v_q, v_v3, v_admin, NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_q)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
   );
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) legal restore returned %', v_res;
@@ -284,7 +285,7 @@ BEGIN
 
   PERFORM pg_temp.create_quote_version_smoke(
     v_qc, v_admin, 'presented', NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_qc)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_qc)
   );
   SELECT id INTO v_vc FROM quote_versions WHERE quote_id = v_qc
   ORDER BY version_number DESC LIMIT 1;
@@ -293,7 +294,7 @@ BEGIN
 
   v_res := pg_temp.restore_quote_version_smoke(
     v_qc, v_vc, v_admin, NULL,
-    (SELECT row_version FROM public.quotes WHERE id = v_qc)
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_qc)
   );
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) control restore returned %', v_res;
