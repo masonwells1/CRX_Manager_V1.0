@@ -107,10 +107,15 @@ regression discover the unique stable suffix rather than embedding a timestamp.
 
 `20260730124308_close_accounting_period_idempotency_recheck.sql` is the B7
 renamed disk record of the live server-assigned ledger version `20260730124308`
-(submitted as `20260730121951_close_accounting_period_idempotency_recheck`). It faithfully re-emits the live
-`close_accounting_period` body with one addition: after the exclusive month
-advisory lock, it checks the same idempotency key again before the
-already-closed refusal. Its postflight asserts the one `jsonb` overload,
+(submitted as `20260730121951_close_accounting_period_idempotency_recheck`). It adds
+a same-key lookup after the exclusive month advisory lock and before the
+already-closed refusal as redundant defense in depth. Under the current
+`check_idempotency` helper, the first lookup takes the key-only transaction
+advisory lock, so a concurrent same-key caller blocks and replays there. The
+behavioral proof therefore demonstrates current helper serialization, not the
+necessity of the later lookup: Sol mutation testing removed that block and the
+current behavioral proof still passed. The source regression retains a separate
+structural assertion that the post-month-lock recheck exists. Its postflight asserts the one `jsonb` overload,
 `postgres` owner, SECURITY DEFINER mode, `search_path=public, pg_temp`, helper
 execute path, and exact callable-role boundary. The disposable PostgreSQL 17
 proof now runs two same-key closes and proves identical JSON replay with one

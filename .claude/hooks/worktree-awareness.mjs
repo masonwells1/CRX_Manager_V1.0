@@ -18,7 +18,7 @@ import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile, fleetSummaryLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
-  fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom,
+  fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom, localCandidateMigrationPathsFromHistory,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap as parseOriginMainSqlBlobMap,
   originMainForwardBlobPaths,
@@ -170,7 +170,12 @@ function mainlineParkedDiscovery() {
       () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS),
     );
     const mainlinePaths = tree.split("\n");
-    const blobs = originMainSqlBlobMap(originMainForwardBlobPaths(mainlinePaths, parkedPrefilter.paths));
+    const historyCandidates = localCandidateMigrationPathsFromHistory(history);
+    const blobs = originMainSqlBlobMap(originMainForwardBlobPaths(
+      mainlinePaths,
+      parkedPrefilter.paths,
+      historyCandidates.state === "known" ? historyCandidates.paths : [],
+    ));
     return parkedMainlineDiscoveryFrom(mainlinePaths, history, (p) => blobs?.get(normRepoPath(p)) ?? null, parkedPrefilter.paths);
   } catch {
     return { state: "unknown", paths: new Set(), reason: "origin/main parked-state metadata is unreadable" };

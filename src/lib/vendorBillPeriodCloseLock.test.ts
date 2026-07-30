@@ -14,9 +14,14 @@ if (migrationMatches.length !== 1) {
 const migration = readFileSync(join(migrationDir, migrationMatches[0]), 'utf8').replace(/\r\n/g, '\n');
 const source = (...parts: string[]) => readFileSync(join(root, ...parts), 'utf8')
   .replace(/\r\n/g, '\n');
-const idempotencyRecheckMigration = source(
-  'supabase', 'migrations', '20260730124308_close_accounting_period_idempotency_recheck.sql',
-);
+const idempotencyRecheckSuffix = '_close_accounting_period_idempotency_recheck.sql';
+const idempotencyRecheckMatches = readdirSync(migrationDir)
+  .filter((name) => /^\d{14}_/.test(name) && name.endsWith(idempotencyRecheckSuffix));
+if (idempotencyRecheckMatches.length !== 1) {
+  throw new Error(`expected exactly one ${idempotencyRecheckSuffix} migration, found ${idempotencyRecheckMatches.join(', ') || 'none'}`);
+}
+const idempotencyRecheckMigration = readFileSync(join(migrationDir, idempotencyRecheckMatches[0]), 'utf8')
+  .replace(/\r\n/g, '\n');
 const smokeSpecs = JSON.parse(source('scripts', 'smoke', 'smoke-specs.json')) as {
   specs: Record<string, { chain: string; covers: string[] }>;
 };
@@ -62,7 +67,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(lock).toBeLessThan(close.indexOf('INSERT INTO public.accounting_periods'));
   });
 
-  it('keeps the applied same-key replay repair immediately after the exclusive month lock', () => {
+  it('retains the structural same-key defense-in-depth check after the exclusive month lock', () => {
     expect(idempotencyRecheckMigration).toContain('APPLIED LIVE 2026-07-30 as Supabase ledger version 20260730124308');
     const close = recheckBody();
     const firstCheck = close.indexOf("check_idempotency(p_idempotency_key, 'close_accounting_period')");
@@ -80,6 +85,11 @@ describe('vendor-bill accounting-period close serialization', () => {
   it('keeps the central closed-period reader narrow and tightly pinned', () => {
     const check = body('check_period_open(');
     expect(check).toContain("SET search_path = ''");
+    expect(check).toContain('FROM public.accounting_periods');
+    const nonCatalogRelations = [...check.matchAll(/\bFROM\s+([a-z_][a-z0-9_.]*)/gi)]
+      .map((match) => match[1])
+      .filter((relation) => !relation.startsWith('pg_catalog.'));
+    expect(nonCatalogRelations).toEqual(['public.accounting_periods']);
     expect(check).not.toContain('_lock_accounting_months');
   });
 
@@ -114,7 +124,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_JAN_FIRST_PASS'\)/);
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS'\)/);
     expect(proof).toMatch(/console\.log\('CANDIDATE_POSTFLIGHT_OWNER_AND_ACL_PASS'\)/);
-    expect(proof).toMatch(/console\.log\('CANDIDATE_CLOSE_SAME_KEY_REPLAY_PASS'\)/);
+    expect(proof).toMatch(/console\.log\('CANDIDATE_CLOSE_SAME_KEY_SERIALIZATION_PASS'\)/);
     expect(proof).toContain("acl.grantee = 0");
     expect(proof).toContain("has_function_privilege('anon', p.oid, 'EXECUTE')");
     expect(proof).toContain("has_function_privilege('service_role', p.oid, 'EXECUTE')");

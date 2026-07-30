@@ -193,12 +193,20 @@ export function originMainSqlBlobMap(paths, runBatch, maxBuffer = ORIGIN_MAIN_CA
   return offset === output.length ? blobs : null;
 }
 
-export function originMainForwardBlobPaths(treePaths, prefilterPaths) {
-  const candidates = prefilterPaths === null ? treePaths : prefilterPaths;
+export function originMainForwardBlobPaths(treePaths, prefilterPaths, localCandidatePaths = []) {
+  // Exact LOCAL CANDIDATE paths must be read even if their SQL lacks a parked
+  // header; otherwise that actionable cross-reference defect looks like an
+  // unreadable blob merely because the prefilter did not select it.
+  const candidates = prefilterPaths === null
+    ? treePaths
+    : [...(prefilterPaths || []), ...(localCandidatePaths || [])];
+  const seen = new Set();
   return (candidates || []).filter((p) => {
     const normalized = normRepoPath(p);
     const name = String(p || "").slice(String(p || "").lastIndexOf("/") + 1);
-    return normalized.startsWith("supabase/migrations/") && isParkedMigrationFile(name);
+    if (!normalized.startsWith("supabase/migrations/") || !isParkedMigrationFile(name) || seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
   });
 }
 
@@ -270,6 +278,22 @@ export function parkedDraftPathsFrom(changedPaths, existsOnDisk = () => true, re
     if (!isParkedDraftPath(p, normalized.startsWith("supabase/migrations/") ? readText(p) : "")) continue;
     const key = normRepoPath(p);
     if (!out.has(key)) out.set(key, p);
+  }
+  return out;
+}
+
+// A SUPERSEDED draft is not waiting for apply, but /fleet must count branch-owned
+// replacements that it intentionally ignores. Apply the identical changed-path and
+// on-disk rules so frozen historical worktrees cannot inflate this healthy-path count.
+export function supersededDraftPathsFrom(changedPaths, existsOnDisk = () => true) {
+  const out = new Map();
+  for (const raw of changedPaths || []) {
+    const p = String(raw || "").trim();
+    const normalized = normRepoPath(p);
+    const name = p.slice(p.lastIndexOf("/") + 1);
+    if (!p || !existsOnDisk(p) || !/^superseded.*\.sql$/i.test(name)) continue;
+    if (!DRAFT_ROOTS.some((root) => normalized.startsWith(root.root))) continue;
+    if (!out.has(normalized)) out.set(normalized, p);
   }
   return out;
 }
@@ -486,8 +510,10 @@ export function validateParkedMigrationCrossReferences(paths, historyText, loadT
 //   hasOriginMain    → false short-circuits everything to the caller's fallback scan
 //
 // Returns ownDraftPaths(entry) → Map(normalized path → git-spelled path), or null when the
-// branch point cannot be read. null means "I don't know", and every caller must then scan
-// the whole checkout rather than report nothing — under-reporting hides real pending work.
+// branch point cannot be read. The returned Map also exposes a non-enumerable
+// `supersededPaths` Map for the fleet's ignored-draft diagnostic. null means "I don't know",
+// and every caller must then scan the whole checkout rather than report nothing —
+// under-reporting hides real pending work.
 export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, readText = () => "", hasOriginMain = true }) {
   // Where a worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
   // snapshots share a handful of shas between them.
@@ -504,6 +530,15 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, r
 
   const cleanCache = new Map(); // head sha → changed paths | null
 
+  function resultFrom(changed, onDisk, textOnDisk) {
+    const parked = parkedDraftPathsFrom(changed, onDisk, textOnDisk);
+    Object.defineProperty(parked, "supersededPaths", {
+      value: supersededDraftPathsFrom(changed, onDisk),
+      enumerable: false,
+    });
+    return parked;
+  }
+
   return function ownDraftPaths(entry) {
     const base = branchPoint(entry.head);
     if (!base) return null;
@@ -519,13 +554,13 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, r
         cleanCache.set(entry.head, run(["diff", "--name-only", base, entry.head, "--", ...spec], repoRoot));
       }
       const changed = cleanCache.get(entry.head);
-      return changed === null ? null : parkedDraftPathsFrom(changed, onDisk, textOnDisk);
+      return changed === null ? null : resultFrom(changed, onDisk, textOnDisk);
     }
 
     const changed = run(["diff", "--name-only", base, "--", ...spec], entry.path);
     const untracked = run(["ls-files", "--others", "--exclude-standard", "--", ...spec], entry.path);
     if (changed === null || untracked === null) return null;
-    return parkedDraftPathsFrom([...changed, ...untracked], onDisk, textOnDisk);
+    return resultFrom([...changed, ...untracked], onDisk, textOnDisk);
   };
 }
 

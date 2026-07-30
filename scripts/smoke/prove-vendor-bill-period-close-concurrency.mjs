@@ -149,9 +149,9 @@ try {
   assert.equal(scalar(`SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['create_vendor_bill','update_vendor_bill','check_period_open','close_accounting_period']) AND (NOT p.prosecdef OR EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS acl WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE') OR NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') OR NOT has_function_privilege('service_role', p.oid, 'EXECUTE'))`), '0');
   console.log('CANDIDATE_POSTFLIGHT_OWNER_AND_ACL_PASS');
   // Same idempotency key: pause the first real close after its exclusive month
-  // lock but before its upsert. The second close must wait on that lock, then
-  // replay the newly committed result rather than reporting an already-closed
-  // month. This needs the new post-lock idempotency read.
+  // lock but before its upsert. The current check_idempotency helper serializes
+  // this key before that lock, so this schedule proves helper serialization and
+  // replay, not that the later defense-in-depth lookup is causally necessary.
   sql(`CREATE OR REPLACE FUNCTION public._proof_pause_period() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_advisory_lock(${KEY}); PERFORM pg_advisory_unlock(${KEY}); RETURN NEW; END$$; CREATE TRIGGER proof_pause_period BEFORE INSERT ON public.accounting_periods FOR EACH ROW EXECUTE FUNCTION public._proof_pause_period();`);
   const sameKeyHolder = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(${BARRIER_SECONDS}); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await sameKeyHolder.ready;
   const sameKeyFirst = session(`BEGIN; ${close('same-key-close')} COMMIT; SELECT 'SAME_KEY_FIRST_DONE';`, 'SAME_KEY_FIRST_DONE');
@@ -171,7 +171,7 @@ try {
   assert.equal(scalar(`SELECT count(*) FROM public.accounting_periods WHERE period_start='2025-01-01'`), '1');
   assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='same-key-close' AND operation='close_accounting_period'`), '1');
   sql(`DROP TRIGGER proof_pause_period ON public.accounting_periods; DROP FUNCTION public._proof_pause_period(); DELETE FROM public.accounting_periods WHERE period_start='2025-01-01';`);
-  console.log('CANDIDATE_CLOSE_SAME_KEY_REPLAY_PASS');
+  console.log('CANDIDATE_CLOSE_SAME_KEY_SERIALIZATION_PASS');
   sql(`INSERT INTO public.products(product_name) VALUES ('[PROOF] sibling smoke product ${process.pid}');`);
   for (const sibling of SIBLING_SMOKES) {
     run(['cp', path.join(ROOT, 'scripts', 'smoke', sibling), `${NAME}:/tmp/${sibling}`]);

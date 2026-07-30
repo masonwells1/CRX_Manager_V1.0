@@ -10,6 +10,8 @@ Use this when Mason asks anything like: "what's parked", "anything waiting on me
    ```
    The "Parked migrations awaiting apply" section lists each draft with the worktree it lives in, when it was last touched, and its first comment line (what it says it does). Parked drafts live in `scripts/.staging-migrations/`, as `*draft*.sql` files in `docs/audits/`, and as branch-owned `supabase/migrations/*.sql` only when a standalone leading SQL status line explicitly marks them `PARKED`, `NOT APPLIED`, or `DO NOT APPLY`; ordinary forward migrations are deliberately excluded. Files marked SUPERSEDED are already replaced and are correctly ignored.
 
+   **Fail-closed scan states:** `PARKED STATE UNKNOWN` means the report could not establish the authoritative parked set (for example, the `origin/main` migration-history-to-SQL cross-reference is unreadable or inconsistent). `PARKED-SCAN DEGRADED` means it had to use conservative disk discovery because `origin/main` or its draft tree was unavailable; inherited historical files may be included. In either state, never report a numeric count or a clean zero as authoritative. First run `node scripts/fleet-status.mjs --fetch`; if the state remains, repair the `migration-history.md` ↔ SQL status-header cross-reference before declaring the parked queue clear.
+
 2. Present the parked list in plain English: for each one, what it changes, why it was parked (check the loop ledger / `docs/loops/` mission doc it came from if unclear), and how risky it looks. Lead with a recommendation for which one (if any) to handle first.
 
 3. **If Mason asks to APPLY one — never apply it directly from here.** Route into the existing gated flow, in order:

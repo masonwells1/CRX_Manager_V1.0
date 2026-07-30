@@ -23,7 +23,8 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile,
   lastNonEmptyLine, firstCommentLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
-  fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom,
+  fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom, localCandidateMigrationPathsFromHistory,
+  supersededDraftPathsFrom,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap as parseOriginMainSqlBlobMap,
   originMainForwardBlobPaths,
@@ -184,7 +185,7 @@ function dirtyCount(wtPath) {
 // draft checked out in 42 worktrees sits at the same relative path in each, so it still
 // collapses to one row (with every worktree listed under `where`).
 const parked = new Map(); // repo-relative path → { name, where: [labels], mtime, comment }
-let supersededSkipped = 0;
+const supersededSkipped = new Set();
 let degradedFallbackUnknown = false;
 const wtLines = [];
 
@@ -238,6 +239,7 @@ for (const e of entries) {
   const own = ownDraftPaths(e);
   if (own) {
     for (const rel of own.values()) addParked(rel, path.join(e.path, ...rel.split("/")), label);
+    for (const rel of own.supersededPaths?.values() || []) supersededSkipped.add(normRepoPath(rel));
   } else {
     // Branch point unreadable (no origin/main, or the checkout is mid-delete by another
     // session) — scan the whole checkout rather than risk reporting nothing. That can
@@ -262,9 +264,12 @@ for (const e of entries) {
       const dir = path.join(e.path, ...root.split("/"));
       for (const full of listFilesRecursive(dir)) {
         const name = path.basename(full);
-        if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
         const rel = `${root}/${path.relative(dir, full).replace(/\\/g, "/")}`;
         if (originMainDraftPaths && fallbackPathsAgainstOrigin([rel], originMainDraftPaths, fallbackChangedPaths).paths.length === 0) continue;
+        if (/^superseded/i.test(name) && /\.sql$/i.test(name)) {
+          supersededSkipped.add(normRepoPath(rel));
+          continue;
+        }
         if (!filter(name, full, rel)) continue;
         // Display path keeps its real casing — addParked lower-cases the KEY itself, and
         // normalizing here too would print Mason a lower-cased filename that no longer
@@ -291,7 +296,15 @@ if (hasOriginMain) {
       () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, repoRoot, 5000),
     );
     const mainlinePaths = tree.split("\n");
-    const blobs = originMainSqlBlobMap(originMainForwardBlobPaths(mainlinePaths, parkedPrefilter.paths));
+    for (const rel of supersededDraftPathsFrom(mainlinePaths, () => true).values()) {
+      supersededSkipped.add(normRepoPath(rel));
+    }
+    const historyCandidates = localCandidateMigrationPathsFromHistory(history);
+    const blobs = originMainSqlBlobMap(originMainForwardBlobPaths(
+      mainlinePaths,
+      parkedPrefilter.paths,
+      historyCandidates.state === "known" ? historyCandidates.paths : [],
+    ));
     for (const [key, text] of blobs || []) mainlineBlobCache.set(key, text);
     const discovery = parkedMainlineDiscoveryFrom(mainlinePaths, history, (p) => blobs?.get(normRepoPath(p)) ?? null, parkedPrefilter.paths);
     mainlineParkedState = discovery.state;
@@ -340,8 +353,8 @@ console.log(`Parked migrations awaiting apply: ${parkedStateUnknown ? "PARKED ST
 for (const p of parkedList) {
   console.log(`  • ${p.name} — in ${p.where.join(", ")} — last touched ${fmtDate(p.mtime)}${p.comment ? ` — ${p.comment}` : ""}`);
 }
-if (supersededSkipped > 0) {
-  console.log(`  (${supersededSkipped} SUPERSEDED draft${supersededSkipped === 1 ? "" : "s"} ignored — already replaced, not waiting on anyone)`);
+if (supersededSkipped.size > 0) {
+  console.log(`  (${supersededSkipped.size} SUPERSEDED draft${supersededSkipped.size === 1 ? "" : "s"} ignored — already replaced, not waiting on anyone)`);
 }
 console.log("");
 

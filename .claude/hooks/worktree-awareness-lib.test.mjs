@@ -255,6 +255,17 @@ const mergedWithBrokenCandidate = parkedMainlineDiscoveryFrom(mainlinePaths, mai
 });
 eq(mergedWithBrokenCandidate.state, "unknown", "history candidate without explicit header is PARKED STATE UNKNOWN");
 eq(candidateReads, [PARKED_FORWARD, CANDIDATE_NO_HEADER], "runtime reads only history-candidate SQL blobs, never 76 stale headers");
+const localCandidatePaths = localCandidateMigrationPathsFromHistory(mainlineHistory).paths;
+const exactCandidateBatchPaths = originMainForwardBlobPaths(mainlinePaths, possibleParkedMigrationPaths, localCandidatePaths);
+ok(exactCandidateBatchPaths.includes(CANDIDATE_NO_HEADER), "origin/main batch content read includes a LOCAL CANDIDATE even when the parked-header prefilter misses it");
+const exactCandidateBatch = new Map(exactCandidateBatchPaths.map((p) => [normRepoPath(p), mainlineTexts.get(p)]));
+const exactCandidateFailure = parkedMainlineDiscoveryFrom(
+  mainlinePaths,
+  mainlineHistory,
+  (p) => exactCandidateBatch.get(normRepoPath(p)) ?? null,
+  possibleParkedMigrationPaths,
+);
+eq(exactCandidateFailure.reason, "LOCAL CANDIDATE SQL lacks an explicit parked status header", "a batched readable candidate without its header reports the explicit status failure, not an unreadable blob");
 
 const mergedHistory = mainlineHistory.replace("**LOCAL CANDIDATE — NOT APPLIED.** File: `20260730235959_candidate_without_header.sql`.", "**APPLIED LIVE.** File: `20260730235959_candidate_without_header.sql`.");
 const mergedReads = [];
@@ -472,6 +483,7 @@ eq(
 
 const DRAFT_A = "scripts/.staging-migrations/PARKED-a.sql";
 const DRAFT_B = "docs/audits/hunt/PARKED-b.sql";
+const SUPERSEDED_A = "scripts/.staging-migrations/SUPERSEDED-a.sql";
 
 // Builds a reader over a fake git. `responses` maps a git subcommand to its output lines;
 // a value of null means that git call failed. Records every call for assertions.
@@ -564,6 +576,15 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
     { exists: (_wtPath, rel) => rel !== DRAFT_A }
   );
   eq([...reader(CLEAN_ENTRY).values()], [DRAFT_B], "a draft no longer on disk is not pending work");
+}
+
+// Healthy branch-owned scans must preserve the ignored SUPERSEDED count; this
+// is not only a degraded full-disk fallback diagnostic.
+{
+  const { reader } = fakeReader({ "merge-base": ["base1"], diff: [DRAFT_A, SUPERSEDED_A] });
+  const healthy = reader(CLEAN_ENTRY);
+  eq([...healthy.values()], [DRAFT_A], "healthy branch-owned scan retains only the pending draft");
+  eq([...healthy.supersededPaths.values()], [SUPERSEDED_A], "healthy branch-owned scan reports its ignored SUPERSEDED draft once");
 }
 
 // The caches are the reason the hook stayed fast across ~42 checkouts sharing a few shas.

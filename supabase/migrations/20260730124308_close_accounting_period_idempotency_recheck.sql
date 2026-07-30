@@ -1,11 +1,12 @@
--- Close-accounting-period same-key replay after month serialization.
+-- Close-accounting-period same-key defense in depth after month serialization.
 -- APPLIED LIVE 2026-07-30 as Supabase ledger version 20260730124308
 -- (submitted as 20260730121951_close_accounting_period_idempotency_recheck).
 --
--- Re-emits the live 20260730114102 function byte-for-byte except for the
--- second idempotency lookup immediately after its exclusive month lock. A
--- concurrent same-key close that passed the first lookup before the first
--- caller committed must replay after waiting, not fail "already closed".
+-- The current check_idempotency helper first takes its key-only transaction
+-- advisory lock, so a concurrent same-key close blocks and replays at that
+-- first check. The second lookup after the exclusive month lock is redundant
+-- defense in depth; Sol mutation testing removed it and the current behavioral
+-- serialization proof still passed.
 
 CREATE OR REPLACE FUNCTION public.close_accounting_period(p_period_end date, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text)
  RETURNS jsonb

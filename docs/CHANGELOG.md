@@ -21,8 +21,12 @@ the broader non-vendor-bill writer race remains separate work.
 
 Follow-up migration `20260730124308_close_accounting_period_idempotency_recheck`
 is now live (submitted as `20260730121951`, then B7-renamed to the server
-ledger version). It adds a post-month-lock same-key replay check to
-`close_accounting_period`; live catalog proof confirmed the exact single
+ledger version). It retains a post-month-lock same-key lookup as redundant
+defense in depth; the current `check_idempotency` helper's first key-only
+transaction advisory lock is what serializes same-key callers. Sol mutation
+testing removed the later block and the current behavioral proof still passed,
+so source coverage structurally asserts the recheck while the runtime marker
+reports helper serialization. Live catalog proof confirmed the exact single
 overload, owner/security/search-path/ACL shape and two idempotency reads, while
 the registered fixed-date delivery smoke reached expected `SMOKE_PASS_ROLLBACK`.
 The independently run post-follow-up all-20 invariant sweep is CLEAN: 7 raw/7
