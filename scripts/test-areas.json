@@ -147,7 +147,8 @@
         "src/lib/gauntletSections26Remediation.test.ts",
         "src/lib/moneyInventoryGauntletFixes.test.ts",
         "src/lib/sqlRoleGateNullFailOpen.test.ts",
-        "src/lib/splitVectorMath.test.ts"
+        "src/lib/splitVectorMath.test.ts",
+        "src/__tests__/predicate-product-name-vs-return-policy.test.ts"
       ],
       "sweeps": []
     },
