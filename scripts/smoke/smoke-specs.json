@@ -41,6 +41,18 @@
         "security"
       ]
     },
+    "vendor_bill_period_close_lock": {
+      "chain": "smoke-vendor-bill-period-close-lock.sql",
+      "description": "Rollback-only candidate guard for the vendor-bill/accounting-period close lock: verifies the whole-month constraint and the authoritative helper, close, create, and update lock shapes after the candidate migration is present. The companion Docker proof exercises the two-session schedule before any live migration gate.",
+      "covers": [
+        "_lock_accounting_months",
+        "check_period_open",
+        "close_accounting_period",
+        "create_vendor_bill",
+        "update_vendor_bill"
+      ],
+      "area": ["billing", "security"]
+    },
     "money_lifecycle_idempotency_required": {
       "chain": "smoke-money-lifecycle-idempotency-required.sql",
       "description": "Public money/lifecycle boundary: create_invoice_from_order, create_invoice_for_unbilled_delivery, post_invoice, cancel_order, generate_finance_charges, and batch_post_invoices all reject NULL or all-whitespace idempotency keys before mutation; actor-bearing wrappers reject forgery; batch posting derives a nonblank child key; and a valid finance-charge key creates one completed replay record and replays exactly. Terminal rollback.",
