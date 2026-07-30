@@ -74,13 +74,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             role={t.type === 'error' ? 'alert' : 'status'}
             aria-live={t.type === 'error' ? 'assertive' : 'polite'}
             className={`
-              flex w-full items-center gap-3 rounded-lg border px-4 py-3 shadow-lg md:w-auto md:max-w-sm
+              flex min-w-0 w-full items-center gap-3 rounded-lg border px-4 py-3 shadow-lg md:w-auto md:max-w-sm
               ${bgClasses[t.type]}
               animate-in slide-in-from-right
             `}
           >
             <span aria-hidden="true">{icons[t.type]}</span>
-            <p className="text-sm text-nav-dark font-medium">{t.message}</p>
+            <p className="min-w-0 break-words text-sm text-nav-dark font-medium">{t.message}</p>
             <button
               onClick={() => removeToast(t.id)}
               aria-label="Dismiss notification"

@@ -591,9 +591,71 @@ export default function QuoteBuilder() {
     }
   };
 
-  const fetchQuote = useCallback(async (quoteId: string) => {
-    const [quoteRes, sectionsRes, itemsRes] = await Promise.all([
-      supabase.from('quotes').select('*, customer:customers(*)').eq('id', quoteId).maybeSingle(),
+  const clearQuoteRowVersionWithRefreshWarning = useCallback((action: string) => {
+    quoteRowVersionRef.current = null;
+    toast('warning', `The quote was ${action}, but its save-protection version could not be confirmed. Refresh before editing, revising, or converting it.`);
+  }, [toast]);
+
+  // An RPC response without row_version must never be followed by a blind
+  // adoption of whatever a second writer committed after us. Only the one
+  // version this mutation can produce is safe to install.
+  const refreshQuoteRowVersionAfterMutation = useCallback(async (
+    mutatedQuoteId: string,
+    previousRowVersion: number | null,
+    expectedRowVersion: number | null,
+  ): Promise<boolean> => {
+    const { data, error } = await supabase
+      .from('quotes')
+      .select('*')
+      .eq('id', mutatedQuoteId)
+      .maybeSingle();
+    const nextRowVersion = readRowVersion((data as { row_version?: unknown } | null)?.row_version);
+
+    if (error || !data || previousRowVersion === null || expectedRowVersion === null || nextRowVersion !== expectedRowVersion) {
+      if (error) {
+        Sentry.captureException(error, { tags: { source: 'read', action: 'refresh_quote_row_version_after_mutation' } });
+      }
+      clearQuoteRowVersionWithRefreshWarning('updated');
+      return false;
+    }
+
+    quoteRowVersionRef.current = nextRowVersion;
+    return true;
+  }, [clearQuoteRowVersionWithRefreshWarning]);
+
+  const installAuthoritativeQuoteRowVersion = useCallback((authoritativeRowVersion: unknown, action: string): boolean => {
+    const nextRowVersion = readRowVersion(authoritativeRowVersion);
+    if (nextRowVersion === null) {
+      clearQuoteRowVersionWithRefreshWarning(action);
+      return false;
+    }
+    quoteRowVersionRef.current = nextRowVersion;
+    return true;
+  }, [clearQuoteRowVersionWithRefreshWarning]);
+
+  const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
+    const quoteRes = await supabase
+      .from('quotes')
+      .select('*, customer:customers(*)')
+      .eq('id', quoteId)
+      .maybeSingle();
+
+    if (quoteRes.error || !quoteRes.data) {
+      if (quoteRes.error) {
+        Sentry.captureException(quoteRes.error, { tags: { source: 'read', action: 'load_quote_snapshot' } });
+      }
+      if (!quoteRes.error) {
+        toast('error', 'Quote not found');
+        navigate('/quotes');
+      } else {
+        toast('error', 'Could not load the complete quote. Your current edits were kept; try Reload again or refresh the page.');
+      }
+      setLoading(false);
+      return false;
+    }
+
+    const initialRowVersion = readRowVersion((quoteRes.data as Quote & { row_version?: unknown }).row_version);
+    const [sectionsRes, itemsRes] = await Promise.all([
       supabase.from('quote_sections').select('*').eq('quote_id', quoteId).order('sort_order'),
       supabase
         .from('quote_items')
@@ -602,32 +664,35 @@ export default function QuoteBuilder() {
         .order('sort_order'),
     ]);
 
-    if (!quoteRes.data) {
-      toast('error', 'Quote not found');
-      navigate('/quotes');
-      return;
+    // Build and validate the complete editable snapshot before changing any
+    // form state. A failed Reload must never replace an operator's local work
+    // with an empty quote, sections, or items list.
+    if (sectionsRes.error || itemsRes.error) {
+      if (sectionsRes.error) Sentry.captureException(sectionsRes.error, { tags: { source: 'read', action: 'load_quote_sections_snapshot' } });
+      if (itemsRes.error) Sentry.captureException(itemsRes.error, { tags: { source: 'read', action: 'load_quote_items_snapshot' } });
+      toast('error', 'Could not load the complete quote. Your current edits were kept; try Reload again or refresh the page.');
+      setLoading(false);
+      return false;
+    }
+
+    const { data: finalHeader, error: finalHeaderError } = await supabase
+      .from('quotes')
+      .select('*')
+      .eq('id', quoteId)
+      .maybeSingle();
+    const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
+    const stableVersion = initialRowVersion === finalRowVersion
+      && (initialRowVersion !== null || !requireStableRowVersion);
+    if (finalHeaderError || !finalHeader || !stableVersion) {
+      if (finalHeaderError) Sentry.captureException(finalHeaderError, { tags: { source: 'read', action: 'confirm_quote_snapshot_version' } });
+      toast('error', 'Could not confirm a stable saved quote. Your current edits were kept; try Reload again or refresh the page.');
+      setLoading(false);
+      return false;
     }
 
     const q = quoteRes.data as Quote;
-    const loadedRowVersion = (q as Quote & { row_version?: unknown }).row_version;
-    quoteRowVersionRef.current = readRowVersion(loadedRowVersion);
-    setQuoteId(q.id);
-    setQuoteNumber(q.quote_number);
-    setCustomerId(q.customer_id);
-    setTier(q.tier);
-    setValidDays(q.valid_days);
-    setHeaderNotes(q.header_notes || '');
-    setFooterNotes(q.footer_notes || '');
-    setStatus(q.status);
-    setIsPlanned(q.is_planned || false);
-    setWasPlanned(q.is_planned || false);
-    if (q.commission_split) setCommissionSplit(q.commission_split);
-    loadedCommissionSplitRef.current = q.commission_split ?? null;
-    commissionSplitTouchedRef.current = false;
-    setQuoteCreatedAt(q.created_at || null);
-
-    const dbSections = (sectionsRes.data || []) as QuoteSection[];
-    const dbItems = (itemsRes.data || []) as QuoteItem[];
+    const dbSections = (sectionsRes.data as QuoteSection[]) || [];
+    const dbItems = (itemsRes.data as QuoteItem[]) || [];
 
     const localSections: LocalSection[] = dbSections.map((s) => ({
       _key: nextKey(),
@@ -668,46 +733,77 @@ export default function QuoteBuilder() {
         }),
     }));
 
+    // The complete snapshot is now known-good. Install its related form state
+    // together so React never observes an error-path partial reload.
+    quoteRowVersionRef.current = finalRowVersion;
+    setQuoteId(q.id);
+    setQuoteNumber(q.quote_number);
+    setCustomerId(q.customer_id);
+    setTier(q.tier);
+    setValidDays(q.valid_days);
+    setHeaderNotes(q.header_notes || '');
+    setFooterNotes(q.footer_notes || '');
+    setStatus(q.status);
+    setIsPlanned(q.is_planned || false);
+    setWasPlanned(q.is_planned || false);
+    setCommissionSplit(q.commission_split ?? { splits: [] });
+    loadedCommissionSplitRef.current = q.commission_split ?? null;
+    commissionSplitTouchedRef.current = false;
+    setQuoteCreatedAt(q.created_at || null);
     setSections(localSections.length > 0 ? localSections : [makeEmptySection(1)]);
 
     // U13 (#111): which sections already have a job scheduled from them, so the
     // badge renders and the "Schedule Job" button hides on load (not just after
     // a fresh schedule this session).
-    const { data: sectionJobsData } = await supabase
+    const { data: sectionJobsData, error: sectionJobsError } = await supabase
       .from('jobs')
       .select('id, job_number, status, quote_section_id')
       .eq('quote_id', quoteId)
       .is('deleted_at', null)
       .not('quote_section_id', 'is', null);
-    const sectionJobMap: Record<string, { id: string; job_number: string; status: JobStatus }> = {};
-    ((sectionJobsData || []) as { id: string; job_number: string; status: JobStatus; quote_section_id: string }[])
-      .forEach((j) => { sectionJobMap[j.quote_section_id] = { id: j.id, job_number: j.job_number, status: j.status }; });
-    setSectionJobs(sectionJobMap);
+    if (sectionJobsError) {
+      Sentry.captureException(sectionJobsError, { tags: { source: 'read', action: 'load_quote_section_jobs' } });
+      toast('warning', 'Quote loaded, but scheduled-job badges could not be refreshed.');
+    } else {
+      const sectionJobMap: Record<string, { id: string; job_number: string; status: JobStatus }> = {};
+      ((sectionJobsData || []) as { id: string; job_number: string; status: JobStatus; quote_section_id: string }[])
+        .forEach((j) => { sectionJobMap[j.quote_section_id] = { id: j.id, job_number: j.job_number, status: j.status }; });
+      setSectionJobs(sectionJobMap);
+    }
 
     // Fetch version history for this quote
-    const { data: versionsData } = await supabase
+    const { data: versionsData, error: versionsError } = await supabase
       .from('quote_versions')
       .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
-    setQuoteVersions((versionsData || []) as QuoteVersion[]);
+    if (versionsError) {
+      Sentry.captureException(versionsError, { tags: { source: 'read', action: 'load_quote_versions' } });
+      toast('warning', 'Quote loaded, but version history could not be refreshed.');
+    } else {
+      setQuoteVersions((versionsData || []) as QuoteVersion[]);
+    }
 
     setLoading(false);
     // Allow a tick for state to settle before tracking changes
     setTimeout(() => { initialLoadDone.current = true; }, 0);
+    return true;
   }, [toast, navigate]);
 
   const reloadAfterStaleSave = useCallback(async () => {
     if (!quoteId) return;
     suppressDirtyUntilReloadSettlesRef.current = true;
+    let installedSnapshot = false;
     try {
-      await fetchQuote(quoteId);
-      setIsDirty(false);
-      setStaleSaveOpen(false);
+      installedSnapshot = await fetchQuote(quoteId, true);
+      if (installedSnapshot) {
+        setIsDirty(false);
+        setStaleSaveOpen(false);
+      }
     } finally {
       requestAnimationFrame(() => requestAnimationFrame(() => {
         suppressDirtyUntilReloadSettlesRef.current = false;
-        setIsDirty(false);
+        if (installedSnapshot) setIsDirty(false);
       }));
     }
   }, [fetchQuote, quoteId]);
@@ -1223,7 +1319,12 @@ export default function QuoteBuilder() {
 
       saveQuoteIdem.resetKey();
       const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown }>(data, 'save_quote');
-      quoteRowVersionRef.current = readRowVersion(result.row_version);
+      const savedQuoteId = result.quote_id || quoteId;
+      if (!savedQuoteId) {
+        toast('error', 'Quote save completed without an ID. Refresh before making further changes.');
+        return null;
+      }
+      installAuthoritativeQuoteRowVersion(result.row_version, 'saved');
       // Advance the baseline snapshot ONLY when THIS tab saved its own split edit;
       // an untouched save keeps the old baseline (still shown in the editor) so a
       // later edit fail-closed-conflicts if another tab changed the split.
@@ -1234,7 +1335,6 @@ export default function QuoteBuilder() {
         currentValue: { splits: commissionSplit.splits },
       });
       commissionSplitTouchedRef.current = false;
-      const savedQuoteId = result.quote_id || quoteId;
       if (!quoteId || !isEditing) {
         setQuoteId(savedQuoteId);
       }
@@ -1447,11 +1547,10 @@ export default function QuoteBuilder() {
         .from('quotes')
         .update({ status: newStatus, updated_at: new Date().toISOString() })
         .eq('id', id)
-        .select('row_version');
+        .select('*');
       checkMutationResult(result, `${verb === 'decline' ? 'Decline' : 'Cancel'} quote`);
-      const nextRowVersion = (result.data as Array<{ row_version?: unknown }>)[0]?.row_version;
-      quoteRowVersionRef.current = readRowVersion(nextRowVersion);
       setStatus(newStatus);
+      installAuthoritativeQuoteRowVersion((result.data as Array<{ row_version?: unknown }>)[0]?.row_version, 'updated');
       setIsDirty(false);
       await logActivity({
         event: newStatus === 'declined' ? 'quote_declined' : 'quote_cancelled',
@@ -1481,6 +1580,7 @@ export default function QuoteBuilder() {
     if (!id) return;
     setClosingApplied(true);
     try {
+      const previousRowVersion = quoteRowVersionRef.current;
       const idemKey = closeAppliedIdem.getKey();
       // supabaseUntyped: close_quote_as_applied is a Layer 2 RPC not yet in the
       // generated types (matches get_dispatch_stock_status / job_product_draws usage).
@@ -1492,7 +1592,8 @@ export default function QuoteBuilder() {
       if (error) throw error;
       closeAppliedIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; active_jobs_remaining?: number; warnings?: string[] }>(data, 'close_quote_as_applied');
-      setStatus('closed_by_application');
+      setStatus((result.status as QuoteStatus) || 'closed_by_application');
+      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1);
       setIsDirty(false);
       const warnings = result.warnings || [];
       toast('success', warnings.length > 0
@@ -1521,6 +1622,7 @@ export default function QuoteBuilder() {
     if (!id) return;
     setClosingShort(true);
     try {
+      const previousRowVersion = quoteRowVersionRef.current;
       const idemKey = closeShortIdem.getKey();
       // supabaseUntyped: close_quote_as_short is a new RPC not yet in the
       // generated types (matches close_quote_as_applied usage).
@@ -1532,7 +1634,8 @@ export default function QuoteBuilder() {
       if (error) throw error;
       closeShortIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; warnings?: string[] }>(data, 'close_quote_as_short');
-      setStatus('closed_short');
+      setStatus((result.status as QuoteStatus) || 'closed_short');
+      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1);
       setIsDirty(false);
       const warnings = result.warnings || [];
       toast('success', warnings.length > 0
@@ -1569,6 +1672,7 @@ export default function QuoteBuilder() {
     }
     setReverting(true);
     try {
+      const previousRowVersion = quoteRowVersionRef.current;
       const idemKey = revertStatusIdem.getKey();
       const { data, error } = await supabase.rpc('revert_quote_status', {
         p_quote_id: id,
@@ -1580,6 +1684,7 @@ export default function QuoteBuilder() {
       const result = assertRpcResult<{ success: boolean; old_status: string; new_status: string }>(data, 'revert_quote_status');
       revertStatusIdem.resetKey();
       setStatus((result.new_status as QuoteStatus) || 'sent');
+      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1);
       // Codex round-9 P2: a PLANNED quote's holds are now rebuilt ATOMICALLY inside
       // revert_quote_status (20260613290000) — same transaction as the status flip, so
       // there is no sent-without-holds window. The previous client-side recreate-after-
@@ -1680,6 +1785,7 @@ export default function QuoteBuilder() {
         // If create_quote_version itself fails, freezeErr throws → catch aborts the
         // send, preserving the frozen-record guarantee (round-4 P1).
         const freezeVerKey = createVersionIdem.getKey();
+        const previousRowVersion = quoteRowVersionRef.current;
         const { data: freezeVer, error: freezeErr } = await supabase.rpc('create_quote_version', {
           p_quote_id: quoteId,
           p_performed_by: profile.id,
@@ -1687,8 +1793,13 @@ export default function QuoteBuilder() {
           p_idempotency_key: freezeVerKey,
         });
         if (freezeErr) throw freezeErr;
-        assertRpcResult(freezeVer, 'create_quote_version');
+        const freezeResult = assertRpcResult<{ status?: string }>(freezeVer, 'create_quote_version');
         setStatus('sent');
+        await refreshQuoteRowVersionAfterMutation(
+          quoteId,
+          previousRowVersion,
+          previousRowVersion === null ? null : previousRowVersion + (freezeResult.status === 'duplicate' ? 0 : 1),
+        );
         fetchVersions();
       }
       // Same rich (download) PDF the customer would receive.
@@ -1801,6 +1912,7 @@ export default function QuoteBuilder() {
     try {
       // Create version snapshot via RPC
       const presVerIdemKey = createVersionIdem.getKey();
+      const previousRowVersion = quoteRowVersionRef.current;
       const { data: versionData, error } = await supabase.rpc('create_quote_version', {
         p_quote_id: savedId,
         p_performed_by: profile.id,
@@ -1808,18 +1920,20 @@ export default function QuoteBuilder() {
         p_idempotency_key: presVerIdemKey,
       });
       if (error) throw error;
-      const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
-      // Version creation can update the quote; re-read the stored token rather than guessing.
-      const { data: currentQuote, error: versionReadError } = await supabase
-        .from('quotes').select('row_version').eq('id', savedId).maybeSingle();
-      if (versionReadError) throw versionReadError;
-      const currentRowVersion = (currentQuote as { row_version?: unknown } | null)?.row_version;
-      quoteRowVersionRef.current = readRowVersion(currentRowVersion);
+      const ver = assertRpcResult<{ version_number: number; status?: string }>(versionData, 'create_quote_version');
+      // Version creation can update the quote. Keep the committed sent status
+      // even if the follow-up version read fails; that condition clears the
+      // local token and tells the operator to refresh instead of faking failure.
+      setStatus('sent');
+      await refreshQuoteRowVersionAfterMutation(
+        savedId,
+        previousRowVersion,
+        previousRowVersion === null ? null : previousRowVersion + (ver.status === 'duplicate' ? 0 : 1),
+      );
       createVersionIdem.resetKey();
       setShowPreviewModal(false);
       if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
       setPreviewPdfUrl(null);
-      setStatus('sent');
       setIsDirty(false);
       fetchVersions();
       try {
@@ -2289,11 +2403,10 @@ export default function QuoteBuilder() {
       // already committed it as sent; keep it sent so normal Convert remains.
       const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
       try {
-        const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select('row_version');
+        const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select('*');
         checkMutationResult(revertResult, 'Revert quote status');
-        const revertedRowVersion = (revertResult.data as Array<{ row_version?: unknown }>)[0]?.row_version;
-        quoteRowVersionRef.current = readRowVersion(revertedRowVersion);
         setStatus(revertTo);
+        installAuthoritativeQuoteRowVersion((revertResult.data as Array<{ row_version?: unknown }>)[0]?.row_version, 'updated');
       } catch (revertErr) {
         // The quote is now stuck 'accepted' with no order — surface it instead
         // of failing silently so someone fixes the status by hand.

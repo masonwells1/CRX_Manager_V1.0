@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { buildRowVersionPatch, readRowVersion } from './recordVersionConcurrency';
 
 describe('whole-record row-version client contract', () => {
@@ -12,5 +14,13 @@ describe('whole-record row-version client contract', () => {
     expect(readRowVersion(0)).toBeNull();
     expect(readRowVersion(1.5)).toBeNull();
     expect(readRowVersion('8')).toBeNull();
+  });
+
+  it('keeps quote and customer version reads compatible with pre-migration schemas', () => {
+    for (const page of ['QuoteBuilder.tsx', 'CustomerDetail.tsx']) {
+      const source = readFileSync(resolve(process.cwd(), 'src', 'pages', page), 'utf8');
+      expect(source).not.toContain(".select('row_version')");
+      expect(source).not.toContain('.select("row_version")');
+    }
   });
 });

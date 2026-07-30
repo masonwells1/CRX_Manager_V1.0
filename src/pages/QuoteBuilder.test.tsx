@@ -7,13 +7,14 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, dirtyStates } = vi.hoisted(() => {
+const { mockFrom, mockRpc, mockToast, mockNavigate, dirtyStates, mockGenerateQuotePdf } = vi.hoisted(() => {
   return {
     mockFrom: vi.fn(),
     mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
     mockToast: vi.fn(),
     mockNavigate: vi.fn(),
     dirtyStates: [] as boolean[],
+    mockGenerateQuotePdf: vi.fn(() => ({ output: () => new Blob(['quote']) })),
   };
 });
 
@@ -107,7 +108,7 @@ vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/notificationTriggers', () => ({ notifyLargeOrder: vi.fn(), notifyCreditLimitExceeded: vi.fn() }));
 vi.mock('../lib/metrics', () => ({ trackBusinessEvent: vi.fn() }));
 vi.mock('../lib/dateUtils', () => ({ localDatePlusDays: vi.fn(() => '2026-04-15'), localToday: vi.fn(() => '2026-03-16') }));
-vi.mock('../lib/quotePdf', () => ({ downloadQuotePdf: vi.fn(), generateQuotePdf: vi.fn() }));
+vi.mock('../lib/quotePdf', () => ({ downloadQuotePdf: vi.fn(), generateQuotePdf: mockGenerateQuotePdf }));
 vi.mock('../lib/emailService', () => ({ sendEmail: vi.fn(), pdfToBase64: vi.fn(), buildEmailHtml: vi.fn(() => '<p>test</p>') }));
 vi.mock('../lib/rupCompliance', () => ({
   checkRUPCompliance: vi.fn().mockResolvedValue({ compliant: true, warnings: [], rupProductNames: [] }),
@@ -294,7 +295,7 @@ describe('QuoteBuilder', () => {
     const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
     const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
     let quoteReads = 0;
-    mockFrom.mockImplementation((table: string) => buildChain({ data: table === 'quotes' ? (++quoteReads === 1 ? quote : reloadedQuote) : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [], error: null }));
+    mockFrom.mockImplementation((table: string) => buildChain({ data: table === 'quotes' ? (++quoteReads <= 2 ? quote : reloadedQuote) : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [], error: null }));
     mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote' ? { data: null, error: { message: 'QUOTE_STALE_WRITE' } } : { data: null, error: null }));
     renderQuoteBuilder(quote.id);
     const header = await screen.findByDisplayValue('Original header');
@@ -317,8 +318,143 @@ describe('QuoteBuilder', () => {
     expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
     await waitFor(() => expect(dirtyStates[dirtyStates.length - 1]).toBe(false));
     fireEvent.click(screen.getByText('Save Draft'));
-    await waitFor(() => expect(mockRpc).toHaveBeenLastCalledWith('save_quote', expect.objectContaining({
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
       p_quote_payload: expect.objectContaining({ row_version_expected: 8, header_notes: 'Newer header' }),
     })));
+  });
+
+  it('keeps the conflict dialog and every local quote edit when Reload cannot read sections', async () => {
+    const quote = { id: 'quote-partial', quote_number: 'Q-partial', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
+    const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
+    const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
+    let sectionReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'quote_sections' && ++sectionReads > 1) return buildChain({ data: null, error: { message: 'sections unavailable' } });
+      const data = table === 'quotes' ? quote : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [];
+      return buildChain({ data, error: null });
+    });
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'QUOTE_STALE_WRITE' } });
+    renderQuoteBuilder(quote.id);
+    const header = await screen.findByDisplayValue('Original header');
+    fireEvent.change(header, { target: { value: 'Keep this quote edit' } });
+    fireEvent.click(screen.getByText('Save Draft'));
+    await screen.findByText('Reload Quote');
+    fireEvent.click(screen.getByText('Reload Quote'));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('current edits were kept')));
+    expect(screen.getByText('Reload Quote')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Keep this quote edit')).toBeInTheDocument();
+  });
+
+  it('keeps the conflict dialog and local quote when the header version changes during Reload', async () => {
+    const quote = { id: 'quote-unstable-reload', quote_number: 'Q-unstable', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const changedQuote = { ...quote, header_notes: 'Other writer header', row_version: 8 };
+    const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
+    const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
+    const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      const quoteData = table === 'quotes'
+        ? (++quoteReads <= 2 ? quote : quoteReads === 3 ? changedQuote : { row_version: 9 })
+        : null;
+      return buildChain({ data: table === 'quotes' ? quoteData : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'QUOTE_STALE_WRITE' } });
+    renderQuoteBuilder(quote.id);
+    const header = await screen.findByDisplayValue('Original header');
+    fireEvent.change(header, { target: { value: 'Keep this quote edit' } });
+    fireEvent.click(screen.getByText('Save Draft'));
+    await screen.findByText('Reload Quote');
+    fireEvent.click(screen.getByText('Reload Quote'));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('stable saved quote')));
+    expect(screen.getByText('Reload Quote')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Keep this quote edit')).toBeInTheDocument();
+  });
+
+  it('uses the reread token after reopening before the next revise/save', async () => {
+    const quote = { id: 'quote-reopen', quote_number: 'Q-reopen', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
+    const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
+    const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({ data: table === 'quotes' ? (++quoteReads <= 2 ? quote : { row_version: 8 }) : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [], error: null }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'revert_quote_status'
+      ? { data: { success: true, old_status: 'accepted', new_status: 'sent' }, error: null }
+      : { data: { quote_id: quote.id, row_version: 9 }, error: null }));
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Un-accept' }));
+    fireEvent.change(screen.getByPlaceholderText('Why is this quote being reopened?'), { target: { value: 'Corrected customer request' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Un-accept' })[1]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Revise Quote' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_payload: expect.objectContaining({ row_version_expected: 8 }),
+    })));
+    expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
+  });
+
+  it('fails closed instead of adopting a jumped post-reopen token', async () => {
+    const quote = { id: 'quote-jumped-token', quote_number: 'Q-jumped', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
+    const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
+    const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({ data: table === 'quotes' ? (++quoteReads <= 2 ? quote : { row_version: 9 }) : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [], error: null }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'revert_quote_status'
+      ? { data: { success: true, old_status: 'accepted', new_status: 'sent' }, error: null }
+      : { data: { quote_id: quote.id, row_version: 10 }, error: null }));
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Un-accept' }));
+    fireEvent.change(screen.getByPlaceholderText('Why is this quote being reopened?'), { target: { value: 'Corrected customer request' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Un-accept' })[1]);
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('save-protection version could not be confirmed')));
+    fireEvent.click(await screen.findByRole('button', { name: 'Revise Quote' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_payload: expect.objectContaining({ row_version_expected: null }),
+    })));
+  });
+
+  it('keeps the committed reopened status and gives refresh guidance when its token reread fails', async () => {
+    const quote = { id: 'quote-reopen-read-fail', quote_number: 'Q-reopen-read-fail', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'accepted', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'quotes') {
+        quoteReads += 1;
+        return buildChain(quoteReads <= 2 ? { data: quote, error: null } : { data: null, error: { message: 'row version read failed' } });
+      }
+      return buildChain({ data: table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : [], error: null });
+    });
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'revert_quote_status'
+      ? { data: { success: true, old_status: 'accepted', new_status: 'sent' }, error: null }
+      : { data: null, error: null }));
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Un-accept' }));
+    fireEvent.change(screen.getByPlaceholderText('Why is this quote being reopened?'), { target: { value: 'Corrected customer request' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Un-accept' })[1]);
+    await waitFor(() => expect(screen.getByText('sent')).toBeInTheDocument());
+    expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('was updated'));
+    expect(mockToast).toHaveBeenCalledWith('success', 'Quote reopened to sent.');
+  });
+
+  it('uses the reread token after freezing a quote before the next revise/save', async () => {
+    const quote = { id: 'quote-freeze', quote_number: 'Q-freeze', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: '', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
+    const product = { id: 'product-1', product_name: 'Product', is_active: true, current_cost: 6, tier1_price: 10, unit_size: 'gal', inventory_unit: 'gal' };
+    const section = { id: 'section-1', quote_id: quote.id, section_name: 'Products', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
+    const item = { id: 'item-1', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({ data: table === 'quotes' ? (++quoteReads <= 2 ? quote : { row_version: 9 }) : table === 'quote_sections' ? [section] : table === 'quote_items' ? [item] : table === 'customers' ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }] : table === 'products' ? [product] : [], error: null }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote'
+      ? { data: { quote_id: quote.id, row_version: 8 }, error: null }
+      : { data: { version_number: 1 }, error: null }));
+    vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:quote'), revokeObjectURL: vi.fn() });
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Quote' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark as Presented' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('create_quote_version', expect.anything()));
+    await waitFor(() => expect(screen.getByText('sent')).toBeInTheDocument());
+    fireEvent.click(await screen.findByRole('button', { name: 'Revise Quote' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_payload: expect.objectContaining({ row_version_expected: 9 }),
+    })));
+    expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
   });
 });

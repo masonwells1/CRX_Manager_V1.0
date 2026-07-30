@@ -9,7 +9,8 @@ describe('RecordVersionConflictDialog (used by QuoteBuilder and CustomerDetail)'
     render(<RecordVersionConflictDialog open entityLabel={entityLabel} onKeepEditing={keepEditing} onReload={reload} />);
     const reloadLabel = `Reload ${entityLabel === 'quote' ? 'Quote' : 'Customer'}`;
 
-    expect(screen.getByRole('dialog')).toHaveTextContent('changed in another tab');
+    expect(screen.getByRole('dialog')).toHaveTextContent('needs a refresh before saving');
+    expect(screen.getByRole('dialog')).toHaveTextContent('may have changed in another workflow');
     fireEvent.click(screen.getByText('Keep editing'));
     expect(keepEditing).toHaveBeenCalledOnce();
     expect(reload).not.toHaveBeenCalled();

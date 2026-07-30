@@ -30,7 +30,12 @@ function customerQuery(nextCustomer: () => typeof original | typeof newer): Reco
   const self = (..._args: unknown[]) => chain;
   for (const name of ['eq', 'neq', 'is', 'in', 'order', 'limit', 'single', 'maybeSingle', 'insert', 'update', 'delete']) chain[name] = self;
   chain.select = (columns: unknown) => {
-    result = columns === '*' ? { data: nextCustomer(), error: null } : { data: [{ id: 'customer-1', farm_name: 'Original Farm' }], error: null };
+    if (columns === '*' || columns === 'row_version') {
+      const current = nextCustomer();
+      result = columns === '*' ? { data: current, error: null } : { data: { row_version: current.row_version }, error: null };
+    } else {
+      result = { data: [{ id: 'customer-1', farm_name: 'Original Farm' }], error: null };
+    }
     return chain;
   };
   chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => Promise.resolve(result).then(resolve, reject);
@@ -84,7 +89,7 @@ describe('CustomerDetail stale whole-record save', () => {
       if (table === 'customers') {
         return customerQuery(() => {
           customerReads += 1;
-          return customerReads === 1 ? original : newer;
+          return customerReads <= 2 ? original : newer;
         });
       }
       return query({ data: [], error: null });
@@ -114,5 +119,61 @@ describe('CustomerDetail stale whole-record save', () => {
     await waitFor(() => expect((screen.getByDisplayValue('Newer Farm') as HTMLInputElement).value).toBe('Newer Farm'));
     expect(screen.queryByRole('button', { name: 'Reload Customer' })).not.toBeInTheDocument();
     await waitFor(() => expect(dirtyStates[dirtyStates.length - 1]).toBe(false));
+  });
+
+  it('keeps the conflict dialog and local customer/address state when Reload cannot read addresses', async () => {
+    let customerReads = 0;
+    let addressReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return customerQuery(() => {
+          customerReads += 1;
+          return customerReads <= 2 ? original : newer;
+        });
+      }
+      if (table === 'customer_addresses') {
+        addressReads += 1;
+        return query(addressReads === 1
+          ? { data: [], error: null }
+          : { data: null, error: { message: 'addresses unavailable' } });
+      }
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'CUSTOMER_STALE_WRITE' } });
+
+    renderDetail();
+    const farmName = await screen.findByDisplayValue('Original Farm');
+    fireEvent.change(farmName, { target: { value: 'Keep this customer edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await screen.findByRole('button', { name: 'Reload Customer' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Customer' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('current edits were kept')));
+    expect(screen.getByRole('button', { name: 'Reload Customer' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Keep this customer edit')).toBeInTheDocument();
+  });
+
+  it('keeps the conflict dialog and local customer when the header version changes during Reload', async () => {
+    let customerReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return customerQuery(() => {
+          customerReads += 1;
+          if (customerReads <= 2) return original;
+          if (customerReads === 3) return newer;
+          return { ...newer, row_version: 6 };
+        });
+      }
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'CUSTOMER_STALE_WRITE' } });
+    renderDetail();
+    const farmName = await screen.findByDisplayValue('Original Farm');
+    fireEvent.change(farmName, { target: { value: 'Keep this customer edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await screen.findByRole('button', { name: 'Reload Customer' });
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Customer' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('stable saved customer')));
+    expect(screen.getByRole('button', { name: 'Reload Customer' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Keep this customer edit')).toBeInTheDocument();
   });
 });

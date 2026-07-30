@@ -17,15 +17,16 @@ const product = { id: '33333333-3333-4333-8333-333333333333', product_name: 'Pro
 const section = { id: '44444444-4444-4444-8444-444444444444', quote_id: quote.id, section_name: 'Proof section', sort_order: 0, section_notes: null, section_header_notes: null, needed_by_date: null, field_id: null };
 const item = { id: '55555555-5555-4555-8555-555555555555', quote_id: quote.id, section_id: section.id, product_id: product.id, sort_order: 0, product, calc_mode: 'units_direct', total_units_needed: 2, price_per_unit: 10, price_override: null, current_cost: 6, suggested_rate: null, actual_rate: null, rate_unit: null, oz_per_acre: null, price_per_acre: null, acres: null, unit_size: 'gal', profit: 8, total_price: 20, net_margin: 40, notes: null, price_unit: null };
 
-async function isolate(page: Page) {
+async function isolate(page: Page, options: { failQuoteReload?: boolean } = {}) {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   const failedRequests: string[] = [];
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('requestfailed', (request) => { if (request.failure()?.errorText !== 'net::ERR_ABORTED') failedRequests.push(`${request.method()} ${request.url()}`); });
-  let quoteReads = 0;
-  let customerReads = 0;
+  let quoteReloadRequested = false;
+  let quoteSectionReads = 0;
+  let customerReloadRequested = false;
   await page.routeWebSocket(`${API.replace('http', 'ws')}/realtime/v1/websocket**`, (socket) => socket.onMessage(() => undefined));
   await page.route(`${API}/**`, async (route) => {
     const request = route.request();
@@ -35,22 +36,36 @@ async function isolate(page: Page) {
     if (url.pathname === '/auth/v1/token') return json(session());
     if (url.pathname === '/rest/v1/profiles') return json(profile);
     if (url.pathname === '/rest/v1/quotes') {
-      // QuoteBuilder performs a guarded detail re-read during its initial
-      // hydration; the explicit conflict reload is the third detail request.
-      if (url.searchParams.get('id')?.includes(quote.id)) return json(++quoteReads <= 2 ? quote : { ...quote, header_notes: 'Reloaded quote note', row_version: 8 });
+      if (url.searchParams.get('select')?.includes('customer:customers') || url.searchParams.get('id')?.includes(quote.id)) {
+        // The exact request count is intentionally not part of the proof: React
+        // development hydration can issue more than one stable snapshot. A
+        // stale-save response is the controlled boundary after which Reload sees
+        // the newer complete header and its matching wildcard verification.
+        return json(quoteReloadRequested ? { ...quote, header_notes: 'Reloaded quote note', row_version: 8 } : quote);
+      }
       return json([]);
     }
     if (url.pathname === '/rest/v1/customers') {
-      // QuoteBuilder looks up the customer by id too, but only CustomerDetail
-      // requests the complete row. Count only that endpoint's explicit reload.
-      if (url.searchParams.get('id')?.includes(customer.id) && url.searchParams.get('select') === '*') return json(++customerReads <= 2 ? customer : { ...customer, farm_name: 'Reloaded Farm', row_version: 5 });
+      // CustomerDetail's complete snapshot and its wildcard verification use
+      // the same response until the controlled stale-save boundary.
+      if (url.searchParams.get('id')?.includes(customer.id) && url.searchParams.get('select') === '*') return json(customerReloadRequested ? { ...customer, farm_name: 'Reloaded Farm', row_version: 5 } : customer);
       return json([{ id: customer.id, farm_name: customer.farm_name, assigned_tier: 1, is_active: true }]);
     }
-    if (url.pathname.endsWith('/rpc/save_quote')) return json({ message: 'QUOTE_STALE_WRITE', code: 'P0001' }, 400);
-    if (url.pathname.endsWith('/rpc/save_customer')) return json({ message: 'CUSTOMER_STALE_WRITE', code: 'P0001' }, 400);
+    if (url.pathname.endsWith('/rpc/save_quote')) {
+      quoteReloadRequested = true;
+      return json({ message: 'QUOTE_STALE_WRITE', code: 'P0001' }, 400);
+    }
+    if (url.pathname.endsWith('/rpc/save_customer')) {
+      customerReloadRequested = true;
+      return json({ message: 'CUSTOMER_STALE_WRITE', code: 'P0001' }, 400);
+    }
     if (url.pathname.endsWith('/rpc/get_customer_prep_card')) return json({ farm_name: customer.farm_name, contacts: [], balance_credit: { credit_limit_cents: 0, prepay_balance_cents: 0, open_ar_cents: 0 }, last_invoice: null, last_interaction: null, open_follow_ups_count: 0, open_workflow_counts: { quotes: 0, orders: 0, deliveries: 0 }, top_verified_facts: [], acres_tier: { total_acres: null, corn_acres: null, soybean_acres: null, other_acres: null, assigned_tier: 1 } });
     if (url.pathname.endsWith('/rpc/get_customer_purchase_summary')) return json({ top_products: [] });
-    if (url.pathname === '/rest/v1/quote_sections') return json([section]);
+    if (url.pathname === '/rest/v1/quote_sections') {
+      quoteSectionReads += 1;
+      if (options.failQuoteReload && quoteSectionReads >= 2) return json({ message: 'controlled quote-section read failure' }, 500);
+      return json([section]);
+    }
     if (url.pathname === '/rest/v1/quote_items') return json([item]);
     if (url.pathname === '/rest/v1/products') return json([product]);
     if (url.pathname === '/rest/v1/customer_addresses') return json([]);
@@ -59,6 +74,23 @@ async function isolate(page: Page) {
   });
   return { consoleErrors, pageErrors, failedRequests };
 }
+
+test('network-isolated failed Quote Reload keeps the phone edit and conflict dialog visible', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const observed = await isolate(page, { failQuoteReload: true });
+  await signIn(page);
+  await page.goto(`/quotes/${quote.id}`);
+  const quoteNotes = page.locator('textarea[placeholder="Notes visible at the top of the quote..."]');
+  await expect(quoteNotes).toHaveValue('Original quote note');
+  await quoteNotes.fill('Phone edit survives failed reload');
+  await page.getByRole('button', { name: 'Save Draft' }).click();
+  await page.getByRole('button', { name: 'Reload Quote' }).click();
+  await expect(page.getByRole('button', { name: 'Reload Quote' })).toBeVisible();
+  await expect(quoteNotes).toHaveValue('Phone edit survives failed reload');
+  await expect(page.getByText(/Could not load the complete quote/)).toBeVisible();
+  expect(observed.pageErrors).toEqual([]);
+  expect(observed.failedRequests).toEqual([]);
+});
 
 async function signIn(page: Page) {
   await page.goto('/');

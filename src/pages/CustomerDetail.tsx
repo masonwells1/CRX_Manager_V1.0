@@ -149,40 +149,92 @@ export default function CustomerDetail() {
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
-  const fetchCustomer = useCallback(async () => {
-    const { data, error } = await supabase.from('customers').select('*').eq('id', id!).maybeSingle();
-    if (error) {
-      toast('error', 'Failed to load customer');
-      setLoading(false);
-      return;
-    }
-    if (data) {
-      setCustomer(data as Customer);
-      const loadedRowVersion = (data as Customer & { row_version?: unknown }).row_version;
-      customerRowVersionRef.current = readRowVersion(loadedRowVersion);
-      loadedDefaultSplitRef.current = (data as Customer).default_commission_split ?? null;
-      defaultSplitTouchedRef.current = false;
-      // DB type is string[]; the CHECK constraint guarantees values are CropValue.
-      setCrops((data.crops ?? []) as CropValue[]);
-      // Fetch parent customer name if set
-      if (data.parent_customer_id) {
-        const { data: parent, error: parentError } = await supabase
-          .from('customers')
-          .select('farm_name')
-          .eq('id', data.parent_customer_id)
-          .maybeSingle();
-        if (parentError) toast('error', 'Failed to load parent customer');
-        if (parent) setParentName(parent.farm_name);
-      }
-    }
-    setLoading(false);
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [id, toast]);
-
   const fetchAddresses = useCallback(async () => {
     const { data, error } = await supabase.from('customer_addresses').select('*').eq('customer_id', id!).order('created_at');
-    if (error) toast('error', 'Failed to load addresses');
-    setAddresses(data || []);
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'read', action: 'load_customer_addresses' } });
+      toast('error', 'Failed to load addresses');
+      return false;
+    }
+    setAddresses((data || []) as Partial<CustomerAddress>[]);
+    return true;
+  }, [id, toast]);
+
+  const fetchCustomerSnapshot = useCallback(async (requireStableRowVersion = false): Promise<boolean> => {
+    if (!id) return false;
+    const customerRes = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
+
+    // Do not install either half until both required reads succeeded. This is
+    // especially important after a stale-save conflict: the user must retain
+    // every local field/address edit if Reload cannot build a complete snapshot.
+    if (customerRes.error || !customerRes.data) {
+      if (customerRes.error) Sentry.captureException(customerRes.error, { tags: { source: 'read', action: 'load_customer_snapshot' } });
+      toast('error', 'Could not load the complete customer record. Your current edits were kept; try Reload again or refresh the page.');
+      setLoading(false);
+      return false;
+    }
+
+    const loadedCustomer = customerRes.data as Customer;
+    const initialRowVersion = readRowVersion((loadedCustomer as Customer & { row_version?: unknown }).row_version);
+    const addressesRes = await supabase
+      .from('customer_addresses')
+      .select('*')
+      .eq('customer_id', id)
+      .order('created_at');
+    if (addressesRes.error) {
+      Sentry.captureException(addressesRes.error, { tags: { source: 'read', action: 'load_customer_addresses_snapshot' } });
+      toast('error', 'Could not load the complete customer record. Your current edits were kept; try Reload again or refresh the page.');
+      setLoading(false);
+      return false;
+    }
+
+    const { data: finalHeader, error: finalHeaderError } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
+    const stableVersion = initialRowVersion === finalRowVersion
+      && (initialRowVersion !== null || !requireStableRowVersion);
+    if (finalHeaderError || !finalHeader || !stableVersion) {
+      if (finalHeaderError) Sentry.captureException(finalHeaderError, { tags: { source: 'read', action: 'confirm_customer_snapshot_version' } });
+      toast('error', 'Could not confirm a stable saved customer. Your current edits were kept; try Reload again or refresh the page.');
+      setLoading(false);
+      return false;
+    }
+
+    const loadedAddresses = (addressesRes.data || []) as Partial<CustomerAddress>[];
+    // Install the complete, validated snapshot atomically from React's event
+    // batch. There is no intermediate empty-address or partially-updated form.
+    setCustomer(loadedCustomer);
+    customerRowVersionRef.current = finalRowVersion;
+    loadedDefaultSplitRef.current = loadedCustomer.default_commission_split ?? null;
+    defaultSplitTouchedRef.current = false;
+    setCrops((loadedCustomer.crops ?? []) as CropValue[]);
+    setAddresses(loadedAddresses);
+    setParentName('');
+    setLoading(false);
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
+
+    // Parent display text is auxiliary to the editable customer/address
+    // snapshot, so a parent lookup failure cannot discard this complete reload.
+    if (loadedCustomer.parent_customer_id) {
+      void supabase
+        .from('customers')
+        .select('farm_name')
+        .eq('id', loadedCustomer.parent_customer_id)
+        .maybeSingle()
+        .then(({ data: parent, error: parentError }) => {
+          if (parentError) {
+            Sentry.captureException(parentError, { tags: { source: 'read', action: 'load_parent_customer_name' } });
+            toast('warning', 'Customer loaded, but the parent customer name could not be refreshed.');
+          } else if (parent) {
+            setParentName(parent.farm_name);
+          }
+        });
+    }
+
+    return true;
   }, [id, toast]);
 
   useEffect(() => {
@@ -193,17 +245,20 @@ export default function CustomerDetail() {
 
   const reloadAfterStaleSave = useCallback(async () => {
     suppressDirtyUntilReloadSettlesRef.current = true;
+    let installedSnapshot = false;
     try {
-      await Promise.all([fetchCustomer(), fetchAddresses()]);
-      setIsDirty(false);
-      setStaleSaveOpen(false);
+      installedSnapshot = await fetchCustomerSnapshot(true);
+      if (installedSnapshot) {
+        setIsDirty(false);
+        setStaleSaveOpen(false);
+      }
     } finally {
       requestAnimationFrame(() => requestAnimationFrame(() => {
         suppressDirtyUntilReloadSettlesRef.current = false;
-        setIsDirty(false);
+        if (installedSnapshot) setIsDirty(false);
       }));
     }
-  }, [fetchAddresses, fetchCustomer]);
+  }, [fetchCustomerSnapshot]);
 
   useEffect(() => {
     // Fetch all customers for parent selector
@@ -211,17 +266,16 @@ export default function CustomerDetail() {
       .then(({ data, error }) => {
         if (error) { toast('error', 'Failed to load customer list'); return; }
         setAllCustomers((data || []) as { id: string; farm_name: string }[]);
-      });
+    });
 
     if (!isNew && id) {
-      fetchCustomer();
-      fetchAddresses();
+      void fetchCustomerSnapshot();
     } else {
       // New customer — mark ready immediately
       setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, isNew, fetchCustomer, fetchAddresses]);
+  }, [id, isNew, fetchCustomerSnapshot]);
 
   const fetchTabData = useCallback(async (selectedTab: string) => {
     setTabLoading(true);
@@ -602,7 +656,7 @@ export default function CustomerDetail() {
         .from('customers')
         .update({ crops: nextCrops })
         .eq('id', id)
-        .select('row_version');
+        .select('*');
       checkMutationResult(result, 'update customer crops');
       const nextRowVersion = (result.data as Array<{ row_version?: unknown }>)[0]?.row_version;
       customerRowVersionRef.current = readRowVersion(nextRowVersion);

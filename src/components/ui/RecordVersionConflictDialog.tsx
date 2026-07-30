@@ -15,8 +15,8 @@ export default function RecordVersionConflictDialog({ open, entityLabel, onKeepE
       open={open}
       onClose={onKeepEditing}
       onConfirm={() => { void onReload(); }}
-      title={`${label} changed in another tab`}
-      message={`This ${entityLabel} was changed after you opened it. Reload to review the current saved version before trying again. Your unsaved edits are still available until you choose Reload.`}
+      title={`${label} needs a refresh before saving`}
+      message={`This ${entityLabel} may have changed in another workflow, or its current version could not be confirmed. Reload to review the saved version before trying again. Your unsaved edits stay available until you choose Reload.`}
       confirmLabel={`Reload ${label}`}
       cancelLabel="Keep editing"
       variant="warning"
