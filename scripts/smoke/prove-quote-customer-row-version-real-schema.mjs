@@ -18,6 +18,7 @@ const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const candidate = path.join(ROOT, 'supabase', 'migrations', '20260730031925_quote_customer_row_version_guard.sql');
 const smokeFiles = [
   path.join(ROOT, 'scripts', 'smoke', 'smoke-save-quote-customer-row-version.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-save-quote-drawn-guard.sql'),
   path.join(ROOT, 'scripts', 'smoke', 'smoke-planned-holds-drawn-sync.sql'),
 ];
 const quoteLifecycleAnchors = [
@@ -155,7 +156,7 @@ try {
   assert.notEqual(missingDefault.status, 0, 'candidate migration accepted a pre-existing row_version without DEFAULT 1');
   assert.match(missingDefaultOutput, /ROW_VERSION_SCHEMA_DRIFT/, `missing-default drift did not fail with ROW_VERSION_SCHEMA_DRIFT:\n${missingDefaultOutput}`);
   assert.match(missingDefaultOutput, /quotes\.row_version/, `missing-default drift did not identify quotes.row_version:\n${missingDefaultOutput}`);
-  console.log('ROW_VERSION_REAL_SCHEMA_RESTORE_PASS baseline=20260727174805 post_baseline_replay=through_candidate smoke_quote_customer=SMOKE_PASS_ROLLBACK quote_lifecycle=draft-sent-sent stale_before_lifecycle=QUOTE_STALE_WRITE smoke_planned_holds=SMOKE_PASS_ROLLBACK');
+  console.log('ROW_VERSION_REAL_SCHEMA_RESTORE_PASS baseline=20260727174805 post_baseline_replay=through_candidate smoke_quote_customer=SMOKE_PASS_ROLLBACK quote_lifecycle=draft-sent-sent stale_before_lifecycle=QUOTE_STALE_WRITE smoke_drawn_guard=SMOKE_PASS_ROLLBACK smoke_planned_holds=SMOKE_PASS_ROLLBACK');
 } catch (error) {
   console.error(`ROW_VERSION_REAL_SCHEMA_RESTORE_FAIL ${error.stack ?? error.message}`);
   process.exitCode = 1;

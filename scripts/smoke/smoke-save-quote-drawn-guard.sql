@@ -41,6 +41,8 @@ DECLARE
   v_product_id uuid;
   v_quote_id uuid;
   v_quote_b_id uuid;
+  v_quote_version bigint;
+  v_quote_b_version bigint;
   v_res jsonb;
   v_err text;
   v_booked numeric;
@@ -63,6 +65,7 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- --------------------------------------------------------------------
   -- 1. Synthetic fixtures (txn-local; rolled back at the end)
@@ -71,8 +74,11 @@ BEGIN
   VALUES ('[SMOKE] Drawn Guard Farm ' || v_suffix)
   RETURNING id INTO v_customer_id;
 
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size)
-  VALUES ('[SMOKE] Drawn Guard Product ' || v_suffix, 5, 10, 'gal')
+  -- Product creation is pricing-free after the governed-pricing cutover. This
+  -- smoke supplies an explicit quote-line override, so no product pricing
+  -- mutation is needed to exercise the drawn-booking guard.
+  INSERT INTO products (product_name, unit_size)
+  VALUES ('[SMOKE] Drawn Guard Product ' || v_suffix, 'gal')
   RETURNING id INTO v_product_id;
 
   v_item_base := jsonb_build_object(
@@ -108,9 +114,14 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: create draft returned %', v_res;
   END IF;
   v_quote_id := (v_res->>'quote_id')::uuid;
+  v_quote_version := (v_res->>'row_version')::bigint;
 
-  v_payload := v_payload || jsonb_build_object('status', 'sent');
-  PERFORM save_quote(v_quote_id, v_payload, v_sections, v_admin, NULL);
+  v_payload := v_payload || jsonb_build_object(
+    'status', 'sent',
+    'row_version_expected', v_quote_version
+  );
+  v_res := save_quote(v_quote_id, v_payload, v_sections, v_admin, NULL);
+  v_quote_version := (v_res->>'row_version')::bigint;
 
   SELECT status INTO v_status FROM quotes WHERE id = v_quote_id;
   SELECT COALESCE(SUM(total_units_needed), 0) INTO v_booked
@@ -128,6 +139,10 @@ BEGIN
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'SMOKE_FAIL: draw 200/500 reported fully_drawn: %', v_res;
   END IF;
+  -- draw_down_quote updates the quote once even for a partial draw. Before the
+  -- row-version migration this remains NULL; after it, advance the exact token.
+  v_quote_version := v_quote_version + 1;
+  v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_version);
   SELECT quantity_drawn INTO v_drawn FROM quote_product_draws
   WHERE quote_id = v_quote_id AND product_id = v_product_id;
   SELECT status INTO v_status FROM quotes WHERE id = v_quote_id;
@@ -188,7 +203,8 @@ BEGIN
     'section_name', 'Smoke Section', 'sort_order', 0,
     'items', jsonb_build_array(
       jsonb_set(v_item_base, '{total_units_needed}', to_jsonb(400)))));
-  PERFORM save_quote(v_quote_id, v_payload, v_sections, v_admin, NULL);
+  v_res := save_quote(v_quote_id, v_payload, v_sections, v_admin, NULL);
+  v_quote_version := (v_res->>'row_version')::bigint;
 
   SELECT COALESCE(SUM(total_units_needed), 0) INTO v_booked
   FROM quote_items WHERE quote_id = v_quote_id AND product_id = v_product_id;
@@ -231,15 +247,22 @@ BEGIN
       jsonb_set(v_item_base, '{total_units_needed}', to_jsonb(300)))));
   v_res := save_quote(NULL, v_payload, v_sections, v_admin, NULL);
   v_quote_b_id := (v_res->>'quote_id')::uuid;
-  v_payload := v_payload || jsonb_build_object('status', 'sent');
-  PERFORM save_quote(v_quote_b_id, v_payload, v_sections, v_admin, NULL);
+  v_quote_b_version := (v_res->>'row_version')::bigint;
+  v_payload := v_payload || jsonb_build_object(
+    'status', 'sent',
+    'row_version_expected', v_quote_b_version
+  );
+  v_res := save_quote(v_quote_b_id, v_payload, v_sections, v_admin, NULL);
+  v_quote_b_version := (v_res->>'row_version')::bigint;
 
   -- reduce 300 -> 50: allowed (no draws)
   v_sections := jsonb_build_array(jsonb_build_object(
     'section_name', 'Smoke Section', 'sort_order', 0,
     'items', jsonb_build_array(
       jsonb_set(v_item_base, '{total_units_needed}', to_jsonb(50)))));
-  PERFORM save_quote(v_quote_b_id, v_payload, v_sections, v_admin, NULL);
+  v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_b_version);
+  v_res := save_quote(v_quote_b_id, v_payload, v_sections, v_admin, NULL);
+  v_quote_b_version := (v_res->>'row_version')::bigint;
   SELECT COALESCE(SUM(total_units_needed), 0) INTO v_booked
   FROM quote_items WHERE quote_id = v_quote_b_id AND product_id = v_product_id;
   IF v_booked <> 50 THEN
@@ -247,7 +270,9 @@ BEGIN
   END IF;
 
   -- remove entirely: also allowed (no draws)
-  PERFORM save_quote(v_quote_b_id, v_payload, '[]'::jsonb, v_admin, NULL);
+  v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_b_version);
+  v_res := save_quote(v_quote_b_id, v_payload, '[]'::jsonb, v_admin, NULL);
+  v_quote_b_version := (v_res->>'row_version')::bigint;
   SELECT COALESCE(SUM(total_units_needed), 0) INTO v_booked
   FROM quote_items WHERE quote_id = v_quote_b_id;
   IF v_booked <> 0 THEN

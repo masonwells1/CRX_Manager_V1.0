@@ -21,7 +21,10 @@ default/search-path formatting, rejects a missing `DEFAULT 1`, and preserves the
 exact security requirements.
 Quote totals reuse the single authoritative aggregate, and the disposable race,
 source-shape, and phone-browser proofs were made deterministic and registered as
-package scripts so future runs can discover them. Verification passed
+package scripts so future runs can discover them. The registered drawn-booking
+guard smoke now carries exact Quote tokens and runs inside the disposable
+post-migration proof, so row-version enforcement cannot mask its own
+`BOOKING_OVERDRAWN` assertions. Verification passed
 4,042 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
 SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains
