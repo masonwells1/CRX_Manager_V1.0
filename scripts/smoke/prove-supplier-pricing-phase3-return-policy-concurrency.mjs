@@ -243,17 +243,44 @@ BEGIN
     RAISE EXCEPTION 'SECTION9_TRIGGER_DEFINITION_DRIFTED: %', v_norm;
   END IF;
 
+  -- Identity here means more than the argument list. These three are SECURITY
+  -- DEFINER money routines, so the properties that decide whether they are safe
+  -- are: who may EXECUTE them, what they return, and what language body runs
+  -- with the definer's rights. A baseline carrying an AP routine re-granted to
+  -- anon -- the exact shape of incidents B7/B8/B9 -- satisfied every earlier
+  -- assertion here, because prosecdef and proconfig are unchanged by a GRANT.
+  -- Grantees are compared as a set with the owner excluded, so this does not
+  -- break if the restored dump is owned by postgres rather than supabase_admin;
+  -- PUBLIC is rendered by name so a re-grant to it fails loudly rather than
+  -- disappearing into an oid. A NULL proacl means "default privileges apply",
+  -- which for these routines is itself the failure, so it is rendered as
+  -- <default> and cannot match.
+  --
+  -- prosrc is deliberately NOT pinned. A body hash would be the strongest
+  -- assertion available, but these routines are under active change (the
+  -- in-flight vendor-bill period-close work rewrites two of the three), so a
+  -- hash would fail this proof on every legitimate AP edit and train whoever
+  -- hits it to update the literal without reading the diff. The properties
+  -- asserted below are the ones a body swap cannot fake while staying callable.
   SELECT string_agg(sig,';' ORDER BY sig) INTO v_actual FROM (
     SELECT p.proname||'('||pg_get_function_identity_arguments(p.oid)||') secdef='||p.prosecdef::text
-           ||' config='||coalesce(array_to_string(p.proconfig,','),'<none>') AS sig
-      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+           ||' config='||coalesce(array_to_string(p.proconfig,','),'<none>')
+           ||' returns='||pg_get_function_result(p.oid)
+           ||' lang='||l.lanname
+           ||' execgrantees='||coalesce((
+                SELECT string_agg(DISTINCT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,','
+                                  ORDER BY CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END)
+                  FROM aclexplode(p.proacl) a
+                 WHERE a.privilege_type='EXECUTE' AND a.grantee<>p.proowner
+              ),CASE WHEN p.proacl IS NULL THEN '<default>' ELSE '<none>' END) AS sig
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
      WHERE n.nspname='public'
        AND p.proname IN ('create_vendor_bill','get_ap_aging','update_vendor_bill')
   ) s;
   v_expected :=
-    'create_vendor_bill(p_vendor_id uuid, p_purchase_order_id uuid, p_bill_number text, p_bill_date date, p_due_date date, p_payment_terms text, p_subtotal_cents bigint, p_adjustment_cents bigint, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp'
-    ||';get_ap_aging(p_as_of_date date) secdef=true config=search_path=public, pg_temp'
-    ||';update_vendor_bill(p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint, p_bill_date date, p_due_date date, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp';
+    'create_vendor_bill(p_vendor_id uuid, p_purchase_order_id uuid, p_bill_number text, p_bill_date date, p_due_date date, p_payment_terms text, p_subtotal_cents bigint, p_adjustment_cents bigint, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=uuid lang=plpgsql execgrantees=authenticated,service_role'
+    ||';get_ap_aging(p_as_of_date date) secdef=true config=search_path=public, pg_temp returns=TABLE(vendor_id uuid, vendor_name text, current_amount bigint, days_31_60 bigint, days_61_90 bigint, over_90 bigint, total_outstanding bigint, bill_count integer) lang=plpgsql execgrantees=authenticated,service_role'
+    ||';update_vendor_bill(p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint, p_bill_date date, p_due_date date, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp returns=jsonb lang=plpgsql execgrantees=authenticated,service_role';
   IF coalesce(v_actual,'<none>') <> v_expected THEN
     RAISE EXCEPTION 'SECTION9_AP_ROUTINE_IDENTITY_DRIFTED: %', coalesce(v_actual,'<none>');
   END IF;
@@ -351,15 +378,33 @@ $rls$;`);
   // and the empty restored table made every earlier read-based probe blind. This
   // runs the genuine article: the image's own auth.uid(), the dump's own
   // is_active_profile(), and the restored policy, with nothing stubbed.
-  // Everything this block adds -- the a003 deactivated profile, which nothing
-  // else here provides, and one product_families row -- is rolled back, so the
-  // rest of this proof continues against exactly the schema it did before. It
-  // reuses the already-seeded a002 rather than seeding its own active profile,
-  // and a001/a002 deliberately stay outside this transaction: the actor-binding
-  // fixtures below depend on both surviving it. Do not move that seed in here.
+  // Everything this block adds -- the a003 deactivated profile and the a004
+  // driver, which nothing else here provides, and one product_families row --
+  // is rolled back, so the rest of this proof continues against exactly the
+  // schema it did before. It reuses the already-seeded a002 rather than seeding
+  // its own active profile, and a001/a002 deliberately stay outside this
+  // transaction: the actor-binding fixtures below depend on both surviving it.
+  // Do not move that seed in here.
+  //
+  // The active and deactivated controls are both sales_rep, which makes them a
+  // clean one-variable test of is_active -- and blind to the drift this gate is
+  // most likely to suffer. is_active_profile() is documented as the
+  // "role-agnostic active-account gate", but its own migration says it was
+  // "modelled exactly on the existing is_admin() / is_sales_rep() / is_driver()
+  // / is_applicator() helpers", all of which DO test role. If a future edit
+  // copies one of those bodies too faithfully and the predicate starts
+  // requiring a role, both controls above still behave exactly as asserted
+  // (active sales_rep reads, inactive sales_rep does not) while every admin,
+  // driver, applicator and entity_recipient silently loses read access to
+  // product_families. The catalog assertion cannot see it either: the policy
+  // text still reads is_active_profile(); the drift is inside the function
+  // body. A third control with a different role is the only witness. driver is
+  // used deliberately -- it is the role least likely to be admitted by an
+  // incidental role test, so a predicate narrowed to admin, to sales_rep, or to
+  // both fails here.
   const rlsBehavior=sql(`BEGIN;
-INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a003') ON CONFLICT DO NOTHING;
-INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a003','phase3-deactivated@example.invalid','sales_rep',false) ON CONFLICT (id) DO UPDATE SET is_active=false;
+INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a003'),('00000000-0000-0000-0000-00000000a004') ON CONFLICT DO NOTHING;
+INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a003','phase3-deactivated@example.invalid','sales_rep',false),('00000000-0000-0000-0000-00000000a004','phase3-driver@example.invalid','driver',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=excluded.is_active;
 INSERT INTO public.product_families(name) VALUES ('[PROOF] Phase3 RLS gate');
 SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a002';
 SET LOCAL ROLE authenticated;
@@ -369,9 +414,14 @@ SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a003';
 SET LOCAL ROLE authenticated;
 SELECT 'PHASE3_RLS_DEACTIVATED_ROWS=' || count(*)::text FROM public.product_families;
 RESET ROLE;
+SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a004';
+SET LOCAL ROLE authenticated;
+SELECT 'PHASE3_RLS_OTHER_ROLE_ROWS=' || count(*)::text FROM public.product_families;
+RESET ROLE;
 ROLLBACK;`).stdout;
   assert.match(rlsBehavior,/PHASE3_RLS_ACTIVE_ROWS=1$/m,`active profile could not read the seeded product_families row: ${rlsBehavior}`);
   assert.match(rlsBehavior,/PHASE3_RLS_DEACTIVATED_ROWS=0$/m,`deactivated profile could still read product_families -- the policy predicate does not gate: ${rlsBehavior}`);
+  assert.match(rlsBehavior,/PHASE3_RLS_OTHER_ROLE_ROWS=1$/m,`an active driver could not read product_families -- the gate is no longer role-agnostic, so non-sales_rep staff have silently lost access: ${rlsBehavior}`);
   assert.equal(scalar(`SELECT count(*)::text FROM public.product_families;`),'0','the rolled-back RLS behavior fixture leaked a product_families row');
   console.log('PHASE3_PRODUCT_FAMILIES_ACTIVE_PROFILE_GATE_PASS');
   const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
