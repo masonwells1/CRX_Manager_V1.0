@@ -255,6 +255,48 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round seventeen: the destination is not where the data lands
+
+Two highs and a medium, each confirmed against the real code before it was touched.
+
+**One git option makes "where is this push going?" the wrong question.** `--receive-pack=<prog>` (and
+its `--exec` alias) names the program that *receives* the push on the far side, and that program
+decides what happens to the objects once they arrive — it can ignore the destination written on the
+command entirely. The argv walk already skipped their values correctly, so this was never a parsing
+gap a better parser would close: every classifier in the guard reads the nominal destination, and the
+nominal destination stops being where the code lands. A read-only parser probe confirmed the shape —
+no unknown options, target branch `main`, and all three guarded-repository classifiers returning
+false — so the review gate would happily inspect a harmless scratch repo while the objects went to
+production. Both spellings are now **denied outright, before any destination question is asked**.
+There is no legitimate use for either here: GitHub runs its own receive-pack. Abbreviations like
+`--receive-p` still fail closed as unknown options.
+
+**The privacy question was not bound to GitHub.com.** The backup script asked
+`gh repo view masonwells1/CRX_Backups` with the inherited environment, and `GH_HOST` decides which
+host `gh` answers for. A same-named repository on an enterprise host could therefore answer
+`PRIVATE` and authorize staging toward a *public* github.com repo of the same name. Demonstrated end
+to end: with `GH_HOST=ghe.example.com` the old shape tried to reach that host, while the new one —
+the full `https://github.com/masonwells1/CRX_Backups` URL, with `GH_HOST`/`GITHUB_HOST` and the two
+enterprise-token variables stripped from the child environment — still answered for github.com and
+reported PRIVATE. The answer is also checked against the URL that was asked about, so a reply naming
+any other repository is refused rather than trusted. The probe is split into `ghProbeCommand()` and
+`ghProbeAnswer()` specifically so the tests can assert the **actual spawned arguments and
+environment**; the suite previously swapped the whole probe out, leaving the argument list with zero
+coverage.
+
+**A manifest entry was treated as a name but used as a path.** Verification only checked that each
+declared name was a string, then joined and read it normally — so a `../` entry or a symlink could
+hash bytes from outside the snapshot and report success, and the runbook's final "verified every
+file" line would be true of the wrong files. Manifest names must now be plain `.md` basenames,
+unique, and every file must be a **regular** file by `lstat` — links are named and refused, not
+followed. Staging refuses such a name up front too, so the script never writes a manifest whose own
+verification it would later have to reject. Proven on the real 190-note snapshot: it verifies clean,
+and the same snapshot with one `../outside-note.md` entry injected fails naming the entry and why.
+That staging check was unreachable through the Windows filesystem on the first attempt — Windows
+cannot create a file called `a:b.md` — so it survived mutation as decoration until the directory
+listing got a test seam, matching the one that already exists for `lstat` for exactly this reason.
+All eight mutants across the three fixes turn the suites red.
+
 ### Round sixteen: a hostname is not an identity, and one token spelling is not all of them
 
 Two highs, both confirmed by probe before either was touched.

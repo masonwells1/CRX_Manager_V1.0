@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -15,13 +16,19 @@ import {
   INDEX_FILE,
   MANIFEST,
   SNAPSHOT_KIND,
+  __setDirRead,
   __setLinkStat,
   __setVisibilityProbe,
+  ghProbeAnswer,
+  ghProbeCommand,
   redactUrl,
   scanForSecrets,
   stage,
+  unsafeSnapshotName,
   verify,
 } from "./backup-claude-memory.mjs";
+
+const sha256Hex = (text) => createHash("sha256").update(Buffer.from(text)).digest("hex");
 
 // Staging into the off-site clone asks GitHub whether that repo is still private.
 // The suite answers that question itself: a unit test must not depend on the
@@ -654,6 +661,162 @@ try {
       !readdirSync(out).includes("b.md"),
       "but the linked note is not copied — its target never enters the backup",
     );
+  }
+
+  // ── round 17: a manifest name is a file name, never a path ────────────────
+  // Verification used to accept any string as a name and `path.join` it. An entry
+  // that climbed out of the directory hashed a file elsewhere and reported the
+  // snapshot OK — verified bytes git would never store as that note.
+  {
+    const good = makeSource("traversal-source", {
+      [INDEX_FILE]: "# Memory Index\n- [a](a.md) — hook\n",
+      "a.md": "---\nname: a\n---\n\nreal note\n",
+    });
+    const dest = fresh("traversal-staged");
+    eq(quiet(() => stage(dest, good)), 0, "a normal snapshot stages");
+    const clean = readManifest(dest);
+    eq(quiet(() => verify(dest)), 0, "and verifies");
+
+    // The bytes an escaping entry would hash: identical content, parked outside.
+    const outsideDir = fresh("traversal-outside");
+    const decoyBody = "---\nname: decoy\n---\n\nnot the note\n";
+    writeFileSync(path.join(outsideDir, "decoy.md"), decoyBody);
+
+    for (const [label, name] of [
+      ["parent traversal", "../traversal-outside/decoy.md"],
+      ["windows traversal", "..\\traversal-outside\\decoy.md"],
+      ["absolute path", path.join(outsideDir, "decoy.md")],
+      ["bare dot-dot", ".."],
+      ["the manifest itself", MANIFEST],
+      ["a non-note", "notes.tar"],
+      ["an empty name", ""],
+    ]) {
+      const entry = { name, bytes: Buffer.byteLength(decoyBody), sha256: sha256Hex(decoyBody) };
+      writeManifest(dest, {
+        ...clean,
+        files: [...clean.files, entry],
+        file_count: clean.files.length + 1,
+        total_bytes: clean.total_bytes + entry.bytes,
+      });
+      const run = captured(() => verify(dest));
+      eq(run.value, 1, `verify refuses a manifest entry that ${label}`);
+      ok(/not plain snapshot file names/.test(run.said), `and says why (${label})`);
+    }
+
+    // Same file twice: counts and totals can be made to agree while a real note
+    // goes unhashed.
+    const first = clean.files[0];
+    writeManifest(dest, {
+      ...clean,
+      files: [...clean.files, { ...first }],
+      file_count: clean.files.length + 1,
+      total_bytes: clean.total_bytes + first.bytes,
+    });
+    eq(quiet(() => verify(dest)), 1, "verify refuses a manifest that lists the same file twice");
+
+    // And a snapshot file that is a LINK rather than a regular file: readFileSync
+    // follows it, so the hash matched something git would never store.
+    writeManifest(dest, clean);
+    eq(quiet(() => verify(dest)), 0, "the restored good manifest verifies again");
+    const linkedPath = path.resolve(dest, clean.files[0].name);
+    const asLink = { isFile: () => false, isDirectory: () => false, isSymbolicLink: () => true };
+    try {
+      __setLinkStat((p) => (path.resolve(p) === linkedPath ? asLink : lstatSync(p)));
+      const run = captured(() => verify(dest));
+      eq(run.value, 1, "verify refuses a snapshot file that is a symbolic link");
+      ok(/not a regular file/.test(run.said), "and names it as one");
+    } finally {
+      __setLinkStat(null);
+    }
+
+    // A stray entry the manifest does not vouch for is still reported, and a
+    // dangling link there no longer throws ENOENT out of the whole run.
+    const danglingPath = path.resolve(dest, "stray.md");
+    writeFileSync(danglingPath, "stray\n");
+    try {
+      __setLinkStat((p) => (path.resolve(p) === danglingPath ? asLink : lstatSync(p)));
+      const run = captured(() => verify(dest));
+      eq(run.value, 1, "an unlisted entry still fails verification");
+      ok(/not in manifest: stray\.md \(unexpected symbolic link\)/.test(run.said), "and is described as a link");
+    } finally {
+      __setLinkStat(null);
+    }
+  }
+
+  // ── round 17: the privacy question must reach github.com ──────────────────
+  // `gh repo view masonwells1/CRX_Backups` resolves against whatever host GH_HOST
+  // names. A PRIVATE answer from an enterprise server would have authorized
+  // staging toward the PUBLIC github.com repo of the same name. Three independent
+  // pins, each tested: a full github.com URL as the argument, the host-selecting
+  // variables stripped from the child environment, and the URL gh says it
+  // answered about compared to the expected one.
+  {
+    const spec = ghProbeCommand({ GH_HOST: "ghe.example.com", GITHUB_HOST: "ghe.example.com", PATH: "/usr/bin" });
+    ok(spec.args.includes("https://github.com/masonwells1/CRX_Backups"), "the probe asks about a full github.com URL");
+    ok(!spec.args.some((a) => /^masonwells1\//.test(a)), "never a bare owner/repo, which GH_HOST would redirect");
+    eq(spec.env.GH_HOST, undefined, "GH_HOST is stripped from the child environment");
+    eq(spec.env.GITHUB_HOST, undefined, "and GITHUB_HOST");
+    eq(spec.env.GH_ENTERPRISE_TOKEN, undefined, "and the enterprise token");
+    eq(spec.env.PATH, "/usr/bin", "the rest of the environment is passed through");
+
+    const answered = (body) => ghProbeAnswer({ status: 0, stdout: JSON.stringify(body) });
+    eq(
+      answered({ visibility: "PRIVATE", url: "https://github.com/masonwells1/CRX_Backups" }).visibility,
+      "PRIVATE",
+      "the real repo answering PRIVATE is accepted",
+    );
+    ok(
+      answered({ visibility: "PRIVATE", url: "https://ghe.example.com/masonwells1/CRX_Backups" }).reason,
+      "a PRIVATE from another host is NOT an answer about this repo",
+    );
+    ok(answered({ visibility: "PRIVATE" }).reason, "and neither is an answer that names no repository");
+    ok(
+      answered({ visibility: "PRIVATE", url: "https://github.com/someoneelse/CRX_Backups" }).reason,
+      "nor a same-named repo under another owner",
+    );
+    ok(ghProbeAnswer({ status: 0, stdout: "not json" }).reason, "unreadable output is not an answer");
+    ok(ghProbeAnswer({ status: 1, stderr: "boom" }).reason, "a non-zero exit is not an answer");
+    ok(ghProbeAnswer({ error: { code: "ENOENT" } }).reason, "gh missing is not an answer");
+  }
+
+  // ── round 17: unsafeSnapshotName, directly ────────────────────────────────
+  {
+    for (const name of ["MEMORY.md", "a.md", "project_foo-bar.md", "UPPER.MD"]) {
+      eq(unsafeSnapshotName(name), null, `${name} is an ordinary snapshot name`);
+    }
+    for (const name of ["../a.md", "..\\a.md", "/etc/a.md", "C:a.md", "a.md:stream", "..", ".", "", MANIFEST, "a.txt", "a\0.md"]) {
+      ok(unsafeSnapshotName(name), `${JSON.stringify(name)} is refused`);
+    }
+    ok(unsafeSnapshotName(null), "a non-string is refused");
+  }
+
+  // ── round 17: staging refuses a source name it could not later verify ─────
+  {
+    const weird = makeSource("weird-name-source", { [INDEX_FILE]: "# Memory Index\n" });
+    writeFileSync(path.join(weird, "ordinary.md"), "fine\n");
+    const dest = fresh("weird-name-dest");
+    eq(quiet(() => stage(dest, weird)), 0, "ordinary source names stage");
+
+    // Windows cannot hold a file called `a:b.md` — that spelling means a drive or
+    // an alternate data stream there — so the listing is supplied instead of the
+    // filesystem. Same refusal, same place, only the directory read is stubbed.
+    const dest2 = fresh("weird-name-dest-2");
+    // Compared as raw text, not via path.resolve: on Windows `path.resolve` reads
+    // the colon in `a:b.md` as a drive letter, which is precisely why the name is
+    // refused — and would make the comparison miss.
+    try {
+      __setDirRead((dir) => (path.resolve(dir) === path.resolve(weird) ? [INDEX_FILE, "a:b.md"] : readdirSync(dir)));
+      __setLinkStat((p) => (String(p).endsWith("a:b.md")
+        ? { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false }
+        : lstatSync(p)));
+      const run = captured(() => stage(dest2, weird));
+      eq(run.value, 1, "staging refuses a source name verification would later reject");
+      ok(/not plain snapshot names/.test(run.said), "and says which name and why");
+      ok(!readdirSync(dest2).includes(MANIFEST), "and no manifest is written");
+    } finally {
+      __setDirRead(null);
+      __setLinkStat(null);
+    }
   }
 
   // ── the CLI still runs when invoked directly ──────────────────────────────

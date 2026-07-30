@@ -23,6 +23,7 @@ import {
   proofValid,
   pushContextIsAmbiguous,
   pushIsForced,
+  pushNamesRemoteProgram,
   pushUsesBulkMode,
   pushUsesInlineConfig,
   pushUsesConfigEnv,
@@ -169,6 +170,13 @@ for (const pushCmd of pushCommands) {
 for (const pushCmd of pushCommands) {
   if (/--git-dir|--work-tree/i.test(pushCmd)) {
     deny("CODEX GATE: pushes using explicit --git-dir/--work-tree contexts are denied because the guard cannot safely bind them to the inspected worktree. Use `git -C <repo> push` instead.");
+  }
+  // Before any question about WHERE this push is addressed, because this option
+  // makes that question unanswerable: `--receive-pack`/`--exec` name the program
+  // that ingests the objects on the far side, and that program is free to send
+  // them somewhere other than the destination named here.
+  if (pushNamesRemoteProgram(pushCmd)) {
+    deny("CODEX GATE: pushes naming a custom receive-pack program (`--receive-pack` / `--exec`) are denied. That option chooses the program that RECEIVES the push on the far side, so it can relay the objects past the destination this guard inspected — the review gate would classify a harmless repository while the code lands somewhere else. GitHub runs its own receive-pack; drop the option and push normally.");
   }
   if (pushUsesBulkMode(pushCmd)) {
     deny("CODEX GATE: bulk push modes (`--all`/`--branches`/`--mirror`/`--prune`) can alter multiple remote refs and are always blocked. Push one explicit branch/refspec instead.");

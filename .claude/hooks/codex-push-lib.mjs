@@ -404,6 +404,32 @@ const PUSH_OPTS_KNOWN = new Set([
 // takes a value.
 const PUSH_SHORT_OPTS_KNOWN = new Set(["v", "q", "d", "n", "f", "u", "o", "4", "6"]);
 
+// `--receive-pack=<prog>` / `--exec=<prog>` name the program that RECEIVES the
+// push on the far side. Every other check here answers "where is this push
+// addressed?" — and this one option makes that question the wrong one, because
+// the named program decides what actually happens to the objects once they
+// arrive. It can ignore the nominal destination and relay them elsewhere, so a
+// push addressed to a scratch repo can still land in production while all three
+// guarded-repository classifiers say "unrelated" (Codex's seventeenth 2026-07-30
+// review, confirmed with a read-only parser probe and reproduced here).
+//
+// The argv walk already skips their values correctly, so this is not a parsing
+// gap that a better parser would close — the destination it reads is simply not
+// where the data ends up. There is no legitimate use of either option in this
+// repo: GitHub runs its own receive-pack. So they are denied outright rather
+// than parsed.
+export function pushNamesRemoteProgram(cmd) {
+  for (const push of eachPush(cmd)) {
+    for (const token of splitShellArgs(push.args)) {
+      if (token === "--") break;
+      const eq = token.indexOf("=");
+      const bare = eq === -1 ? token : token.slice(0, eq);
+      if (bare === "--receive-pack" || bare === "--exec") return true;
+    }
+  }
+  return false;
+}
+
 // Any option in a push command that this guard's argv walk does not understand.
 // A non-empty result means the destination cannot be resolved safely.
 export function unknownPushOptions(cmd) {

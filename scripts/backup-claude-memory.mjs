@@ -84,8 +84,16 @@ const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 let linkStat = lstatSync;
 export function __setLinkStat(fn) { linkStat = fn || lstatSync; }
 
+// Seam for the same reason as linkStat above: some names this script must refuse
+// cannot be created on Windows at all (`a:b.md` is a drive/stream spelling there,
+// not a file name), so the suite supplies the directory listing instead of the
+// filesystem — exercising the REAL refusal rather than skipping it. Production
+// always reads the real directory.
+let dirRead = readdirSync;
+export function __setDirRead(fn) { dirRead = fn || readdirSync; }
+
 const mdFiles = (dir) =>
-  readdirSync(dir)
+  dirRead(dir)
     .filter((f) => f.toLowerCase().endsWith(".md"))
     .filter((f) => linkStat(path.join(dir, f)).isFile())
     .sort();
@@ -102,6 +110,26 @@ function symlinkRefusal(dest) {
     `      Writing through it would put the notes wherever it points, outside the\n` +
     `      destination this run verified. Remove the link and re-run.`
   );
+}
+
+// A manifest entry names a FILE sitting in the snapshot directory — never a
+// path. Until round seventeen the only check was `typeof name === "string"`, and
+// verification then did `path.join(dir, name)` and read whatever came back: an
+// entry of `../../secrets.md` hashed a file outside the snapshot and reported
+// the snapshot OK, even though git would never store those bytes as that note
+// (Codex's seventeenth 2026-07-30 review). Verification exists to answer "are
+// the notes in this directory the ones the manifest vouches for", so a name that
+// can point outside the directory is not a name this tool accepts.
+// Exported because a rule with no test is a comment.
+export function unsafeSnapshotName(name) {
+  if (typeof name !== "string" || name.length === 0) return "is empty";
+  if (name.includes("\0")) return "contains a NUL byte";
+  if (/[\\/]/.test(name)) return "contains a path separator";
+  if (name.includes(":")) return "contains a drive or stream separator";
+  if (name === "." || name === ".." || name !== path.basename(name)) return "is a path, not a file name";
+  if (name === MANIFEST) return "is the manifest itself";
+  if (!name.toLowerCase().endsWith(".md")) return "is not a .md note";
+  return null;
 }
 
 // Claude Code stores memory at ~/.claude/projects/<encoded-project>/memory. The
@@ -196,17 +224,47 @@ const GIT_DISCOVERY_ENV = [
 // lookup, and a test that forgets to restore it fails loudly on the next case.
 let visibilityProbe = null;
 export function __setVisibilityProbe(fn) { visibilityProbe = fn; }
+// The one repository this check is allowed to be answering about. `gh` prints
+// the canonical URL of whatever it looked at, so comparing against this proves
+// the answer came from the repository whose privacy is being trusted.
+const BACKUP_REPO_URL = "https://github.com/masonwells1/CRX_Backups";
+// `gh` resolves a bare `owner/repo` against whichever host GH_HOST names, so an
+// inherited GH_HOST=<enterprise> made this check answer for a same-named repo on
+// a different server — and a PRIVATE there would have authorized staging toward
+// the PUBLIC github.com repo of the same name (Codex's seventeenth 2026-07-30
+// review). Exposure here is not undoable, so the host is pinned three ways, any
+// one of which is sufficient: the argument is a full github.com URL (which wins
+// over GH_HOST), the host-selecting variables are stripped from the child's
+// environment, and the URL gh says it answered about must be the expected one.
+const GH_HOST_ENV = ["GH_HOST", "GITHUB_HOST", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
+// Split from the spawn so the exact arguments and environment are testable
+// without a network call — the swappable probe above replaces this whole
+// function in the suite, which meant the argument list itself had no coverage at
+// all, and an argument list nothing checks is where GH_HOST got in.
+export function ghProbeCommand(baseEnv = process.env) {
+  const env = { ...baseEnv };
+  for (const name of GH_HOST_ENV) delete env[name];
+  return { command: "gh", args: ["repo", "view", BACKUP_REPO_URL, "--json", "visibility,url"], env };
+}
+// Interprets one spawnSync result. Separate for the same reason.
+export function ghProbeAnswer(result) {
+  if (result?.error) return { reason: `gh unavailable: ${result.error.code || result.error.message}` };
+  if (result?.status !== 0) return { reason: `gh exited ${result?.status}: ${String(result?.stderr || "").trim().split(/\r?\n/)[0] || "no output"}` };
+  let answer;
+  try { answer = JSON.parse(String(result.stdout || "")); } catch { return { reason: "gh returned unreadable JSON" }; }
+  const url = String(answer?.url || "").trim().replace(/\/+$/, "");
+  if (url.toLowerCase() !== BACKUP_REPO_URL.toLowerCase()) {
+    return { reason: `gh answered for ${url || "an unnamed repository"}, not ${BACKUP_REPO_URL} — refusing to trust that answer` };
+  }
+  const visibility = String(answer?.visibility || "").trim();
+  return visibility ? { visibility } : { reason: "gh returned no visibility field" };
+}
 function ghVisibility() {
   if (visibilityProbe) return visibilityProbe();
-  const result = spawnSync(
-    "gh",
-    ["repo", "view", "masonwells1/CRX_Backups", "--json", "visibility", "-q", ".visibility"],
-    { encoding: "utf8", timeout: 20000, windowsHide: true },
-  );
-  if (result.error) return { reason: `gh unavailable: ${result.error.code || result.error.message}` };
-  if (result.status !== 0) return { reason: `gh exited ${result.status}: ${String(result.stderr || "").trim().split(/\r?\n/)[0] || "no output"}` };
-  const visibility = String(result.stdout || "").trim();
-  return visibility ? { visibility } : { reason: "gh returned no visibility field" };
+  const spec = ghProbeCommand();
+  return ghProbeAnswer(spawnSync(spec.command, spec.args, {
+    encoding: "utf8", env: spec.env, timeout: 20000, windowsHide: true,
+  }));
 }
 
 // Backstop for the fourth credential shape nobody has thought of yet. The detector
@@ -468,6 +526,18 @@ function stage(outDir, sourceArg) {
     console.error(`FAIL: source is missing ${INDEX_FILE} — that is not a memory dir: ${source}`);
     return 1;
   }
+  // The same rule verification applies, applied at the moment the manifest is
+  // written rather than only when it is read. A name this tool would later
+  // refuse to verify has no business entering a snapshot in the first place —
+  // failing here costs one clear message; failing later means a backup that
+  // cannot pass its own check.
+  const unstageable = names.map((name) => ({ name, why: unsafeSnapshotName(name) })).filter((n) => n.why);
+  if (unstageable.length > 0) {
+    console.error(`FAIL: refusing to stage — ${unstageable.length} source file name(s) are not plain snapshot names:`);
+    for (const bad of unstageable) console.error(`      ${JSON.stringify(bad.name)} ${bad.why}`);
+    console.error(`      Nothing was written.`);
+    return 1;
+  }
 
   // Codex's 2026-07-30 review, second finding: the notes are copied verbatim into
   // git history, and a private repo is access control, not content control — git
@@ -611,6 +681,30 @@ function verify(dir) {
     console.error(`FAIL: ${MANIFEST} has ${malformed.length} entr(ies) missing name/bytes/sha256.`);
     return 1;
   }
+  // Names are checked BEFORE anything joins them to a path. Everything below —
+  // the ignore probe, the hash loop, the "not in manifest" sweep — takes these
+  // names as directory-local file names, and each one is only true if this is.
+  const badNames = manifest.files
+    .map((entry) => ({ name: entry.name, why: unsafeSnapshotName(entry.name) }))
+    .filter((entry) => entry.why);
+  if (badNames.length > 0) {
+    console.error(`FAIL: ${MANIFEST} names ${badNames.length} entr(ies) that are not plain snapshot file names:`);
+    for (const bad of badNames) console.error(`  - ${JSON.stringify(bad.name)} ${bad.why}`);
+    return 1;
+  }
+  // Duplicates would hash one file twice and let total_bytes/file_count agree
+  // while a real note went unchecked.
+  const seen = new Set();
+  const duplicates = manifest.files.map((entry) => entry.name).filter((name) => {
+    const key = name.toLowerCase();
+    if (seen.has(key)) return true;
+    seen.add(key);
+    return false;
+  });
+  if (duplicates.length > 0) {
+    console.error(`FAIL: ${MANIFEST} lists the same file more than once: ${[...new Set(duplicates)].join(", ")}`);
+    return 1;
+  }
   if (!manifest.files.some((entry) => entry.name === INDEX_FILE)) {
     console.error(`FAIL: ${MANIFEST} does not list ${INDEX_FILE} — that is not a memory snapshot.`);
     return 1;
@@ -643,8 +737,19 @@ function verify(dir) {
   const problems = [];
   for (const entry of manifest.files) {
     const file = path.join(dir, entry.name);
-    if (!existsSync(file)) {
+    // lstat, and it must be a REGULAR file. `readFileSync` follows a symlink, so
+    // a link named like a note hashed bytes from wherever it pointed and passed
+    // — while git stores the link, not those bytes. The name check above stops
+    // the manifest from pointing outside the directory; this stops the directory
+    // from pointing outside itself.
+    let info;
+    try { info = linkStat(file); } catch { info = null; }
+    if (!info) {
       problems.push(`missing: ${entry.name}`);
+      continue;
+    }
+    if (!info.isFile()) {
+      problems.push(`not a regular file: ${entry.name} (${info.isSymbolicLink() ? "symbolic link" : info.isDirectory() ? "directory" : "special file"})`);
       continue;
     }
     const buf = readFileSync(file);
@@ -662,7 +767,14 @@ function verify(dir) {
   const listed = new Set(manifest.files.map((e) => e.name));
   for (const name of readdirSync(dir).sort()) {
     if (name === MANIFEST || listed.has(name)) continue;
-    const kind = statSync(path.join(dir, name)).isDirectory() ? "directory" : "file";
+    // lstat again, and never throw: `statSync` on a dangling symlink raises
+    // ENOENT, which would crash the whole verification on the one entry it most
+    // needs to report.
+    let kind = "file";
+    try {
+      const info = linkStat(path.join(dir, name));
+      kind = info.isSymbolicLink() ? "symbolic link" : info.isDirectory() ? "directory" : "file";
+    } catch { kind = "unreadable entry"; }
     problems.push(`not in manifest: ${name} (unexpected ${kind})`);
   }
 

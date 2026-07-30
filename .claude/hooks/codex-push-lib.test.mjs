@@ -15,6 +15,7 @@ import {
   mainPushIsForced,
   mainPushSource,
   pushIsForced,
+  pushNamesRemoteProgram,
   pushContextIsAmbiguous,
   pushUsesBulkMode,
   reviewProofPathMentioned,
@@ -712,6 +713,28 @@ assert.deepEqual(unknownPushOptions("git push -fu origin main"), [], "a bundle o
 assert.deepEqual(unknownPushOptions("git push origin main -- --not-an-option"), [], "everything after -- is a refspec");
 assert.deepEqual(unknownPushOptions("git status --weird"), [], "non-pushes are not scanned");
 
+// --- the receive-pack program (Codex 2026-07-30, round 17)
+// Not a parsing question: the argv walk skips these values correctly. The option
+// names the program that RECEIVES the objects, and that program decides where
+// they actually go — so the destination every other check classifies stops being
+// the destination. Denied outright; nothing here ever needs it.
+assert.equal(pushNamesRemoteProgram("git push --receive-pack=/tmp/relay origin main"), true);
+assert.equal(pushNamesRemoteProgram("git push --receive-pack /tmp/relay origin main"), true, "separate-value spelling");
+assert.equal(pushNamesRemoteProgram("git push --exec=/tmp/relay origin main"), true, "the --exec alias");
+assert.equal(pushNamesRemoteProgram("git push --exec /tmp/relay origin main"), true);
+assert.equal(
+  pushNamesRemoteProgram(`git push origin feature && git push --exec=/tmp/relay ${CRX_URL} HEAD:main`),
+  true,
+  "a later push in the same command is scanned too",
+);
+assert.equal(pushNamesRemoteProgram("git push origin main"), false, "an ordinary push is untouched");
+assert.equal(
+  pushNamesRemoteProgram("git push origin main -- --receive-pack=/tmp/relay"),
+  false,
+  "after `--` it is a refspec, not an option",
+);
+assert.equal(pushNamesRemoteProgram("git commit -m 'exec --receive-pack'"), false, "non-pushes are not scanned");
+
 // --- a harmless FIRST push must not hide a second one (Codex 2026-07-30, round 8)
 // A whole-command scan that stopped at the first match saw neither the abbreviated
 // option nor the inline variable on the second push. git accepts unambiguous
@@ -905,6 +928,34 @@ assert.equal(pushDestinationToken("git push"), null);
       `git -C ${work} push ssh://git@github-crx/masonwells1/CRX_Manager_V1.0.git HEAD:main`,
       /codex/i,
       "nor does the ssh:// spelling of the same alias",
+    );
+
+    // Round 17, end-to-end: `--receive-pack`/`--exec` name the program that
+    // INGESTS the push on the far side, so the destination the guard classifies
+    // is not necessarily where the objects end up. Codex's probe confirmed such
+    // a command parsed cleanly, targeted `main`, and made every guarded-repo
+    // classifier answer "unrelated" — the proof gate skipped entirely.
+    deniedBecause(
+      `git -C ${work} push --receive-pack=/tmp/relay origin HEAD:main`,
+      /receive-pack/i,
+      "a custom receive-pack program is denied before the destination is even classified",
+    );
+    deniedBecause(
+      `git -C ${work} push --receive-pack /tmp/relay origin HEAD:main`,
+      /receive-pack/i,
+      "including the separate-value spelling",
+    );
+    deniedBecause(
+      `git -C ${work} push --exec=/tmp/relay origin HEAD:main`,
+      /receive-pack/i,
+      "and its `--exec` alias",
+    );
+    // The option list still fails closed on an abbreviation, so `--receive-p`
+    // does not slip past the exact-match check above.
+    deniedBecause(
+      `git -C ${work} push --receive-p /tmp/relay origin HEAD:main`,
+      /--receive-p/,
+      "an abbreviated spelling is refused as an unknown option",
     );
 
     // Round 12, end-to-end: a transport variable set in a segment of its OWN.
