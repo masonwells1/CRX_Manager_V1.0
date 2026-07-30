@@ -2,6 +2,38 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-29 — `/fleet` can now tell a stalled loop from a finished one
+
+`/fleet` reported what *exists* — worktrees, branches, ledgers, counts — but never whether anything
+that claims to be running still is. That is Mason's most common fleet worry: a loop or a Codex run
+that died quietly hours ago and looks identical, in the report, to one that is working. Step 2b adds
+a liveness probe per loop: ledger last-write time, plus a `Get-CimInstance Win32_Process` scan judged
+by **CommandLine**, because `Get-Process`'s `.Path` omits the arguments that say which worktree or
+loop a `node.exe` belongs to. Each loop gets a stated verdict — RUNNING, IDLE, or STALLED — along
+with the evidence that produced it. Invoked from Git Bash the whole `-Command` string must be
+single-quoted or the parent shell consumes `$_` and the probe fails *open*, reporting "nothing
+running" when plenty is. The scan therefore matches `powershell.exe` as its **own self-check** — the
+probe is itself a `powershell.exe`, so at least one row must always return, and zero rows means the
+probe broke rather than that nothing is running. It also matches `claude.exe`, not just
+`codex`/`node`: a Claude-owned loop sitting in a long step would otherwise show no process at all and
+be mislabelled STALLED (CodeRabbit on #283). A stalled Codex run is reported and never auto-restarted:
+restarting it is Mason's call once he can see what it was doing. Step 2c routes "keep an eye on it" /
+"ping me every N minutes" to `/loop <N>m /fleet` instead of hand-rolled reminders.
+
+Proven by running the documented command verbatim: 4 `codex.exe`, 23 `claude.exe`, 47 `node.exe`, and
+6 `powershell.exe` self-check rows. The first version of this entry claimed that proof while the
+command as written excluded `powershell.exe` — the run behind it had quietly used a different regex,
+so the self-check it prescribed could not have fired. Caught in review, and worth recording: proving a
+*variant* of the command you shipped is not proving the command you shipped.
+
+Landed alongside it: the 2026-07-26 PR #231 post-mortem, archived under `docs/audits/` and stamped
+with its resolved status so it reads as history rather than an open action list. Both files were
+carried off `claude/schema-baseline-refresh-20260727` in the main checkout, a dead branch 39 commits
+behind `main`. Everything else uncommitted there was checked file by file against `main` and left
+behind deliberately — it is either byte-identical to `main` already or *older* than `main`, and
+carrying it over wholesale would have reverted roughly a thousand lines of merged work, including
+the `/fleet` counter fix below and the session-scoped apply-proof decision from #273.
+
 ## 2026-07-29 — Supplier Pricing Phase 3 Stage C: the return-policy guard finally fires
 
 Supplier Pricing Phase 3 Stage C: applied the owner-approved return-policy classification live (migration 20260729213733) — 21 products no_return (10 also full-tote-only), 2 returnable, remainder left unknown by owner decision. Activates the previously dormant assert_phase3_return_policy() guard across create_return/approve_return/receive_return/issue_return_credit. Rows keyed by primary key so no product names or SKUs enter the repo. Verified live: catalog 604 rows -> 21/2/581/0, tote=10 all inside no_return, and the guard raises RETURN_POLICY_NO_RETURN on a real classified product while both returnable overrides and an untouched unknown product pass. Landed via PR #282.
