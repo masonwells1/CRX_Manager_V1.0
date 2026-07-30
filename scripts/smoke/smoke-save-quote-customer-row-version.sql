@@ -8,7 +8,7 @@ DO $smoke$
 DECLARE
   v_admin uuid; v_rep uuid; v_nonoffice uuid; v_customer uuid; v_quote uuid; v_product uuid;
   v_q jsonb; v_q_replay jsonb; v_c jsonb; v_c_replay jsonb;
-  v_quote_before bigint; v_customer_before bigint; v_quote_after bigint; v_customer_after bigint;
+  v_quote_before bigint; v_customer_before bigint; v_quote_after bigint; v_quote_after_second bigint; v_customer_after bigint;
   v_note_before text; v_addresses_before jsonb; v_error text;
   v_suffix text := substr(md5(random()::text), 1, 8);
   v_sections jsonb;
@@ -41,15 +41,17 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: quote idempotent creation replay changed outcome';
   END IF;
   SELECT row_version INTO v_quote_before FROM quotes WHERE id = v_quote;
-  -- The inserted row starts at 1; save_quote then performs its canonical
-  -- server-total UPDATE, so its returned usable token may already be higher.
-  IF v_quote_before < 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: new quote row_version %, expected positive token', v_quote_before; END IF;
+  -- The insert starts at the column default (1), then the one consolidated
+  -- header/totals UPDATE advances it exactly once.
+  IF v_quote_before <> 2 OR (v_q->>'row_version')::bigint <> v_quote_before THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: new quote row_version %, expected returned token 2 after one consolidated update', v_quote_before;
+  END IF;
 
   -- Fresh existing-row save proves header/sections/items and server math still
   -- execute through the canonical RPC; client price 999 must not win.
   v_q := public.save_quote(v_quote, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1, 'header_notes', 'fresh', 'row_version_expected', v_quote_before), v_sections, v_admin, 'rv-quote-fresh-' || v_suffix);
   SELECT row_version, header_notes INTO v_quote_after, v_note_before FROM quotes WHERE id = v_quote;
-  IF v_q->>'status' <> 'saved' OR (v_q->>'row_version')::bigint <> v_quote_after OR v_quote_after <= v_quote_before
+  IF v_q->>'status' <> 'saved' OR (v_q->>'row_version')::bigint <> v_quote_after OR v_quote_after <> v_quote_before + 1
      OR v_note_before <> 'fresh' OR (SELECT count(*) FROM quote_sections WHERE quote_id = v_quote) <> 1
      OR (SELECT count(*) FROM quote_items WHERE quote_id = v_quote) <> 1
      -- The Product shell has no governed price/cost data.  Forged client 999s
@@ -68,6 +70,18 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: fresh quote save lost canonical section/item/math behavior';
   END IF;
 
+  -- The returned token must be immediately usable by the same page. A second
+  -- save reaches exactly N+2 without a recovery reread or stale rejection.
+  v_q := public.save_quote(v_quote, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1, 'header_notes', 'fresh-second', 'row_version_expected', v_quote_after), v_sections, v_admin, 'rv-quote-fresh-second-' || v_suffix);
+  SELECT row_version, header_notes INTO v_quote_after_second, v_note_before FROM quotes WHERE id = v_quote;
+  IF v_q->>'status' <> 'saved'
+     OR (v_q->>'row_version')::bigint <> v_quote_after_second
+     OR v_quote_after_second <> v_quote_after + 1
+     OR v_note_before <> 'fresh-second' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: second same-session quote save did not advance exactly N+1 to N+2';
+  END IF;
+  v_quote_after := v_quote_after_second;
+
   -- The older token cannot mutate either the header or replaced children.
   BEGIN
     PERFORM public.save_quote(v_quote, jsonb_build_object('quote_number', '[SMOKE] RVQ-' || v_suffix, 'customer_id', v_customer, 'status', 'draft', 'tier', 1, 'header_notes', 'STALE-MUST-NOT-LAND', 'row_version_expected', v_quote_before), '[]'::jsonb, v_admin, 'rv-quote-stale-' || v_suffix);
@@ -77,7 +91,7 @@ BEGIN
     IF v_error LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF v_error NOT LIKE 'QUOTE_STALE_WRITE:%' THEN RAISE EXCEPTION 'SMOKE_FAIL: stale quote raised %', v_error; END IF;
   END;
-  IF (SELECT row_version FROM quotes WHERE id = v_quote) <> v_quote_after OR (SELECT header_notes FROM quotes WHERE id = v_quote) <> 'fresh'
+  IF (SELECT row_version FROM quotes WHERE id = v_quote) <> v_quote_after OR (SELECT header_notes FROM quotes WHERE id = v_quote) <> 'fresh-second'
      OR (SELECT count(*) FROM quote_sections WHERE quote_id = v_quote) <> 1 OR (SELECT count(*) FROM quote_items WHERE quote_id = v_quote) <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected stale quote changed header or children';
   END IF;

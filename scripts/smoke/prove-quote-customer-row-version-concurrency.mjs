@@ -65,6 +65,18 @@ function assertCanonicalContract() {
     assert.ok(start >= 0 && end > start, `could not extract ${name} body`);
     return source.slice(start, end).replace(/\r\n/g, '\n').trim();
   };
+  const priorQuote = extract(prior, 'save_quote', 'save_customer');
+  const priorQuoteHeaderUpdate = priorQuote.match(/\n    UPDATE quotes SET[\s\S]*?\n    WHERE id = p_quote_id;\n/)?.[0];
+  assert.ok(priorQuoteHeaderUpdate, 'could not extract prior quote header update');
+  const restorePriorQuoteUpdateShape = (body) => body
+    .replace(
+      /\n  -- One logical save must produce exactly one quote UPDATE\.[\s\S]*?\n  UPDATE quotes SET\n    customer_id =[\s\S]*?(?=    total_price =)/,
+      '\n  UPDATE quotes SET\n',
+    )
+    .replace(
+      '\n    v_quote_id := p_quote_id;',
+      `${priorQuoteHeaderUpdate}\n    v_quote_id := p_quote_id;`,
+    );
   const stripQuoteToken = (body) => body
     .replace('  v_old_row_version bigint;\n', '')
     .replace('  v_expected_row_version bigint;\n', '')
@@ -79,8 +91,8 @@ function assertCanonicalContract() {
     .replace(",\n    'row_version', (SELECT row_version FROM customers WHERE id = v_customer_id)", '');
   const normalizeSqlLayout = (body) => body.replace(/\s+/g, ' ').trim();
   assert.equal(
-    normalizeSqlLayout(stripQuoteToken(extract(current, 'save_quote', 'save_customer'))),
-    normalizeSqlLayout(extract(prior, 'save_quote', 'save_customer')),
+    normalizeSqlLayout(stripQuoteToken(restorePriorQuoteUpdateShape(extract(current, 'save_quote', 'save_customer')))),
+    normalizeSqlLayout(priorQuote),
     'save_quote changed outside the audited row-version delta',
   );
   assert.equal(
@@ -94,6 +106,18 @@ function assertCanonicalContract() {
   const customerVersion = current.indexOf('CUSTOMER_STALE_WRITE');
   assert.ok(quoteGuard >= 0 && quoteGuard < quoteVersion, 'quote split conflict must precede generic stale guard');
   assert.ok(customerGuard >= 0 && customerGuard < customerVersion, 'customer split conflict must precede generic stale guard');
+
+  const currentQuote = extract(current, 'save_quote', 'save_customer');
+  assert.equal(
+    currentQuote.match(/\bUPDATE quotes SET\b/g)?.length,
+    1,
+    'save_quote must use one parent UPDATE so one logical save bumps row_version exactly once',
+  );
+  assert.match(
+    currentQuote,
+    /UPDATE quotes SET[\s\S]*customer_id =[\s\S]*total_price =[\s\S]*WHERE id = v_quote_id;/,
+    'save_quote must consolidate header and calculated totals into its single parent UPDATE',
+  );
 }
 
 function assertChildOwnershipContract() {
@@ -178,7 +202,7 @@ INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.custom
     psql("INSERT INTO public.quotes(id,value) VALUES ('new','inserted'); INSERT INTO public.customers(id,value) VALUES ('new','inserted');");
     assert.equal(scalar("SELECT row_version FROM public.quotes WHERE id='new'"), '1');
     assert.equal(scalar("SELECT row_version FROM public.customers WHERE id='new'"), '1');
-    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved quote_lock_orders=both customer_lock_orders=both idempotent_replay=real insert_defaults=verified');
+    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=real insert_defaults=verified');
   } finally {
     docker(['rm', '-f', name], undefined, true);
   }

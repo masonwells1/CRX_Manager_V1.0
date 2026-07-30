@@ -13,6 +13,8 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 The same candidate closes two adjacent bypasses: direct crop/lifecycle writes only adopt the returned token when it is exactly the previous token plus one (otherwise they preserve the committed narrow change, clear the local token, and require Reload), and normal browser roles lose direct INSERT/UPDATE/DELETE on `quote_sections`, `quote_items`, and `customer_addresses`. Those children remain readable under their existing policy/SELECT boundary and are written only by the parent-locking `save_quote`/`save_customer` SECURITY DEFINER RPCs; no child-to-parent version trigger is used because it would invert that lock order.
 
+Exact-SHA review found that the first candidate `save_quote` body performed one parent UPDATE for header/status fields and another for calculated totals, so one logical existing-quote save advanced `row_version` from N to N+2 and made the client's exact-next-token check fail closed. The correction consolidates header, status, and totals into one parent UPDATE after the existing upfront `FOR UPDATE` lock and stale-token check. Its rollback proof now requires a created quote to return exactly version 2 (insert default 1 plus one totals/header update), then proves two consecutive existing-quote saves advance exactly N→N+1→N+2 using the first returned token for the second save.
+
 ---
 
 ## 0d. RESOLVED LIVE 2026-07-29 — `profile_public_view` RLS bypass onto `profiles`

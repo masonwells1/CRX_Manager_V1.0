@@ -182,28 +182,6 @@ BEGIN
       RAISE EXCEPTION 'QUOTE_STALE_WRITE: quote changed after this page opened — reload to review the current quote before saving';
     END IF;
 
-    UPDATE quotes SET
-      customer_id = (p_quote_payload->>'customer_id')::uuid,
-      tier = v_tier,
-      status = v_status,
-      commission_split = CASE
-        WHEN p_quote_payload->'commission_split' IS NOT NULL
-        THEN p_quote_payload->'commission_split'
-        ELSE commission_split
-      END,
-      valid_days = COALESCE((p_quote_payload->>'valid_days')::int, valid_days),
-      expires_at = COALESCE((p_quote_payload->>'expires_at')::date, expires_at),
-      header_notes = p_quote_payload->>'header_notes',
-      footer_notes = p_quote_payload->>'footer_notes',
-      is_planned = COALESCE((p_quote_payload->>'is_planned')::boolean, is_planned),
-      sent_at = CASE
-        WHEN v_status = 'sent' AND sent_at IS NULL THEN now()
-        WHEN v_status = 'sent' THEN sent_at
-        ELSE sent_at
-      END,
-      updated_at = now()
-    WHERE id = p_quote_id;
-
     v_quote_id := p_quote_id;
 
     DELETE FROM quote_sections WHERE quote_id = v_quote_id;
@@ -411,7 +389,29 @@ BEGIN
   FROM quote_items
   WHERE quote_id = v_quote_id;
 
+  -- One logical save must produce exactly one quote UPDATE. The row was
+  -- already locked and its expected version checked before any children were
+  -- replaced; combining header/status fields with the calculated totals keeps
+  -- that lock order while ensuring the row-version trigger advances once.
   UPDATE quotes SET
+    customer_id = (p_quote_payload->>'customer_id')::uuid,
+    tier = v_tier,
+    status = v_status,
+    commission_split = CASE
+      WHEN p_quote_payload->'commission_split' IS NOT NULL
+      THEN p_quote_payload->'commission_split'
+      ELSE commission_split
+    END,
+    valid_days = COALESCE((p_quote_payload->>'valid_days')::int, valid_days),
+    expires_at = COALESCE((p_quote_payload->>'expires_at')::date, expires_at),
+    header_notes = p_quote_payload->>'header_notes',
+    footer_notes = p_quote_payload->>'footer_notes',
+    is_planned = COALESCE((p_quote_payload->>'is_planned')::boolean, is_planned),
+    sent_at = CASE
+      WHEN v_status = 'sent' AND sent_at IS NULL THEN now()
+      WHEN v_status = 'sent' THEN sent_at
+      ELSE sent_at
+    END,
     total_price = v_server_totals.total_price,
     total_cost = (SELECT COALESCE(SUM(current_cost * total_units_needed), 0) FROM quote_items WHERE quote_id = v_quote_id),
     total_profit = (SELECT COALESCE(SUM(profit), 0) FROM quote_items WHERE quote_id = v_quote_id),

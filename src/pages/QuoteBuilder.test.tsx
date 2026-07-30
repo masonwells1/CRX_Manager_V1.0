@@ -441,6 +441,46 @@ describe('QuoteBuilder', () => {
     expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
   });
 
+  it('adopts an exact N+1 save token and sends it on the next same-page save', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    let saveCalls = 0;
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote'
+      ? { data: { quote_id: quote.id, row_version: ++saveCalls === 1 ? 8 : 9 }, error: null }
+      : { data: null, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
+      p_quote_payload: expect.objectContaining({ row_version_expected: 7 }),
+    })));
+    await waitFor(() => expect(screen.getByText('Save Draft')).not.toBeDisabled());
+
+    fireEvent.click(screen.getByText('Save Draft'));
+    await waitFor(() => {
+      const quoteSaves = mockRpc.mock.calls.filter(([name]) => name === 'save_quote');
+      expect(quoteSaves).toHaveLength(2);
+      expect(quoteSaves[1][1]).toEqual(expect.objectContaining({
+        p_quote_payload: expect.objectContaining({ row_version_expected: 8 }),
+      }));
+    });
+    expect(mockToast).not.toHaveBeenCalledWith('warning', expect.stringContaining('save-protection version'));
+    expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
+  });
+
   it('rejects a missing authoritative save token after a numeric Quote token was loaded', async () => {
     const { quote, product, section, item } = makeQuoteFixture('draft', 7);
     mockFrom.mockImplementation((table: string) => buildChain({
