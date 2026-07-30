@@ -2,6 +2,131 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — Final Quote lifecycle replay review closed two operator-safety gaps
+
+The pending row-version migration now binds `create_quote_version` idempotent
+replays to both the authenticated actor and the requested delivery method. A
+lost response can therefore be retried with the original key, but that key
+cannot be reused to turn a cached Presented snapshot into an Emailed snapshot
+or replay another actor's request. The rollback smoke proves that a changed
+method fails with `IDEMPOTENCY_PAYLOAD_CONFLICT` and leaves both the Quote token
+and version count unchanged.
+
+Quote-to-Order flows also stopped adding a generic recovery toast after
+`saveQuote` or Mark Presented returns failure. Those lower-level paths already
+report the accurate outcome; removing the duplicate message prevents a rejected
+write from being described to the operator as saved or frozen.
+
+## 2026-07-30 — Quote-version restore joins row-version boundary
+
+`restore_quote_version` is now wrapped inside the pending Quote/Customer
+row-version migration with sales-rep ownership enforcement, canonical
+idempotency-before-parent locking, an expected Quote token, and
+request/current-token-bound replay. The browser sends the loaded Quote token
+and preserves its original key/token pair across retries, with the same exact
+`PGRST202` frontend-first fallback used by the other lifecycle calls while
+production remains pre-migration.
+
+Rollback-only and structural proofs now cover stale restore rejection, direct
+and replay ownership, exact one-time token advancement, drawn-ledger
+compatibility, and planned-hold synchronization. Registered lifecycle smokes
+now dispatch against both the live legacy RPC signatures and the pending
+row-version signatures, and the candidate was restamped above the live
+migration ledger high-water without changing its SQL content. The migration
+remains unapplied.
+
+## 2026-07-30 — Quote and Customer stale-save recovery was hardened before merge
+
+PR #290's automated review found that Customer saves did not validate the RPC's
+returned `row_version` as strictly as Quote saves, and that the reload dirty-state
+suppression depended only on `requestAnimationFrame`. The shared version resolver
+now rejects missing or jumped Customer save tokens, both Quote and Customer reloads
+have an idempotent timer fallback, and the conflict dialog reports asynchronous
+reload failure without discarding the operator's edits. A reload now locks every
+dialog close path until it settles, and the real `false` failure result is surfaced
+instead of only rejected promises. Lifecycle recovery warnings also name the action
+that actually committed. During the frontend-first rollout, an existing
+commission-split conflict can still reload a tokenless legacy record; numeric-token
+records retain the stricter stable-version check.
+
+The candidate migration's catalog postflight now tolerates PostgreSQL's harmless
+default/search-path formatting, rejects a missing `DEFAULT 1`, and preserves the
+exact security requirements.
+Quote totals reuse the single authoritative aggregate, and the disposable race,
+source-shape, and phone-browser proofs were made deterministic and registered as
+package scripts so future runs can discover them. The registered drawn-booking
+guard smoke now carries exact Quote tokens and runs inside the disposable
+post-migration proof, so row-version enforcement cannot mask its own
+`BOOKING_OVERDRAWN` assertions. Its token is now re-read from the row after a
+partial draw rather than hand-advanced. The Customer rollback smoke also proves
+that a concurrent prepay-balance update invalidates an open whole-record editor
+without losing the committed money change, and the RLS contract matrix now
+records all three protected child tables as RPC-only. The elevated `save_quote`
+RPC now mirrors Quote ownership before mutation or idempotent replay, and its
+rollback proof rejects both non-owner paths without leaking or changing the
+target Quote. Final PR review centralized both admin exceptions through the
+canonical active-admin helper, gave the controlled PostgreSQL race observer a
+real-time deadline and longer observation window without treating a missed
+sleep as success, and stopped committed lifecycle actions from showing a
+success toast when their follow-up version check instead requires recovery.
+Server-returned booking warnings remain visible in that recovery path. The
+same recovery result now aborts customer email before a possibly stale local
+PDF leaves the app and returns `false` to stop the chained Book-as-Order
+conversion. A persistent reload-required latch also blocks retry clicks and
+direct conversion until a complete stable reload clears it; abort messages say
+plainly that the email was not sent or the order was not created. Numeric-token
+mode survives recovery, so a post-migration tab cannot accept a tokenless reload.
+Every email, including an already-sent Quote after a tab remount, now creates
+and confirms a version snapshot before sending the PDF. The version key is
+scoped to the signed-in user and Quote, so it cannot replay across Quotes. The
+Convert-to-Order chain also stops if its accepted-status save commits without
+an exact authoritative token; it cannot create an order while recovery is
+required. After a stable reload, an accepted Quote remains convertible: the
+server safely resumes it when no Order exists or returns the existing Order.
+The existing-Order replay opens that Order without re-saving the accepted Quote
+or repeating creation telemetry, admin alerts, credit checks, or customer
+confirmation email. The pending migration now owner-gates the privileged
+quote-version and conversion RPCs before mutation or idempotent replay. Quote
+and Customer save replays are bound to the complete request and release a
+cached token only while the target still has the exact post-save version; a
+later writer forces reload instead of releasing stale proof. A complete recovery
+reload now rotates the possibly committed save key, including a legacy cached
+result that crosses the migration boundary, so the next reviewed save cannot
+loop on the retired request. `save_quote`, quote-versioning, and conversion all
+preserve the owner check before replay while taking their idempotency advisory
+lock before the Quote row lock and rechecking ownership under that row lock.
+Quote-versioning and whole-Quote conversion now also accept the exact Quote
+`row_version` reviewed by the operator, compare it under that same row lock
+before any lifecycle mutation, and bind idempotent replay to both the requested
+pre-mutation token and the committed post-mutation token. A writer landing
+between load and either action therefore gets `QUOTE_STALE_WRITE` instead of
+creating a version or Order from a different Quote. The migration postflight
+requires exactly one public overload for both lifecycle RPCs. The frontend-first
+rollout bridge tries the versioned signature and falls back to the live legacy
+signature only for PostgREST's exact missing-function `PGRST202`; database,
+authentication, network, and stale-write failures never retry without the
+token. A rejected lifecycle key rotates only after a complete stable reload,
+and every registered smoke caller now supplies the current token.
+The disposable proof also demonstrates that the old reverse order deadlocks,
+so a future cross-operation regression cannot silently pass. The
+rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
+planned-hold synchronization helper chain too.
+Final retry review found one more lifecycle edge: a successful version snapshot
+followed by an email failure could reuse its idempotency key with the newer local
+token instead of the original reviewed token. Each version attempt now preserves
+the exact key and pre-mutation token together until the whole action succeeds,
+while the RPC returns the authoritative post-mutation `row_version` on both the
+first response and a cached replay. Regression coverage proves both downstream
+email failure and a lost first RPC response replay without creating a second
+version. The shared Quote type also represents `row_version` as optional during
+the intentional pre-migration window, and list-page conversion normalizes that
+absence to the legacy-compatible `null` token.
+Verification passed
+4,127 tests with 123 skipped, 3/3 isolated Playwright flows, both disposable
+PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
+SQL audit. Migration `20260730201230_quote_customer_row_version_guard.sql` remains
+unapplied; frontend-first deployment and live migration apply remain separate gates.
+
 ## 2026-07-30 — Vendor-bill accounting-period close lock applied
 
 Live migration `20260730114102_vendor_bill_period_close_lock` now serializes
@@ -65,7 +190,6 @@ the whole-calendar-month constraint.
 The live schema-integrity tripwire now guards the exact month-lock calls in
 both vendor-bill writers and period close, so a later function re-emission
 cannot silently reopen the race.
-
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

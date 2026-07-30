@@ -41,6 +41,8 @@ draft -> sent -> revised -> accepted -> declined -> expired -> cancelled
 - `save_quote()` — atomic save of header + sections + items in one transaction
 - `duplicate_quote()` — clones a quote for reuse
 
+Quote sections and quote items are RPC-owned: browser roles may read them but must not write them directly. `save_quote()` locks the parent quote and replaces its child collection in the same transaction, so its row-version check covers both header and line edits.
+
 ### Rules
 - Tier pricing: customers have assigned tier (1-4). Quote inherits the customer's tier but can be overridden per item.
 - `is_planned` flag: when true, inventory holds are created to reserve stock.
