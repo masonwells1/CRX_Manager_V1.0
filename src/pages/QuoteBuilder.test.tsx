@@ -1245,9 +1245,12 @@ describe('QuoteBuilder', () => {
     ));
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('quote was frozen'));
     fireEvent.click(screen.getByRole('button', { name: /Keep editing/i }));
-    const retryBookButtons = screen.getAllByRole('button', { name: 'Book as Order' });
-    fireEvent.click(retryBookButtons[retryBookButtons.length - 1]);
-    await waitFor(() => expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything()));
+    expect(screen.getByText('Mark this quote as sent and convert it to an order now?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Book as Order' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('Reload the quote, then try Book as Order again'),
+    ));
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('quote was frozen'));
     expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything());
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.stringContaining('marked as presented'));
