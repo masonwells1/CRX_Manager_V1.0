@@ -39,6 +39,37 @@ function toJsRegExp(posix: string): RegExp {
   return new RegExp(translated, 'i');
 }
 
+// Split on top-level separators only. A naive split also breaks up nested
+// groups — `(s|able)` for the pattern, a comma inside a function call for a
+// projection list — and reports a false failure.
+function splitTopLevel(source: string, separator: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of source) {
+    if (ch === separator && depth === 0) {
+      out.push(current);
+      current = '';
+      continue;
+    }
+    if (ch === '(') depth += 1;
+    if (ch === ')') depth -= 1;
+    current += ch;
+  }
+  out.push(current);
+  return out;
+}
+
+// Every item projected by any SELECT in the predicate. String literals are
+// blanked first so their punctuation cannot confuse the split.
+function projections(body: string): string[] {
+  const masked = body.replace(/'[^']*'/g, "''");
+  return [...masked.matchAll(/\bselect\b([\s\S]*?)\bfrom\b/gi)]
+    .flatMap((m) => splitTopLevel(m[1], ','))
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 // CONTAINMENT: every fixture below is a SYNTHETIC string. The repo is public
 // and the predicate's own header forbids real product names or supplier SKUs in
 // tracked files, so these must never be copied out of the live catalog — not
@@ -102,23 +133,7 @@ describe('product-name-vs-return-policy predicate pattern', () => {
   });
 
   it('anchors every alternative at a word boundary', () => {
-    // Split on top-level | only — a naive split also breaks up the nested
-    // (s|able) group and reports a false failure.
-    const raw = extractPattern();
-    const alternatives: string[] = [];
-    let depth = 0;
-    let current = '';
-    for (const ch of raw) {
-      if (ch === '|' && depth === 0) {
-        alternatives.push(current);
-        current = '';
-        continue;
-      }
-      if (ch === '(') depth += 1;
-      if (ch === ')') depth -= 1;
-      current += ch;
-    }
-    alternatives.push(current);
+    const alternatives = splitTopLevel(extractPattern(), '|');
 
     expect(alternatives.length).toBeGreaterThan(1);
     // Each alternative must open with \m. Without it the alternative can match
@@ -151,10 +166,22 @@ describe('product-name-vs-return-policy predicate pattern', () => {
     // The SKU has no legitimate use here at all.
     expect(body.match(SKU) ?? []).toHaveLength(0);
 
-    // Naming the columns is not enough: `SELECT p.*` emits product_name and sku
-    // without spelling either one, so the checks above stay green while the
-    // sweep leaks the whole catalog row. Every column here is listed by hand.
-    expect(body).not.toMatch(/\b[a-z_][a-z0-9_]*\s*\.\s*\*/i);
-    expect(body).not.toMatch(/\bselect\s+(?:distinct\s+)?\*/i);
+    // Naming the columns is not enough. `SELECT p.*` emits product_name and sku
+    // without spelling either one, so every check above stays green while the
+    // sweep leaks the whole catalog row. Blacklisting spellings turned into
+    // whack-a-mole — p.*, then a bare * mid-list, then row_to_json(p), then a
+    // lone alias, which Postgres expands to the entire row as a composite. So
+    // inspect the projections themselves and require each one to name a column.
+    for (const item of projections(body)) {
+      const expr = item.split(/\bas\b/i)[0].replace(/'[^']*'/g, "''").trim();
+      // A wildcard anywhere in a projected item, qualified or not.
+      expect(expr, `wildcard projection: ${item}`).not.toMatch(/\*/);
+      // Whole-row constructors.
+      expect(expr, `row-valued projection: ${item}`).not.toMatch(
+        /\b(?:row|row_to_json|to_json|to_jsonb|json_agg|jsonb_agg)\s*\(/i,
+      );
+      // A lone identifier is a table alias, i.e. the whole row.
+      expect(expr, `bare alias projection: ${item}`).not.toMatch(/^[a-z_][a-z0-9_]*$/i);
+    }
   });
 });

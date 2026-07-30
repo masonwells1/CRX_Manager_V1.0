@@ -104,18 +104,27 @@ that has only ever seen zero. Cross-model review caught the first pattern matchi
 "NON RETURN"; every alternative is now word-anchored, and
 `src/__tests__/predicate-product-name-vs-return-policy.test.ts` pins the phrase set plus the
 near-miss false positives, reading the pattern out of the `.sql` file so the two cannot drift.
-Three more review rounds sharpened it, each closing a false negative on the unsafe side.
-"NON-RETURN VALVE" is a check valve rather than a merchandise policy and is excluded by a negative
-lookahead, but the exclusion is now narrowed twice: to RETURN/RETURNS and not RETURNABLE, and to the
-NON spelling and not NO. The equipment term is exactly "NON-RETURN VALVE" — both
-"NON-RETURNABLE VALVE" and "NO RETURN VALVE" assert a policy, and a wider lookahead dropped them
-silently. That is why NO and NON are separate alternatives rather than the tidier `(no|non)`.
-The containment assertion was hardened twice as well: it is alias-agnostic (exactly one
-`product_name` reference is permitted, and only as the `~*` filter), and it rejects wildcard
-projections, because `SELECT p.*` emits the name and SKU without spelling either one. Both
-hardenings were mutation-tested — aliasing the name, then `p.*` — and each turns the guard red.
-Every version of the pattern is behavior-identical on live data: still 0 violations across 604
-products, still all 21 matched, still all 21 under the mutation. Landed via PR #286.
+Review then hardened two separate things.
+
+The **phrase set** took two further rounds, each closing a false negative — the detector staying
+silent on a product it should flag. "NON-RETURN VALVE" is a check valve rather than a merchandise
+policy and is excluded by a negative lookahead, but that exclusion is now narrowed twice: to
+RETURN/RETURNS and not RETURNABLE, and to the NON spelling and not NO. The equipment term is exactly
+"NON-RETURN VALVE" — both "NON-RETURNABLE VALVE" and "NO RETURN VALVE" assert a policy, and a wider
+lookahead dropped them silently. That is why NO and NON are separate alternatives rather than the
+tidier `(no|non)`.
+
+The **containment guard** took two rounds of its own. These are output-safety fixes, not detection
+fixes: they govern what the sweep may emit into a public repo, and neither changes which products
+are flagged. It is now alias-agnostic (exactly one `product_name` reference is permitted, and only
+as the `~*` filter), and it validates the projected items themselves rather than blacklisting
+spellings — blacklisting became whack-a-mole as `p.*`, a bare `*` mid-list, `row_to_json(p)`, and a
+lone table alias each evaded the previous version in turn. All four now turn the guard red under
+mutation, and it returns green on restore.
+
+Across every revision the live result is unchanged: 0 violations across 604 products, all 21
+`no_return` products matched, and all 21 still detected under the classification-stripped mutation.
+Landed via PR #286.
 
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `1442ee92 feat(products): Supplier Pricing Phase 3 Stage C return-policy classification`
