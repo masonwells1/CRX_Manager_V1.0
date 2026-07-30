@@ -34,6 +34,10 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(helper).toContain('ORDER BY 1');
     expect(migration).toContain('REVOKE ALL ON FUNCTION public._lock_accounting_months(date[], boolean)');
     expect(migration).toContain('FROM PUBLIC, anon, authenticated, service_role;');
+    expect(migration).toContain('PERIOD_CLOSE_POSTFLIGHT_FUNCTION_COUNT');
+    expect(migration).toContain('PERIOD_CLOSE_POSTFLIGHT_SECURITY_MODE');
+    expect(migration).toContain('PERIOD_CLOSE_POSTFLIGHT_HELPER_EXECUTE');
+    expect(migration).toContain("has_function_privilege(v_owner_oid, v_helper_oid, 'EXECUTE')");
   });
 
   it('requires accounting_periods rows to be exactly one calendar month', () => {
@@ -85,6 +89,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_SHARED_REVERSE_MONTH_COMPLETION_PASS'\)/);
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_JAN_FIRST_PASS'\)/);
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS'\)/);
+    expect(proof).toMatch(/console\.log\('CANDIDATE_POSTFLIGHT_OWNER_EXECUTE_PASS'\)/);
     expect(proof).toContain("classid=73492010");
     expect(proof).toContain("'--network', 'none'");
     expect(proof).toContain('const BARRIER_SECONDS = 8;');

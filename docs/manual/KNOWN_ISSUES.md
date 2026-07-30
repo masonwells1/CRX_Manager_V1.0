@@ -55,8 +55,9 @@ file in one transaction. Before apply, confirm and record that transactional wra
 then observe it in the apply evidence; a non-transactional SQL channel is not an
 alternative. Take a read-only immediate-before-apply blocker census for active locks or
 sessions on the accounting-period, vendor-bill, and purchase-order paths (and the month
-advisory-lock namespace when visible). This is a snapshot only: the existing five-second
-fail-closed timeout remains unchanged and must be observed if contention occurs.
+advisory-lock namespace when visible). This is a snapshot only: the candidate sets a
+ten-second apply-time `SET LOCAL lock_timeout`, and that fail-closed timeout must be
+observed if contention occurs.
 
 **Explicit scope residual.** This candidate guarantees only
 `create_vendor_bill` and `update_vendor_bill` date writes. `record_vendor_payment`,

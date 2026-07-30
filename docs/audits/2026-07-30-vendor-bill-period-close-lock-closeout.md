@@ -88,8 +88,8 @@ in the apply evidence; do not substitute a non-transactional SQL channel. Immedi
 before starting it, take a read-only blocker census of active locks/sessions touching
 the affected accounting-period, vendor-bill, and purchase-order paths (including this
 month-lock advisory namespace when visible). The census is only a snapshot, not a claim
-that contention cannot arrive later: the existing fail-closed five-second lock timeout
-is intentionally unchanged and must still be observed if it fires.
+that contention cannot arrive later: this candidate sets a ten-second apply-time
+`SET LOCAL lock_timeout`, and that fail-closed timeout must still be observed if it fires.
 
 This slice guarantees only `create_vendor_bill` and `update_vendor_bill` date
 writes. `record_vendor_payment`, `void_vendor_payment`, `void_vendor_bill`, and

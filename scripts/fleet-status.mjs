@@ -23,7 +23,7 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile,
   lastNonEmptyLine, firstCommentLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
-  excludeInheritedFallbackPaths, parkedMainlineDiscoveryFrom,
+  fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
 
 // The repo root this script lives in (works no matter what cwd it's launched from).
@@ -167,6 +167,7 @@ function dirtyCount(wtPath) {
 // collapses to one row (with every worktree listed under `where`).
 const parked = new Map(); // repo-relative path → { name, where: [labels], mtime, comment }
 let supersededSkipped = 0;
+let degradedFallbackUnknown = false;
 const wtLines = [];
 
 function addParked(rel, full, label) {
@@ -224,7 +225,17 @@ for (const e of entries) {
     // session) — scan the whole checkout rather than risk reporting nothing. That can
     // re-surface drafts main has already retired, so say so instead of letting the number
     // move unexplained.
-    notes.push(`${label}: could not read its branch point, so it uses a degraded disk scan${originMainDraftPaths ? " after excluding paths inherited from origin/main" : " with no inherited-path filter"}.`);
+    let fallbackChangedPaths = null;
+    if (originMainDraftPaths) {
+      try {
+        fallbackChangedPaths = git(["diff", "--name-only", "origin/main", "--", ...draftPathspec()], e.path, 5000).split("\n");
+      } catch { /* the comparison below becomes PARKED STATE UNKNOWN */ }
+    }
+    notes.push(`${label}: could not read its branch point, so it uses a degraded disk scan${originMainDraftPaths ? " with an exact origin/main content comparison" : " with no inherited-path filter"}.`);
+    if (originMainDraftPaths && fallbackChangedPaths === null) {
+      degradedFallbackUnknown = true;
+      notes.push(`PARKED STATE UNKNOWN: ${label} could not compare its draft content to origin/main, so inherited paths were retained conservatively.`);
+    }
     for (const { root, filter } of [
       { root: "scripts/.staging-migrations", filter: isParkedMigrationFile },
       { root: "docs/audits", filter: isDraftSqlName },
@@ -235,7 +246,7 @@ for (const e of entries) {
         const name = path.basename(full);
         if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
         const rel = `${root}/${path.relative(dir, full).replace(/\\/g, "/")}`;
-        if (originMainDraftPaths && excludeInheritedFallbackPaths([rel], originMainDraftPaths).length === 0) continue;
+        if (originMainDraftPaths && fallbackPathsAgainstOrigin([rel], originMainDraftPaths, fallbackChangedPaths).paths.length === 0) continue;
         if (!filter(name, full, rel)) continue;
         // Display path keeps its real casing — addParked lower-cases the KEY itself, and
         // normalizing here too would print Mason a lower-cased filename that no longer
@@ -305,7 +316,8 @@ console.log(wtLines.join("\n"));
 console.log("");
 
 const parkedList = [...parked.values()].sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
-console.log(`Parked migrations awaiting apply: ${mainlineParkedState === "unknown" ? "PARKED STATE UNKNOWN" : parkedList.length}`);
+const parkedStateUnknown = mainlineParkedState === "unknown" || degradedFallbackUnknown;
+console.log(`Parked migrations awaiting apply: ${parkedStateUnknown ? "PARKED STATE UNKNOWN" : parkedList.length}`);
 for (const p of parkedList) {
   console.log(`  • ${p.name} — in ${p.where.join(", ")} — last touched ${fmtDate(p.mtime)}${p.comment ? ` — ${p.comment}` : ""}`);
 }
@@ -314,7 +326,7 @@ if (supersededSkipped > 0) {
 }
 console.log("");
 
-if (mainlineParkedState === "unknown") {
+if (parkedStateUnknown) {
   console.log("PARKED STATE UNKNOWN — do not treat this report as a clean zero until the origin/main migration-history/SQL cross-reference is repaired.");
 } else if (parkedList.length > 0) {
   console.log("WAITING ON YOU (Mason):");

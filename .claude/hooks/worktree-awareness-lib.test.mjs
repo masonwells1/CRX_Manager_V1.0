@@ -12,7 +12,7 @@ import {
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
   isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
   hasExplicitParkedMigrationHeader, isParkedFallbackFile, originMainDraftPathSet,
-  excludeInheritedFallbackPaths, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
+  fallbackPathsAgainstOrigin, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
   createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
@@ -154,16 +154,27 @@ const inherited = originMainDraftPathSet((args) => {
   return [INHERITED_HISTORY, ORDINARY_FORWARD];
 });
 eq(originTreeCalls, 1, "origin/main fallback tree is read once");
-eq(excludeInheritedFallbackPaths([INHERITED_HISTORY, PARKED_FORWARD, ORDINARY_FORWARD], inherited), [PARKED_FORWARD], "degraded fallback excludes inherited history and ordinary main paths before header matching");
-eq(excludeInheritedFallbackPaths([INHERITED_HISTORY, PARKED_FORWARD], null), [INHERITED_HISTORY, PARKED_FORWARD], "without origin/main the conservative all-disk fallback is retained");
+const identicalFallback = fallbackPathsAgainstOrigin([INHERITED_HISTORY, PARKED_FORWARD, ORDINARY_FORWARD], inherited, []);
+eq(identicalFallback.state, "known", "exact origin/main comparison succeeds");
+eq(identicalFallback.paths, [PARKED_FORWARD], "degraded fallback excludes only byte-identical inherited paths before header matching");
+const modifiedInheritedFallback = fallbackPathsAgainstOrigin([INHERITED_HISTORY, PARKED_FORWARD], inherited, [INHERITED_HISTORY]);
+eq(modifiedInheritedFallback.paths, [INHERITED_HISTORY, PARKED_FORWARD], "locally modified inherited draft remains visible to both consumers");
+const unreadableFallback = fallbackPathsAgainstOrigin([INHERITED_HISTORY, PARKED_FORWARD], inherited, null);
+eq(unreadableFallback.state, "unknown", "unreadable origin/main comparison is PARKED STATE UNKNOWN, not a confident zero");
+eq(unreadableFallback.paths, [INHERITED_HISTORY, PARKED_FORWARD], "unreadable comparison retains paths conservatively instead of undercounting");
+eq(fallbackPathsAgainstOrigin([INHERITED_HISTORY, PARKED_FORWARD], null, []).state, "unknown", "missing origin/main keeps the fallback state unknown");
 const fallbackHeaders = new Map([
   [INHERITED_HISTORY, PARKED_FORWARD_HEADER],
   [PARKED_FORWARD, PARKED_FORWARD_HEADER],
   [LOCAL_ORDINARY_FORWARD, "-- ordinary feature migration\nSELECT 1;"],
 ]);
-const degradedFallback = excludeInheritedFallbackPaths(
-  [INHERITED_HISTORY, PARKED_FORWARD, LOCAL_ORDINARY_FORWARD], inherited,
-).filter((p) => isParkedFallbackFile(p, p.slice(p.lastIndexOf("/") + 1), () => fallbackHeaders.get(p)));
+const modifiedInheritedParked = fallbackPathsAgainstOrigin(
+  [INHERITED_HISTORY], inherited, [INHERITED_HISTORY],
+).paths.filter((p) => isParkedFallbackFile(p, p.slice(p.lastIndexOf("/") + 1), () => fallbackHeaders.get(p)));
+eq(modifiedInheritedParked, [INHERITED_HISTORY], "a locally modified inherited parked draft remains discoverable after header matching");
+const degradedFallback = fallbackPathsAgainstOrigin(
+  [INHERITED_HISTORY, PARKED_FORWARD, LOCAL_ORDINARY_FORWARD], inherited, [PARKED_FORWARD, LOCAL_ORDINARY_FORWARD],
+).paths.filter((p) => isParkedFallbackFile(p, p.slice(p.lastIndexOf("/") + 1), () => fallbackHeaders.get(p)));
 eq(degradedFallback, [PARKED_FORWARD], "degraded fallback finds only the branch-owned explicitly parked candidate");
 eq(parkedMainlinePathsFrom([DISPATCH, "docs/audits/PARKED-direct.sql", PARKED_FORWARD]), [DISPATCH, "docs/audits/PARKED-direct.sql"], "mainline classification is name-only and never re-lists forward migrations");
 

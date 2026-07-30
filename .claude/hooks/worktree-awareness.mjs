@@ -18,7 +18,7 @@ import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile, fleetSummaryLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
-  excludeInheritedFallbackPaths, parkedMainlineDiscoveryFrom,
+  fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -171,6 +171,7 @@ try {
     ? mainlineParkedDiscovery()
     : { state: "unknown", paths: new Set(), reason: "origin/main is unavailable" };
   const parkedPaths = new Set([...mainline.paths].map((p) => normRepoPath(p)));
+  const fallbackUnknownReasons = new Set();
   for (const e of entries) {
     if (!e.path || !existsSync(e.path)) continue;
     for (const f of listDir(path.join(e.path, "docs", "loops"))) {
@@ -186,6 +187,14 @@ try {
       for (const key of own.keys()) parkedPaths.add(key);
       continue;
     }
+    let fallbackChangedPaths = null;
+    if (originMainDraftPaths) {
+      try {
+        fallbackChangedPaths = git(["diff", "--name-only", "origin/main", "--", ...draftPathspec()], e.path).split("\n");
+      } catch {
+        fallbackUnknownReasons.add(`${e.path}: origin/main content comparison is unreadable`);
+      }
+    }
     const scans = [
       { root: "scripts/.staging-migrations/", filter: isParkedMigrationFile },
       { root: "docs/audits/", filter: isDraftSqlName },
@@ -195,14 +204,18 @@ try {
     ];
     for (const { root, filter } of scans) {
       for (const d of listDraftsRecursive(path.join(e.path, ...root.split("/").filter(Boolean)), root)) {
-        if (originMainDraftPaths && excludeInheritedFallbackPaths([d.rel], originMainDraftPaths).length === 0) continue;
+        const comparison = originMainDraftPaths
+          ? fallbackPathsAgainstOrigin([d.rel], originMainDraftPaths, fallbackChangedPaths)
+          : null;
+        if (comparison?.state === "unknown") fallbackUnknownReasons.add(`${e.path}: ${comparison.reason}`);
+        if (comparison && comparison.paths.length === 0) continue;
         if (filter(d.name, d.rel)) parkedPaths.add(normRepoPath(d.rel));
       }
     }
   }
   fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedPaths.size)}` +
-    (mainline.state === "unknown"
-      ? `\nPARKED STATE UNKNOWN: ${mainline.reason}. Do not treat the parked count as a clean zero.`
+    (mainline.state === "unknown" || fallbackUnknownReasons.size > 0
+      ? `\nPARKED STATE UNKNOWN: ${[mainline.state === "unknown" ? mainline.reason : "", ...fallbackUnknownReasons].filter(Boolean).join("; ")}. Do not treat the parked count as a clean zero.`
       : "");
 } catch { fleetLine = ""; }
 

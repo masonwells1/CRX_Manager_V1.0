@@ -186,18 +186,34 @@ export function draftPathspec() {
 }
 
 // Injected tree reader used when a worktree's merge-base is unreadable. With a
-// usable origin/main tree, inherited paths are subtracted before the fallback
-// opens a file or evaluates its parked header. A null return means callers must
-// retain conservative all-disk discovery and say so loudly.
+// usable origin/main tree, callers compare each fallback worktree's content to
+// that tree before opening a file or evaluating its parked header. A null return
+// means callers must retain conservative all-disk discovery and say so loudly.
 export function originMainDraftPathSet(run) {
   const lines = run(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
   if (lines === null) return null;
   return new Set((lines || []).map(normRepoPath).filter(Boolean));
 }
 
-export function excludeInheritedFallbackPaths(paths, originMainPaths) {
-  if (!originMainPaths) return [...(paths || [])];
-  return [...(paths || [])].filter((p) => !originMainPaths.has(normRepoPath(p)));
+// A merge-base fallback cannot use path identity alone: a worktree may have changed
+// an inherited parked draft in place. Callers obtain `changedPaths` with one exact
+// `git diff --name-only origin/main -- <draft roots>` against that worktree. That
+// content/blob comparison excludes only byte-identical inherited files; a failed
+// comparison is UNKNOWN and conservatively retains every scanned path.
+export function fallbackPathsAgainstOrigin(paths, originMainPaths, changedPaths) {
+  const allPaths = [...(paths || [])].map((p) => String(p || "").trim()).filter(Boolean);
+  if (!originMainPaths) {
+    return { state: "unknown", paths: allPaths, reason: "origin/main draft tree is unavailable" };
+  }
+  if (changedPaths === null) {
+    return { state: "unknown", paths: allPaths, reason: "origin/main content comparison is unreadable" };
+  }
+  const changed = new Set((changedPaths || []).map(normRepoPath).filter(Boolean));
+  return {
+    state: "known",
+    paths: allPaths.filter((p) => !originMainPaths.has(normRepoPath(p)) || changed.has(normRepoPath(p))),
+    reason: "",
+  };
 }
 
 // Mainline can retain historical PARKED prose after an apply. It contributes

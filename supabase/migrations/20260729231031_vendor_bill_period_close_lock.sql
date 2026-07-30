@@ -296,3 +296,59 @@ BEGIN
   RETURN v_summary;
 END;
 $function$;
+
+-- Apply-time ownership guard. The helper is SECURITY INVOKER and deliberately
+-- non-public, so every SECURITY DEFINER caller's effective owner must retain
+-- EXECUTE after the helper revoke. This catches a migration-runner/helper-owner
+-- mismatch before the transaction can commit a broken close/write protocol.
+SET LOCAL search_path = pg_catalog, public, pg_temp;
+
+DO $period_close_postflight$
+DECLARE
+  v_helper_oid oid;
+  v_function_name text;
+  v_function_count integer;
+  v_owner_oid oid;
+  v_owner_name name;
+  v_is_security_definer boolean;
+BEGIN
+  v_helper_oid := to_regprocedure('public._lock_accounting_months(date[],boolean)');
+  IF v_helper_oid IS NULL THEN
+    RAISE EXCEPTION 'PERIOD_CLOSE_POSTFLIGHT_HELPER_MISSING: public._lock_accounting_months(date[],boolean) is absent';
+  END IF;
+
+  FOREACH v_function_name IN ARRAY ARRAY[
+    'create_vendor_bill',
+    'update_vendor_bill',
+    'close_accounting_period'
+  ]
+  LOOP
+    SELECT count(*)
+      INTO v_function_count
+      FROM pg_catalog.pg_proc AS p
+      JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname = v_function_name;
+    IF v_function_count <> 1 THEN
+      RAISE EXCEPTION 'PERIOD_CLOSE_POSTFLIGHT_FUNCTION_COUNT: expected exactly one public.% function, found %',
+        v_function_name, v_function_count;
+    END IF;
+
+    SELECT p.proowner, p.prosecdef
+      INTO v_owner_oid, v_is_security_definer
+      FROM pg_catalog.pg_proc AS p
+      JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname = v_function_name;
+    IF NOT v_is_security_definer THEN
+      RAISE EXCEPTION 'PERIOD_CLOSE_POSTFLIGHT_SECURITY_MODE: public.% must remain SECURITY DEFINER', v_function_name;
+    END IF;
+
+    SELECT r.rolname INTO v_owner_name FROM pg_catalog.pg_roles AS r WHERE r.oid = v_owner_oid;
+    IF v_owner_name IS NULL OR NOT has_function_privilege(v_owner_oid, v_helper_oid, 'EXECUTE') THEN
+      RAISE EXCEPTION 'PERIOD_CLOSE_POSTFLIGHT_HELPER_EXECUTE: owner role % of public.% lacks EXECUTE on public._lock_accounting_months(date[],boolean)',
+        COALESCE(v_owner_name::text, v_owner_oid::text), v_function_name;
+    END IF;
+  END LOOP;
+END;
+$period_close_postflight$;

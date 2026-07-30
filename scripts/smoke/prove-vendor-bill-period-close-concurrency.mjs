@@ -108,6 +108,8 @@ try {
   // The candidate must be visibly present before the registered business chains
   // and two-session schedules run.
   assert.equal(scalar(`SELECT count(*) FROM pg_constraint WHERE conrelid='public.accounting_periods'::regclass AND conname='accounting_periods_whole_calendar_month_check'`), '1');
+  assert.equal(scalar(`SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['create_vendor_bill','update_vendor_bill','close_accounting_period']) AND (NOT p.prosecdef OR NOT has_function_privilege(p.proowner, 'public._lock_accounting_months(date[],boolean)'::regprocedure, 'EXECUTE'))`), '0');
+  console.log('CANDIDATE_POSTFLIGHT_OWNER_EXECUTE_PASS');
   sql(`INSERT INTO public.products(product_name) VALUES ('[PROOF] sibling smoke product ${process.pid}');`);
   for (const sibling of SIBLING_SMOKES) {
     run(['cp', path.join(ROOT, 'scripts', 'smoke', sibling), `${NAME}:/tmp/${sibling}`]);
