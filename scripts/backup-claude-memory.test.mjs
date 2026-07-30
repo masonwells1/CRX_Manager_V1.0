@@ -440,6 +440,53 @@ try {
         "every push destination must be the backup repo, not just one of them",
       );
     }
+
+    // ── round 15: the FINAL location is what gets committed, so verify checks it ─
+    // The documented flow stages outside git — where every repository check is
+    // skipped by design, because nothing outside a repo can be committed — then
+    // copies into a clone and runs `--verify` there. Until now `--verify` only
+    // compared hashes, so the clone that actually receives the notes was never
+    // asked which repository it is, where it pushes, or whether GitHub still calls
+    // it private. A wrong or public clone passed the final check.
+    {
+      const outside = path.join(root, "verify-staged-outside-git");
+      eq(quiet(() => stage(outside, notes)), 0, "staging outside git still succeeds");
+      eq(quiet(() => verify(outside)), 0, "and verifying it there is fine — nothing outside a repo is committable");
+
+      const copySnapshot = (from, to) => {
+        mkdirSync(to, { recursive: true });
+        for (const name of readdirSync(from)) writeFileSync(path.join(to, name), readFileSync(path.join(from, name)));
+      };
+
+      const wrongClone = makeRepo("verify-wrong-clone", "https://github.com/someone-else/notes.git", "");
+      const wrongDest = path.join(wrongClone, "claude-memory");
+      copySnapshot(outside, wrongDest);
+      eq(
+        quiet(() => verify(wrongDest)), 1,
+        "a byte-perfect snapshot sitting in the wrong clone fails verification on WHERE it is",
+      );
+
+      const publicClone = makeRepo("verify-public-app-clone", "https://github.com/masonwells1/CRX_Manager_V1.0.git", "");
+      const publicDest = path.join(publicClone, "claude-memory");
+      copySnapshot(outside, publicDest);
+      eq(quiet(() => verify(publicDest)), 1, "and so does one sitting in the PUBLIC app repo");
+
+      // The legitimate final location still passes, or the check would be useless.
+      const goodDest = path.join(backupRepo, "claude-memory-final");
+      copySnapshot(outside, goodDest);
+      eq(quiet(() => verify(goodDest)), 0, "the private backup clone verifies");
+
+      // Privacy is re-asked at the final location too: a repo that went public
+      // between staging and committing must not pass the last check before a push.
+      try {
+        __setVisibilityProbe(() => ({ visibility: "PUBLIC" }));
+        eq(quiet(() => verify(goodDest)), 1, "a backup repo that has gone public fails final verification");
+        __setVisibilityProbe(() => ({ reason: "gh unavailable: ENOENT" }));
+        eq(quiet(() => verify(goodDest)), 1, "and so does one whose visibility cannot be confirmed");
+      } finally {
+        __setVisibilityProbe(() => ({ visibility: "PRIVATE" }));
+      }
+    }
   }
 
   // ── round 9: a staging run that dies partway cannot pass as complete ──────

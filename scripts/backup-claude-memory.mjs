@@ -209,7 +209,14 @@ function ghVisibility() {
   return visibility ? { visibility } : { reason: "gh returned no visibility field" };
 }
 
-function destinationIsPublishable(outDir, names) {
+// `verb` only shapes the refusal wording. `--verify` runs this same check in the
+// snapshot's FINAL location, because that is the directory the runbook commits and
+// pushes from, and until round fifteen nothing checked it: the documented flow
+// stages outside git (where every repository check is skipped by design), copies
+// into a clone, and verifies there — so a wrong or public clone passed final
+// verification and received the notes (Codex's fifteenth 2026-07-30 review).
+// Neither path writes anything, so "Nothing was written" stays true for both.
+function destinationIsPublishable(outDir, names, verb = "stage") {
   const probe = nearestExisting(outDir);
   const env = { ...process.env };
   for (const name of GIT_DISCOVERY_ENV) delete env[name];
@@ -276,7 +283,7 @@ function destinationIsPublishable(outDir, names) {
   });
   if (credentialed.length > 0) {
     return (
-      `FAIL: refusing to stage — a push remote in this checkout embeds a credential in its URL.\n` +
+      `FAIL: refusing to ${verb} — a push remote in this checkout embeds a credential in its URL.\n` +
       `      (The URL is not reproduced here on purpose.) The runbook prints and reuses the\n` +
       `      verified push URL, so a token in it would end up in terminal output, transcripts\n` +
       `      and shell history. Re-point the remote at the plain SSH or HTTPS URL and let a\n` +
@@ -296,14 +303,14 @@ function destinationIsPublishable(outDir, names) {
     const seen = ghVisibility();
     if (seen.visibility && seen.visibility.toUpperCase() !== "PRIVATE") {
       return (
-        `FAIL: refusing to stage — GitHub reports masonwells1/CRX_Backups is ${seen.visibility}.\n` +
+        `FAIL: refusing to ${verb} — GitHub reports masonwells1/CRX_Backups is ${seen.visibility}.\n` +
         `      The off-site snapshot is only safe while that repository is PRIVATE. Set it back to\n` +
         `      private, then re-run. Nothing was written.`
       );
     }
     if (!seen.visibility) {
       return (
-        `FAIL: refusing to stage — could not confirm masonwells1/CRX_Backups is still private\n` +
+        `FAIL: refusing to ${verb} — could not confirm masonwells1/CRX_Backups is still private\n` +
         `      (${seen.reason}). This directory gets committed and pushed, and these notes name\n` +
         `      real people and real money, so an unproven-private destination is a park, not a\n` +
         `      warning. Fix the check (\`gh auth status\`, or come back online) and re-run — or\n` +
@@ -321,7 +328,7 @@ function destinationIsPublishable(outDir, names) {
       ? `a git checkout with no push remote, so where it would end up cannot be determined`
       : `a git checkout that pushes to ${pushUrls[0]}, not the off-site backup repo`;
   return (
-    `FAIL: refusing to stage into ${outDir} — it is inside ${where}\n` +
+    `FAIL: refusing to ${verb} into ${outDir} — it is inside ${where}\n` +
     `      (${top.stdout.trim()}), and git does not ignore it, so the notes (real names,\n` +
     `      real commission amounts) would become committable there. These notes may be\n` +
     `      tracked in exactly one repository: masonwells1/CRX_Backups. Stage into that\n` +
@@ -582,6 +589,21 @@ function verify(dir) {
   const declaredBytes = manifest.files.reduce((sum, entry) => sum + entry.bytes, 0);
   if (manifest.total_bytes !== declaredBytes) {
     console.error(`FAIL: ${MANIFEST} says total_bytes=${manifest.total_bytes} but its entries sum to ${declaredBytes}.`);
+    return 1;
+  }
+
+  // WHERE this snapshot sits matters as much as whether its hashes match, and
+  // this is the only check that sees the final location. The runbook stages, copies
+  // into a clone, and verifies there — and `stage()`'s repository, push-URL and
+  // privacy checks all ran against the STAGING directory, which the documented flow
+  // puts outside git entirely, where every one of them is skipped by design. So a
+  // wrong clone, a public fork, or a repo whose push URL was re-pointed passed the
+  // final check and was committed from (Codex's fifteenth 2026-07-30 review). The
+  // names come from the manifest, which is validated above, so the ignore probe
+  // covers exactly the files that are actually here.
+  const unsafeHere = destinationIsPublishable(dir, manifest.files.map((entry) => entry.name), "verify");
+  if (unsafeHere) {
+    console.error(unsafeHere);
     return 1;
   }
 

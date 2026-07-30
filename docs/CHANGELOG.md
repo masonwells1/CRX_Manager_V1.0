@@ -255,6 +255,34 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round fifteen: the directory that gets pushed was the one nothing checked
+
+Two highs and a false guarantee.
+
+**Every destination check ran against a directory that is never pushed.** The runbook stages into a
+scratch directory outside git — where the repository, push-URL and privacy checks are all skipped by
+design, because nothing outside a repo can be committed — then copies into a clone and runs
+`--verify` there. But `--verify` only compared hashes. So the clone that actually receives the notes,
+gets committed, and gets pushed was never asked which repository it is, where its remotes push, or
+whether GitHub still calls it private: a wrong clone or a public fork passed the final check with a
+byte-perfect snapshot. `--verify` now re-runs the full destination check in place. Proven with the
+real 190-note snapshot copied into a throwaway repo whose remote was someone else's: refused, naming
+the remote. Removing the check makes that case pass — which is what pins the refusal on it.
+
+**Remote confirmation could accept an old backup.** The final step compared only the number of `.md`
+files on GitHub. If a push silently failed — and this branch has a documented way for exactly that to
+happen, a hook slow enough that GitHub drops the connection and Git reports success before the
+upload — a previous snapshot with the same file count read as confirmation. The check now compares
+the remote manifest's `completed_at`, `file_count` and `total_bytes` against the manifest just
+committed; the timestamp is unique to the staging run, so a match proves *this* snapshot landed.
+Both halves run today: the local line prints, and GitHub returns 404, correctly reporting that
+nothing has landed yet.
+
+**The runbook claimed the script has no network access.** It makes one call — `gh repo view` — to
+confirm the backup repo is still private. The guarantee now says what is actually true: the notes
+never leave the machine by any route the script controls, one read-only call goes out and sends
+nothing, and `gh` holds the credential so the script never sees a token.
+
 ### Round fourteen: an escape is not a name, and a link is not a file
 
 Three findings, all real.
