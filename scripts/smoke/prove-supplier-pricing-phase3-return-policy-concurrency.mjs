@@ -2,20 +2,124 @@
 /**
  * Real-schema, network-isolated Phase 3 proof.  The required schema dump is
  * read-only input; this runner never reads a DB URL or connects to Supabase.
+ *
+ *   node scripts/decompress-schema-baseline.mjs > public-schema.sql
+ *   node scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs \
+ *     --schema-dump public-schema.sql
+ *
+ * The repository's own committed baseline is the only accepted input: it is the
+ * one dump whose provenance is establishable here, because the manifest records
+ * its digest and the ACL artifact this proof restores belongs to that same
+ * generation.  Any other dump is refused rather than proven against.
  */
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..','..');
 const dump=process.argv[2]==='--schema-dump'?process.argv[3]:process.env.CRXP3_SCHEMA_DUMP;
-if(!dump||!existsSync(dump)) throw new Error('usage: node scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs --schema-dump <read-only-public-schema.sql>');
+if(!dump||!existsSync(dump)) throw new Error('usage: node scripts/smoke/prove-supplier-pricing-phase3-return-policy-concurrency.mjs --schema-dump <read-only-public-schema.sql>\n  produce the dump with: node scripts/decompress-schema-baseline.mjs > public-schema.sql');
 const NAME=`crx-phase3-real-${process.pid}-${Date.now().toString(36)}`;
 const image='public.ecr.aws/supabase/postgres:17.6.1.141';
-const files={ extensions:path.join(ROOT,'supabase/baselines/20260719092832_extensions.sql'), dump:path.resolve(dump), liveUnapply:path.join(ROOT,'scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql'), section9:path.join(ROOT,'supabase/migrations/20260726190515_section9_po_ap_high_remediation.sql'), stageA:path.join(ROOT,'supabase/migrations/20260722222743_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
+// Resolve repository artifacts by suffix, never by timestamp prefix. Migration
+// files get renumbered before they land and the schema baseline is regenerated
+// under a fresh timestamp, so a pinned prefix silently rots into a hard
+// `missing <k>` abort that stops this proof before it runs.
+function resolveMigration(suffix){
+  const dir=path.join(ROOT,'supabase/migrations');
+  const hits=readdirSync(dir).filter(f=>f.endsWith(suffix)).sort();
+  if(hits.length!==1) throw new Error(`expected exactly one supabase/migrations/*${suffix}, found ${hits.length}${hits.length?`: ${hits.join(', ')}`:''}`);
+  return path.join(dir,hits[0]);
+}
+// The baseline manifest -- not the directory listing -- is the authority for
+// which generation's artifacts to use and what each must hash to. Picking the
+// lexically-last file per suffix would happily pair a stale extensions dump
+// with a fresh ACL file, and would apply an artifact that had been edited.
+const manifest=JSON.parse(readFileSync(path.join(ROOT,'supabase/baselines/manifest.json'),'utf8'));
+const sha256=local=>createHash('sha256').update(readFileSync(local)).digest('hex').toUpperCase();
+function resolveBaseline(suffix){
+  const hits=Object.keys(manifest.artifacts??{}).filter(f=>f.endsWith(suffix));
+  if(hits.length!==1) throw new Error(`expected exactly one baseline artifact *${suffix} in manifest.json, found ${hits.length}${hits.length?`: ${hits.join(', ')}`:''}`);
+  const local=path.join(ROOT,'supabase/baselines',hits[0]);
+  if(!existsSync(local)) throw new Error(`manifest names ${hits[0]} but the file is missing`);
+  const want=manifest.artifacts[hits[0]].sha256, got=sha256(local);
+  if(got!==want) throw new Error(`baseline artifact ${hits[0]} does not match manifest sha256 (manifest ${want}, on disk ${got})`);
+  return local;
+}
+// Bind the caller-supplied dump to this exact baseline generation, and accept
+// nothing else. The repository's committed baseline is the only schema whose
+// provenance this proof can establish: the manifest records its digest, and the
+// companion ACL artifact restored below belongs to that same generation.
+//
+// An unbound dump cannot be proven against, even one predating Stage A. Every
+// success marker this script prints would look identical, while the schema
+// underneath could carry stale or crafted definitions of the very helpers the
+// assertions lean on -- `check_idempotency`, `_issue_return_credit_impl`, the
+// return implementations -- so the run would certify behavior that is not the
+// repository's. There is no second trusted input, so there is no second path.
+// Exactly one candidate, same as resolveBaseline: taking the first suffix match
+// would let a second generation's entry sit unnoticed in the manifest and decide
+// which dump this proof accepts, which is the ambiguity this binding exists to
+// remove.
+const schemaHits=Object.keys(manifest.artifacts??{}).filter(f=>f.endsWith('_public_schema.sql.br'));
+if(schemaHits.length!==1) throw new Error(`expected exactly one *_public_schema.sql.br entry in manifest.json to bind the dump against, found ${schemaHits.length}${schemaHits.length?`: ${schemaHits.join(', ')}`:''}`);
+const schemaArtifact=schemaHits[0];
+const baselineDumpSha=manifest.artifacts[schemaArtifact].decoded_sha256;
+if(!baselineDumpSha) throw new Error(`manifest.json entry ${schemaArtifact} has no decoded_sha256 to bind the dump against`);
+// The replay below asks the baseline tooling which migrations post-date
+// `migrations_high_water`, then trusts that answer to mean "everything the dump
+// is missing". That only holds while the high-water names the same generation as
+// the dump artifact. Bumping the high-water on its own -- without regenerating
+// the dump -- would empty the pending list, and the proof would quietly go back
+// to certifying the older schema while still printing a replay marker. These two
+// fields are the join between the artifact and the ledger, so assert they agree
+// rather than assuming the tooling always writes them together.
+const schemaArtifactGeneration=schemaArtifact.slice(0,14);
+if(schemaArtifactGeneration!==manifest.migrations_high_water) throw new Error(`baseline manifest is internally inconsistent: schema artifact ${schemaArtifact} is generation ${schemaArtifactGeneration} but migrations_high_water is ${manifest.migrations_high_water}. The post-baseline replay cannot determine what the dump is missing; regenerate supabase/baselines so both agree.`);
+const dumpSha=sha256(path.resolve(dump));
+if(dumpSha!==baselineDumpSha) throw new Error(`refusing to prove against an unbound schema dump: ${path.resolve(dump)} hashes to ${dumpSha}, but this baseline generation (${schemaArtifact}) requires ${baselineDumpSha}. Produce the accepted dump with \`node scripts/decompress-schema-baseline.mjs > public-schema.sql\`.`);
+const files={ extensions:resolveBaseline('_extensions.sql'), aclLockdown:resolveBaseline('_acl_lockdown.sql'), dump:path.resolve(dump), section9:resolveMigration('_section9_po_ap_high_remediation.sql'), stageA:resolveMigration('_product_families_return_policy_foundation.sql'), smoke:path.join(ROOT,'scripts/smoke/smoke-supplier-pricing-phase3-return-policy.sql') };
 for(const [k,v] of Object.entries(files)) if(!existsSync(v)) throw new Error(`missing ${k}: ${v}`);
+// The baseline is a point-in-time snapshot, so every migration that landed after
+// its high-water is absent from the restored schema. Proving Phase 3 against that
+// older shape is a real hole and not a theoretical one: every marker below would
+// print identically while the schema being inspected sat behind production, so a
+// regression introduced by a later migration would pass here. Replay the pending
+// set instead, in ledger order, delegating "what is missing from the baseline" to
+// the same script the schema-baseline tooling already uses -- a second copy of
+// that rule here would be free to drift from the one that governs the baseline.
+// Shelled out rather than imported because the module prints the list from its
+// own top-level body, which would otherwise land in this proof's stdout.
+function postBaselineMigrations(){
+  const script=path.join(ROOT,'scripts/list-post-baseline-migrations.mjs');
+  if(!existsSync(script)) throw new Error(`missing post-baseline migration enumerator: ${script}`);
+  // That script decides what is pending by reading the baseline's captured
+  // migration ledger and trusting the names inside it. The ledger is a manifest
+  // artifact with a recorded digest, so verify it instead of trusting the bytes on
+  // disk: splicing a post-baseline migration's stem into that COPY block removes
+  // it from the pending list, and this proof would go straight back to certifying
+  // a schema missing that migration while still printing a replay marker. Same
+  // hole as the high-water check above, entered from the other side.
+  // resolveBaseline performs the manifest hash comparison and throws on mismatch.
+  const history=path.basename(resolveBaseline('_migration_history.sql'));
+  const historyGeneration=history.slice(0,14);
+  if(historyGeneration!==manifest.migrations_high_water) throw new Error(`baseline migration-history artifact ${history} is generation ${historyGeneration} but migrations_high_water is ${manifest.migrations_high_water}; the enumerator would read a different ledger than the one just hash-verified.`);
+  const r=spawnSync(process.execPath,[script],{cwd:ROOT,encoding:'utf8',maxBuffer:8*1024*1024});
+  if(r.error||r.status!==0) throw new Error(`could not enumerate post-baseline migrations: ${r.error?.message||''}\n${r.stderr||r.stdout}`);
+  return r.stdout.split(/\r?\n/).map(l=>l.trim()).filter(Boolean).map(rel=>{
+    // Validate the shape rather than trusting stdout: a future change to that
+    // script that prints a summary line must fail loudly here, not get copied
+    // into the container as a migration and applied.
+    if(!/^supabase\/migrations\/\d{14}_[^/]+\.sql$/.test(rel)) throw new Error(`unexpected line from list-post-baseline-migrations.mjs, not a migration path: ${rel}`);
+    const local=path.join(ROOT,rel);
+    if(!existsSync(local)) throw new Error(`post-baseline migration is listed but missing on disk: ${rel}`);
+    return local;
+  });
+}
+const pendingMigrations=postBaselineMigrations();
 function run(args,o={}){const r=spawnSync('docker',args,{cwd:ROOT,encoding:'utf8',input:o.input,maxBuffer:50*1024*1024});if(r.error||(!o.fail&&r.status!==0))throw new Error(`${r.error?.message||''}\n${r.stderr||r.stdout}`);return r}
 function psqlArgs(){return ['exec','-i',NAME,'psql','-U','postgres','-d','postgres','-X','-q','-A','-t','-v','ON_ERROR_STOP=1']}
 function sql(s,o={}){return run(psqlArgs(),{input:s,fail:o.fail})}
@@ -24,12 +128,6 @@ function file(local,name){run(['cp',local,`${NAME}:/tmp/${name}`])}
 function apply(name){return sql(`BEGIN;
 \\i /tmp/${name}
 COMMIT;`)}
-function applyNormalized(local){
-  const source=readFileSync(local,'utf8').replace(/\r\n/g,'\n');
-  return sql(`BEGIN;
-${source}
-COMMIT;`);
-}
 function session(s,marker){const c=spawn('docker',psqlArgs(),{cwd:ROOT,stdio:['pipe','pipe','pipe']});let out='',err='',timer,settled=false;let resolve,reject;const ready=new Promise((r,j)=>{resolve=r;reject=j;timer=setTimeout(()=>{if(!settled){settled=true;j(new Error(`timeout waiting for ${marker}: ${err||out}`))}},20000)});c.stdout.on('data',x=>{out+=x;if(!settled&&out.includes(marker)){settled=true;clearTimeout(timer);resolve()}});c.stderr.on('data',x=>err+=x);c.stdin.end(s);const done=new Promise(r=>c.on('close',code=>{if(!settled){settled=true;clearTimeout(timer);reject(new Error(`session ended before ${marker}: ${err||out}`))}r({code,out,err})}));return {ready,done,output:()=>out} }
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function scalar(statement){const out=sql(statement).stdout.trim(); if(!out)throw new Error(`expected scalar output: ${statement}`); return out.split(/\r?\n/).at(-1)}
@@ -44,15 +142,238 @@ try {
   for(const [k,v] of Object.entries(files)) file(v,`${k}.sql`);
   adminSql('CREATE SCHEMA IF NOT EXISTS auth; CREATE TABLE IF NOT EXISTS auth.users(id uuid PRIMARY KEY);');
   apply('extensions.sql'); apply('dump.sql');
-  // The approved real dump predates the current live unapply body and Section
-  // 09. Restore the read-only pg_get_functiondef fixture, then Section 09, so
-  // Stage A sees the exact live bodies it deliberately hash-pins. Each boundary
-  // is a separate transaction and therefore fails independently.
-  // Normalize the captured pg_get_functiondef fixture before psql sees it.
-  // PostgreSQL hashes the function body byte-for-byte, so a Windows CRLF
-  // checkout must reconstruct the same LF body captured from production.
-  applyNormalized(files.liveUnapply); apply('section9.sql'); apply('stageA.sql');
+  // The dump is hash-bound to the current baseline generation, which is at or
+  // past both migrations' high-water, so both must already be in the restored
+  // schema. Neither is re-applied here -- both are non-idempotent (CREATE TABLE
+  // / CREATE UNIQUE INDEX / CREATE POLICY / DROP CONSTRAINT) and would abort.
+  // Assert their arrival anyway: if a future baseline is regenerated from a
+  // database missing them, that is a schema-provenance failure, and it must
+  // surface here rather than as a confusing error deep in the matrix below.
+  const present=probe=>scalar(`SELECT (${probe})::text;`)==='true';
+  const hasStageA=present(`to_regclass('public.product_families') IS NOT NULL`);
+  // Pinned to the relation, not just the trigger name: the same name attached to
+  // some other table would satisfy a name-only probe while leaving
+  // purchase_order_items untriggered, which is exactly the drift this asserts on.
+  const hasSection9=present(`EXISTS (
+    SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE t.tgname='trg_po_items_recompute_on_order' AND NOT t.tgisinternal
+       AND n.nspname='public' AND c.relname='purchase_order_items')`);
+  console.log(`PHASE3_DUMP_STATE stage_a=${hasStageA?'present':'absent'} section09=${hasSection9?'present':'absent'} dump_sha256=${dumpSha}`);
+  if(!hasStageA||!hasSection9) throw new Error(`the hash-bound baseline dump is missing schema this proof asserts against (stage_a=${hasStageA?'present':'absent'}, section09=${hasSection9?'present':'absent'}); regenerate supabase/baselines from a database at or past both migrations`);
+  // The baseline dump needs its companion ACL artifact. A schema dump can only
+  // GRANT, and this image's ALTER DEFAULT PRIVILEGES re-grants EXECUTE to
+  // anon/authenticated as each function is created, which `REVOKE ... FROM
+  // PUBLIC` does not strip. Without this step the smoke matrix correctly fails
+  // its app-role privilege assertion. The artifact owns its own transaction, so
+  // it is applied without the BEGIN/COMMIT wrapper, and it self-verifies via
+  // BASELINE_ACL_ANON_EXECUTE_DRIFTED. Safe here precisely because the dump is
+  // pinned to this generation: its GRANTs name objects that an older dump would
+  // not contain, and it cannot mask drift in a schema it did not come from.
+  sql('\\i /tmp/aclLockdown.sql');
+  console.log('PHASE3_BASELINE_ACL_LOCKDOWN_APPLIED');
+  // Bring the restored snapshot up to the migration set production actually has.
+  // Ordered after the ACL artifact because that is the order production saw: the
+  // lockdown belongs to the baseline generation, and each of these migrations
+  // issues its own REVOKEs afterwards. Non-idempotent statements are safe -- this
+  // is a fresh restore and each file is applied exactly once, as on production.
+  // Every migration's own terminal verification block runs as part of the replay,
+  // so a migration whose postflight assertions no longer hold on this schema
+  // fails here instead of being skipped.
+  for(const local of pendingMigrations){
+    const name=path.basename(local);
+    // A migration that opens its own transaction must not be wrapped in a second
+    // one: the inner COMMIT would end the outer transaction early and silently
+    // drop the rest of the file into autocommit. `BEGIN;` with a semicolon at the
+    // start of a line is the discriminator -- PL/pgSQL block openers inside a
+    // function body are a bare `BEGIN` with no semicolon, so they do not match.
+    const ownsTransaction=/^[ \t]*BEGIN[ \t]*;/mi.test(readFileSync(local,'utf8'));
+    file(local,`pending_${name}`);
+    if(ownsTransaction) sql(`\\i /tmp/pending_${name}`); else apply(`pending_${name}`);
+    console.log(`PHASE3_POST_BASELINE_MIGRATION_APPLIED ${name}${ownsTransaction?' (self-transacted)':''}`);
+  }
+  console.log(`PHASE3_POST_BASELINE_REPLAY_PASS count=${pendingMigrations.length} baseline_high_water=${manifest.migrations_high_water}`);
+  // Both migrations arrive inside the dump, so neither one's postflight security
+  // assertions have run in this container. The probes above only establish that
+  // one table and one trigger name exist; they say nothing about SECURITY
+  // DEFINER, `search_path`, trigger relation/binding identity, function-body
+  // hashes, grants, deferred-constraint timing, or AP overload counts. Each
+  // migration ends with exactly one terminal assertion block that checks all of
+  // that, and those blocks are pure reads, so replay both here. Without this, a
+  // baseline regenerated from a drifted database -- an unsafe function
+  // definition, a wrongly bound trigger, an extra AP overload -- would still
+  // print every success marker below.
+  function terminalAssertionBlock(local){
+    const source=readFileSync(local,'utf8').replace(/\r\n/g,'\n');
+    const opener=[...source.matchAll(/^DO \$([A-Za-z0-9_]+)\$$/gm)].at(-1);
+    if(!opener) throw new Error(`no terminal DO block found in ${path.basename(local)}`);
+    const tag=`$${opener[1]}$`, block=source.slice(opener.index).trimEnd();
+    if(!block.endsWith(`${tag};`)) throw new Error(`terminal ${tag} block in ${path.basename(local)} is not the final statement; postflight assertions cannot be replayed safely`);
+    return block;
+  }
+  for(const [label,local] of [['section09',files.section9],['stage_a',files.stageA]]){
+    sql(terminalAssertionBlock(local));
+    console.log(`PHASE3_MIGRATION_POSTFLIGHT_ASSERTIONS_PASS ${label}`);
+  }
+  // Section 9's own postflight block is weaker than its marker suggests: it counts
+  // pg_proc rows across three AP routine names and demands the total be 3, so a
+  // dropped routine paired with an extra overload of another still totals 3 and
+  // passes. It also never looks at the recompute trigger's binding. Nothing later
+  // in this proof exercises those objects, so without the assertions below a
+  // baseline carrying either drift would print a postflight-pass marker anyway.
+  // Assert full identity instead of counts: exact argument lists (which is what
+  // an overload changes), SECURITY DEFINER, search_path, and the trigger's
+  // relation/events/function as PostgreSQL itself renders them.
+  sql(`DO $sec9$
+DECLARE v_def text; v_norm text; v_expected text; v_actual text; v_count integer;
+BEGIN
+  SELECT count(*) INTO v_count FROM pg_trigger WHERE tgname='trg_po_items_recompute_on_order' AND NOT tgisinternal;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SECTION9_TRIGGER_COUNT_UNEXPECTED: %', v_count;
+  END IF;
+  SELECT pg_get_triggerdef(t.oid) INTO v_def
+    FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE t.tgname='trg_po_items_recompute_on_order' AND NOT t.tgisinternal
+     AND n.nspname='public' AND c.relname='purchase_order_items';
+  IF v_def IS NULL THEN
+    RAISE EXCEPTION 'SECTION9_TRIGGER_NOT_BOUND_TO_PURCHASE_ORDER_ITEMS';
+  END IF;
+  v_norm := btrim(regexp_replace(v_def,'\\s+',' ','g'));
+  v_expected := 'CREATE TRIGGER trg_po_items_recompute_on_order AFTER INSERT OR DELETE OR UPDATE OF purchase_order_id, product_id, quantity_ordered, quantity_received ON public.purchase_order_items FOR EACH ROW EXECUTE FUNCTION trg_po_items_recompute_on_order()';
+  IF v_norm <> v_expected THEN
+    RAISE EXCEPTION 'SECTION9_TRIGGER_DEFINITION_DRIFTED: %', v_norm;
+  END IF;
+
+  SELECT string_agg(sig,';' ORDER BY sig) INTO v_actual FROM (
+    SELECT p.proname||'('||pg_get_function_identity_arguments(p.oid)||') secdef='||p.prosecdef::text
+           ||' config='||coalesce(array_to_string(p.proconfig,','),'<none>') AS sig
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+     WHERE n.nspname='public'
+       AND p.proname IN ('create_vendor_bill','get_ap_aging','update_vendor_bill')
+  ) s;
+  v_expected :=
+    'create_vendor_bill(p_vendor_id uuid, p_purchase_order_id uuid, p_bill_number text, p_bill_date date, p_due_date date, p_payment_terms text, p_subtotal_cents bigint, p_adjustment_cents bigint, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp'
+    ||';get_ap_aging(p_as_of_date date) secdef=true config=search_path=public, pg_temp'
+    ||';update_vendor_bill(p_bill_id uuid, p_subtotal_cents bigint, p_adjustment_cents bigint, p_bill_date date, p_due_date date, p_notes text, p_idempotency_key text) secdef=true config=search_path=public, pg_temp';
+  IF coalesce(v_actual,'<none>') <> v_expected THEN
+    RAISE EXCEPTION 'SECTION9_AP_ROUTINE_IDENTITY_DRIFTED: %', coalesce(v_actual,'<none>');
+  END IF;
+END;
+$sec9$;`);
+  console.log('PHASE3_SECTION9_OBJECT_IDENTITY_PASS');
+  // Every trigger assertion above and in both replayed terminal blocks reads
+  // pg_get_triggerdef(), whose output is byte-identical whether the trigger is
+  // enabled, disabled, or replica-only -- tgenabled is simply not part of the
+  // rendered definition. A baseline captured from a database where any of these
+  // was left disabled would therefore satisfy every identity check while the
+  // behavior it guards silently does not run. Assert the whole set in one place,
+  // relation-qualified, so a disabled, dropped, renamed, or rebound trigger all
+  // land as the same failure. This is checked for the full load-bearing set, not
+  // only the two triggers the definition checks above happen to name.
+  // tgenabled is PostgreSQL's internal "char" type, which has no unambiguous
+  // concatenation operator with text -- the cast is required, not cosmetic.
+  const triggerState=scalar(`SELECT coalesce(string_agg(c.relname||'.'||t.tgname||'='||t.tgenabled::text,';' ORDER BY c.relname||'.'||t.tgname COLLATE "C"),'<none>')
+    FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE NOT t.tgisinternal AND n.nspname='public'
+     AND t.tgname IN ('set_product_families_updated_at','trigger_w_defer_phase3_return_item_product_fk',
+       'trigger_x_validate_phase3_return_item_policy','trigger_y_lock_assert_phase3_return_item_insert_policy',
+       'trigger_y_lock_assert_phase3_return_item_update_policy','trigger_x_lock_phase3_return_status_products',
+       'trigger_x_require_governed_phase3_product_metadata','trg_po_items_recompute_on_order',
+       'trg_po_status_recompute_on_order');`);
+  assert.equal(triggerState,[
+    'product_families.set_product_families_updated_at=O',
+    'products.trigger_x_require_governed_phase3_product_metadata=O',
+    'purchase_order_items.trg_po_items_recompute_on_order=O',
+    'purchase_orders.trg_po_status_recompute_on_order=O',
+    'return_items.trigger_w_defer_phase3_return_item_product_fk=O',
+    'return_items.trigger_x_validate_phase3_return_item_policy=O',
+    'return_items.trigger_y_lock_assert_phase3_return_item_insert_policy=O',
+    'return_items.trigger_y_lock_assert_phase3_return_item_update_policy=O',
+    'returns.trigger_x_lock_phase3_return_status_products=O',
+  ].join(';'),`the baseline's Phase 3 / Section 9 trigger set is not the expected fully-enabled set (O=enabled, D=disabled, R/A=replica-only): ${triggerState}`);
+  console.log('PHASE3_TRIGGER_ENABLED_STATE_PASS');
+  // Stage A's own terminal block checks product_families grants and that no
+  // policy targets anon, but it never asserts that RLS is still ENABLED. Every
+  // later check in this proof runs as `postgres`, which bypasses RLS, so a dump
+  // with `relrowsecurity` off would sail through undetected. The catalog is the
+  // only instrument that can see this: a permissive SELECT policy that admits
+  // the reader reads identically whether RLS is enabled or disabled.
+  sql(`DO $rls$
+DECLARE v_pol record; v_count integer; v_qual text;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+     WHERE n.nspname='public' AND c.relname='product_families' AND c.relrowsecurity
+  ) THEN
+    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_RLS_DISABLED';
+  END IF;
+  SELECT count(*) INTO v_count FROM pg_policies WHERE schemaname='public' AND tablename='product_families';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_POLICY_COUNT_UNEXPECTED: %', v_count;
+  END IF;
+  SELECT * INTO v_pol FROM pg_policies WHERE schemaname='public' AND tablename='product_families';
+  -- The predicate is asserted from the catalog, not inferred from a role-scoped
+  -- read. Stage A restores an empty product_families, so a predicate narrowed to
+  -- admit nothing returns the same count(*) = 0 as an unconditional one, and no
+  -- read-based probe can tell them apart. The catalog text is the only witness.
+  --
+  -- Stage A created this policy as USING (true); 20260727174657 then tightened
+  -- it to require an active profile, which is the state both the baseline and
+  -- production now carry. Assert the WHOLE predicate, not the presence of a
+  -- substring: searching for 'is_active_profile' is fail-open, because
+  -- true OR is_active_profile() contains it and admits everyone. Only three
+  -- rendering artifacts are normalized away -- identifier quoting, schema
+  -- qualification, and PostgreSQL's own whitespace -- none of which can change
+  -- what the predicate admits.
+  v_qual := replace(btrim(regexp_replace(replace(replace(v_pol.qual,'"',''),'public.',''),'\\s+',' ','g')),'( ','(');
+  IF v_pol.policyname <> 'product_families_select'
+     OR v_pol.cmd <> 'SELECT'
+     OR v_pol.permissive <> 'PERMISSIVE'
+     OR v_pol.roles <> ARRAY['authenticated']::name[]
+     OR v_qual IS DISTINCT FROM '(SELECT is_active_profile() AS is_active_profile)'
+     OR v_pol.with_check IS NOT NULL THEN
+    RAISE EXCEPTION 'PHASE3_PRODUCT_FAMILIES_POLICY_IDENTITY_DRIFTED: % / % / % / % / qual=% / normalized=% / with_check=%',
+      v_pol.policyname, v_pol.cmd, v_pol.permissive, v_pol.roles, v_pol.qual, v_qual, v_pol.with_check;
+  END IF;
+END;
+$rls$;`);
+  // ...and confirm the GRANT layer agrees: reachable by the intended
+  // application role, refused for anon, exercised as those roles rather than as
+  // the RLS-bypassing superuser every other statement here runs as. This pair
+  // proves grant reachability only -- the policy predicate itself is asserted
+  // from the catalog above, because the restored table is empty.
+  sql(`BEGIN; SET LOCAL ROLE authenticated; SELECT count(*) FROM public.product_families; ROLLBACK;`);
+  assertExactFailure(sql(`BEGIN; SET LOCAL ROLE anon; SELECT count(*) FROM public.product_families; ROLLBACK;`,{fail:true}),'permission denied for table product_families','anon read of product_families');
+  console.log('PHASE3_PRODUCT_FAMILIES_RLS_IN_FORCE_PASS');
   sql(`INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a001'),('00000000-0000-0000-0000-00000000a002') ON CONFLICT DO NOTHING; INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a001','phase3-admin@example.invalid','admin',true),('00000000-0000-0000-0000-00000000a002','phase3-sales@example.invalid','sales_rep',true) ON CONFLICT (id) DO UPDATE SET role=excluded.role,is_active=true;`);
+  // Behavioral counterpart to the catalog assertion above: prove the predicate
+  // actually gates, by reading one real row as an active profile and then as a
+  // deactivated one. The catalog check alone cannot show that -- it reads text --
+  // and the empty restored table made every earlier read-based probe blind. This
+  // runs the genuine article: the image's own auth.uid(), the dump's own
+  // is_active_profile(), and the restored policy, with nothing stubbed.
+  // Everything this block adds -- the a003 deactivated profile, which nothing
+  // else here provides, and one product_families row -- is rolled back, so the
+  // rest of this proof continues against exactly the schema it did before. It
+  // reuses the already-seeded a002 rather than seeding its own active profile,
+  // and a001/a002 deliberately stay outside this transaction: the actor-binding
+  // fixtures below depend on both surviving it. Do not move that seed in here.
+  const rlsBehavior=sql(`BEGIN;
+INSERT INTO auth.users(id) VALUES ('00000000-0000-0000-0000-00000000a003') ON CONFLICT DO NOTHING;
+INSERT INTO public.profiles(id,email,role,is_active) VALUES ('00000000-0000-0000-0000-00000000a003','phase3-deactivated@example.invalid','sales_rep',false) ON CONFLICT (id) DO UPDATE SET is_active=false;
+INSERT INTO public.product_families(name) VALUES ('[PROOF] Phase3 RLS gate');
+SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a002';
+SET LOCAL ROLE authenticated;
+SELECT 'PHASE3_RLS_ACTIVE_ROWS=' || count(*)::text FROM public.product_families;
+RESET ROLE;
+SET LOCAL "request.jwt.claim.sub" = '00000000-0000-0000-0000-00000000a003';
+SET LOCAL ROLE authenticated;
+SELECT 'PHASE3_RLS_DEACTIVATED_ROWS=' || count(*)::text FROM public.product_families;
+RESET ROLE;
+ROLLBACK;`).stdout;
+  assert.match(rlsBehavior,/PHASE3_RLS_ACTIVE_ROWS=1$/m,`active profile could not read the seeded product_families row: ${rlsBehavior}`);
+  assert.match(rlsBehavior,/PHASE3_RLS_DEACTIVATED_ROWS=0$/m,`deactivated profile could still read product_families -- the policy predicate does not gate: ${rlsBehavior}`);
+  assert.equal(scalar(`SELECT count(*)::text FROM public.product_families;`),'0','the rolled-back RLS behavior fixture leaked a product_families row');
+  console.log('PHASE3_PRODUCT_FAMILIES_ACTIVE_PROFILE_GATE_PASS');
   const smoke=sql('\\i /tmp/smoke.sql',{fail:true}); const smokeOut=`${smoke.stdout}\n${smoke.stderr}`; assert.match(smokeOut,/SMOKE_PASS_ROLLBACK/,'rollback matrix did not reach its terminal marker'); assert.match(smokeOut,/PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS/,'unrelated credit-memo unapply regression did not pass'); console.log('PHASE3_UNRELATED_CREDIT_MEMO_UNAPPLY_PASS');
   const source=readFileSync(files.stageA,'utf8'); for(const x of ['lock_phase3_product_policy_products','RETURN_POLICY_NO_RETURN','trigger_x_validate_phase3_return_item_policy'])assert.match(source,new RegExp(x));
   sql(`INSERT INTO public.products(product_name) VALUES ('[PROOF] Phase3 lock A'),('[PROOF] Phase3 lock B');`);
