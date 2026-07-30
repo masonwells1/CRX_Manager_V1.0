@@ -334,7 +334,16 @@ export function pushUsesConfigEnv(cmd) {
   // through the earlier class: the shell strips the quotes and Git sees the
   // assignment, but the detector saw a `'` where it demanded whitespace. `_` is
   // still not in the class, so an unrelated `MY_GIT_CONFIG_COUNT=1` stays allowed.
-  return /(?:^|[;&|(\r\n'"]|\s)(?:\$env:)?GIT_CONFIG(?:_COUNT|_KEY_\d+|_VALUE_\d+|_GLOBAL|_SYSTEM|_NOSYSTEM)?\s*=/i.test(text);
+  //
+  // The NAME half matches the whole `GIT_CONFIG*` namespace, not a hand-listed
+  // subset. Codex's fifth 2026-07-30 review found the list was missing
+  // `GIT_CONFIG_PARAMETERS`, and git 2.54 honours it: verified 2026-07-30 that
+  // `GIT_CONFIG_PARAMETERS="'remote.origin.pushurl=<app repo>'" git config --get
+  // remote.origin.pushurl` returns the injected URL in a checkout that has no
+  // pushurl configured at all. Enumerating variable names is the wrong shape for
+  // this check — every future addition to the namespace would be another silent
+  // hole — so the whole prefix is denied instead.
+  return /(?:^|[;&|(\r\n'"]|\s)(?:\$env:)?GIT_CONFIG(?:_[A-Z0-9_]+)?\s*=/i.test(text);
 }
 
 // URL rewrites are the other way inline-free config can redirect a push:

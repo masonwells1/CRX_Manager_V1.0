@@ -209,6 +209,28 @@ agreeing with the entries. A new `scripts/backup-claude-memory.test.mjs` (31 ass
 secret scan, and the CLI itself; removing the hardening turns the `{}` case red with the exact
 symptom Codex described.
 
+### Round five: enumerating the namespace was the bug
+
+The fifth proof run returned `BLOCKERS` on one finding, and it was real. The `GIT_CONFIG*` detector
+listed variable names one at a time — `_COUNT`, `_KEY_n`, `_VALUE_n`, `_GLOBAL`, `_SYSTEM`,
+`_NOSYSTEM` — and `GIT_CONFIG_PARAMETERS` was not on the list. Git honours it: in a scratch checkout
+with no `pushurl` configured at all,
+`GIT_CONFIG_PARAMETERS="'remote.origin.pushurl=<app repo>'" git config --get remote.origin.pushurl`
+returned the injected URL under git 2.54, and the detector returned `false` for the matching push
+command. That is the same production bypass as rounds three and four, reached through a variable name
+nobody had thought to write down.
+
+The fix is a change of shape, not another name: the detector now matches the whole `GIT_CONFIG*`
+prefix. Any variable in that namespace — including ones git has not invented yet — is denied, while
+the leading boundary still excludes `_`, so an unrelated `MY_GIT_CONFIG_PARAMETERS=1` stays allowed
+and `GIT_SSH_COMMAND` (transport, not destination) keeps working. Coverage was added at both levels:
+unit assertions for the new forms, and two more end-to-end denials driven through the real hook
+against a checkout whose configured `origin` is an unrelated local repo. Restoring the enumerated
+list turns the suite red on the `GIT_CONFIG_PARAMETERS` case.
+
+Three rounds of this guard have now failed the same way — a check written as a list of known-bad
+spellings rather than as a boundary. The list is gone.
+
 ## 2026-07-29 — agent memory is now backed up off-site, and permanently barred from this public repo
 
 162 stale agent-memory notes had been sitting untracked in the main checkout since 2026-07-26,

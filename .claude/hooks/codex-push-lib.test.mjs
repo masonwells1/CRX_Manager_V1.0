@@ -349,6 +349,21 @@ assert.equal(pushUsesConfigEnv(`env "GIT_CONFIG_COUNT=1" git -C /repo push origi
 assert.equal(pushUsesConfigEnv("env 'GIT_CONFIG_GLOBAL=/tmp/evil' git push origin main"), true, "quoted GIT_CONFIG_GLOBAL");
 assert.equal(pushUsesConfigEnv("GIT_CONFIG_COUNT='1' git push origin main"), true, "quoted VALUE, unquoted name");
 assert.equal(pushUsesConfigEnv("env 'MY_GIT_CONFIG_COUNT=1' git push origin main"), false, "quoting does not turn an unrelated variable into an override");
+// Round 5 (Codex, 2026-07-30): the detector listed variable names one by one and
+// GIT_CONFIG_PARAMETERS was not on the list. Git honours it — verified against
+// git 2.54 that it sets remote.origin.pushurl in a checkout that has none — so
+// the whole `GIT_CONFIG*` namespace is denied rather than an enumerated subset.
+assert.equal(
+  pushUsesConfigEnv(`GIT_CONFIG_PARAMETERS="'remote.origin.pushurl=${CRX_URL}'" git -C /repo push origin main`),
+  true,
+  "GIT_CONFIG_PARAMETERS is a destination override",
+);
+assert.equal(pushUsesConfigEnv("env 'GIT_CONFIG_PARAMETERS=x' git push origin main"), true, "quoted GIT_CONFIG_PARAMETERS");
+assert.equal(pushUsesConfigEnv('$env:GIT_CONFIG_PARAMETERS = "x"; git push origin main'), true, "PowerShell GIT_CONFIG_PARAMETERS");
+// A name the namespace has not invented yet must be denied too — that is the
+// point of matching the prefix instead of a list.
+assert.equal(pushUsesConfigEnv("GIT_CONFIG_SOMETHING_NEW=x git push origin main"), true, "any future GIT_CONFIG_* variable is denied");
+assert.equal(pushUsesConfigEnv("MY_GIT_CONFIG_PARAMETERS=x git push origin main"), false, "the prefix match is still anchored at a boundary");
 
 // --- `--repo` vs a positional destination -------------------------------------
 // git-push: "if both are specified, the command-line argument takes precedence".
@@ -416,6 +431,12 @@ assert.equal(pushDestinationToken("git push"), null);
     denied(`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=${CRX_URL} ${push}`, "bare env assignments");
     denied(`export GIT_CONFIG_KEY_0=remote.origin.pushurl; ${push}`, "assignment in its own command segment");
     denied(`$env:GIT_CONFIG_COUNT = "1"; ${push}`, "PowerShell env form");
+    // The round-5 form, end-to-end against a checkout whose configured `origin`
+    // is an unrelated local repo: this is exactly the shape that would have
+    // redirected the push to production while every lookup the guard makes
+    // still described the harmless remote.
+    denied(`GIT_CONFIG_PARAMETERS="'remote.origin.pushurl=${CRX_URL}'" ${push}`, "GIT_CONFIG_PARAMETERS redirect");
+    denied(`env 'GIT_CONFIG_PARAMETERS=remote.origin.pushurl=${CRX_URL}' ${push}`, "quoted GIT_CONFIG_PARAMETERS redirect");
 
     // Controls: the guard must not have become a blanket denier. Both of these
     // run all the way through the destination lookups against the scratch repo.
