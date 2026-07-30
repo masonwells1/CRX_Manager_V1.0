@@ -1,6 +1,6 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-07-30 (post-apply B7 closeout: ledger rows `20260730114102_vendor_bill_period_close_lock` and `20260730124308_close_accounting_period_idempotency_recheck` are live. The follow-up catalog proof confirmed its sole `close_accounting_period(date,uuid,text)` overload, `postgres` owner, SECURITY DEFINER mode, `search_path=public, pg_temp`, ACL boundary, and structurally asserted post-month-lock idempotency recheck; current same-key serialization comes from the helper's first key-only transaction advisory lock. Fixed-date delivery smoke reached expected `ERROR P0001 SMOKE_PASS_ROLLBACK`. The independently run post-follow-up all-20 sweep is CLEAN: 7 raw/7 allowlisted/0 new rows across the same 5 predicates. Operational counts below remain the separately dated 2026-07-18 snapshot.)
+**Last verified:** 2026-07-30 (post-apply B7 closeout: ledger rows `20260730114102_vendor_bill_period_close_lock`, `20260730124308_close_accounting_period_idempotency_recheck`, and `20260730140808_accounting_period_immutable_date_math` are live. The final readback confirmed the validated whole-month constraint and close RPC use exactly two time-zone-independent casts each; 9 period rows remain valid and no business rows changed. The sole close overload retains `postgres` owner, SECURITY DEFINER mode, `search_path=public, pg_temp`, ACL boundary, two idempotency reads, and the month lock. Fixed-date delivery smoke reached expected `ERROR P0001 SMOKE_PASS_ROLLBACK`. The independently run post-follow-up all-20 sweep is CLEAN: 7 raw/7 allowlisted/0 new rows across the same 5 predicates. Operational counts below remain the separately dated 2026-07-18 snapshot.)
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 ## Recent production deployments
@@ -8,6 +8,8 @@
 - **2026-07-30:** Accounting-period close write serialization is live via `20260730114102_vendor_bill_period_close_lock`. The post-apply catalog, ACL, and whole-month-constraint checks passed; the rollback-only business chain reached its expected `SMOKE_PASS_ROLLBACK` terminal. Residual hardening remains: direct authenticated-admin writes to `accounting_periods`, existing vendor-bill completeness at close, and the broader non-vendor-bill writer race.
 
 - **2026-07-30:** Same-key accounting-period-close defense-in-depth follow-up is live via `20260730124308_close_accounting_period_idempotency_recheck`. The post-month-lock recheck is structurally asserted; the current helper's first key-only transaction advisory lock supplies behavioral same-key serialization. Sol mutation testing removed the later block and the current behavioral proof still passed. Live catalog proof and fixed-date delivery rollback smoke passed. Independent all-20 sweep: 7 raw/7 allowlisted/0 new rows across 5 predicates.
+
+- **2026-07-30:** Accounting-period date math is explicitly time-zone-independent via `20260730140808_accounting_period_immutable_date_math`. It changed no business rows; live proof found one validated two-cast constraint, 9 valid period rows, and the close RPC's owner/security/search-path/ACL/lock/replay contract intact.
 
 - **2026-07-28:** `process-document` Edge Function deployed v20 → v21 from merged PR #268
   (`7c096444`). Re-verified live 2026-07-29 by read-only `list_edge_functions`: version **21**,

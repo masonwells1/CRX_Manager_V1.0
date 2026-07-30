@@ -1,11 +1,23 @@
 # Decision Log
 
-Last verified: 2026-07-28
+Last verified: 2026-07-30
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-07-30 — Empty search_path is the narrow stronger SECURITY DEFINER variant
+
+**Decision:** `SECURITY DEFINER` functions normally use `public, pg_temp`; an exactly empty
+`search_path` is allowed only for a deliberately fully schema-qualified body with current
+source and migration-review proof. `check_period_open(date)` is the first explicit exception.
+**Why:** an empty path removes mutable schema lookup entirely, while a separate live guard
+still fails if the function drifts to `public`, `pg_temp`, or any other non-empty path.
+**What this forbids/implies:** never remove a function from the pg_temp contract silently;
+move a reviewed exception to the exact-empty allowlist and keep every relation schema-qualified.
 
 ---
 

@@ -32,6 +32,18 @@ the registered fixed-date delivery smoke reached expected `SMOKE_PASS_ROLLBACK`.
 The independently run post-follow-up all-20 invariant sweep is CLEAN: 7 raw/7
 allowlisted/0 new rows across the same 5 predicates.
 
+Final review correction
+`20260730140808_accounting_period_immutable_date_math` is also live (submitted
+as `20260730140000`, then B7-renamed). It makes the whole-month CHECK and both
+close-RPC month-boundary calculations explicitly time-zone-independent by
+selecting the IMMUTABLE timestamp-without-time-zone `date_trunc` overload.
+The migration changed no business rows. Live proof found one validated
+constraint with two immutable casts, 9 period rows/0 invalid, and one close
+overload retaining its owner, security mode, search path, two idempotency
+reads, month lock, and callable-role boundary. The security-integrity suite now
+guards `check_period_open` as an exact-empty-path, fully schema-qualified
+exception and separately pins `compute_season` to SECURITY INVOKER.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

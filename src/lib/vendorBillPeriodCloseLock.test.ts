@@ -22,6 +22,14 @@ if (idempotencyRecheckMatches.length !== 1) {
 }
 const idempotencyRecheckMigration = readFileSync(join(migrationDir, idempotencyRecheckMatches[0]), 'utf8')
   .replace(/\r\n/g, '\n');
+const immutableDateMathSuffix = '_accounting_period_immutable_date_math.sql';
+const immutableDateMathMatches = readdirSync(migrationDir)
+  .filter((name) => /^\d{14}_/.test(name) && name.endsWith(immutableDateMathSuffix));
+if (immutableDateMathMatches.length !== 1) {
+  throw new Error(`expected exactly one ${immutableDateMathSuffix} migration, found ${immutableDateMathMatches.join(', ') || 'none'}`);
+}
+const immutableDateMathMigration = readFileSync(join(migrationDir, immutableDateMathMatches[0]), 'utf8')
+  .replace(/\r\n/g, '\n');
 const smokeSpecs = JSON.parse(source('scripts', 'smoke', 'smoke-specs.json')) as {
   specs: Record<string, { chain: string; covers: string[] }>;
 };
@@ -57,6 +65,38 @@ describe('vendor-bill accounting-period close serialization', () => {
   it('requires accounting_periods rows to be exactly one calendar month', () => {
     expect(migration).toContain('accounting_periods_whole_calendar_month_check');
     expect(migration).toContain("INTERVAL '1 month - 1 day'");
+    expect(immutableDateMathMigration).toContain(
+      'period_start::timestamp without time zone',
+    );
+    expect(immutableDateMathMigration).toContain(
+      'p_period_end::timestamp without time zone',
+    );
+    expect(immutableDateMathMigration).toContain(
+      'ACCOUNTING_PERIOD_IMMUTABLE_DATE_MATH_CONSTRAINT_DRIFT',
+    );
+    expect(immutableDateMathMigration).toContain(
+      'ACCOUNTING_PERIOD_IMMUTABLE_DATE_MATH_FUNCTION_DRIFT',
+    );
+    const immutableCloseStart = immutableDateMathMigration.indexOf(
+      'CREATE OR REPLACE FUNCTION public.close_accounting_period',
+    );
+    const immutableConstraintStart = immutableDateMathMigration.indexOf(
+      'ADD CONSTRAINT accounting_periods_whole_calendar_month_check',
+    );
+    expect(
+      immutableDateMathMigration
+        .slice(immutableConstraintStart, immutableCloseStart)
+        .match(/period_start::timestamp without time zone/g),
+    ).toHaveLength(2);
+    const immutableCloseEnd = immutableDateMathMigration.indexOf(
+      '$function$;',
+      immutableCloseStart,
+    );
+    expect(
+      immutableDateMathMigration
+        .slice(immutableCloseStart, immutableCloseEnd)
+        .match(/p_period_end::timestamp without time zone/g),
+    ).toHaveLength(2);
   });
 
   it('takes exclusive close lock before invoice scan and upsert', () => {
@@ -133,6 +173,7 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toContain('const BARRIER_SECONDS = 8;');
     expect(proof).toContain("const MIGRATION_SUFFIX = '_vendor_bill_period_close_lock.sql';");
     expect(proof).toContain("const IDEMPOTENCY_RECHECK_SUFFIX = '_close_accounting_period_idempotency_recheck.sql';");
+    expect(proof).toContain("const IMMUTABLE_DATE_MATH_SUFFIX = '_accounting_period_immutable_date_math.sql';");
     expect(proof).toContain('waitForDatabaseReadiness');
     expect(proof).toContain("waitForBarrierWaiters(1, 'baseline writer trigger barrier')");
     expect(proof).toContain("waitForSessionLock('same-key-second-close'");

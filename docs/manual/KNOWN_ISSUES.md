@@ -1,13 +1,13 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-30** (post-apply B7 closeout: Supabase ledger rows `20260730114102_vendor_bill_period_close_lock` and `20260730124308_close_accounting_period_idempotency_recheck` are live. Targeted catalog/ACL/constraint proof passed; the fixed-date delivery rollback-only chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; the independent post-follow-up all-20 sweep is CLEAN with 7 raw/7 allowlisted/0 new rows across 5 predicates. Earlier resolved and deferred claims below remain unchanged.)
+**Last verified: 2026-07-30** (post-apply B7 closeout: Supabase ledger rows `20260730114102_vendor_bill_period_close_lock`, `20260730124308_close_accounting_period_idempotency_recheck`, and `20260730140808_accounting_period_immutable_date_math` are live. Targeted catalog/ACL/constraint proof passed; the final forward correction made the constraint and close-RPC month math explicitly time-zone-independent without changing business rows; the fixed-date delivery rollback-only chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; the independent post-follow-up all-20 sweep is CLEAN with 7 raw/7 allowlisted/0 new rows across 5 predicates. Earlier resolved and deferred claims below remain unchanged.)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## 0f. RESOLVED — vendor-bill versus accounting-period close race
+## 0f. PARTIALLY RESOLVED — governed vendor-bill create/update race closed; residual paths remain
 
 **Status: APPLIED LIVE 2026-07-30.** A read-only 2026-07-29 preflight confirmed
 the current production functions can interleave a vendor-bill period check with

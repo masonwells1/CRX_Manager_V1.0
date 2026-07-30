@@ -134,6 +134,28 @@ auth-bound-role-ungated (1), status-literals (3), and
 ungated-secdef-mutators (1). Ledger version `20260730124308` was independently
 confirmed exactly once.
 
+## Final review correction — applied live
+
+Opus' exact-SHA review found that PostgreSQL resolves
+`date_trunc(text, date)` through the time-zone-aware overload. The current
+expressions are safe for the live UTC configuration and all nine existing rows,
+but an accounting constraint should not depend on session time zone.
+`20260730140808_accounting_period_immutable_date_math.sql` is the B7-renamed
+disk record of the live server-assigned version (submitted as
+`20260730140000_accounting_period_immutable_date_math`). It explicitly casts date inputs to
+`timestamp without time zone` in the whole-month CHECK and both close-RPC
+boundary calculations. It preserves the lock, replay, owner, security, and
+grant behavior, changes no business rows, and carries apply-time postflight
+checks. The two mandatory content-bound Sol reviewer charters returned CLEAN
+before apply. Live readback confirmed one ledger row; one validated constraint
+with exactly two immutable casts; 9 period rows with 0 invalid; and one
+`close_accounting_period(date,uuid,text)` overload with `postgres` owner,
+SECURITY DEFINER, `search_path=public, pg_temp`, two immutable casts, two
+idempotency reads, canonical `ACTOR_MISMATCH`, `anon=false`, and
+`authenticated/service_role=true`. `check_period_open(date)` retains its
+exactly empty path, fully qualified relation reference, and explanatory
+catalog comment.
+
 ## Disposable PostgreSQL 17 proof
 
 `node scripts/smoke/prove-vendor-bill-period-close-concurrency.mjs` restores

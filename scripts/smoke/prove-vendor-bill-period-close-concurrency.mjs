@@ -17,6 +17,7 @@ const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.141';
 const BASE = path.join(ROOT, 'supabase', 'baselines');
 const MIGRATION_SUFFIX = '_vendor_bill_period_close_lock.sql';
 const IDEMPOTENCY_RECHECK_SUFFIX = '_close_accounting_period_idempotency_recheck.sql';
+const IMMUTABLE_DATE_MATH_SUFFIX = '_accounting_period_immutable_date_math.sql';
 const migrationDir = path.join(ROOT, 'supabase', 'migrations');
 const migrationMatches = readdirSync(migrationDir)
   .filter((name) => /^\d{14}_/.test(name) && name.endsWith(MIGRATION_SUFFIX));
@@ -26,6 +27,10 @@ const idempotencyRecheckMatches = readdirSync(migrationDir)
   .filter((name) => /^\d{14}_/.test(name) && name.endsWith(IDEMPOTENCY_RECHECK_SUFFIX));
 assert.equal(idempotencyRecheckMatches.length, 1, `expected exactly one ${IDEMPOTENCY_RECHECK_SUFFIX} migration, found ${idempotencyRecheckMatches.join(', ') || 'none'}`);
 const IDEMPOTENCY_RECHECK_MIGRATION = path.join(migrationDir, idempotencyRecheckMatches[0]);
+const immutableDateMathMatches = readdirSync(migrationDir)
+  .filter((name) => /^\d{14}_/.test(name) && name.endsWith(IMMUTABLE_DATE_MATH_SUFFIX));
+assert.equal(immutableDateMathMatches.length, 1, `expected exactly one ${IMMUTABLE_DATE_MATH_SUFFIX} migration, found ${immutableDateMathMatches.join(', ') || 'none'}`);
+const IMMUTABLE_DATE_MATH_MIGRATION = path.join(migrationDir, immutableDateMathMatches[0]);
 const SIBLING_SMOKES = [
   'smoke-section9-po-ap-high-remediation.sql',
   'smoke-finance-charge-month-dedup.sql',
@@ -142,9 +147,11 @@ try {
   sql(`DELETE FROM public.vendor_bills WHERE bill_number='proof-baseline-create'; DELETE FROM public.accounting_periods WHERE period_start='2025-01-01'; DROP TRIGGER proof_pause_bill ON public.vendor_bills; DROP FUNCTION public._proof_pause_bill();`);
   run(['cp', MIGRATION, `${NAME}:/tmp/candidate.sql`]); console.log(applyFile('candidate.sql').stdout);
   run(['cp', IDEMPOTENCY_RECHECK_MIGRATION, `${NAME}:/tmp/idempotency-recheck.sql`]); console.log(applyFile('idempotency-recheck.sql').stdout);
+  run(['cp', IMMUTABLE_DATE_MATH_MIGRATION, `${NAME}:/tmp/immutable-date-math.sql`]); console.log(applyFile('immutable-date-math.sql').stdout);
   // The candidate must be visibly present before the registered business chains
   // and two-session schedules run.
   assert.equal(scalar(`SELECT count(*) FROM pg_constraint WHERE conrelid='public.accounting_periods'::regclass AND conname='accounting_periods_whole_calendar_month_check'`), '1');
+  assert.equal(scalar(`SELECT count(*) FROM pg_constraint WHERE conrelid='public.accounting_periods'::regclass AND conname='accounting_periods_whole_calendar_month_check' AND pg_get_constraintdef(oid, true) LIKE '%timestamp without time zone%'`), '1');
   assert.equal(scalar(`SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['create_vendor_bill','update_vendor_bill','close_accounting_period']) AND (NOT p.prosecdef OR NOT has_function_privilege(p.proowner, 'public._lock_accounting_months(date[],boolean)'::regprocedure, 'EXECUTE'))`), '0');
   assert.equal(scalar(`SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['create_vendor_bill','update_vendor_bill','check_period_open','close_accounting_period']) AND (NOT p.prosecdef OR EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS acl WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE') OR NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') OR NOT has_function_privilege('service_role', p.oid, 'EXECUTE'))`), '0');
   console.log('CANDIDATE_POSTFLIGHT_OWNER_AND_ACL_PASS');
