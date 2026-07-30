@@ -97,13 +97,14 @@ export function hasExplicitParkedMigrationHeader(sqlText) {
 }
 
 // Every parser-accepted explicit status header contains at least one of these
-// phrases. `git grep` is only a cheap complete prefilter: the SQL blob is still
-// opened and passed through hasExplicitParkedMigrationHeader before it counts.
+// phrases. Extended POSIX whitespace mirrors the parser's flexible multiword
+// status spacing. `git grep` is only a cheap complete prefilter: the SQL blob is
+// still opened and passed through hasExplicitParkedMigrationHeader before it counts.
 export const ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS = [
-  "grep", "-l", "-i",
+  "grep", "-l", "-i", "-E",
   "-e", "PARKED",
-  "-e", "NOT APPLIED",
-  "-e", "DO NOT APPLY",
+  "-e", "NOT[[:space:]]+APPLIED",
+  "-e", "DO[[:space:]]+NOT[[:space:]]+APPLY",
   "origin/main", "--", "supabase/migrations",
 ];
 

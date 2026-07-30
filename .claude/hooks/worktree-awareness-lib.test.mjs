@@ -3,7 +3,9 @@
 // Run: node .claude/hooks/worktree-awareness-lib.test.mjs
 
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -93,6 +95,9 @@ const PARKED_FORWARD_HEADER = "-- Accounting-period close/write serialization.\n
 const PARKED_DRAFT_HEADER = "-- Purpose comment stays first.\n-- PARKED DRAFT — NOT APPLIED until review\n";
 const NOT_APPLIED_HEADER = "-- NOT APPLIED\n";
 const DO_NOT_APPLY_HEADER = "-- DO NOT APPLY\n";
+const NOT_SPACED_APPLIED_HEADER = "-- NOT    APPLIED\n";
+const DO_TABBED_NOT_APPLY_HEADER = "-- DO\tNOT\tAPPLY: owner gate\n";
+const STATUS_TABBED_NOT_APPLIED_HEADER = "-- STATUS: NOT\tAPPLIED\n";
 ok(isParkedDraftPath(DISPATCH), "a staged .sql draft is a parked draft");
 ok(isParkedDraftPath("docs/audits/new-hunt/PARKED-brand-new.sql"), "an audits PARKED-*.sql is a parked draft");
 ok(isParkedDraftPath("docs/audits/2026-07-01-per-acre-draft.sql"), "an audits *draft*.sql is a parked draft");
@@ -102,6 +107,9 @@ ok(hasExplicitParkedMigrationHeader(PARKED_FORWARD_HEADER), "explicit parked hea
 ok(hasExplicitParkedMigrationHeader(PARKED_DRAFT_HEADER), "PARKED DRAFT / NOT APPLIED status line is recognized");
 ok(hasExplicitParkedMigrationHeader(NOT_APPLIED_HEADER), "standalone NOT APPLIED status line is recognized");
 ok(hasExplicitParkedMigrationHeader(DO_NOT_APPLY_HEADER), "standalone DO NOT APPLY status line is recognized");
+ok(hasExplicitParkedMigrationHeader(NOT_SPACED_APPLIED_HEADER), "repeated-space NOT APPLIED status line is recognized");
+ok(hasExplicitParkedMigrationHeader(DO_TABBED_NOT_APPLY_HEADER), "tabbed DO NOT APPLY status line with owner-gate colon is recognized");
+ok(hasExplicitParkedMigrationHeader(STATUS_TABBED_NOT_APPLIED_HEADER), "STATUS-prefixed tabbed NOT APPLIED status line is recognized");
 ok(!hasExplicitParkedMigrationHeader("-- normal feature migration\nCREATE TABLE public.example();"), "ordinary leading comments do not park a migration");
 ok(!hasExplicitParkedMigrationHeader("-- This was previously parked for review\nSELECT 1;"), "historical parked prose is not a current status line");
 ok(!hasExplicitParkedMigrationHeader("-- PARKED migration notes appear later\nSELECT 1;"), "bare parked prose is not a current status line");
@@ -195,6 +203,9 @@ const MAINLINE_ORDINARY_FORWARD = "supabase/migrations/20260730235960_ordinary_f
 const ORPHAN_HEADER = "supabase/migrations/20260730235961_orphaned_parked_header.sql";
 const ORPHAN_NOT_APPLIED = "supabase/migrations/20260730235962_orphaned_not_applied.sql";
 const ORPHAN_DO_NOT_APPLY = "supabase/migrations/20260730235963_orphaned_do_not_apply.sql";
+const ORPHAN_SPACED_NOT_APPLIED = "supabase/migrations/20260730235964_orphaned_spaced_not_applied.sql";
+const ORPHAN_TABBED_DO_NOT_APPLY = "supabase/migrations/20260730235965_orphaned_tabbed_do_not_apply.sql";
+const ORPHAN_STATUS_TABBED_NOT_APPLIED = "supabase/migrations/20260730235966_orphaned_status_tabbed_not_applied.sql";
 const STALE_HEADERS = Array.from({ length: 76 }, (_unused, i) => `supabase/migrations/2025${String(i).padStart(10, "0")}_historical_${i}.sql`);
 const STALE_APPLIED_HISTORY = STALE_HEADERS.map((p, i) => {
   const filename = p.slice(p.lastIndexOf("/") + 1);
@@ -217,6 +228,9 @@ const mainlineTexts = new Map([
   [ORPHAN_HEADER, PARKED_FORWARD_HEADER],
   [ORPHAN_NOT_APPLIED, NOT_APPLIED_HEADER],
   [ORPHAN_DO_NOT_APPLY, DO_NOT_APPLY_HEADER],
+  [ORPHAN_SPACED_NOT_APPLIED, NOT_SPACED_APPLIED_HEADER],
+  [ORPHAN_TABBED_DO_NOT_APPLY, DO_TABBED_NOT_APPLY_HEADER],
+  [ORPHAN_STATUS_TABBED_NOT_APPLIED, STATUS_TABBED_NOT_APPLIED_HEADER],
   ...STALE_HEADERS.map((p) => [p, PARKED_FORWARD_HEADER]),
 ]);
 const mainlinePaths = [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD, CANDIDATE_NO_HEADER, APPLIED_HEADER, SUPERSEDED_FORWARD, MAINLINE_ORDINARY_FORWARD, ...STALE_HEADERS];
@@ -264,6 +278,9 @@ eq(ambiguousHeaderDiscovery.state, "unknown", "a non-candidate, non-applied hist
 for (const [path, header, label] of [
   [ORPHAN_NOT_APPLIED, NOT_APPLIED_HEADER, "standalone NOT APPLIED"],
   [ORPHAN_DO_NOT_APPLY, DO_NOT_APPLY_HEADER, "standalone DO NOT APPLY"],
+  [ORPHAN_SPACED_NOT_APPLIED, NOT_SPACED_APPLIED_HEADER, "repeated-space NOT APPLIED"],
+  [ORPHAN_TABBED_DO_NOT_APPLY, DO_TABBED_NOT_APPLY_HEADER, "tabbed DO NOT APPLY"],
+  [ORPHAN_STATUS_TABBED_NOT_APPLIED, STATUS_TABBED_NOT_APPLIED_HEADER, "STATUS-prefixed tabbed NOT APPLIED"],
 ]) {
   const standaloneOrphan = parkedMainlineDiscoveryFrom(
     [PARKED_FORWARD, path],
@@ -276,9 +293,31 @@ for (const [path, header, label] of [
 
 eq(
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS,
-  ["grep", "-l", "-i", "-e", "PARKED", "-e", "NOT APPLIED", "-e", "DO NOT APPLY", "origin/main", "--", "supabase/migrations"],
-  "shared origin/main prefilter covers every parser-accepted explicit status phrase",
+  ["grep", "-l", "-i", "-E", "-e", "PARKED", "-e", "NOT[[:space:]]+APPLIED", "-e", "DO[[:space:]]+NOT[[:space:]]+APPLY", "origin/main", "--", "supabase/migrations"],
+  "shared origin/main prefilter covers every parser-accepted phrase including repeated spaces and tabs",
 );
+const grepFixtureDir = mkdtempSync(path.join(tmpdir(), "crx-parked-prefilter-"));
+try {
+  const grepFixtures = [
+    ["spaced.sql", NOT_SPACED_APPLIED_HEADER],
+    ["tabbed.sql", DO_TABBED_NOT_APPLY_HEADER],
+    ["status-tabbed.sql", STATUS_TABBED_NOT_APPLIED_HEADER],
+    ["ordinary.sql", "-- ordinary feature migration\nSELECT 1;\n"],
+  ];
+  for (const [name, text] of grepFixtures) writeFileSync(path.join(grepFixtureDir, name), text, "utf8");
+  const isolatedGitEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+  const isolatedGitOptions = { cwd: grepFixtureDir, env: isolatedGitEnv };
+  execFileSync("git", ["init", "-q"], isolatedGitOptions);
+  execFileSync("git", ["add", "--", "."], isolatedGitOptions);
+  const prefilterOptions = ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS.slice(1, -3);
+  const matches = execFileSync("git", ["grep", ...prefilterOptions, "--", "."], { ...isolatedGitOptions, encoding: "utf8" })
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((p) => path.basename(p));
+  eq(matches.sort(), ["spaced.sql", "status-tabbed.sql", "tabbed.sql"], "Git extended-regex prefilter finds repeated-space and tabbed parser-accepted headers only");
+} finally {
+  rmSync(grepFixtureDir, { recursive: true, force: true });
+}
 const zeroMatchPrefilter = originMainParkedMigrationPrefilter(() => {
   const error = new Error("no matches");
   error.status = 1;
