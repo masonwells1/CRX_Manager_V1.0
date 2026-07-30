@@ -247,12 +247,58 @@ export function riskyFiles(files) {
 // remotes so it keeps FULL strength on the app repo (the path patterns are
 // deliberately untouched) and stops policing unrelated ones.
 export const GUARDED_REPO_RE = /[:/]masonwells1\/CRX_Manager_V1\.0(?:\.git)?$/i;
+
+// Raw string matching is not repository identity. `https://github.com/masonwells1/
+// ./CRX_Manager_V1.0.git` is the production repo — every URL parser and git itself
+// resolve it there — but the suffix pattern above does not match it, so the guard
+// classified it as some unrelated repo and skipped the proof gate entirely
+// (Codex's ninth 2026-07-30 review). Compare canonical identity instead: reduce a
+// destination to `host/owner/repo`, resolving `.`/`..`, collapsing separators,
+// dropping credentials, port, trailing slashes and `.git`, and lowercasing (GitHub
+// treats owner and repo case-insensitively). Returns null when the text is not a
+// URL form at all — a bare remote name like `origin` or a filesystem path — so
+// callers can tell "not this repo" apart from "no repository named here".
+export function canonicalRepoId(url) {
+  let text = String(url ?? "").trim();
+  if (!text) return null;
+  const outer = /^(['"])([\s\S]*)\1$/.exec(text);
+  if (outer) text = outer[2].trim();
+  let host;
+  let rawPath;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text)) {
+    let parsed;
+    try { parsed = new URL(text); } catch { return null; }
+    host = parsed.hostname;
+    rawPath = parsed.pathname;
+  } else {
+    // scp-like: [user@]host:path — the colon must not be followed by a slash
+    // (that would be a scheme) and the host must not look like a drive letter.
+    const scp = /^(?:[^@\s/\\]+@)?([^\s:/\\]{2,}):(?!\/)([\s\S]+)$/.exec(text);
+    if (!scp) return null;
+    host = scp[1];
+    rawPath = scp[2];
+  }
+  const segments = [];
+  for (const segment of String(rawPath).split(/[\\/]+/)) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") { segments.pop(); continue; }
+    segments.push(segment);
+  }
+  if (segments.length === 0 || !host) return null;
+  segments[segments.length - 1] = segments[segments.length - 1].replace(/\.git$/i, "");
+  if (!segments[segments.length - 1]) return null;
+  return `${host}/${segments.join("/")}`.toLowerCase();
+}
+const GUARDED_REPO_ID = "github.com/masonwells1/crx_manager_v1.0";
 // Accepts `git remote -v` output. Fails CLOSED: anything unparseable or empty is
 // treated as the guarded repo, so a broken remote lookup cannot skip the gate.
 export function repoIsGuardedApp(remoteListOutput) {
   const lines = String(remoteListOutput ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return true;
-  return lines.some((line) => GUARDED_REPO_RE.test(line.split(/\s+/)[1] || ""));
+  return lines.some((line) => {
+    const url = line.split(/\s+/)[1] || "";
+    return canonicalRepoId(url) === GUARDED_REPO_ID || GUARDED_REPO_RE.test(url);
+  });
 }
 // The checkout's CONFIGURED remotes are not the whole answer, and relying on
 // them alone was a bypass (Codex pre-push review 2026-07-30): `git push
@@ -264,6 +310,14 @@ export function repoIsGuardedApp(remoteListOutput) {
 export function urlIsGuardedApp(url) {
   const text = String(url ?? "").trim().replace(/\/+$/, "");
   if (text.length === 0) return true; // fail CLOSED: unresolvable destination gates
+  const id = canonicalRepoId(text);
+  if (id) return id === GUARDED_REPO_ID;
+  // Not canonicalizable. If it still carries a URL SCHEME it names some host the
+  // guard could not resolve — fail CLOSED, because an unreadable remote is
+  // exactly the case this exists for. A bare remote name (`origin`) or a
+  // filesystem path names no host at all; those resolve elsewhere, and calling
+  // them guarded here would gate every push to a local repo.
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text)) return true;
   return GUARDED_REPO_RE.test(text);
 }
 
@@ -476,10 +530,65 @@ export function pushUsesConfigRootEnv(cmd) {
 // resolves the destination in ITS environment, the push runs in a different one,
 // and no amount of naming individual variables closes a gap that is really about
 // the two environments differing at all. So the rule is inverted here — an
-// allowlist, not a denylist. `GIT_SSH_COMMAND` is the one sanctioned prefix (the
-// documented SSH keepalive workaround); it selects a TRANSPORT, not a
-// destination, and cannot change where the objects land.
-const INLINE_ENV_ALLOWED = new Set(["GIT_SSH_COMMAND", "GIT_TERMINAL_PROMPT"]);
+// allowlist, not a denylist.
+//
+// The allowlist is by NAME **and VALUE**. An earlier version admitted any
+// `GIT_SSH_COMMAND`, on the reasoning that it selects a transport rather than a
+// destination — which is wrong, and Codex's ninth 2026-07-30 review said so:
+// GIT_SSH_COMMAND is an arbitrary command line that git executes, free to ignore
+// the destination git hands it and run `git-receive-pack` against production
+// while the guard reads only the innocent-looking nominal destination. So the
+// sanctioned keepalive workaround is admitted in its exact documented shape and
+// nothing else; every other value is reported and denied.
+const INLINE_ENV_ALLOWED = new Map([
+  // `ssh` plus keepalive/batch options only — no shell, no command, no host.
+  ["GIT_SSH_COMMAND", /^ssh(?:\s+-o\s+(?:ServerAliveInterval=\d{1,4}|ServerAliveCountMax=\d{1,3}|BatchMode=(?:yes|no)))*$/],
+  ["GIT_TERMINAL_PROMPT", /^[01]$/],
+]);
+// Splitting a command on `&&`/`||`/`;` with a plain regex splits INSIDE quotes
+// too, and that silently disarmed the value check above: the separator in
+// `GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 && curl evil" git push …` is
+// part of the value, but a naive split made the assignment look like it belonged
+// to an earlier command and the push looked clean. Track quote state instead.
+export function shellSegments(cmd) {
+  const text = String(cmd ?? "");
+  const segments = [];
+  let quote = null;
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === ";" || ch === "\n" || ch === "\r") {
+      segments.push(text.slice(start, i));
+      start = i + 1;
+      continue;
+    }
+    if (ch === "&" || ch === "|") {
+      segments.push(text.slice(start, i));
+      let end = i;
+      while (end < text.length && (text[end] === "&" || text[end] === "|")) end += 1;
+      start = end;
+      i = end - 1;
+    }
+  }
+  segments.push(text.slice(start));
+  return segments;
+}
+
+// `NAME=value`, `NAME="value with spaces"`, and `'NAME=value'` are all one token
+// by the time this sees it. Returns null when the token is not an assignment.
+function inlineAssignment(token) {
+  let text = String(token ?? "");
+  const outer = /^(['"])([\s\S]*)\1$/.exec(text);
+  if (outer) text = outer[2];
+  const split = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/.exec(text);
+  if (!split) return null;
+  let value = split[2];
+  const quoted = /^(['"])([\s\S]*)\1$/.exec(value);
+  if (quoted) value = quoted[2];
+  return { name: split[1], value: value.trim() };
+}
 export function pushSetsInlineEnv(cmd) {
   const text = String(cmd || "");
   const names = [];
@@ -488,16 +597,16 @@ export function pushSetsInlineEnv(cmd) {
     // GIT_PUSH_PREFIX_RE captures (that starts after it). Take the text up to the
     // binary, trimmed to the current segment so an earlier chained command's
     // arguments are not misread as this push's prefix.
-    const prefix = text.slice(0, push.index).split(/(?:&&|\|\|?|;|\r?\n)/).pop() || "";
+    const prefix = shellSegments(text.slice(0, push.index)).pop() || "";
     // splitShellArgs is not usable here: it only treats a quote as grouping when
     // the token STARTS with one, so `GIT_SSH_COMMAND="ssh -o Foo=1"` came apart at
     // the space and the fragment `Foo=1"` read as a second assignment. A token is
     // really a run of unquoted characters and quoted spans, in any order.
     for (const token of prefix.match(/(?:[^\s'"]|'[^']*'|"[^"]*")+/g) || []) {
-      const assignment = /^(?:'|")?([A-Za-z_][A-Za-z0-9_]*)=/.exec(token);
-      if (assignment && !INLINE_ENV_ALLOWED.has(assignment[1].toUpperCase())) {
-        names.push(assignment[1]);
-      }
+      const assignment = inlineAssignment(token);
+      if (!assignment) continue;
+      const shape = INLINE_ENV_ALLOWED.get(assignment.name.toUpperCase());
+      if (!shape || !shape.test(assignment.value)) names.push(assignment.name);
     }
   }
   return names;

@@ -27,6 +27,7 @@ import {
   pushUsesConfigEnv,
   pushUsesConfigRootEnv,
   pushSetsInlineEnv,
+  shellSegments,
   unknownPushOptions,
   environmentCarriesConfigOverride,
   destinationLooksLikeUrl,
@@ -82,7 +83,7 @@ if (pushUsesConfigRootEnv(cmd)) {
 // of ANYTHING but the sanctioned transport variables is denied outright.
 const inlineEnv = pushSetsInlineEnv(cmd);
 if (inlineEnv.length > 0) {
-  deny(`CODEX GATE: this push sets environment variables inline (${inlineEnv.join(", ")}). The guard resolves the destination in its own environment, so any variable the push carries and the guard does not makes the two disagree. Only GIT_SSH_COMMAND/GIT_TERMINAL_PROMPT, which select a transport rather than a destination, may prefix a push.`);
+  deny(`CODEX GATE: this push sets environment variables inline (${inlineEnv.join(", ")}). The guard resolves the destination in its own environment, so any variable the push carries and the guard does not makes the two disagree. The only prefixes accepted are GIT_TERMINAL_PROMPT=0/1 and GIT_SSH_COMMAND in its exact documented keepalive shape (\`ssh\` with ServerAliveInterval/ServerAliveCountMax/BatchMode options and nothing else) — GIT_SSH_COMMAND is a command line git executes, so any other value can run git-receive-pack against production while this guard reads only the nominal destination.`);
 }
 // The destination is read by walking argv, and that walk has to know which
 // options swallow the following token. `--recurse-submodules no <url>` slipped
@@ -119,8 +120,9 @@ function git(args, cwd) {
 // Inspect every push in a chained/multiline command. A harmless first push must
 // not hide a later main-bound push. Single `|` splits too (Codex round-4):
 // both sides of a pipeline execute.
-const pushCommands = cmd
-  .split(/(?:&&|\|\|?|;|\r?\n)/)
+// Quote-aware, so a separator inside a quoted value cannot manufacture a phantom
+// segment boundary (Codex round 9).
+const pushCommands = shellSegments(cmd)
   .map((segment) => segment.trim())
   .filter((segment) => isGitPush(segment));
 

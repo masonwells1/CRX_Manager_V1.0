@@ -255,6 +255,46 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round nine: a transport variable is a command, and a repository is not a string
+
+Two blockers, both real, both proven with the reviewer's own read-only probe before being fixed.
+
+**`GIT_SSH_COMMAND` could redirect an apparently unrelated push to production.** The guard let that
+one variable through on the reasoning that it picks a *transport* rather than a *destination*. That
+reasoning is wrong: `GIT_SSH_COMMAND` is an arbitrary command line git executes, and it is free to
+ignore the destination git hands it and run `git-receive-pack` against production instead. The
+reviewer's probe showed exactly that — a push classified `HEAD → main` with nothing denied, no
+guarded destination, and no guarded checkout, while the value pointed anywhere it liked. The
+allowlist is now by **name and value**: `GIT_TERMINAL_PROMPT=0/1`, and `GIT_SSH_COMMAND` only in its
+exact documented keepalive shape (`ssh` plus `ServerAliveInterval` / `ServerAliveCountMax` /
+`BatchMode` options and nothing else). Anything else denies and says why.
+
+**Raw suffix matching is not repository identity.** `https://github.com/masonwells1/./CRX_Manager_V1.0.git`
+is the production repo to git and to every URL parser, but the suffix pattern did not match it — so
+the guard filed it as some unrelated repository and skipped the proof gate outright. The same
+weakness sat in the memory-backup script's public-repo refusal. Both now share one
+`canonicalRepoId()`: it parses the URL (both the `https://` and the `user@host:path` spellings),
+resolves `.` and `..` segments, collapses doubled separators, drops a trailing `.git`, and lowercases
+the result. A string that carries a URL scheme but cannot be canonicalised fails **closed**; a bare
+remote name or a filesystem path is correctly read as naming no repository at all.
+
+Finding the second one required fixing a third thing first: splitting a command on `&&` / `||` / `;`
+with a plain regex splits **inside quoted values** too, which silently disarmed the new value check.
+The splitter is now quote-aware, and the push guard's per-push loop uses it as well.
+
+Also closed the reviewer's non-blocking note: staging copies the notes in place, so a run that dies
+partway leaves a mixture of new and old files — and the previous manifest still sitting there
+described a snapshot that no longer existed. The runbook promised a failed staging leaves the
+previous snapshot intact; in-place copying cannot honour that. Staging now retires the manifest
+*before* the first byte is written, so a half-written directory fails `--verify` closed instead of
+being graded against a stale description, and the runbook says plainly that recovery is a
+`git restore` in the backup clone.
+
+Proven end to end on the real notes: staging wrote **189 files (880.9 KB)** and `--verify` matched
+all 189 against the manifest. Every fix is mutation-tested — a name-only allowlist, disabled
+canonicalisation, the naive non-quote-aware split, a raw suffix match in the backup script, and
+keeping the stale manifest each turn the suites red on their own case, and only that case.
+
 ### Round eight: the guard read the first push and stopped, and staging had no fixed address
 
 Two findings, both real.

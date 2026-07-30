@@ -266,6 +266,14 @@ try {
       "the ssh spelling of the app remote is recognised as the same repo",
     );
 
+    // Round 9: so is a spelling that only a URL parser resolves. A raw suffix
+    // match called this an unrelated repository and let the notes through.
+    const dottedRepo = makeRepo("public-app-repo-dotted", "https://github.com/masonwells1/./CRX_Manager_V1.0.git", "");
+    eq(
+      quiet(() => stage(path.join(dottedRepo, "notes"), notes)), 1,
+      "a `.` segment in the remote does not disguise the public repo",
+    );
+
     // The private off-site clone is a different repo — staging there is the point.
     const backupRepo = makeRepo("private-backup-repo", "https://github.com/masonwells1/CRX_Backups.git", "");
     eq(
@@ -293,6 +301,46 @@ try {
         else process.env.GIT_DIR = inherited;
       }
     }
+  }
+
+  // ── round 9: a staging run that dies partway cannot pass as complete ──────
+  // The notes are copied in place, so a failure mid-copy leaves a mixture of new
+  // and old files. With the PREVIOUS manifest still sitting there, that mixture
+  // was described by a manifest that no longer matched it. Codex's ninth
+  // 2026-07-30 review called it out against the runbook's promise. The manifest is
+  // now retired before the first byte is written, so the half-written directory
+  // fails `--verify` closed instead of being graded against a stale description.
+  {
+    const dest = fresh("interrupted-destination");
+    const before = makeSource("interrupted-source-a", {
+      [INDEX_FILE]: "# index\n- one\n",
+      "a.md": "first snapshot\n",
+    });
+    eq(quiet(() => stage(dest, before)), 0, "the first snapshot stages cleanly");
+    eq(quiet(() => verify(dest)), 0, "and verifies");
+
+    // `zz-crash.md` sorts last, so the earlier notes are already overwritten by
+    // the time the copy hits it — a genuine mid-run failure, not a pre-flight one.
+    // Making the destination path a DIRECTORY is the portable way to force the
+    // write to throw.
+    mkdirSync(path.join(dest, "zz-crash.md"), { recursive: true });
+    const after = makeSource("interrupted-source-b", {
+      [INDEX_FILE]: "# index\n- two\n",
+      "a.md": "second snapshot\n",
+      "zz-crash.md": "this write cannot land\n",
+    });
+    let threw = false;
+    try { quiet(() => stage(dest, after)); } catch { threw = true; }
+    ok(threw, "a write that cannot land aborts the staging run");
+    ok(
+      !readdirSync(dest).includes(MANIFEST),
+      "the interrupted run leaves no manifest behind",
+    );
+    eq(quiet(() => verify(dest)), 1, "so verify refuses the half-written snapshot");
+    eq(
+      readFileSync(path.join(dest, "a.md"), "utf8"), "second snapshot\n",
+      "the notes written before the failure are the new ones — the previous snapshot is NOT preserved in place, which is why the manifest must go first",
+    );
   }
 
   // ── the CLI still runs when invoked directly ──────────────────────────────

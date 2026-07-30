@@ -44,6 +44,7 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { canonicalRepoId } from "../.claude/hooks/codex-push-lib.mjs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -122,7 +123,13 @@ function isInside(child, parent) {
 // review found this. The off-site repo is deliberately unaffected: there the notes
 // ARE tracked on purpose, which is the whole point of the backup — so the refusal
 // is scoped to the app repo, not to "any git worktree".
-const PUBLIC_APP_REPO_RE = /[:/]masonwells1\/CRX_Manager_V1\.0(?:\.git)?$/i;
+// Repository identity comes from the ONE canonicalizer in the hooks library
+// (CLAUDE.md: `.claude/hooks/` is the single source of truth for shared guard
+// logic). A second, weaker copy here is exactly how this check would drift out of
+// agreement with the push guard — and it already had the same defect the guard
+// did: `https://github.com/masonwells1/./CRX_Manager_V1.0.git` is the public repo,
+// and a raw suffix match says it is not (Codex's ninth 2026-07-30 review).
+const GUARDED_APP_REPO_ID = "github.com/masonwells1/crx_manager_v1.0";
 function nearestExisting(dir) {
   let current = path.resolve(dir);
   for (let hops = 0; hops < 64; hops += 1) {
@@ -152,7 +159,7 @@ function destinationIsPublishable(outDir) {
   const remotes = git(["remote", "-v"]);
   const inAppRepo = String(remotes.stdout || "")
     .split(/\r?\n/)
-    .some((line) => PUBLIC_APP_REPO_RE.test(line.trim().split(/\s+/)[1] || ""));
+    .some((line) => canonicalRepoId(line.trim().split(/\s+/)[1] || "") === GUARDED_APP_REPO_ID);
   if (!inAppRepo) return null;
   // Ask about a file INSIDE the destination, not the destination itself: a
   // directory-only pattern (`docs/claude-memory/`) does not match a directory
@@ -306,6 +313,20 @@ function stage(outDir, sourceArg) {
 
   mkdirSync(outDir, { recursive: true });
 
+  // Retire the OLD manifest before overwriting a single note. The notes are copied
+  // in place, so a run that dies partway leaves a mixture of new and old files —
+  // and with the old manifest still sitting there, `--verify` would compare the new
+  // directory against a description of the previous snapshot and call the result
+  // corrupt, or (worse) pass by luck. Codex's ninth 2026-07-30 review flagged the
+  // gap: the runbook promised a failed staging leaves the previous snapshot intact,
+  // and in-place copying cannot honour that. Removing the manifest first cannot
+  // restore the old files, but it makes the half-written state UNMISTAKABLE —
+  // `--verify` fails closed on a missing manifest, so an incomplete snapshot can
+  // never be mistaken for a good one. The recoverable copy is git: in the backup
+  // clone the previous snapshot is one `git restore` away.
+  const manifestPath = path.join(outDir, MANIFEST);
+  if (existsSync(manifestPath)) unlinkSync(manifestPath);
+
   const files = [];
   let totalBytes = 0;
   for (const { name, buf } of entries) {
@@ -338,7 +359,7 @@ function stage(outDir, sourceArg) {
   }
 
   writeFileSync(
-    path.join(outDir, MANIFEST),
+    manifestPath,
     `${JSON.stringify(
       {
         kind: SNAPSHOT_KIND,

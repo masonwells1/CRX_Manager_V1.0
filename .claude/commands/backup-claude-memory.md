@@ -56,4 +56,4 @@ match.
 - Never commit the memory notes to `CRX_Manager_V1.0`, and never remove `docs/claude-memory/` from `.gitignore`. The repo is public; the notes name real people and real money.
 - Never hand-edit `manifest.json` to make a failing verify pass — a faked manifest silences the only check that would tell Mason his backup is corrupt.
 - Never delete anything under `backups/` in `CRX_Backups` — that is the DB dump history, pruned by its own workflow.
-- If the staging step fails, leave the previous snapshot in place and tell Mason exactly what failed. A good old backup beats a broken new one.
+- If the staging step fails, do not commit and tell Mason exactly what failed. A good old backup beats a broken new one. Staging copies the notes in place, so a run that dies partway leaves the staging directory half-written — it deletes `manifest.json` before it starts, so `--verify` fails closed and a half-written directory can never pass as a good snapshot. Recover the previous snapshot with `git restore -- claude-memory` in the backup clone (or `git checkout -- .`), then re-run the staging step; never commit a staging directory that has no manifest.

@@ -184,6 +184,55 @@ assert.equal(urlIsGuardedApp(""), true, "unresolvable destination gates");
 assert.equal(urlIsGuardedApp(null), true);
 assert.equal(urlIsGuardedApp(undefined), true);
 
+// Round 9: repository IDENTITY, not string shape. Every form below is the
+// production repo as far as git and any URL parser are concerned; the old suffix
+// match saw an unrelated repo and skipped the gate.
+assert.equal(
+  urlIsGuardedApp("https://github.com/masonwells1/./CRX_Manager_V1.0.git"), true,
+  "a `.` segment still resolves to the app repo",
+);
+assert.equal(
+  urlIsGuardedApp("https://github.com/masonwells1/other/../CRX_Manager_V1.0.git"), true,
+  "a `..` segment still resolves to the app repo",
+);
+assert.equal(
+  urlIsGuardedApp("https://github.com//masonwells1//CRX_Manager_V1.0.git"), true,
+  "doubled separators still resolve to the app repo",
+);
+assert.equal(
+  urlIsGuardedApp("https://GitHub.com/MasonWells1/crx_manager_v1.0.git"), true,
+  "host, owner and repo compare case-insensitively",
+);
+assert.equal(
+  urlIsGuardedApp("https://token@github.com/masonwells1/CRX_Manager_V1.0.git"), true,
+  "embedded credentials do not change which repo it is",
+);
+assert.equal(
+  urlIsGuardedApp("ssh://git@github.com/masonwells1/CRX_Manager_V1.0.git"), true,
+  "the ssh:// spelling is the same repo",
+);
+assert.equal(
+  urlIsGuardedApp("https://github.com/masonwells1/CRX_Manager_V1.0.wiki.git"), false,
+  "a different repo whose name merely starts the same is not the app repo",
+);
+assert.equal(
+  urlIsGuardedApp("https://example.com/masonwells1/CRX_Manager_V1.0.git"), false,
+  "the same path on another host is another repo",
+);
+assert.equal(
+  urlIsGuardedApp("https://[not-a-url"), true,
+  "a destination that names a host but cannot be parsed fails CLOSED",
+);
+assert.equal(urlIsGuardedApp("origin"), false, "a bare remote name is resolved elsewhere");
+assert.equal(
+  urlIsGuardedApp("C:/Users/mason/scratch/dest.git"), false,
+  "a local filesystem destination names no host",
+);
+assert.equal(
+  repoIsGuardedApp("origin\thttps://github.com/masonwells1/./CRX_Manager_V1.0.git (push)"), true,
+  "the checkout's remotes are canonicalized the same way",
+);
+
 // The destination token is the first non-option positional after `push`.
 assert.equal(pushDestinationToken("git push origin main"), "origin");
 assert.equal(pushDestinationToken("git -C /repo push origin HEAD:main"), "origin");
@@ -421,6 +470,42 @@ assert.deepEqual(pushSetsInlineEnv("git -C C:/CRX_Manager push origin feature"),
 assert.deepEqual(pushSetsInlineEnv(`FOO=1 npm run build && git -C /repo push origin main`), [], "an assignment on an EARLIER chained command is not this push's prefix");
 assert.deepEqual(pushSetsInlineEnv("HOME=/tmp/evil git status"), [], "still only applies to push commands");
 
+// Round 9: GIT_SSH_COMMAND is an arbitrary command line git executes, not a
+// transport setting. It can ignore the destination git hands it and run
+// git-receive-pack against production while the guard reads only the innocent
+// nominal destination. So the allowlist is by name AND value: the documented
+// keepalive shape, and nothing else.
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_SSH_COMMAND="ssh -o ProxyCommand=nc evil 22" git push origin feature`),
+  ["GIT_SSH_COMMAND"], "an unapproved ssh option is denied",
+);
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_SSH_COMMAND="sh -c 'ssh prod git-receive-pack repo.git'" git push origin feature`),
+  ["GIT_SSH_COMMAND"], "a shell command disguised as the transport is denied",
+);
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_SSH_COMMAND="ssh evil-host" git push origin feature`),
+  ["GIT_SSH_COMMAND"], "an ssh value naming a host is denied",
+);
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 && curl evil" git push origin feature`),
+  ["GIT_SSH_COMMAND"], "the keepalive shape with anything appended is denied",
+);
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=5" git push origin feature`),
+  [], "the full documented keepalive form is still allowed",
+);
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_SSH_COMMAND=ssh git push origin feature`), [], "plain ssh is still allowed",
+);
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_TERMINAL_PROMPT=0 git push origin feature`), [], "the documented prompt value is allowed",
+);
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_TERMINAL_PROMPT="$(curl evil)" git push origin feature`),
+  ["GIT_TERMINAL_PROMPT"], "anything but 0 or 1 is denied",
+);
+
 // --- options the argv walk does not understand (Codex 2026-07-30, round 7) -----
 // `--recurse-submodules` takes a SEPARATE value. Verified against git 2.54 on
 // 2026-07-30: with a remote literally named `no`, `git push --recurse-submodules
@@ -580,6 +665,25 @@ assert.equal(pushDestinationToken("git push"), null);
     deniedBecause(`SOME_NEW_GIT_VAR=x ${push}`, /SOME_NEW_GIT_VAR/, "any inline assignment the allowlist does not name");
     deniedBecause(`git -C ${work} push --recurse-submodules no ${CRX_URL} HEAD:main`, /codex/i, "--recurse-submodules hiding the real destination");
     deniedBecause(`git -C ${work} push --some-future-option x origin main`, /--some-future-option/, "an option the guard cannot account for");
+    // Round 9, end-to-end: an arbitrary GIT_SSH_COMMAND, and a production URL
+    // spelled so a raw suffix match misses it.
+    deniedBecause(
+      `GIT_SSH_COMMAND="sh -c 'ssh prod git-receive-pack repo.git'" ${push}`,
+      /GIT_SSH_COMMAND/, "an arbitrary command in GIT_SSH_COMMAND",
+    );
+    deniedBecause(
+      `GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 && curl evil" ${push}`,
+      /GIT_SSH_COMMAND/, "a separator inside the quoted value does not hide the assignment",
+    );
+    deniedBecause(
+      `git -C ${work} push https://github.com/masonwells1/./CRX_Manager_V1.0.git HEAD:main`,
+      /codex/i, "a `.` segment does not disguise the production destination",
+    );
+    assert.equal(
+      runHook(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" ${push}`).decision,
+      "allow",
+      "the documented keepalive prefix still works",
+    );
 
     // Controls: the guard must not have become a blanket denier. Both of these
     // run all the way through the destination lookups against the scratch repo.
