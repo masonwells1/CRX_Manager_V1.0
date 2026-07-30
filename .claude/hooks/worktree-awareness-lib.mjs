@@ -95,7 +95,7 @@ export function hasExplicitParkedMigrationHeader(sqlText) {
     if (!line.startsWith("--")) break;
     header.push(line.replace(/^--[ \t]*/, ""));
   }
-  return header.some((line) => /^(?:status:[ \t]*)?(?:PARKED(?:[ \t]+DRAFT)?(?:[ \t]*$|[ \t]*(?:\/|—|:|-)[ \t]*(?:NOT[ \t]+APPLIED|DO[ \t]+NOT[ \t]+APPLY)\b)|NOT[ \t]+APPLIED(?=[ \t]*$|[ \t]*(?:\/|—|:|-)[ \t]*DO[ \t]+NOT[ \t]+APPLY\b)|DO[ \t]+NOT[ \t]+APPLY(?=[ \t]*$|[ \t]*[—:-]))/i.test(line));
+  return header.some((line) => /^(?:status:[ \t]*)?(?:PARKED(?:[ \t]+DRAFT)?(?:[ \t]*$|[ \t]*(?:\/|—|-)[ \t]*(?:NOT[ \t]+APPLIED|DO[ \t]+NOT[ \t]+APPLY)\b|[ \t]*:[ \t]*(?=[^\r\n]*\b(?:NOT[ \t]+APPLIED|DO[ \t]+NOT[ \t]+APPLY)\b))|NOT[ \t]+APPLIED(?=[ \t]*$|[ \t]*(?:\/|—|:|-)[ \t]*DO[ \t]+NOT[ \t]+APPLY\b)|DO[ \t]+NOT[ \t]+APPLY(?=[ \t]*$|[ \t]*[—:-]))/i.test(line));
 }
 
 // This is a safe, anchored superset of parser-accepted leading SQL status lines.
@@ -382,6 +382,26 @@ export function localCandidateMigrationPathsFromHistory(historyText) {
   return { state: "known", paths, reason: "" };
 }
 
+function historyRowsByMigrationBasename(historyText) {
+  const rowsByBasename = new Map();
+  for (const raw of String(historyText).split("\n")) {
+    const line = raw.replace(/\r/g, "").trim();
+    if (!/^\|/.test(line)) continue;
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 3 || !/^\d{14}$/.test(cells[1])) continue;
+    const detail = cells.slice(2).join(" | ");
+    const basenames = new Set([...detail.matchAll(/`(\d{14}_[a-z0-9_]+\.sql)`/gi)]
+      .map((match) => match[1].toLowerCase())
+      .filter((basename) => basename.startsWith(`${cells[1]}_`)));
+    if (basenames.size !== 1) continue;
+    const basename = [...basenames][0];
+    const rows = rowsByBasename.get(basename) || [];
+    rows.push(detail);
+    rowsByBasename.set(basename, rows);
+  }
+  return rowsByBasename;
+}
+
 // Mainline discovery reads the exact LOCAL CANDIDATE blobs plus a complete, cheap
 // prefilter of origin/main forward migrations whose content contains "PARKED". That
 // makes an orphaned explicit parked header fail loud without opening every migration.
@@ -415,16 +435,7 @@ export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () =>
     discovered.push(matches[0]);
   }
 
-  const historyRowsByVersion = new Map();
-  for (const raw of String(historyText).split("\n")) {
-    const line = raw.replace(/\r/g, "").trim();
-    if (!/^\|/.test(line)) continue;
-    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
-    if (cells.length < 3 || !/^\d{14}$/.test(cells[1])) continue;
-    const rows = historyRowsByVersion.get(cells[1]) || [];
-    rows.push(cells.slice(2).join(" | "));
-    historyRowsByVersion.set(cells[1], rows);
-  }
+  const historyRowsByBasename = historyRowsByMigrationBasename(historyText);
 
   // `null` is the conservative unit-test/fallback mode: inspect every forward
   // migration. Production passes the complete shared origin/main grep prefilter,
@@ -446,8 +457,8 @@ export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () =>
       return { state: "unknown", paths: new Set(discovered), reason: "possible parked forward migration SQL blob is unreadable from origin/main" };
     }
     if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
-    const version = matches[0].slice(matches[0].lastIndexOf("/") + 1).match(/^(\d{14})_/);
-    const rows = version ? historyRowsByVersion.get(version[1]) || [] : [];
+    const basename = matches[0].slice(matches[0].lastIndexOf("/") + 1).toLowerCase();
+    const rows = historyRowsByBasename.get(basename) || [];
     if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
       return { state: "unknown", paths: new Set(discovered), reason: "parked forward header has no LOCAL CANDIDATE or applied/retired history record" };
     }
@@ -463,16 +474,7 @@ export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () =>
 export function validateParkedMigrationCrossReferences(paths, historyText, loadText = () => null) {
   const history = localCandidateMigrationPathsFromHistory(historyText);
   if (history.state !== "known") return history;
-  const historyRowsByVersion = new Map();
-  for (const raw of String(historyText).split("\n")) {
-    const line = raw.replace(/\r/g, "").trim();
-    if (!/^\|/.test(line)) continue;
-    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
-    if (cells.length < 3 || !/^\d{14}$/.test(cells[1])) continue;
-    const rows = historyRowsByVersion.get(cells[1]) || [];
-    rows.push(cells.slice(2).join(" | "));
-    historyRowsByVersion.set(cells[1], rows);
-  }
+  const historyRowsByBasename = historyRowsByMigrationBasename(historyText);
   const headers = new Set();
   for (const raw of paths || []) {
     const p = String(raw || "").trim();
@@ -485,8 +487,8 @@ export function validateParkedMigrationCrossReferences(paths, historyText, loadT
       headers.add(normalized);
       continue;
     }
-    const version = p.slice(p.lastIndexOf("/") + 1).match(/^(\d{14})_/);
-    const rows = version ? historyRowsByVersion.get(version[1]) || [] : [];
+    const basename = p.slice(p.lastIndexOf("/") + 1).toLowerCase();
+    const rows = historyRowsByBasename.get(basename) || [];
     if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
       return { state: "unknown", paths: new Set(), reason: "parked header has no applied/retired history record for its migration version" };
     }

@@ -94,6 +94,7 @@ const DISPATCH = "scripts/.staging-migrations/workflow-waves-parked/PARKED-dispa
 const PARKED_FORWARD = "supabase/migrations/20260729231031_vendor_bill_period_close_lock.sql";
 const PARKED_FORWARD_HEADER = "-- Accounting-period close/write serialization.\n-- PARKED / DO NOT APPLY without Mason approval\n";
 const PARKED_DRAFT_HEADER = "-- Purpose comment stays first.\n-- PARKED DRAFT — NOT APPLIED until review\n";
+const PARKED_COLON_HEADER = "-- PARKED: owner-gated. Do NOT apply without Mason's explicit OK.\n";
 const NOT_APPLIED_HEADER = "-- NOT APPLIED\n";
 const DO_NOT_APPLY_HEADER = "-- DO NOT APPLY\n";
 const NOT_SPACED_APPLIED_HEADER = "-- NOT    APPLIED\n";
@@ -103,6 +104,7 @@ const INDENTED_TABBED_NOT_APPLIED_HEADER = " \t--   NOT\tAPPLIED\n";
 const NBSP_NOT_APPLIED_HEADER = "-- NOT\u00a0APPLIED\n";
 const NBSP_AFTER_COMMENT_HEADER = "--\u00a0NOT APPLIED\n";
 const FALSE_PROSE_HEADER = "-- Historical note: NOT APPLIED after a prior review\n";
+const HISTORICAL_PARKED_COLON_PROSE = "-- PARKED: historical migration applied after a prior review\n";
 const LATER_STATUS_HEADER = "SELECT 1;\n-- NOT APPLIED\n";
 ok(isParkedDraftPath(DISPATCH), "a staged .sql draft is a parked draft");
 ok(isParkedDraftPath("docs/audits/new-hunt/PARKED-brand-new.sql"), "an audits PARKED-*.sql is a parked draft");
@@ -111,6 +113,7 @@ ok(!isParkedDraftPath("docs/audits/2026-07-01-review-final.sql"), "an audits .sq
 ok(!isParkedDraftPath("scripts/.staging-migrations/SUPERSEDED-old.sql"), "a SUPERSEDED draft is retired, not pending");
 ok(hasExplicitParkedMigrationHeader(PARKED_FORWARD_HEADER), "explicit parked header is recognized");
 ok(hasExplicitParkedMigrationHeader(PARKED_DRAFT_HEADER), "PARKED DRAFT / NOT APPLIED status line is recognized");
+ok(hasExplicitParkedMigrationHeader(PARKED_COLON_HEADER), "PARKED colon header with an owner-gated DO NOT APPLY directive is recognized");
 ok(hasExplicitParkedMigrationHeader(NOT_APPLIED_HEADER), "standalone NOT APPLIED status line is recognized");
 ok(hasExplicitParkedMigrationHeader(DO_NOT_APPLY_HEADER), "standalone DO NOT APPLY status line is recognized");
 ok(hasExplicitParkedMigrationHeader(NOT_SPACED_APPLIED_HEADER), "repeated-space NOT APPLIED status line is recognized");
@@ -120,6 +123,7 @@ ok(hasExplicitParkedMigrationHeader(INDENTED_TABBED_NOT_APPLIED_HEADER), "leadin
 ok(!hasExplicitParkedMigrationHeader(NBSP_NOT_APPLIED_HEADER), "NBSP between multiword status tokens is rejected by portable parser grammar");
 ok(!hasExplicitParkedMigrationHeader(NBSP_AFTER_COMMENT_HEADER), "NBSP after SQL comment marker is rejected by portable parser grammar");
 ok(!hasExplicitParkedMigrationHeader(FALSE_PROSE_HEADER), "status-looking prose after another leading comment word is rejected");
+ok(!hasExplicitParkedMigrationHeader(HISTORICAL_PARKED_COLON_PROSE), "historical PARKED colon prose without a current directive is rejected");
 ok(!hasExplicitParkedMigrationHeader(LATER_STATUS_HEADER), "status-looking later comment after SQL is outside the leading header window");
 ok(!hasExplicitParkedMigrationHeader("-- normal feature migration\nCREATE TABLE public.example();"), "ordinary leading comments do not park a migration");
 ok(!hasExplicitParkedMigrationHeader("-- This was previously parked for review\nSELECT 1;"), "historical parked prose is not a current status line");
@@ -209,6 +213,7 @@ eq(parkedMainlinePathsFrom([DISPATCH, "docs/audits/PARKED-direct.sql", PARKED_FO
 // without reading ordinary forward migrations, while an applied header still self-clears.
 const CANDIDATE_NO_HEADER = "supabase/migrations/20260730235959_candidate_without_header.sql";
 const APPLIED_HEADER = "supabase/migrations/20260729010101_applied_old_header.sql";
+const COLLIDING_TIMESTAMP_HEADER = "supabase/migrations/20260729010101_other_same_timestamp.sql";
 const SUPERSEDED_FORWARD = "supabase/migrations/SUPERSEDED-20260730235958_replaced.sql";
 const MAINLINE_ORDINARY_FORWARD = "supabase/migrations/20260730235960_ordinary_feature.sql";
 const ORPHAN_HEADER = "supabase/migrations/20260730235961_orphaned_parked_header.sql";
@@ -281,6 +286,33 @@ ok(!mergedReads.includes(MAINLINE_ORDINARY_FORWARD), "PARKED prefilter preserves
 const b7Applied = parkedMainlineDiscoveryFrom([PARKED_FORWARD], mergedHistory.replace("**LOCAL CANDIDATE — NOT APPLIED.** File: `20260729231031_vendor_bill_period_close_lock.sql`.", "**APPLIED LIVE.** File: `20260729231031_vendor_bill_period_close_lock.sql`."), () => PARKED_FORWARD_HEADER);
 eq(b7Applied.state, "known", "B7 applied history is a known state");
 eq([...b7Applied.paths], [], "B7 applied history self-clears even if an old header survives");
+
+const collidingTimestampHistory = "| 841 | 20260729010101 | **APPLIED LIVE.** File: `20260729010101_applied_old_header.sql`. |";
+const collidingTimestampDiscovery = parkedMainlineDiscoveryFrom(
+  [COLLIDING_TIMESTAMP_HEADER],
+  collidingTimestampHistory,
+  () => PARKED_FORWARD_HEADER,
+  [COLLIDING_TIMESTAMP_HEADER],
+);
+eq(collidingTimestampDiscovery.state, "unknown", "an applied row for a colliding timestamp cannot resolve a different migration basename");
+
+const mismatchedFilenameHistory = "| 841 | 20260729010101 | **APPLIED LIVE.** File: `20260729010102_mismatched_timestamp.sql`. |";
+const mismatchedFilenameDiscovery = parkedMainlineDiscoveryFrom(
+  [APPLIED_HEADER],
+  mismatchedFilenameHistory,
+  () => PARKED_FORWARD_HEADER,
+  [APPLIED_HEADER],
+);
+eq(mismatchedFilenameDiscovery.state, "unknown", "a resolved row cannot index a filename whose timestamp differs from its row");
+
+const ambiguousBasenameHistory = "| 841 | 20260729010101 | **APPLIED LIVE.** Files: `20260729010101_applied_old_header.sql`, `20260729010101_other_same_timestamp.sql`. |";
+const ambiguousBasenameDiscovery = parkedMainlineDiscoveryFrom(
+  [APPLIED_HEADER],
+  ambiguousBasenameHistory,
+  () => PARKED_FORWARD_HEADER,
+  [APPLIED_HEADER],
+);
+eq(ambiguousBasenameDiscovery.state, "unknown", "a resolved row with two same-timestamp basenames resolves neither file");
 
 const orphanHeaderDiscovery = parkedMainlineDiscoveryFrom(
   [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD, ORPHAN_HEADER],
@@ -417,6 +449,12 @@ eq(ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, 32 * 1024 * 1024, "production batch ceiling 
 
 const headerWithoutRow = validateParkedMigrationCrossReferences([PARKED_FORWARD], "| # | Migration timestamp | Purpose |\n|---:|---|---|", () => PARKED_FORWARD_HEADER);
 eq(headerWithoutRow.state, "unknown", "correction guard fails loud for a parked header without a candidate history row");
+const collidingTimestampCrossReference = validateParkedMigrationCrossReferences(
+  [COLLIDING_TIMESTAMP_HEADER],
+  collidingTimestampHistory,
+  () => PARKED_FORWARD_HEADER,
+);
+eq(collidingTimestampCrossReference.state, "unknown", "correction guard also requires an exact applied migration basename");
 const oneCandidateHistory = [
   "| # | Migration timestamp | Purpose |",
   "|---:|---|---|",
