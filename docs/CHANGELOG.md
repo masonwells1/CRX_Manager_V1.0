@@ -428,6 +428,15 @@ bounded canonical base64 carries the text directly, and secret-shaped operationa
 before persistence. Closeout now selects the newest Production deployment, requires its newest
 status to be `success`, and uses GitHub compare ancestry to prove the currently deployed SHA is the
 landing commit or a descendant.
+An eighth exact-SHA Sol/high acceptance found that the read-only Factory Board and `package.json`
+test wiring were not consistently classified as risky/protected, and that absolute temporary/profile
+paths remained in sanitized diff headers. Both trust-chain surfaces are now protected from lane
+self-editing and require Sol/high review when changed. Review diffs use fixed relative snapshot
+operands, with regression proof that neither the source checkout nor the temporary review-root/user
+profile path appears in the packet artifacts. Commit-bound closeout revalidation reads test wiring
+from the frozen landing commit rather than the caller's mutable working tree. Scratch review-packet
+tests also strip hook-inherited repository-local Git variables before initializing a disposable
+repository, preventing the test from targeting the caller's real Git administration directory.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

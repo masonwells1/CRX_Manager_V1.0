@@ -204,8 +204,8 @@ export function createSanitizedReviewWorkspace({
       "--src-prefix=base/",
       "--dst-prefix=candidate/",
       "--",
-      baseDir,
-      candidateDir,
+      path.basename(baseDir),
+      path.basename(candidateDir),
     ], {
       cwd: reviewRoot,
       encoding: "utf8",

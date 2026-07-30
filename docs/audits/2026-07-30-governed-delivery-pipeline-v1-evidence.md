@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `886fa4591dd72c82d9e8c8f0b09fd3c8b7355053`
-State: rebased onto current `origin/main`; seventh Sol/high publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; eighth Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -111,7 +111,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 303 focused assertions after seventh Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 303 focused assertions after eighth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -292,6 +292,17 @@ recursive force-delete cleanup command.
   the newest Production deployment, requires its newest status to be `success`, and uses GitHub's
   compare result to prove the currently deployed SHA is the landing commit or a descendant. Fresh
   exact-commit acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `042afe2482e7a0571cb7df16784e9ad70219c1e6` returned `BLOCKERS`: the read-only Factory Board and
+  `package.json` test wiring were absent from the risky/protected trust-chain registries, and the
+  sanitized review diff still disclosed the host's absolute temporary/profile path in its headers.
+  The repair classifies and protects both surfaces, generates review diffs from fixed relative
+  snapshot names, and tests that packet artifacts contain neither the source checkout nor temporary
+  review-root/profile path. Commit-bound closeout evidence now also reads `package.json` from the
+  frozen landing commit, so staged caller changes cannot mask evidence-freshness checks. Scratch
+  review-packet tests strip hook-inherited repository-local Git variables before `git init`, so they
+  cannot target or reinitialize the caller's real worktree metadata. Fresh exact-commit acceptance
+  is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

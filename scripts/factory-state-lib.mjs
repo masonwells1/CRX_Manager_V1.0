@@ -1629,7 +1629,12 @@ export function validateCurrentHarnessEvidence(job, cwd = FACTORY_ROOT, {
   repositoryFingerprint = null,
 } = {}) {
   validateRepositoryScope(job, cwd, { commitish: repositoryFingerprint?.commitSha || "" });
-  const packageBytes = readFileSync(path.join(cwd, "package.json"));
+  const packageBytes = repositoryFingerprint?.commitSha
+    ? execFileSync("git", ["show", `${repositoryFingerprint.commitSha}:package.json`], {
+        cwd,
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+    : readFileSync(path.join(cwd, "package.json"));
   const packageJson = JSON.parse(packageBytes);
   const currentBaseSha = requireCurrentBase ? currentOriginMain(cwd) : "";
   const repository = repositoryFingerprint || repositoryContentFingerprint(cwd);

@@ -27,9 +27,18 @@ import {
   timeoutMessage,
   worktreeIsClean,
 } from "./write-codex-push-proof.mjs";
+import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
 // Cross-check against the REAL guard validator so the minted proof shape can
 // never silently drift from what codex-push-guard actually accepts.
 import { proofValid } from "../.claude/hooks/codex-push-lib.mjs";
+
+// Git hooks export repository-local GIT_* variables. A scratch `git init`
+// must never inherit them or it can target/reinitialize the caller's real
+// worktree administrative directory instead of the disposable fixture.
+for (const name of gitLocalEnvironmentNames()) delete process.env[name];
+for (const name of Object.keys(process.env)) {
+  if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) delete process.env[name];
+}
 
 // ── arg parsing ──────────────────────────────────────────────────────────────
 const dflt = parseArgs([]);
@@ -151,7 +160,22 @@ assert.equal(scrubbedEnvironment.USERPROFILE, undefined, "reviewer environment d
   assert.equal(existsSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", ".env")), false, "ignored environment files are absent");
   assert.equal(readFileSync(path.join(sanitized.root, "BASE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"), "base\n");
   assert.equal(readFileSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"), "candidate\n");
-  assert.match(readFileSync(path.join(sanitized.root, "REVIEW_DIFF.patch"), "utf8"), /-base[\s\S]*\+candidate/);
+  const reviewPacketText = [
+    readFileSync(path.join(sanitized.root, "REVIEW_DIFF.patch"), "utf8"),
+    readFileSync(path.join(sanitized.root, "REVIEW_MANIFEST.json"), "utf8"),
+  ].join("\n").replace(/\\/g, "/");
+  assert.match(reviewPacketText, /-base[\s\S]*\+candidate/);
+  assert.equal(
+    reviewPacketText.includes(sanitized.root.replace(/\\/g, "/")),
+    false,
+    "review packet does not disclose its temporary review root",
+  );
+  assert.equal(
+    reviewPacketText.includes(source.replace(/\\/g, "/")),
+    false,
+    "review packet does not disclose the source checkout path",
+  );
+  assert.doesNotMatch(reviewPacketText, /[A-Za-z]:\/Users\//i, "review packet does not disclose a Windows user profile path");
   removeSanitizedReviewWorkspace(sanitized.root);
   writeFileSync(path.join(source, "tracked.txt"), "working tree\n");
   writeFileSync(path.join(source, "untracked.txt"), "nonignored\n");

@@ -110,8 +110,12 @@ fingerprint before the ticket or morning decision is re-presented there.
   working-tree, and untracked paths from that base and rejects any path outside the ticket.
 - Independent Sol review never runs in the host checkout. Trusted bootstrap creates a disposable,
   Git-free packet containing exact base bytes, tracked/non-ignored candidate bytes, a precomputed
-  diff, and a SHA manifest. Ignored files, factory session state, host profile paths, and repository
-  Git metadata are not exposed to the reviewer.
+  diff with fixed relative snapshot headers, and a SHA manifest. Packet regression checks reject
+  source-checkout, temporary review-root, or user-profile paths. Ignored files, factory session
+  state, host profile paths, and repository Git metadata are not exposed to the reviewer.
+- The authoritative factory CLI, state broker, read-only Board, and `package.json` test wiring are
+  all risky/protected trust-chain surfaces. A governed lane cannot rewrite them, and any later
+  publication that changes them requires a fresh exact-SHA Sol/high review.
 - Factory-intent routing writes a separate per-session failure latch before the shared ledger. If
   ledger append fails, build writes and mutating factory commands stay blocked until recovery and
   successful owner-prompt re-submit clears the latch.
@@ -163,7 +167,9 @@ base to remain current after a fresh fetch. Once Mason accepts, factory custody 
 job's immutable original base, proves that the landing commit is contained in current `origin/main`,
 and computes the commit's own tree/content fingerprint. The landing commit must contain the exact
 bytes that passed the accepted harness. Harness and independent-review artifacts are reopened and
-re-hashed from the shared evidence store before morning review and closeout. The CLI has no arbitrary
+re-hashed from the shared evidence store before morning review and closeout; commit-bound closeout
+reads the harness script wiring from that frozen landing commit, not the mutable caller checkout.
+The CLI has no arbitrary
 local-file evidence route. Production verification is performed by the trusted broker: GitHub must
 report a successful `Production` deployment for the exact landing SHA and the fixed canonical app URL
 must answer HTTP 200 without a redirect. Caller-supplied production prose is neither accepted nor
