@@ -1642,12 +1642,16 @@ export default function QuoteBuilder() {
       closeAppliedIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; active_jobs_remaining?: number; warnings?: string[] }>(data, 'close_quote_as_applied');
       setStatus((result.status as QuoteStatus) || 'closed_by_application');
-      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'closed as fulfilled by application');
+      const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'closed as fulfilled by application');
       setIsDirty(false);
       const warnings = result.warnings || [];
-      toast('success', warnings.length > 0
-        ? `Booking closed — fulfilled by application. ${warnings.join('. ')}.`
-        : 'Booking closed — fulfilled by application.');
+      if (rowVersionConfirmed) {
+        toast('success', warnings.length > 0
+          ? `Booking closed — fulfilled by application. ${warnings.join('. ')}.`
+          : 'Booking closed — fulfilled by application.');
+      } else if (warnings.length > 0) {
+        toast('warning', `Booking close warnings: ${warnings.join('. ')}.`);
+      }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'mutation', action: 'close_quote_as_applied' } });
       if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
@@ -1684,12 +1688,16 @@ export default function QuoteBuilder() {
       closeShortIdem.resetKey();
       const result = assertRpcResult<{ status: string; released_units?: number; warnings?: string[] }>(data, 'close_quote_as_short');
       setStatus((result.status as QuoteStatus) || 'closed_short');
-      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'closed short');
+      const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'closed short');
       setIsDirty(false);
       const warnings = result.warnings || [];
-      toast('success', warnings.length > 0
-        ? `Booking closed short. ${warnings.join('. ')}.`
-        : 'Booking closed short.');
+      if (rowVersionConfirmed) {
+        toast('success', warnings.length > 0
+          ? `Booking closed short. ${warnings.join('. ')}.`
+          : 'Booking closed short.');
+      } else if (warnings.length > 0) {
+        toast('warning', `Booking close warnings: ${warnings.join('. ')}.`);
+      }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'mutation', action: 'close_quote_as_short' } });
       if (hasRpcCode(err, RpcErrorCodes.BOOKING_HAS_ACTIVE_JOBS)) {
@@ -1733,14 +1741,16 @@ export default function QuoteBuilder() {
       const result = assertRpcResult<{ success: boolean; old_status: string; new_status: string }>(data, 'revert_quote_status');
       revertStatusIdem.resetKey();
       setStatus((result.new_status as QuoteStatus) || 'sent');
-      await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'reopened');
+      const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(id, previousRowVersion, previousRowVersion === null ? null : previousRowVersion + 1, 'reopened');
       // Codex round-9 P2: a PLANNED quote's holds are now rebuilt ATOMICALLY inside
       // revert_quote_status (20260613290000) — same transaction as the status flip, so
       // there is no sent-without-holds window. The previous client-side recreate-after-
       // revert was non-atomic and is removed.
       setShowRevertModal(false);
       setRevertReason('');
-      toast('success', `Quote reopened to ${result.new_status}.`);
+      if (rowVersionConfirmed) {
+        toast('success', `Quote reopened to ${result.new_status}.`);
+      }
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'revert_quote_status' } });
       if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) {
@@ -1975,7 +1985,7 @@ export default function QuoteBuilder() {
       // even if the follow-up version read fails; that condition clears the
       // local token and tells the operator to refresh instead of faking failure.
       setStatus('sent');
-      await refreshQuoteRowVersionAfterMutation(
+      const rowVersionConfirmed = await refreshQuoteRowVersionAfterMutation(
         savedId,
         previousRowVersion,
         previousRowVersion === null ? null : previousRowVersion + (ver.status === 'duplicate' ? 0 : 1),
@@ -1994,7 +2004,9 @@ export default function QuoteBuilder() {
         // because the secondary activity-feed write failed.
         Sentry.captureException(logError instanceof Error ? logError : new Error(String(logError)), { tags: { source: 'activity_log', action: 'quote_presented' } });
       }
-      toast('success', `Quote marked as presented (V${ver.version_number})`);
+      if (rowVersionConfirmed) {
+        toast('success', `Quote marked as presented (V${ver.version_number})`);
+      }
       return true;
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'create_quote_version' } });

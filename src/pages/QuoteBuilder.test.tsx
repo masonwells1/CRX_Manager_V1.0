@@ -747,6 +747,7 @@ describe('QuoteBuilder', () => {
     fireEvent.change(screen.getByPlaceholderText('Why is this quote being reopened?'), { target: { value: 'Corrected customer request' } });
     fireEvent.click(screen.getAllByRole('button', { name: 'Un-accept' })[1]);
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('save-protection version could not be confirmed')));
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Quote reopened to sent.');
     fireEvent.click(await screen.findByRole('button', { name: 'Revise Quote' }));
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_quote', expect.objectContaining({
       p_quote_payload: expect.objectContaining({ row_version_expected: null }),
@@ -772,7 +773,7 @@ describe('QuoteBuilder', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Un-accept' })[1]);
     await waitFor(() => expect(screen.getByText('sent')).toBeInTheDocument());
     expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('was reopened'));
-    expect(mockToast).toHaveBeenCalledWith('success', 'Quote reopened to sent.');
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Quote reopened to sent.');
   });
 
   it('uses the reread token after freezing a quote before the next revise/save', async () => {

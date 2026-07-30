@@ -131,10 +131,7 @@ BEGIN
   -- quote, while a sales rep may save only a quote they created. Locking an
   -- owned target here keeps that authorization stable through all later DML.
   IF p_quote_id IS NOT NULL
-     AND NOT EXISTS (
-       SELECT 1 FROM profiles
-       WHERE id = v_actor AND role = 'admin' AND is_active = true
-     )
+     AND NOT public.is_admin()
      AND NOT EXISTS (
        SELECT 1 FROM quotes
        WHERE id = p_quote_id
@@ -158,10 +155,7 @@ BEGIN
          AND p_quote_id IS DISTINCT FROM v_cached_quote_id THEN
         RAISE EXCEPTION 'IDEMPOTENCY_PAYLOAD_CONFLICT';
       END IF;
-      IF NOT EXISTS (
-           SELECT 1 FROM profiles
-           WHERE id = v_actor AND role = 'admin' AND is_active = true
-         )
+      IF NOT public.is_admin()
          AND NOT EXISTS (
            SELECT 1 FROM quotes
            WHERE id = v_cached_quote_id

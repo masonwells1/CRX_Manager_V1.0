@@ -31,7 +31,13 @@ without losing the committed money change, and the RLS contract matrix now
 records all three protected child tables as RPC-only. The elevated `save_quote`
 RPC now mirrors Quote ownership before mutation or idempotent replay, and its
 rollback proof rejects both non-owner paths without leaking or changing the
-target Quote. Verification passed
+target Quote. Final PR review centralized both admin exceptions through the
+canonical active-admin helper, gave the controlled PostgreSQL race observer a
+real-time deadline and longer observation window without treating a missed
+sleep as success, and stopped committed lifecycle actions from showing a
+success toast when their follow-up version check instead requires recovery.
+Server-returned booking warnings remain visible in that recovery path.
+Verification passed
 4,045 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
 SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains
