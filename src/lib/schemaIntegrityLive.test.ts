@@ -640,6 +640,32 @@ describe.skipIf(!isLiveDB)('Live DB: SECURITY DEFINER pg_temp Bodies', () => {
 });
 
 describe.skipIf(!isLiveDB)('Live DB: SECURITY DEFINER exact-empty search_path Bodies', () => {
+  it('no unlisted SECURITY DEFINER function adopts the exact-empty exception', async () => {
+    const result = (await queryInformationSchema(`
+      SELECT
+        p.proname,
+        pg_get_function_identity_arguments(p.oid) AS identity_arguments
+      FROM pg_proc AS p
+      WHERE p.pronamespace = 'public'::regnamespace
+        AND p.prosecdef = true
+        AND EXISTS (
+          SELECT 1
+          FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS config(value)
+          WHERE lower(config.value) = 'search_path=""'
+        )
+      ORDER BY p.proname, identity_arguments
+    `)) as Array<{ proname: string; identity_arguments: string }>;
+
+    const unapproved = result.filter(
+      (row) => !SECURITY_DEFINER_FUNCTIONS_REQUIRING_EMPTY_SEARCH_PATH.includes(row.proname),
+    );
+    expect(
+      unapproved,
+      `Unapproved SECURITY DEFINER exact-empty search_path functions: ` +
+        `${JSON.stringify(unapproved)}`,
+    ).toHaveLength(0);
+  });
+
   it('every listed exception has an exactly empty search_path', async () => {
     const namesList = SECURITY_DEFINER_FUNCTIONS_REQUIRING_EMPTY_SEARCH_PATH
       .map((n) => `'${n}'`)
