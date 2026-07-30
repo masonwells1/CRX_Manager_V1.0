@@ -902,13 +902,15 @@ describe('QuoteBuilder', () => {
     expect(mockToast).toHaveBeenCalledWith('success', expect.stringContaining('Quote emailed'));
   });
 
-  it('does not convert when the accepted-status save cannot install its authoritative token', async () => {
+  it('stops on an unconfirmed accepted save and safely resumes conversion after reload', async () => {
     const fixture = makeQuoteFixture('draft', 7);
     const { product, section, item } = fixture;
     const quote = { ...fixture.quote, status: 'sent' };
+    let reloaded = false;
+    let saveCalls = 0;
     mockFrom.mockImplementation((table: string) => buildChain({
       data: table === 'quotes'
-        ? quote
+        ? (reloaded ? { ...quote, status: 'accepted', row_version: 9 } : quote)
         : table === 'quote_sections'
           ? [section]
           : table === 'quote_items'
@@ -920,11 +922,22 @@ describe('QuoteBuilder', () => {
                 : [],
       error: null,
     }));
-    mockRpc.mockImplementation((name: string) => Promise.resolve(
-      name === 'save_quote'
-        ? { data: { quote_id: quote.id, row_version: 9 }, error: null }
-        : { data: { status: 'created', order_id: 'order-1' }, error: null },
-    ));
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'save_quote') {
+        saveCalls += 1;
+        return Promise.resolve({
+          data: { quote_id: quote.id, row_version: saveCalls === 1 ? 9 : 10 },
+          error: null,
+        });
+      }
+      if (name === 'convert_quote_to_order') {
+        return Promise.resolve({
+          data: { status: 'created', order_id: 'order-1', order_number: 'O-1', warnings: [] },
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
 
     renderQuoteBuilder(quote.id);
     fireEvent.click(await screen.findByRole('button', { name: 'Create Order ▾' }));
@@ -940,6 +953,20 @@ describe('QuoteBuilder', () => {
       expect.stringContaining('order was NOT created'),
     );
     expect(mockRpc).not.toHaveBeenCalledWith('convert_quote_to_order', expect.anything());
+
+    reloaded = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Quote' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Quote' })).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create Order ▾' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Order' }));
+
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith(
+      'convert_quote_to_order',
+      expect.objectContaining({ p_quote_id: quote.id }),
+    ));
+    expect(saveCalls).toBe(2);
   });
 
   it('stops Book as Order when mark-presented cannot confirm the frozen quote token', async () => {

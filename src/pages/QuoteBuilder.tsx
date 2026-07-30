@@ -375,7 +375,11 @@ export default function QuoteBuilder() {
   // handleEmailToGrower explicitly supports re-sending an already-sent quote and
   // creates a newly confirmed version snapshot before every send.
   const canSend = ['draft', 'revised', 'sent'].includes(currentStatus);
-  const canConvert = ['sent', 'revised'].includes(currentStatus);
+  // The server conversion RPC deliberately resumes an accepted Quote that has
+  // no Order and returns the existing Order when one already exists. Keeping
+  // accepted Quotes convertible gives a sales rep a safe retry path if the
+  // accepted-status save committed but its row-version response was uncertain.
+  const canConvert = ['sent', 'revised', 'accepted'].includes(currentStatus);
   // Both whole conversion and draw_down_quote accept sent/revised bookings.
   const canDraw = currentStatus === 'sent' || currentStatus === 'revised';
 
