@@ -21,7 +21,9 @@ DECLARE
   v_secondary_before numeric;
   v_secondary_after numeric;
   v_status text;
-  v_old_date date := CURRENT_DATE - 400;
+  -- Fixed pre-history fixture: never select a rolling date that could collide
+  -- with real accounting history as time passes.
+  v_old_date date := DATE '1990-01-15';
   v_err text;
   v_suffix text := substr(md5(random()::text), 1, 8);
 BEGIN
@@ -40,6 +42,24 @@ BEGIN
 
   IF v_admin IS NULL OR v_product IS NULL THEN
     RAISE EXCEPTION 'SMOKE_SETUP: active admin and product required';
+  END IF;
+
+  -- Keep the fixed pre-history month collision-safe. The rollback chain never
+  -- closes an existing historical period or attempts a close that a real
+  -- unposted invoice would reject.
+  IF EXISTS (
+    SELECT 1
+    FROM public.accounting_periods ap
+    WHERE v_old_date BETWEEN ap.period_start AND ap.period_end
+  ) OR EXISTS (
+    SELECT 1
+    FROM public.invoices i
+    WHERE i.invoice_date BETWEEN date_trunc('month', v_old_date)::date
+      AND (date_trunc('month', v_old_date) + interval '1 month - 1 day')::date
+      AND i.status IN ('draft', 'unposted')
+      AND i.deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: fixed pre-history month % is occupied', v_old_date;
   END IF;
 
   PERFORM set_config(
@@ -292,7 +312,7 @@ BEGIN
     p_vendor_id := v_vendor,
     p_purchase_order_id := v_billed_po,
     p_bill_number := 'SMK-S9-BILL-' || v_suffix,
-    p_bill_date := CURRENT_DATE,
+    p_bill_date := v_old_date,
     p_subtotal_cents := 100,
     p_idempotency_key := 'smk-s9-bill-create-' || v_suffix
   );
@@ -363,13 +383,8 @@ BEGIN
     END IF;
   END;
 
-  -- Simulate a legacy unpaid bill whose original period is now closed. The
-  -- update must reject before moving its date or changing its money.
-  UPDATE public.vendor_bills
-  SET bill_date = v_old_date,
-      due_date = v_old_date + 30
-  WHERE id = v_bill;
-  -- Close through the real accounting RPC. This makes the registered PO/AP
+  -- Close the real bill's fixed pre-history month through the real accounting
+  -- RPC. This makes the registered PO/AP
   -- business chain cover close_accounting_period and the update's authoritative
   -- check_period_open refusal, rather than creating a closed row as a probe.
   PERFORM public.close_accounting_period(

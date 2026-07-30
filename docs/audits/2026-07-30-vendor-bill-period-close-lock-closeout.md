@@ -2,12 +2,12 @@
 
 ## Scope
 
-Forward migration `20260730031031_vendor_bill_period_close_lock.sql` closes the
+Forward migration `20260729231031_vendor_bill_period_close_lock.sql` closes the
 governed-RPC race between `close_accounting_period` and `create_vendor_bill` /
 `update_vendor_bill`. It adds a whole-calendar-month constraint before deriving
 month keys, a non-public internal shared/exclusive transaction-lock helper in
-namespace `(73492010, year * 12 + month - 1)`, and re-emits the three current
-authoritative RPC bodies with only the required lock ordering changes.
+namespace `(73492010, year * 12 + month - 1)`, and re-emits the four current
+authoritative RPC bodies with the required serialization changes.
 
 `create_vendor_bill` locks its vendor and optional purchase order, then takes
 its shared month lock before its authoritative period check.
@@ -15,6 +15,17 @@ its shared month lock before its authoritative period check.
 old/new month locks before both checks. The close takes the exclusive lock after
 authorization, idempotency replay, and month validation, but before its invoice
 completeness scan and upsert. No vendor-bill or PO completeness gate was added.
+
+This is more than an invisible lock-order adjustment: under a same-month close,
+create now waits at the shared advisory lock before it can read closed-period
+state. Consequently the observable error precedence changes under contention:
+the request waits for close to finish and then reports the authoritative
+closed-period refusal, instead of reading an earlier open state and racing into
+an insert. Its pre-lock authorization, vendor/PO, and amount validations retain
+their existing precedence. The separate existing-vendor-bills residual remains
+intentional: `close_accounting_period` still does not reject an already-existing
+vendor bill as a completeness condition; this candidate serializes governed
+create/update activity, not a new AP close policy.
 
 `check_period_open` deliberately remains only the authoritative closed-period
 reader, with its established tighter `search_path = ''`. It does not acquire

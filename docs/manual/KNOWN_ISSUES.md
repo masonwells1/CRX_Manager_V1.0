@@ -14,7 +14,7 @@ the current production functions can interleave a vendor-bill period check with
 `close_accounting_period`; no accounting period is closed live today (9 rows,
 all open), so the exposure is dormant rather than an active historical-data
 incident. Candidate migration
-`20260730031031_vendor_bill_period_close_lock.sql` is local-only and must not
+`20260729231031_vendor_bill_period_close_lock.sql` is local-only and must not
 be applied without Mason's explicit current-conversation approval, fresh
 exact-SHA migration review, and a fresh live preflight.
 
@@ -27,7 +27,8 @@ closes its month through the real close RPC, and proves the authoritative
 closed-period reader blocks the bill update before mutation. Direct
 authenticated-admin writes to
 `accounting_periods` remain a deliberately recorded UI-unreachable residual
-boundary; no permission change is included. Durable local evidence:
+boundary; and close still has no separate existing-vendor-bill completeness
+gate. No permission change is included. Durable local evidence:
 `docs/audits/2026-07-30-vendor-bill-period-close-lock-closeout.md`.
 
 ---

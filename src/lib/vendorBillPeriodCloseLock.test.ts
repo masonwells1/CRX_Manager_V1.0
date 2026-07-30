@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const migration = readFileSync(join(
   root, 'supabase', 'migrations',
-  '20260730031031_vendor_bill_period_close_lock.sql',
+  '20260729231031_vendor_bill_period_close_lock.sql',
 ), 'utf8').replace(/\r\n/g, '\n');
 const source = (...parts: string[]) => readFileSync(join(root, ...parts), 'utf8')
   .replace(/\r\n/g, '\n');
@@ -83,6 +83,8 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS'\)/);
     expect(proof).toContain("classid=73492010");
     expect(proof).toContain("'--network', 'none'");
+    expect(proof).toContain('const BARRIER_SECONDS = 8;');
+    expect(proof).not.toContain('pg_sleep(3)');
     const section9 = smokeSpecs.specs.section9_po_ap_high_remediation;
     expect(section9.chain).toBe('smoke-section9-po-ap-high-remediation.sql');
     expect(section9.covers).toEqual(expect.arrayContaining([
