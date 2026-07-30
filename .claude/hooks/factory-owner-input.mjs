@@ -8,11 +8,11 @@ import {
   APPROVAL_TTL_MS,
   appendFactoryEvent,
   clearEmergencyFactoryHold,
-  currentOriginMain,
   loadFactorySnapshot,
   normalizeOwnerQuestion,
   pendingTicketForSession,
   pendingReviewForSession,
+  refreshOriginMain,
   resolveHookFactoryPaths,
   setEmergencyFactoryHold,
   sha256,
@@ -202,7 +202,7 @@ async function main() {
 
   if (decision.kind === "review") {
     let reviewBaseSha;
-    try { reviewBaseSha = currentOriginMain(projectDir); } catch {
+    try { reviewBaseSha = refreshOriginMain(projectDir); } catch {
       emit("CRX Factory could not verify current origin/main, so it recorded no morning decision. Refresh repository state and re-present the review.");
     }
     if (reviewBaseSha !== job.reviewBaseSha) {
@@ -234,7 +234,7 @@ async function main() {
   }
 
   let baseSha;
-  try { baseSha = currentOriginMain(projectDir); } catch {
+  try { baseSha = refreshOriginMain(projectDir); } catch {
     emit("CRX Factory could not verify current origin/main, so it recorded no approval. Refresh repository state, then re-present the ticket.");
   }
   if (baseSha !== job.baseSha) {

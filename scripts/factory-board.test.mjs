@@ -31,6 +31,7 @@ const snapshot = {
     behaviorSummary: "A $500 split shows $250 and $250.",
     blocker: "",
     evidence: [{ label: "Browser proof", kind: "screenshot", filename: "abc-proof.png" }],
+    reviews: [{ reviewer: "codex", model: "gpt-5.6-sol", verdict: "clean", filename: "review.json", sha256: "c".repeat(64) }],
     lastActivity: "2026-07-30T12:00:00.000Z",
   }],
 };
@@ -39,6 +40,7 @@ ok(!html.includes("<img src=x"), "ticket title cannot inject HTML");
 ok(html.includes("&lt;img src=x"), "escaped title remains readable");
 ok(html.includes("Ready for your review"), "friendly stage label is rendered");
 ok(html.includes("Browser proof"), "machine-attached proof is visible");
+ok(html.includes("Independent codex review: CLEAN"), "independent reviewer receipt is visible");
 ok(html.includes("@media (max-width:640px)"), "board has a narrow viewport layout");
 ok(!/<form|<button|method=/i.test(html), "board contains no mutation controls");
 const projected = projectFactoryBoardState({
@@ -64,6 +66,7 @@ const projectedJson = JSON.stringify(projected);
 ok(!projectedJson.includes("private-owner-session"), "board API projection omits owner chat session identifiers");
 ok(!projectedJson.includes("private-lane-session"), "board API projection omits lane session identifiers");
 ok(!projectedJson.includes('"baseSha"'), "board API projection omits internal proof base metadata");
+ok(projectedJson.includes('"reviewer":"codex"'), "board API includes the independent reviewer identity");
 
 const empty = renderFactoryBoard({ held: false, holdReason: "", warning: "", jobs: [] });
 ok(empty.includes("No factory jobs yet"), "empty state tells Mason what happens next");

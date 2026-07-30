@@ -9,15 +9,18 @@ import {
   APPROVAL_TTL_MS,
   appendFactoryEvent,
   buildFactorySnapshot,
+  canonicalMorningReviewQuestion,
+  canonicalTicketApprovalQuestion,
   consumeFactoryCliPermit,
   currentOriginMain,
   loadFactorySnapshot,
-  normalizeOwnerQuestion,
   recoverFactoryState,
+  refreshOriginMain,
   rejectSecretBearingText,
   repositoryCommitFingerprint,
   resolveFactoryPaths,
   runHarnessEvidence,
+  runIndependentReviewEvidence,
   sha256,
   validateLaneActor,
   validateLaneStart,
@@ -35,9 +38,10 @@ function usage(message = "") {
     "",
     "Usage:",
     "  node scripts/factory.mjs ticket draft --file <ticket.json>",
-    "  node scripts/factory.mjs ticket present --job <id> --question-file <text>",
+    "  node scripts/factory.mjs ticket present --job <id>",
     "  node scripts/factory.mjs lane start --job <id>",
-    "  node scripts/factory.mjs review present --job <id> --question-file <text>",
+    "  node scripts/factory.mjs review run --job <id>",
+    "  node scripts/factory.mjs review present --job <id>",
     "  node scripts/factory.mjs stage --job <id> --stage <stage> [--summary-file <text>] [--blocker-file <text>]",
     "  node scripts/factory.mjs evidence run --job <id> --harness <npm-script> --label <text>",
     "  node scripts/factory.mjs closeout write --job <id> --landing-commit <sha> --production-proof <text>",
@@ -203,12 +207,11 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "ticket" && action === "present") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const questionText = normalizeOwnerQuestion(readTextFile(required(flags, "question-file")));
-    if (!questionText.endsWith("?")) throw new Error("Ticket approval question must end with a question mark.");
     const snapshot = loadFactorySnapshot(paths);
     const job = snapshot.jobs.find((candidate) => candidate.id === jobId);
     if (!job?.ticketHash) throw new Error(`Draft ticket ${jobId} before presenting it.`);
-    const baseSha = currentOriginMain(cwd);
+    const questionText = canonicalTicketApprovalQuestion(job.ticket);
+    const baseSha = refreshOriginMain(cwd, env);
     const event = appendFactoryEvent(paths, {
       type: "ticket-presented",
       jobId,
@@ -224,6 +227,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     process.stdout.write(`${JSON.stringify({
       jobId,
       questionHash: event.payload.questionHash,
+      questionText,
       baseSha,
       instruction: "Send the exact question text as the final assistant message. Ask no other question until Mason replies.",
     })}\n`);
@@ -234,7 +238,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
     const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
-    const baseSha = currentOriginMain(cwd);
+    const baseSha = refreshOriginMain(cwd, env);
     const job = validateLaneStart({
       snapshot,
       jobId,
@@ -267,13 +271,12 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "review" && action === "present") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const questionText = normalizeOwnerQuestion(readTextFile(required(flags, "question-file")));
-    if (!questionText.endsWith("?")) throw new Error("Morning review question must end with a question mark.");
     const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
     const job = snapshot.jobs.find((candidate) => candidate.id === jobId);
     if (!job || job.stage !== "awaiting-morning-review") {
       throw new Error(`Job ${jobId} must be awaiting morning review before its decision question is presented.`);
     }
+    const questionText = canonicalMorningReviewQuestion(job);
     appendFactoryEvent(paths, {
       type: "review-presented",
       jobId,
@@ -283,14 +286,40 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         ticketHash: job.ticketHash,
         questionText,
         questionHash: sha256(questionText),
-        baseSha: currentOriginMain(cwd),
+        baseSha: refreshOriginMain(cwd, env),
         expiresAt: new Date(now().getTime() + APPROVAL_TTL_MS).toISOString(),
       },
     });
     process.stdout.write(`${JSON.stringify({
       jobId,
       questionHash: sha256(questionText),
+      questionText,
       instruction: "Send the exact review question as the final assistant message. Ask no other question until Mason replies.",
+    })}\n`);
+    return 0;
+  }
+
+  if (group === "review" && action === "run") {
+    const who = actor(paths, flags, env, now().getTime());
+    const jobId = required(flags, "job");
+    const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
+    const job = validateLaneActor(snapshot, jobId, who.sessionId, {
+      allowedStages: new Set(["in-review"]),
+    });
+    const review = runIndependentReviewEvidence(paths, { job, cwd, env });
+    appendFactoryEvent(paths, {
+      type: "independent-review-attached",
+      jobId,
+      ...who,
+      timestamp: now().toISOString(),
+      payload: review,
+    });
+    process.stdout.write(`${JSON.stringify({
+      jobId,
+      reviewer: review.reviewer,
+      model: review.model,
+      verdict: review.verdict,
+      sha256: review.sha256,
     })}\n`);
     return 0;
   }
@@ -302,6 +331,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     const behaviorSummary = flags.get("summary-file") ? readTextFile(flags.get("summary-file")) : "";
     const blocker = flags.get("blocker-file") ? readTextFile(flags.get("blocker-file")) : "";
     const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
+    if (stage === "awaiting-morning-review") refreshOriginMain(cwd, env);
     validateStageChange(snapshot, jobId, stage, { sessionId: who.sessionId, cwd, behaviorSummary, blocker });
     appendFactoryEvent(paths, {
       type: "job-stage",
@@ -323,7 +353,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     const jobId = required(flags, "job");
     const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
     const job = validateLaneActor(snapshot, jobId, who.sessionId);
-    if (job.baseSha !== currentOriginMain(cwd)) {
+    if (job.baseSha !== refreshOriginMain(cwd, env)) {
       throw new Error("origin/main moved after ticket approval; park and re-present the job before minting proof.");
     }
     const harness = required(flags, "harness");

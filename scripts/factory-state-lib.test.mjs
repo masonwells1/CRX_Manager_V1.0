@@ -19,6 +19,8 @@ import {
   buildFactorySnapshot,
   canonicalJson,
   consumeFactoryCliPermit,
+  FACTORY_REVIEW_TOKEN,
+  factoryReviewVerdict,
   factoryHarnessDependencyHashForCommit,
   factoryHarnessSandboxArgs,
   loadFactorySnapshot,
@@ -58,6 +60,26 @@ throws(
   () => rejectSecretBearingText("OPENAI_API_KEY=sk-this-must-not-persist", "proof"),
   /credential or secret/,
   "secret-shaped proof text is rejected before persistence",
+);
+eq(
+  factoryReviewVerdict({ status: 0, stdout: `Review complete.\n${FACTORY_REVIEW_TOKEN}: CLEAN\n` }),
+  "clean",
+  "one terminal independent-review CLEAN token is accepted",
+);
+eq(
+  factoryReviewVerdict({ status: 0, stdout: `${FACTORY_REVIEW_TOKEN}: CLEAN\ntext after verdict\n` }),
+  null,
+  "independent-review prose after the token fails closed",
+);
+eq(
+  factoryReviewVerdict({ status: 0, stdout: `${FACTORY_REVIEW_TOKEN}: CLEAN\n${FACTORY_REVIEW_TOKEN}: CLEAN\n` }),
+  null,
+  "duplicate independent-review tokens fail closed",
+);
+eq(
+  factoryReviewVerdict({ status: 0, stdout: `${FACTORY_REVIEW_TOKEN}: BLOCKERS\n` }),
+  null,
+  "independent-review blockers fail closed",
 );
 
 if (process.env.CRX_FACTORY_SANDBOX !== "1") {

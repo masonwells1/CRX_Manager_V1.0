@@ -19,7 +19,7 @@ Claude and Codex resolve `git rev-parse --git-common-dir` to one absolute path a
 - one append-only, hash-chained event ledger;
 - copied, content-hashed proof files.
 
-The state lives under `<git-common-dir>/crx-factory/`, so every worktree and both tools see the same queue. An incomplete final ledger line is shown as degraded and cannot advance a job. An interior malformed line, broken hash chain, duplicate event, changed ticket, expired approval, moved `origin/main`, or missing session binding fails closed.
+The state lives under `<git-common-dir>/crx-factory/`, so every worktree and both tools see the same queue. An incomplete final ledger line is shown as degraded and cannot advance a job. An interior malformed line, broken hash chain, duplicate event, changed ticket, expired approval, moved `origin/main`, or missing session binding fails closed. Critical decisions first fetch `origin/main`; they do not treat a previously fetched local pointer as current.
 
 Only the canonical `scripts/factory.mjs` process and the owner-routing hooks may call the state writer.
 The library checks the invoked entrypoint and real call stack; pre-tool guards also block direct state
@@ -28,9 +28,14 @@ Every mutating CLI call additionally consumes a 30-second, single-use permit min
 PreToolUse hook from that tool call's actual chat identity. Agent-supplied `--session`, `--tool`, or
 permit values cannot create or override identity, and the permit-minting hook cannot be launched as
 an agent command.
-These are strong defense-in-depth controls inside the agent tool model, not a cryptographic sandbox
-against replacement of the installed runtime or operating system. The supported commands are
-agent-facing implementation details, not owner interfaces.
+These are defense-in-depth controls inside the supported Claude/Codex tool model, not a cryptographic
+security boundary against another arbitrary process running as Mason's Windows account. The hash chain
+detects accidental/torn/tampered history when the reader has an honest prior hash; it does not provide
+authenticity against a same-user program that rewrites the whole ledger. Therefore the ledger and Board
+are operational coordination/audit surfaces, never authority to merge, deploy, migrate, alter live data,
+or bypass `/ship`, GitHub review, branch protection, and production approval gates. Installing this pilot
+on a shared or hostile workstation is out of scope. The supported commands are agent-facing implementation
+details, not owner interfaces.
 
 If Mason changes his mind before a ticket exists, he says “never mind the factory” or asks for the
 normal workflow in chat. The real owner-input hook clears that chat's intent. There is no agent-facing
@@ -67,16 +72,20 @@ An approval is valid only when all of these are true:
 
 - exactly one decision is pending in that chat;
 - the immediately preceding assistant message in the transcript is byte-for-byte the stored question after newline normalization;
+- the ticket question is generated deterministically from the immutable ticket and includes its goal, done conditions, prohibitions, proof, delivery gate, and high-risk example/forbidden outcome;
+- the morning question is generated deterministically from the exact behavior summary, harness receipts, independent-review receipt, and ticket hash, and says explicitly that acceptance is not landing or production;
 - Mason replies with an unqualified `yes`, `approved`, `approve it`, `go ahead`, or `do it`;
 - the session identifier matches; build-stage and evidence changes stay bound to the lane-start session;
-- for a mission ticket, the recorded `origin/main` still matches and the receipt has not expired after 24 hours.
+- for a mission ticket, a fresh `git fetch origin main` still matches the recorded base and the receipt has not expired after 24 hours.
 
 “Yes, but…”, “yes, except…”, or similar language is a revision request. A reply in another tool or a new chat does not carry over; the ticket or morning decision must be re-presented there.
 
 ## Pilot limits
 
-- One active build lane at a time. While it is building, verifying, or in review, build writes from
-  every other chat are denied, including fresh chats with no prior factory intent. Native editing,
+- One factory custody window at a time. From ticket drafting/presentation through queued, build,
+  verification, independent review, morning review, and accepted-to-land disposition, build writes
+  and opaque helper execution from every other chat are denied, including fresh chats with no prior
+  factory intent. Native editing,
   MCP filesystem tools, shell file commands, redirects, Git mutation, and unknown repository scripts
   all count as writes. Inside the active lane, source changes use structured Write/Edit/apply_patch
   calls whose targets are visible to the guards. Opaque shell writers, generated helper scripts, and
@@ -101,8 +110,12 @@ non-ignored repository bytes. The original checkout and ignored files are unavai
 process. The broker verifies that repository and shared factory state stayed frozen, deletes the
 disposable workspace, emergency-holds on detected indirect host mutation, and refuses secret-shaped
 harness output before it can become a Board artifact. It rechecks the repository fingerprint before
-morning review and closeout, so later source or test edits invalidate stale proof. Morning review additionally
-requires the original base to remain current. After landing, closeout validates proof against the
+morning review and closeout, so later source or test edits invalidate stale proof. A separate trusted
+Codex executable then performs a fixed-prompt, read-only review. Its unique terminal CLEAN verdict,
+model, fresh base, and complete repository fingerprint are persisted; any byte change invalidates the
+review. A passing branch-controlled harness without this independent verdict cannot reach morning review.
+Morning review additionally requires the original base to remain current after a fresh fetch. After
+landing, closeout validates proof against the
 job's immutable original base, proves that the landing commit is contained in current `origin/main`,
 and computes the commit's own tree/content fingerprint. The landing commit must contain the exact
 bytes that passed the accepted harness. The CLI has no arbitrary local-file evidence route, and

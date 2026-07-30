@@ -319,7 +319,7 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/factory-owner-input.mjs\"",
-            "timeout": 15
+            "timeout": 120
           },
           {
             "type": "command",

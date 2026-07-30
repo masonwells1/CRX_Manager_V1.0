@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `31cf0abe760cdd845d047bd856e3401b76def44e`
-State: rebased onto current `origin/main`; third publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; fourth publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -22,13 +22,19 @@ pipeline remains the delivery engine and all of its landing and production gates
 - Tickets are immutable, canonically serialized, and content-hashed.
 - Events are append-only, schema-checked, duplicate-checked, and hash-chained under an exclusive lock.
 - One torn final JSONL line is visible as degraded but cannot advance a job; interior corruption fails closed.
-- Exact ticket approval requires the immediately preceding assistant transcript message to match the stored
-  question, plus the same session, ticket hash, fresh `origin/main`, and a receipt no older than 24 hours.
+- Exact ticket approval requires the immediately preceding assistant transcript message to match the
+  canonical question generated from the immutable ticket. That question includes the ticket goal,
+  completion conditions, prohibitions, proof, delivery gate, and any high-risk example/forbidden outcome.
+  The same session, ticket hash, freshly fetched `origin/main`, and a receipt no older than 24 hours are required.
+- The morning question is likewise canonical and includes the exact behavior summary, harness receipts,
+  independent-review receipt, ticket hash, and a warning that acceptance is not merge/deploy/live.
 - Qualified yes, side-question yes, missing transcript, cross-session reply, machine prompt, moved base,
   changed ticket, global hold, and second active lane do not start work.
 - State writes are restricted to canonical process/call-stack entrypoints; direct paths, state-library
   imports, inline-code bypasses, and governance self-edits in an active lane are denied. This is
-  defense-in-depth inside the agent tool boundary, not a claim of operating-system cryptographic isolation.
+  defense-in-depth inside the supported agent tool boundary, not a same-Windows-user cryptographic
+  security boundary. The ledger/Board never authorizes merge, deploy, migration, live-data, or
+  production actions; existing `/ship`, GitHub, and owner hard gates remain authoritative.
 - Legal stage transitions and evidence writes are bound to the lane-start session. Lane start uses
   an expected-last-event compare-and-swap under the exclusive ledger lock, so simultaneous starts
   cannot both win. A successful
@@ -43,9 +49,12 @@ pipeline remains the delivery engine and all of its landing and production gates
   to the harness. The broker fingerprints both repository and shared factory state around the run,
   emergency-holds on indirect host mutation, refuses secret-shaped stdout/stderr before persistence,
   and deletes the disposable workspace. Source or test edits after the harness invalidate it. The
-  arbitrary local-file evidence route has been removed.
-- While one lane is active, native edits, MCP filesystem tools, shell writes/redirection, Git
-  mutations, and unknown repository scripts from other or fresh chats are denied. The winning lane
+  arbitrary local-file evidence route has been removed. A separate fixed-prompt, read-only Codex run
+  must then return one terminal CLEAN verdict bound to the exact base and repository fingerprint;
+  branch harness success alone cannot advance the job to morning review.
+- Throughout nonterminal factory custody—from ticket decision through accepted-to-land—native edits,
+  MCP filesystem tools, shell writes/redirection, Git mutations, unknown repository scripts, and
+  opaque helper execution from other or fresh chats are denied. The winning lane
   uses structured target-visible edits and read-only shell inspection; opaque shell/helper/MCP process
   execution is denied, and fixed harnesses run only through the permit-bound factory CLI broker.
 - A stale lock can be removed only after five minutes when its process is gone, with a backup retained.
@@ -84,7 +93,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 192 focused assertions after publication-blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 205 focused assertions after publication-blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -169,8 +178,14 @@ recursive force-delete cleanup command.
   HIGH execution-boundary gaps: command substitution could receive a factory permit, and
   branch-modified harness dependencies executed on the credentialed workstation. The current repair
   uses a strict argument grammar and a credential-free, no-network Docker harness with pinned trusted
-  dependencies and a disposable source workspace. Publication remains parked until fresh exact-SHA
-  Codex and Fable acceptance pass.
+  dependencies and a disposable source workspace.
+- Trusted Codex exact-head publication re-review `2026-07-30T17:22:43Z`: `BLOCKERS`; it found four
+  gaps: the same-user ledger boundary was overstated, ticket approval wording was not derived from
+  ticket content, branch-controlled harness proof lacked mandatory independent review, and moving-main
+  checks could use a stale local ref. The current repair states the ledger's real trust boundary,
+  extends cross-session custody, requires the canonical scope-complete ticket question, adds an
+  exact-content independent Codex CLEAN gate, and fetches `origin/main` at critical decisions.
+  Publication remains parked until fresh exact-SHA Codex and Fable acceptance pass.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -185,7 +200,7 @@ Phase 3 prover identity/RLS checks do not overlap the factory implementation.
 
 ## Remaining gate
 
-The third repair pass remains unpushed. The next gates are full verification at frozen bytes,
+The fourth repair pass remains unpushed. The next gates are full verification at frozen bytes,
 fresh exact-SHA Codex and Fable acceptance, then the explicitly authorized feature-branch push and
 draft PR. Merge, board installation/startup, deployment, migration, and all production actions remain
 undone.

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   ACTIVE_STAGES,
+  FACTORY_CUSTODY_STAGES,
   loadFactorySnapshot,
   mintFactoryCliPermit,
   resolveHookFactoryPaths,
@@ -142,12 +143,12 @@ if (factoryCli) {
   const permit = mintFactoryCliPermit(paths, { sessionId, actorTool });
   allowWithPermit(payload, permit.token);
 }
-const otherActive = snapshot.jobs.find((job) =>
-  ACTIVE_STAGES.has(job.stage)
-  && job.laneSessionId !== sessionId,
+const otherCustody = snapshot.jobs.find((job) =>
+  FACTORY_CUSTODY_STAGES.has(job.stage)
+  && (job.laneSessionId || job.sessionId) !== sessionId,
 );
-if (buildMutation && otherActive) {
-  deny(`CRX FACTORY GATE: pilot job ${otherActive.id} is already ${otherActive.stage} in another chat. The one-lane pilot blocks parallel repository writes until it reaches morning review or is parked.`);
+if (buildMutation && otherCustody) {
+  deny(`CRX FACTORY GATE: pilot job ${otherCustody.id} is under factory custody at ${otherCustody.stage} in another chat. The one-lane pilot blocks cross-session repository writes and opaque helper execution from ticket presentation through owner disposition.`);
 }
 if (!sessionId) nothing();
 

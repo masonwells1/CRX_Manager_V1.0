@@ -230,7 +230,7 @@ function hookOutput(result) {
     thread_id: sessionId,
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
-  }), /no mission ticket is presented and approved/i, "drafted but unpresented ticket still blocks writes");
+  }), /waiting for Mason's exact chat approval/i, "drafted but unpresented ticket still blocks writes");
 
   appendFactoryEvent(paths, {
     type: "ticket-presented",
@@ -239,6 +239,11 @@ function hookOutput(result) {
     sessionId,
     payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: "a".repeat(64), baseSha: "b".repeat(40) },
   });
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-parallel-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
+  }), /under factory custody/i, "fresh chats cannot execute a prebuilt helper while a ticket decision is pending");
   appendFactoryEvent(paths, {
     type: "ticket-approved",
     jobId: ticket.ticket.id,
@@ -252,6 +257,11 @@ function hookOutput(result) {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     },
   });
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-parallel-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
+  }), /under factory custody/i, "fresh chats cannot execute a prebuilt helper while an approved job is queued");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Edit",
@@ -316,17 +326,17 @@ function hookOutput(result) {
     thread_id: "fresh-parallel-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "parallel.ts") },
-  }), /one-lane pilot blocks parallel repository writes/i, "fresh chats cannot bypass an active factory lane");
+  }), /under factory custody/i, "fresh chats cannot bypass an active factory lane");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
     tool_input: { command: "Set-Content src/parallel.ts forged" },
-  }), /one-lane pilot blocks parallel repository writes/i, "fresh chats cannot bypass one-lane enforcement with shell writes");
+  }), /under factory custody/i, "fresh chats cannot bypass one-lane enforcement with shell writes");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "mcp__desktop_commander__write_file",
     tool_input: { path: path.join(root, "src", "parallel.ts"), content: "forged" },
-  }), /one-lane pilot blocks parallel repository writes/i, "fresh chats cannot bypass one-lane enforcement with MCP writers");
+  }), /under factory custody/i, "fresh chats cannot bypass one-lane enforcement with MCP writers");
 
   appendFactoryEvent(paths, {
     type: "factory-held",

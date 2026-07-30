@@ -327,7 +327,19 @@ container root, bounded resources, and only a disposable copy of tracked/non-ign
 bytes. The original checkout and ignored files are exposed only to the separate no-network bootstrap
 container, never the harness process, and the disposable workspace is deleted after each run. Both a
 real contained factory test run and a real contained production build pass. The focused host suite
-now covers 192 adversarial assertions before another exact-SHA review.
+now covers 205 adversarial assertions before another exact-SHA review.
+
+A fourth trusted Codex publication review found that the pilot still overstated the authenticity of
+same-user disk state, allowed approval wording detached from ticket content, accepted a
+branch-controlled harness without a mandatory independent verdict, and resolved `origin/main`
+without fetching. The repair now describes the hash-chained ledger and Board accurately as
+coordination/audit state—not an operating-system security boundary or landing authority—and blocks
+cross-session writes/helper execution throughout the nonterminal custody window. Ticket and morning
+questions are generated only by the CLI from the exact ticket/result/proof; no caller-written
+question is accepted. Critical decisions fetch `origin/main`, and morning review requires a
+fixed-prompt read-only Codex CLEAN receipt bound to the complete repository fingerprint. The Board
+shows that reviewer receipt beside harness proof. Merge, deployment, migration, live-data, and
+production authority remain exclusively with the existing `/ship`, GitHub, and owner gates.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

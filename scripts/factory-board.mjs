@@ -40,8 +40,16 @@ function evidenceHref(jobId, filename) {
 }
 
 function jobCard(job) {
-  const evidence = job.evidence.length
-    ? `<ul class="proof-list">${job.evidence.map((item) =>
+  const proofItems = [
+    ...job.evidence,
+    ...(job.reviews || []).map((item) => ({
+      label: `Independent ${item.reviewer} review: ${item.verdict.toUpperCase()}`,
+      kind: item.model || "review",
+      filename: item.filename,
+    })),
+  ];
+  const evidence = proofItems.length
+    ? `<ul class="proof-list">${proofItems.map((item) =>
       `<li><a href="${evidenceHref(job.id, item.filename)}" target="_blank" rel="noopener">${escapeHtml(item.label)}</a><span>${escapeHtml(item.kind)}</span></li>`,
     ).join("")}</ul>`
     : `<p class="muted">No machine-attached proof yet.</p>`;
@@ -185,6 +193,13 @@ export function projectFactoryBoardState(snapshot) {
         sha256: item.sha256,
         verified: item.verified,
         sourceCommand: item.sourceCommand,
+      })),
+      reviews: (job.reviews || []).map((item) => ({
+        reviewer: item.reviewer,
+        model: item.model,
+        verdict: item.verdict,
+        filename: item.filename,
+        sha256: item.sha256,
       })),
       lastActivity: job.lastActivity,
     })),

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
+  canonicalMorningReviewQuestion,
+  canonicalTicketApprovalQuestion,
   loadFactorySnapshot,
   mintFactoryCliPermit,
   resolveFactoryPaths,
@@ -104,18 +106,20 @@ assert.notEqual(unsafeTestRepo.status, 0, "test repository override cannot escap
 pass(run(["ticket", "draft", "--file", ticketFile]), "draft ticket");
 
 const questionFile = path.join(fixtureDir, "question.txt");
-writeFileSync(questionFile, `Approve ticket ${jobId}?`);
+const draftedTicket = loadFactorySnapshot(paths).jobs[0].ticket;
+writeFileSync(questionFile, canonicalTicketApprovalQuestion(draftedTicket));
 const spoofedIdentity = run([
   "ticket", "present",
   "--job", jobId,
-  "--question-file", questionFile,
   "--session", "forged-thread",
   "--tool", "claude",
 ]);
 assertions++;
 assert.notEqual(spoofedIdentity.status, 0, "caller-supplied session/tool flags cannot override the trusted permit identity");
-const presented = run(["ticket", "present", "--job", jobId, "--question-file", questionFile]);
+const presented = run(["ticket", "present", "--job", jobId]);
 pass(presented, "present ticket");
+assertions++;
+assert.equal(JSON.parse(presented.stdout).questionText, canonicalTicketApprovalQuestion(draftedTicket), "ticket presentation emits only the ticket-derived canonical question");
 const queued = loadFactorySnapshot(paths);
 appendFactoryEvent(paths, {
   type: "ticket-approved",
@@ -157,11 +161,18 @@ const unverifiedProof = run(["stage", "--job", jobId, "--stage", "awaiting-morni
 assertions++;
 assert.notEqual(unverifiedProof.status, 0, "self-labeled attached file is not enough for morning review");
 pass(run(["evidence", "run", "--job", jobId, "--harness", "verify-deps", "--label", "Dependency harness"]), "run repository harness");
+const noIndependentReview = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", summaryFile]);
+assertions++;
+assert.notEqual(noIndependentReview.status, 0, "a passing branch harness cannot self-certify morning review");
+pass(run(["review", "run", "--job", jobId]), "run independent Codex review");
 pass(run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", summaryFile]), "advance to morning review");
 
 const reviewQuestion = path.join(fixtureDir, "review-question.txt");
-writeFileSync(reviewQuestion, `Accept completed job ${jobId} for the existing ship gates?`);
-pass(run(["review", "present", "--job", jobId, "--question-file", reviewQuestion]), "present morning decision");
+writeFileSync(reviewQuestion, canonicalMorningReviewQuestion(loadFactorySnapshot(paths).jobs[0]));
+const morningPresented = run(["review", "present", "--job", jobId]);
+pass(morningPresented, "present morning decision");
+assertions++;
+assert.equal(JSON.parse(morningPresented.stdout).questionText, readFileSync(reviewQuestion, "utf8"), "morning presentation emits only the result-and-proof-derived canonical question");
 
 const snapshot = loadFactorySnapshot(paths);
 assertions++;
@@ -170,6 +181,8 @@ assertions++;
 assert.equal(snapshot.jobs[0].evidence.length, 1);
 assertions++;
 assert.equal(snapshot.jobs[0].evidence.filter((item) => item.verified).length, 1);
+assertions++;
+assert.equal(snapshot.jobs[0].reviews.filter((item) => item.verdict === "clean").length, 1);
 assertions++;
 assert.equal(snapshot.jobs[0].evidence.find((item) => item.verified).scriptBodyHash.length, 64);
 assertions++;
