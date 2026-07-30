@@ -24,6 +24,7 @@
         "src/lib/commissionSplit.test.ts",
         "src/lib/commissionPayoutGuards.test.ts",
         "src/lib/section9PoApRemediation.test.ts",
+        "src/lib/vendorBillPeriodCloseLock.test.ts",
         "src/lib/reconciliation.test.ts",
         "src/lib/returnWriteBoundary.test.ts",
         "src/lib/fieldInvoiceList.test.ts",

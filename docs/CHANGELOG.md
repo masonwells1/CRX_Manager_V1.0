@@ -109,6 +109,69 @@ PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-mi
 SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains
 unapplied; frontend-first deployment and live migration apply remain separate gates.
 
+## 2026-07-30 — Vendor-bill accounting-period close lock applied
+
+Live migration `20260730114102_vendor_bill_period_close_lock` now serializes
+governed vendor-bill create/update writes with accounting-period close through
+ordered transaction advisory locks. It preserves the established public RPC
+boundary: `PUBLIC` and `anon` cannot execute the four re-emitted SECURITY
+DEFINER routines, while `authenticated` and `service_role` retain their routes.
+The B7 rename completed from submitted timestamp `20260729231031` to the
+server-assigned ledger version. Post-apply catalog/ACL/constraint checks passed;
+the registered Section 9 rollback-only chain reached expected `SMOKE_PASS_ROLLBACK`;
+and all 20 standing invariants had 0 non-allowlisted rows; the raw approved
+output was 7 rows across 5 predicates, including
+`ungated-secdef-mutators/log_failed_notification(...)`. The close
+still does not require an existing vendor-bill completeness gate, direct
+authenticated-admin accounting-period writes remain an explicit boundary, and
+the broader non-vendor-bill writer race remains separate work.
+
+Follow-up migration `20260730124308_close_accounting_period_idempotency_recheck`
+is now live (submitted as `20260730121951`, then B7-renamed to the server
+ledger version). It retains a post-month-lock same-key lookup as redundant
+defense in depth; the current `check_idempotency` helper's first key-only
+transaction advisory lock is what serializes same-key callers. Sol adversarial
+mutation testing removed the later block and the current behavioral proof still passed,
+so source coverage structurally asserts the recheck while the runtime marker
+reports helper serialization. Live catalog proof confirmed the exact single
+overload, owner/security/search-path/ACL shape and two idempotency reads, while
+the registered fixed-date delivery smoke reached expected `SMOKE_PASS_ROLLBACK`.
+The independently run post-follow-up all-20 invariant sweep is CLEAN: 7 raw/7
+allowlisted/0 new rows across the same 5 predicates.
+
+Final review correction
+`20260730140808_accounting_period_immutable_date_math` is also live (submitted
+as `20260730140000`, then B7-renamed). It makes the whole-month CHECK and both
+close-RPC month-boundary calculations explicitly time-zone-independent by
+selecting the IMMUTABLE timestamp-without-time-zone `date_trunc` overload.
+The migration changed no business rows. Live proof found one validated
+constraint with two immutable casts, 9 period rows/0 invalid, and one close
+overload retaining its owner, security mode, search path, two idempotency
+reads, month lock, and callable-role boundary. The security-integrity suite now
+guards `check_period_open` as an exact-empty-path, fully schema-qualified
+exception and separately pins `compute_season` to SECURITY INVOKER.
+The validation-only helper/caller postflight was authored as
+`20260730170743_vendor_bill_month_lock_helper_acl_postflight` and B7-renamed
+to server-assigned live version `20260730174628`. It changes no schema or
+business rows, but requires the helper to be the unique `postgres`-owned
+SECURITY INVOKER routine with `search_path=public, pg_temp` and EXECUTE for
+`postgres` alone; API roles are denied. Its three callers must each be unique
+`postgres`-owned SECURITY DEFINER routines. The ledger records it exactly once
+at high-water (930 rows), and the schema registry was refreshed to the same
+version/name. The disposable PostgreSQL 17 proof now replays 12 pre-release
+migrations after the trusted baseline, applies 4 candidates in live order (16
+total), and rejects both an untrusted helper-owner mutation and a custom-role
+helper-EXECUTE mutation before its clean replay completes the concurrency
+matrix. Post-apply, all 21 standing invariant predicates executed live with
+7 raw/7 allowlisted/0 new rows; the registered Section 9 PO/AP chain returned
+`SMOKE_PASS_ROLLBACK` and left zero checked remnants.
+Its owning npm command also runs the readiness helper unit test. The generated
+schema registry was refreshed from live introspection to high-water
+`20260730174628`, records the validation-postflight migration name, and retains
+the whole-calendar-month constraint.
+The live schema-integrity tripwire now guards the exact month-lock calls in
+both vendor-bill writers and period close, so a later function re-emission
+cannot silently reopen the race.
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

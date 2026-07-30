@@ -1,11 +1,43 @@
 # Decision Log
 
-Last verified: 2026-07-28
+Last verified: 2026-07-30
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-07-30 — Period-close month lock spans the atomic close result
+
+**Decision (Mason, in-chat — "I approve pushing all of this and migrating and making it live",
+after the release packet and lock behavior were presented):** retain the transaction-scoped
+exclusive accounting-month lock through the close upsert, summary construction, idempotency save,
+and return. The five summary aggregates do not read `vendor_bills`; keeping the lock until commit
+preserves one atomic close/result boundary, while vendor-bill writers wait under the calling
+request's statement timeout. Do not switch to a releasable session lock or move result construction
+outside the transaction without a new concurrency and failure-path proof.
+
+**Tradeoff:** a close temporarily blocks vendor-bill create/update for that month through its
+bounded reporting queries. This is an accepted close-time latency cost, not an invitation to widen
+the protocol to unrelated writers.
+
+---
+
+## 2026-07-30 — Empty search_path is the narrow fully-qualified SECURITY DEFINER exception
+
+**Decision (Mason, in-chat — "I approve pushing all of this and migrating and making it live",
+after the governed release packet and rule change were presented):** `SECURITY DEFINER`
+functions normally use `public, pg_temp`; an exactly empty `search_path` is allowed only for a
+deliberately fully schema-qualified body with current source and migration-review proof.
+`check_period_open(date)` is the first explicit exception.
+**Why:** this exception is safe because every application relation reference is
+schema-qualified and a separate live guard enforces that requirement. PostgreSQL still
+searches `pg_temp` implicitly first with an empty path, so full qualification — not the
+empty path alone — is the protection.
+**What this forbids/implies:** never remove a function from the pg_temp contract silently;
+move a reviewed exception to the exact-empty allowlist and keep every relation schema-qualified.
 
 ---
 
