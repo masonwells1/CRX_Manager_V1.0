@@ -132,6 +132,31 @@ describe('CustomerDetail stale whole-record save', () => {
     await waitFor(() => expect(dirtyStates[dirtyStates.length - 1]).toBe(false));
   });
 
+  it('reloads a pre-migration Customer after a commission-split conflict without requiring a row-version token', async () => {
+    const legacyOriginal = { ...original, row_version: undefined } as unknown as typeof original;
+    const legacyNewer = { ...newer, row_version: undefined } as unknown as typeof original;
+    let customerReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') {
+        return customerQuery(() => {
+          customerReads += 1;
+          return customerReads <= 2 ? legacyOriginal : legacyNewer;
+        });
+      }
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'COMMISSION_SPLIT_CONFLICT: changed elsewhere' } });
+
+    renderDetail();
+    fireEvent.change(await screen.findByDisplayValue('Original Farm'), { target: { value: 'Unsaved legacy edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload Customer' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Customer' })).not.toBeInTheDocument());
+    expect(screen.getByDisplayValue('Newer Farm')).toBeInTheDocument();
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('stable saved customer'));
+  });
+
   it('keeps the conflict dialog and local customer/address state when Reload cannot read addresses', async () => {
     let customerReads = 0;
     let addressReads = 0;

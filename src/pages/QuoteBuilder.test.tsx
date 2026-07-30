@@ -488,6 +488,43 @@ describe('QuoteBuilder', () => {
     expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
   });
 
+  it('reloads a pre-migration Quote after a commission-split conflict without requiring a row-version token', async () => {
+    const { quote, product, section, item } = makeQuoteFixture();
+    const reloadedQuote = {
+      ...quote,
+      header_notes: 'Saved by the other workflow',
+      commission_split: { splits: [{ sales_rep_id: 'admin-1', percentage: 100 }] },
+    };
+    let quoteReads = 0;
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? (++quoteReads <= 2 ? quote : reloadedQuote)
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote'
+      ? { data: null, error: { code: 'P0001', message: 'COMMISSION_SPLIT_CONFLICT: changed elsewhere' } }
+      : { data: null, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    const header = await screen.findByDisplayValue(quote.header_notes);
+    fireEvent.change(header, { target: { value: 'Unsaved local edit' } });
+    fireEvent.click(screen.getByText('Save Draft'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reload Quote' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reload Quote' })).not.toBeInTheDocument());
+    expect(screen.getByDisplayValue('Saved by the other workflow')).toBeInTheDocument();
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('stable saved quote'));
+  });
+
   it('adopts an exact N+1 save token and sends it on the next same-page save', async () => {
     const { quote, product, section, item } = makeQuoteFixture('draft', 7);
     mockFrom.mockImplementation((table: string) => buildChain({

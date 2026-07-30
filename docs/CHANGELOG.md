@@ -12,13 +12,16 @@ have an idempotent timer fallback, and the conflict dialog reports asynchronous
 reload failure without discarding the operator's edits. A reload now locks every
 dialog close path until it settles, and the real `false` failure result is surfaced
 instead of only rejected promises. Lifecycle recovery warnings also name the action
-that actually committed.
+that actually committed. During the frontend-first rollout, an existing
+commission-split conflict can still reload a tokenless legacy record; numeric-token
+records retain the stricter stable-version check.
 
 The candidate migration's catalog postflight now tolerates PostgreSQL's harmless
 default/search-path formatting, rejects a missing `DEFAULT 1`, and preserves the
 exact security requirements.
 Quote totals reuse the single authoritative aggregate, and the disposable race,
-source-shape, and phone-browser proofs were made deterministic. Verification passed
+source-shape, and phone-browser proofs were made deterministic and registered as
+package scripts so future runs can discover them. Verification passed
 4,042 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
 SQL audit. Migration `20260730031925_quote_customer_row_version_guard.sql` remains

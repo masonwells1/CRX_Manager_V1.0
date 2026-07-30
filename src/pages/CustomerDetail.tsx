@@ -252,7 +252,11 @@ export default function CustomerDetail() {
     suppressDirtyUntilReloadSettlesRef.current = true;
     let installedSnapshot = false;
     try {
-      installedSnapshot = await fetchCustomerSnapshot(true);
+      // Before the migration lands, a live commission-split conflict can still
+      // open this dialog while the record has no row_version. Preserve the
+      // legacy double-read reload in that window; require a numeric stability
+      // token as soon as this page has ever loaded one.
+      installedSnapshot = await fetchCustomerSnapshot(customerRowVersionRef.current !== null);
       if (installedSnapshot) {
         setIsDirty(false);
         setStaleSaveOpen(false);

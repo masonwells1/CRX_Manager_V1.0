@@ -826,7 +826,11 @@ export default function QuoteBuilder() {
     suppressDirtyUntilReloadSettlesRef.current = true;
     let installedSnapshot = false;
     try {
-      installedSnapshot = await fetchQuote(quoteId, true);
+      // Commission-split conflicts already exist in production, before the
+      // row-version migration. Allow the legacy tokenless double-read reload
+      // during that rollout window, but stay strict once a numeric token has
+      // been loaded for this quote.
+      installedSnapshot = await fetchQuote(quoteId, quoteRowVersionRef.current !== null);
       if (installedSnapshot) {
         setIsDirty(false);
         setStaleSaveOpen(false);
