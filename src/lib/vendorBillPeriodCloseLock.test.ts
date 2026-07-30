@@ -8,6 +8,8 @@ const migration = readFileSync(join(
   root, 'supabase', 'migrations',
   '20260730031031_vendor_bill_period_close_lock.sql',
 ), 'utf8').replace(/\r\n/g, '\n');
+const source = (...parts: string[]) => readFileSync(join(root, ...parts), 'utf8')
+  .replace(/\r\n/g, '\n');
 
 function body(name: string) {
   const start = migration.indexOf(`CREATE OR REPLACE FUNCTION public.${name}`);
@@ -54,5 +56,17 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(locks).toBeGreaterThan(row);
     expect(locks).toBeLessThan(oldCheck);
     expect(oldCheck).toBeLessThan(newCheck);
+  });
+
+  it('keeps the restored-schema create/update concurrency proof registered', () => {
+    const proof = source(
+      'scripts', 'smoke', 'prove-vendor-bill-period-close-concurrency.mjs',
+    );
+    expect(proof).toContain('BASELINE_CREATE_CLOSE_RACE_REPRODUCED');
+    expect(proof).toContain('CANDIDATE_UPDATE_WRITER_FIRST_CLOSE_WAITS_PASS');
+    expect(proof).toContain('CANDIDATE_UPDATE_CLOSE_FIRST_FAIL_CLOSED_PASS');
+    expect(proof).toContain('CANDIDATE_UPDATE_REVERSE_MONTH_NO_DEADLOCK_PASS');
+    expect(proof).toContain("classid=73492010");
+    expect(proof).toContain("'--network', 'none'");
   });
 });

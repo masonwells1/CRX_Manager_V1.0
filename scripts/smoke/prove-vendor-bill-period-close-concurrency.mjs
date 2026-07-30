@@ -115,5 +115,55 @@ try {
   assert.equal(scalar(`SELECT count(*) FROM public.vendor_bills WHERE bill_number='proof-candidate-close-first-writer'`), '0');
   assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='candidate-close-first-writer'`), '0');
   console.log('CANDIDATE_CLOSE_FIRST_FAIL_CLOSED_PASS');
+
+  sql(`DROP TRIGGER proof_pause_period ON public.accounting_periods; DROP FUNCTION public._proof_pause_period(); DELETE FROM public.accounting_periods WHERE period_start='2025-01-01';`);
+  const update = (id, d, key) => `${claims()} SELECT public.update_vendor_bill('${id}'::uuid,1000,0,'${d}'::date,'${d}'::date,'[PROOF] ${key}','${key}');`;
+  const updateSource = scalar(`${bill('update-source')} `);
+  // Update writer-first: actual update locks its bill row, then both old/new
+  // months before the proof-only BEFORE UPDATE barrier. Closing January waits.
+  sql(`CREATE OR REPLACE FUNCTION public._proof_pause_bill_update() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_advisory_lock(${KEY}); PERFORM pg_advisory_unlock(${KEY}); RETURN NEW; END$$; CREATE TRIGGER proof_pause_bill_update BEFORE UPDATE ON public.vendor_bills FOR EACH ROW EXECUTE FUNCTION public._proof_pause_bill_update();`);
+  const h3 = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(3); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await h3.ready;
+  const updateWriter = session(`BEGIN; ${update(updateSource, '2025-02-15', 'update-writer-first')} COMMIT; SELECT 'UPDATE_WRITER_DONE';`, 'UPDATE_WRITER_DONE'); await waiting(updateWriter.done, 'update writer barrier');
+  assert.equal(scalar(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=73492010 AND objid=${monthKey} AND mode='ShareLock'`), '1');
+  const updateClose = session(`BEGIN; ${close('update-writer-close')} COMMIT; SELECT 'UPDATE_CLOSE_DONE';`, 'UPDATE_CLOSE_DONE'); await waiting(updateClose.done, 'update close waits');
+  const [uw, uc] = await Promise.all([updateWriter.done, updateClose.done]); assert.equal(uw.code, 0, uw.err); assert.equal(uc.code, 0, uc.err);
+  assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${updateSource}'::uuid`), '2025-02-15');
+  console.log('CANDIDATE_UPDATE_WRITER_FIRST_CLOSE_WAITS_PASS');
+
+  sql(`DELETE FROM public.vendor_bills WHERE id='${updateSource}'::uuid; DELETE FROM public.accounting_periods WHERE period_start='2025-01-01'; DROP TRIGGER proof_pause_bill_update ON public.vendor_bills; DROP FUNCTION public._proof_pause_bill_update();`);
+  const closeFirstBill = scalar(`${bill('update-close-first')}`);
+  const auditBefore = scalar(`SELECT count(*) FROM public.financial_audit_log WHERE entity_id='${closeFirstBill}'::uuid`);
+  const feedBefore = scalar(`SELECT count(*) FROM public.activity_feed WHERE related_entity_id='${closeFirstBill}'::uuid`);
+  sql(`CREATE OR REPLACE FUNCTION public._proof_pause_period() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_advisory_lock(${KEY}); PERFORM pg_advisory_unlock(${KEY}); RETURN NEW; END$$; CREATE TRIGGER proof_pause_period BEFORE INSERT ON public.accounting_periods FOR EACH ROW EXECUTE FUNCTION public._proof_pause_period();`);
+  const h4 = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(3); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await h4.ready;
+  const updateCfirst = session(`BEGIN; ${close('update-close-first-close')} COMMIT; SELECT 'UPDATE_CLOSE_FIRST_DONE';`, 'UPDATE_CLOSE_FIRST_DONE'); await waiting(updateCfirst.done, 'update close-first barrier');
+  const updateBlocked = session(`BEGIN; SELECT 'UPDATE_STARTED'; ${update(closeFirstBill, '2025-02-15', 'update-close-first-writer')} COMMIT;`, 'UPDATE_STARTED'); await updateBlocked.ready; await waiting(updateBlocked.done, 'update waiting exclusive month');
+  const [ucf, ub] = await Promise.all([updateCfirst.done, updateBlocked.done]); assert.equal(ucf.code, 0, ucf.err); expectError(ub, 'closed accounting period', 'close-first update');
+  assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${closeFirstBill}'::uuid`), '2025-01-15');
+  assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='update-close-first-writer'`), '0');
+  assert.equal(scalar(`SELECT count(*) FROM public.financial_audit_log WHERE entity_id='${closeFirstBill}'::uuid`), auditBefore);
+  assert.equal(scalar(`SELECT count(*) FROM public.activity_feed WHERE related_entity_id='${closeFirstBill}'::uuid`), feedBefore);
+  console.log('CANDIDATE_UPDATE_CLOSE_FIRST_FAIL_CLOSED_PASS');
+
+  sql(`DROP TRIGGER proof_pause_period ON public.accounting_periods; DROP FUNCTION public._proof_pause_period(); DELETE FROM public.accounting_periods WHERE period_start='2025-01-01'; DELETE FROM public.vendor_bills WHERE id='${closeFirstBill}'::uuid;`);
+  const janBill = scalar(`${bill('reverse-jan', '2025-01-15')}`);
+  const febBill = scalar(`${bill('reverse-feb', '2025-02-15')}`);
+  // Both distinct rows request opposite directions simultaneously. A
+  // disposable post-check UPDATE barrier holds both real RPCs after they have
+  // acquired their helper locks, making the two-session assertion deterministic.
+  sql(`CREATE OR REPLACE FUNCTION public._proof_pause_bill_update() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_advisory_lock(${KEY}); PERFORM pg_advisory_unlock(${KEY}); RETURN NEW; END$$; CREATE TRIGGER proof_pause_bill_update BEFORE UPDATE ON public.vendor_bills FOR EACH ROW EXECUTE FUNCTION public._proof_pause_bill_update();`);
+  const h5 = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(3); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await h5.ready;
+  const reverseA = session(`BEGIN; SET lock_timeout='10s'; SELECT 'REVERSE_A_STARTED'; ${update(janBill, '2025-02-15', 'reverse-a')} COMMIT; SELECT 'REVERSE_A_DONE';`, 'REVERSE_A_STARTED');
+  const reverseB = session(`BEGIN; SET lock_timeout='10s'; SELECT 'REVERSE_B_STARTED'; ${update(febBill, '2025-01-15', 'reverse-b')} COMMIT; SELECT 'REVERSE_B_DONE';`, 'REVERSE_B_STARTED');
+  await Promise.all([reverseA.ready, reverseB.ready]); await Promise.all([waiting(reverseA.done, 'reverse A barrier'), waiting(reverseB.done, 'reverse B barrier')]);
+  const febKey = 2025 * 12 + 2 - 1;
+  assert.equal(scalar(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=73492010 AND objid=${monthKey} AND mode='ShareLock' AND granted`), '2');
+  assert.equal(scalar(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=73492010 AND objid=${febKey} AND mode='ShareLock' AND granted`), '2');
+  await h5.done;
+  const [ra, rb] = await Promise.all([reverseA.done, reverseB.done]); assert.equal(ra.code, 0, ra.err); assert.equal(rb.code, 0, rb.err);
+  assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${janBill}'::uuid`), '2025-02-15');
+  assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${febBill}'::uuid`), '2025-01-15');
+  sql(`DROP TRIGGER proof_pause_bill_update ON public.vendor_bills; DROP FUNCTION public._proof_pause_bill_update();`);
+  console.log('CANDIDATE_UPDATE_REVERSE_MONTH_NO_DEADLOCK_PASS');
   console.log('VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS');
 } finally { run(['rm', '-f', NAME], { fail: true }); }

@@ -41,3 +41,17 @@ closed state and remains unchanged.
 This is local-only. It does not apply a migration, change live data, alter
 direct table permissions, deploy, push, or open a PR. Any live apply requires
 fresh exact-SHA review and the normal migration gate.
+
+## Disposable PostgreSQL 17 proof
+
+`node scripts/smoke/prove-vendor-bill-period-close-concurrency.mjs` restores
+the checked-in real schema baseline in a network-isolated Supabase PostgreSQL
+17 container. It uses disposable BEFORE INSERT/UPDATE proof barriers only after
+the actual RPC period checks, not replacement writer functions. The runner
+reproduces the baseline create-versus-close race, then proves candidate
+create-writer-first and close-first schedules, update-writer-first and
+close-first schedules (including no idempotency/audit/activity side effects on
+the rejected update), and simultaneous opposite `Jan→Feb` / `Feb→Jan` updates
+on distinct bills without deadlock. Its terminal markers are
+`CANDIDATE_UPDATE_REVERSE_MONTH_NO_DEADLOCK_PASS` and
+`VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
