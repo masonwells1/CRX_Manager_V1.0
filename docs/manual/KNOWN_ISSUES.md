@@ -59,6 +59,15 @@ advisory-lock namespace when visible). This is a snapshot only: the candidate se
 ten-second apply-time `SET LOCAL lock_timeout`, and that fail-closed timeout must be
 observed if contention occurs.
 
+**Parked-discovery integrity guard (local 2026-07-30).** The fleet and SessionStart
+readers previously opened only migration-history `LOCAL CANDIDATE / NOT APPLIED` files,
+so a forward SQL file with an explicit leading parked header but no history row could
+produce a false clean zero. They now prefilter the immutable `origin/main` tree for
+forward SQL containing `PARKED`, inspect those possible headers, and report `PARKED
+STATE UNKNOWN` unless each header has the required candidate signal or an exact
+applied/retired/superseded history state. If the prefilter is unavailable, they fall
+back to a complete forward scan rather than claim the backlog is clear.
+
 **Explicit scope residual.** This candidate guarantees only
 `create_vendor_bill` and `update_vendor_bill` date writes. `record_vendor_payment`,
 `void_vendor_payment`, `void_vendor_bill`, and other `check_period_open`-only

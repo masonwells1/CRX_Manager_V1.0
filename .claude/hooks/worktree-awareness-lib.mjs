@@ -262,12 +262,12 @@ export function localCandidateMigrationPathsFromHistory(historyText) {
   return { state: "known", paths, reason: "" };
 }
 
-// Mainline discovery intentionally reads SQL only for filenames the canonical
-// origin/main history has already marked LOCAL CANDIDATE / NOT APPLIED. A stale
-// applied header therefore cannot resurrect the old migration list. Broken links
-// are fail-loud rather than a confident zero; staging/audit name-based drafts remain
-// visible in the returned partial set.
-export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () => null) {
+// Mainline discovery reads the exact LOCAL CANDIDATE blobs plus a complete, cheap
+// prefilter of origin/main forward migrations whose content contains "PARKED". That
+// makes an orphaned explicit parked header fail loud without opening every migration.
+// A stale header with an exact APPLIED/RETIRED/SUPERSEDED history row still self-clears;
+// staging/audit name-based drafts remain visible in every partial result.
+export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () => null, possibleParkedMigrationPaths = null) {
   const mainlinePaths = [...(paths || [])].map((p) => String(p || "").trim()).filter(Boolean);
   const discovered = parkedMainlinePathsFrom(mainlinePaths);
   const history = localCandidateMigrationPathsFromHistory(historyText);
@@ -293,6 +293,44 @@ export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () =>
       return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL lacks an explicit parked status header" };
     }
     discovered.push(matches[0]);
+  }
+
+  const historyRowsByVersion = new Map();
+  for (const raw of String(historyText).split("\n")) {
+    const line = raw.replace(/\r/g, "").trim();
+    if (!/^\|/.test(line)) continue;
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 3 || !/^\d{14}$/.test(cells[1])) continue;
+    const rows = historyRowsByVersion.get(cells[1]) || [];
+    rows.push(cells.slice(2).join(" | "));
+    historyRowsByVersion.set(cells[1], rows);
+  }
+
+  // `null` is the conservative unit-test/fallback mode: inspect every forward
+  // migration. Production passes a complete origin/main `git grep -il PARKED`
+  // result, which is sufficient because every explicit status header contains PARKED.
+  const headerProbePaths = possibleParkedMigrationPaths === null ? mainlinePaths : possibleParkedMigrationPaths;
+  const seenProbePaths = new Set();
+  for (const raw of headerProbePaths || []) {
+    const normalized = normRepoPath(raw);
+    if (seenProbePaths.has(normalized)) continue;
+    seenProbePaths.add(normalized);
+    if (!normalized.startsWith("supabase/migrations/") || !isParkedMigrationFile(String(raw).slice(String(raw).lastIndexOf("/") + 1))) continue;
+    if (history.paths.has(normalized)) continue; // already read and verified above
+    const matches = treeByPath.get(normalized) || [];
+    if (matches.length !== 1) {
+      return { state: "unknown", paths: new Set(discovered), reason: "possible parked forward migration does not map one-to-one to origin/main SQL" };
+    }
+    const sqlText = loadText(matches[0]);
+    if (typeof sqlText !== "string") {
+      return { state: "unknown", paths: new Set(discovered), reason: "possible parked forward migration SQL blob is unreadable from origin/main" };
+    }
+    if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
+    const version = matches[0].slice(matches[0].lastIndexOf("/") + 1).match(/^(\d{14})_/);
+    const rows = version ? historyRowsByVersion.get(version[1]) || [] : [];
+    if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
+      return { state: "unknown", paths: new Set(discovered), reason: "parked forward header has no LOCAL CANDIDATE or applied/retired history record" };
+    }
   }
   return { state: "known", paths: new Set(discovered), reason: "" };
 }

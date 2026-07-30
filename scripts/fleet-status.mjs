@@ -260,7 +260,8 @@ for (const e of entries) {
 }
 
 // The mainline backlog is read from one immutable origin/main tree. Forward SQL must
-// agree with migration-history.md, so historical applied headers never resurrect.
+// agree with migration-history.md; a cheap PARKED-content prefilter catches orphaned
+// explicit status headers while applied historical headers still never resurrect.
 const mainlineBlobCache = new Map();
 let mainlineParkedState = hasOriginMain ? "known" : "unknown";
 let mainlineParkedReason = hasOriginMain ? "" : "origin/main is unavailable";
@@ -268,13 +269,20 @@ if (hasOriginMain) {
   try {
     const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()], repoRoot, 5000);
     const history = git(["show", "origin/main:docs/reference/migration-history.md"], repoRoot, 5000);
+    let possibleParkedMigrationPaths = null;
+    try {
+      possibleParkedMigrationPaths = git(["grep", "-l", "-i", "PARKED", "origin/main", "--", "supabase/migrations"], repoRoot, 5000)
+        .split("\n")
+        .filter(Boolean)
+        .map((p) => p.replace(/^origin\/main:/i, ""));
+    } catch { /* null falls back to a complete conservative forward scan */ }
     const discovery = parkedMainlineDiscoveryFrom(tree.split("\n"), history, (p) => {
       try {
         const text = git(["show", `origin/main:${p}`], repoRoot, 5000);
         mainlineBlobCache.set(normRepoPath(p), text);
         return text;
       } catch { return null; }
-    });
+    }, possibleParkedMigrationPaths);
     mainlineParkedState = discovery.state;
     mainlineParkedReason = discovery.reason;
     for (const p of discovery.paths) {

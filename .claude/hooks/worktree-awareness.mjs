@@ -142,14 +142,22 @@ const ownDraftPaths = createOwnDraftPathsReader({
 });
 
 // The mainline backlog is read from one immutable origin/main tree. A forward SQL
-// file counts only when migration-history.md names that exact LOCAL CANDIDATE file.
+// file counts only when migration-history.md names that exact LOCAL CANDIDATE file;
+// a cheap PARKED-content prefilter also catches orphaned explicit status headers.
 function mainlineParkedDiscovery() {
   try {
     const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
     const history = git(["show", "origin/main:docs/reference/migration-history.md"]);
+    let possibleParkedMigrationPaths = null;
+    try {
+      possibleParkedMigrationPaths = git(["grep", "-l", "-i", "PARKED", "origin/main", "--", "supabase/migrations"])
+        .split("\n")
+        .filter(Boolean)
+        .map((p) => p.replace(/^origin\/main:/i, ""));
+    } catch { /* null falls back to a complete conservative forward scan */ }
     return parkedMainlineDiscoveryFrom(tree.split("\n"), history, (p) => {
       try { return git(["show", `origin/main:${p}`]); } catch { return null; }
-    });
+    }, possibleParkedMigrationPaths);
   } catch {
     return { state: "unknown", paths: new Set(), reason: "origin/main parked-state metadata is unreadable" };
   }

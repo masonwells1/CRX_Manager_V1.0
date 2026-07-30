@@ -180,28 +180,38 @@ eq(parkedMainlinePathsFrom([DISPATCH, "docs/audits/PARKED-direct.sql", PARKED_FO
 
 // ── origin/main forward migrations: history + explicit header, or fail loud ──
 //
-// Runtime reads history once, then opens SQL blobs only for the exact filenames that
-// history calls LOCAL CANDIDATE / NOT APPLIED. This keeps 76 old applied headers from
-// coming back while still making a merged candidate visible until its B7 update.
+// Runtime reads history once, then opens exact LOCAL CANDIDATE blobs plus only the
+// complete origin/main PARKED-content prefilter. This catches orphaned explicit headers
+// without reading ordinary forward migrations, while an applied header still self-clears.
 const CANDIDATE_NO_HEADER = "supabase/migrations/20260730235959_candidate_without_header.sql";
 const APPLIED_HEADER = "supabase/migrations/20260729010101_applied_old_header.sql";
 const SUPERSEDED_FORWARD = "supabase/migrations/SUPERSEDED-20260730235958_replaced.sql";
+const MAINLINE_ORDINARY_FORWARD = "supabase/migrations/20260730235960_ordinary_feature.sql";
+const ORPHAN_HEADER = "supabase/migrations/20260730235961_orphaned_parked_header.sql";
 const STALE_HEADERS = Array.from({ length: 76 }, (_unused, i) => `supabase/migrations/2025${String(i).padStart(10, "0")}_historical_${i}.sql`);
+const STALE_APPLIED_HISTORY = STALE_HEADERS.map((p, i) => {
+  const filename = p.slice(p.lastIndexOf("/") + 1);
+  return `| ${700 + i} | ${filename.slice(0, 14)} | **APPLIED LIVE.** File: \`${filename}\`. |`;
+});
 const mainlineHistory = [
   "| # | Migration timestamp | Purpose |",
   "|---:|---|---|",
   "| 842 | 20260729231031 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260729231031_vendor_bill_period_close_lock.sql`. |",
   "| 843 | 20260730235959 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260730235959_candidate_without_header.sql`. |",
   "| 841 | 20260729010101 | **APPLIED LIVE.** File: `20260729010101_applied_old_header.sql`. |",
+  ...STALE_APPLIED_HISTORY,
 ].join("\n");
 const mainlineTexts = new Map([
   [PARKED_FORWARD, PARKED_FORWARD_HEADER],
   [CANDIDATE_NO_HEADER, "-- purpose only\nSELECT 1;\n"],
   [APPLIED_HEADER, PARKED_FORWARD_HEADER],
   [SUPERSEDED_FORWARD, PARKED_FORWARD_HEADER],
+  [MAINLINE_ORDINARY_FORWARD, "-- ordinary feature migration\nSELECT 1;\n"],
+  [ORPHAN_HEADER, PARKED_FORWARD_HEADER],
   ...STALE_HEADERS.map((p) => [p, PARKED_FORWARD_HEADER]),
 ]);
-const mainlinePaths = [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD, CANDIDATE_NO_HEADER, APPLIED_HEADER, SUPERSEDED_FORWARD, ...STALE_HEADERS];
+const mainlinePaths = [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD, CANDIDATE_NO_HEADER, APPLIED_HEADER, SUPERSEDED_FORWARD, MAINLINE_ORDINARY_FORWARD, ...STALE_HEADERS];
+const possibleParkedMigrationPaths = [PARKED_FORWARD, APPLIED_HEADER, ...STALE_HEADERS];
 const candidateReads = [];
 const mergedWithBrokenCandidate = parkedMainlineDiscoveryFrom(mainlinePaths, mainlineHistory, (p) => {
   candidateReads.push(p);
@@ -215,14 +225,32 @@ const mergedReads = [];
 const mergedCandidate = parkedMainlineDiscoveryFrom(mainlinePaths, mergedHistory, (p) => {
   mergedReads.push(p);
   return mainlineTexts.get(p);
-});
+}, possibleParkedMigrationPaths);
 eq(mergedCandidate.state, "known", "merged candidate has a coherent origin/main cross-reference");
 eq([...mergedCandidate.paths].sort(), [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD].sort(), "76 applied-like headers plus one merged candidate report exactly one forward migration");
-eq(mergedReads, [PARKED_FORWARD], "coherent merged state reads the candidate blob only once");
+eq(mergedReads, [PARKED_FORWARD, APPLIED_HEADER, ...STALE_HEADERS], "coherent mainline state reads candidates and the complete PARKED prefilter, not ordinary forward SQL");
+ok(!mergedReads.includes(MAINLINE_ORDINARY_FORWARD), "PARKED prefilter preserves runtime performance by skipping ordinary forward migrations");
 
 const b7Applied = parkedMainlineDiscoveryFrom([PARKED_FORWARD], mergedHistory.replace("**LOCAL CANDIDATE — NOT APPLIED.** File: `20260729231031_vendor_bill_period_close_lock.sql`.", "**APPLIED LIVE.** File: `20260729231031_vendor_bill_period_close_lock.sql`."), () => PARKED_FORWARD_HEADER);
 eq(b7Applied.state, "known", "B7 applied history is a known state");
 eq([...b7Applied.paths], [], "B7 applied history self-clears even if an old header survives");
+
+const orphanHeaderDiscovery = parkedMainlineDiscoveryFrom(
+  [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD, ORPHAN_HEADER],
+  mergedHistory,
+  (p) => mainlineTexts.get(p),
+  [PARKED_FORWARD, ORPHAN_HEADER],
+);
+eq(orphanHeaderDiscovery.state, "unknown", "an explicit forward parked header with no history row is PARKED STATE UNKNOWN, never a known zero");
+eq([...orphanHeaderDiscovery.paths].sort(), [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD].sort(), "orphaned header failure retains independently discoverable drafts and valid candidates");
+const ambiguousHeaderHistory = `${mergedHistory}\n| 844 | 20260730235961 | Ordinary migration note. File: \`20260730235961_orphaned_parked_header.sql\`. |`;
+const ambiguousHeaderDiscovery = parkedMainlineDiscoveryFrom(
+  [PARKED_FORWARD, ORPHAN_HEADER],
+  ambiguousHeaderHistory,
+  (p) => mainlineTexts.get(p),
+  [PARKED_FORWARD, ORPHAN_HEADER],
+);
+eq(ambiguousHeaderDiscovery.state, "unknown", "a non-candidate, non-applied history row cannot silently clear an explicit parked header");
 
 const headerWithoutRow = validateParkedMigrationCrossReferences([PARKED_FORWARD], "| # | Migration timestamp | Purpose |\n|---:|---|---|", () => PARKED_FORWARD_HEADER);
 eq(headerWithoutRow.state, "unknown", "correction guard fails loud for a parked header without a candidate history row");
