@@ -641,7 +641,7 @@ const SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP: string[] = [
 ];
 
 /**
- * Deliberately stronger SECURITY DEFINER configuration: an exactly empty
+ * Narrow fully-qualified SECURITY DEFINER exception: an exactly empty
  * search_path is allowed only while every body reference is schema-qualified.
  * Keep this separate from the pg_temp list so live proof fails if the function
  * drifts to any mutable path.

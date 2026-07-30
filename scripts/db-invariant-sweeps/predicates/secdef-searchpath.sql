@@ -1,6 +1,6 @@
 -- predicate (e): secdef-searchpath
 -- Every SECURITY DEFINER function MUST pin search_path. The normal contract is
---   public, pg_temp; an exactly empty path is the narrow stronger exception for
+--   public, pg_temp; an exactly empty path is the narrow fully-qualified exception for
 --   a separately guarded, fully schema-qualified body. A SECDEF function with
 --   an unpinned mutable search_path is a privilege-escalation vector (an attacker
 --   who can create objects in an earlier schema can hijack an unqualified
