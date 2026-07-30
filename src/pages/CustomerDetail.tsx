@@ -7,12 +7,13 @@ import Input from '../components/ui/Input';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictDialog';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate, localToday } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -23,6 +24,12 @@ import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
+import {
+  buildRowVersionPatch,
+  readRowVersion,
+  resolveAuthoritativeSaveRowVersion,
+  resolveDirectMutationRowVersion,
+} from '../lib/recordVersionConcurrency';
 import { ALLOWED_CROPS, type CropValue } from '../lib/crops';
 import { logActivity } from '../lib/activityLogger';
 import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
@@ -67,7 +74,10 @@ export default function CustomerDetail() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
-  const saveCustomerIdem = useIdempotencyKey('save_customer', profile?.id || '');
+  const {
+    getKey: getSaveCustomerIdempotencyKey,
+    resetKey: resetSaveCustomerIdempotencyKey,
+  } = useIdempotencyKey('save_customer', profile?.id || '');
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>({
@@ -95,6 +105,9 @@ export default function CustomerDetail() {
   const defaultSplitTouchedRef = useRef(false);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
+  // Narrow local structural state: generated types are refreshed only after apply.
+  const customerRowVersionRef = useRef<number | null>(null);
+  const [staleSaveOpen, setStaleSaveOpen] = useState(false);
   const [tab, setTab] = useState<'info' | 'contacts' | 'knowledge' | 'documents' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
   const [timeline, setTimeline] = useState<ActivityFeedItem[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -141,46 +154,135 @@ export default function CustomerDetail() {
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
+  const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
-
-  const fetchCustomer = useCallback(async () => {
-    const { data, error } = await supabase.from('customers').select('*').eq('id', id!).maybeSingle();
-    if (error) {
-      toast('error', 'Failed to load customer');
-      setLoading(false);
-      return;
-    }
-    if (data) {
-      setCustomer(data as Customer);
-      loadedDefaultSplitRef.current = (data as Customer).default_commission_split ?? null;
-      defaultSplitTouchedRef.current = false;
-      // DB type is string[]; the CHECK constraint guarantees values are CropValue.
-      setCrops((data.crops ?? []) as CropValue[]);
-      // Fetch parent customer name if set
-      if (data.parent_customer_id) {
-        const { data: parent, error: parentError } = await supabase
-          .from('customers')
-          .select('farm_name')
-          .eq('id', data.parent_customer_id)
-          .maybeSingle();
-        if (parentError) toast('error', 'Failed to load parent customer');
-        if (parent) setParentName(parent.farm_name);
-      }
-    }
-    setLoading(false);
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [id, toast]);
 
   const fetchAddresses = useCallback(async () => {
     const { data, error } = await supabase.from('customer_addresses').select('*').eq('customer_id', id!).order('created_at');
-    if (error) toast('error', 'Failed to load addresses');
-    setAddresses(data || []);
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'read', action: 'load_customer_addresses' } });
+      toast('error', 'Failed to load addresses');
+      return false;
+    }
+    setAddresses((data || []) as Partial<CustomerAddress>[]);
+    return true;
+  }, [id, toast]);
+
+  const fetchCustomerSnapshot = useCallback(async (requireStableRowVersion = false): Promise<boolean> => {
+    if (!id) return false;
+    const customerRes = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
+
+    // Do not install either half until both required reads succeeded. This is
+    // especially important after a stale-save conflict: the user must retain
+    // every local field/address edit if Reload cannot build a complete snapshot.
+    if (customerRes.error || !customerRes.data) {
+      if (customerRes.error) Sentry.captureException(customerRes.error, { tags: { source: 'read', action: 'load_customer_snapshot' } });
+      toast('error', 'Could not load the complete customer record. Your current edits were kept; try Reload again or refresh the page.');
+      setLoading(false);
+      return false;
+    }
+
+    const loadedCustomer = customerRes.data as Customer;
+    const initialRowVersion = readRowVersion((loadedCustomer as Customer & { row_version?: unknown }).row_version);
+    const addressesRes = await supabase
+      .from('customer_addresses')
+      .select('*')
+      .eq('customer_id', id)
+      .order('created_at');
+    if (addressesRes.error) {
+      Sentry.captureException(addressesRes.error, { tags: { source: 'read', action: 'load_customer_addresses_snapshot' } });
+      toast('error', 'Could not load the complete customer record. Your current edits were kept; try Reload again or refresh the page.');
+      setLoading(false);
+      return false;
+    }
+
+    const { data: finalHeader, error: finalHeaderError } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
+    const stableVersion = initialRowVersion === finalRowVersion
+      && (initialRowVersion !== null || !requireStableRowVersion);
+    if (finalHeaderError || !finalHeader || !stableVersion) {
+      if (finalHeaderError) Sentry.captureException(finalHeaderError, { tags: { source: 'read', action: 'confirm_customer_snapshot_version' } });
+      toast('error', 'Could not confirm a stable saved customer. Your current edits were kept; try Reload again or refresh the page.');
+      setLoading(false);
+      return false;
+    }
+
+    const loadedAddresses = (addressesRes.data || []) as Partial<CustomerAddress>[];
+    // Install the complete, validated snapshot atomically from React's event
+    // batch. There is no intermediate empty-address or partially-updated form.
+    setCustomer(loadedCustomer);
+    customerRowVersionRef.current = finalRowVersion;
+    loadedDefaultSplitRef.current = loadedCustomer.default_commission_split ?? null;
+    defaultSplitTouchedRef.current = false;
+    setCrops((loadedCustomer.crops ?? []) as CropValue[]);
+    setAddresses(loadedAddresses);
+    setParentName('');
+    setLoading(false);
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
+
+    // Parent display text is auxiliary to the editable customer/address
+    // snapshot, so a parent lookup failure cannot discard this complete reload.
+    if (loadedCustomer.parent_customer_id) {
+      void supabase
+        .from('customers')
+        .select('farm_name')
+        .eq('id', loadedCustomer.parent_customer_id)
+        .maybeSingle()
+        .then(({ data: parent, error: parentError }) => {
+          if (parentError) {
+            Sentry.captureException(parentError, { tags: { source: 'read', action: 'load_parent_customer_name' } });
+            toast('warning', 'Customer loaded, but the parent customer name could not be refreshed.');
+          } else if (parent) {
+            setParentName(parent.farm_name);
+          }
+        });
+    }
+
+    return true;
   }, [id, toast]);
 
   useEffect(() => {
     if (!initialLoadDone.current) return;
+    if (suppressDirtyUntilReloadSettlesRef.current) return;
     setIsDirty(true);
   }, [customer, addresses]);
+
+  const reloadAfterStaleSave = useCallback(async () => {
+    suppressDirtyUntilReloadSettlesRef.current = true;
+    let installedSnapshot = false;
+    try {
+      // Before the migration lands, a live commission-split conflict can still
+      // open this dialog while the record has no row_version. Preserve the
+      // legacy double-read reload in that window; require a numeric stability
+      // token as soon as this page has ever loaded one.
+      installedSnapshot = await fetchCustomerSnapshot(customerRowVersionRef.current !== null);
+      if (installedSnapshot) {
+        // The rejected key may represent a committed save whose response was
+        // lost. Rotate it only after a complete authoritative reload succeeds.
+        resetSaveCustomerIdempotencyKey();
+        setIsDirty(false);
+        setStaleSaveOpen(false);
+      }
+    } finally {
+      let released = false;
+      const releaseDirtySuppression = () => {
+        if (released) return;
+        released = true;
+        suppressDirtyUntilReloadSettlesRef.current = false;
+        if (installedSnapshot) setIsDirty(false);
+      };
+      const fallback = window.setTimeout(releaseDirtySuppression, 250);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        window.clearTimeout(fallback);
+        releaseDirtySuppression();
+      }));
+    }
+    return installedSnapshot;
+  }, [fetchCustomerSnapshot, resetSaveCustomerIdempotencyKey]);
 
   useEffect(() => {
     // Fetch all customers for parent selector
@@ -188,17 +290,16 @@ export default function CustomerDetail() {
       .then(({ data, error }) => {
         if (error) { toast('error', 'Failed to load customer list'); return; }
         setAllCustomers((data || []) as { id: string; farm_name: string }[]);
-      });
+    });
 
     if (!isNew && id) {
-      fetchCustomer();
-      fetchAddresses();
+      void fetchCustomerSnapshot();
     } else {
       // New customer — mark ready immediately
       setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, isNew, fetchCustomer, fetchAddresses]);
+  }, [id, isNew, fetchCustomerSnapshot]);
 
   const fetchTabData = useCallback(async (selectedTab: string) => {
     setTabLoading(true);
@@ -494,6 +595,7 @@ export default function CustomerDetail() {
           value: customer.default_commission_split ?? null,
           loaded: loadedDefaultSplitRef.current,
         }),
+        ...buildRowVersionPatch(!isNew, customerRowVersionRef.current),
         credit_limit_cents: customer.credit_limit_cents || 0,
         finance_charge_rate: customer.finance_charge_rate || 0,
         finance_charge_enabled: customer.finance_charge_enabled ?? true,
@@ -514,7 +616,7 @@ export default function CustomerDetail() {
         is_default: addr.is_default,
       }));
 
-      const idemKey = saveCustomerIdem.getKey();
+      const idemKey = getSaveCustomerIdempotencyKey();
       const { data, error } = await supabase.rpc('save_customer', {
         // save_customer accepts NULL p_customer_id to create a new customer
         // (live signature is nullable; generated type narrows it to string).
@@ -526,10 +628,25 @@ export default function CustomerDetail() {
       });
 
       if (error) {
-        toast('error', error.message);
+        if (hasRpcCode(error, RpcErrorCodes.CUSTOMER_STALE_WRITE)
+          || hasRpcCode(error, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)
+          || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
+          setStaleSaveOpen(true);
+        } else {
+          toast('error', error.message);
+        }
       } else {
-        saveCustomerIdem.resetKey();
-        const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null }>(data, 'save_customer');
+        resetSaveCustomerIdempotencyKey();
+        const result = assertRpcResult<{ customer_id: string; default_commission_split?: Customer['default_commission_split'] | null; row_version?: unknown }>(data, 'save_customer');
+        const rowVersionResult = resolveAuthoritativeSaveRowVersion(
+          customerRowVersionRef.current,
+          result.row_version,
+        );
+        customerRowVersionRef.current = rowVersionResult.rowVersion;
+        if (rowVersionResult.kind === 'recovery') {
+          setStaleSaveOpen(true);
+          toast('warning', 'Customer saved, but its save-protection version could not be confirmed. Reload before editing or saving it again.');
+        }
         // Advance the baseline snapshot ONLY when THIS tab saved its own split edit
         // (see QuoteBuilder / nextLoadedSplitSnapshot for the multi-tab rationale).
         loadedDefaultSplitRef.current = nextLoadedSplitSnapshot({
@@ -541,10 +658,10 @@ export default function CustomerDetail() {
         defaultSplitTouchedRef.current = false;
         setIsDirty(false);
         if (isNew) {
-          toast('success', 'Customer created');
+          if (rowVersionResult.kind !== 'recovery') toast('success', 'Customer created');
           navigate(`/customers/${result.customer_id ?? data}`, { replace: true });
         } else {
-          toast('success', 'Customer updated');
+          if (rowVersionResult.kind !== 'recovery') toast('success', 'Customer updated');
           fetchAddresses();
         }
       }
@@ -568,12 +685,23 @@ export default function CustomerDetail() {
     setCrops(nextCrops);
     setCropSaving(crop);
     try {
+      const previousRowVersion = customerRowVersionRef.current;
       const result = await supabase
         .from('customers')
         .update({ crops: nextCrops })
         .eq('id', id)
-        .select('id');
+        .select('*');
       checkMutationResult(result, 'update customer crops');
+      const nextRowVersion = (result.data as Array<{ row_version?: unknown }>)[0]?.row_version;
+      const rowVersionResult = resolveDirectMutationRowVersion(previousRowVersion, nextRowVersion);
+      customerRowVersionRef.current = rowVersionResult.rowVersion;
+      if (rowVersionResult.kind === 'recovery') {
+        // The crop change committed, but this tab cannot prove the returned token
+        // belongs to this write. Keep the visible crop state and any form edits;
+        // a later whole-record save must reload instead of overwriting unseen work.
+        setStaleSaveOpen(true);
+        toast('warning', 'Crops were updated, but another customer edit may have completed at the same time. Your current edits were kept; reload before saving other customer changes.');
+      }
       if (profile?.id) {
         await logActivity({
           event: 'crops_updated',
@@ -632,6 +760,12 @@ export default function CustomerDetail() {
         { label: 'Customers', href: '/customers' },
         { label: isNew ? 'New Customer' : (customer.farm_name || 'Customer') },
       ]} />
+      <RecordVersionConflictDialog
+        open={staleSaveOpen}
+        entityLabel="customer"
+        onKeepEditing={() => setStaleSaveOpen(false)}
+        onReload={reloadAfterStaleSave}
+      />
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold font-heading text-nav-dark">
           {isNew ? 'New Customer' : customer.farm_name}

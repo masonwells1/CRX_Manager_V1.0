@@ -30,6 +30,64 @@
 --   (d) control: a quote with NO draws restores a lower-qty version freely
 -- ============================================================================
 
+CREATE OR REPLACE FUNCTION pg_temp.restore_quote_version_smoke(
+  p_quote_id uuid,
+  p_version_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text,
+  p_expected_row_version bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $helper$
+DECLARE
+  v_result jsonb;
+BEGIN
+  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.restore_quote_version($1, $2, $3, $4, $5)'
+      INTO v_result
+      USING p_quote_id, p_version_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
+  RETURN public.restore_quote_version(
+    p_quote_id,
+    p_version_id,
+    p_performed_by,
+    p_idempotency_key
+  );
+END;
+$helper$;
+
+CREATE OR REPLACE FUNCTION pg_temp.create_quote_version_smoke(
+  p_quote_id uuid,
+  p_performed_by uuid,
+  p_method text,
+  p_idempotency_key text,
+  p_expected_row_version bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $helper$
+DECLARE
+  v_result jsonb;
+BEGIN
+  IF to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.create_quote_version($1, $2, $3, $4, $5)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_method, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
+  RETURN public.create_quote_version(
+    p_quote_id,
+    p_performed_by,
+    p_method,
+    p_idempotency_key
+  );
+END;
+$helper$;
+
 DO $smoke$
 DECLARE
   v_admin uuid;
@@ -62,6 +120,7 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- --------------------------------------------------------------------
   -- 1. Fixtures (txn-local; rolled back at the end)
@@ -69,11 +128,11 @@ BEGIN
   INSERT INTO customers (farm_name)
   VALUES ('[SMOKE] Restore Guard Farm ' || v_suffix)
   RETURNING id INTO v_customer;
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size)
-  VALUES ('[SMOKE] Restore Guard A ' || v_suffix, 6, 10, 'gal')
+  INSERT INTO products (product_name, unit_size)
+  VALUES ('[SMOKE] Restore Guard A ' || v_suffix, 'gal')
   RETURNING id INTO v_prod_a;
-  INSERT INTO products (product_name, current_cost, tier1_price, unit_size)
-  VALUES ('[SMOKE] Restore Guard B ' || v_suffix, 4, 8, 'gal')
+  INSERT INTO products (product_name, unit_size)
+  VALUES ('[SMOKE] Restore Guard B ' || v_suffix, 'gal')
   RETURNING id INTO v_prod_b;
 
   INSERT INTO quotes (quote_number, customer_id, created_by, status, commission_split)
@@ -86,7 +145,10 @@ BEGIN
   VALUES (v_q, v_sec, v_prod_a, 10, 6, 100, 'gal');
 
   -- V1: snapshot @ A=100
-  PERFORM create_quote_version(v_q, v_admin, 'presented', NULL);
+  PERFORM pg_temp.create_quote_version_smoke(
+    v_q, v_admin, 'presented', NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+  );
   SELECT id INTO v_v1 FROM quote_versions WHERE quote_id = v_q
   ORDER BY version_number DESC LIMIT 1;
   IF v_v1 IS NULL THEN
@@ -96,14 +158,20 @@ BEGIN
   -- V2: snapshot that books ONLY product B (drawn product A absent)
   UPDATE quote_items SET product_id = v_prod_b, total_units_needed = 400
   WHERE quote_id = v_q;
-  PERFORM create_quote_version(v_q, v_admin, 'presented', NULL);
+  PERFORM pg_temp.create_quote_version_smoke(
+    v_q, v_admin, 'presented', NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+  );
   SELECT id INTO v_v2 FROM quote_versions WHERE quote_id = v_q
   ORDER BY version_number DESC LIMIT 1;
 
   -- V3: snapshot @ A=400 (legal: >= the 200 that will be drawn)
   UPDATE quote_items SET product_id = v_prod_a, total_units_needed = 400
   WHERE quote_id = v_q;
-  PERFORM create_quote_version(v_q, v_admin, 'presented', NULL);
+  PERFORM pg_temp.create_quote_version_smoke(
+    v_q, v_admin, 'presented', NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+  );
   SELECT id INTO v_v3 FROM quote_versions WHERE quote_id = v_q
   ORDER BY version_number DESC LIMIT 1;
   IF v_v1 = v_v2 OR v_v2 = v_v3 THEN
@@ -128,7 +196,10 @@ BEGIN
   -- (a) Restore V1 (A booked 100 < 200 drawn): must be BLOCKED
   -- --------------------------------------------------------------------
   BEGIN
-    PERFORM restore_quote_version(v_q, v_v1, v_admin, NULL);
+    PERFORM pg_temp.restore_quote_version_smoke(
+      v_q, v_v1, v_admin, NULL,
+      (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+    );
     RAISE EXCEPTION 'SMOKE_FAIL: (a) restoring below the drawn ledger was ALLOWED';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -151,7 +222,10 @@ BEGIN
   -- (b) Restore V2 (books only product B — removes drawn A): must be BLOCKED
   -- --------------------------------------------------------------------
   BEGIN
-    PERFORM restore_quote_version(v_q, v_v2, v_admin, NULL);
+    PERFORM pg_temp.restore_quote_version_smoke(
+      v_q, v_v2, v_admin, NULL,
+      (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+    );
     RAISE EXCEPTION 'SMOKE_FAIL: (b) restoring a version without the drawn product was ALLOWED';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
@@ -169,7 +243,10 @@ BEGIN
   -- --------------------------------------------------------------------
   -- (c) Restore V3 (A @ 400 >= 200 drawn): SUCCEEDS, then draws to closure
   -- --------------------------------------------------------------------
-  v_res := restore_quote_version(v_q, v_v3, v_admin, NULL);
+  v_res := pg_temp.restore_quote_version_smoke(
+    v_q, v_v3, v_admin, NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+  );
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) legal restore returned %', v_res;
   END IF;
@@ -206,13 +283,19 @@ BEGIN
     price_per_unit, current_cost, total_units_needed, unit_size)
   VALUES (v_qc, v_sec, v_prod_a, 10, 6, 300, 'gal');
 
-  PERFORM create_quote_version(v_qc, v_admin, 'presented', NULL);
+  PERFORM pg_temp.create_quote_version_smoke(
+    v_qc, v_admin, 'presented', NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_qc)
+  );
   SELECT id INTO v_vc FROM quote_versions WHERE quote_id = v_qc
   ORDER BY version_number DESC LIMIT 1;
 
   UPDATE quote_items SET total_units_needed = 500 WHERE quote_id = v_qc;
 
-  v_res := restore_quote_version(v_qc, v_vc, v_admin, NULL);
+  v_res := pg_temp.restore_quote_version_smoke(
+    v_qc, v_vc, v_admin, NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_qc)
+  );
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) control restore returned %', v_res;
   END IF;

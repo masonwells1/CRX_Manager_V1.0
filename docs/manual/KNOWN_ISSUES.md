@@ -1,9 +1,122 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-29** (live post-apply read: **926 ledger rows**, high-water `20260729222311_bind_save_field_actor`. The six approved migrations applied in order: `20260729125227_secure_profile_public_directory`, `20260729125251_pin_contact_sync_search_path`, `20260729125314_application_service_cost_exact_text`, `20260729163243_harden_profile_directory_followups`, `20260729213733_supplier_pricing_phase3_stage_c`, then `20260729222311_bind_save_field_actor`. The earlier profile-directory postflights remain green. The final migration passed a rollback-only live smoke proving unauthenticated and forged actors are rejected, signed-in attribution and idempotent replay work, and zero smoke fixtures remain. Earlier resolved and deferred claims below remain unchanged.)
+**Last verified: 2026-07-30** (post-apply B7 closeout: Supabase ledger rows `20260730114102_vendor_bill_period_close_lock`, `20260730124308_close_accounting_period_idempotency_recheck`, and `20260730140808_accounting_period_immutable_date_math` are live. Targeted catalog/ACL/constraint proof passed; the final forward correction made the constraint and close-RPC month math explicitly time-zone-independent without changing business rows; the fixed-date delivery rollback-only chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; the independent post-follow-up all-20 sweep is CLEAN with 7 raw/7 allowlisted/0 new rows across 5 predicates. Earlier resolved and deferred claims below remain unchanged.)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
+
+---
+
+## LOCAL ONLY — Quote and Customer whole-record save protection pending review
+
+`20260730201230_quote_customer_row_version_guard.sql` is authored locally and **not applied, deployed, or live-verified**. It addresses the known last-write-wins exposure for whole-record `save_quote` and `save_customer` updates with trigger-maintained row versions. The payload is compatible with the old RPCs because their JSON inputs ignore the extra token key: merge/deploy and production-verify the compatible frontend first while the migration remains unapplied; then obtain separate explicit approval, apply the migration in a bounded maintenance window, require browser/PWA refresh for cached bundles, and run postflight/live smoke. Regenerate generated schema/types only after that applied proof. Cached old bundles fail closed after apply until refreshed, but the deployed compatible bundle avoids an all-user outage. No rollout toggle is required. No live claim belongs here until the governed migration and rollback-only smoke chain run.
+
+The same candidate closes adjacent bypasses: direct crop/lifecycle writes only adopt the returned token when it is exactly the previous token plus one (otherwise they preserve the committed narrow change, clear the local token, and require Reload), and normal browser roles lose direct INSERT/UPDATE/DELETE on `quote_sections`, `quote_items`, and `customer_addresses`. Those children remain readable under their existing policy/SELECT boundary and are written only by the parent-locking `save_quote`/`save_customer` SECURITY DEFINER RPCs; no child-to-parent version trigger is used because it would invert that lock order. Because `save_quote` is elevated, it also mirrors the parent Quote ownership policy before either mutation or idempotent replay: admins may save any Quote, while a sales rep must match `quotes.created_by`; the rollback proof rejects both a direct non-owner save and an attempt to recover another actor's cached result.
+
+After the migration applies, every committed Customer-row update advances the same whole-record token, including payment and prepay balance updates. If money is posted for a customer while another user has unsaved edits open in `CustomerDetail`, that editor's next save intentionally fails closed and requires Reload; the typed edits are not merged automatically. The operational rule for the apply window is: finish and save a customer edit before posting money for that same customer, or reload and re-enter the edit after the conflict. The rollback smoke proves a concurrent `prepay_balance_cents` change advances exactly once, makes the older editor token stale, and preserves both the committed money change and the rejected editor payload.
+
+Exact-SHA review found that the first candidate `save_quote` body performed one parent UPDATE for header/status fields and another for calculated totals, so one logical existing-quote save advanced `row_version` from N to N+2 and made the client's exact-next-token check fail closed. The correction consolidates header, status, and totals into one parent UPDATE after the existing upfront `FOR UPDATE` lock and stale-token check. Its rollback proof now requires a created quote to return exactly version 2 (insert default 1 plus one totals/header update), then proves two consecutive existing-quote saves advance exactly N→N+1→N+2 using the first returned token for the second save. A later exact-SHA review exposed that the canonical prover trusted the relocated header block instead of comparing it: the hardened proof now compares every moved assignment field-by-field, mutation-tests deliberate `status` and first-send `sent_at` corruption, and executes draft→sent→sent on the real restored schema to require exact +1 tokens, `sent_at` set then preserved, and commission-split persistence. The real-schema harness now requires both lifecycle failure assertions exactly once and mutation-tests their removal and renaming before Docker or its PASS banner can run, while `smoke-specs.json` documents that lifecycle contract. A further exact-SHA review found that lifecycle validation still ran before the generic row-version guard, so a stale draft tab could receive `Invalid status transition: sent -> draft` after another tab sent the quote and miss the Reload/review UX; the corrected order is split-specific conflict first, generic stale token second, lifecycle/unplanning validation third, and the one parent write last, with static order mutation tests plus a real-schema stale-draft-after-sent rollback case.
+
+## 0f. PARTIALLY RESOLVED — governed vendor-bill create/update race closed; residual paths remain
+
+**Status: APPLIED LIVE 2026-07-30.** A read-only 2026-07-29 preflight confirmed
+the current production functions can interleave a vendor-bill period check with
+`close_accounting_period`; no accounting period is closed live today (9 rows,
+all open), so the exposure is dormant rather than an active historical-data
+incident. Migration `20260730114102_vendor_bill_period_close_lock.sql` is now
+the B7-renamed disk record of the live server-assigned ledger version
+`20260730114102` (submitted as `20260729231031_vendor_bill_period_close_lock`).
+
+The candidate enforces whole calendar-month rows, serializes governed close and
+vendor-bill RPCs with sorted transaction advisory locks, and has a restored
+PostgreSQL 17 proof covering baseline reproduction, create/update winning
+orders, canonical month acquisition, and the affected Section 9, finance, and
+delivery rollback smokes. The registered Section 9 chain now creates a bill,
+closes its month through the real close RPC, and proves the authoritative
+closed-period reader blocks the bill update before mutation. Direct
+authenticated-admin writes to
+`accounting_periods` remain a deliberately recorded UI-unreachable residual
+boundary; close still has no separate existing-vendor-bill completeness gate;
+and only governed create/update vendor-bill RPCs join the new protocol, so a
+pre-existing concurrent draft/unposted-invoice writer can still beat close's
+invoice-completeness scan. Create intentionally completes its existing vendor,
+amount, and PO validation before its month lock, so those errors may precede a
+closed-period refusal. The live application also reasserted the established
+callable-role model for the four re-emitted SECURITY DEFINER routines: `PUBLIC`
+and `anon` are denied while `authenticated` and `service_role` retain EXECUTE;
+the new internal month-lock helper remains API-unexecutable. B7 is complete:
+the disk filename and header now match live applied state, so fleet discovery
+does not retain this migration as parked. The runner and regression use its
+unique suffix, not its submitted timestamp. Durable local evidence:
+`docs/audits/2026-07-30-vendor-bill-period-close-lock-closeout.md`.
+
+**Live proof.** Targeted catalog/ACL/constraint verification passed after apply.
+The registered Section 9 rollback-only chain reached its expected terminal
+`ERROR P0001 SMOKE_PASS_ROLLBACK`; it proves the real closed-period bill-update
+refusal while rolling back every fixture. All 20 standing invariant predicates
+have 0 non-allowlisted rows. The raw allowlist output is seven rows across five
+predicates: actor-forgery (1), anon-exec-secdef (1), auth-bound-role-ungated
+(1), status-literals (3), and ungated-secdef-mutators /
+`log_failed_notification(...)` (1).
+
+**Follow-up applied live.**
+`20260730124308_close_accounting_period_idempotency_recheck.sql` is the B7
+renamed disk record of server ledger version `20260730124308` (submitted as
+`20260730121951_close_accounting_period_idempotency_recheck`). It retains a
+second same-key idempotency lookup immediately after its exclusive month lock
+and before the already-closed refusal as redundant defense in depth. The
+current `check_idempotency` helper serializes same-key callers at the first
+key-only transaction advisory lock, so the behavioral proof demonstrates that
+current helper serialization rather than the later lookup's necessity. Sol
+mutation testing removed the later block and the current behavioral proof still
+passed; the source regression separately asserts the block's structure. It preserves the live signature, `postgres` owner, SECURITY DEFINER
+mode, `search_path=public, pg_temp`, helper execute path, and explicit
+authenticated/service-role-only ACL. The deterministic disposable PostgreSQL 17
+proof observes real lock readiness for every schedule and proves concurrent
+same-key callers return one identical committed result. Post-apply live catalog
+proof confirmed exactly one matching overload, the asserted owner/security/path
+and ACL shape, and exactly two `check_idempotency` occurrences with the second
+after the month lock. The registered fixed-date delivery smoke returned expected
+`ERROR P0001 SMOKE_PASS_ROLLBACK`. The independent post-follow-up all-20
+invariant sweep is CLEAN: 7 raw rows, all 7 allowlisted, and 0 new findings
+across actor-forgery (1), anon-exec-secdef (1), auth-bound-role-ungated (1),
+status-literals (3), and ungated-secdef-mutators (1).
+
+**Vendor-bill candidate ACL preservation (local 2026-07-30).** The period-close
+candidate re-emits four SECURITY DEFINER public RPCs, so it now explicitly denies
+`PUBLIC`/`anon` and grants EXECUTE only to `authenticated` and `service_role` on
+`create_vendor_bill`, `update_vendor_bill`, `check_period_open`, and
+`close_accounting_period`. Its apply-time postflight and disposable PostgreSQL 17
+proof fail if any of those callable-role guarantees drift; the new internal
+month-lock helper remains uncallable by every API role.
+
+**Parked-discovery integrity guard (local 2026-07-30).** The fleet and SessionStart
+readers previously opened only migration-history `LOCAL CANDIDATE / NOT APPLIED` files,
+so a forward SQL file with an explicit leading parked header but no history row could
+produce a false clean zero. They now prefilter the immutable `origin/main` tree for
+all parser-accepted header phrases (`PARKED`, `NOT APPLIED`, and `DO NOT APPLY`) with
+case-insensitive extended whitespace matching (including repeated spaces and tabs),
+inspect those possible headers, and report `PARKED STATE UNKNOWN` unless each header has
+the required candidate signal or an exact applied/retired/superseded history state. Git's
+exit `1` means the healthy case of no prefilter matches and preserves a known empty set;
+only a real prefilter error falls back to a complete forward scan rather than claiming the
+backlog is clear. The prefilter is anchored to an ASCII-space/tab SQL comment status line,
+which removes prose-only matches; it intentionally remains a safe superset because only
+the parser can enforce the first-comment-block window. Both readers load the remaining
+safe-superset SQL blobs through one `git cat-file --batch` process rather than spawning a
+separate `git show` for each candidate. That batch has a deliberate 32 MiB output ceiling
+(the observed complete 840-file fallback is about 10.5 MiB) and each returned record must
+echo its requested path in order, carry an exact body delimiter, and consume the entire
+output. Any Git size/framing/path failure produces `PARKED STATE UNKNOWN`; it never drops
+unreadable forward SQL and reports a false clean zero.
+
+**Explicit scope residual.** This candidate guarantees only
+`create_vendor_bill` and `update_vendor_bill` date writes. `record_vendor_payment`,
+`void_vendor_payment`, `void_vendor_bill`, and other `check_period_open`-only
+mutators retain the pre-existing close race unless a separately proven coherent
+protocol adds them. Sol adjudication retained this boundary: these AP-only cases
+are a MED residual, while a global protocol is a separate HIGH-risk lane because
+many financial mutators retain the same race. Do not widen this migration here.
 
 ---
 
@@ -571,7 +684,7 @@ with JWT enforcement and rejects supplier price/product lists before OCR.
 
 `save_quote`/`save_customer` saves resend the entire record, so a stale tab silently overwrites newer values on EVERY field (classic last-write-wins). The **money-bearing half — `quotes.commission_split` / `customers.default_commission_split` — is fixed and LIVE** as of 2026-07-22: clients omit the split when unedited, and migration `20260722190000_commission_split_lost_update_guard` (APPLIED LIVE, server version `20260722202622`) adds a server-verified `*_expected` optimistic-concurrency check plus a stored-split echo in the RPC result (routing triggers enrich splits with `recipient_user_id`, so the client must snapshot the STORED value or the second edit false-conflicts). **Still open:** the same lost-update applies to all other fields (notes, pricing terms, acres, …). A general fix means whole-record version checking with real UX trade-offs — deliberately deferred as a follow-up owner decision, not bundled into the split fix.
 
-**Rollout ordering note (Codex P2, dispositioned 2026-07-22):** the client's no-echo fallback (`nextLoadedSplitSnapshot`, `src/lib/commissionSplitConcurrency.ts`) records the client-sent value as the next baseline when the RPC returns no split echo — which only happens against the PRE-migration function body. If the frontend deployed before the migration AND a tab did a split-edit save in that window AND then stayed open across the apply, the next split edit would fail-closed-conflict falsely (a benign "reload and re-apply" prompt, never an overwrite). **Mitigation: apply the migration BEFORE merging/deploying the frontend** — then production frontend only ever talks to the post-migration RPC (which always echoes), so the fallback never runs in prod. Only revisit (re-fetch-on-missing-echo) if a future change re-emits these RPCs and would ship frontend-first.
+**Rollout ordering note (corrected 2026-07-30):** the client's no-echo fallback (`nextLoadedSplitSnapshot`, `src/lib/commissionSplitConcurrency.ts`) records the client-sent value as the next baseline when the old RPC returns no split echo. The compatible frontend must still ship first: its extra row-version JSON key is ignored by the old RPC, avoiding an all-user outage. A tab that stays open across the later approved apply can fail closed on its next save or split edit until refresh; that is the intentional residual, not an overwrite. Require the normal browser/PWA refresh during the bounded migration window, then run postflight/live smoke and regenerate generated schema/types afterward.
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 
@@ -615,6 +728,8 @@ Branch `claude/nervous-dubinsky-39a725` (worktree `.claude/worktrees/stoic-heyro
 
 | File | Purpose | Why parked | What unblocks it |
 |---|---|---|---|
+| ~~`supabase/migrations/20260730114102_vendor_bill_period_close_lock.sql`~~ (submitted `20260729231031_...`, B7-renamed to the server version) | Serializes governed vendor-bill create/update with accounting-period close using month locks | **APPLIED LIVE 2026-07-30** as Supabase ledger version `20260730114102` — no longer parked. Targeted catalog/ACL/constraint verification, the registered Section 9 rollback-only chain (`ERROR P0001 SMOKE_PASS_ROLLBACK`), and all 20 predicates with 0 non-allowlisted rows passed; raw approved output was 7 rows across 5 predicates. | Done. Residual boundaries remain explicit in §0f: direct authenticated-admin `accounting_periods` writes, no existing-vendor-bill close-completeness gate, and the wider pre-existing non-vendor-bill writer race. |
+| ~~`supabase/migrations/20260730124308_close_accounting_period_idempotency_recheck.sql`~~ (submitted `20260730121951_...`, B7-renamed to the server version) | Same-key post-month-lock idempotency defense in depth | **APPLIED LIVE 2026-07-30** as Supabase ledger version `20260730124308` — no longer parked. Exact overload/owner/SECURITY DEFINER/search-path/ACL proof passed; two idempotency reads including the structurally asserted post-lock recheck were observed; fixed-date delivery rollback smoke returned `ERROR P0001 SMOKE_PASS_ROLLBACK`. | Done. Current helper key-lock serialization is behaviorally proven; Sol mutation testing showed that removing this redundant block still passes that proof. Independent post-follow-up all-20 sweep CLEAN: 7 raw/7 allowlisted/0 new rows across 5 predicates. |
 | ~~`supabase/migrations/20260726201208_void_vendor_payment_vendor_liveness.sql`~~ (submitted `20260726210000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-26** (server version `20260726201208`) — no longer parked. Section 9 follow-up MEDIUM-1: `void_vendor_payment` now locks the vendor row (`deleted_at IS NULL … FOR UPDATE`) so it serializes with `delete_vendor`; a void against a soft-deleted vendor raises `VENDOR_DELETED`. Gate passed (both charters CLEAN) + Mason's in-chat approval; post-apply live body md5 matches disk exactly. | — | Done. Residual RESOLVED 2026-07-26: Mason approved the Deactivate/Reactivate reframe — `reactivate_vendor` RPC **APPLIED LIVE** (gate CLEAN, submitted `20260726213000`, server version `20260726212043`) + Vendors-page Show Inactive view and Reactivate button, giving `VENDOR_DELETED` a one-click remedy; the PR #236 review then caught (and 2026-07-26 same-day fix `20260726215154_vendors_inactive_admin_select` resolved, gate CLEAN + applied live) an RLS gap that hid inactive vendors from the new view. |
 | ~~`supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`~~ (submitted `20260722190000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-22** (server version `20260722202622`) — no longer parked. `save_quote`/`save_customer` reject a split overwrite when the client's `*_expected` snapshot no longer matches the stored value, echo the stored (trigger-enriched) split back, and canonicalize `save_quote`'s actor exception to `ACTOR_MISMATCH`. Proven live on both RPCs (conflict/rejection/matching-expected/omitted-key/actor-mismatch). | — | Done. |
 | `docs/audits/nightly-debug/parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md` | Release prebooked inventory when a scheduled quick-delivery is cancelled | — | **RESOLVED, applied live 2026-06-16** (`20260616151122_cancel_delivery_release_prebook_on_quick_cancel`). File header already says so — stale-looking filename, not a stale fix. |

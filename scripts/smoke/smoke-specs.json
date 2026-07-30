@@ -7,6 +7,12 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "save_quote_customer_row_version": {
+      "chain": "smoke-save-quote-customer-row-version.sql",
+      "description": "LOCAL ONLY pending-apply rollback fixture: executes the real save_quote/save_customer contracts for exact +1 tokens, payload-bound/current-token-verified idempotent replay, draft->sent->sent lifecycle persistence, stale header/child/address rejection, concurrent Customer money-path invalidation, split-conflict precedence, auth/role gates, sales-rep non-owner Customer rejection, and sales-rep non-owner Quote save, replay, version, and conversion rejection before mutation or result release, plus server-authoritative quote item math. As an authenticated browser role it proves stable parent-version reads while direct child INSERT/UPDATE/DELETE are denied; SECURITY DEFINER parent saves still replace child collections. The companion network-isolated PostgreSQL 17 prover demonstrates the pre-fix overwrite, both lock orders, payload-conflict and advanced-token replay rejection, exact split-conflict < stale-token < lifecycle/unplan < write ordering, mutation-resistant ownership gates, and normalized canonical-body preservation outside the audited row-version/security delta. Run smoke-planned-holds-drawn-sync.sql alongside this chain for planned-hold preservation; no PASS is a live-apply claim.",
+      "covers": ["save_quote", "save_customer"],
+      "area": ["lifecycle", "security", "idempotency"]
+    },
     "save_field": {
       "chain": "smoke-save-field-actor-binding.sql",
       "description": "save_field actor-binding rollback proof: no-auth and forged actors fail before field writes, a legacy NULL actor is bound to the authenticated admin, request replay returns the same field without duplicate activity, and the sole SECURITY DEFINER overload retains its fixed search_path and narrow grants.",
@@ -21,7 +27,7 @@
     },
     "section9_po_ap_high_remediation": {
       "chain": "smoke-section9-po-ap-high-remediation.sql",
-      "description": "Section 9 PO/AP HIGH closeout: real save/submit/edit/alternate-location receive/reverse/cancel paths keep Main Warehouse on-order equal to authoritative open remainder; vendor browser mutation grants/policies are absent; cancelled-PO bill creation and billed-PO cancellation fail in the shared PO-first lock contract; AP aging serves current truth but fails closed for unsupported past/future dates; and update_vendor_bill cannot move or rewrite a bill whose stored period is closed. Self-contained fixtures and terminal rollback. The companion prove-section9-po-ap-concurrency.mjs races create_vendor_bill against both cancel_purchase_order and delete_vendor in both winning orders in an isolated PostgreSQL container.",
+      "description": "Section 9 PO/AP HIGH closeout: real save/submit/edit/alternate-location receive/reverse/cancel paths keep Main Warehouse on-order equal to authoritative open remainder; vendor browser mutation grants/policies are absent; cancelled-PO bill creation and billed-PO cancellation fail in the shared PO-first lock contract; AP aging serves current truth but fails closed for unsupported past/future dates; a real close_accounting_period call then makes check_period_open reject update_vendor_bill before it can move or rewrite closed bill history. Self-contained fixtures and terminal rollback. The companion prove-section9-po-ap-concurrency.mjs races create_vendor_bill against both cancel_purchase_order and delete_vendor in both winning orders in an isolated PostgreSQL container.",
       "covers": [
         "save_purchase_order",
         "submit_purchase_order",
@@ -31,6 +37,8 @@
         "create_vendor_bill",
         "get_ap_aging",
         "update_vendor_bill",
+        "close_accounting_period",
+        "check_period_open",
         "vendors",
         "_recompute_po_on_order_for_products"
       ],
@@ -462,7 +470,7 @@
     },
     "restore_quote_version": {
       "chain": "smoke-restore-version-drawn-guard.sql",
-      "description": "Drawn-version restore guard (Codex r2 MED): restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the restore's section DELETE rolls back atomically), a legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure, and a no-draws control quote restores freely.",
+      "description": "Drawn-version and row-version restore guard: restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the section DELETE rolls back atomically), while the row-version matrix separately proves owner-only access, stale-writer rejection before child replacement, exact N+1 success, and request-bound replay. A legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure; a no-draws control quote restores freely.",
       "covers": [
         "restore_quote_version",
         "create_quote_version",

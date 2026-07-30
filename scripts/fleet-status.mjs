@@ -20,9 +20,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   parseWorktreePorcelain, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile,
   lastNonEmptyLine, firstCommentLine,
-  draftPathspec, normRepoPath, createOwnDraftPathsReader,
+  draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
+  fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom, localCandidateMigrationPathsFromHistory,
+  supersededDraftPathsFrom,
+  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
+  ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap as parseOriginMainSqlBlobMap,
+  originMainForwardBlobPaths,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
 
 // The repo root this script lives in (works no matter what cwd it's launched from).
@@ -32,6 +37,21 @@ const notes = []; // degraded-mode notes, printed at the end
 function git(args, cwd = repoRoot, timeout = 5000) {
   return execFileSync("git", args, {
     encoding: "utf8", timeout, stdio: ["ignore", "pipe", "ignore"], cwd,
+  });
+}
+
+// Read every prefiltered origin/main SQL blob in one bounded Git process. The
+// shared parser validates echoed paths, record delimiters, and complete framing.
+function originMainSqlBlobMap(paths) {
+  return parseOriginMainSqlBlobMap(paths, (input) => {
+    const result = spawnSync("git", ["cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"], {
+      cwd: repoRoot,
+      input,
+      timeout: 5000,
+      maxBuffer: ORIGIN_MAIN_CAT_FILE_MAX_BUFFER,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    return result.status === 0 ? result.stdout : null;
   });
 }
 
@@ -101,7 +121,11 @@ try {
 
 let hasOriginMain = false;
 try { git(["rev-parse", "--verify", "--quiet", "origin/main"]); hasOriginMain = true; } catch { hasOriginMain = false; }
-if (!hasOriginMain) notes.push("origin/main not found locally — merge-state shown as unknown (try --fetch).");
+if (!hasOriginMain) notes.push("origin/main not found locally — merge-state is unknown and any degraded parked scan uses conservative all-disk discovery (inherited historical files may appear; try --fetch).");
+const originMainDraftPaths = hasOriginMain ? originMainDraftPathSet((args) => {
+  try { return git(args, repoRoot, 5000).split("\n"); } catch { return null; }
+}) : null;
+if (hasOriginMain && !originMainDraftPaths) notes.push("origin/main exists but its draft tree could not be read — degraded parked scans use conservative all-disk discovery and may include inherited historical files.");
 
 // Which worktree is "this window"? The one containing cwd, else the script's own repo.
 const cwdNorm = normPath(process.cwd());
@@ -133,6 +157,7 @@ const ownDraftPaths = createOwnDraftPathsReader({
   hasOriginMain,
   dirtyCount,
   exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
+  readText: (wtPath, rel) => readTextSafe(path.join(wtPath, ...rel.split("/"))),
   run: (args, cwd) => {
     const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
     return r.status === 0 ? String(r.stdout || "").split("\n") : null;
@@ -160,7 +185,8 @@ function dirtyCount(wtPath) {
 // draft checked out in 42 worktrees sits at the same relative path in each, so it still
 // collapses to one row (with every worktree listed under `where`).
 const parked = new Map(); // repo-relative path → { name, where: [labels], mtime, comment }
-let supersededSkipped = 0;
+const supersededSkipped = new Set();
+let degradedFallbackUnknown = false;
 const wtLines = [];
 
 function addParked(rel, full, label) {
@@ -213,25 +239,42 @@ for (const e of entries) {
   const own = ownDraftPaths(e);
   if (own) {
     for (const rel of own.values()) addParked(rel, path.join(e.path, ...rel.split("/")), label);
+    for (const rel of own.supersededPaths?.values() || []) supersededSkipped.add(normRepoPath(rel));
   } else {
     // Branch point unreadable (no origin/main, or the checkout is mid-delete by another
     // session) — scan the whole checkout rather than risk reporting nothing. That can
     // re-surface drafts main has already retired, so say so instead of letting the number
     // move unexplained.
-    notes.push(`${label}: could not read its branch point, so every draft on its disk is listed — some may already be retired on main.`);
+    let fallbackChangedPaths = null;
+    if (originMainDraftPaths) {
+      try {
+        fallbackChangedPaths = git(["diff", "--name-only", "origin/main", "--", ...draftPathspec()], e.path, 5000).split("\n");
+      } catch { /* the comparison below becomes PARKED STATE UNKNOWN */ }
+    }
+    notes.push(`${label}: could not read its branch point, so it uses a degraded disk scan${originMainDraftPaths ? " with an exact origin/main content comparison" : " with no inherited-path filter"}.`);
+    if (originMainDraftPaths && fallbackChangedPaths === null) {
+      degradedFallbackUnknown = true;
+      notes.push(`PARKED STATE UNKNOWN: ${label} could not compare its draft content to origin/main, so inherited paths were retained conservatively.`);
+    }
     for (const { root, filter } of [
       { root: "scripts/.staging-migrations", filter: isParkedMigrationFile },
       { root: "docs/audits", filter: isDraftSqlName },
+      { root: "supabase/migrations", filter: (name, full, rel) => isParkedFallbackFile(rel, name, () => readTextSafe(full)) },
     ]) {
       const dir = path.join(e.path, ...root.split("/"));
       for (const full of listFilesRecursive(dir)) {
         const name = path.basename(full);
-        if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
-        if (!filter(name)) continue;
+        const rel = `${root}/${path.relative(dir, full).replace(/\\/g, "/")}`;
+        if (originMainDraftPaths && fallbackPathsAgainstOrigin([rel], originMainDraftPaths, fallbackChangedPaths).paths.length === 0) continue;
+        if (/^superseded/i.test(name) && /\.sql$/i.test(name)) {
+          supersededSkipped.add(normRepoPath(rel));
+          continue;
+        }
+        if (!filter(name, full, rel)) continue;
         // Display path keeps its real casing — addParked lower-cases the KEY itself, and
         // normalizing here too would print Mason a lower-cased filename that no longer
         // matches what is on disk (CodeRabbit on #279).
-        addParked(`${root}/${path.relative(dir, full).replace(/\\/g, "/")}`, full, label);
+        addParked(rel, full, label);
       }
     }
   }
@@ -239,30 +282,61 @@ for (const e of entries) {
   wtLines.push([head, ...sub.map((s) => `    ${s}`)].join("\n"));
 }
 
-// The mainline backlog, read straight from origin/main's tree. Without this, a fleet
-// where every checkout happens to be stale would report zero and hide real work.
+// The mainline backlog is read from one immutable origin/main tree. Forward SQL must
+// agree with migration-history.md; an anchored status prefilter catches orphaned
+// explicit status headers while a batched blob read avoids per-file Git spawns.
+const mainlineBlobCache = new Map();
+let mainlineParkedState = hasOriginMain ? "known" : "unknown";
+let mainlineParkedReason = hasOriginMain ? "" : "origin/main is unavailable";
 if (hasOriginMain) {
   try {
-    const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()],
-      repoRoot, 5000);
-    for (const line of tree.split("\n")) {
-      const p = line.trim();
-      if (!p) continue;
-      const name = p.slice(p.lastIndexOf("/") + 1);
-      if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
-      const inStaging = p.startsWith("scripts/.staging-migrations/");
-      if (!(inStaging ? isParkedMigrationFile(name) : isDraftSqlName(name))) continue;
+    const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()], repoRoot, 5000);
+    const history = git(["show", "origin/main:docs/reference/migration-history.md"], repoRoot, 5000);
+    const parkedPrefilter = originMainParkedMigrationPrefilter(
+      () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, repoRoot, 5000),
+    );
+    const mainlinePaths = tree.split("\n");
+    for (const rel of supersededDraftPathsFrom(mainlinePaths, () => true).values()) {
+      supersededSkipped.add(normRepoPath(rel));
+    }
+    const historyCandidates = localCandidateMigrationPathsFromHistory(history);
+    const blobs = originMainSqlBlobMap(originMainForwardBlobPaths(
+      mainlinePaths,
+      parkedPrefilter.paths,
+      historyCandidates.state === "known" ? historyCandidates.paths : [],
+    ));
+    for (const [key, text] of blobs || []) mainlineBlobCache.set(key, text);
+    const discovery = parkedMainlineDiscoveryFrom(mainlinePaths, history, (p) => blobs?.get(normRepoPath(p)) ?? null, parkedPrefilter.paths);
+    mainlineParkedState = discovery.state;
+    mainlineParkedReason = discovery.reason;
+    for (const p of discovery.paths) {
       const key = normRepoPath(p);
       const hit = parked.get(key);
       if (hit) {
         if (!hit.where.includes("origin/main")) hit.where.push("origin/main");
         continue;
       }
-      let comment = "";
-      try { comment = firstCommentLine(git(["show", `origin/main:${p}`], repoRoot, 5000), 120); } catch { comment = ""; }
-      parked.set(key, { name: p, where: ["origin/main"], mtime: 0, comment });
+      let text = mainlineBlobCache.get(key);
+      if (text === undefined) {
+        try {
+          text = git(["show", `origin/main:${p}`], repoRoot, 5000);
+          mainlineBlobCache.set(key, text);
+        } catch { text = ""; }
+      }
+      let mtime = null;
+      try {
+        const parsed = new Date(git(["log", "-1", "--format=%aI", "origin/main", "--", p], repoRoot, 5000).trim());
+        if (!Number.isNaN(parsed.valueOf())) mtime = parsed;
+      } catch { /* report the source path even if its Git date is unavailable */ }
+      parked.set(key, { name: p, where: ["origin/main"], mtime, comment: firstCommentLine(text, 120) });
     }
-  } catch { /* fail-open: worktree scan above still reported what it could */ }
+  } catch {
+    mainlineParkedState = "unknown";
+    mainlineParkedReason = "origin/main parked-state metadata is unreadable";
+  }
+}
+if (mainlineParkedState === "unknown") {
+  notes.push(`PARKED STATE UNKNOWN: ${mainlineParkedReason}. Resolve the origin/main migration-history/SQL cross-reference before treating the parked count as clear.`);
 }
 
 // ── 4. Print the report ──
@@ -274,16 +348,19 @@ console.log(wtLines.join("\n"));
 console.log("");
 
 const parkedList = [...parked.values()].sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
-console.log(`Parked migrations awaiting apply: ${parkedList.length}`);
+const parkedStateUnknown = mainlineParkedState === "unknown" || degradedFallbackUnknown;
+console.log(`Parked migrations awaiting apply: ${parkedStateUnknown ? "PARKED STATE UNKNOWN" : parkedList.length}`);
 for (const p of parkedList) {
   console.log(`  • ${p.name} — in ${p.where.join(", ")} — last touched ${fmtDate(p.mtime)}${p.comment ? ` — ${p.comment}` : ""}`);
 }
-if (supersededSkipped > 0) {
-  console.log(`  (${supersededSkipped} SUPERSEDED draft${supersededSkipped === 1 ? "" : "s"} ignored — already replaced, not waiting on anyone)`);
+if (supersededSkipped.size > 0) {
+  console.log(`  (${supersededSkipped.size} SUPERSEDED draft${supersededSkipped.size === 1 ? "" : "s"} ignored — already replaced, not waiting on anyone)`);
 }
 console.log("");
 
-if (parkedList.length > 0) {
+if (parkedStateUnknown) {
+  console.log("PARKED STATE UNKNOWN — do not treat this report as a clean zero until the origin/main migration-history/SQL cross-reference is repaired.");
+} else if (parkedList.length > 0) {
   console.log("WAITING ON YOU (Mason):");
   console.log(`  • ${parkedList.length} parked migration${parkedList.length === 1 ? "" : "s"} need${parkedList.length === 1 ? "s" : ""} your OK before touching the live database — say "/parked" to walk through them safely (plain-English explanation + review first; nothing applies without you).`);
 } else {

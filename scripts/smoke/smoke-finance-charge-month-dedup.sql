@@ -80,7 +80,9 @@ BEGIN
     INSERT INTO public.accounting_periods (
       period_start, period_end, status, closed_by, closed_at, notes
     ) VALUES (
-      v_closed, v_closed, 'closed', v_admin, now(),
+      date_trunc('month', v_closed)::date,
+      (date_trunc('month', v_closed) + interval '1 month - 1 day')::date,
+      'closed', v_admin, now(),
       '[E2E] rollback-only finance preview parity fixture'
     );
   END IF;

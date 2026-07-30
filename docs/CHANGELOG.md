@@ -806,6 +806,194 @@ flag-shaped value (exit 2, and no bogus directory). And an unexpected crash exit
 the runbook reads as "verification failed" — crashes now print `FAIL:` and exit 3, proven by
 injecting a permission error. The script turned out to already handle a missing, corrupt, or
 non-directory target itself, so exit 1 still means exactly what it claims.
+## 2026-07-30 — Final Quote lifecycle replay review closed two operator-safety gaps
+
+The pending row-version migration now binds `create_quote_version` idempotent
+replays to both the authenticated actor and the requested delivery method. A
+lost response can therefore be retried with the original key, but that key
+cannot be reused to turn a cached Presented snapshot into an Emailed snapshot
+or replay another actor's request. The rollback smoke proves that a changed
+method fails with `IDEMPOTENCY_PAYLOAD_CONFLICT` and leaves both the Quote token
+and version count unchanged.
+
+Quote-to-Order flows also stopped adding a generic recovery toast after
+`saveQuote` or Mark Presented returns failure. Those lower-level paths already
+report the accurate outcome; removing the duplicate message prevents a rejected
+write from being described to the operator as saved or frozen.
+
+## 2026-07-30 — Quote-version restore joins row-version boundary
+
+`restore_quote_version` is now wrapped inside the pending Quote/Customer
+row-version migration with sales-rep ownership enforcement, canonical
+idempotency-before-parent locking, an expected Quote token, and
+request/current-token-bound replay. The browser sends the loaded Quote token
+and preserves its original key/token pair across retries, with the same exact
+`PGRST202` frontend-first fallback used by the other lifecycle calls while
+production remains pre-migration.
+
+Rollback-only and structural proofs now cover stale restore rejection, direct
+and replay ownership, exact one-time token advancement, drawn-ledger
+compatibility, and planned-hold synchronization. Registered lifecycle smokes
+now dispatch against both the live legacy RPC signatures and the pending
+row-version signatures, and the candidate was restamped above the live
+migration ledger high-water without changing its SQL content. The migration
+remains unapplied.
+
+## 2026-07-30 — Quote and Customer stale-save recovery was hardened before merge
+
+PR #290's automated review found that Customer saves did not validate the RPC's
+returned `row_version` as strictly as Quote saves, and that the reload dirty-state
+suppression depended only on `requestAnimationFrame`. The shared version resolver
+now rejects missing or jumped Customer save tokens, both Quote and Customer reloads
+have an idempotent timer fallback, and the conflict dialog reports asynchronous
+reload failure without discarding the operator's edits. A reload now locks every
+dialog close path until it settles, and the real `false` failure result is surfaced
+instead of only rejected promises. Lifecycle recovery warnings also name the action
+that actually committed. During the frontend-first rollout, an existing
+commission-split conflict can still reload a tokenless legacy record; numeric-token
+records retain the stricter stable-version check.
+
+The candidate migration's catalog postflight now tolerates PostgreSQL's harmless
+default/search-path formatting, rejects a missing `DEFAULT 1`, and preserves the
+exact security requirements.
+Quote totals reuse the single authoritative aggregate, and the disposable race,
+source-shape, and phone-browser proofs were made deterministic and registered as
+package scripts so future runs can discover them. The registered drawn-booking
+guard smoke now carries exact Quote tokens and runs inside the disposable
+post-migration proof, so row-version enforcement cannot mask its own
+`BOOKING_OVERDRAWN` assertions. Its token is now re-read from the row after a
+partial draw rather than hand-advanced. The Customer rollback smoke also proves
+that a concurrent prepay-balance update invalidates an open whole-record editor
+without losing the committed money change, and the RLS contract matrix now
+records all three protected child tables as RPC-only. The elevated `save_quote`
+RPC now mirrors Quote ownership before mutation or idempotent replay, and its
+rollback proof rejects both non-owner paths without leaking or changing the
+target Quote. Final PR review centralized both admin exceptions through the
+canonical active-admin helper, gave the controlled PostgreSQL race observer a
+real-time deadline and longer observation window without treating a missed
+sleep as success, and stopped committed lifecycle actions from showing a
+success toast when their follow-up version check instead requires recovery.
+Server-returned booking warnings remain visible in that recovery path. The
+same recovery result now aborts customer email before a possibly stale local
+PDF leaves the app and returns `false` to stop the chained Book-as-Order
+conversion. A persistent reload-required latch also blocks retry clicks and
+direct conversion until a complete stable reload clears it; abort messages say
+plainly that the email was not sent or the order was not created. Numeric-token
+mode survives recovery, so a post-migration tab cannot accept a tokenless reload.
+Every email, including an already-sent Quote after a tab remount, now creates
+and confirms a version snapshot before sending the PDF. The version key is
+scoped to the signed-in user and Quote, so it cannot replay across Quotes. The
+Convert-to-Order chain also stops if its accepted-status save commits without
+an exact authoritative token; it cannot create an order while recovery is
+required. After a stable reload, an accepted Quote remains convertible: the
+server safely resumes it when no Order exists or returns the existing Order.
+The existing-Order replay opens that Order without re-saving the accepted Quote
+or repeating creation telemetry, admin alerts, credit checks, or customer
+confirmation email. The pending migration now owner-gates the privileged
+quote-version and conversion RPCs before mutation or idempotent replay. Quote
+and Customer save replays are bound to the complete request and release a
+cached token only while the target still has the exact post-save version; a
+later writer forces reload instead of releasing stale proof. A complete recovery
+reload now rotates the possibly committed save key, including a legacy cached
+result that crosses the migration boundary, so the next reviewed save cannot
+loop on the retired request. `save_quote`, quote-versioning, and conversion all
+preserve the owner check before replay while taking their idempotency advisory
+lock before the Quote row lock and rechecking ownership under that row lock.
+Quote-versioning and whole-Quote conversion now also accept the exact Quote
+`row_version` reviewed by the operator, compare it under that same row lock
+before any lifecycle mutation, and bind idempotent replay to both the requested
+pre-mutation token and the committed post-mutation token. A writer landing
+between load and either action therefore gets `QUOTE_STALE_WRITE` instead of
+creating a version or Order from a different Quote. The migration postflight
+requires exactly one public overload for both lifecycle RPCs. The frontend-first
+rollout bridge tries the versioned signature and falls back to the live legacy
+signature only for PostgREST's exact missing-function `PGRST202`; database,
+authentication, network, and stale-write failures never retry without the
+token. A rejected lifecycle key rotates only after a complete stable reload,
+and every registered smoke caller now supplies the current token.
+The disposable proof also demonstrates that the old reverse order deadlocks,
+so a future cross-operation regression cannot silently pass. The
+rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
+planned-hold synchronization helper chain too.
+Final retry review found one more lifecycle edge: a successful version snapshot
+followed by an email failure could reuse its idempotency key with the newer local
+token instead of the original reviewed token. Each version attempt now preserves
+the exact key and pre-mutation token together until the whole action succeeds,
+while the RPC returns the authoritative post-mutation `row_version` on both the
+first response and a cached replay. Regression coverage proves both downstream
+email failure and a lost first RPC response replay without creating a second
+version. The shared Quote type also represents `row_version` as optional during
+the intentional pre-migration window, and list-page conversion normalizes that
+absence to the legacy-compatible `null` token.
+Verification passed
+4,127 tests with 123 skipped, 3/3 isolated Playwright flows, both disposable
+PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
+SQL audit. Migration `20260730201230_quote_customer_row_version_guard.sql` remains
+unapplied; frontend-first deployment and live migration apply remain separate gates.
+
+## 2026-07-30 — Vendor-bill accounting-period close lock applied
+
+Live migration `20260730114102_vendor_bill_period_close_lock` now serializes
+governed vendor-bill create/update writes with accounting-period close through
+ordered transaction advisory locks. It preserves the established public RPC
+boundary: `PUBLIC` and `anon` cannot execute the four re-emitted SECURITY
+DEFINER routines, while `authenticated` and `service_role` retain their routes.
+The B7 rename completed from submitted timestamp `20260729231031` to the
+server-assigned ledger version. Post-apply catalog/ACL/constraint checks passed;
+the registered Section 9 rollback-only chain reached expected `SMOKE_PASS_ROLLBACK`;
+and all 20 standing invariants had 0 non-allowlisted rows; the raw approved
+output was 7 rows across 5 predicates, including
+`ungated-secdef-mutators/log_failed_notification(...)`. The close
+still does not require an existing vendor-bill completeness gate, direct
+authenticated-admin accounting-period writes remain an explicit boundary, and
+the broader non-vendor-bill writer race remains separate work.
+
+Follow-up migration `20260730124308_close_accounting_period_idempotency_recheck`
+is now live (submitted as `20260730121951`, then B7-renamed to the server
+ledger version). It retains a post-month-lock same-key lookup as redundant
+defense in depth; the current `check_idempotency` helper's first key-only
+transaction advisory lock is what serializes same-key callers. Sol adversarial
+mutation testing removed the later block and the current behavioral proof still passed,
+so source coverage structurally asserts the recheck while the runtime marker
+reports helper serialization. Live catalog proof confirmed the exact single
+overload, owner/security/search-path/ACL shape and two idempotency reads, while
+the registered fixed-date delivery smoke reached expected `SMOKE_PASS_ROLLBACK`.
+The independently run post-follow-up all-20 invariant sweep is CLEAN: 7 raw/7
+allowlisted/0 new rows across the same 5 predicates.
+
+Final review correction
+`20260730140808_accounting_period_immutable_date_math` is also live (submitted
+as `20260730140000`, then B7-renamed). It makes the whole-month CHECK and both
+close-RPC month-boundary calculations explicitly time-zone-independent by
+selecting the IMMUTABLE timestamp-without-time-zone `date_trunc` overload.
+The migration changed no business rows. Live proof found one validated
+constraint with two immutable casts, 9 period rows/0 invalid, and one close
+overload retaining its owner, security mode, search path, two idempotency
+reads, month lock, and callable-role boundary. The security-integrity suite now
+guards `check_period_open` as an exact-empty-path, fully schema-qualified
+exception and separately pins `compute_season` to SECURITY INVOKER.
+The validation-only helper/caller postflight was authored as
+`20260730170743_vendor_bill_month_lock_helper_acl_postflight` and B7-renamed
+to server-assigned live version `20260730174628`. It changes no schema or
+business rows, but requires the helper to be the unique `postgres`-owned
+SECURITY INVOKER routine with `search_path=public, pg_temp` and EXECUTE for
+`postgres` alone; API roles are denied. Its three callers must each be unique
+`postgres`-owned SECURITY DEFINER routines. The ledger records it exactly once
+at high-water (930 rows), and the schema registry was refreshed to the same
+version/name. The disposable PostgreSQL 17 proof now replays 12 pre-release
+migrations after the trusted baseline, applies 4 candidates in live order (16
+total), and rejects both an untrusted helper-owner mutation and a custom-role
+helper-EXECUTE mutation before its clean replay completes the concurrency
+matrix. Post-apply, all 21 standing invariant predicates executed live with
+7 raw/7 allowlisted/0 new rows; the registered Section 9 PO/AP chain returned
+`SMOKE_PASS_ROLLBACK` and left zero checked remnants.
+Its owning npm command also runs the readiness helper unit test. The generated
+schema registry was refreshed from live introspection to high-water
+`20260730174628`, records the validation-postflight migration name, and retains
+the whole-calendar-month constraint.
+The live schema-integrity tripwire now guards the exact month-lock calls in
+both vendor-bill writers and period close, so a later function re-emission
+cannot silently reopen the race.
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but
@@ -888,6 +1076,74 @@ apply, or it would replace the live function body and intentionally trip the has
 ## 2026-07-29 — Supplier Pricing Phase 3 Stage C: the return-policy guard finally fires
 
 Supplier Pricing Phase 3 Stage C: applied the owner-approved return-policy classification live (migration 20260729213733) — 21 products no_return (10 also full-tote-only), 2 returnable, remainder left unknown by owner decision. Activates the previously dormant assert_phase3_return_policy() guard across create_return/approve_return/receive_return/issue_return_credit. Rows keyed by primary key so no product names or SKUs enter the repo. Verified live: catalog 604 rows -> 21/2/581/0, tote=10 all inside no_return, and the guard raises RETURN_POLICY_NO_RETURN on a real classified product while both returnable overrides and an untouched unknown product pass. Landed via PR #282.
+
+The classification is a point-in-time snapshot, so a second change makes the relationship permanent
+(owner decision, same day): `scripts/db-invariant-sweeps/predicates/product-name-vs-return-policy.sql`
+flags any product whose **name** asserts it cannot be returned while its `return_policy` is not
+`no_return` — the state where the app accepts a return the supplier will refuse, because the
+`'unknown'` default does not trip `assert_phase3_return_policy()`. It is a detector, not a CHECK
+constraint, and deliberately so: the live governance trigger fires on
+`UPDATE OF product_family_id, return_policy, packaging_variant, is_full_tote_only`, so a CHECK tying
+name to policy would force `return_policy` into any rename `UPDATE`, raise
+`PRODUCT_PHASE3_METADATA_GOVERNED`, and make renaming a product to include "NO RETURN" impossible
+through the app. Only the unsafe direction is a violation; `no_return` on a product whose name says
+nothing is the expected shape once policies come from supplier sheets, and it fails safe. The
+predicate emits the product id and never the name or SKU, because the repo is public and the
+allowlist is tracked. Proven live: 0 violations across 604 products, and the same query with the
+classification stripped out returns all 21 — the alarm demonstrably fires rather than being a check
+that has only ever seen zero. Cross-model review caught the first pattern matching "no" mid-word
+(so "MONO RETURN" would false-flag) while missing "ALL SALES FINAL" and a space-separated
+"NON RETURN"; every alternative is now word-anchored, and
+`src/__tests__/predicate-product-name-vs-return-policy.test.ts` pins the phrase set plus the
+near-miss false positives, reading the pattern out of the `.sql` file so the two cannot drift.
+Review then hardened two separate things.
+
+The **phrase set** took six further rounds, each closing a false negative — the detector staying
+silent on a product it should flag. "NON-RETURN VALVE" is a check valve rather than a merchandise
+policy and is excluded by a negative lookahead, but that exclusion is now narrowed twice: to
+RETURN/RETURNS and not RETURNABLE, and to the NON spelling and not NO. The equipment term is exactly
+"NON-RETURN VALVE" — both "NON-RETURNABLE VALVE" and "NO RETURN VALVE" assert a policy, and a wider
+lookahead dropped them silently. That is why NO and NON are separate alternatives rather than the
+tidier `(no|non)`. The third round covered compound wording: the separators between the negation and
+the return word span whitespace and punctuation only, so an intervening WORD broke the match and
+"NO REFUNDS OR RETURNS" or "NOT REFUNDABLE OR RETURNABLE" went undetected. A repeating
+refund/exchange/credit clause is now permitted there, from a closed vocabulary — the repetition
+because these lists usually run to three items ("NO REFUNDS, EXCHANGES, OR RETURNS"), the closed
+vocabulary because allowing arbitrary filler words would flag names like "NO TILL SEED RETURN TRAY".
+The fourth round extended that clause
+to the NON spelling and added the opposite word order: "RETURNS NOT ACCEPTED" and "RETURN NOT
+ALLOWED" reject a return just as plainly, and every negation-first alternative missed them. The verb
+list is closed for the same reason — "RETURN LABEL NOT INCLUDED" must not flag. A fifth round widened
+that branch to auxiliaries ("RETURNS WILL NOT BE ACCEPTED", "RETURNS CANNOT BE ACCEPTED"), and a
+sixth made the compound clause repeat rather than fire once, which is what finally caught the
+three-item lists. A
+phrase-matching detector can always be widened by another synonym, so the list is the reviewed set
+rather than a claim of completeness; the live catalog is separately proven fully covered, and adding
+a phrase later is a one-line change plus a fixture, not a migration.
+
+The **containment guard** took three rounds of its own. These are output-safety fixes, not detection
+fixes: they govern what the sweep may emit into a public repo, and none of them changes which
+products are flagged. It is now alias-agnostic (exactly one `product_name` reference is permitted,
+and only as the `~*` filter), and it audits the projected expressions themselves. Enumerating the
+leak forms became whack-a-mole — `p.*`, a bare `*` mid-list, `row_to_json(p)`, a lone table alias,
+and finally `json_build_object('row', p)`, which no constructor blacklist named while still
+serializing every column of the row. So the rule was inverted into an allowlist: a projected
+expression may mention only the three permitted columns, one permitted function, and a table alias
+used strictly as a qualifier before a dot. All six leak forms turn the guard red under mutation, and
+it returns green on restore.
+
+One review round corrected the sweep README rather than the detector. The new row had claimed this
+was the only data predicate and that everything else reads the catalog, which is false and unsafe to
+rely on: `fin-commission-split-sum` emits a customer farm name and raw commission-split JSON, and
+`fin-invoice-balance-identity` emits customer ids, invoice numbers, and cent amounts. An operator
+trusting that sentence could have pasted genuinely private output somewhere public. The README now
+splits the predicates into catalog and business-data groups, names all seven business-data ones
+(verified against their `FROM`/`JOIN` targets, not assumed), and says plainly that only
+`product-name-vs-return-policy` carries an enforced containment guard.
+
+Across every revision the live result is unchanged: 0 violations across 604 products, all 21
+`no_return` products matched, and all 21 still detected under the classification-stripped mutation.
+Landed via PR #286.
 
 - **Commits this session** (git log --since=12.hours --author=Mason):
   - `1442ee92 feat(products): Supplier Pricing Phase 3 Stage C return-policy classification`

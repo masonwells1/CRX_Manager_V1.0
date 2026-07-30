@@ -16,8 +16,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, fleetSummaryLine,
-  draftPathspec, normRepoPath, createOwnDraftPathsReader,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile, fleetSummaryLine,
+  draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
+  fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom, localCandidateMigrationPathsFromHistory,
+  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
+  ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap as parseOriginMainSqlBlobMap,
+  originMainForwardBlobPaths,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -37,6 +41,21 @@ const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 function git(args, cwd) {
   return execFileSync("git", args, {
     encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], cwd: cwd || projectDir,
+  });
+}
+
+// Read every prefiltered origin/main SQL blob in one bounded Git process. The
+// shared parser validates echoed paths, record delimiters, and complete framing.
+function originMainSqlBlobMap(paths) {
+  return parseOriginMainSqlBlobMap(paths, (input) => {
+    const result = spawnSync("git", ["cat-file", "--batch=%(objectname) %(objecttype) %(objectsize) %(rest)"], {
+      cwd: projectDir,
+      input,
+      timeout: 5000,
+      maxBuffer: ORIGIN_MAIN_CAT_FILE_MAX_BUFFER,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    return result.status === 0 ? result.stdout : null;
   });
 }
 
@@ -131,39 +150,55 @@ const ownDraftPaths = createOwnDraftPathsReader({
   hasOriginMain,
   dirtyCount,
   exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
+  readText: (wtPath, rel) => {
+    try { return readFileSync(path.join(wtPath, ...rel.split("/")), "utf8"); } catch { return ""; }
+  },
   run: (args, cwd) => {
     const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
     return r.status === 0 ? String(r.stdout || "").split("\n") : null;
   },
 });
 
-// Draft files tracked at a given commit (staged migrations + audit drafts), by
-// repo-relative path.
-function draftPathsInTree(rev) {
-  const out = [];
-  const tree = git(["ls-tree", "-r", "--name-only", rev, "--", ...draftPathspec()]);
-  for (const line of tree.split("\n")) {
-    const p = line.trim();
-    if (!p) continue;
-    const base = p.slice(p.lastIndexOf("/") + 1);
-    const inStaging = p.startsWith("scripts/.staging-migrations/");
-    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) out.push(p);
+// The mainline backlog is read from one immutable origin/main tree. A forward SQL
+// file counts only when migration-history.md names that exact LOCAL CANDIDATE file;
+// an anchored status prefilter also catches orphans, with its blobs read in one batch.
+function mainlineParkedDiscovery() {
+  try {
+    const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
+    const history = git(["show", "origin/main:docs/reference/migration-history.md"]);
+    const parkedPrefilter = originMainParkedMigrationPrefilter(
+      () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS),
+    );
+    const mainlinePaths = tree.split("\n");
+    const historyCandidates = localCandidateMigrationPathsFromHistory(history);
+    const blobs = originMainSqlBlobMap(originMainForwardBlobPaths(
+      mainlinePaths,
+      parkedPrefilter.paths,
+      historyCandidates.state === "known" ? historyCandidates.paths : [],
+    ));
+    return parkedMainlineDiscoveryFrom(mainlinePaths, history, (p) => blobs?.get(normRepoPath(p)) ?? null, parkedPrefilter.paths);
+  } catch {
+    return { state: "unknown", paths: new Set(), reason: "origin/main parked-state metadata is unreadable" };
   }
-  return out;
 }
 
-// The mainline backlog, read straight from origin/main's tree rather than from any
-// checkout — so the count is right even when every worktree is stale.
-function mainlineParkedPaths() {
-  try {
-    return new Set(draftPathsInTree("origin/main").map((p) => normRepoPath(p)));
-  } catch { return new Set(); }
-}
+const originMainDraftPaths = hasOriginMain ? originMainDraftPathSet((args) => {
+  try { return git(args, projectDir).split("\n"); } catch { return null; }
+}) : null;
+const parkedFallbackNote = !hasOriginMain
+  ? "\n\nPARKED-SCAN DEGRADED: origin/main is unavailable, so a fallback uses conservative all-disk discovery and may include inherited historical files."
+  : !originMainDraftPaths
+    ? "\n\nPARKED-SCAN DEGRADED: origin/main exists but its draft tree is unreadable, so a fallback uses conservative all-disk discovery and may include inherited historical files."
+    : "";
 
 let fleetLine = "";
 try {
   const ledgerNames = new Set();
-  const parkedPaths = hasOriginMain ? mainlineParkedPaths() : new Set();
+  const mainline = hasOriginMain
+    ? mainlineParkedDiscovery()
+    : { state: "unknown", paths: new Set(), reason: "origin/main is unavailable" };
+  const parkedPaths = new Set([...mainline.paths].map((p) => normRepoPath(p)));
+  const fallbackUnknownReasons = new Set();
   for (const e of entries) {
     if (!e.path || !existsSync(e.path)) continue;
     for (const f of listDir(path.join(e.path, "docs", "loops"))) {
@@ -179,17 +214,36 @@ try {
       for (const key of own.keys()) parkedPaths.add(key);
       continue;
     }
+    let fallbackChangedPaths = null;
+    if (originMainDraftPaths) {
+      try {
+        fallbackChangedPaths = git(["diff", "--name-only", "origin/main", "--", ...draftPathspec()], e.path).split("\n");
+      } catch {
+        fallbackUnknownReasons.add(`${e.path}: origin/main content comparison is unreadable`);
+      }
+    }
     const scans = [
       { root: "scripts/.staging-migrations/", filter: isParkedMigrationFile },
       { root: "docs/audits/", filter: isDraftSqlName },
+      { root: "supabase/migrations/", filter: (name, rel) => isParkedFallbackFile(rel, name, () => {
+        try { return readFileSync(path.join(e.path, ...rel.split("/")), "utf8"); } catch { return ""; }
+      }) },
     ];
     for (const { root, filter } of scans) {
       for (const d of listDraftsRecursive(path.join(e.path, ...root.split("/").filter(Boolean)), root)) {
-        if (filter(d.name)) parkedPaths.add(normRepoPath(d.rel));
+        const comparison = originMainDraftPaths
+          ? fallbackPathsAgainstOrigin([d.rel], originMainDraftPaths, fallbackChangedPaths)
+          : null;
+        if (comparison?.state === "unknown") fallbackUnknownReasons.add(`${e.path}: ${comparison.reason}`);
+        if (comparison && comparison.paths.length === 0) continue;
+        if (filter(d.name, d.rel)) parkedPaths.add(normRepoPath(d.rel));
       }
     }
   }
-  fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedPaths.size)}`;
+  fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedPaths.size)}` +
+    (mainline.state === "unknown" || fallbackUnknownReasons.size > 0
+      ? `\nPARKED STATE UNKNOWN: ${[mainline.state === "unknown" ? mainline.reason : "", ...fallbackUnknownReasons].filter(Boolean).join("; ")}. Do not treat the parked count as a clean zero.`
+      : "");
 } catch { fleetLine = ""; }
 
 emit(
@@ -197,6 +251,7 @@ emit(
   `You are NOT the only session. Mason runs concurrent sessions/worktrees. ${siblings.length} other worktree(s):\n\n` +
   lines.join("\n") +
   fleetLine +
+  parkedFallbackNote +
   `\n\nBEFORE building a feature or claiming a fix "done / already shipped / already fixed":\n` +
   `  1. Confirm your task isn't already being handled in one of these (git log that branch).\n` +
   `  2. Verify live ship-state — mcp list_migrations + git ancestry — don't trust this session's picture alone.\n` +

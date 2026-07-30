@@ -109,6 +109,10 @@ describe('hasRpcCode', () => {
   it('matches the bare token and "TOKEN suffix" forms', () => {
     expect(hasRpcCode({ message: 'ACTOR_MISMATCH' }, RpcErrorCodes.ACTOR_MISMATCH)).toBe(true);
     expect(hasRpcCode({ message: 'INSUFFICIENT_ROLE admin or sales_rep required' }, RpcErrorCodes.INSUFFICIENT_ROLE)).toBe(true);
+    expect(hasRpcCode({ message: 'QUOTE_STALE_WRITE: reload and review' }, RpcErrorCodes.QUOTE_STALE_WRITE)).toBe(true);
+    expect(hasRpcCode({ message: 'CUSTOMER_STALE_WRITE: reload and review' }, RpcErrorCodes.CUSTOMER_STALE_WRITE)).toBe(true);
+    expect(hasRpcCode({ message: 'COMMISSION_SPLIT_CONFLICT: reload and review' }, RpcErrorCodes.COMMISSION_SPLIT_CONFLICT)).toBe(true);
+    expect(hasRpcCode(new Error('QUOTE_STALE_WRITE: reload and review'), RpcErrorCodes.QUOTE_STALE_WRITE)).toBe(true);
   });
   it('does NOT false-positive on the token mid-message', () => {
     expect(hasRpcCode({ message: 'note: LICENSE_EXPIRED appears here' }, RpcErrorCodes.LICENSE_EXPIRED)).toBe(false);
