@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `31cf0abe760cdd845d047bd856e3401b76def44e`
-State: rebased onto current `origin/main`; fourth publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; latest publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -63,11 +63,13 @@ pipeline remains the delivery engine and all of its landing and production gates
 - Morning chat acceptance produces only `approved-to-land`, never `live`.
 - `approved-to-land` releases factory custody so the ordinary `/ship` commit, push, PR, and production
   guards can run; the factory cannot deadlock its own landing lifecycle.
-- Live closeout requires an accepted job, a landing commit contained in `origin/main`, bounded
-  secret-scanned production-verification text, proof still bound to the job's immutable original
-  base, and a new durable content-hashed packet under `docs/audits/factory/jobs/`. The named landing
-  commit's own content fingerprint must equal the harness-proven bytes. The successful closeout path
-  is exercised end-to-end.
+- Live closeout requires an accepted job, a landing commit contained in `origin/main`, a successful
+  GitHub `Production` deployment for that exact SHA, HTTP 200 from the fixed canonical app URL, proof
+  still bound to the job's immutable original base, and a durable content-hashed packet under
+  `docs/audits/factory/jobs/`. Caller-authored production proof is not accepted. The named landing
+  commit's content fingerprint must equal the harness-proven bytes; every harness/review artifact is
+  reopened and re-hashed; and the packet records approved base, reviewer verdicts, and the
+  pre-closeout ledger checkpoint.
 - A chat can clear its recorded factory intent and return to the normal guarded workflow without
   starting a lane or abandoning the chat.
 - Only a real owner chat prompt can resume a global or emergency hold. The agent CLI has no
@@ -76,8 +78,10 @@ pipeline remains the delivery engine and all of its landing and production gates
   explanatory factory questions do not.
 - Board process wording never changes the global hold, and the Board API omits owner/lane session IDs
   plus internal ticket/base fields.
-- Closeout is idempotent across a packet-written/ledger-failed interruption, an already-live retry
-  returns the verified existing packet, and conflicting retry proof is refused.
+- Closeout is idempotent across a packet-written/ledger-failed interruption. Packet preparation leaves
+  the job `approved-to-land`; `live` is refused until those exact bytes are committed into
+  `origin/main`, then production is rechecked and the packet-containing commit is recorded. An
+  already-live retry returns the verified packet, and conflicting landing/packet retries are refused.
 - A governed lane cannot edit any trusted writer hook, imported hook library, hook manifest, Codex
   adapter, factory implementation, or npm harness definition. This includes the local Claude settings
   manifest that can disable all hooks, plus in-place and opaque Git shell mutation routes.
@@ -95,7 +99,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 217 focused assertions after publication-blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 228 focused assertions after publication-blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -198,6 +202,12 @@ recursive force-delete cleanup command.
   `approved-to-land` remained locked inside factory custody. The current repair removes shell ripgrep
   from read allowances, revalidates fresh base plus all proof at presentation, requires every named
   harness and lists them in the independent-review prompt, and hands accepted jobs to `/ship`.
+- Trusted Codex exact-head publication re-review `2026-07-30T18:25:01Z`: `BLOCKERS`; it found that
+  arbitrary closeout prose could self-certify `live`, the post-land packet was not required to enter
+  Git and omitted approved-base/reviewer/ledger-checkpoint data, and proof files were not re-hashed
+  before acceptance. The current repair uses exact-SHA GitHub Production status plus a fixed HTTP
+  check, makes closeout two-phase with an exact packet-in-`origin/main` gate, expands the packet
+  manifest, and reopens/re-hashes every harness and independent-review artifact.
   Publication remains parked until fresh exact-SHA Codex and Fable acceptance pass.
 
 The latest review capture is
@@ -213,7 +223,7 @@ Phase 3 prover identity/RLS checks do not overlap the factory implementation.
 
 ## Remaining gate
 
-The fourth repair pass remains unpushed. The next gates are full verification at frozen bytes,
+The latest repair pass remains unpushed. The next gates are full verification at frozen bytes,
 fresh exact-SHA Codex and Fable acceptance, then the explicitly authorized feature-branch push and
 draft PR. Merge, board installation/startup, deployment, migration, and all production actions remain
 undone.

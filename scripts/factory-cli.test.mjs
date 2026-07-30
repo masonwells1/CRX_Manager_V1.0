@@ -43,7 +43,7 @@ const env = {
   ...process.env,
   CRX_FACTORY_TEST_MODE: "1",
   CRX_FACTORY_TEST_STATE_DIR: stateDir,
-  CRX_FACTORY_TEST_CLOSEOUT_DIR: path.join(fixtureDir, "closeout"),
+  CRX_FACTORY_TEST_CLOSEOUT_DIR: path.join(fixtureRepo, "docs", "audits", "factory", "jobs"),
   CRX_FACTORY_TEST_REPO_DIR: fixtureRepo,
 };
 process.env.CRX_FACTORY_TEST_MODE = "1";
@@ -240,12 +240,10 @@ appendFactoryEvent(paths, {
     reviewQuestionHash: reviewed.jobs[0].reviewQuestionHash,
   },
 });
-const productionProof = "Production behavior verified after landing.";
 const closeoutArgs = [
   "closeout", "write",
   "--job", jobId,
   "--landing-commit", gitHead(fixtureRepo),
-  "--production-proof", productionProof,
 ];
 writeFileSync(path.join(fixtureRepo, "old.txt"), "old landing content\n");
 let gitResult = spawnSync("git", ["add", "old.txt"], { cwd: fixtureRepo, encoding: "utf8" });
@@ -264,10 +262,6 @@ rmSync(path.join(fixtureRepo, "old.txt"));
 const wrongLanding = run(closeoutArgs.map((value) => value === gitHead(fixtureRepo) ? differentAncestor : value));
 assertions++;
 assert.notEqual(wrongLanding.status, 0, "closeout refuses an origin/main ancestor whose content differs from the proven bytes");
-const secretProof = run(closeoutArgs.map((value) =>
-  value === productionProof ? "OPENAI_API_KEY=sk-this-must-never-be-persisted" : value));
-assertions++;
-assert.notEqual(secretProof.status, 0, "closeout refuses secret-shaped production proof text");
 writeFileSync(paths.lockPath, `${JSON.stringify({
   pid: process.pid,
   createdAt: new Date().toISOString(),
@@ -277,23 +271,53 @@ assertions++;
 assert.notEqual(interruptedCloseout.status, 0, "ledger lock can interrupt closeout after packet creation");
 const expectedPacket = path.join(env.CRX_FACTORY_TEST_CLOSEOUT_DIR, `${jobId}.md`);
 assertions++;
-assert.equal(existsSync(expectedPacket), true, "interrupted closeout leaves its deterministic packet for retry");
+assert.equal(existsSync(expectedPacket), true, `interrupted closeout leaves its deterministic packet for retry: ${interruptedCloseout.stderr}`);
 rmSync(paths.lockPath);
+const prepared = run(closeoutArgs);
+pass(prepared, "prepare post-landing closeout");
+assertions++;
+assert.equal(JSON.parse(prepared.stdout).prepared, true, "first closeout pass prepares the durable packet");
+const packetText = readFileSync(expectedPacket, "utf8");
+for (const requiredPacketText of [
+  `Approved base: \`${approvedBase}\``,
+  "Pre-closeout ledger checkpoint:",
+  "## Independent review manifest",
+  "Exact-SHA Production deployment:",
+]) {
+  assertions++;
+  assert.equal(packetText.includes(requiredPacketText), true, `closeout packet records ${requiredPacketText}`);
+}
+assertions++;
+assert.equal(loadFactorySnapshot(paths).jobs[0].stage, "approved-to-land", "packet preparation cannot self-label the job live");
+const prematureCloseout = run(closeoutArgs);
+assertions++;
+assert.notEqual(prematureCloseout.status, 0, "closeout refuses live until the exact packet is contained in origin/main");
+gitResult = spawnSync("git", ["add", "docs/audits/factory/jobs"], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitResult.status, 0, gitResult.stderr);
+gitResult = spawnSync("git", [
+  "-c", "user.name=Factory Test",
+  "-c", "user.email=factory@example.invalid",
+  "commit", "-qm", "land closeout packet",
+], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitResult.status, 0, gitResult.stderr);
+gitResult = spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitResult.status, 0, gitResult.stderr);
 const closed = run(closeoutArgs);
-pass(closed, "write post-landing closeout");
+pass(closed, "finalize landed closeout packet");
 const live = loadFactorySnapshot(paths);
 assertions++;
 assert.equal(live.jobs[0].stage, "live", "successful closeout is the only path to live");
 assertions++;
 assert.equal(existsSync(JSON.parse(closed.stdout).closeoutPacket), true, "closeout writes a durable packet");
+assertions++;
+assert.match(live.jobs[0].closeoutCommit, /^[a-f0-9]{40}$/, "live state records the commit containing the closeout packet");
 const repeatedCloseout = run(closeoutArgs);
 pass(repeatedCloseout, "repeat an already successful closeout");
 assertions++;
 assert.equal(JSON.parse(repeatedCloseout.stdout).alreadyClosed, true, "successful closeout retry is idempotent");
-const forgedProof = "Different proof must not replace the ledger record.";
-const conflictingCloseout = run(closeoutArgs.map((value) => value === productionProof ? forgedProof : value));
+const conflictingCloseout = run(closeoutArgs.map((value, index) => index === 4 ? differentAncestor : value));
 assertions++;
-assert.notEqual(conflictingCloseout.status, 0, "idempotent closeout refuses conflicting proof");
+assert.notEqual(conflictingCloseout.status, 0, "idempotent closeout refuses a conflicting landing commit");
 
 appendFactoryEvent(paths, {
   type: "factory-intent",

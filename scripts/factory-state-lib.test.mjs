@@ -39,6 +39,7 @@ import {
   sha256,
   ticketHash,
   validateCurrentHarnessEvidence,
+  validateCurrentIndependentReview,
   validateLaneStart,
   writeImmutableTicket,
 } from "./factory-state-lib.mjs";
@@ -458,7 +459,23 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const repository = repositoryContentFingerprint(repoRoot);
   const proofBaseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
   const proofDependencyHash = factoryHarnessDependencyHashForCommit(repoRoot, proofBaseSha);
+  const proofRoot = mkdtempSync(path.join(tmpdir(), "crx-factory-artifact-proof-"));
+  const proofPaths = resolveFactoryPaths(repoRoot, {
+    CRX_FACTORY_TEST_MODE: "1",
+    CRX_FACTORY_TEST_STATE_DIR: path.join(proofRoot, "state"),
+  });
+  const proofPayload = {
+    scriptName: "verify-deps",
+    baseSha: proofBaseSha,
+    repositoryContentHash: repository.repositoryContentHash,
+    repositoryFileCount: repository.repositoryFileCount,
+  };
+  const proofBytes = `${canonicalJson(proofPayload)}\n`;
+  const proofFilename = `${sha256(proofBytes).slice(0, 12)}-verify-deps.json`;
+  mkdirSync(path.join(proofPaths.evidenceDir, "landed-job"), { recursive: true });
+  writeFileSync(path.join(proofPaths.evidenceDir, "landed-job", proofFilename), proofBytes);
   const landedJob = {
+    id: "landed-job",
     baseSha: proofBaseSha,
     ticket: { proofHarnesses: ["verify-deps"] },
     evidence: [{
@@ -469,6 +486,8 @@ function append(paths, type, jobId, payload = {}, options = {}) {
       scriptBodyHash: sha256(scriptBody),
       baseScriptBodyHash: sha256(scriptBody),
       packageJsonHash: sha256(packageBytes),
+      filename: proofFilename,
+      sha256: sha256(proofBytes),
       repositoryContentHash: repository.repositoryContentHash,
       repositoryFileCount: repository.repositoryFileCount,
       sandbox: {
@@ -485,27 +504,64 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     }],
   };
   throws(
-    () => validateCurrentHarnessEvidence(landedJob, repoRoot),
+    () => validateCurrentHarnessEvidence(landedJob, repoRoot, { paths: proofPaths }),
     /every ticket-required/,
     "morning review rejects proof when origin/main moved",
   );
   ok(
-    validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false }),
+    validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false, paths: proofPaths }),
     "post-landing closeout accepts proof bound to the job's immutable original base",
   );
   landedJob.ticket.proofHarnesses = ["verify-deps", "build"];
   throws(
-    () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false }),
+    () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false, paths: proofPaths }),
     /every ticket-required/,
     "one passing harness cannot satisfy a ticket that requires multiple harnesses",
   );
   landedJob.ticket.proofHarnesses = ["verify-deps"];
   landedJob.evidence[0].repositoryContentHash = "0".repeat(64);
   throws(
-    () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false }),
+    () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false, paths: proofPaths }),
     /every ticket-required/,
     "source changes invalidate previously verified harness evidence",
   );
+  landedJob.evidence[0].repositoryContentHash = repository.repositoryContentHash;
+  writeFileSync(path.join(proofPaths.evidenceDir, "landed-job", proofFilename), `${proofBytes}tampered`);
+  throws(
+    () => validateCurrentHarnessEvidence(landedJob, repoRoot, { requireCurrentBase: false, paths: proofPaths }),
+    /no longer match the ledger SHA-256/,
+    "morning and closeout validation re-hash saved harness proof bytes",
+  );
+
+  const reviewPayload = {
+    reviewer: "codex",
+    verdict: "clean",
+    baseSha: proofBaseSha,
+    headSha: repository.headSha,
+    headTreeSha: repository.headTreeSha,
+    repositoryContentHash: repository.repositoryContentHash,
+    repositoryFileCount: repository.repositoryFileCount,
+  };
+  const reviewBytes = `${canonicalJson(reviewPayload)}\n`;
+  const reviewFilename = `${sha256(reviewBytes).slice(0, 12)}-independent-codex-review.json`;
+  writeFileSync(path.join(proofPaths.evidenceDir, "landed-job", reviewFilename), reviewBytes);
+  landedJob.reviews = [{
+    ...reviewPayload,
+    model: "test-reviewer",
+    filename: reviewFilename,
+    sha256: sha256(reviewBytes),
+  }];
+  ok(
+    validateCurrentIndependentReview(landedJob, repoRoot, { paths: proofPaths }),
+    "independent review validation reopens the ledger-bound review artifact",
+  );
+  writeFileSync(path.join(proofPaths.evidenceDir, "landed-job", reviewFilename), `${reviewBytes}tampered`);
+  throws(
+    () => validateCurrentIndependentReview(landedJob, repoRoot, { paths: proofPaths }),
+    /no longer match the ledger SHA-256/,
+    "independent review validation rejects changed artifact bytes",
+  );
+  rmSync(proofRoot, { recursive: true, force: true });
 }
 
 console.log(`factory-state-lib: ${pass} assertions passed`);

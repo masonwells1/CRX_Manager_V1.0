@@ -273,8 +273,11 @@ fresh parallel chats. A stale lock has a validated age/process-checked
 recovery path, and an emergency hold still blocks lanes if the ledger cannot record Mason's pause.
 Mason's later chat acceptance means only
 `approved-to-land`; it never self-certifies a job as live. A live closeout additionally requires a
-commit already contained in `origin/main`, production-verification text, attached proof, and a durable
-content-hashed packet under `docs/audits/factory/jobs/`.
+commit already contained in `origin/main`, a successful GitHub Production deployment for that exact
+SHA, HTTP 200 from the fixed canonical app URL, re-hashed attached proof, and a durable content-hashed
+packet under `docs/audits/factory/jobs/`. Packet preparation does not mark the job live. The exact
+packet must first be committed into `origin/main`; closeout then rechecks production and records the
+packet-containing commit.
 
 The single owner output is `npm run factory:board`: a loopback-only, read-only page extending `/fleet`
 with one card per job, plain-English status, behavior result, blocker, and linked proof. It has no
@@ -314,8 +317,8 @@ session. Direct permit injection, reading, forwarding, hook invocation, and iden
 fail closed. A second trusted Codex publication review then found four more trust-boundary gaps.
 Closeout now fingerprints the actual landing commit and requires it to contain the exact harness-proven
 bytes; simultaneous lane starts use the ledger's compare-and-swap hash so only one can win; arbitrary
-local-file evidence attachment is removed; production verification is bounded text with credential
-patterns rejected. Active lanes may use structured file edits and fixed verification commands, but
+local-file evidence attachment is removed; the later seventh review replaces bounded production text
+with machine-checked deployment and HTTP proof. Active lanes may use structured file edits and fixed verification commands, but
 opaque shell/helper/MCP process execution is denied so a generated helper cannot hide its mutation
 targets from the guards. A third trusted Codex publication review then found two remaining HIGH
 execution boundaries: command substitution could still reach the permit path, and a branch-modified
@@ -350,6 +353,13 @@ presentation, “any one” handling of a multi-harness ticket, and a custody de
 Shell ripgrep is no longer a read exemption; morning presentation freshly revalidates the immutable
 base, every required harness, and exact independent review; the reviewer prompt lists those
 harnesses; and `approved-to-land` exits factory custody into the ordinary `/ship` lifecycle.
+A seventh Codex pass found that arbitrary prose could still self-certify production, a closeout packet
+could disappear with its worktree and omitted key provenance, and evidence files were not reopened
+before acceptance. Caller-supplied production proof is removed. The trusted broker now requires a
+successful GitHub `Production` deployment for the exact landing SHA and HTTP 200 from the canonical
+app URL. Harness and review files are re-hashed at morning and closeout, while the two-phase packet
+records approved base, reviewer verdicts, landing SHA, and the pre-closeout ledger checkpoint and
+must itself land in `origin/main` before `live`.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

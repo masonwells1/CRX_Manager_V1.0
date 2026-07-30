@@ -52,6 +52,8 @@ export const FACTORY_HARNESS_ALLOWLIST = new Set([
   "check-doc-drift",
 ]);
 export const FACTORY_HARNESS_NODE_IMAGE = "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059";
+export const FACTORY_GITHUB_REPOSITORY = "masonwells1/CRX_Manager_V1.0";
+export const FACTORY_PRODUCTION_URL = "https://croprxsolutions.app/";
 export const BOARD_STAGES = new Set([
   "needs-ticket-ok",
   "queued",
@@ -723,9 +725,10 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       behaviorSummary: "",
       blocker: "",
       landingCommit: "",
-      productionProof: "",
+      productionVerification: null,
       closeoutPacket: "",
       closeoutPacketHash: "",
+      closeoutCommit: "",
       evidence: [],
       reviews: [],
       lastActivity: event.timestamp,
@@ -785,10 +788,23 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.blocker = String(event.payload.blocker || "");
         if (event.payload.stage === "live") {
           job.landingCommit = String(event.payload.landingCommit || "");
-          job.productionProof = String(event.payload.productionProof || "");
+          job.productionVerification = event.payload.productionVerification
+            && typeof event.payload.productionVerification === "object"
+            ? canonicalize(event.payload.productionVerification)
+            : null;
           job.closeoutPacket = String(event.payload.closeoutPacket || "");
           job.closeoutPacketHash = String(event.payload.closeoutPacketHash || "");
+          job.closeoutCommit = String(event.payload.closeoutCommit || "");
         }
+        break;
+      case "closeout-prepared":
+        job.landingCommit = String(event.payload.landingCommit || "");
+        job.productionVerification = event.payload.productionVerification
+          && typeof event.payload.productionVerification === "object"
+          ? canonicalize(event.payload.productionVerification)
+          : null;
+        job.closeoutPacket = String(event.payload.closeoutPacket || "");
+        job.closeoutPacketHash = String(event.payload.closeoutPacketHash || "");
         break;
       case "evidence-attached":
         job.evidence.push({
@@ -922,8 +938,9 @@ export function validateStageChange(snapshot, jobId, nextStage, {
     if (!String(behaviorSummary || "").trim()) {
       throw new Error("A plain-English behavior summary is required before morning review.");
     }
-    validateCurrentHarnessEvidence(job, cwd);
-    validateCurrentIndependentReview(job, cwd);
+    const paths = resolvePathsFromSnapshot(snapshot);
+    validateCurrentHarnessEvidence(job, cwd, { paths });
+    validateCurrentIndependentReview(job, cwd, { paths });
   }
   if (nextStage === "parked" && !String(blocker || "").trim()) {
     throw new Error("A plain-English blocker is required when parking a job.");
@@ -1343,13 +1360,35 @@ export function runHarnessEvidence(paths, {
   };
 }
 
+function readBoundEvidenceArtifact(paths, job, item, description) {
+  const filename = String(item?.filename || "");
+  if (!filename || path.basename(filename) !== filename) {
+    throw new Error(`${description} has an invalid evidence filename.`);
+  }
+  const target = path.join(paths.evidenceDir, safeId(job.id), filename);
+  if (!existsSync(target)) {
+    throw new Error(`${description} file is missing from the shared evidence store.`);
+  }
+  const bytes = readFileSync(target);
+  if (sha256(bytes) !== item.sha256) {
+    throw new Error(`${description} file bytes no longer match the ledger SHA-256.`);
+  }
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error(`${description} file is not valid JSON.`);
+  }
+}
+
 export function validateCurrentHarnessEvidence(job, cwd = FACTORY_ROOT, {
   requireCurrentBase = true,
+  paths = resolveFactoryPaths(cwd),
+  repositoryFingerprint = null,
 } = {}) {
   const packageBytes = readFileSync(path.join(cwd, "package.json"));
   const packageJson = JSON.parse(packageBytes);
   const currentBaseSha = requireCurrentBase ? currentOriginMain(cwd) : "";
-  const repository = repositoryContentFingerprint(cwd);
+  const repository = repositoryFingerprint || repositoryContentFingerprint(cwd);
   const requiredHarnesses = job.ticket?.proofHarnesses || [];
   const accepted = requiredHarnesses.map((requiredHarness) =>
     job.evidence.find((item) => {
@@ -1371,12 +1410,18 @@ export function validateCurrentHarnessEvidence(job, cwd = FACTORY_ROOT, {
         && item.sandbox?.imageTag === `crx-factory-harness:${item.sandbox.dependencyHash.slice(0, 24)}`;
       if (!isolatedTest && !containedProductionRun) return false;
       const currentBody = packageJson.scripts?.[item.scriptName];
-      return typeof currentBody === "string"
+      const metadataMatches = typeof currentBody === "string"
         && sha256(currentBody) === item.scriptBodyHash
         && item.baseScriptBodyHash === item.scriptBodyHash
         && sha256(packageBytes) === item.packageJsonHash
         && item.repositoryContentHash === repository.repositoryContentHash
         && Number(item.repositoryFileCount) === repository.repositoryFileCount;
+      if (!metadataMatches) return false;
+      const artifact = readBoundEvidenceArtifact(paths, job, item, `Harness proof ${item.scriptName}`);
+      return artifact.scriptName === item.scriptName
+        && artifact.repositoryContentHash === item.repositoryContentHash
+        && Number(artifact.repositoryFileCount) === item.repositoryFileCount
+        && artifact.baseSha === item.baseSha;
     }),
   );
   if (requiredHarnesses.length === 0 || accepted.some((item) => !item)) {
@@ -1502,20 +1547,32 @@ export function runIndependentReviewEvidence(paths, {
   };
 }
 
-export function validateCurrentIndependentReview(job, cwd = FACTORY_ROOT) {
-  const repository = repositoryContentFingerprint(cwd);
+export function validateCurrentIndependentReview(job, cwd = FACTORY_ROOT, {
+  paths = resolveFactoryPaths(cwd),
+  repositoryFingerprint = null,
+} = {}) {
+  const repository = repositoryFingerprint || repositoryContentFingerprint(cwd);
+  const repositoryHeadSha = repository.headSha || repository.commitSha;
+  const repositoryTreeSha = repository.headTreeSha || repository.treeSha;
   const accepted = job.reviews?.find((review) =>
     review.reviewer === "codex"
     && review.verdict === "clean"
     && review.baseSha === job.baseSha
-    && review.headSha === repository.headSha
-    && review.headTreeSha === repository.headTreeSha
+    && review.headSha === repositoryHeadSha
+    && review.headTreeSha === repositoryTreeSha
     && review.repositoryContentHash === repository.repositoryContentHash
     && Number(review.repositoryFileCount) === repository.repositoryFileCount
     && /^[a-f0-9]{64}$/i.test(review.sha256),
   );
   if (!accepted) {
     throw new Error("A current independent Codex CLEAN review bound to these exact repository bytes is required.");
+  }
+  const artifact = readBoundEvidenceArtifact(paths, job, accepted, "Independent Codex review");
+  if (artifact.reviewer !== accepted.reviewer
+      || artifact.verdict !== accepted.verdict
+      || artifact.repositoryContentHash !== accepted.repositoryContentHash
+      || Number(artifact.repositoryFileCount) !== accepted.repositoryFileCount) {
+    throw new Error("Independent Codex review file metadata no longer matches the ledger.");
   }
   return accepted;
 }

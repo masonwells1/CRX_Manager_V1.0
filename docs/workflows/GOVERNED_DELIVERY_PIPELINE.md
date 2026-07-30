@@ -123,15 +123,22 @@ base to remain current after a fresh fetch. Once Mason accepts, factory custody 
 `/ship` commit/PR guards become authoritative. After landing, closeout validates proof against the
 job's immutable original base, proves that the landing commit is contained in current `origin/main`,
 and computes the commit's own tree/content fingerprint. The landing commit must contain the exact
-bytes that passed the accepted harness. The CLI has no arbitrary local-file evidence route, and
-production verification is bounded text whose secret-shaped content is rejected before persistence.
-The same persistence scan covers every ticket and ledger payload, including raw JWT/Supabase-key
+bytes that passed the accepted harness. Harness and independent-review artifacts are reopened and
+re-hashed from the shared evidence store before morning review and closeout. The CLI has no arbitrary
+local-file evidence route. Production verification is performed by the trusted broker: GitHub must
+report a successful `Production` deployment for the exact landing SHA and the fixed canonical app URL
+must answer HTTP 200 without a redirect. Caller-supplied production prose is neither accepted nor
+persisted. The persistence scan still covers every ticket and ledger payload, including raw JWT/Supabase-key
 shapes and common GitHub, AWS, Google, Slack, Stripe, named-password, API-key, and access-token forms.
 
-Closeout is retry-safe. Its packet content is deterministic. If a lock or ledger interruption happens
-after the packet is created, the next supported closeout call reuses the byte-identical packet and
-finishes the ledger event. A conflicting packet or production-proof retry fails closed; retrying a
-completed closeout returns the already-recorded packet without appending another `live` event.
+Closeout is retry-safe and two-phase. The first call machine-verifies production and prepares a
+deterministic packet containing the approved base, landing commit, proof and review manifests, and
+pre-closeout ledger checkpoint. The job remains `approved-to-land`. If a lock or ledger interruption
+happens after the packet is created, the next call reuses the byte-identical packet. A later call can
+record `live` only after the exact packet bytes are committed into `origin/main`; it rechecks the
+exact-SHA deployment and canonical URL first and records the packet-containing commit. Conflicting
+packet or landing retries fail closed; retrying a completed closeout returns the already-recorded
+packet without appending another `live` event.
 Lane start uses the ledger's expected-last-event hash under the same exclusive writer lock, so two
 simultaneous starts cannot both pass a stale “no active lane” snapshot.
 

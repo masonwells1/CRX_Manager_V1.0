@@ -2,11 +2,13 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   APPROVAL_TTL_MS,
+  FACTORY_GITHUB_REPOSITORY,
+  FACTORY_PRODUCTION_URL,
   appendFactoryEvent,
   buildFactorySnapshot,
   canonicalMorningReviewQuestion,
@@ -16,7 +18,6 @@ import {
   loadFactorySnapshot,
   recoverFactoryState,
   refreshOriginMain,
-  rejectSecretBearingText,
   repositoryCommitFingerprint,
   resolveFactoryPaths,
   runHarnessEvidence,
@@ -45,7 +46,7 @@ function usage(message = "") {
     "  node scripts/factory.mjs review present --job <id>",
     "  node scripts/factory.mjs stage --job <id> --stage <stage> [--summary-file <text>] [--blocker-file <text>]",
     "  node scripts/factory.mjs evidence run --job <id> --harness <npm-script> --label <text>",
-    "  node scripts/factory.mjs closeout write --job <id> --landing-commit <sha> --production-proof <text>",
+    "  node scripts/factory.mjs closeout write --job <id> --landing-commit <sha>",
     "  node scripts/factory.mjs recover <unlock|torn-tail> --reason-file <text>",
     "  node scripts/factory.mjs status [--json]",
   ].join("\n") + "\n");
@@ -123,19 +124,108 @@ function isIsolatedFactoryTest(paths, env) {
     && closeout.startsWith(tempRoot);
 }
 
-function productionProofText(value) {
-  const proof = String(value || "").trim();
-  if (!proof || proof.length > 4_000) {
-    throw new Error("Production verification text must be between 1 and 4,000 characters.");
-  }
-  if (/[\0\u0001-\u0008\u000b\u000c\u000e-\u001f]/.test(proof)) {
-    throw new Error("Production verification text contains unsupported control characters.");
-  }
-  return rejectSecretBearingText(proof, "Production verification text");
-}
-
 function markdownCell(value) {
   return String(value || "").replaceAll("|", "\\|").replace(/\r?\n/g, " ");
+}
+
+function fixedGitHubExecutable() {
+  const candidates = process.platform === "win32"
+    ? [
+        "C:\\Program Files\\GitHub CLI\\gh.exe",
+        path.join(homedir(), "AppData", "Local", "Programs", "GitHub CLI", "gh.exe"),
+      ]
+    : ["/usr/bin/gh", "/usr/local/bin/gh"];
+  const resolved = candidates.find((candidate) => existsSync(candidate));
+  if (!resolved) {
+    throw new Error("Trusted GitHub CLI executable was not found in a fixed installation location.");
+  }
+  return resolved;
+}
+
+async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
+  if (isIsolatedFactoryTest(paths, env)) {
+    return {
+      repository: FACTORY_GITHUB_REPOSITORY,
+      landingCommit,
+      deploymentId: 1,
+      deploymentStatusId: 1,
+      deploymentState: "success",
+      deploymentEnvironment: "Production",
+      deploymentUrl: "https://factory-test.example.invalid/deployment",
+      productionUrl: FACTORY_PRODUCTION_URL,
+      httpStatus: 200,
+    };
+  }
+  let deployments;
+  try {
+    deployments = JSON.parse(execFileSync(fixedGitHubExecutable(), [
+      "api",
+      `repos/${FACTORY_GITHUB_REPOSITORY}/deployments?sha=${landingCommit}&per_page=20`,
+    ], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 30_000,
+    }));
+  } catch {
+    throw new Error("Could not read GitHub deployment records for the exact landing commit.");
+  }
+  const productionDeployments = Array.isArray(deployments)
+    ? deployments.filter((item) =>
+      item?.sha === landingCommit
+      && String(item?.environment || "").toLowerCase() === "production")
+    : [];
+  let accepted = null;
+  for (const deployment of productionDeployments) {
+    let statuses;
+    try {
+      statuses = JSON.parse(execFileSync(fixedGitHubExecutable(), [
+        "api",
+        `repos/${FACTORY_GITHUB_REPOSITORY}/deployments/${deployment.id}/statuses?per_page=20`,
+      ], {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 30_000,
+      }));
+    } catch {
+      continue;
+    }
+    const success = Array.isArray(statuses)
+      ? statuses.find((status) => String(status?.state || "").toLowerCase() === "success")
+      : null;
+    if (success) {
+      accepted = { deployment, status: success };
+      break;
+    }
+  }
+  if (!accepted) {
+    throw new Error("The exact landing commit has no successful GitHub Production deployment.");
+  }
+  let response;
+  try {
+    response = await fetch(FACTORY_PRODUCTION_URL, {
+      method: "HEAD",
+      redirect: "manual",
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch {
+    throw new Error("The canonical production URL could not be reached.");
+  }
+  if (response.status !== 200) {
+    throw new Error(`The canonical production URL returned HTTP ${response.status}, not 200.`);
+  }
+  return {
+    repository: FACTORY_GITHUB_REPOSITORY,
+    landingCommit,
+    deploymentId: Number(accepted.deployment.id),
+    deploymentStatusId: Number(accepted.status.id),
+    deploymentState: "success",
+    deploymentEnvironment: String(accepted.deployment.environment),
+    deploymentUrl: String(accepted.status.environment_url || accepted.status.log_url || ""),
+    productionUrl: FACTORY_PRODUCTION_URL,
+    httpStatus: response.status,
+  };
 }
 
 function printStatus(snapshot, asJson) {
@@ -282,8 +372,8 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     if (baseSha !== job.baseSha) {
       throw new Error("origin/main moved after ticket approval; park and re-present the ticket before morning review.");
     }
-    validateCurrentHarnessEvidence(job, cwd);
-    validateCurrentIndependentReview(job, cwd);
+    validateCurrentHarnessEvidence(job, cwd, { paths });
+    validateCurrentIndependentReview(job, cwd, { paths });
     appendFactoryEvent(paths, {
       type: "review-presented",
       jobId,
@@ -410,8 +500,9 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "closeout" && action === "write") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const landingCommit = required(flags, "landing-commit");
-    const productionProof = productionProofText(required(flags, "production-proof"));
+    const requestedLandingCommit = required(flags, "landing-commit");
+    git(["cat-file", "-e", `${requestedLandingCommit}^{commit}`], cwd);
+    const landingCommit = git(["rev-parse", `${requestedLandingCommit}^{commit}`], cwd);
     const snapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
     const job = snapshot.jobs.find((candidate) => candidate.id === jobId);
     if (!job) {
@@ -421,7 +512,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       throw new Error(`Job ${jobId} morning acceptance is bound to another chat session.`);
     }
     if (job.stage === "live") {
-      if (job.landingCommit !== landingCommit || job.productionProof !== productionProof) {
+      if (job.landingCommit !== landingCommit) {
         throw new Error(`Job ${jobId} is already live with a different closeout record.`);
       }
       const recordedPath = path.resolve(cwd, job.closeoutPacket);
@@ -436,6 +527,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         jobId,
         closeoutPacket: recordedPath,
         closeoutPacketHash: recordedHash,
+        closeoutCommit: job.closeoutCommit,
         alreadyClosed: true,
       })}\n`);
       return 0;
@@ -443,25 +535,99 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     if (job.stage !== "approved-to-land") {
       throw new Error(`Job ${jobId} must have Mason's morning acceptance before closeout.`);
     }
-    git(["cat-file", "-e", `${landingCommit}^{commit}`], cwd);
     if (!isIsolatedFactoryTest(paths, env)) {
+      refreshOriginMain(cwd, env);
       try {
         git(["merge-base", "--is-ancestor", landingCommit, "origin/main"], cwd);
       } catch {
         throw new Error("Landing commit is not contained in the current origin/main.");
       }
     }
-    if (!productionProof) throw new Error("Production verification text is required.");
-    const acceptedEvidence = validateCurrentHarnessEvidence(job, cwd, { requireCurrentBase: false });
     const landing = repositoryCommitFingerprint(cwd, landingCommit);
+    const acceptedEvidence = validateCurrentHarnessEvidence(job, cwd, {
+      requireCurrentBase: false,
+      paths,
+      repositoryFingerprint: landing,
+    });
+    const acceptedReview = validateCurrentIndependentReview(job, cwd, {
+      paths,
+      repositoryFingerprint: landing,
+    });
     if (acceptedEvidence.some((item) =>
       item.repositoryContentHash !== landing.repositoryContentHash
       || Number(item.repositoryFileCount) !== landing.repositoryFileCount)) {
       throw new Error("Landing commit does not contain the exact repository content bound to the accepted harness proof.");
     }
 
+    if (job.closeoutPacketHash) {
+      if (job.landingCommit !== landingCommit) {
+        throw new Error(`Job ${jobId} has a closeout packet for a different landing commit.`);
+      }
+      const recordedPath = path.resolve(cwd, job.closeoutPacket);
+      if (!existsSync(recordedPath) || sha256(readFileSync(recordedPath)) !== job.closeoutPacketHash) {
+        throw new Error(`Job ${jobId} closeout packet is missing or no longer matches the ledger.`);
+      }
+      const relativePacket = path.relative(cwd, recordedPath).replace(/\\/g, "/");
+      let landedPacket;
+      try {
+        landedPacket = execFileSync("git", ["show", `origin/main:${relativePacket}`], {
+          cwd,
+          encoding: "buffer",
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+      } catch {
+        throw new Error("The exact closeout packet must be committed and contained in origin/main before live.");
+      }
+      if (sha256(landedPacket) !== job.closeoutPacketHash) {
+        throw new Error("The closeout packet in origin/main does not match the ledger-bound packet bytes.");
+      }
+      const closeoutCommit = git(["log", "-1", "--format=%H", "origin/main", "--", relativePacket], cwd);
+      if (!closeoutCommit) {
+        throw new Error("Could not resolve the origin/main commit containing the closeout packet.");
+      }
+      const productionVerification = await verifyProductionLanding({
+        cwd,
+        landingCommit,
+        paths,
+        env,
+      });
+      appendFactoryEvent(paths, {
+        type: "job-stage",
+        jobId,
+        ...who,
+        timestamp: now().toISOString(),
+        payload: {
+          stage: "live",
+          behaviorSummary: job.behaviorSummary,
+          blocker: "",
+          landingCommit,
+          productionVerification,
+          closeoutPacket: relativePacket,
+          closeoutPacketHash: job.closeoutPacketHash,
+          closeoutCommit,
+        },
+      });
+      process.stdout.write(`${JSON.stringify({
+        jobId,
+        closeoutPacket: recordedPath,
+        closeoutPacketHash: job.closeoutPacketHash,
+        closeoutCommit,
+        live: true,
+      })}\n`);
+      return 0;
+    }
+
+    const productionVerification = await verifyProductionLanding({
+      cwd,
+      landingCommit,
+      paths,
+      env,
+    });
     const rows = job.evidence.map((item) =>
       `| ${markdownCell(item.label)} | ${markdownCell(item.kind)} | \`${item.sha256}\` |`,
+    ).join("\n");
+    const reviewRows = job.reviews.map((item) =>
+      `| ${markdownCell(item.reviewer)} | ${markdownCell(item.model)} | ${markdownCell(item.verdict)} | \`${item.sha256}\` |`,
     ).join("\n");
     const body = [
       `# Factory Job Closeout — ${job.title}`,
@@ -469,13 +635,19 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       `- Job: \`${job.id}\``,
       `- Ticket hash: \`${job.ticketHash}\``,
       `- Approval reply: ${markdownCell(job.approvalReply)}`,
+      `- Approved base: \`${job.baseSha}\``,
       `- Behavior result: ${markdownCell(job.behaviorSummary)}`,
       `- Landing commit: \`${landingCommit}\``,
-      "- Landing ancestry: verified contained in `origin/main` before this packet was recorded",
+      "- Landing ancestry: verified contained in `origin/main` before this packet was prepared",
+      `- Pre-closeout ledger checkpoint: \`${snapshot.lastEventHash}\``,
       "",
       "## Production verification",
       "",
-      productionProof,
+      `- GitHub repository: \`${productionVerification.repository}\``,
+      `- Exact-SHA Production deployment: \`${productionVerification.deploymentId}\``,
+      `- Deployment status: \`${productionVerification.deploymentState}\` (status \`${productionVerification.deploymentStatusId}\`)`,
+      `- Canonical URL: ${productionVerification.productionUrl}`,
+      `- Canonical URL response: HTTP ${productionVerification.httpStatus}`,
       "",
       "## Proof manifest",
       "",
@@ -483,7 +655,14 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       "|---|---|---|",
       rows,
       "",
+      "## Independent review manifest",
+      "",
+      "| Reviewer | Model | Verdict | SHA-256 |",
+      "|---|---|---|---|",
+      reviewRows,
+      "",
       "This packet records evidence; it does not replace the existing `/ship` review, PR, deployment, migration, or destructive-action gates.",
+      "The job remains `approved-to-land` until these exact packet bytes are committed into `origin/main` and production is rechecked.",
       "",
     ].join("\n");
     const outputDir = closeoutDirectory(cwd, env);
@@ -499,21 +678,26 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       writeFileSync(outputPath, body, { encoding: "utf8", flag: "wx" });
     }
     appendFactoryEvent(paths, {
-      type: "job-stage",
+      type: "closeout-prepared",
       jobId,
       ...who,
       timestamp: now().toISOString(),
       payload: {
-        stage: "live",
-        behaviorSummary: job.behaviorSummary,
-        blocker: "",
         landingCommit,
-        productionProof,
+        productionVerification,
         closeoutPacket: path.relative(cwd, outputPath).replace(/\\/g, "/"),
         closeoutPacketHash: packetHash,
+        ledgerCheckpointHash: snapshot.lastEventHash,
+        independentReviewHash: acceptedReview.sha256,
       },
     });
-    process.stdout.write(`${JSON.stringify({ jobId, closeoutPacket: outputPath, closeoutPacketHash: packetHash })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      jobId,
+      closeoutPacket: outputPath,
+      closeoutPacketHash: packetHash,
+      prepared: true,
+      live: false,
+    })}\n`);
     return 0;
   }
 
