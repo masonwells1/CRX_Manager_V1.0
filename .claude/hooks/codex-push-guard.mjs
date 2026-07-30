@@ -23,7 +23,10 @@ import {
   pushContextIsAmbiguous,
   pushIsForced,
   pushUsesBulkMode,
+  destinationLooksLikeUrl,
+  pushDestinationToken,
   repoIsGuardedApp,
+  urlIsGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
 
@@ -102,6 +105,34 @@ for (const pushCmd of pushCommands) {
   // `project_policy-grantee-disk-vs-live-drift.md` and the path pattern
   // `/policy|grant/i` is unanchored. Scope the gate to the app repo rather than
   // loosening the patterns, so its strength here is unchanged.
+  //
+  // "Is this the app repo?" is answered TWICE and the gate fires if EITHER says
+  // yes. Codex's 2026-07-30 pre-push review found that asking only about the
+  // checkout's configured remotes is a bypass: `git push
+  // git@github.com:masonwells1/CRX_Manager_V1.0.git HEAD:main` writes straight
+  // to production from a checkout whose configured remote is something else.
+  // So: (1) resolve the push's ACTUAL destination URL, and (2) keep the
+  // configured-remotes check as a second line of defence. Both fail CLOSED.
+  let destinationUrl = "";
+  try {
+    const destinationToken = pushDestinationToken(pushCmd);
+    if (destinationToken && destinationLooksLikeUrl(destinationToken)) {
+      destinationUrl = destinationToken;
+    } else {
+      // No destination named → git resolves its own default, in this order.
+      const config = (key) => { try { return git(["config", "--get", key], pushRepoDir); } catch { return ""; } };
+      const remoteName = destinationToken
+        || config(`branch.${branch}.pushRemote`)
+        || config("remote.pushDefault")
+        || config(`branch.${branch}.remote`)
+        || "origin";
+      destinationUrl = git(["remote", "get-url", "--push", remoteName], pushRepoDir);
+    }
+  } catch (_error) {
+    // Fail CLOSED: urlIsGuardedApp("") is true, so an unresolvable destination
+    // gates the push instead of waving it through.
+    destinationUrl = "";
+  }
   let remoteList = "";
   try {
     remoteList = git(["remote", "-v"], pushRepoDir);
@@ -110,7 +141,7 @@ for (const pushCmd of pushCommands) {
     // gates the push instead of waving it through.
     remoteList = "";
   }
-  if (!repoIsGuardedApp(remoteList)) continue;
+  if (!urlIsGuardedApp(destinationUrl) && !repoIsGuardedApp(remoteList)) continue;
 
   let baseSha = "";
   try {

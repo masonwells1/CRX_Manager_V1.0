@@ -230,6 +230,48 @@ export function repoIsGuardedApp(remoteListOutput) {
   if (lines.length === 0) return true;
   return lines.some((line) => GUARDED_REPO_RE.test(line.split(/\s+/)[1] || ""));
 }
+// The checkout's CONFIGURED remotes are not the whole answer, and relying on
+// them alone was a bypass (Codex pre-push review 2026-07-30): `git push
+// git@github.com:masonwells1/CRX_Manager_V1.0.git HEAD:main` writes to the
+// production app repo from a checkout whose only configured remote is something
+// unrelated, so a configured-remotes-only check would have waved it through.
+// The guard now classifies the push's ACTUAL destination as well, and gates
+// when EITHER the destination or the checkout is the app repo.
+export function urlIsGuardedApp(url) {
+  const text = String(url ?? "").trim().replace(/\/+$/, "");
+  if (text.length === 0) return true; // fail CLOSED: unresolvable destination gates
+  return GUARDED_REPO_RE.test(text);
+}
+
+// Options that consume the FOLLOWING argv token. Without this, `git push -o
+// ci.skip origin main` would read `ci.skip` as the destination.
+const PUSH_OPTS_WITH_VALUE = new Set(["--receive-pack", "--exec", "--repo", "-o", "--push-option"]);
+// The destination this push writes to: a remote NAME, a URL, or null when the
+// command names none (git then resolves its own default — see the guard).
+export function pushDestinationToken(cmd) {
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const tokens = splitShellArgs(args);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") return tokens[i + 1] ?? null;
+    if (!token.startsWith("-")) return token;
+    const eq = token.indexOf("=");
+    const bare = eq === -1 ? token : token.slice(0, eq);
+    // `--repo=<url>` / `--repo <url>` names the destination explicitly and
+    // overrides the positional one.
+    if (bare === "--repo") return (eq === -1 ? tokens[i + 1] : token.slice(eq + 1)) || null;
+    if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(bare)) i += 1;
+  }
+  return null;
+}
+
+// Git treats a destination as a URL/path unless it is a bare remote name, and a
+// remote name can contain neither `:` nor a path separator.
+export function destinationLooksLikeUrl(token) {
+  const text = String(token ?? "");
+  if (text.length === 0) return false;
+  return text.includes(":") || text.includes("/") || text.includes("\\");
+}
 
 // A push can also be risky by CONTENT even when no file's PATH matches the
 // patterns above — e.g. a helper file outside the usual risky paths that still

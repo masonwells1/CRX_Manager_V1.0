@@ -91,6 +91,53 @@ function discoverSource() {
   return pool[0].dir;
 }
 
+// Is `child` inside `parent` (or the same directory)? Path-string comparison
+// with a separator so `/docs` is not read as a parent of `/docs-archive`.
+function isInside(child, parent) {
+  const a = path.resolve(child);
+  const b = path.resolve(parent);
+  if (a === b) return true;
+  return a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+}
+
+// The DESTINATION is the dangerous argument here, because staging PRUNES: it
+// deletes top-level .md files the source no longer has. Codex's 2026-07-30
+// pre-push review pointed out that `--stage .` would therefore delete the
+// repository's own documentation. So a destination is only accepted when it is
+// new, empty, or a previous snapshot written by THIS script — and pruning is
+// limited to files that snapshot's own manifest recorded. Anything else fails
+// BEFORE a single byte is written or deleted.
+function assertSafeDestination(outDir, source) {
+  if (isInside(source, outDir)) {
+    return `FAIL: refusing to stage into ${outDir} — the memory source lives inside it. Pick a dedicated directory.`;
+  }
+  if (isInside(outDir, source)) {
+    return `FAIL: refusing to stage into ${outDir} — it is inside the memory source. Pick a dedicated directory.`;
+  }
+  if (!existsSync(outDir)) return null;                       // new directory: nothing to clobber
+  if (!statSync(outDir).isDirectory()) return `FAIL: destination is not a directory: ${outDir}`;
+  if (readdirSync(outDir).length === 0) return null;          // empty directory: nothing to clobber
+
+  const manifestPath = path.join(outDir, MANIFEST);
+  if (!existsSync(manifestPath)) {
+    return (
+      `FAIL: destination is not empty and holds no ${MANIFEST}: ${outDir}\n` +
+      `      Staging deletes stale .md files, so it only ever writes into a new,\n` +
+      `      empty, or previously-staged directory. Nothing was changed.`
+    );
+  }
+  let previous;
+  try {
+    previous = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch {
+    return `FAIL: ${MANIFEST} in ${outDir} is not valid JSON — refusing to treat it as a snapshot. Nothing was changed.`;
+  }
+  if (previous?.kind !== "claude-agent-memory-snapshot" || !Array.isArray(previous.files)) {
+    return `FAIL: ${MANIFEST} in ${outDir} is not a memory snapshot manifest. Nothing was changed.`;
+  }
+  return { previous };
+}
+
 function stage(outDir, sourceArg) {
   const source = sourceArg || discoverSource();
   if (!source) {
@@ -116,6 +163,13 @@ function stage(outDir, sourceArg) {
     return 1;
   }
 
+  const destination = assertSafeDestination(outDir, source);
+  if (typeof destination === "string") {
+    console.error(destination);
+    return 1;
+  }
+  const prunable = new Set((destination?.previous?.files ?? []).map((entry) => entry.name));
+
   mkdirSync(outDir, { recursive: true });
 
   const files = [];
@@ -137,10 +191,13 @@ function stage(outDir, sourceArg) {
 
   // Drop staged files the source no longer has, one by one — never a recursive
   // delete. Without this, a renamed or deleted memory would linger forever.
+  // Only files the PREVIOUS manifest recorded are eligible: this script deletes
+  // nothing it did not itself write, so a stray .md that a human put in the
+  // staging directory survives instead of being silently destroyed.
   const keep = new Set(names);
   let pruned = 0;
   for (const stale of mdFiles(outDir)) {
-    if (!keep.has(stale)) {
+    if (!keep.has(stale) && prunable.has(stale)) {
       unlinkSync(path.join(outDir, stale));
       pruned += 1;
     }

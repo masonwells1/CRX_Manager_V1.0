@@ -17,6 +17,9 @@ import {
   extractPatchDestinations,
   proofValid,
   repoIsGuardedApp,
+  urlIsGuardedApp,
+  pushDestinationToken,
+  destinationLooksLikeUrl,
   riskyFiles,
 } from "./codex-push-lib.mjs";
 
@@ -155,6 +158,48 @@ assert.equal(repoIsGuardedApp(undefined), true);
 // A look-alike repo name must NOT be mistaken for the real one.
 assert.equal(repoIsGuardedApp("origin\tgit@github.com:someoneelse/CRX_Manager_V1.0.git (push)"), false);
 assert.equal(repoIsGuardedApp("origin\tgit@github.com:masonwells1/CRX_Manager_V1.0_fork.git (push)"), false);
+
+// 2026-07-30 (Codex pre-push review): scoping by CONFIGURED remotes alone is a
+// bypass — a push can name the app repo's URL directly from a checkout whose
+// configured remote is something unrelated. The destination must be classified
+// on its own, and it too fails CLOSED.
+assert.equal(urlIsGuardedApp("git@github.com:masonwells1/CRX_Manager_V1.0.git"), true);
+assert.equal(urlIsGuardedApp("https://github.com/masonwells1/CRX_Manager_V1.0"), true);
+assert.equal(urlIsGuardedApp("https://github.com/masonwells1/CRX_Manager_V1.0/"), true, "trailing slash still matches");
+assert.equal(urlIsGuardedApp("git@github.com:masonwells1/CRX_Backups.git"), false);
+assert.equal(urlIsGuardedApp("git@github.com:someoneelse/CRX_Manager_V1.0.git"), false);
+assert.equal(urlIsGuardedApp(""), true, "unresolvable destination gates");
+assert.equal(urlIsGuardedApp(null), true);
+assert.equal(urlIsGuardedApp(undefined), true);
+
+// The destination token is the first non-option positional after `push`.
+assert.equal(pushDestinationToken("git push origin main"), "origin");
+assert.equal(pushDestinationToken("git -C /repo push origin HEAD:main"), "origin");
+assert.equal(
+  pushDestinationToken("git push git@github.com:masonwells1/CRX_Manager_V1.0.git HEAD:main"),
+  "git@github.com:masonwells1/CRX_Manager_V1.0.git",
+  "a direct URL destination is the one that matters",
+);
+assert.equal(pushDestinationToken("git push"), null, "no destination named — caller resolves git's default");
+assert.equal(pushDestinationToken("git push -u origin main"), "origin");
+// Options that consume the NEXT token must not be mistaken for the destination.
+assert.equal(pushDestinationToken("git push -o ci.skip origin main"), "origin");
+assert.equal(pushDestinationToken("git push --push-option=ci.skip origin main"), "origin");
+assert.equal(pushDestinationToken("git push --receive-pack /usr/bin/rp origin main"), "origin");
+// `--repo=<url>` names the destination even with a positional present.
+assert.equal(pushDestinationToken("git push --repo=git@github.com:masonwells1/CRX_Manager_V1.0.git"), "git@github.com:masonwells1/CRX_Manager_V1.0.git");
+assert.equal(pushDestinationToken("git push --repo git@github.com:masonwells1/CRX_Backups.git"), "git@github.com:masonwells1/CRX_Backups.git");
+
+// A remote NAME can contain neither `:` nor a path separator, so anything that
+// does is a URL/path and must be classified directly rather than looked up.
+assert.equal(destinationLooksLikeUrl("origin"), false);
+assert.equal(destinationLooksLikeUrl("backup-remote"), false);
+assert.equal(destinationLooksLikeUrl("git@github.com:masonwells1/CRX_Manager_V1.0.git"), true);
+assert.equal(destinationLooksLikeUrl("https://github.com/masonwells1/CRX_Manager_V1.0"), true);
+assert.equal(destinationLooksLikeUrl("../sibling-repo"), true);
+assert.equal(destinationLooksLikeUrl("C:\\repos\\CRX_Manager_V1.0"), true);
+assert.equal(destinationLooksLikeUrl(""), false);
+assert.equal(destinationLooksLikeUrl(null), false);
 
 const base = "c".repeat(40);
 const codexProof = { codex_ran: true, verdict: "clean", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };

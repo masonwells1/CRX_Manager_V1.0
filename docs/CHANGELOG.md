@@ -22,12 +22,16 @@ after every check had passed. Four pushes failed this way, each printing the hoo
 `✅ … pushing to GitHub` line first. That line prints *before* the upload; it is not evidence, and a
 push is only confirmed by `git ls-remote --heads origin <branch>`.
 
-The scan now excludes what the remote already has (`--not --remotes=<remote>`), which is the set Git
-itself would upload. An unrecognised remote falls back to the old full walk, so the guard fails
-toward *more* scanning, never less. Same branch: 748s → 318s, 2,114 commits → 0. Mutation-tested both
-ways — a synthetic commit carrying a private artifact still exits 1 and names the file, and a benign
-commit passes with `checked_commits=1`, proving the narrowed scan still inspects the genuinely new
-commit rather than skipping everything.
+The scan now excludes what the remote already has, which is the set Git itself would upload. An
+unreachable remote falls back to the old full walk, so the guard fails toward *more* scanning, never
+less. Same branch: 748s → 318s, 2,114 commits → 0. Mutation-tested both ways — a synthetic commit
+carrying a private artifact still exits 1 and names the file, and a benign commit passes with
+`checked_commits=1`, proving the narrowed scan still inspects the genuinely new commit rather than
+skipping everything.
+
+The first draft of that narrowing asked the *local* `refs/remotes/<remote>/*` what the server had.
+Codex's pre-push review rejected it (see below) and it was replaced by `git ls-remote`, which asks
+the server itself.
 
 **The Codex risky-file gate policed every repository, and matched on filename substrings.** Its path
 patterns include an unanchored `/policy|grant/i`, so the memory note
@@ -46,6 +50,44 @@ push carrying that same filename stop being denied — proving the new check is 
 The lesson worth keeping: a guard that is slow enough to break the thing it guards is a broken guard,
 and neither of these announced itself as a failure. One reported success and lost the push anyway;
 the other blocked a file for its *name*.
+
+### Codex refused to sign off, and was right three times
+
+The pre-push proof run returned `BLOCKERS`. All three findings were in the *fixes above*, not in
+older code — loosening a guard is exactly where a second reviewer earns its keep. Each is now fixed
+and mutation-tested to red before green.
+
+**1. The Codex gate could be walked around with a URL.** Scoping the gate by the checkout's
+*configured* remotes answers the wrong question. `git push git@github.com:masonwells1/CRX_Manager_V1.0.git HEAD:main`
+writes straight to production from a checkout whose only configured remote is something unrelated —
+and that checkout classifies as "not the app repo", so the gate skipped. The guard now resolves the
+push's **actual destination** (an explicit URL, `--repo=`, or the remote Git would pick by default via
+`branch.<b>.pushRemote` → `remote.pushDefault` → `branch.<b>.remote` → `origin`) and fires if *either*
+the destination or the checkout is the app repo. Both halves fail closed. Proven end-to-end in a
+throwaway repo whose only remote was `CRX_Backups`, carrying a migration file: the URL push was
+denied and named the migration, the ordinary backup push stayed allowed, and reverting to the
+old single-check logic let the migration-carrying push through.
+
+**2. Local remote-tracking refs do not prove what the server holds.** `refs/remotes/origin/*` goes
+stale when a remote branch is deleted without `--prune`, can point at a different URL after `remote
+set-url`, and can be written directly with `git update-ref`. Excluding on them would let a commit
+carrying a private artifact reach GitHub unscanned. The scan now asks the remote itself with
+`git ls-remote --heads --tags`, feeding the exclusions through `--stdin` so a repo with many refs
+cannot overflow the Windows command line, and `--ignore-missing` so a server SHA this clone lacks is
+skipped rather than failing the whole scan. Unreachable remote → exclude nothing → full walk. Proven
+with a ghost commit carrying a real Phase 3C artifact, reachable only through a hand-written
+`refs/remotes/origin/ghost` the server never had: the fixed scan fails and names the file, the
+old logic reported `PASS checked_commits=1` and missed it entirely.
+
+**3. A mistyped backup destination could delete real documentation.** Staging *prunes* — it deletes
+top-level `.md` files the source no longer has — and it accepted any directory, so `--stage .` would
+have eaten this repo's docs. The destination is now accepted only when it is new, empty, or a
+previous snapshot carrying this script's own valid `manifest.json`; pruning is limited to files that
+manifest recorded, so a note a human dropped in the staging folder survives; and source/ancestor
+nesting in either direction is refused before a single byte is written. Proven: staging into a folder
+of unrelated docs fails with both files intact, a fresh directory and a re-stage both succeed, a
+hand-written note survives pruning, and all three nesting cases refuse. Running the pre-fix code
+against that same docs folder destroyed both files.
 
 ## 2026-07-29 — agent memory is now backed up off-site, and permanently barred from this public repo
 
