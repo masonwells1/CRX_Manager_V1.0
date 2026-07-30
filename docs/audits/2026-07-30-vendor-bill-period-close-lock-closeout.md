@@ -52,6 +52,13 @@ reproduces the baseline create-versus-close race, then proves candidate
 create-writer-first and close-first schedules, update-writer-first and
 close-first schedules (including no idempotency/audit/activity side effects on
 the rejected update), and simultaneous opposite `Jan→Feb` / `Feb→Jan` updates
-on distinct bills without deadlock. Its terminal markers are
-`CANDIDATE_UPDATE_REVERSE_MONTH_NO_DEADLOCK_PASS` and
+on distinct bills with shared-lock compatibility. That completion test alone
+does not prove acquisition order, so the runner additionally holds Jan
+exclusive for an actual reverse-input `Feb→Jan` update and asserts a waiting
+Jan request with no granted Feb request; it also holds Feb for `Jan→Feb` and
+asserts granted Jan then waiting Feb. The live schedules observe the candidate's
+canonical acquisition order; the source regression separately requires the
+helper's ascending `ORDER BY` clause. Terminal markers include
+`CANDIDATE_UPDATE_CANONICAL_JAN_FIRST_PASS`,
+`CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS`, and
 `VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.

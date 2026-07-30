@@ -31,12 +31,15 @@ function scalar(s) { const out = sql(s).stdout.trim().split(/\r?\n/).filter(Bool
 function pause(ms) { return new Promise(r => setTimeout(r, ms)); }
 function session(s, marker) {
   const child = spawn('docker', psqlArgs(), { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
-  let out = '', err = '', resolved = false, resolve, reject;
-  const ready = new Promise((r, j) => { resolve = r; reject = j; setTimeout(() => !resolved && j(new Error(`timeout ${marker}: ${out}\n${err}`)), 20000); });
-  child.stdout.on('data', x => { out += x; if (!resolved && out.includes(marker)) { resolved = true; resolve(); } });
+  let out = '', err = '', resolved = false, resolve, reject, timer;
+  const ready = new Promise((r, j) => { resolve = r; reject = j; timer = setTimeout(() => { if (!resolved) { resolved = true; j(new Error(`timeout ${marker}: ${out}\n${err}`)); } }, 20000); });
+  // Every caller uses a deterministic marker, but retain a rejection handler
+  // so an unexpected child exit never becomes an unhandled promise rejection.
+  ready.catch(() => {});
+  child.stdout.on('data', x => { out += x; if (!resolved && out.includes(marker)) { resolved = true; clearTimeout(timer); resolve(); } });
   child.stderr.on('data', x => { err += x; });
   child.stdin.end(s);
-  const done = new Promise(r => child.on('close', code => { if (!resolved) { resolved = true; reject(new Error(`ended before ${marker}: ${out}\n${err}`)); } r({ code, out, err }); }));
+  const done = new Promise(r => child.on('close', code => { if (!resolved) { resolved = true; clearTimeout(timer); reject(new Error(`ended before ${marker}: ${out}\n${err}`)); } r({ code, out, err }); }));
   return { ready, done };
 }
 async function waiting(p, label) { assert.equal(await Promise.race([p.then(() => 'done'), pause(500).then(() => 'waiting')]), 'waiting', `${label} was not blocked`); }
@@ -126,6 +129,7 @@ try {
   const updateWriter = session(`BEGIN; ${update(updateSource, '2025-02-15', 'update-writer-first')} COMMIT; SELECT 'UPDATE_WRITER_DONE';`, 'UPDATE_WRITER_DONE'); await waiting(updateWriter.done, 'update writer barrier');
   assert.equal(scalar(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=73492010 AND objid=${monthKey} AND mode='ShareLock'`), '1');
   const updateClose = session(`BEGIN; ${close('update-writer-close')} COMMIT; SELECT 'UPDATE_CLOSE_DONE';`, 'UPDATE_CLOSE_DONE'); await waiting(updateClose.done, 'update close waits');
+  assert.equal(scalar(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=73492010 AND objid=${monthKey} AND mode='ExclusiveLock' AND NOT granted`), '1');
   const [uw, uc] = await Promise.all([updateWriter.done, updateClose.done]); assert.equal(uw.code, 0, uw.err); assert.equal(uc.code, 0, uc.err);
   assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${updateSource}'::uuid`), '2025-02-15');
   console.log('CANDIDATE_UPDATE_WRITER_FIRST_CLOSE_WAITS_PASS');
@@ -164,6 +168,30 @@ try {
   assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${janBill}'::uuid`), '2025-02-15');
   assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${febBill}'::uuid`), '2025-01-15');
   sql(`DROP TRIGGER proof_pause_bill_update ON public.vendor_bills; DROP FUNCTION public._proof_pause_bill_update();`);
-  console.log('CANDIDATE_UPDATE_REVERSE_MONTH_NO_DEADLOCK_PASS');
+  console.log('CANDIDATE_UPDATE_SHARED_REVERSE_MONTH_COMPLETION_PASS');
+
+  // Mutation-sensitive canonical-order proof. The reverse input is Feb -> Jan,
+  // and this live candidate demonstrably requests Jan first: holding Jan
+  // exclusively leaves it NOT GRANTED with no granted Feb lock. The static
+  // source test separately requires the helper's ascending ORDER BY clause.
+  const reverseInput = scalar(`${bill('order-reverse-input', '2025-02-15')}`);
+  const h6 = session(`BEGIN; SELECT pg_advisory_xact_lock(73492010, ${monthKey}); SELECT 'JAN_EXCLUSIVE_HELD'; SELECT pg_sleep(3); COMMIT;`, 'JAN_EXCLUSIVE_HELD'); await h6.ready;
+  const reverseOrder = session(`BEGIN; SELECT 'REVERSE_ORDER_STARTED'; ${update(reverseInput, '2025-01-15', 'order-reverse-input-update')} COMMIT; SELECT 'REVERSE_ORDER_DONE';`, 'REVERSE_ORDER_STARTED'); await reverseOrder.ready; await waiting(reverseOrder.done, 'reverse-input canonical first month');
+  assert.equal(scalar(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=73492010 AND objid=${monthKey} AND mode='ShareLock' AND NOT granted`), '1');
+  assert.equal(scalar(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=73492010 AND objid=${febKey} AND mode='ShareLock' AND granted`), '0');
+  await h6.done; const reverseOrderResult = await reverseOrder.done; assert.equal(reverseOrderResult.code, 0, reverseOrderResult.err);
+  assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${reverseInput}'::uuid`), '2025-01-15');
+  console.log('CANDIDATE_UPDATE_CANONICAL_JAN_FIRST_PASS');
+
+  // The forward input Jan -> Feb complements the reverse proof: hold Feb and
+  // observe granted Jan plus a NOT GRANTED Feb request from the actual RPC.
+  const forwardInput = scalar(`${bill('order-forward-input', '2025-01-15')}`);
+  const h7 = session(`BEGIN; SELECT pg_advisory_xact_lock(73492010, ${febKey}); SELECT 'FEB_EXCLUSIVE_HELD'; SELECT pg_sleep(3); COMMIT;`, 'FEB_EXCLUSIVE_HELD'); await h7.ready;
+  const forwardOrder = session(`BEGIN; SELECT 'FORWARD_ORDER_STARTED'; ${update(forwardInput, '2025-02-15', 'order-forward-input-update')} COMMIT; SELECT 'FORWARD_ORDER_DONE';`, 'FORWARD_ORDER_STARTED'); await forwardOrder.ready; await waiting(forwardOrder.done, 'forward-input second month');
+  assert.equal(scalar(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=73492010 AND objid=${monthKey} AND mode='ShareLock' AND granted`), '1');
+  assert.equal(scalar(`SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=73492010 AND objid=${febKey} AND mode='ShareLock' AND NOT granted`), '1');
+  await h7.done; const forwardOrderResult = await forwardOrder.done; assert.equal(forwardOrderResult.code, 0, forwardOrderResult.err);
+  assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${forwardInput}'::uuid`), '2025-02-15');
+  console.log('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS');
   console.log('VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS');
 } finally { run(['rm', '-f', NAME], { fail: true }); }

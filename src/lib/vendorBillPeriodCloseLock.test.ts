@@ -62,10 +62,12 @@ describe('vendor-bill accounting-period close serialization', () => {
     const proof = source(
       'scripts', 'smoke', 'prove-vendor-bill-period-close-concurrency.mjs',
     );
-    expect(proof).toContain('BASELINE_CREATE_CLOSE_RACE_REPRODUCED');
-    expect(proof).toContain('CANDIDATE_UPDATE_WRITER_FIRST_CLOSE_WAITS_PASS');
-    expect(proof).toContain('CANDIDATE_UPDATE_CLOSE_FIRST_FAIL_CLOSED_PASS');
-    expect(proof).toContain('CANDIDATE_UPDATE_REVERSE_MONTH_NO_DEADLOCK_PASS');
+    expect(proof).toMatch(/console\.log\('BASELINE_CREATE_CLOSE_RACE_REPRODUCED'\)/);
+    expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_WRITER_FIRST_CLOSE_WAITS_PASS'\)/);
+    expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CLOSE_FIRST_FAIL_CLOSED_PASS'\)/);
+    expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_SHARED_REVERSE_MONTH_COMPLETION_PASS'\)/);
+    expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_JAN_FIRST_PASS'\)/);
+    expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS'\)/);
     expect(proof).toContain("classid=73492010");
     expect(proof).toContain("'--network', 'none'");
   });
