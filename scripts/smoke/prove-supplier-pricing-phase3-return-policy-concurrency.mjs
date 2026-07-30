@@ -192,6 +192,37 @@ BEGIN
 END;
 $sec9$;`);
   console.log('PHASE3_SECTION9_OBJECT_IDENTITY_PASS');
+  // Every trigger assertion above and in both replayed terminal blocks reads
+  // pg_get_triggerdef(), whose output is byte-identical whether the trigger is
+  // enabled, disabled, or replica-only -- tgenabled is simply not part of the
+  // rendered definition. A baseline captured from a database where any of these
+  // was left disabled would therefore satisfy every identity check while the
+  // behavior it guards silently does not run. Assert the whole set in one place,
+  // relation-qualified, so a disabled, dropped, renamed, or rebound trigger all
+  // land as the same failure. This is checked for the full load-bearing set, not
+  // only the two triggers the definition checks above happen to name.
+  // tgenabled is PostgreSQL's internal "char" type, which has no unambiguous
+  // concatenation operator with text -- the cast is required, not cosmetic.
+  const triggerState=scalar(`SELECT coalesce(string_agg(c.relname||'.'||t.tgname||'='||t.tgenabled::text,';' ORDER BY c.relname||'.'||t.tgname COLLATE "C"),'<none>')
+    FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE NOT t.tgisinternal AND n.nspname='public'
+     AND t.tgname IN ('set_product_families_updated_at','trigger_w_defer_phase3_return_item_product_fk',
+       'trigger_x_validate_phase3_return_item_policy','trigger_y_lock_assert_phase3_return_item_insert_policy',
+       'trigger_y_lock_assert_phase3_return_item_update_policy','trigger_x_lock_phase3_return_status_products',
+       'trigger_x_require_governed_phase3_product_metadata','trg_po_items_recompute_on_order',
+       'trg_po_status_recompute_on_order');`);
+  assert.equal(triggerState,[
+    'product_families.set_product_families_updated_at=O',
+    'products.trigger_x_require_governed_phase3_product_metadata=O',
+    'purchase_order_items.trg_po_items_recompute_on_order=O',
+    'purchase_orders.trg_po_status_recompute_on_order=O',
+    'return_items.trigger_w_defer_phase3_return_item_product_fk=O',
+    'return_items.trigger_x_validate_phase3_return_item_policy=O',
+    'return_items.trigger_y_lock_assert_phase3_return_item_insert_policy=O',
+    'return_items.trigger_y_lock_assert_phase3_return_item_update_policy=O',
+    'returns.trigger_x_lock_phase3_return_status_products=O',
+  ].join(';'),`the baseline's Phase 3 / Section 9 trigger set is not the expected fully-enabled set (O=enabled, D=disabled, R/A=replica-only): ${triggerState}`);
+  console.log('PHASE3_TRIGGER_ENABLED_STATE_PASS');
   // Stage A's own terminal block checks product_families grants and that no
   // policy targets anon, but it never asserts that RLS is still ENABLED. Every
   // later check in this proof runs as `postgres`, which bypasses RLS, so a dump
