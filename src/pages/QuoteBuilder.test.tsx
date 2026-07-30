@@ -802,12 +802,17 @@ describe('QuoteBuilder', () => {
     expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument();
   });
 
-  it('does not email a local PDF when the frozen quote token cannot be confirmed', async () => {
+  it('requires a numeric reload and a new confirmed freeze before retrying an aborted email', async () => {
     const { quote, product, section, item } = makeQuoteFixture('draft', 7);
     let quoteReads = 0;
+    let recoveryReadMode: 'jumped' | 'tokenless' | 'stable' | 'refrozen' = 'jumped';
     mockFrom.mockImplementation((table: string) => buildChain({
       data: table === 'quotes'
-        ? (++quoteReads <= 2 ? quote : { ...quote, status: 'sent', row_version: 9 })
+        ? (++quoteReads <= 2
+            ? quote
+            : recoveryReadMode === 'tokenless'
+              ? { ...quote, status: 'sent', row_version: undefined }
+              : { ...quote, status: 'sent', row_version: recoveryReadMode === 'refrozen' ? 10 : 9 })
         : table === 'quote_sections'
           ? [section]
           : table === 'quote_items'
@@ -842,10 +847,22 @@ describe('QuoteBuilder', () => {
     expect(mockSendEmail).not.toHaveBeenCalled();
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.stringContaining('Quote emailed'));
 
+    recoveryReadMode = 'tokenless';
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Quote' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      expect.stringContaining('stable saved quote'),
+    ));
+    expect(screen.getByText('Reload Quote')).toBeInTheDocument();
+    expect(mockSendEmail).not.toHaveBeenCalled();
+
+    recoveryReadMode = 'stable';
     fireEvent.click(screen.getByRole('button', { name: 'Reload Quote' }));
     await waitFor(() => expect(screen.queryByText('Reload Quote')).not.toBeInTheDocument());
+    recoveryReadMode = 'refrozen';
     fireEvent.click(screen.getByRole('button', { name: 'Email to Grower' }));
     await waitFor(() => expect(mockSendEmail).toHaveBeenCalledTimes(1));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'create_quote_version')).toHaveLength(2);
   });
 
   it('stops Book as Order when mark-presented cannot confirm the frozen quote token', async () => {

@@ -248,6 +248,13 @@ export default function QuoteBuilder() {
   // Unlike the dialog's open/closed state, this latch survives "Keep Editing".
   // Only a complete, stable Quote reload may clear it.
   const quoteVersionRecoveryRequiredRef = useRef(false);
+  // Once this tab has observed a numeric token, recovery must never downgrade
+  // it to the frontend-first legacy tokenless contract.
+  const quoteNumericVersionRequiredRef = useRef(false);
+  // If an email freeze committed but could not be confirmed, a reload alone is
+  // insufficient: the reloaded Quote must be frozen into a new version before
+  // its current local PDF can be sent.
+  const quoteEmailRefreezeRequiredRef = useRef(false);
   const [staleSaveOpen, setStaleSaveOpen] = useState(false);
 
   const [converting, setConverting] = useState(false);
@@ -600,6 +607,9 @@ export default function QuoteBuilder() {
   };
 
   const clearQuoteRowVersionWithRefreshWarning = useCallback((action: string) => {
+    if (quoteRowVersionRef.current !== null) {
+      quoteNumericVersionRequiredRef.current = true;
+    }
     quoteRowVersionRef.current = null;
     quoteVersionRecoveryRequiredRef.current = true;
     setStaleSaveOpen(true);
@@ -613,7 +623,12 @@ export default function QuoteBuilder() {
   ): boolean => {
     const rowVersionResult = resolveDirectMutationRowVersion(previousRowVersion, returnedRowVersion);
     quoteRowVersionRef.current = rowVersionResult.rowVersion;
-    if (rowVersionResult.kind !== 'recovery') return true;
+    if (rowVersionResult.kind !== 'recovery') {
+      if (rowVersionResult.rowVersion !== null) {
+        quoteNumericVersionRequiredRef.current = true;
+      }
+      return true;
+    }
 
     // The direct lifecycle update committed, but a jumped/missing token could
     // belong to another writer. Do not adopt it: preserve local edits and make
@@ -640,7 +655,12 @@ export default function QuoteBuilder() {
       .maybeSingle();
     const nextRowVersion = readRowVersion((data as { row_version?: unknown } | null)?.row_version);
 
-    if (!error && data && previousRowVersion === null && expectedRowVersion === null && nextRowVersion === null) {
+    if (!error
+      && data
+      && previousRowVersion === null
+      && expectedRowVersion === null
+      && nextRowVersion === null
+      && !quoteNumericVersionRequiredRef.current) {
       quoteRowVersionRef.current = null;
       return true;
     }
@@ -654,6 +674,7 @@ export default function QuoteBuilder() {
     }
 
     quoteRowVersionRef.current = nextRowVersion;
+    quoteNumericVersionRequiredRef.current = true;
     return true;
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
@@ -666,6 +687,9 @@ export default function QuoteBuilder() {
     if (rowVersionResult.kind === 'recovery') {
       clearQuoteRowVersionWithRefreshWarning(action);
       return false;
+    }
+    if (rowVersionResult.rowVersion !== null) {
+      quoteNumericVersionRequiredRef.current = true;
     }
     return true;
   }, [clearQuoteRowVersionWithRefreshWarning]);
@@ -773,6 +797,7 @@ export default function QuoteBuilder() {
     // The complete snapshot is now known-good. Install its related form state
     // together so React never observes an error-path partial reload.
     quoteRowVersionRef.current = finalRowVersion;
+    quoteNumericVersionRequiredRef.current = finalRowVersion !== null;
     quoteVersionRecoveryRequiredRef.current = false;
     setQuoteId(q.id);
     setQuoteNumber(q.quote_number);
@@ -837,7 +862,7 @@ export default function QuoteBuilder() {
       // row-version migration. Allow the legacy tokenless double-read reload
       // during that rollout window, but stay strict once a numeric token has
       // been loaded for this quote.
-      installedSnapshot = await fetchQuote(quoteId, quoteRowVersionRef.current !== null);
+      installedSnapshot = await fetchQuote(quoteId, quoteNumericVersionRequiredRef.current);
       if (installedSnapshot) {
         setIsDirty(false);
         setStaleSaveOpen(false);
@@ -1846,7 +1871,7 @@ export default function QuoteBuilder() {
       // (draft/revised) snapshot a version + move it to 'sent'; re-emailing a 'sent'
       // quote just re-sends (already frozen). Snapshotting only changes status, not
       // line items, so the PDF generated below is identical.
-      if (status === 'draft' || status === 'revised') {
+      if (status === 'draft' || status === 'revised' || quoteEmailRefreezeRequiredRef.current) {
         // create_quote_version snapshots the version AND atomically sets
         // quotes.status='sent' (single RPC). Codex round-8 P2: NO separate
         // saveQuote('sent') — that was redundant (the isDirty guard above already
@@ -1878,9 +1903,15 @@ export default function QuoteBuilder() {
         // means the local lines may no longer match that frozen snapshot. Never
         // send the locally rendered PDF until a reload proves what was frozen.
         if (!rowVersionConfirmed) {
+          quoteEmailRefreezeRequiredRef.current = true;
+          // The first snapshot committed. A retry after reload must use a new
+          // key so it creates a new snapshot of the now-authoritative Quote
+          // instead of replaying the mismatched frozen version.
+          createVersionIdem.resetKey();
           toast('error', 'The quote was frozen, but the email was NOT sent. Reload the quote, then email it again.');
           return;
         }
+        quoteEmailRefreezeRequiredRef.current = false;
       }
       // Same rich (download) PDF the customer would receive.
       const pdfData = {

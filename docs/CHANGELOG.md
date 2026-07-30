@@ -41,8 +41,11 @@ same recovery result now aborts customer email before a possibly stale local
 PDF leaves the app and returns `false` to stop the chained Book-as-Order
 conversion. A persistent reload-required latch also blocks retry clicks and
 direct conversion until a complete stable reload clears it; abort messages say
-plainly that the email was not sent or the order was not created. The rollback
-smoke keeps its Quote planned so exact N+1 token assertions cover the
+plainly that the email was not sent or the order was not created. Numeric-token
+mode survives recovery, so a post-migration tab cannot accept a tokenless reload.
+An aborted email also requires a new confirmed version snapshot after reload;
+the app cannot send the current PDF against the older mismatched snapshot. The
+rollback smoke keeps its Quote planned so exact N+1 token assertions cover the
 planned-hold synchronization helper chain too.
 Verification passed
 4,045 tests with 118 skipped, 3/3 isolated Playwright flows, both disposable
