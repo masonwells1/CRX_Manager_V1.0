@@ -209,6 +209,22 @@ function ghVisibility() {
   return visibility ? { visibility } : { reason: "gh returned no visibility field" };
 }
 
+// Backstop for the fourth credential shape nobody has thought of yet. The detector
+// in destinationIsPublishable() is a list of known spellings, and every review
+// round so far has found one it was missing — so no remote URL reaches output
+// without the places a secret can hide stripped first, whether or not the detector
+// recognised it. On a URL the detector accepts this is a no-op: a bare `git@` is
+// the ordinary SSH spelling and is kept, so the runbook still prints the exact URL
+// to push to. Exported because a backstop nobody can test is decoration.
+export function redactUrl(url) {
+  return String(url)
+    .replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/]*)@/, (whole, head, userinfo) =>
+      userinfo.toLowerCase() === "git" ? whole : `${head}***@`)
+    .replace(/^([^@\s/\\]+)@(?=[^\s:/\\]{2,}:(?!\/))/, (whole, user) =>
+      user.toLowerCase() === "git" ? whole : "***@")
+    .replace(/[?#].*$/, "");
+}
+
 // `verb` only shapes the refusal wording. `--verify` runs this same check in the
 // snapshot's FINAL location, because that is the directory the runbook commits and
 // pushes from, and until round fifteen nothing checked it: the documented flow
@@ -275,12 +291,29 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
   // that needs an inline token is misconfigured, and the fix (a credential helper,
   // or SSH) is one command. `ssh://git@host/...` and `git@host:...` are the
   // ordinary SSH spellings — a bare username is not a credential.
-  const credentialed = pushUrls.filter((url) => {
-    const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/]*)@/.exec(url);
-    if (!scheme) return false;
-    const userinfo = scheme[2];
-    return userinfo.includes(":") || !/^ssh$/i.test(scheme[1]);
-  });
+  //
+  // Three shapes carry a secret, not one. Round twelve only recognised
+  // `scheme://userinfo@`, which is what git prints for an HTTPS token, and missed
+  // the other two completely — both canonicalized as the allowed backup repo and
+  // were then printed verbatim (Codex's sixteenth 2026-07-30 review, reproduced by
+  // probe before this fix):
+  //   1. `scheme://userinfo@host/…` — refuse unless it is the plain `ssh://git@`.
+  //   2. `token@host:path` — scp-style, with NO scheme at all, so a pattern
+  //      anchored on `://` never even looked at it. A bare `git@` is the ordinary
+  //      SSH spelling; any other username in that position is a credential.
+  //   3. `…?access_token=…` or `…#…` — a query or fragment. Canonical identity
+  //      drops both, so the URL read as the backup repo and printed with the token
+  //      still attached. A git remote never needs either.
+  const credentialBearing = (url) => {
+    const text = String(url);
+    if (/[?#]/.test(text)) return true;
+    const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/]*)@/.exec(text);
+    if (scheme) return scheme[2].includes(":") || !/^ssh$/i.test(scheme[1]);
+    const scp = /^([^@\s/\\]+)@[^\s:/\\]{2,}:(?!\/)/.exec(text);
+    if (scp) return scp[1].toLowerCase() !== "git";
+    return false;
+  };
+  const credentialed = pushUrls.filter(credentialBearing);
   if (credentialed.length > 0) {
     return (
       `FAIL: refusing to ${verb} — a push remote in this checkout embeds a credential in its URL.\n` +
@@ -318,7 +351,7 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
         `      written.`
       );
     }
-    console.log(`Destination verified: this checkout pushes only to ${pushUrls[0]}, which GitHub reports PRIVATE.`);
+    console.log(`Destination verified: this checkout pushes only to ${redactUrl(pushUrls[0])}, which GitHub reports PRIVATE.`);
     return null;
   }
 
@@ -326,7 +359,7 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
     ? `the PUBLIC CRX Manager checkout`
     : pushUrls.length === 0
       ? `a git checkout with no push remote, so where it would end up cannot be determined`
-      : `a git checkout that pushes to ${pushUrls[0]}, not the off-site backup repo`;
+      : `a git checkout that pushes to ${redactUrl(pushUrls[0])}, not the off-site backup repo`;
   return (
     `FAIL: refusing to ${verb} into ${outDir} — it is inside ${where}\n` +
     `      (${top.stdout.trim()}), and git does not ignore it, so the notes (real names,\n` +
@@ -671,6 +704,7 @@ function main(argv) {
 // them. Importing this file must therefore NOT run the CLI, hence the
 // invoked-directly check below.
 export { scanForSecrets, stage, verify, SNAPSHOT_KIND, MANIFEST, INDEX_FILE };
+
 
 const invokedDirectly =
   process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);

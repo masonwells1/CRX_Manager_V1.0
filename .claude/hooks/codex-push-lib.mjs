@@ -315,7 +315,31 @@ function canonicalHost(host) {
   const lower = String(host).toLowerCase().replace(/\.$/, "");
   return HOST_ALIASES.get(lower) || lower;
 }
-const GUARDED_REPO_ID = "github.com/masonwells1/crx_manager_v1.0";
+// The HOSTNAME is not the identity; the owner/repo path is.
+// `github-crx:masonwells1/CRX_Manager_V1.0.git` is an ordinary `~/.ssh/config`
+// Host alias — git resolves `github-crx` to github.com and the push lands on the
+// production app repo — but on host name alone it read as somewhere unrelated and
+// skipped the whole proof gate (Codex's sixteenth 2026-07-30 review, confirmed by
+// its own read-only probe and reproduced here before the fix). An alias is local
+// text that only the pushing machine can resolve, so no list of host names can
+// ever be complete; the HOST_ALIASES map above handles the names GitHub itself
+// publishes and cannot handle the ones Mason invents.
+//
+// So decide on the path, whatever host precedes it. A destination naming
+// masonwells1/CRX_Manager_V1.0 is gated even through an alias, a mirror, or an
+// unknown host. That gates slightly more than git would actually deliver — the
+// safe direction, because a false positive costs one extra review and a false
+// negative is an ungated production push.
+const GUARDED_REPO_PATH = "masonwells1/crx_manager_v1.0";
+function idPath(id) {
+  const slash = String(id).indexOf("/");
+  return slash === -1 ? "" : String(id).slice(slash + 1);
+}
+function idNamesGuardedRepo(id) {
+  if (typeof id !== "string" || id.length === 0) return false;
+  const p = idPath(id);
+  return p === GUARDED_REPO_PATH || p.endsWith(`/${GUARDED_REPO_PATH}`);
+}
 // Accepts `git remote -v` output. Fails CLOSED: anything unparseable or empty is
 // treated as the guarded repo, so a broken remote lookup cannot skip the gate.
 export function repoIsGuardedApp(remoteListOutput) {
@@ -323,7 +347,7 @@ export function repoIsGuardedApp(remoteListOutput) {
   if (lines.length === 0) return true;
   return lines.some((line) => {
     const url = line.split(/\s+/)[1] || "";
-    return canonicalRepoId(url) === GUARDED_REPO_ID || GUARDED_REPO_RE.test(url);
+    return idNamesGuardedRepo(canonicalRepoId(url)) || GUARDED_REPO_RE.test(url);
   });
 }
 // The checkout's CONFIGURED remotes are not the whole answer, and relying on
@@ -337,7 +361,7 @@ export function urlIsGuardedApp(url) {
   const text = String(url ?? "").trim().replace(/\/+$/, "");
   if (text.length === 0) return true; // fail CLOSED: unresolvable destination gates
   const id = canonicalRepoId(text);
-  if (id) return id === GUARDED_REPO_ID;
+  if (id) return idNamesGuardedRepo(id);
   // Not canonicalizable. If it still carries a URL SCHEME it names some host the
   // guard could not resolve — fail CLOSED, because an unreadable remote is
   // exactly the case this exists for. A bare remote name (`origin`) or a
@@ -751,7 +775,10 @@ function rewriteBaseReachesGuardedApp(rawBase) {
   if (urlIsGuardedApp(base)) return true;
   const id = canonicalRepoId(base);
   if (!id) return true;
-  return id === GUARDED_REPO_ID || GUARDED_REPO_ID.startsWith(`${id}/`);
+  // Path, not host — an aliased base (`github-crx:masonwells1/`) rewrites to the
+  // production repo exactly like `git@github.com:masonwells1/` does.
+  const p = idPath(id);
+  return p !== "" && (p === GUARDED_REPO_PATH || GUARDED_REPO_PATH.startsWith(`${p}/`));
 }
 
 // A push can also be risky by CONTENT even when no file's PATH matches the

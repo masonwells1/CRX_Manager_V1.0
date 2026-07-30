@@ -237,9 +237,22 @@ assert.equal(
   urlIsGuardedApp("https://github.com/masonwells1/CRX_Manager_V1.0.wiki.git"), false,
   "a different repo whose name merely starts the same is not the app repo",
 );
+// SUPERSEDED BY ROUND 16 (2026-07-30). This used to assert false, on the premise
+// that the host name identifies the repository. Round 16 showed the premise is
+// wrong: `github-crx:masonwells1/CRX_Manager_V1.0.git` is an ssh_config Host alias
+// that git resolves to github.com, and an alias can be spelled with a dot as
+// easily as without, so no host name can be trusted and no list of them can be
+// complete. The guard now decides on the owner/repo path alone. The cost of that
+// is this case — a hypothetical foreign host serving the same owner/repo path
+// gets reviewed too. One extra review is the cheap side of the trade; the other
+// side is an ungated push to the production app.
 assert.equal(
-  urlIsGuardedApp("https://example.com/masonwells1/CRX_Manager_V1.0.git"), false,
-  "the same path on another host is another repo",
+  urlIsGuardedApp("https://example.com/masonwells1/CRX_Manager_V1.0.git"), true,
+  "the app repo's owner/repo path is gated on any host, because a host name can be an alias",
+);
+assert.equal(
+  urlIsGuardedApp("https://example.com/someoneelse/CRX_Manager_V1.0.git"), false,
+  "but the gate is still scoped to this owner's repo, not to the name anywhere",
 );
 assert.equal(
   urlIsGuardedApp("https://[not-a-url"), true,
@@ -345,6 +358,30 @@ assert.equal(
 assert.equal(
   urlIsGuardedApp("https://github.com/masonwells1/%43RX_Backups.git"), false,
   "decoding does not turn an unrelated repo into this one",
+);
+// ── round 16: a `~/.ssh/config` Host alias is still github.com ───────────────
+// `github-crx` is local text that resolves to github.com on the pushing machine,
+// so no list of host names can be complete. Identity is the owner/repo path.
+assert.equal(
+  urlIsGuardedApp("github-crx:masonwells1/CRX_Manager_V1.0.git"), true,
+  "an ssh Host alias does not hide the production repo",
+);
+assert.equal(
+  urlIsGuardedApp("ssh://git@github-crx/masonwells1/CRX_Manager_V1.0.git"), true,
+  "nor does the ssh:// spelling of the same alias",
+);
+assert.equal(
+  urlIsGuardedApp("github-crx:masonwells1/CRX_Backups.git"), false,
+  "and the alias rule does not start policing the private backup repo",
+);
+assert.equal(
+  repoIsGuardedApp("origin\tgithub-crx:masonwells1/CRX_Manager_V1.0.git (push)"), true,
+  "a checkout whose only remote is an aliased app-repo URL is the app repo",
+);
+assert.equal(
+  rewritesReachGuardedApp("url.github-crx:masonwells1/.insteadof ghm:"),
+  true,
+  "an aliased owner-level prefix rewrite reaches production too",
 );
 // insteadOf is a PREFIX substitution: `ghm:CRX_Manager_V1.0.git` expands to the
 // production repo even though the base names no repository on its own.
@@ -853,6 +890,21 @@ assert.equal(pushDestinationToken("git push"), null);
       `git -C ${work} push ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git HEAD:main`,
       /codex/i,
       "the port-443 ssh endpoint does not disguise the production destination",
+    );
+
+    // Round 16, end-to-end: an ssh_config Host alias. `github-crx` is local text
+    // that resolves to github.com on the pushing machine, so from a checkout with
+    // no CRX remote at all this pushed straight to production while the guard
+    // classified the destination as an unrelated host and skipped the proof gate.
+    deniedBecause(
+      `git -C ${work} push github-crx:masonwells1/CRX_Manager_V1.0.git HEAD:main`,
+      /codex/i,
+      "an ssh Host alias does not disguise the production destination",
+    );
+    deniedBecause(
+      `git -C ${work} push ssh://git@github-crx/masonwells1/CRX_Manager_V1.0.git HEAD:main`,
+      /codex/i,
+      "nor does the ssh:// spelling of the same alias",
     );
 
     // Round 12, end-to-end: a transport variable set in a segment of its OWN.

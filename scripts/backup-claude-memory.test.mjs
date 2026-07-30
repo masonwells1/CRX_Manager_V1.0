@@ -17,6 +17,7 @@ import {
   SNAPSHOT_KIND,
   __setLinkStat,
   __setVisibilityProbe,
+  redactUrl,
   scanForSecrets,
   stage,
   verify,
@@ -424,6 +425,64 @@ try {
     {
       const ssh = makeRepo("ssh-backup-repo", "git@github.com:masonwells1/CRX_Backups.git", "");
       eq(quiet(() => stage(path.join(ssh, "claude-memory"), notes)), 0, "the plain ssh remote is still fine");
+    }
+    // ── round 16: the token detector only knew ONE of the three shapes ───────
+    // Round 12 matched `scheme://userinfo@`, which is what git prints for an HTTPS
+    // token. scp-style credentials carry no scheme at all, and a query or fragment
+    // is dropped from canonical identity — so both read as the allowed backup repo
+    // and were printed with the secret still attached.
+    {
+      const shapes = [
+        ["scp-style-token-repo", "ghp_EXAMPLETOKENVALUE0000000000@github.com:masonwells1/CRX_Backups.git"],
+        ["query-token-repo", "https://github.com/masonwells1/CRX_Backups.git?access_token=ghp_EXAMPLETOKENVALUE0000000000"],
+        ["fragment-token-repo", "https://github.com/masonwells1/CRX_Backups.git#ghp_EXAMPLETOKENVALUE0000000000"],
+      ];
+      for (const [name, url] of shapes) {
+        const repo = makeRepo(name, url, "");
+        const landing = path.join(repo, "claude-memory");
+        const run = captured(() => stage(landing, notes));
+        eq(run.value, 1, `${name}: a credential in this shape is refused`);
+        ok(!readdirSafe(landing), `${name}: and nothing is written`);
+        ok(!/ghp_EXAMPLETOKENVALUE/.test(run.said), `${name}: and the token is never echoed`);
+      }
+    }
+    // The redaction backstop, tested directly. It has to be: by design the detector
+    // above refuses every shape that carries a secret, so nothing reachable through
+    // stage() exercises redaction — and a backstop nobody can test is decoration.
+    // These are the shapes a FUTURE detector gap would hand it.
+    {
+      const T = "ghp_EXAMPLETOKENVALUE0000000000";
+      eq(redactUrl(`https://${T}@github.com/masonwells1/CRX_Backups.git`),
+        "https://***@github.com/masonwells1/CRX_Backups.git", "https userinfo is masked");
+      eq(redactUrl(`https://user:${T}@github.com/masonwells1/CRX_Backups.git`),
+        "https://***@github.com/masonwells1/CRX_Backups.git", "so is a user:password pair");
+      eq(redactUrl(`${T}@github.com:masonwells1/CRX_Backups.git`),
+        "***@github.com:masonwells1/CRX_Backups.git", "and an scp-style token username");
+      eq(redactUrl(`https://github.com/masonwells1/CRX_Backups.git?access_token=${T}`),
+        "https://github.com/masonwells1/CRX_Backups.git", "a query string is dropped whole");
+      eq(redactUrl(`https://github.com/masonwells1/CRX_Backups.git#${T}`),
+        "https://github.com/masonwells1/CRX_Backups.git", "so is a fragment");
+      // No-ops: the runbook prints this URL and says to push to exactly it, so a
+      // legitimate remote must come through byte-identical.
+      for (const url of [
+        "https://github.com/masonwells1/CRX_Backups.git",
+        "git@github.com:masonwells1/CRX_Backups.git",
+        "ssh://git@github.com/masonwells1/CRX_Backups.git",
+      ]) {
+        eq(redactUrl(url), url, `an ordinary remote is printed unchanged: ${url}`);
+      }
+    }
+    // The refusal MESSAGE is a second leak channel: a wrong-repo remote gets its
+    // URL printed. Redaction is the backstop for a shape the detector misses.
+    {
+      const wrong = makeRepo(
+        "stranger-with-token-repo",
+        "https://ghp_EXAMPLETOKENVALUE0000000000@github.com/someone-else/notes.git",
+        "",
+      );
+      const run = captured(() => stage(path.join(wrong, "claude-memory"), notes));
+      eq(run.value, 1, "a stranger's repo is refused whether or not its URL carries a token");
+      ok(!/ghp_EXAMPLETOKENVALUE/.test(run.said), "and the wrong-destination message does not print it either");
     }
 
     // One good remote does not license a second, wrong one: `git push <name>` picks.

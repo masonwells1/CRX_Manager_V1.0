@@ -255,6 +255,37 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round sixteen: a hostname is not an identity, and one token spelling is not all of them
+
+Two highs, both confirmed by probe before either was touched.
+
+**An SSH `Host` alias walked straight past the production review gate.** `~/.ssh/config` lets any
+name stand for any host, so `github-crx:masonwells1/CRX_Manager_V1.0.git` is the production app repo
+to git and an unknown host to the guard. Probed before the fix: the destination canonicalized to
+`github-crx/masonwells1/crx_manager_v1.0`, `urlIsGuardedApp()` returned **false**, and the whole
+risky-diff proof gate was skipped — from a checkout with no CRX remote at all. Rounds nine and eleven
+had already patched two host names (`ssh.github.com`, `www.github.com`) into an alias map, which was
+the wrong shape of fix: an alias is local text on one machine, so no list of names can ever be
+complete. The guard now decides on the **owner/repo path**, whatever host precedes it. That
+deliberately reverses a round-11 assertion which held that the same path on another host is a
+different repo — the premise was wrong, and the trade is one extra review against an ungated push to
+production. The gate is still scoped to this owner's repo: `someoneelse/CRX_Manager_V1.0` is not it.
+Proven end-to-end by driving the hook itself over stdin from a scratch checkout whose only remote is
+a local bare repo — both alias spellings now return **DENY**, an ordinary push still returns
+**ALLOWED**, and restoring the host-equality check turns the suite red on exactly that case.
+
+**The backup script knew one credential spelling out of three.** Round twelve taught it
+`scheme://userinfo@`, which is what git prints for an HTTPS token, and stopped there. Probed: an
+scp-style `<token>@github.com:masonwells1/CRX_Backups.git` carries no `://` at all, and
+`…CRX_Backups.git?access_token=…` hides the secret in a query string that canonical identity throws
+away — both passed as the allowed backup repo and were then printed verbatim into terminal output,
+transcripts and shell history. All three shapes (plus `#fragment`) are refused now. Because the
+detector is a list of known spellings and every round so far has found one missing from it, no remote
+URL reaches output at all without its userinfo, query and fragment stripped first — a no-op on a
+legitimate remote, so the runbook still prints the exact URL to push to. That backstop is exported
+and unit-tested directly rather than left as unreachable decoration: the first attempt at it survived
+mutation, which is the tell.
+
 ### Round fifteen: the directory that gets pushed was the one nothing checked
 
 Two highs and a false guarantee.
