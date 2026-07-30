@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const migration = readFileSync(join(
-  root, 'supabase', 'migrations',
-  '20260729231031_vendor_bill_period_close_lock.sql',
-), 'utf8').replace(/\r\n/g, '\n');
+const migrationDir = join(root, 'supabase', 'migrations');
+const migrationSuffix = '_vendor_bill_period_close_lock.sql';
+const migrationMatches = readdirSync(migrationDir)
+  .filter((name) => /^\d{14}_/.test(name) && name.endsWith(migrationSuffix));
+if (migrationMatches.length !== 1) {
+  throw new Error(`expected exactly one ${migrationSuffix} migration, found ${migrationMatches.join(', ') || 'none'}`);
+}
+const migration = readFileSync(join(migrationDir, migrationMatches[0]), 'utf8').replace(/\r\n/g, '\n');
 const source = (...parts: string[]) => readFileSync(join(root, ...parts), 'utf8')
   .replace(/\r\n/g, '\n');
 const smokeSpecs = JSON.parse(source('scripts', 'smoke', 'smoke-specs.json')) as {
@@ -84,7 +88,8 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toContain("classid=73492010");
     expect(proof).toContain("'--network', 'none'");
     expect(proof).toContain('const BARRIER_SECONDS = 8;');
-    expect(proof).not.toContain('pg_sleep(3)');
+    expect(proof).toContain("const MIGRATION_SUFFIX = '_vendor_bill_period_close_lock.sql';");
+    expect(proof.match(/pg_sleep\(\$\{BARRIER_SECONDS\}\)/g)).toHaveLength(8);
     const section9 = smokeSpecs.specs.section9_po_ap_high_remediation;
     expect(section9.chain).toBe('smoke-section9-po-ap-high-remediation.sql');
     expect(section9.covers).toEqual(expect.arrayContaining([

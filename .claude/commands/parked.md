@@ -8,7 +8,7 @@ Use this when Mason asks anything like: "what's parked", "anything waiting on me
    ```
    node scripts/fleet-status.mjs
    ```
-   The "Parked migrations awaiting apply" section lists each draft with the worktree it lives in, when it was last touched, and its first comment line (what it says it does). Parked drafts live in `scripts/.staging-migrations/` and as `*draft*.sql` files in `docs/audits/`; files marked SUPERSEDED are already replaced and are correctly ignored.
+   The "Parked migrations awaiting apply" section lists each draft with the worktree it lives in, when it was last touched, and its first comment line (what it says it does). Parked drafts live in `scripts/.staging-migrations/`, as `*draft*.sql` files in `docs/audits/`, and as branch-owned `supabase/migrations/*.sql` only when the leading SQL comments explicitly mark them `PARKED`, `NOT APPLIED`, or `DO NOT APPLY`; ordinary forward migrations are deliberately excluded. Files marked SUPERSEDED are already replaced and are correctly ignored.
 
 2. Present the parked list in plain English: for each one, what it changes, why it was parked (check the loop ledger / `docs/loops/` mission doc it came from if unclear), and how risky it looks. Lead with a recommendation for which one (if any) to handle first.
 

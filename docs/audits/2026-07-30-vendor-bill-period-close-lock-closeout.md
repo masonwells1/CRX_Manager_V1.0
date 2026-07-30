@@ -17,15 +17,18 @@ authorization, idempotency replay, and month validation, but before its invoice
 completeness scan and upsert. No vendor-bill or PO completeness gate was added.
 
 This is more than an invisible lock-order adjustment: under a same-month close,
-create now waits at the shared advisory lock before it can read closed-period
-state. Consequently the observable error precedence changes under contention:
-the request waits for close to finish and then reports the authoritative
-closed-period refusal, instead of reading an earlier open state and racing into
-an insert. Its pre-lock authorization, vendor/PO, and amount validations retain
-their existing precedence. The separate existing-vendor-bills residual remains
-intentional: `close_accounting_period` still does not reject an already-existing
-vendor bill as a completeness condition; this candidate serializes governed
-create/update activity, not a new AP close policy.
+create runs its existing vendor, amount, and PO validations before taking the
+shared advisory lock and reading closed-period state. Those validation errors may
+therefore surface before a closed-period refusal; that precedence is intentional
+for the established row-then-month lock order. Once it reaches the month lock,
+the request waits for close to finish and then gets the authoritative
+closed-period refusal instead of reading an earlier open state and racing into
+an insert. The separate existing-vendor-bills residual remains intentional:
+`close_accounting_period` still does not reject an already-existing vendor bill
+as a completeness condition. A second residual is also unchanged: only the
+governed create/update vendor-bill RPCs join this protocol, so a pre-existing
+concurrent draft/unposted-invoice writer can still beat close's invoice
+completeness scan. This candidate is not a new AP close policy.
 
 `check_period_open` deliberately remains only the authoritative closed-period
 reader, with its established tighter `search_path = ''`. It does not acquire
@@ -68,6 +71,13 @@ closed state and remains unchanged.
 This is local-only. It does not apply a migration, change live data, alter
 direct table permissions, deploy, push, or open a PR. Any live apply requires
 fresh exact-SHA review and the normal migration gate.
+
+If an approved MCP apply succeeds, its server-assigned migration version will
+differ from this pre-apply disk timestamp. In the same post-apply closeout
+change, rename the disk migration to that assigned version and update migration
+history plus the timestamped documentation references. The proof runner and
+source regression discover the unique stable suffix rather than embedding a
+timestamp, but that does not remove the B7 rename-and-documentation obligation.
 
 ## Disposable PostgreSQL 17 proof
 

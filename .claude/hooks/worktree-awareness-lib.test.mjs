@@ -8,6 +8,7 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
   isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
+  hasExplicitParkedMigrationHeader,
   createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
@@ -81,12 +82,17 @@ ok(!isDraftSqlName("2026-07-01-review-final.sql"), "audits sql without 'draft' i
 // banner — it sat at 2 with nothing actually pending. The count is now fed from what a
 // worktree CHANGED since its branch point, so this decides which of those paths qualify.
 const DISPATCH = "scripts/.staging-migrations/workflow-waves-parked/PARKED-dispatch-backfill.sql";
+const PARKED_FORWARD = "supabase/migrations/20260729231031_vendor_bill_period_close_lock.sql";
+const PARKED_FORWARD_HEADER = "-- Accounting-period close/write serialization.\n-- PARKED / DO NOT APPLY without Mason approval\n";
 ok(isParkedDraftPath(DISPATCH), "a staged .sql draft is a parked draft");
 ok(isParkedDraftPath("docs/audits/new-hunt/PARKED-brand-new.sql"), "an audits PARKED-*.sql is a parked draft");
 ok(isParkedDraftPath("docs/audits/2026-07-01-per-acre-draft.sql"), "an audits *draft*.sql is a parked draft");
 ok(!isParkedDraftPath("docs/audits/2026-07-01-review-final.sql"), "an audits .sql that is not a draft does not count");
 ok(!isParkedDraftPath("scripts/.staging-migrations/SUPERSEDED-old.sql"), "a SUPERSEDED draft is retired, not pending");
-ok(!isParkedDraftPath("supabase/migrations/20260101000000_real.sql"), "an applied migration is not a parked draft");
+ok(hasExplicitParkedMigrationHeader(PARKED_FORWARD_HEADER), "explicit parked header is recognized");
+ok(!hasExplicitParkedMigrationHeader("-- normal feature migration\nCREATE TABLE public.example();"), "ordinary leading comments do not park a migration");
+ok(isParkedDraftPath(PARKED_FORWARD, PARKED_FORWARD_HEADER), "explicitly parked forward migration is surfaced");
+ok(!isParkedDraftPath("supabase/migrations/20260101000000_real.sql", "-- normal feature migration\nSELECT 1;"), "ordinary applied migration is not a parked draft");
 ok(!isParkedDraftPath("docs/audits/notes.md"), "a non-sql audit file is not a draft");
 ok(!isParkedDraftPath(""), "an empty path is not a draft");
 ok(!isParkedDraftPath(null), "a missing path is not a draft, and does not throw");
@@ -115,9 +121,11 @@ eq(parkedDraftPathsFrom(null).size, 0, "a missing change list contributes nothin
 // re-report the very file the SUPERSEDED- rename retired.
 eq(parkedDraftPathsFrom([DISPATCH], () => false).size, 0, "a draft the branch deleted is not pending work");
 eq(parkedDraftPathsFrom([DISPATCH], (p) => p === DISPATCH).size, 1, "the existence check sees the raw path, not the lower-cased key");
+eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => PARKED_FORWARD_HEADER).size, 1, "an explicitly parked forward migration is retained");
+eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => "-- ordinary migration\nSELECT 1;").size, 0, "a forward migration without the header is excluded");
 
 // The pathspec both readers hand to git — it must cover exactly the two draft folders.
-eq(draftPathspec(), ["scripts/.staging-migrations", "docs/audits"], "git is restricted to the two draft folders");
+eq(draftPathspec(), ["scripts/.staging-migrations", "docs/audits", "supabase/migrations"], "git includes only draft folders plus explicitly marked forward migrations");
 
 // Path normalization the count key depends on.
 eq(normRepoPath("Docs\\Audits\\A.SQL"), "docs/audits/a.sql", "backslashes, case and separators normalize");
@@ -169,6 +177,7 @@ function fakeReader(responses, opts = {}) {
     hasOriginMain: opts.hasOriginMain !== false,
     dirtyCount: opts.dirtyCount || (() => 0),
     exists: opts.exists || (() => true),
+    readText: opts.readText || (() => ""),
     run: (args, cwd) => {
       calls.push({ cmd: args[0], args, cwd });
       const hit = responses[args[0]];
@@ -191,6 +200,16 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
   eq(diffCall.cwd, "C:/main", "a clean checkout's diff is computed in the main repo, not in it");
   ok(diffCall.args.includes(CLEAN_ENTRY.head), "clean diff is base..HEAD, not base..worktree");
   ok(!calls.some((c) => c.cmd === "ls-files"), "clean checkout skips the untracked scan");
+}
+
+// A clean branch-owned forward migration is counted only with the explicit header;
+// this is the shared guard used by both /fleet and SessionStart.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [PARKED_FORWARD] },
+    { readText: () => PARKED_FORWARD_HEADER },
+  );
+  eq([...reader(CLEAN_ENTRY).values()], [PARKED_FORWARD], "clean branch surfaces explicitly parked forward migration");
 }
 
 // A dirty checkout must be asked in place, and its untracked files count too — that is

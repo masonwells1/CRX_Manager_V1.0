@@ -5,7 +5,7 @@
  * writers call the real restored RPCs.
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-vendor-period-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.141';
 const BASE = path.join(ROOT, 'supabase', 'baselines');
-const MIGRATION = path.join(ROOT, 'supabase', 'migrations', '20260729231031_vendor_bill_period_close_lock.sql');
+const MIGRATION_SUFFIX = '_vendor_bill_period_close_lock.sql';
+const migrationDir = path.join(ROOT, 'supabase', 'migrations');
+const migrationMatches = readdirSync(migrationDir)
+  .filter((name) => /^\d{14}_/.test(name) && name.endsWith(MIGRATION_SUFFIX));
+assert.equal(migrationMatches.length, 1, `expected exactly one ${MIGRATION_SUFFIX} migration, found ${migrationMatches.join(', ') || 'none'}`);
+const MIGRATION = path.join(migrationDir, migrationMatches[0]);
 const SIBLING_SMOKES = [
   'smoke-section9-po-ap-high-remediation.sql',
   'smoke-finance-charge-month-dedup.sql',

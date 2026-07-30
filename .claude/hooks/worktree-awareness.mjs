@@ -16,7 +16,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, fleetSummaryLine,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedDraftPath, fleetSummaryLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
@@ -131,23 +131,29 @@ const ownDraftPaths = createOwnDraftPathsReader({
   hasOriginMain,
   dirtyCount,
   exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
+  readText: (wtPath, rel) => {
+    try { return readFileSync(path.join(wtPath, ...rel.split("/")), "utf8"); } catch { return ""; }
+  },
   run: (args, cwd) => {
     const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
     return r.status === 0 ? String(r.stdout || "").split("\n") : null;
   },
 });
 
-// Draft files tracked at a given commit (staged migrations + audit drafts), by
-// repo-relative path.
+// Draft files tracked at a given commit, including a forward migration only when
+// its leading SQL comments explicitly mark it PARKED / NOT APPLIED / DO NOT APPLY.
 function draftPathsInTree(rev) {
   const out = [];
   const tree = git(["ls-tree", "-r", "--name-only", rev, "--", ...draftPathspec()]);
   for (const line of tree.split("\n")) {
     const p = line.trim();
     if (!p) continue;
-    const base = p.slice(p.lastIndexOf("/") + 1);
-    const inStaging = p.startsWith("scripts/.staging-migrations/");
-    if (inStaging ? isParkedMigrationFile(base) : isDraftSqlName(base)) out.push(p);
+    // Mainline contains historical migration comments. Only an unmerged
+    // worktree's own changed paths may surface a forward migration as parked.
+    if (p.startsWith("supabase/migrations/")) continue;
+    let content = "";
+    try { content = git(["show", `${rev}:${p}`]); } catch { continue; }
+    if (isParkedDraftPath(p, content)) out.push(p);
   }
   return out;
 }
@@ -185,7 +191,7 @@ try {
     ];
     for (const { root, filter } of scans) {
       for (const d of listDraftsRecursive(path.join(e.path, ...root.split("/").filter(Boolean)), root)) {
-        if (filter(d.name)) parkedPaths.add(normRepoPath(d.rel));
+        if (filter(d.name, d.rel)) parkedPaths.add(normRepoPath(d.rel));
       }
     }
   }

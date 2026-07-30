@@ -80,6 +80,22 @@ export function isDraftSqlName(name) {
   return isParkedMigrationFile(name) && /draft|^parked[-_]/i.test(String(name || ""));
 }
 
+// A normal forward migration under supabase/migrations is not pending merely because
+// a feature branch added it. It is surfaced as parked only when its leading SQL
+// comment block says so explicitly. This permits a local, review-ready migration to
+// appear in /fleet without turning every ordinary feature migration into an owner
+// approval item.
+export function hasExplicitParkedMigrationHeader(sqlText) {
+  const header = [];
+  for (const raw of String(sqlText || "").split("\n")) {
+    const line = raw.replace(/\r/g, "").trim();
+    if (!line) continue;
+    if (!line.startsWith("--")) break;
+    header.push(line);
+  }
+  return /\bPARKED\b|\bNOT\s+APPLIED\b|\bDO\s+NOT\s+APPLY\b/i.test(header.join("\n"));
+}
+
 // Repo-relative path, normalized for comparison (forward slashes, no leading "./",
 // lowercased — Windows paths are case-insensitive and git reports forward slashes).
 export function normRepoPath(p) {
@@ -96,15 +112,17 @@ export function normRepoPath(p) {
 const DRAFT_ROOTS = [
   { root: "scripts/.staging-migrations/", isDraft: isParkedMigrationFile },
   { root: "docs/audits/", isDraft: isDraftSqlName },
+  { root: "supabase/migrations/", isDraft: (_name, sqlText) => hasExplicitParkedMigrationHeader(sqlText) },
 ];
 
-// Is this repo-relative path a parked migration draft?
-export function isParkedDraftPath(repoRelPath) {
+// Is this repo-relative path a parked migration draft? A normal forward migration
+// requires its leading SQL-comment header as a second, deliberate safety signal.
+export function isParkedDraftPath(repoRelPath, sqlText = "") {
   const p = normRepoPath(repoRelPath);
   if (!p) return false;
   const base = p.slice(p.lastIndexOf("/") + 1);
   const root = DRAFT_ROOTS.find((r) => p.startsWith(r.root));
-  return root ? root.isDraft(base) : false;
+  return root ? root.isDraft(base, sqlText) : false;
 }
 
 // Which of the paths a worktree CHANGED since its branch point are parked drafts?
@@ -138,19 +156,21 @@ export function isParkedDraftPath(repoRelPath) {
 //
 // Returns a Map of normalized path → the path as git spelled it, so the count dedupes
 // case-insensitively while /fleet still shows Mason the real filename.
-export function parkedDraftPathsFrom(changedPaths, existsOnDisk = () => true) {
+export function parkedDraftPathsFrom(changedPaths, existsOnDisk = () => true, readText = () => "") {
   const out = new Map();
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();
-    if (!isParkedDraftPath(p)) continue;
     if (!existsOnDisk(p)) continue;
+    if (!isParkedDraftPath(p, readText(p))) continue;
     const key = normRepoPath(p);
     if (!out.has(key)) out.set(key, p);
   }
   return out;
 }
 
-// The pathspec restricting git's diff/ls-files to the two draft folders.
+// The pathspec restricting git's diff/ls-files to draft folders and explicitly
+// marked, local-only forward migrations. The content predicate above keeps ordinary
+// supabase migrations out of the parked report.
 export function draftPathspec() {
   return DRAFT_ROOTS.map((r) => r.root.replace(/\/$/, ""));
 }
@@ -170,7 +190,7 @@ export function draftPathspec() {
 // Returns ownDraftPaths(entry) → Map(normalized path → git-spelled path), or null when the
 // branch point cannot be read. null means "I don't know", and every caller must then scan
 // the whole checkout rather than report nothing — under-reporting hides real pending work.
-export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, hasOriginMain = true }) {
+export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, readText = () => "", hasOriginMain = true }) {
   // Where a worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
   // snapshots share a handful of shas between them.
   const baseCache = new Map(); // sha → base sha | null
@@ -191,6 +211,7 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, h
     if (!base) return null;
     const spec = draftPathspec();
     const onDisk = (p) => exists(entry.path, p);
+    const textOnDisk = (p) => readText(entry.path, p);
 
     // A CLEAN checkout holds nothing but its commits, so its pending set is fully
     // determined by base..HEAD — computable once per sha in the MAIN repo instead of
@@ -200,13 +221,13 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, h
         cleanCache.set(entry.head, run(["diff", "--name-only", base, entry.head, "--", ...spec], repoRoot));
       }
       const changed = cleanCache.get(entry.head);
-      return changed === null ? null : parkedDraftPathsFrom(changed, onDisk);
+      return changed === null ? null : parkedDraftPathsFrom(changed, onDisk, textOnDisk);
     }
 
     const changed = run(["diff", "--name-only", base, "--", ...spec], entry.path);
     const untracked = run(["ls-files", "--others", "--exclude-standard", "--", ...spec], entry.path);
     if (changed === null || untracked === null) return null;
-    return parkedDraftPathsFrom([...changed, ...untracked], onDisk);
+    return parkedDraftPathsFrom([...changed, ...untracked], onDisk, textOnDisk);
   };
 }
 

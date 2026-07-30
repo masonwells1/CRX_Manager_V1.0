@@ -20,7 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   parseWorktreePorcelain, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedDraftPath,
   lastNonEmptyLine, firstCommentLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
@@ -133,6 +133,7 @@ const ownDraftPaths = createOwnDraftPathsReader({
   hasOriginMain,
   dirtyCount,
   exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
+  readText: (wtPath, rel) => readTextSafe(path.join(wtPath, ...rel.split("/"))),
   run: (args, cwd) => {
     const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
     return r.status === 0 ? String(r.stdout || "").split("\n") : null;
@@ -227,11 +228,12 @@ for (const e of entries) {
       for (const full of listFilesRecursive(dir)) {
         const name = path.basename(full);
         if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
-        if (!filter(name)) continue;
+        const rel = `${root}/${path.relative(dir, full).replace(/\\/g, "/")}`;
+        if (!filter(name, full, rel)) continue;
         // Display path keeps its real casing — addParked lower-cases the KEY itself, and
         // normalizing here too would print Mason a lower-cased filename that no longer
         // matches what is on disk (CodeRabbit on #279).
-        addParked(`${root}/${path.relative(dir, full).replace(/\\/g, "/")}`, full, label);
+        addParked(rel, full, label);
       }
     }
   }
@@ -248,18 +250,22 @@ if (hasOriginMain) {
     for (const line of tree.split("\n")) {
       const p = line.trim();
       if (!p) continue;
+      // A forward migration is parked only when it is owned by an unmerged branch.
+      // Mainline may preserve historical PARKED comments after an apply, so never
+      // re-list a supabase migration from origin/main as waiting for approval.
+      if (p.startsWith("supabase/migrations/")) continue;
       const name = p.slice(p.lastIndexOf("/") + 1);
       if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
-      const inStaging = p.startsWith("scripts/.staging-migrations/");
-      if (!(inStaging ? isParkedMigrationFile(name) : isDraftSqlName(name))) continue;
+      let content = "";
+      try { content = git(["show", `origin/main:${p}`], repoRoot, 5000); } catch { continue; }
+      if (!isParkedDraftPath(p, content)) continue;
       const key = normRepoPath(p);
       const hit = parked.get(key);
       if (hit) {
         if (!hit.where.includes("origin/main")) hit.where.push("origin/main");
         continue;
       }
-      let comment = "";
-      try { comment = firstCommentLine(git(["show", `origin/main:${p}`], repoRoot, 5000), 120); } catch { comment = ""; }
+      const comment = firstCommentLine(content, 120);
       parked.set(key, { name: p, where: ["origin/main"], mtime: 0, comment });
     }
   } catch { /* fail-open: worktree scan above still reported what it could */ }

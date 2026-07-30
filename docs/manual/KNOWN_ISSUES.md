@@ -7,7 +7,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## 0c. PARKED — vendor-bill versus accounting-period close race candidate
+## 0f. PARKED — vendor-bill versus accounting-period close race candidate
 
 **Status: PARKED / NOT APPLIED.** A read-only 2026-07-29 preflight confirmed
 the current production functions can interleave a vendor-bill period check with
@@ -27,8 +27,16 @@ closes its month through the real close RPC, and proves the authoritative
 closed-period reader blocks the bill update before mutation. Direct
 authenticated-admin writes to
 `accounting_periods` remain a deliberately recorded UI-unreachable residual
-boundary; and close still has no separate existing-vendor-bill completeness
-gate. No permission change is included. Durable local evidence:
+boundary; close still has no separate existing-vendor-bill completeness gate;
+and only governed create/update vendor-bill RPCs join the new protocol, so a
+pre-existing concurrent draft/unposted-invoice writer can still beat close's
+invoice-completeness scan. Create intentionally completes its existing vendor,
+amount, and PO validation before its month lock, so those errors may precede a
+closed-period refusal. No permission change is included. If an approved MCP
+apply assigns a new live version, the same post-apply closeout must rename the
+disk migration and update migration history plus timestamped documentation
+references (B7); the runner and regression use its unique suffix, not this
+pre-apply timestamp. Durable local evidence:
 `docs/audits/2026-07-30-vendor-bill-period-close-lock-closeout.md`.
 
 ---
@@ -641,6 +649,7 @@ Branch `claude/nervous-dubinsky-39a725` (worktree `.claude/worktrees/stoic-heyro
 
 | File | Purpose | Why parked | What unblocks it |
 |---|---|---|---|
+| `supabase/migrations/20260729231031_vendor_bill_period_close_lock.sql` | Serializes governed vendor-bill create/update with accounting-period close using month locks | **PARKED / NOT APPLIED.** The pre-apply disk timestamp is above the recorded live high-water. It is intentionally visible to `/fleet` only because its leading SQL header explicitly says PARKED / DO NOT APPLY; ordinary forward migrations are not listed. | Fresh exact-SHA migration review, fresh live preflight, and Mason's explicit current-conversation approval. After MCP apply, complete B7: rename to the server-assigned version and update migration history and timestamped docs in the same change. |
 | ~~`supabase/migrations/20260726201208_void_vendor_payment_vendor_liveness.sql`~~ (submitted `20260726210000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-26** (server version `20260726201208`) — no longer parked. Section 9 follow-up MEDIUM-1: `void_vendor_payment` now locks the vendor row (`deleted_at IS NULL … FOR UPDATE`) so it serializes with `delete_vendor`; a void against a soft-deleted vendor raises `VENDOR_DELETED`. Gate passed (both charters CLEAN) + Mason's in-chat approval; post-apply live body md5 matches disk exactly. | — | Done. Residual RESOLVED 2026-07-26: Mason approved the Deactivate/Reactivate reframe — `reactivate_vendor` RPC **APPLIED LIVE** (gate CLEAN, submitted `20260726213000`, server version `20260726212043`) + Vendors-page Show Inactive view and Reactivate button, giving `VENDOR_DELETED` a one-click remedy; the PR #236 review then caught (and 2026-07-26 same-day fix `20260726215154_vendors_inactive_admin_select` resolved, gate CLEAN + applied live) an RLS gap that hid inactive vendors from the new view. |
 | ~~`supabase/migrations/20260722202622_commission_split_lost_update_guard.sql`~~ (submitted `20260722190000_...`, B7-renamed to the live version) | **APPLIED LIVE 2026-07-22** (server version `20260722202622`) — no longer parked. `save_quote`/`save_customer` reject a split overwrite when the client's `*_expected` snapshot no longer matches the stored value, echo the stored (trigger-enriched) split back, and canonicalize `save_quote`'s actor exception to `ACTOR_MISMATCH`. Proven live on both RPCs (conflict/rejection/matching-expected/omitted-key/actor-mismatch). | — | Done. |
 | `docs/audits/nightly-debug/parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md` | Release prebooked inventory when a scheduled quick-delivery is cancelled | — | **RESOLVED, applied live 2026-06-16** (`20260616151122_cancel_delivery_release_prebook_on_quick_cancel`). File header already says so — stale-looking filename, not a stale fix. |
