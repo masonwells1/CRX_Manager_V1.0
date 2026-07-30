@@ -59,6 +59,14 @@ advisory-lock namespace when visible). This is a snapshot only: the candidate se
 ten-second apply-time `SET LOCAL lock_timeout`, and that fail-closed timeout must be
 observed if contention occurs.
 
+**Vendor-bill candidate ACL preservation (local 2026-07-30).** The period-close
+candidate re-emits four SECURITY DEFINER public RPCs, so it now explicitly denies
+`PUBLIC`/`anon` and grants EXECUTE only to `authenticated` and `service_role` on
+`create_vendor_bill`, `update_vendor_bill`, `check_period_open`, and
+`close_accounting_period`. Its apply-time postflight and disposable PostgreSQL 17
+proof fail if any of those callable-role guarantees drift; the new internal
+month-lock helper remains uncallable by every API role.
+
 **Parked-discovery integrity guard (local 2026-07-30).** The fleet and SessionStart
 readers previously opened only migration-history `LOCAL CANDIDATE / NOT APPLIED` files,
 so a forward SQL file with an explicit leading parked header but no history row could

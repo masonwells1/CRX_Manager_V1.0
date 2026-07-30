@@ -40,6 +40,12 @@ do not inherit a new lock protocol or broader function contract. The two
 vendor-bill writers acquire their own governed shared locks immediately before
 calling it.
 
+Every re-emitted public SECURITY DEFINER routine explicitly reasserts its live
+callable-role boundary: `PUBLIC` and `anon` are denied, while `authenticated`
+and `service_role` retain EXECUTE. The non-public month-lock helper remains
+unexecutable by all four API roles. The apply-time postflight proves both
+boundaries instead of relying on `CREATE OR REPLACE` to preserve prior ACLs.
+
 ## Read-only live preflight already observed
 
 Root's fresh read-only production preflight observed PostgreSQL 17.6,

@@ -300,6 +300,33 @@ BEGIN
 END;
 $function$;
 
+-- Preserve the established public-RPC callable-role model explicitly whenever
+-- these SECURITY DEFINER bodies are re-emitted: browser callers authenticate,
+-- service jobs retain their route, and neither anon nor PUBLIC can execute.
+REVOKE ALL ON FUNCTION public.create_vendor_bill(
+  uuid, uuid, text, date, date, text, bigint, bigint, text, text
+) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.create_vendor_bill(
+  uuid, uuid, text, date, date, text, bigint, bigint, text, text
+) TO authenticated, service_role;
+
+REVOKE ALL ON FUNCTION public.update_vendor_bill(
+  uuid, bigint, bigint, date, date, text, text
+) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.update_vendor_bill(
+  uuid, bigint, bigint, date, date, text, text
+) TO authenticated, service_role;
+
+REVOKE ALL ON FUNCTION public.check_period_open(date)
+  FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.check_period_open(date)
+  TO authenticated, service_role;
+
+REVOKE ALL ON FUNCTION public.close_accounting_period(date, uuid, text)
+  FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.close_accounting_period(date, uuid, text)
+  TO authenticated, service_role;
+
 -- Apply-time ownership guard. The helper is SECURITY INVOKER and deliberately
 -- non-public, so every SECURITY DEFINER caller's effective owner must retain
 -- EXECUTE after the helper revoke. This catches a migration-runner/helper-owner
@@ -314,6 +341,7 @@ DECLARE
   v_owner_oid oid;
   v_owner_name name;
   v_is_security_definer boolean;
+  v_acl_bad_count integer;
 BEGIN
   v_helper_oid := to_regprocedure('public._lock_accounting_months(date[],boolean)');
   IF v_helper_oid IS NULL THEN
@@ -353,5 +381,44 @@ BEGIN
         COALESCE(v_owner_name::text, v_owner_oid::text), v_function_name;
     END IF;
   END LOOP;
+
+  -- The helper-owner check above applies only to its three callers. The four
+  -- re-emitted public RPCs additionally preserve their exact API ACL model.
+  SELECT count(*)
+    INTO v_function_count
+    FROM pg_catalog.pg_proc AS p
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = ANY (ARRAY[
+       'create_vendor_bill', 'update_vendor_bill', 'check_period_open', 'close_accounting_period'
+     ]);
+  IF v_function_count <> 4 THEN
+    RAISE EXCEPTION 'PERIOD_CLOSE_POSTFLIGHT_PUBLIC_FUNCTION_COUNT: expected exactly four re-emitted public RPCs, found %',
+      v_function_count;
+  END IF;
+
+  SELECT count(*)
+    INTO v_acl_bad_count
+    FROM pg_catalog.pg_proc AS p
+    JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = ANY (ARRAY[
+       'create_vendor_bill', 'update_vendor_bill', 'check_period_open', 'close_accounting_period'
+     ])
+     AND (
+       NOT p.prosecdef
+       OR EXISTS (
+         SELECT 1
+           FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS acl
+          WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE'
+       )
+       OR has_function_privilege('anon', p.oid, 'EXECUTE')
+       OR NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+       OR NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
+     );
+  IF v_acl_bad_count <> 0 THEN
+    RAISE EXCEPTION 'PERIOD_CLOSE_POSTFLIGHT_EXECUTE_ACL: % re-emitted public RPC(s) do not deny PUBLIC/anon or retain authenticated/service_role EXECUTE',
+      v_acl_bad_count;
+  END IF;
 END;
 $period_close_postflight$;

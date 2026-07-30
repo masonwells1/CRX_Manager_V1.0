@@ -89,7 +89,10 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_SHARED_REVERSE_MONTH_COMPLETION_PASS'\)/);
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_JAN_FIRST_PASS'\)/);
     expect(proof).toMatch(/console\.log\('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS'\)/);
-    expect(proof).toMatch(/console\.log\('CANDIDATE_POSTFLIGHT_OWNER_EXECUTE_PASS'\)/);
+    expect(proof).toMatch(/console\.log\('CANDIDATE_POSTFLIGHT_OWNER_AND_ACL_PASS'\)/);
+    expect(proof).toContain("acl.grantee = 0");
+    expect(proof).toContain("has_function_privilege('anon', p.oid, 'EXECUTE')");
+    expect(proof).toContain("has_function_privilege('service_role', p.oid, 'EXECUTE')");
     expect(proof).toContain("classid=73492010");
     expect(proof).toContain("'--network', 'none'");
     expect(proof).toContain('const BARRIER_SECONDS = 8;');
