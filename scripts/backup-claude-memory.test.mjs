@@ -15,10 +15,17 @@ import {
   INDEX_FILE,
   MANIFEST,
   SNAPSHOT_KIND,
+  __setVisibilityProbe,
   scanForSecrets,
   stage,
   verify,
 } from "./backup-claude-memory.mjs";
+
+// Staging into the off-site clone asks GitHub whether that repo is still private.
+// The suite answers that question itself: a unit test must not depend on the
+// network, on `gh` being installed, or on anyone being logged in. Each case that
+// cares sets its own answer and restores this one.
+__setVisibilityProbe(() => ({ visibility: "PRIVATE" }));
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "backup-claude-memory.mjs");
 let pass = 0;
@@ -300,6 +307,50 @@ try {
         if (inherited === undefined) delete process.env.GIT_DIR;
         else process.env.GIT_DIR = inherited;
       }
+    }
+
+    // ── round 10: a tracked destination must be the ONE private backup repo ──
+    // Naming only the repo to refuse accepted every other repository by default —
+    // a wrong clone, a public fork, a replaced remote — and the runbook commits and
+    // pushes whatever was staged. The rule is an allowlist now.
+    const strangerRepo = makeRepo("someone-elses-repo", "https://github.com/someone-else/notes.git", "");
+    eq(
+      quiet(() => stage(path.join(strangerRepo, "claude-memory"), notes)), 1,
+      "an unrelated repository is refused, not accepted by default",
+    );
+    const forkRepo = makeRepo("public-fork-repo", "https://github.com/masonwells1/CRX_Backups_fork.git", "");
+    eq(
+      quiet(() => stage(path.join(forkRepo, "claude-memory"), notes)), 1,
+      "a repo whose name merely resembles the backup repo is refused",
+    );
+    const remoteless = makeRepo("no-remote-repo", "", "");
+    eq(
+      quiet(() => stage(path.join(remoteless, "claude-memory"), notes)), 1,
+      "a checkout with no remote is refused — where it would end up cannot be determined",
+    );
+    // An ignored path is still fine anywhere: nothing there can be committed.
+    const ignoringStranger = makeRepo("stranger-that-ignores", "https://github.com/someone-else/notes.git", "claude-memory/\n");
+    eq(
+      quiet(() => stage(path.join(ignoringStranger, "claude-memory"), notes)), 0,
+      "an ignored destination is allowed even in an unrelated repo",
+    );
+
+    // Being the right repository is not the same as still being private.
+    try {
+      __setVisibilityProbe(() => ({ visibility: "PUBLIC" }));
+      const flipped = path.join(backupRepo, "claude-memory-public");
+      eq(quiet(() => stage(flipped, notes)), 1, "staging is refused when GitHub says the backup repo is public");
+      ok(!readdirSafe(flipped), "and nothing is written when it is refused");
+
+      // Offline or without `gh`, the check cannot answer. That warns — it must not
+      // block a local snapshot — and the runbook carries the confirmation step.
+      __setVisibilityProbe(() => ({ reason: "gh unavailable: ENOENT" }));
+      eq(
+        quiet(() => stage(path.join(backupRepo, "claude-memory-offline"), notes)), 0,
+        "an unanswerable visibility check warns rather than blocking the snapshot",
+      );
+    } finally {
+      __setVisibilityProbe(() => ({ visibility: "PRIVATE" }));
     }
   }
 

@@ -29,7 +29,7 @@ export function isGitPush(cmd) {
 // (Codex's eighth 2026-07-30 review; confirmed by probe the same day, which also
 // showed pushSetsInlineEnv blind to a chained second push, which the review did
 // not name). Every whole-command scan below iterates this instead.
-function eachPush(cmd) {
+export function eachPush(cmd) {
   const text = String(cmd || "");
   const scanner = new RegExp(GIT_PUSH_RE.source, "gi");
   const found = [];
@@ -550,6 +550,17 @@ const INLINE_ENV_ALLOWED = new Map([
 // `GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 && curl evil" git push …` is
 // part of the value, but a naive split made the assignment look like it belonged
 // to an earlier command and the push looked clean. Track quote state instead.
+//
+// Quote tracking alone is still not the shell. `echo "a\"b" && git push origin
+// HEAD:main` closes its quote at the FINAL `"`, because `\"` is an escaped quote
+// and not a delimiter — a tracker blind to escapes reopens the quote there and
+// swallows every following separator, so the whole line reads as one segment and
+// the main-bound push at the end is never classified. Codex's tenth 2026-07-30
+// review demonstrated exactly that. A backslash therefore escapes the next
+// character everywhere EXCEPT inside single quotes, where bash treats it
+// literally. `.claude/hooks/codex-push-guard.mjs` additionally refuses any
+// segment that still contains more than one push, so a future gap in this parser
+// fails closed instead of silently skipping a push.
 export function shellSegments(cmd) {
   const text = String(cmd ?? "");
   const segments = [];
@@ -557,6 +568,7 @@ export function shellSegments(cmd) {
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
+    if (ch === "\\" && quote !== "'" && i + 1 < text.length) { i += 1; continue; }
     if (quote) { if (ch === quote) quote = null; continue; }
     if (ch === "'" || ch === '"') { quote = ch; continue; }
     if (ch === ";" || ch === "\n" || ch === "\r") {

@@ -29,6 +29,7 @@ import {
   pushUsesConfigEnv,
   pushUsesConfigRootEnv,
   pushSetsInlineEnv,
+  shellSegments,
   unknownPushOptions,
   environmentCarriesConfigOverride,
   rewritesReachGuardedApp,
@@ -506,6 +507,39 @@ assert.deepEqual(
   ["GIT_TERMINAL_PROMPT"], "anything but 0 or 1 is denied",
 );
 
+// --- the splitter is escape-aware (Codex 2026-07-30, round 10) -----------------
+// `\"` inside double quotes is an escaped quote, so the string ends at the FINAL
+// quote. Tracking quotes without escapes reopened one there and swallowed every
+// separator after it — the whole line became a single segment and a main-bound
+// push at the end was never classified.
+{
+  const segments = shellSegments(`echo "a\\"b" && git push origin feature && git push origin HEAD:main`);
+  assert.equal(segments.length, 3, "an escaped quote does not merge the whole line into one segment");
+  assert.match(segments[2], /git push origin HEAD:main\s*$/, "the last segment is the main-bound push, on its own");
+}
+// A backslash is literal inside SINGLE quotes, so the quote closes at the next
+// one and the separator after it is real.
+assert.equal(
+  shellSegments(`echo 'a\\' && git push origin main`).length, 2,
+  "a backslash inside single quotes is literal, so the following separator still splits",
+);
+// A separator that is itself escaped is not a separator. (`\;` is a literal
+// semicolon to bash, so this is one command, not two.)
+assert.equal(
+  shellSegments(`echo a\\; git push origin main`).length, 1,
+  "an escaped separator does not split",
+);
+// Line continuations join, they do not split.
+assert.equal(
+  shellSegments("git push \\\norigin main").length, 1,
+  "a line continuation keeps one command together",
+);
+// The escape handling must not have re-broken the round-9 case.
+assert.deepEqual(
+  pushSetsInlineEnv(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20 && curl evil" git push origin feature`),
+  ["GIT_SSH_COMMAND"], "quoted separators are still part of the value",
+);
+
 // --- options the argv walk does not understand (Codex 2026-07-30, round 7) -----
 // `--recurse-submodules` takes a SEPARATE value. Verified against git 2.54 on
 // 2026-07-30: with a remote literally named `no`, `git push --recurse-submodules
@@ -683,6 +717,30 @@ assert.equal(pushDestinationToken("git push"), null);
       runHook(`GIT_SSH_COMMAND="ssh -o ServerAliveInterval=20" ${push}`).decision,
       "allow",
       "the documented keepalive prefix still works",
+    );
+
+    // Round 10, end-to-end: `\"` is an escaped quote, not a delimiter. A tracker
+    // blind to escapes reopened the quote at that point and swallowed every later
+    // separator, so the whole line read as ONE segment and the main-bound push at
+    // the end was never classified. Codex's probe returned exactly that.
+    deniedBecause(
+      `echo "a\\"b" && git -C ${work} push origin feature && git -C ${work} push ${CRX_URL} HEAD:main`,
+      /codex/i,
+      "an escaped quote cannot hide a later main-bound push",
+    );
+    // Found while building the case above: a command substitution is not separated
+    // by `;`/`&&`/`|` at all, so no splitter of any kind sees the push hidden
+    // inside it. The inner command runs first — straight to production — while the
+    // guard classifies the harmless outer push. Denied outright now.
+    deniedBecause(
+      `git -C ${work} push origin feature \`git push ${CRX_URL} HEAD:main\``,
+      /substitution/i,
+      "a push carrying a backtick substitution is refused",
+    );
+    deniedBecause(
+      `git -C ${work} push origin $(git push ${CRX_URL} HEAD:main)`,
+      /substitution/i,
+      "and the $(...) spelling too",
     );
 
     // Controls: the guard must not have become a blanket denier. Both of these

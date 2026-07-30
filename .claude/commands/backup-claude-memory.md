@@ -18,6 +18,8 @@ The source dir is auto-discovered under `~/.claude/projects/*/memory` (it picks 
 
 It **fails** rather than shipping a bad backup if the source is empty, is missing `MEMORY.md`, or if any copy does not match. A failure means the snapshot is wrong — fix the source path, do not push.
 
+The staging directory is checked before anything is written. If it sits inside a git checkout where the files would be committable, that checkout must be `masonwells1/CRX_Backups` — the notes may be tracked in exactly one repository, and every other repo (a wrong clone, a fork, a checkout with no remote) is refused. A path the repo ignores, or a directory outside git entirely, is always fine. When the destination is the backup clone the script also asks GitHub whether that repo is still private and refuses if it is not; if `gh` cannot answer it warns instead, and confirming visibility before you commit is then on you.
+
 ### 2. Copy into a clone of the private repo
 
 Clone `masonwells1/CRX_Backups` (private) to a scratch dir, then copy the staged files into `claude-memory/` at its root. Do not touch `backups/` — that is the encrypted DB dump and is managed by the repo's own GitHub Action.

@@ -16,6 +16,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   contentIsRisky,
+  eachPush,
   gitPushCwd,
   isGitPush,
   mainPushSource,
@@ -125,6 +126,26 @@ function git(args, cwd) {
 const pushCommands = shellSegments(cmd)
   .map((segment) => segment.trim())
   .filter((segment) => isGitPush(segment));
+
+// Backstop for the splitter itself. Every check below classifies ONE push, so a
+// segment holding two of them means the split failed and a push would be judged
+// by the other push's arguments — which is exactly how an escaped quote hid a
+// main-bound push from Codex's tenth 2026-07-30 review. A single shell command
+// cannot legitimately invoke `git push` twice, so this can only mean the guard
+// misread the line: refuse instead of guessing. Any future parser gap lands here.
+for (const pushCmd of pushCommands) {
+  if (eachPush(pushCmd).length > 1) {
+    deny("CODEX GATE: this command chains more than one push in a way the guard cannot split reliably (quoting/escaping makes the boundaries ambiguous), so it is denied rather than judged on a guess. Run each push as its own separate command.");
+  }
+  // Command substitution runs a whole command of its own, INSIDE this one, before
+  // this one runs — and it is not separated by `;`/`&&`/`|`, so nothing above sees
+  // it: `git push origin feature \`git push <prod-url> HEAD:main\`` reaches
+  // production while the guard classifies only the harmless outer push. Found while
+  // building the round-10 regression tests. A legitimate push never needs it.
+  if (/\$\(|`/.test(pushCmd)) {
+    deny("CODEX GATE: this push contains a command substitution (`$(...)` or backticks). The substitution executes as a command in its own right before the push does, and the guard cannot classify what it will run — so a second, hidden push could reach production while only the outer one is inspected. Write the value out literally, or run the inner command as its own separate step.");
+  }
+}
 
 for (const pushCmd of pushCommands) {
   if (/--git-dir|--work-tree/i.test(pushCmd)) {

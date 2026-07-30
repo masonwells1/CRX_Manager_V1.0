@@ -255,6 +255,44 @@ the inherited-environment case return **DENY**, and an ordinary push to the same
 **ALLOWED**. Both halves are mutation-tested — restoring the syntax-shaped regex, or disabling the
 environment check, each turns the suite red on its own case.
 
+### Round ten: an escaped quote hid a push, and "not the public repo" was not an allowlist
+
+Two blockers, both real.
+
+**An escaped quote could hide a later main-bound push.** The splitter tracked quotes but not
+escapes, so `echo "a\"b" && git push origin feature && git push <prod> HEAD:main` reopened its quote
+at the `\"` and swallowed every separator after it. The whole line read as one segment, only the
+harmless first push was classified, and the main-bound push at the end never reached the gate — the
+reviewer's probe returned exactly one segment and no main-bound source. The splitter is escape-aware
+now (a backslash escapes the next character everywhere except inside single quotes, where bash treats
+it literally), and the guard gained a backstop: a segment still holding more than one push is refused
+outright rather than judged on the wrong one, so a future parser gap fails closed. Proven by
+mutation — with escape-awareness removed the line still denies, via the backstop.
+
+Building that regression turned up a third hole the review had not named: **command substitution**.
+`git push origin feature \`git push <prod> HEAD:main\`` is not separated by `;`/`&&`/`|` at all, so
+no splitter of any kind can see the inner push — and the inner command runs first, straight to
+production, while the guard inspects only the outer one. Any push carrying `$(...)` or backticks is
+now denied.
+
+**"Anywhere except the public repo" is not an allowlist.** The staging destination check named the
+one repository to refuse, which accepted every other repository by default — a wrong clone, a public
+fork, a replaced remote, a checkout with no remote at all — and the runbook goes on to commit and
+push whatever was staged. For content that can never be un-published the default has to be "no", so
+a *tracked* destination must now be `masonwells1/CRX_Backups` and nothing else. The two legitimate
+non-repo cases are unchanged: a path git ignores, and a directory outside any repository.
+
+Being the right repository is also not the same as still being private, and a visibility flip on
+GitHub would look identical on disk. Staging into the backup clone now asks GitHub and refuses if the
+answer is not `PRIVATE`; if `gh` cannot answer (offline, not installed) it warns rather than blocking
+a local snapshot, and the runbook carries the confirmation step. Verified against the live repo —
+`gh repo view masonwells1/CRX_Backups` answers **PRIVATE**.
+
+Proven end to end: staging the real notes wrote **190 files (884.3 KB)** and verified all of them.
+Four mutations — removing escape-awareness, disabling the substitution check, accepting any
+repository, and ignoring a `PUBLIC` answer — each turn the suites red on their own case and only
+their own case.
+
 ### Round nine: a transport variable is a command, and a repository is not a string
 
 Two blockers, both real, both proven with the reviewer's own read-only probe before being fixed.

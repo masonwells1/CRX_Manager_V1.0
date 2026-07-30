@@ -123,6 +123,16 @@ function isInside(child, parent) {
 // review found this. The off-site repo is deliberately unaffected: there the notes
 // ARE tracked on purpose, which is the whole point of the backup — so the refusal
 // is scoped to the app repo, not to "any git worktree".
+//
+// Round ten inverted the rule. Naming the one repo to refuse meant every OTHER
+// repository was accepted by default — a wrong clone, a public fork, a replaced
+// remote, a checkout with no remote at all — and the runbook goes on to commit and
+// push whatever was staged. Codex's tenth 2026-07-30 review called that out, and
+// it is right: for content that can never be un-published, the safe default is
+// "no". So a tracked destination must now name the ONE private off-site repo, and
+// everything else is refused. The two legitimate non-repo cases still work: a
+// path git ignores (nothing there can be committed) and a directory outside any
+// repository at all.
 // Repository identity comes from the ONE canonicalizer in the hooks library
 // (CLAUDE.md: `.claude/hooks/` is the single source of truth for shared guard
 // logic). A second, weaker copy here is exactly how this check would drift out of
@@ -130,6 +140,8 @@ function isInside(child, parent) {
 // did: `https://github.com/masonwells1/./CRX_Manager_V1.0.git` is the public repo,
 // and a raw suffix match says it is not (Codex's ninth 2026-07-30 review).
 const GUARDED_APP_REPO_ID = "github.com/masonwells1/crx_manager_v1.0";
+// The ONE repository allowed to hold these notes as tracked files.
+const BACKUP_REPO_ID = "github.com/masonwells1/crx_backups";
 function nearestExisting(dir) {
   let current = path.resolve(dir);
   for (let hops = 0; hops < 64; hops += 1) {
@@ -149,6 +161,27 @@ const GIT_DISCOVERY_ENV = [
   "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX",
   "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES",
 ];
+// Read-only visibility lookup. Returns { visibility } when GitHub answered, or
+// { reason } when it could not be asked. Never throws: the caller decides.
+//
+// The probe is swappable ONLY so the tests can exercise all three answers without
+// a network call; nothing else imports this module. The default is the real
+// lookup, and a test that forgets to restore it fails loudly on the next case.
+let visibilityProbe = null;
+export function __setVisibilityProbe(fn) { visibilityProbe = fn; }
+function ghVisibility() {
+  if (visibilityProbe) return visibilityProbe();
+  const result = spawnSync(
+    "gh",
+    ["repo", "view", "masonwells1/CRX_Backups", "--json", "visibility", "-q", ".visibility"],
+    { encoding: "utf8", timeout: 20000, windowsHide: true },
+  );
+  if (result.error) return { reason: `gh unavailable: ${result.error.code || result.error.message}` };
+  if (result.status !== 0) return { reason: `gh exited ${result.status}: ${String(result.stderr || "").trim().split(/\r?\n/)[0] || "no output"}` };
+  const visibility = String(result.stdout || "").trim();
+  return visibility ? { visibility } : { reason: "gh returned no visibility field" };
+}
+
 function destinationIsPublishable(outDir) {
   const probe = nearestExisting(outDir);
   const env = { ...process.env };
@@ -156,26 +189,58 @@ function destinationIsPublishable(outDir) {
   const git = (args) => spawnSync("git", ["-C", probe, ...args], { encoding: "utf8", env });
   const top = git(["rev-parse", "--show-toplevel"]);
   if (top.status !== 0) return null;                       // not inside a git repo at all
-  const remotes = git(["remote", "-v"]);
-  const inAppRepo = String(remotes.stdout || "")
-    .split(/\r?\n/)
-    .some((line) => canonicalRepoId(line.trim().split(/\s+/)[1] || "") === GUARDED_APP_REPO_ID);
-  if (!inAppRepo) return null;
+
   // Ask about a file INSIDE the destination, not the destination itself: a
   // directory-only pattern (`docs/claude-memory/`) does not match a directory
   // that does not exist yet, and staging into a not-yet-created directory is the
   // normal case. A path beneath it matches either way — probed both ways on
   // git 2.54 before relying on it.
   // status 0 = ignored, 1 = not ignored, anything else = git could not answer.
-  // Fail CLOSED on "could not answer": inside the public repo, an unverifiable
-  // path is exactly the case this refusal exists for.
+  // Fail CLOSED on "could not answer": an unverifiable path inside a repository is
+  // exactly the case this refusal exists for.
   const probeFile = path.join(path.resolve(outDir), INDEX_FILE);
   if (git(["check-ignore", "-q", probeFile]).status === 0) return null;
+
+  // Tracked, then. Only the private off-site repo may hold these notes.
+  const remotes = String(git(["remote", "-v"]).stdout || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/)[1] || "")
+    .filter(Boolean);
+  if (remotes.some((url) => canonicalRepoId(url) === BACKUP_REPO_ID)) {
+    // Being the right repository is not the same as still being private. A
+    // visibility flip on GitHub would silently turn every future snapshot into a
+    // publication, and nothing on disk would look different (Codex round 10). Ask
+    // GitHub while we are here. `gh` is not a hard dependency of this script and
+    // the machine may be offline, so an unanswerable check WARNS; an answer of
+    // "PUBLIC" refuses outright.
+    const seen = ghVisibility();
+    if (seen.visibility && seen.visibility.toUpperCase() !== "PRIVATE") {
+      return (
+        `FAIL: refusing to stage — GitHub reports masonwells1/CRX_Backups is ${seen.visibility}.\n` +
+        `      The off-site snapshot is only safe while that repository is PRIVATE. Set it back to\n` +
+        `      private, then re-run. Nothing was written.`
+      );
+    }
+    if (!seen.visibility) {
+      console.error(
+        `WARNING: could not confirm masonwells1/CRX_Backups is still private (${seen.reason}).\n` +
+        `         Staging anyway — but confirm the repository is PRIVATE before committing or pushing.`
+      );
+    }
+    return null;
+  }
+
+  const where = remotes.some((url) => canonicalRepoId(url) === GUARDED_APP_REPO_ID)
+    ? `the PUBLIC CRX Manager checkout`
+    : remotes.length === 0
+      ? `a git checkout with no remote, so where it would end up cannot be determined`
+      : `a git checkout whose remote is ${remotes[0]}, not the off-site backup repo`;
   return (
-    `FAIL: refusing to stage into ${outDir} — it is inside the PUBLIC ${top.stdout.trim()} checkout\n` +
-    `      and git does not ignore it, so the notes (real names, real commission amounts)\n` +
-    `      would become publishable. Stage into the off-site backup clone, or into a path\n` +
-    `      this repo ignores (docs/claude-memory/). Nothing was written.`
+    `FAIL: refusing to stage into ${outDir} — it is inside ${where}\n` +
+    `      (${top.stdout.trim()}), and git does not ignore it, so the notes (real names,\n` +
+    `      real commission amounts) would become committable there. These notes may be\n` +
+    `      tracked in exactly one repository: masonwells1/CRX_Backups. Stage into that\n` +
+    `      clone, or into a path the repo ignores (docs/claude-memory/). Nothing was written.`
   );
 }
 
