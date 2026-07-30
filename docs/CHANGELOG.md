@@ -250,6 +250,60 @@ the whole-calendar-month constraint.
 The live schema-integrity tripwire now guards the exact month-lock calls in
 both vendor-bill writers and period close, so a later function re-emission
 cannot silently reopen the race.
+## 2026-07-30 — Governed factory pilot adds chat approvals and one read-only board
+
+The existing `/ship` delivery pipeline now has a governed, single-lane factory entry for plain-English
+autonomous or overnight requests. Mason still uses only chat: the session drafts a mission ticket,
+presents one exact yes/no question, and records his verbatim response. A 24-hour receipt binds that
+response to the chat session, immutable ticket hash, question fingerprint, and current `origin/main`.
+The deterministic lane-start gate refuses missing, expired, cross-session, changed-ticket, moved-base,
+globally paused, or second-active-lane work.
+
+Claude and Codex share one append-only, hash-chained ledger under the absolute Git common directory,
+so state follows the repository across worktrees without per-tool copies. Direct paths, direct library
+invocation, inline-code bypasses, and governance self-edits in an active lane are blocked, while the
+writer checks the canonical process and call stack; these are strong agent-tool controls rather than
+a claim of operating-system cryptographic isolation. An interrupted final JSONL line degrades
+read-only display but cannot advance work. Legal session-bound stage transitions, a behavior summary,
+and successful CLI-executed repository harness proof are required before a job can reach morning
+review. Its name must be in both the immutable approved ticket and a fixed allowlist; its resolved
+npm body must match `origin/main`, and the command/body/package/base/output hashes are rechecked.
+Copied or self-labeled files do not qualify. The active pilot lane also blocks build writes from
+fresh parallel chats. A stale lock has a validated age/process-checked
+recovery path, and an emergency hold still blocks lanes if the ledger cannot record Mason's pause.
+Mason's later chat acceptance means only
+`approved-to-land`; it never self-certifies a job as live. A live closeout additionally requires a
+commit already contained in `origin/main`, production-verification text, attached proof, and a durable
+content-hashed packet under `docs/audits/factory/jobs/`.
+
+The single owner output is `npm run factory:board`: a loopback-only, read-only page extending `/fleet`
+with one card per job, plain-English status, behavior result, blocker, and linked proof. It has no
+forms or decision controls; accept, reject, pause, resume, and revise remain normal chat. Multi-lane
+dispatch stays disabled until the pilot proves safe behavior and trustworthy hard cost enforcement
+exists. Existing `/ship` review, commit, PR, production, migration, deletion, secret, and permission
+gates are unchanged.
+
+Proof includes focused state/CLI/hook/board tests, Claude–Codex manifest parity, synced workflow
+adapters, and a real narrow-screen browser pass. Fable-low independently approved the revised design
+and reviewed the implementation in three bounded rounds. Every reported issue was remediated locally,
+including a final post-landing closeout regression, but the third-round `NEEDS-WORK` result exhausted
+the original review-loop cap. Mason then explicitly authorized a fresh acceptance review. That review
+confirmed every earlier fix and found four more actionable gaps: an agent-runnable resume command,
+Factory Board wording that could resume the global factory, natural overnight requests that could miss
+factory routing, and a non-idempotent closeout retry. The current candidate removes the agent resume
+surface, distinguishes Board process language, routes direct factory execution phrases, makes closeout
+retry-safe, and also redacts internal session identifiers from the Board API. It remains uncommitted
+until a new independent Fable acceptance evaluates these exact repaired bytes. That next acceptance
+confirmed those five repairs and found three additional governance gaps plus one ambiguous resume
+phrase. The current candidate now protects every trusted writer/import/manifest from governed-lane
+edits, limits corrupt-state denial to mutations while preserving diagnostics and recovery, makes
+pre-ticket intent clearing owner-chat-only, and requires explicit resume/restart wording.
+A later acceptance pass confirmed all four repairs and found one remaining governance-edit route
+through `.claude/settings.local.json` plus in-place/opaque shell mutators. The final candidate protects
+that local hook-disabling manifest, denies `sed -i`, `perl -i`, `tee`, `git apply`,
+`git checkout --`, and `git restore` governance rewrites from governed sessions, accepts the natural
+unqualified reply “yes, ship it,” and explains decision-like replies that remain too ambiguous to bind.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

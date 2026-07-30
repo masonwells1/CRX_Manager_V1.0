@@ -24,6 +24,8 @@ These mostly run when Claude Code tries to Write or Edit a file — they refuse 
 | `migration-apply-guard.mjs` | Supabase MCP `apply_migration` calls — refused unless `.claude/session-state/migration-review-<name>.json` proof exists from a recent (<30 min) `rls-security-reviewer` + `migration-drift-reviewer` run, with `queryHash` binding the proof to the exact transmitted SQL. ALSO (settled 2026-07-13 policy), three flag-driven rule-sets: **flag absent** → interactive rules (Mason's in-chat OK is the prose gate). **`AUTOPILOT.on` active** → hands-free rules: (a) a DESTRUCTIVE migration — apply-time `DROP TABLE`, `DROP SCHEMA/DATABASE/OWNED`, `ALTER TABLE … DROP COLUMN`, `TRUNCATE`, ANY top-level `DELETE FROM`, or `MERGE INTO` (`destructiveMigrationCheck` in `live-testdata-lib.mjs`; function bodies exempt, `DO` blocks count, no table allowlist) — is refused even with a clean proof; (b) the reviewer proof must carry a nonempty `queryHash` exactly matching the transmitted SQL; (c) a separate content-bound Codex proof `codex-review-mig-<safe-name>.json` must exist with `queryHash` matching the transmitted SQL, `verdict` in clean/ship/ship-with-followups, and a fresh (<30 min) `timestamp` — the second-model gate must have actually run and PASSED on this exact SQL. **Flag exists but expired/malformed** → the authorization LAPSED: ALL applies blocked until Mason re-arms or disarms (`--off` deletes the flag) | B7/B8/B9 class — applying migrations without parallel-session review; plus unattended data loss (no PITR on the free plan), Codex-gate skips, edited-after-review SQL, and lapsed-authorization applies in hands-free runs |
 | `review-proof-guard.mjs` | Native Write/Edit, MCP filesystem paths, or shell commands that directly name `.claude/session-state/claude-review-push.json` or `codex-review-*.json`; wired for both Claude and Codex. Legitimate review wrappers — `scripts/run-claude-review.mjs` (Claude proof), `scripts/write-codex-push-proof.mjs` (Codex push proof), and `scripts/write-apply-proofs.mjs` (migration proof pair — machine-minted 2026-07-16: every stamp executes EACH required reviewer charter, `rls-security-reviewer` + `migration-drift-reviewer`, as its own trusted-Codex machine-verdict run and mints only when ALL return CLEAN; the caller-supplied `--codex-verdict <v>` form and the say-so reviewer-only stamp were both removed) — derive the path internally and never name it in the tool command, so they pass. | Prevents accidental or one-line self-certification of the second-model review gate. |
 | `pr-merge-guard.mjs` (+ shared `codex-push-lib.mjs`) | PR merges into `main` — `gh pr merge`, `gh api PUT .../pulls/N/merge`, or a GitHub-MCP `merge_pull_request` tool call (GraphQL `mergePullRequest` is denied outright as unresolvable). Added 2026-07-16: the 2026-07-14 `protect-main` ruleset moved the landing action from `git push` to PR merge, and `codex-push-guard`'s Codex gate never followed. Raw REST merges outside gh (`curl`/`wget`/`Invoke-RestMethod`/fetch naming `.../pulls/<n>/merge`) are denied outright — the guard cannot resolve their PR context, so they fail closed (Codex finding on this guard's own PR, 2026-07-16). Resolves the PR via `gh pr view` (fail closed if unresolvable), denies merges into `master`/`production`, requires a fully green pipeline (`mergeStateStatus` CLEAN + every check successful; for a NON-risky diff `--auto` is exempt from the green requirement because GitHub itself enforces the required checks; for a RISKY diff `--auto` is denied outright — auto-merge lands later-pushed commits after this gate has run, with a stale proof — Codex round-4 finding on this guard’s own PR), classifies the PR diff with the SAME risky-path/risky-content rules as the push gate, and — for risky diffs — requires the same fresh (<30 min), head- and base-bound `codex-review-<sha>.json` proof minted only by `scripts/write-codex-push-proof.mjs`. Non-risky green merges pass (the standing 2026-06-16 landing authorization stays intact). Tests: `.claude/hooks/pr-merge-guard.test.mjs`. | A Claude session one-click-merging un-Codex-reviewed money/RLS/migration code to production — the post-branch-protection twin of the "has codex reviewed all of these?" gap. |
+| `factory-state-integrity-guard.mjs` | Direct state paths and shell mutations; direct imports/calls of the state library; inline code and governance self-edits in an active lane. Protected governance includes both Claude settings manifests (including hook-disabling `.claude/settings.local.json`), Codex wiring, trusted writers/imports, factory scripts, and `package.json`; governed shell sessions also deny named in-place writers and opaque `git apply`/checkout/restore routes. The library separately restricts mutation to exact canonical entrypoints and call stacks. | Defense-in-depth against forged approvals, proofs, stages, or self-disabled hooks inside the agent-tool boundary; it is not an operating-system cryptographic sandbox |
+| `factory-lane-guard.mjs` | Build mutations in a session that requested factory/autonomous work until its immutable ticket has an exact chat approval and the deterministic lane-start validation passes; also blocks a globally held or morning-review/parked lane | Turns “approve before autonomous work” into an enforced lane boundary shared by Claude and Codex |
 
 ### Bash/PowerShell PreToolUse Hook (`.claude/hooks/`)
 Runs on the `Bash|PowerShell` matcher, before a shell command executes. Deterministic regex, hard-blocking (not advisory).
@@ -57,9 +59,45 @@ These run when Mason submits a prompt, BEFORE Claude reads it. They inject extra
 | `codex-gauntlet-reminder.mjs` | Plain-English review/ship/push wording where the object is the code change itself (domain-word-aware — "is the herbicide safe" doesn't false-trigger) | Reminds Claude to route through the Codex Review Gauntlet instead of self-certifying |
 | `agent-pair-review-reminder.mjs` | Requests for Claude and Codex to both review the same work | Reminds Claude to route through `/agent-pair-review` |
 | `codex-to-claude-handoff-reminder.mjs` | Plain-English requests for Claude to review or continue Codex's work | Reminds Claude that direct review is preferred, with durable handoff as the continuation fallback |
-| `ship-intent-reminder.mjs` | Build/fix/ship/push/"go live"/"do it" intent | Reminds Claude to drive the work through the `/ship` pipeline rather than requiring Mason to know slash commands; only ever restates the standing push policy, never authorizes a prod action itself |
+| `ship-intent-reminder.mjs` | Build/fix/ship/push/"go live"/"do it" intent, plus direct natural factory requests such as “run the factory overnight” | Reminds Claude to drive the work through the `/ship` pipeline rather than requiring Mason to know slash commands; factory execution intent also records the shared governed-session marker, while explanatory factory questions stay ungoverned |
+| `factory-owner-input.mjs` | Exact ticket and morning-review yes/no replies, plus plain-English global factory pause/resume | Records decisions from the real owner prompt hook; qualified yes becomes revise, cross-session/missing-transcript replies do not bind, Board start/stop/restart wording never changes the factory hold, and no agent-facing CLI can resume or clear the emergency hold |
 
 `hold-latch-prompt.mjs` and `autopilot-intent-reminder.mjs` are also UserPromptSubmit hooks — see the Correction-mined guards table below for what they do.
+
+### Governed Factory State and Board
+
+`scripts/factory-state-lib.mjs` resolves one absolute `<git-common-dir>/crx-factory/` path shared by
+Claude, Codex, and every worktree. Tickets are immutable and content-hashed. Events are append-only
+and hash-chained under an exclusive writer lock. One incomplete trailing event is ignored with a
+degraded warning and cannot advance state; any interior corruption or broken chain fails closed.
+Approval receipts expire after 24 hours and bind the exact question, ticket, session, and
+`origin/main`. Build-stage and evidence changes remain bound to the session that started the lane.
+Copied evidence is informational; morning review and closeout require `factory.mjs evidence run`.
+The harness name must appear in the immutable approved ticket and the factory's fixed allowlist, its
+resolved npm script body must equal `origin/main`, and the evidence binds the script/body/package/base
+hashes plus its real zero exit and output. The gate rechecks current hashes before advancing. While
+one pilot lane is active, other chats' build writes deny, even from a fresh session.
+
+Governed lanes cannot edit any trusted factory writer, its imported hook libraries, the Claude/Codex
+hook manifests (including `.claude/settings.local.json`), the Codex adapter, `package.json`, or the
+factory scripts themselves. Named in-place shell writers and opaque Git apply/checkout/restore routes
+deny in governed sessions so a patch cannot silently rewrite those controls. If state
+verification fails, only repository mutations deny; reads and the canonical status/recovery CLI remain
+available so the failure can be diagnosed without disabling every agent window.
+
+A failed chat pause writes an emergency hold marker outside the locked event stream, so subsequent
+lane writes still deny. `factory.mjs recover unlock` removes only a lock older than five minutes whose
+recorded process is gone, preserving a backup; `recover torn-tail` archives the original ledger and
+removes only its incomplete final line. Manual state repair remains forbidden.
+Only Mason's real plain-English owner prompt can resume the factory; the CLI exposes no hold/resume
+subcommand, and direct command invocation of the trusted owner-input hook is denied. Leaving factory
+mode before a ticket exists is likewise owner-chat-only; no agent-facing intent-clear subcommand exists.
+
+`scripts/factory-board.mjs` serves the only owner-facing output at a loopback address. It is read-only,
+HTML-escapes ledger content, rejects path traversal, returns 405 for mutation methods, and exposes
+only copied evidence files. Its JSON projection omits owner/lane session identifiers and internal
+ticket/base metadata. Decisions always return to chat. Full behavior and recovery instructions
+live in `docs/workflows/GOVERNED_DELIVERY_PIPELINE.md`.
 
 ### SessionStart Hooks (`.claude/hooks/`)
 Run when a new session begins. Inject `additionalContext` so Claude sees state-drift warnings up front.

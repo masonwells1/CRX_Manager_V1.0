@@ -1,0 +1,267 @@
+#!/usr/bin/env node
+
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
+import {
+  appendFactoryEvent,
+  resolveFactoryPaths,
+  writeImmutableTicket,
+} from "../../scripts/factory-state-lib.mjs";
+
+const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "../..");
+const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
+const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integrity-guard.mjs");
+let assertions = 0;
+
+function run(hook, stateDir, payload) {
+  return spawnSync(process.execPath, [hook], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: root,
+      CRX_FACTORY_TEST_MODE: "1",
+      CRX_FACTORY_TEST_STATE_DIR: stateDir,
+    },
+    input: JSON.stringify(payload),
+  });
+}
+
+function denied(result, pattern, message) {
+  assertions++;
+  assert.match(result.stdout, pattern, message);
+}
+
+{
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-integrity-"));
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  denied(run(integrityHook, stateDir, {
+    tool_name: "Write",
+    tool_input: { file_path: paths.eventsPath, content: "forged" },
+  }), /direct edits.*forbidden/i, "direct ledger write is denied");
+  denied(run(integrityHook, stateDir, {
+    tool_name: "PowerShell",
+    tool_input: { command: `Set-Content -LiteralPath "${paths.eventsPath}" -Value forged` },
+  }), /shell mutation.*forbidden/i, "shell ledger write is denied");
+  denied(run(integrityHook, stateDir, {
+    tool_name: "PowerShell",
+    tool_input: {
+      command: "node -e \"import('./scripts/factory-state-lib.mjs').then(m => m.appendFactoryEvent({}))\"",
+    },
+  }), /direct invocation of factory state internals/i, "dynamic import ledger-forgery route is denied");
+  denied(run(integrityHook, stateDir, {
+    tool_name: "PowerShell",
+    tool_input: {
+      command: "node .claude/hooks/factory-owner-input.mjs",
+    },
+  }), /owner-input hook may run only/i, "agents cannot invoke the trusted owner-input hook as a command");
+  const allowed = run(integrityHook, stateDir, {
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/factory.mjs status --json" },
+  });
+  assertions++;
+  assert.equal(allowed.stdout, "", "official read path is allowed");
+}
+
+{
+  const sessionId = "factory-intent-thread";
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-lane-"));
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    actorTool: "codex",
+    sessionId,
+    payload: { prompt: "run autonomously" },
+  });
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "apply_patch",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  }), /no mission ticket/i, "factory intent blocks build edits before ticket approval");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node -e \"console.log('dynamic')\"" },
+  }), /dynamic inline code execution is disabled/i, "governed sessions deny generic node eval");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "scripts", "factory.mjs") },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite the factory implementation");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Edit",
+    tool_input: { file_path: path.join(root, "package.json") },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite npm harness definitions");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Edit",
+    tool_input: { file_path: path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs") },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite a trusted ledger-writer hook");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, ".claude", "settings.json") },
+  }), /cannot modify its own governance/i, "governed sessions cannot remove Claude guard wiring");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, ".claude", "settings.local.json") },
+  }), /cannot modify its own governance/i, "governed sessions cannot disable hooks through local Claude settings");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, ".codex", "hooks.json") },
+  }), /cannot modify its own governance/i, "governed sessions cannot remove Codex guard wiring");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content .claude/hooks/ship-intent-reminder.mjs forged" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot shell-rewrite a trusted writer");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "sed -i 's/factory/forged/' package.json" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot use sed in-place against governance");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "perl -i -pe 's/factory/forged/' .claude/settings.local.json" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot use perl in-place against governance");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "'{}' | tee .claude/settings.local.json" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot use tee against governance");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git apply proposed-change.patch" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot apply an opaque patch that may rewrite governance");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git checkout -- .claude/settings.json" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot use shell checkout to rewrite governance");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git restore package.json" },
+  }), /cannot mutate its governance implementation through the shell/i, "governed sessions cannot use shell restore to rewrite governance");
+
+  const ticket = writeImmutableTicket(paths, {
+    id: "lane-job",
+    title: "Guard the lane",
+    goal: "Prove one governed lane.",
+    definitionOfDone: ["Approved lane can write."],
+    mustNotChange: ["Production."],
+    proofRequirements: ["Hook output."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before commit.",
+    riskAreas: [],
+  });
+  appendFactoryEvent(paths, {
+    type: "ticket-drafted",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { ticketFile: ticket.filename, ticketHash: ticket.hash, ticketVersion: 1, title: ticket.ticket.title },
+  });
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  }), /no mission ticket is presented and approved/i, "drafted but unpresented ticket still blocks writes");
+
+  appendFactoryEvent(paths, {
+    type: "ticket-presented",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: "a".repeat(64), baseSha: "b".repeat(40) },
+  });
+  appendFactoryEvent(paths, {
+    type: "ticket-approved",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: {
+      ticketHash: ticket.hash,
+      questionHash: "a".repeat(64),
+      ownerReply: "yes",
+      baseSha: "b".repeat(40),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Edit",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  }), /lane-start check has not run/i, "approved ticket still requires deterministic lane start");
+
+  appendFactoryEvent(paths, {
+    type: "lane-started",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { ticketHash: ticket.hash, baseSha: "b".repeat(40), worktree: root },
+  });
+  const allowed = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "apply_patch",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  });
+  assertions++;
+  assert.equal(allowed.stdout, "", "started governed lane permits scoped build edits");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-parallel-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "parallel.ts") },
+  }), /one-lane pilot blocks parallel repository writes/i, "fresh chats cannot bypass an active factory lane");
+
+  appendFactoryEvent(paths, {
+    type: "factory-held",
+    jobId: null,
+    actorTool: "codex",
+    sessionId,
+    payload: { reason: "Mason paused it." },
+  });
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  }), /globally paused/i, "global hold blocks an active lane");
+}
+
+{
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-corrupt-"));
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  writeFileSync(paths.eventsPath, "{not-valid-json}\n");
+  const readResult = run(laneHook, stateDir, {
+    thread_id: "diagnostic-thread",
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "docs", "workflows", "GOVERNED_DELIVERY_PIPELINE.md") },
+  });
+  assertions++;
+  assert.equal(readResult.stdout, "", "corrupt factory state leaves read-only diagnosis available");
+  denied(run(laneHook, stateDir, {
+    thread_id: "diagnostic-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  }), /build writes fail closed/i, "corrupt factory state still denies repository mutation");
+  const recoveryResult = run(laneHook, stateDir, {
+    thread_id: "diagnostic-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/factory.mjs recover torn-tail --reason-file reason.txt --session diagnostic-thread --tool codex" },
+  });
+  assertions++;
+  assert.equal(recoveryResult.stdout, "", "corrupt factory state leaves the canonical recovery CLI reachable");
+}
+
+console.log(`factory-guards: ${assertions} assertions passed`);
