@@ -39,3 +39,25 @@ export function resolveDirectMutationRowVersion(
   }
   return { kind: 'recovery', rowVersion: null };
 }
+
+/**
+ * A whole-record save returns the authoritative token from the same RPC.
+ * New records can legitimately move from no token to their first token, while
+ * an existing numeric token must advance by exactly one. During the
+ * frontend-first rollout, legacy RPCs return no token at all; null -> null is
+ * compatible until the migration lands.
+ */
+export function resolveAuthoritativeSaveRowVersion(
+  previousRowVersion: number | null,
+  returnedRowVersion: unknown,
+): DirectMutationRowVersionResult {
+  const nextRowVersion = readRowVersion(returnedRowVersion);
+  if (previousRowVersion === null && nextRowVersion === null) {
+    return { kind: 'legacy', rowVersion: null };
+  }
+  if (nextRowVersion !== null
+    && (previousRowVersion === null || nextRowVersion === previousRowVersion + 1)) {
+    return { kind: 'adopt', rowVersion: nextRowVersion };
+  }
+  return { kind: 'recovery', rowVersion: null };
+}

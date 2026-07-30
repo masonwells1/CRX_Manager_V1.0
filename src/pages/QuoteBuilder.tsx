@@ -45,7 +45,12 @@ import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
-import { buildRowVersionPatch, readRowVersion, resolveDirectMutationRowVersion } from '../lib/recordVersionConcurrency';
+import {
+  buildRowVersionPatch,
+  readRowVersion,
+  resolveAuthoritativeSaveRowVersion,
+  resolveDirectMutationRowVersion,
+} from '../lib/recordVersionConcurrency';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { warnIfOverCreditLimit } from '../lib/creditLimit';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
@@ -628,6 +633,11 @@ export default function QuoteBuilder() {
       .maybeSingle();
     const nextRowVersion = readRowVersion((data as { row_version?: unknown } | null)?.row_version);
 
+    if (!error && data && previousRowVersion === null && expectedRowVersion === null && nextRowVersion === null) {
+      quoteRowVersionRef.current = null;
+      return true;
+    }
+
     if (error || !data || previousRowVersion === null || expectedRowVersion === null || nextRowVersion !== expectedRowVersion) {
       if (error) {
         Sentry.captureException(error, { tags: { source: 'read', action: 'refresh_quote_row_version_after_mutation' } });
@@ -641,12 +651,15 @@ export default function QuoteBuilder() {
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
   const installAuthoritativeQuoteRowVersion = useCallback((authoritativeRowVersion: unknown, action: string): boolean => {
-    const nextRowVersion = readRowVersion(authoritativeRowVersion);
-    if (nextRowVersion === null) {
+    const rowVersionResult = resolveAuthoritativeSaveRowVersion(
+      quoteRowVersionRef.current,
+      authoritativeRowVersion,
+    );
+    quoteRowVersionRef.current = rowVersionResult.rowVersion;
+    if (rowVersionResult.kind === 'recovery') {
       clearQuoteRowVersionWithRefreshWarning(action);
       return false;
     }
-    quoteRowVersionRef.current = nextRowVersion;
     return true;
   }, [clearQuoteRowVersionWithRefreshWarning]);
 

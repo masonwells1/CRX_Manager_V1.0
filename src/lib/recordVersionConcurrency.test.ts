@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { buildRowVersionPatch, readRowVersion, resolveDirectMutationRowVersion } from './recordVersionConcurrency';
+import {
+  buildRowVersionPatch,
+  readRowVersion,
+  resolveAuthoritativeSaveRowVersion,
+  resolveDirectMutationRowVersion,
+} from './recordVersionConcurrency';
 
 describe('whole-record row-version client contract', () => {
   it('omits the token for an insert and includes the exact loaded token for an update', () => {
@@ -27,6 +32,15 @@ describe('whole-record row-version client contract', () => {
     expect(resolveDirectMutationRowVersion(null, undefined)).toEqual({ kind: 'legacy', rowVersion: null });
     expect(resolveDirectMutationRowVersion(null, null)).toEqual({ kind: 'legacy', rowVersion: null });
     expect(resolveDirectMutationRowVersion(null, 1)).toEqual({ kind: 'recovery', rowVersion: null });
+  });
+
+  it('keeps legacy saves compatible while rejecting missing or jumped post-migration tokens', () => {
+    expect(resolveAuthoritativeSaveRowVersion(null, undefined)).toEqual({ kind: 'legacy', rowVersion: null });
+    expect(resolveAuthoritativeSaveRowVersion(null, null)).toEqual({ kind: 'legacy', rowVersion: null });
+    expect(resolveAuthoritativeSaveRowVersion(null, 1)).toEqual({ kind: 'adopt', rowVersion: 1 });
+    expect(resolveAuthoritativeSaveRowVersion(7, 8)).toEqual({ kind: 'adopt', rowVersion: 8 });
+    expect(resolveAuthoritativeSaveRowVersion(7, undefined)).toEqual({ kind: 'recovery', rowVersion: null });
+    expect(resolveAuthoritativeSaveRowVersion(7, 9)).toEqual({ kind: 'recovery', rowVersion: null });
   });
 
   it('keeps quote and customer version reads compatible with pre-migration schemas', () => {
