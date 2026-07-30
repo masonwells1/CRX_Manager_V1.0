@@ -93,7 +93,7 @@ export function hasExplicitParkedMigrationHeader(sqlText) {
     if (!line.startsWith("--")) break;
     header.push(line.replace(/^--\s?/, ""));
   }
-  return header.some((line) => /^(?:status:\s*)?(?:PARKED(?=\s*$|\s*(?:\/\s*(?:NOT\s+APPLIED|DO\s+NOT\s+APPLY)\b|[—:-]))|NOT\s+APPLIED(?=\s*$|\s*(?:\/\s*DO\s+NOT\s+APPLY\b|[—:-]))|DO\s+NOT\s+APPLY(?=\s*$|\s*[—:-]))/i.test(line));
+  return header.some((line) => /^(?:status:\s*)?(?:PARKED(?:\s+DRAFT)?(?:\s*$|\s*(?:\/|—|:|-)\s*(?:NOT\s+APPLIED|DO\s+NOT\s+APPLY)\b)|NOT\s+APPLIED(?=\s*$|\s*(?:\/|—|:|-)\s*DO\s+NOT\s+APPLY\b)|DO\s+NOT\s+APPLY(?=\s*$|\s*[—:-]))/i.test(line));
 }
 
 // Repo-relative path, normalized for comparison (forward slashes, no leading "./",
@@ -112,7 +112,7 @@ export function normRepoPath(p) {
 const DRAFT_ROOTS = [
   { root: "scripts/.staging-migrations/", isDraft: isParkedMigrationFile },
   { root: "docs/audits/", isDraft: isDraftSqlName },
-  { root: "supabase/migrations/", isDraft: (_name, sqlText) => hasExplicitParkedMigrationHeader(sqlText) },
+  { root: "supabase/migrations/", isDraft: (name, sqlText) => isParkedMigrationFile(name) && hasExplicitParkedMigrationHeader(sqlText) },
 ];
 
 // Is this repo-relative path a parked migration draft? A normal forward migration
@@ -201,13 +201,126 @@ export function excludeInheritedFallbackPaths(paths, originMainPaths) {
 }
 
 // Mainline can retain historical PARKED prose after an apply. It contributes
-// only staging/audit draft paths, classified from their names without git-show
-// content reads; forward migrations are always branch-owned-only.
+// only staging/audit draft paths in this cheap first pass. Forward migrations
+// need the history-and-blob cross-reference below.
 export function parkedMainlinePathsFrom(paths) {
   return [...(paths || [])].filter((raw) => {
     const p = String(raw || "").trim();
     return p && !normRepoPath(p).startsWith("supabase/migrations/") && isParkedDraftPath(p);
   });
+}
+
+// `migration-history.md` is the canonical B7 state record after a migration has
+// landed. A parked forward migration on origin/main therefore needs two facts from
+// the SAME immutable tree: an exact LOCAL CANDIDATE / NOT APPLIED history row and
+// an explicit leading status header in that exact SQL blob. Parsing the timestamp
+// column and a full backticked basename avoids fuzzy prose/timestamp matches.
+export function localCandidateMigrationPathsFromHistory(historyText) {
+  if (typeof historyText !== "string" || !historyText.trim()) {
+    return { state: "unknown", paths: new Set(), reason: "migration history is unreadable" };
+  }
+
+  const paths = new Set();
+  for (const raw of historyText.split("\n")) {
+    const line = raw.replace(/\r/g, "").trim();
+    if (!/^\|/.test(line)) continue;
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 3) continue;
+    const detail = cells.slice(2).join(" | ");
+    if (!/\bLOCAL\s+CANDIDATE\b[\s\S]*\bNOT\s+APPLIED\b/i.test(detail)) continue;
+
+    const version = cells[1];
+    if (!/^\d{14}$/.test(version)) {
+      return { state: "unknown", paths: new Set(), reason: "LOCAL CANDIDATE history row has no exact migration timestamp column" };
+    }
+    const filenames = [...detail.matchAll(/`(\d{14}_[a-z0-9_]+\.sql)`/gi)].map((match) => match[1]);
+    if (filenames.length !== 1 || !filenames[0].startsWith(`${version}_`)) {
+      return { state: "unknown", paths: new Set(), reason: "LOCAL CANDIDATE history row has no single exact migration basename" };
+    }
+    const repoPath = normRepoPath(`supabase/migrations/${filenames[0]}`);
+    if (paths.has(repoPath)) {
+      return { state: "unknown", paths: new Set(), reason: "duplicate LOCAL CANDIDATE history rows name the same migration" };
+    }
+    paths.add(repoPath);
+  }
+  return { state: "known", paths, reason: "" };
+}
+
+// Mainline discovery intentionally reads SQL only for filenames the canonical
+// origin/main history has already marked LOCAL CANDIDATE / NOT APPLIED. A stale
+// applied header therefore cannot resurrect the old migration list. Broken links
+// are fail-loud rather than a confident zero; staging/audit name-based drafts remain
+// visible in the returned partial set.
+export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () => null) {
+  const mainlinePaths = [...(paths || [])].map((p) => String(p || "").trim()).filter(Boolean);
+  const discovered = parkedMainlinePathsFrom(mainlinePaths);
+  const history = localCandidateMigrationPathsFromHistory(historyText);
+  if (history.state !== "known") return { ...history, paths: new Set(discovered) };
+
+  const treeByPath = new Map();
+  for (const p of mainlinePaths) {
+    const key = normRepoPath(p);
+    const list = treeByPath.get(key) || [];
+    list.push(p);
+    treeByPath.set(key, list);
+  }
+  for (const candidate of history.paths) {
+    const matches = treeByPath.get(candidate) || [];
+    if (matches.length !== 1) {
+      return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE history row does not map one-to-one to origin/main SQL" };
+    }
+    const sqlText = loadText(matches[0]);
+    if (typeof sqlText !== "string") {
+      return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL blob is unreadable from origin/main" };
+    }
+    if (!hasExplicitParkedMigrationHeader(sqlText)) {
+      return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL lacks an explicit parked status header" };
+    }
+    discovered.push(matches[0]);
+  }
+  return { state: "known", paths: new Set(discovered), reason: "" };
+}
+
+// CI/correction guard used by the injected regression suite. Unlike the runtime
+// discovery above, it may inspect the supplied forward-migration set to prove the
+// candidate registry is one-to-one in both directions. Runtime deliberately avoids
+// that broad blob scan so 76 historical headers cannot become a latency or false-list
+// regression.
+export function validateParkedMigrationCrossReferences(paths, historyText, loadText = () => null) {
+  const history = localCandidateMigrationPathsFromHistory(historyText);
+  if (history.state !== "known") return history;
+  const historyRowsByVersion = new Map();
+  for (const raw of String(historyText).split("\n")) {
+    const line = raw.replace(/\r/g, "").trim();
+    if (!/^\|/.test(line)) continue;
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 3 || !/^\d{14}$/.test(cells[1])) continue;
+    const rows = historyRowsByVersion.get(cells[1]) || [];
+    rows.push(cells.slice(2).join(" | "));
+    historyRowsByVersion.set(cells[1], rows);
+  }
+  const headers = new Set();
+  for (const raw of paths || []) {
+    const p = String(raw || "").trim();
+    const normalized = normRepoPath(p);
+    if (!normalized.startsWith("supabase/migrations/") || !isParkedMigrationFile(p.slice(p.lastIndexOf("/") + 1))) continue;
+    const sqlText = loadText(p);
+    if (typeof sqlText !== "string") return { state: "unknown", paths: new Set(), reason: "forward migration SQL blob is unreadable" };
+    if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
+    if (history.paths.has(normalized)) {
+      headers.add(normalized);
+      continue;
+    }
+    const version = p.slice(p.lastIndexOf("/") + 1).match(/^(\d{14})_/);
+    const rows = version ? historyRowsByVersion.get(version[1]) || [] : [];
+    if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
+      return { state: "unknown", paths: new Set(), reason: "parked header has no applied/retired history record for its migration version" };
+    }
+  }
+  if (headers.size !== history.paths.size || [...headers].some((p) => !history.paths.has(p))) {
+    return { state: "unknown", paths: new Set(), reason: "parked header and LOCAL CANDIDATE history registry are not one-to-one" };
+  }
+  return { state: "known", paths: history.paths, reason: "" };
 }
 
 // Builds the "what is THIS worktree pending?" reader that both the SessionStart hook and

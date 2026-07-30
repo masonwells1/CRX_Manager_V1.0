@@ -80,6 +80,17 @@ INVOKER` month-lock helper. The disposable baseline runs under one owner and
 cannot prove this live ownership boundary. This is a preflight requirement only;
 the candidate's SQL grant/ownership design is unchanged.
 
+**Transactional apply-channel and blocker preflight.** This migration deliberately
+uses `SET LOCAL lock_timeout`, which only remains in force when the migration runner
+executes the file inside one transaction. Before an approved apply, confirm and record
+that the governed apply channel is transactional, then observe that transaction wrapper
+in the apply evidence; do not substitute a non-transactional SQL channel. Immediately
+before starting it, take a read-only blocker census of active locks/sessions touching
+the affected accounting-period, vendor-bill, and purchase-order paths (including this
+month-lock advisory namespace when visible). The census is only a snapshot, not a claim
+that contention cannot arrive later: the existing fail-closed five-second lock timeout
+is intentionally unchanged and must still be observed if it fires.
+
 This slice guarantees only `create_vendor_bill` and `update_vendor_bill` date
 writes. `record_vendor_payment`, `void_vendor_payment`, `void_vendor_bill`, and
 other mutators that only call `check_period_open` retain their pre-existing

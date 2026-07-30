@@ -3,13 +3,17 @@
 // Run: node .claude/hooks/worktree-awareness-lib.test.mjs
 
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
   isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
   hasExplicitParkedMigrationHeader, isParkedFallbackFile, originMainDraftPathSet,
-  excludeInheritedFallbackPaths, parkedMainlinePathsFrom,
+  excludeInheritedFallbackPaths, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
+  localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
   createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
@@ -85,16 +89,19 @@ ok(!isDraftSqlName("2026-07-01-review-final.sql"), "audits sql without 'draft' i
 const DISPATCH = "scripts/.staging-migrations/workflow-waves-parked/PARKED-dispatch-backfill.sql";
 const PARKED_FORWARD = "supabase/migrations/20260729231031_vendor_bill_period_close_lock.sql";
 const PARKED_FORWARD_HEADER = "-- Accounting-period close/write serialization.\n-- PARKED / DO NOT APPLY without Mason approval\n";
+const PARKED_DRAFT_HEADER = "-- Purpose comment stays first.\n-- PARKED DRAFT — NOT APPLIED until review\n";
 ok(isParkedDraftPath(DISPATCH), "a staged .sql draft is a parked draft");
 ok(isParkedDraftPath("docs/audits/new-hunt/PARKED-brand-new.sql"), "an audits PARKED-*.sql is a parked draft");
 ok(isParkedDraftPath("docs/audits/2026-07-01-per-acre-draft.sql"), "an audits *draft*.sql is a parked draft");
 ok(!isParkedDraftPath("docs/audits/2026-07-01-review-final.sql"), "an audits .sql that is not a draft does not count");
 ok(!isParkedDraftPath("scripts/.staging-migrations/SUPERSEDED-old.sql"), "a SUPERSEDED draft is retired, not pending");
 ok(hasExplicitParkedMigrationHeader(PARKED_FORWARD_HEADER), "explicit parked header is recognized");
+ok(hasExplicitParkedMigrationHeader(PARKED_DRAFT_HEADER), "PARKED DRAFT / NOT APPLIED status line is recognized");
 ok(!hasExplicitParkedMigrationHeader("-- normal feature migration\nCREATE TABLE public.example();"), "ordinary leading comments do not park a migration");
 ok(!hasExplicitParkedMigrationHeader("-- This was previously parked for review\nSELECT 1;"), "historical parked prose is not a current status line");
 ok(!hasExplicitParkedMigrationHeader("-- PARKED migration notes appear later\nSELECT 1;"), "bare parked prose is not a current status line");
 ok(isParkedDraftPath(PARKED_FORWARD, PARKED_FORWARD_HEADER), "explicitly parked forward migration is surfaced");
+ok(!isParkedDraftPath("supabase/migrations/SUPERSEDED-20260729231031_vendor_bill_period_close_lock.sql", PARKED_FORWARD_HEADER), "SUPERSEDED forward migration is never surfaced");
 ok(!isParkedDraftPath("supabase/migrations/20260101000000_real.sql", "-- normal feature migration\nSELECT 1;"), "ordinary applied migration is not a parked draft");
 ok(isParkedFallbackFile(PARKED_FORWARD, "20260729231031_vendor_bill_period_close_lock.sql", () => PARKED_FORWARD_HEADER), "fallback finds an explicitly parked forward migration");
 ok(!isParkedFallbackFile("supabase/migrations/20260101000000_real.sql", "20260101000000_real.sql", () => "-- normal feature migration\nSELECT 1;"), "fallback excludes an ordinary forward migration");
@@ -159,6 +166,78 @@ const degradedFallback = excludeInheritedFallbackPaths(
 ).filter((p) => isParkedFallbackFile(p, p.slice(p.lastIndexOf("/") + 1), () => fallbackHeaders.get(p)));
 eq(degradedFallback, [PARKED_FORWARD], "degraded fallback finds only the branch-owned explicitly parked candidate");
 eq(parkedMainlinePathsFrom([DISPATCH, "docs/audits/PARKED-direct.sql", PARKED_FORWARD]), [DISPATCH, "docs/audits/PARKED-direct.sql"], "mainline classification is name-only and never re-lists forward migrations");
+
+// ── origin/main forward migrations: history + explicit header, or fail loud ──
+//
+// Runtime reads history once, then opens SQL blobs only for the exact filenames that
+// history calls LOCAL CANDIDATE / NOT APPLIED. This keeps 76 old applied headers from
+// coming back while still making a merged candidate visible until its B7 update.
+const CANDIDATE_NO_HEADER = "supabase/migrations/20260730235959_candidate_without_header.sql";
+const APPLIED_HEADER = "supabase/migrations/20260729010101_applied_old_header.sql";
+const SUPERSEDED_FORWARD = "supabase/migrations/SUPERSEDED-20260730235958_replaced.sql";
+const STALE_HEADERS = Array.from({ length: 76 }, (_unused, i) => `supabase/migrations/2025${String(i).padStart(10, "0")}_historical_${i}.sql`);
+const mainlineHistory = [
+  "| # | Migration timestamp | Purpose |",
+  "|---:|---|---|",
+  "| 842 | 20260729231031 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260729231031_vendor_bill_period_close_lock.sql`. |",
+  "| 843 | 20260730235959 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260730235959_candidate_without_header.sql`. |",
+  "| 841 | 20260729010101 | **APPLIED LIVE.** File: `20260729010101_applied_old_header.sql`. |",
+].join("\n");
+const mainlineTexts = new Map([
+  [PARKED_FORWARD, PARKED_FORWARD_HEADER],
+  [CANDIDATE_NO_HEADER, "-- purpose only\nSELECT 1;\n"],
+  [APPLIED_HEADER, PARKED_FORWARD_HEADER],
+  [SUPERSEDED_FORWARD, PARKED_FORWARD_HEADER],
+  ...STALE_HEADERS.map((p) => [p, PARKED_FORWARD_HEADER]),
+]);
+const mainlinePaths = [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD, CANDIDATE_NO_HEADER, APPLIED_HEADER, SUPERSEDED_FORWARD, ...STALE_HEADERS];
+const candidateReads = [];
+const mergedWithBrokenCandidate = parkedMainlineDiscoveryFrom(mainlinePaths, mainlineHistory, (p) => {
+  candidateReads.push(p);
+  return mainlineTexts.get(p);
+});
+eq(mergedWithBrokenCandidate.state, "unknown", "history candidate without explicit header is PARKED STATE UNKNOWN");
+eq(candidateReads, [PARKED_FORWARD, CANDIDATE_NO_HEADER], "runtime reads only history-candidate SQL blobs, never 76 stale headers");
+
+const mergedHistory = mainlineHistory.replace("**LOCAL CANDIDATE — NOT APPLIED.** File: `20260730235959_candidate_without_header.sql`.", "**APPLIED LIVE.** File: `20260730235959_candidate_without_header.sql`.");
+const mergedReads = [];
+const mergedCandidate = parkedMainlineDiscoveryFrom(mainlinePaths, mergedHistory, (p) => {
+  mergedReads.push(p);
+  return mainlineTexts.get(p);
+});
+eq(mergedCandidate.state, "known", "merged candidate has a coherent origin/main cross-reference");
+eq([...mergedCandidate.paths].sort(), [DISPATCH, "docs/audits/PARKED-mainline.sql", PARKED_FORWARD].sort(), "76 applied-like headers plus one merged candidate report exactly one forward migration");
+eq(mergedReads, [PARKED_FORWARD], "coherent merged state reads the candidate blob only once");
+
+const b7Applied = parkedMainlineDiscoveryFrom([PARKED_FORWARD], mergedHistory.replace("**LOCAL CANDIDATE — NOT APPLIED.** File: `20260729231031_vendor_bill_period_close_lock.sql`.", "**APPLIED LIVE.** File: `20260729231031_vendor_bill_period_close_lock.sql`."), () => PARKED_FORWARD_HEADER);
+eq(b7Applied.state, "known", "B7 applied history is a known state");
+eq([...b7Applied.paths], [], "B7 applied history self-clears even if an old header survives");
+
+const headerWithoutRow = validateParkedMigrationCrossReferences([PARKED_FORWARD], "| # | Migration timestamp | Purpose |\n|---:|---|---|", () => PARKED_FORWARD_HEADER);
+eq(headerWithoutRow.state, "unknown", "correction guard fails loud for a parked header without a candidate history row");
+const oneCandidateHistory = [
+  "| # | Migration timestamp | Purpose |",
+  "|---:|---|---|",
+  "| 842 | 20260729231031 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260729231031_vendor_bill_period_close_lock.sql`. |",
+].join("\n");
+const candidateWithoutHeader = validateParkedMigrationCrossReferences([PARKED_FORWARD], oneCandidateHistory, () => "-- ordinary migration\nSELECT 1;");
+eq(candidateWithoutHeader.state, "unknown", "correction guard fails loud for a candidate history row without its status header");
+const duplicateHistory = localCandidateMigrationPathsFromHistory(`${mergedHistory}\n| 999 | 20260729231031 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260729231031_vendor_bill_period_close_lock.sql\`. |`);
+eq(duplicateHistory.state, "unknown", "duplicate candidate history rows are not silently deduped");
+eq(localCandidateMigrationPathsFromHistory(null).state, "unknown", "unreadable history is PARKED STATE UNKNOWN");
+const unreadableBlob = parkedMainlineDiscoveryFrom([PARKED_FORWARD], mergedHistory, () => null);
+eq(unreadableBlob.state, "unknown", "unreadable candidate SQL blob is PARKED STATE UNKNOWN");
+const proseTimestamp = localCandidateMigrationPathsFromHistory("| 842 | 20260729231031 | **LOCAL CANDIDATE — NOT APPLIED.** Apply 20260729231031_vendor_bill_period_close_lock.sql after review. |");
+eq(proseTimestamp.state, "unknown", "prose filename/timestamp is not accepted as the exact Markdown migration reference");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const migrationDir = path.join(repoRoot, "supabase", "migrations");
+const repoMigrationPaths = readdirSync(migrationDir).filter((name) => name.endsWith(".sql")).map((name) => `supabase/migrations/${name}`);
+const currentCrossReference = validateParkedMigrationCrossReferences(
+  repoMigrationPaths,
+  readFileSync(path.join(repoRoot, "docs", "reference", "migration-history.md"), "utf8"),
+  (p) => readFileSync(path.join(repoRoot, ...p.split("/")), "utf8"),
+);
+eq(currentCrossReference.state, "known", "repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row");
 
 // Path normalization the count key depends on.
 eq(normRepoPath("Docs\\Audits\\A.SQL"), "docs/audits/a.sql", "backslashes, case and separators normalize");

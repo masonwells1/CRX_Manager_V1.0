@@ -23,7 +23,7 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile,
   lastNonEmptyLine, firstCommentLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
-  excludeInheritedFallbackPaths, parkedMainlinePathsFrom,
+  excludeInheritedFallbackPaths, parkedMainlineDiscoveryFrom,
 } from "../.claude/hooks/worktree-awareness-lib.mjs";
 
 // The repo root this script lives in (works no matter what cwd it's launched from).
@@ -248,23 +248,52 @@ for (const e of entries) {
   wtLines.push([head, ...sub.map((s) => `    ${s}`)].join("\n"));
 }
 
-// The mainline backlog, read straight from origin/main's tree. Without this, a fleet
-// where every checkout happens to be stale would report zero and hide real work.
+// The mainline backlog is read from one immutable origin/main tree. Forward SQL must
+// agree with migration-history.md, so historical applied headers never resurrect.
+const mainlineBlobCache = new Map();
+let mainlineParkedState = hasOriginMain ? "known" : "unknown";
+let mainlineParkedReason = hasOriginMain ? "" : "origin/main is unavailable";
 if (hasOriginMain) {
   try {
     const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()], repoRoot, 5000);
-    for (const p of parkedMainlinePathsFrom(tree.split("\n"))) {
-      const name = p.slice(p.lastIndexOf("/") + 1);
-      if (/^superseded/i.test(name) && /\.sql$/i.test(name)) { supersededSkipped++; continue; }
+    const history = git(["show", "origin/main:docs/reference/migration-history.md"], repoRoot, 5000);
+    const discovery = parkedMainlineDiscoveryFrom(tree.split("\n"), history, (p) => {
+      try {
+        const text = git(["show", `origin/main:${p}`], repoRoot, 5000);
+        mainlineBlobCache.set(normRepoPath(p), text);
+        return text;
+      } catch { return null; }
+    });
+    mainlineParkedState = discovery.state;
+    mainlineParkedReason = discovery.reason;
+    for (const p of discovery.paths) {
       const key = normRepoPath(p);
       const hit = parked.get(key);
       if (hit) {
         if (!hit.where.includes("origin/main")) hit.where.push("origin/main");
         continue;
       }
-      parked.set(key, { name: p, where: ["origin/main"], mtime: 0, comment: "" });
+      let text = mainlineBlobCache.get(key);
+      if (text === undefined) {
+        try {
+          text = git(["show", `origin/main:${p}`], repoRoot, 5000);
+          mainlineBlobCache.set(key, text);
+        } catch { text = ""; }
+      }
+      let mtime = null;
+      try {
+        const parsed = new Date(git(["log", "-1", "--format=%aI", "origin/main", "--", p], repoRoot, 5000).trim());
+        if (!Number.isNaN(parsed.valueOf())) mtime = parsed;
+      } catch { /* report the source path even if its Git date is unavailable */ }
+      parked.set(key, { name: p, where: ["origin/main"], mtime, comment: firstCommentLine(text, 120) });
     }
-  } catch { /* fail-open: worktree scan above still reported what it could */ }
+  } catch {
+    mainlineParkedState = "unknown";
+    mainlineParkedReason = "origin/main parked-state metadata is unreadable";
+  }
+}
+if (mainlineParkedState === "unknown") {
+  notes.push(`PARKED STATE UNKNOWN: ${mainlineParkedReason}. Resolve the origin/main migration-history/SQL cross-reference before treating the parked count as clear.`);
 }
 
 // ── 4. Print the report ──
@@ -276,7 +305,7 @@ console.log(wtLines.join("\n"));
 console.log("");
 
 const parkedList = [...parked.values()].sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
-console.log(`Parked migrations awaiting apply: ${parkedList.length}`);
+console.log(`Parked migrations awaiting apply: ${mainlineParkedState === "unknown" ? "PARKED STATE UNKNOWN" : parkedList.length}`);
 for (const p of parkedList) {
   console.log(`  • ${p.name} — in ${p.where.join(", ")} — last touched ${fmtDate(p.mtime)}${p.comment ? ` — ${p.comment}` : ""}`);
 }
@@ -285,7 +314,9 @@ if (supersededSkipped > 0) {
 }
 console.log("");
 
-if (parkedList.length > 0) {
+if (mainlineParkedState === "unknown") {
+  console.log("PARKED STATE UNKNOWN — do not treat this report as a clean zero until the origin/main migration-history/SQL cross-reference is repaired.");
+} else if (parkedList.length > 0) {
   console.log("WAITING ON YOU (Mason):");
   console.log(`  • ${parkedList.length} parked migration${parkedList.length === 1 ? "" : "s"} need${parkedList.length === 1 ? "s" : ""} your OK before touching the live database — say "/parked" to walk through them safely (plain-English explanation + review first; nothing applies without you).`);
 } else {

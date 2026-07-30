@@ -49,6 +49,15 @@ verify compatibility with the database role that will own the new `SECURITY
 INVOKER` month-lock helper. The disposable single-owner baseline cannot prove
 that live ownership boundary. This requires no SQL redesign or grant change.
 
+**Transactional apply-channel and blocker preflight.** The candidate's existing
+`SET LOCAL lock_timeout` is meaningful only if the approved migration channel wraps the
+file in one transaction. Before apply, confirm and record that transactional wrapper,
+then observe it in the apply evidence; a non-transactional SQL channel is not an
+alternative. Take a read-only immediate-before-apply blocker census for active locks or
+sessions on the accounting-period, vendor-bill, and purchase-order paths (and the month
+advisory-lock namespace when visible). This is a snapshot only: the existing five-second
+fail-closed timeout remains unchanged and must be observed if contention occurs.
+
 **Explicit scope residual.** This candidate guarantees only
 `create_vendor_bill` and `update_vendor_bill` date writes. `record_vendor_payment`,
 `void_vendor_payment`, `void_vendor_bill`, and other `check_period_open`-only

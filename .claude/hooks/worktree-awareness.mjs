@@ -18,7 +18,7 @@ import {
   parseWorktreePorcelain, siblingsOf, normPath,
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile, fleetSummaryLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
-  excludeInheritedFallbackPaths, parkedMainlinePathsFrom,
+  excludeInheritedFallbackPaths, parkedMainlineDiscoveryFrom,
 } from "./worktree-awareness-lib.mjs";
 
 function emit(extra) {
@@ -141,19 +141,18 @@ const ownDraftPaths = createOwnDraftPathsReader({
   },
 });
 
-// Mainline parked drafts are name-only: never read every tree blob and never
-// re-list a forward migration just because historical comments remain on disk.
-function draftPathsInTree(rev) {
-  const tree = git(["ls-tree", "-r", "--name-only", rev, "--", ...draftPathspec()]);
-  return parkedMainlinePathsFrom(tree.split("\n"));
-}
-
-// The mainline backlog, read straight from origin/main's tree rather than from any
-// checkout — so the count is right even when every worktree is stale.
-function mainlineParkedPaths() {
+// The mainline backlog is read from one immutable origin/main tree. A forward SQL
+// file counts only when migration-history.md names that exact LOCAL CANDIDATE file.
+function mainlineParkedDiscovery() {
   try {
-    return new Set(draftPathsInTree("origin/main").map((p) => normRepoPath(p)));
-  } catch { return new Set(); }
+    const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
+    const history = git(["show", "origin/main:docs/reference/migration-history.md"]);
+    return parkedMainlineDiscoveryFrom(tree.split("\n"), history, (p) => {
+      try { return git(["show", `origin/main:${p}`]); } catch { return null; }
+    });
+  } catch {
+    return { state: "unknown", paths: new Set(), reason: "origin/main parked-state metadata is unreadable" };
+  }
 }
 
 const originMainDraftPaths = hasOriginMain ? originMainDraftPathSet((args) => {
@@ -168,7 +167,10 @@ const parkedFallbackNote = !hasOriginMain
 let fleetLine = "";
 try {
   const ledgerNames = new Set();
-  const parkedPaths = hasOriginMain ? mainlineParkedPaths() : new Set();
+  const mainline = hasOriginMain
+    ? mainlineParkedDiscovery()
+    : { state: "unknown", paths: new Set(), reason: "origin/main is unavailable" };
+  const parkedPaths = new Set([...mainline.paths].map((p) => normRepoPath(p)));
   for (const e of entries) {
     if (!e.path || !existsSync(e.path)) continue;
     for (const f of listDir(path.join(e.path, "docs", "loops"))) {
@@ -198,7 +200,10 @@ try {
       }
     }
   }
-  fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedPaths.size)}`;
+  fleetLine = `\n\n${fleetSummaryLine(ledgerNames.size, parkedPaths.size)}` +
+    (mainline.state === "unknown"
+      ? `\nPARKED STATE UNKNOWN: ${mainline.reason}. Do not treat the parked count as a clean zero.`
+      : "");
 } catch { fleetLine = ""; }
 
 emit(
