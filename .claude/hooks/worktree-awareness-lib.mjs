@@ -87,7 +87,10 @@ export function isDraftSqlName(name) {
 // approval item.
 export function hasExplicitParkedMigrationHeader(sqlText) {
   const header = [];
-  for (const raw of String(sqlText || "").split("\n")) {
+  // A UTF-8 BOM is an encoding marker, not migration content. Tolerate it only
+  // at byte zero so PowerShell-written SQL cannot disappear from the parked scan.
+  const text = String(sqlText || "").replace(/^\uFEFF/, "");
+  for (const raw of text.split("\n")) {
     // Keep the parser and the Git prefilter on portable whitespace: a status line
     // may indent or pad with ASCII space/tab, never Unicode whitespace such as NBSP.
     const line = raw.replace(/\r/g, "").replace(/^[ \t]+|[ \t]+$/g, "");
@@ -104,7 +107,7 @@ export function hasExplicitParkedMigrationHeader(sqlText) {
 // POSIX blank means portable ASCII space/tab, matching the parser exactly.
 export const ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS = [
   "grep", "-l", "-i", "-E",
-  "-e", "^[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)",
+  "-e", "^(\uFEFF)?[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)",
   "origin/main", "--", "supabase/migrations",
 ];
 

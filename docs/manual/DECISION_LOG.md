@@ -25,15 +25,17 @@ the protocol to unrelated writers.
 
 ---
 
-## 2026-07-30 — Empty search_path is the narrow stronger SECURITY DEFINER variant
+## 2026-07-30 — Empty search_path is the narrow fully-qualified SECURITY DEFINER exception
 
 **Decision (Mason, in-chat — "I approve pushing all of this and migrating and making it live",
 after the governed release packet and rule change were presented):** `SECURITY DEFINER`
 functions normally use `public, pg_temp`; an exactly empty `search_path` is allowed only for a
 deliberately fully schema-qualified body with current source and migration-review proof.
 `check_period_open(date)` is the first explicit exception.
-**Why:** an empty path removes mutable schema lookup entirely, while a separate live guard
-still fails if the function drifts to `public`, `pg_temp`, or any other non-empty path.
+**Why:** this exception is safe because every application relation reference is
+schema-qualified and a separate live guard enforces that requirement. PostgreSQL still
+searches `pg_temp` implicitly first with an empty path, so full qualification — not the
+empty path alone — is the protection.
 **What this forbids/implies:** never remove a function from the pg_temp contract silently;
 move a reviewed exception to the exact-empty allowlist and keep every relation schema-qualified.
 

@@ -93,6 +93,7 @@ ok(!isDraftSqlName("2026-07-01-review-final.sql"), "audits sql without 'draft' i
 const DISPATCH = "scripts/.staging-migrations/workflow-waves-parked/PARKED-dispatch-backfill.sql";
 const PARKED_FORWARD = "supabase/migrations/20260729231031_vendor_bill_period_close_lock.sql";
 const PARKED_FORWARD_HEADER = "-- Accounting-period close/write serialization.\n-- PARKED / DO NOT APPLY without Mason approval\n";
+const BOM_PARKED_FORWARD_HEADER = `\uFEFF${PARKED_FORWARD_HEADER}`;
 const PARKED_DRAFT_HEADER = "-- Purpose comment stays first.\n-- PARKED DRAFT — NOT APPLIED until review\n";
 const PARKED_COLON_HEADER = "-- PARKED: owner-gated. Do NOT apply without Mason's explicit OK.\n";
 const NOT_APPLIED_HEADER = "-- NOT APPLIED\n";
@@ -112,6 +113,7 @@ ok(isParkedDraftPath("docs/audits/2026-07-01-per-acre-draft.sql"), "an audits *d
 ok(!isParkedDraftPath("docs/audits/2026-07-01-review-final.sql"), "an audits .sql that is not a draft does not count");
 ok(!isParkedDraftPath("scripts/.staging-migrations/SUPERSEDED-old.sql"), "a SUPERSEDED draft is retired, not pending");
 ok(hasExplicitParkedMigrationHeader(PARKED_FORWARD_HEADER), "explicit parked header is recognized");
+ok(hasExplicitParkedMigrationHeader(BOM_PARKED_FORWARD_HEADER), "a UTF-8 BOM cannot hide an explicit parked header");
 ok(hasExplicitParkedMigrationHeader(PARKED_DRAFT_HEADER), "PARKED DRAFT / NOT APPLIED status line is recognized");
 ok(hasExplicitParkedMigrationHeader(PARKED_COLON_HEADER), "PARKED colon header with an owner-gated DO NOT APPLY directive is recognized");
 ok(hasExplicitParkedMigrationHeader(NOT_APPLIED_HEADER), "standalone NOT APPLIED status line is recognized");
@@ -350,12 +352,13 @@ for (const [path, header, label] of [
 
 eq(
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS,
-  ["grep", "-l", "-i", "-E", "-e", "^[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)", "origin/main", "--", "supabase/migrations"],
+  ["grep", "-l", "-i", "-E", "-e", "^(\uFEFF)?[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)", "origin/main", "--", "supabase/migrations"],
   "shared origin/main prefilter anchors to portable SQL comment status lines",
 );
 const grepFixtureDir = mkdtempSync(path.join(tmpdir(), "crx-parked-prefilter-"));
 try {
   const grepFixtures = [
+    ["bom.sql", BOM_PARKED_FORWARD_HEADER],
     ["spaced.sql", NOT_SPACED_APPLIED_HEADER],
     ["tabbed.sql", DO_TABBED_NOT_APPLY_HEADER],
     ["status-tabbed.sql", STATUS_TABBED_NOT_APPLIED_HEADER],
@@ -376,7 +379,7 @@ try {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((p) => path.basename(p));
-  eq(matches.sort(), ["indented.sql", "later.sql", "spaced.sql", "status-tabbed.sql", "tabbed.sql"], "anchored Git prefilter finds portable comment status lines, including the safe later-header superset only");
+  eq(matches.sort(), ["bom.sql", "indented.sql", "later.sql", "spaced.sql", "status-tabbed.sql", "tabbed.sql"], "anchored Git prefilter finds portable comment status lines and a leading UTF-8 BOM, including the safe later-header superset only");
 } finally {
   rmSync(grepFixtureDir, { recursive: true, force: true });
 }

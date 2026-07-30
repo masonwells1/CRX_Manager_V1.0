@@ -60,7 +60,7 @@ Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use des
 - Add database changes only as new files under `supabase/migrations/`; never edit an applied migration.
 - New tables must enable Row Level Security (RLS) and include policies in the same migration.
 - Mutating RPCs must accept and actually enforce `p_idempotency_key text DEFAULT NULL`.
-- `SECURITY DEFINER` functions normally must use `SET search_path = public, pg_temp` and deliberate grants. Per Mason's 2026-07-30 approval recorded in `docs/manual/DECISION_LOG.md`, an empty search path is allowed only as the stronger variant for a deliberately fully schema-qualified body with current source and migration-review proof.
+- `SECURITY DEFINER` functions normally must use `SET search_path = public, pg_temp` and deliberate grants. Per Mason's 2026-07-30 approval recorded in `docs/manual/DECISION_LOG.md`, an empty search path is allowed only as a narrow exception for a deliberately fully schema-qualified body with current source and migration-review proof.
 - Money is bigint cents. Never use floating-point math for stored or calculated money.
 - Inventory and financial invariants belong in PostgreSQL RPCs/triggers, not only in React.
 - Use `src/lib/db.ts` as the only Supabase client.
