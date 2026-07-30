@@ -11,7 +11,7 @@ import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../../lib/db';
+import { supabase, assertRpcResult, rpcAuthErrorMessage } from '../../lib/db';
 import {
   parseShapefileBundle,
   parseShapefileZip,
@@ -445,7 +445,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
         if (saveError) {
           failed++;
-          errors.push(`"${pf.field_name}": ${saveError.message}`);
+          errors.push(`"${pf.field_name}": ${rpcAuthErrorMessage(saveError) ?? saveError.message}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
           // Persist the boundary via the server-authoritative acreage RPC — it measures the
           // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
