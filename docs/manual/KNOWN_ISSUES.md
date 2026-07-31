@@ -695,9 +695,16 @@ with JWT enforcement and rejects supplier price/product lists before OCR.
 
 ## 1. Open HIGH findings (dormant on live data)
 
-### Whole-record lost-update class on quote/customer saves (surfaced by the 2026-07-22 Codex push-proof review of the commission UUID-routing work)
+### RESOLVED LIVE — Whole-record lost updates on quote/customer saves
 
-`save_quote`/`save_customer` saves resend the entire record, so a stale tab silently overwrites newer values on EVERY field (classic last-write-wins). The **money-bearing half — `quotes.commission_split` / `customers.default_commission_split` — is fixed and LIVE** as of 2026-07-22: clients omit the split when unedited, and migration `20260722190000_commission_split_lost_update_guard` (APPLIED LIVE, server version `20260722202622`) adds a server-verified `*_expected` optimistic-concurrency check plus a stored-split echo in the RPC result (routing triggers enrich splits with `recipient_user_id`, so the client must snapshot the STORED value or the second edit false-conflicts). **Still open:** the same lost-update applies to all other fields (notes, pricing terms, acres, …). A general fix means whole-record version checking with real UX trade-offs — deliberately deferred as a follow-up owner decision, not bundled into the split fix.
+The formerly open whole-record last-write-wins class is closed by live migration
+`20260730235031_quote_customer_row_version_guard`. Both save RPCs now require the
+loaded row-version token and reject stale editors before rewriting any field.
+See **“RESOLVED LIVE — Quote and Customer whole-record saves reject stale
+editors”** near the top of this file for the live proof, protected child-write
+boundary, and operator reload behavior. The earlier commission-split-specific
+guard remains useful defense in depth; it is no longer the only concurrency
+boundary.
 
 **Rollout ordering note (corrected 2026-07-30):** the client's no-echo fallback (`nextLoadedSplitSnapshot`, `src/lib/commissionSplitConcurrency.ts`) records the client-sent value as the next baseline when the old RPC returns no split echo. The compatible frontend must still ship first: its extra row-version JSON key is ignored by the old RPC, avoiding an all-user outage. A tab that stays open across the later approved apply can fail closed on its next save or split edit until refresh; that is the intentional residual, not an overwrite. Require the normal browser/PWA refresh during the bounded migration window, then run postflight/live smoke and regenerate generated schema/types afterward.
 

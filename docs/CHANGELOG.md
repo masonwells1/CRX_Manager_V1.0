@@ -50,6 +50,15 @@ The disposable real-schema prover now deterministically replays only through
 the row-version candidate, so later independently landed migrations do not
 invalidate its historical boundary proof.
 
+PR-review follow-up preserved the applied migration byte-for-byte and closed
+the replay-side-effect risk in the compatible client instead. A cached
+Quote-to-Order result deliberately retains `status:'created'` so a lost
+response can still emit the client-only email and alerts on its first observed
+retry; `QuoteBuilder` now mirrors the Quotes list's stable-`order_id` latch so
+the same mounted page cannot emit them twice. The stale Known Issues entry that
+still described whole-record lost updates as open now points to the resolved
+live rollout.
+
 ## 2026-07-30 — Final Quote lifecycle replay review closed two operator-safety gaps
 
 The pending row-version migration now binds `create_quote_version` idempotent
