@@ -693,8 +693,6 @@ Product-page and XLSX pricing paths are live, the final lifecycle migration is
 applied at `20260721014858`, and production `process-document` v19 is ACTIVE
 with JWT enforcement and rejects supplier price/product lists before OCR.
 
-## 1. Open HIGH findings (dormant on live data)
-
 ### RESOLVED LIVE — Whole-record lost updates on quote/customer saves
 
 The formerly open whole-record last-write-wins class is closed by live migration
@@ -707,6 +705,8 @@ guard remains useful defense in depth; it is no longer the only concurrency
 boundary.
 
 **Rollout ordering note (corrected 2026-07-30):** the client's no-echo fallback (`nextLoadedSplitSnapshot`, `src/lib/commissionSplitConcurrency.ts`) records the client-sent value as the next baseline when the old RPC returns no split echo. The compatible frontend must still ship first: its extra row-version JSON key is ignored by the old RPC, avoiding an all-user outage. A tab that stays open across the later approved apply can fail closed on its next save or split edit until refresh; that is the intentional residual, not an overwrite. Require the normal browser/PWA refresh during the bounded migration window, then run postflight/live smoke and regenerate generated schema/types afterward.
+
+## 1. Open HIGH findings (dormant on live data)
 
 ### July 14 full-gauntlet remediation — LIVE, frontend rolled out (PR #133 merged 2026-07-15)
 
