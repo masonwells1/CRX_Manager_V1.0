@@ -179,21 +179,94 @@ function fixedGitHubExecutable() {
   return resolved;
 }
 
+function fixedVercelCliInvocation() {
+  const candidates = process.platform === "win32"
+    ? [
+        path.join(homedir(), "AppData", "Roaming", "npm", "node_modules", "vercel", "dist", "index.js"),
+      ]
+    : [
+        "/usr/local/lib/node_modules/vercel/dist/index.js",
+        "/usr/lib/node_modules/vercel/dist/index.js",
+      ];
+  const script = candidates.find((candidate) => existsSync(candidate));
+  if (!script) {
+    throw new Error("Trusted Vercel CLI was not found in a fixed installation location.");
+  }
+  return { executable: process.execPath, prefixArgs: [script] };
+}
+
+function runVercelJson(args, { cwd, failureMessage }) {
+  const invocation = fixedVercelCliInvocation();
+  try {
+    return JSON.parse(execFileSync(invocation.executable, [
+      ...invocation.prefixArgs,
+      ...args,
+    ], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 30_000,
+      maxBuffer: 10 * 1024 * 1024,
+    }));
+  } catch {
+    throw new Error(failureMessage);
+  }
+}
+
 function newestFirst(left, right) {
   const leftTime = Date.parse(String(left?.created_at || left?.updated_at || "")) || 0;
   const rightTime = Date.parse(String(right?.created_at || right?.updated_at || "")) || 0;
   return rightTime - leftTime || Number(right?.id || 0) - Number(left?.id || 0);
 }
 
-export function selectCurrentProductionDeployment(deployments, statuses) {
+export function selectCurrentVercelAliasDeployment(inspection, deployment) {
+  const productionHost = new URL(FACTORY_PRODUCTION_URL).hostname.toLowerCase();
+  const aliases = Array.isArray(inspection?.aliases)
+    ? inspection.aliases.map((item) => String(item).toLowerCase())
+    : [];
+  const deploymentAliases = Array.isArray(deployment?.alias)
+    ? deployment.alias.map((item) => String(item).toLowerCase())
+    : [];
+  const [expectedOwner, expectedRepo] = FACTORY_GITHUB_REPOSITORY.split("/");
+  const sha = String(deployment?.gitSource?.sha || "");
+  if (!/^dpl_[A-Za-z0-9]+$/.test(String(inspection?.id || ""))
+      || inspection.id !== deployment?.id
+      || String(inspection?.target || "").toLowerCase() !== "production"
+      || String(inspection?.readyState || "").toUpperCase() !== "READY"
+      || !aliases.includes(productionHost)
+      || String(deployment?.target || "").toLowerCase() !== "production"
+      || String(deployment?.readyState || "").toUpperCase() !== "READY"
+      || !deploymentAliases.includes(productionHost)
+      || String(deployment?.gitSource?.type || "").toLowerCase() !== "github"
+      || String(deployment?.gitSource?.ref || "") !== "main"
+      || !/^[a-f0-9]{40}$/i.test(sha)
+      || String(deployment?.meta?.githubCommitSha || "") !== sha
+      || String(deployment?.meta?.githubCommitOrg || "") !== expectedOwner
+      || String(deployment?.meta?.githubCommitRepo || "") !== expectedRepo) {
+    throw new Error("The canonical production alias is not bound to a READY main-branch deployment from the governed GitHub repository.");
+  }
+  return {
+    deploymentId: inspection.id,
+    deployedCommit: sha,
+    deploymentUrl: String(inspection.url || ""),
+  };
+}
+
+export function selectCurrentProductionDeployment(deployments, statuses, deployedCommit) {
+  if (!/^[a-f0-9]{40}$/i.test(String(deployedCommit || ""))) {
+    throw new Error("The Vercel production alias did not identify an exact deployed commit.");
+  }
   const production = Array.isArray(deployments)
     ? deployments.filter((item) =>
       /^[a-f0-9]{40}$/i.test(String(item?.sha || ""))
-      && String(item?.environment || "").toLowerCase() === "production")
+      && String(item?.environment || "").toLowerCase() === "production"
+      && String(item.sha).toLowerCase() === String(deployedCommit).toLowerCase())
       .sort(newestFirst)
     : [];
   const deployment = production[0];
-  if (!deployment) throw new Error("GitHub has no current Production deployment record.");
+  if (!deployment) {
+    throw new Error("GitHub has no successful Production deployment record for the commit currently attached to the Vercel production alias.");
+  }
   const latestStatus = Array.isArray(statuses) ? [...statuses].sort(newestFirst)[0] : null;
   if (!latestStatus || String(latestStatus.state || "").toLowerCase() !== "success") {
     throw new Error("The newest Production deployment is not currently successful.");
@@ -216,10 +289,28 @@ async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
       deploymentState: "success",
       deploymentEnvironment: "Production",
       deploymentUrl: "https://factory-test.example.invalid/deployment",
+      vercelDeploymentId: "dpl_factory_test",
       productionUrl: FACTORY_PRODUCTION_URL,
       httpStatus: 200,
     };
   }
+  const productionHost = new URL(FACTORY_PRODUCTION_URL).hostname;
+  const vercelInspection = runVercelJson([
+    "inspect",
+    productionHost,
+    "--json",
+  ], {
+    cwd,
+    failureMessage: "Could not resolve the deployment currently attached to the canonical Vercel production alias.",
+  });
+  const vercelDeployment = runVercelJson([
+    "api",
+    `/v13/deployments/${vercelInspection.id}`,
+  ], {
+    cwd,
+    failureMessage: "Could not read the current canonical Vercel deployment metadata.",
+  });
+  const currentAlias = selectCurrentVercelAliasDeployment(vercelInspection, vercelDeployment);
   let deployments;
   try {
     deployments = JSON.parse(execFileSync(fixedGitHubExecutable(), [
@@ -234,19 +325,20 @@ async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
   } catch {
     throw new Error("Could not read current GitHub Production deployment records.");
   }
-  const newestProduction = Array.isArray(deployments)
+  const currentProduction = Array.isArray(deployments)
     ? [...deployments].filter((item) =>
       /^[a-f0-9]{40}$/i.test(String(item?.sha || ""))
-      && String(item?.environment || "").toLowerCase() === "production").sort(newestFirst)[0]
+      && String(item?.environment || "").toLowerCase() === "production"
+      && String(item.sha).toLowerCase() === currentAlias.deployedCommit.toLowerCase()).sort(newestFirst)[0]
     : null;
-  if (!newestProduction?.id) {
-    throw new Error("GitHub has no current Production deployment record.");
+  if (!currentProduction?.id) {
+    throw new Error("GitHub has no Production deployment record for the commit currently attached to the Vercel production alias.");
   }
   let statuses;
   try {
     statuses = JSON.parse(execFileSync(fixedGitHubExecutable(), [
       "api",
-      `repos/${FACTORY_GITHUB_REPOSITORY}/deployments/${newestProduction.id}/statuses?per_page=20`,
+      `repos/${FACTORY_GITHUB_REPOSITORY}/deployments/${currentProduction.id}/statuses?per_page=20`,
     ], {
       cwd,
       encoding: "utf8",
@@ -256,7 +348,11 @@ async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
   } catch {
     throw new Error("Could not read the current Production deployment status.");
   }
-  const accepted = selectCurrentProductionDeployment(deployments, statuses);
+  const accepted = selectCurrentProductionDeployment(
+    deployments,
+    statuses,
+    currentAlias.deployedCommit,
+  );
   let comparison;
   try {
     comparison = JSON.parse(execFileSync(fixedGitHubExecutable(), [
@@ -295,7 +391,9 @@ async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
     deploymentStatusId: Number(accepted.status.id),
     deploymentState: "success",
     deploymentEnvironment: String(accepted.deployment.environment),
-    deploymentUrl: String(accepted.status.environment_url || accepted.status.log_url || ""),
+    deploymentUrl: currentAlias.deploymentUrl
+      || String(accepted.status.environment_url || accepted.status.log_url || ""),
+    vercelDeploymentId: currentAlias.deploymentId,
     productionUrl: FACTORY_PRODUCTION_URL,
     httpStatus: response.status,
   };
@@ -731,8 +829,9 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       "## Production verification",
       "",
       `- GitHub repository: \`${productionVerification.repository}\``,
-      `- Current Production deployment: \`${productionVerification.deploymentId}\``,
-      `- Currently deployed commit: \`${productionVerification.deployedCommit}\` (landing or proven descendant)`,
+      `- Vercel deployment currently attached to the canonical alias: \`${productionVerification.vercelDeploymentId}\``,
+      `- Matching GitHub Production deployment: \`${productionVerification.deploymentId}\``,
+      `- Alias-bound deployed commit: \`${productionVerification.deployedCommit}\` (landing or proven descendant)`,
       `- Deployment status: \`${productionVerification.deploymentState}\` (status \`${productionVerification.deploymentStatusId}\`)`,
       `- Canonical URL: ${productionVerification.productionUrl}`,
       `- Canonical URL response: HTTP ${productionVerification.httpStatus}`,

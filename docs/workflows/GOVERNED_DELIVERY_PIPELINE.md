@@ -127,6 +127,11 @@ fingerprint before the ticket or morning decision is re-presented there.
 - The authoritative factory CLI, state broker, read-only Board, and `package.json` test wiring are
   all risky/protected trust-chain surfaces. A governed lane cannot rewrite them, and any later
   publication that changes them requires a fresh exact-SHA Sol/high review.
+- After Mason accepts the exact bytes and those bytes are committed, landing custody permits the
+  one canonical `write-codex-push-proof.mjs` command required by the existing risky push/merge
+  guard. The hook revalidates the accepted fingerprint at committed `HEAD` and rewrites the command
+  to the protected absolute wrapper path; arbitrary scripts, flags, source edits, and parallel
+  sessions remain blocked.
 - Factory-intent routing writes a separate per-session failure latch before the shared ledger. If
   ledger append fails, build writes and mutating factory commands stay blocked until recovery and
   successful owner-prompt re-submit clears the latch. The owner text is secret-scanned before any
@@ -137,10 +142,12 @@ fingerprint before the ticket or morning decision is re-presented there.
 - Permit-bound factory commands never read caller-selected files. Ticket JSON and short
   summary/blocker/recovery text travel as bounded canonical base64; secret-shaped operational text
   is rejected before it can enter the ledger or board.
-- A job becomes `live` only when the newest GitHub Production deployment has a newest status of
-  `success` and GitHub compare proves its deployed SHA is the recorded landing commit or a
-  descendant. Historical success followed by `inactive`, or a rollback to an older SHA, fails
-  closed even when the canonical URL still returns HTTP 200.
+- A job becomes `live` only when authenticated Vercel inspection resolves the deployment currently
+  attached to the fixed canonical production alias, that deployment is `READY`, its Git source is
+  the governed repository's exact `main` commit, and a matching GitHub Production deployment has a
+  newest status of `success`. GitHub compare must prove the alias-bound SHA is the recorded landing
+  commit or a descendant. A Vercel alias rollback therefore fails closed even if a newer historical
+  GitHub deployment remains successful and the canonical URL still returns HTTP 200.
 - The board binds only to loopback and is read-only.
 - A global hold clears only on an unambiguous affirmative owner resume/restart phrase; negated
   phrases such as “do not resume” leave the hold active.
@@ -189,10 +196,12 @@ bytes that passed the accepted harness. Harness and independent-review artifacts
 re-hashed from the shared evidence store before morning review and closeout; commit-bound closeout
 reads the harness script wiring from that frozen landing commit, not the mutable caller checkout.
 The CLI has no arbitrary
-local-file evidence route. Production verification is performed by the trusted broker: GitHub must
-report a successful `Production` deployment for the exact landing SHA and the fixed canonical app URL
-must answer HTTP 200 without a redirect. Caller-supplied production prose is neither accepted nor
-persisted. The persistence scan still covers every ticket and ledger payload, including raw JWT/Supabase-key
+local-file evidence route. Production verification is performed by the trusted broker: authenticated
+Vercel metadata must bind the canonical alias to a `READY` deployment from this repository's exact
+`main` SHA, GitHub must report a successful `Production` deployment for that same alias-bound SHA,
+GitHub compare must prove landing ancestry, and the fixed canonical app URL must answer HTTP 200
+without a redirect. Caller-supplied production prose is neither accepted nor persisted. The
+persistence scan still covers every ticket and ledger payload, including raw JWT/Supabase-key
 shapes and common GitHub, AWS, Google, Slack, Stripe, named-password, API-key, and access-token forms.
 
 Closeout is retry-safe and two-phase. The first call machine-verifies production and prepares a

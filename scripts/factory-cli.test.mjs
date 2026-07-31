@@ -17,6 +17,7 @@ import {
 import {
   productionComparisonAccepts,
   selectCurrentProductionDeployment,
+  selectCurrentVercelAliasDeployment,
 } from "./factory.mjs";
 import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
 
@@ -26,6 +27,7 @@ for (const name of Object.keys(process.env)) {
   if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) delete process.env[name];
 }
 const script = path.join(root, "scripts", "factory.mjs");
+const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-cli-"));
 const fixtureDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-fixture-"));
 const fixtureRepo = path.join(fixtureDir, "repo");
@@ -67,11 +69,53 @@ function base64(value) {
     { id: 10, sha: "a".repeat(40), environment: "Production", created_at: "2026-07-30T10:00:00.000Z" },
     { id: 11, sha: "b".repeat(40), environment: "Production", created_at: "2026-07-30T11:00:00.000Z" },
   ];
+  const currentAlias = selectCurrentVercelAliasDeployment({
+    id: "dpl_rollback",
+    target: "production",
+    readyState: "READY",
+    aliases: ["croprxsolutions.app"],
+    url: "crx-rollback.vercel.app",
+  }, {
+    id: "dpl_rollback",
+    target: "production",
+    readyState: "READY",
+    alias: ["croprxsolutions.app"],
+    gitSource: { type: "github", ref: "main", sha: "a".repeat(40) },
+    meta: {
+      githubCommitSha: "a".repeat(40),
+      githubCommitOrg: "masonwells1",
+      githubCommitRepo: "CRX_Manager_V1.0",
+    },
+  });
+  assertions++;
+  assert.equal(currentAlias.deployedCommit, "a".repeat(40), "Vercel alias metadata identifies the commit actually serving production");
   const rollback = selectCurrentProductionDeployment(deployments, [
     { id: 21, state: "success", created_at: "2026-07-30T11:01:00.000Z" },
-  ]);
+  ], currentAlias.deployedCommit);
   assertions++;
-  assert.equal(rollback.deployment.sha, "b".repeat(40), "production proof selects the newest deployment, including a rollback SHA");
+  assert.equal(rollback.deployment.sha, "a".repeat(40), "production proof follows the Vercel alias rollback instead of a newer historical GitHub deployment");
+  assertions++;
+  assert.throws(
+    () => selectCurrentVercelAliasDeployment({
+      id: "dpl_rollback",
+      target: "production",
+      readyState: "READY",
+      aliases: ["croprxsolutions.app"],
+    }, {
+      id: "dpl_rollback",
+      target: "production",
+      readyState: "READY",
+      alias: ["croprxsolutions.app"],
+      gitSource: { type: "github", ref: "main", sha: "a".repeat(40) },
+      meta: {
+        githubCommitSha: "b".repeat(40),
+        githubCommitOrg: "masonwells1",
+        githubCommitRepo: "CRX_Manager_V1.0",
+      },
+    }),
+    /not bound to a READY main-branch deployment/i,
+    "production proof rejects conflicting Vercel Git metadata",
+  );
   assertions++;
   assert.equal(productionComparisonAccepts("behind"), false, "a deployed rollback behind the landing commit is rejected");
   assertions++;
@@ -83,7 +127,7 @@ function base64(value) {
     () => selectCurrentProductionDeployment(deployments, [
       { id: 30, state: "success", created_at: "2026-07-30T11:01:00.000Z" },
       { id: 31, state: "inactive", created_at: "2026-07-30T11:02:00.000Z" },
-    ]),
+    ], "b".repeat(40)),
     /not currently successful/i,
     "a newer inactive status overrides historical success",
   );
@@ -362,6 +406,60 @@ assert.equal(gitResult.status, 0, gitResult.stderr);
 const committedLanding = validateApprovedFactoryLanding(fixtureRepo, { paths, commitish: "HEAD" });
 assertions++;
 assert.equal(committedLanding.repository.repositoryContentHash, acceptedReview.repositoryContentHash, "commit retains the exact owner-accepted repository bytes");
+const pushProofHook = spawnSync(process.execPath, [laneHook], {
+  cwd: fixtureRepo,
+  encoding: "utf8",
+  env: {
+    ...process.env,
+    CLAUDE_PROJECT_DIR: fixtureRepo,
+    CRX_AGENT_SURFACE: "codex",
+    CRX_FACTORY_TEST_MODE: "1",
+    CRX_FACTORY_TEST_STATE_DIR: stateDir,
+  },
+  input: JSON.stringify({
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/write-codex-push-proof.mjs --timeout 2400" },
+  }),
+});
+assertions++;
+assert.equal(pushProofHook.status, 0, pushProofHook.stderr);
+const pushProofDecision = JSON.parse(pushProofHook.stdout).hookSpecificOutput;
+assertions++;
+assert.equal(pushProofDecision.permissionDecision, "allow", "committed accepted bytes may run the exact risky-PR Sol proof gate");
+assertions++;
+assert.match(
+  pushProofDecision.updatedInput.command.replace(/\\/g, "/"),
+  new RegExp(
+    `write-codex-push-proof\\.mjs"? --timeout 2400$`,
+    "i",
+  ),
+  "factory landing rewrites the proof wrapper to its canonical absolute path",
+);
+const widenedPushProofHook = spawnSync(process.execPath, [laneHook], {
+  cwd: fixtureRepo,
+  encoding: "utf8",
+  env: {
+    ...process.env,
+    CLAUDE_PROJECT_DIR: fixtureRepo,
+    CRX_AGENT_SURFACE: "codex",
+    CRX_FACTORY_TEST_MODE: "1",
+    CRX_FACTORY_TEST_STATE_DIR: stateDir,
+  },
+  input: JSON.stringify({
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/write-codex-push-proof.mjs --timeout 2400 --output elsewhere.json" },
+  }),
+});
+assertions++;
+assert.equal(widenedPushProofHook.status, 0, widenedPushProofHook.stderr);
+assertions++;
+assert.match(
+  JSON.parse(widenedPushProofHook.stdout).hookSpecificOutput.permissionDecisionReason,
+  /only exact-byte.*landing commands/i,
+  "factory landing rejects extra proof-wrapper flags and output destinations",
+);
 gitResult = spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
 const closeoutArgs = [
@@ -406,7 +504,7 @@ for (const requiredPacketText of [
   `Approved base: \`${approvedBase}\``,
   "Pre-closeout ledger checkpoint:",
   "## Independent review manifest",
-  "Current Production deployment:",
+  "Vercel deployment currently attached to the canonical alias:",
 ]) {
   assertions++;
   assert.equal(packetText.includes(requiredPacketText), true, `closeout packet records ${requiredPacketText}`);

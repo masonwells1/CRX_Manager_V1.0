@@ -273,8 +273,10 @@ fresh parallel chats. A stale lock has a validated age/process-checked
 recovery path, and an emergency hold still blocks lanes if the ledger cannot record Mason's pause.
 Mason's later chat acceptance means only
 `approved-to-land`; it never self-certifies a job as live. A live closeout additionally requires a
-commit already contained in `origin/main`, a successful GitHub Production deployment for that exact
-SHA, HTTP 200 from the fixed canonical app URL, re-hashed attached proof, and a durable content-hashed
+commit already contained in `origin/main`, authenticated Vercel proof of the exact `READY` main
+commit currently attached to the canonical production alias, a successful GitHub Production
+deployment for that same SHA, HTTP 200 from the fixed canonical app URL, re-hashed attached proof,
+and a durable content-hashed
 packet under `docs/audits/factory/jobs/`. Packet preparation does not mark the job live. The exact
 packet must first be committed into `origin/main`; closeout then rechecks production and records the
 packet-containing commit.
@@ -494,6 +496,17 @@ factory command. Permit and working-directory rewrites now follow the actual too
 `Bash` receives POSIX syntax even on Windows, while `PowerShell` and Codex `shell_command` retain
 PowerShell syntax. The regression invokes the installed Git Bash with the hook-rewritten,
 one-time-permit command and requires a real governed ledger transition to `verifying`.
+
+A fifteenth exact-SHA Sol/high acceptance found two landing deadlocks/truth gaps. First, factory
+custody blocked `write-codex-push-proof.mjs` after commit even though the existing risky merge guard
+requires that exact-SHA receipt. Landing custody now permits only that protected wrapper after
+revalidating the committed owner-accepted bytes and rewrites it to the canonical absolute path.
+Second, a historical successful GitHub deployment plus HTTP 200 could not identify the commit
+actually serving after a Vercel alias rollback. Closeout now resolves the deployment currently
+attached to `croprxsolutions.app` through authenticated Vercel inspection, requires a `READY`
+main-branch deployment from the governed repository with internally matching Git metadata, requires
+a successful GitHub Production record for that same SHA, and compares that alias-bound SHA to the
+landing commit. A rollback behind the job therefore cannot be labeled `live`.
 
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 

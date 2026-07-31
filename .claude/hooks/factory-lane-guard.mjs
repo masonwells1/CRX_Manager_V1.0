@@ -406,10 +406,27 @@ function isActiveLaneShellRead(toolName, toolInput) {
     || /^\s*node(?:\.exe)?\s+--check\s+\S+\s*$/i.test(command);
 }
 
+function pushProofInvocation(toolName, toolInput, projectDir) {
+  if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return null;
+  const command = String(toolInput?.command || "").trim().replace(/\\/g, "/");
+  const absolute = path.join(projectDir, "scripts", "write-codex-push-proof.mjs").replace(/\\/g, "/");
+  const match = command.match(new RegExp(
+    `^node(?:\\.exe)?\\s+(?:[\"']?${absolute.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\"']?|scripts/write-codex-push-proof\\.mjs)(?:\\s+--timeout\\s+([0-9]{3,4}))?$`,
+    "i",
+  ));
+  if (!match) return null;
+  const timeout = match[1] ? Number(match[1]) : 0;
+  if (timeout && (timeout < 300 || timeout > 3600)) return null;
+  return {
+    canonicalCommand: `node ${JSON.stringify(absolute)}${timeout ? ` --timeout ${timeout}` : ""}`,
+  };
+}
+
 function approvedLandingShellAction(toolName, toolInput, projectDir) {
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return "";
   const command = String(toolInput?.command || "").trim();
   if (!command || /[\r\n;&|<>`$(){}[\]*?!~%]/.test(command)) return "";
+  if (pushProofInvocation(toolName, toolInput, projectDir)) return "proof";
   if (/^git(?:\.exe)?\s+fetch\s+(?:--no-tags\s+)?origin\s+main\s*$/i.test(command)) return "refresh-base";
   if (/^git(?:\.exe)?\s+add\b/i.test(command)
       && !/\b(?:--pathspec-from-file|--interactive|--patch)\b|(?:^|\s)-[ip](?:\s|$)/i.test(command)) {
@@ -586,10 +603,14 @@ if (governedJob.stage === "approved-to-land") {
   try {
     validateApprovedFactoryLanding(projectDir, {
       paths,
-      commitish: ["push", "pr-create", "merge"].includes(landingAction) ? "HEAD" : "",
+      commitish: ["proof", "push", "pr-create", "merge"].includes(landingAction) ? "HEAD" : "",
     });
   } catch (error) {
     deny(`CRX FACTORY GATE: the accepted landing bytes are no longer valid (${error.message}). Park the job, rerun evidence and Sol/high review, and re-present the exact morning decision before landing.`);
+  }
+  if (landingAction === "proof") {
+    const proof = pushProofInvocation(payload?.tool_name, payload?.tool_input, projectDir);
+    allowWithCommand(payload, proof.canonicalCommand, projectDir);
   }
   nothing();
 }

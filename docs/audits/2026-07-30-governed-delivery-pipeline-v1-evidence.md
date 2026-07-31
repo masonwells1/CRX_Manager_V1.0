@@ -78,10 +78,13 @@ pipeline remains the delivery engine and all of its landing and production gates
   commands remain available. The lane, Claude push/merge guards, and Codex production guard revalidate
   the accepted fingerprint, ticket scope, original or authoritative merge base, harness artifacts,
   and Sol/high receipt. Drift or an alternate source ref fails closed and requires parking, fresh
-  proof, and a newly presented owner decision.
+  proof, and a newly presented owner decision. After the accepted bytes are committed, the sole
+  additional executable is the protected canonical Sol push-proof wrapper required by the existing
+  risky merge guard; it receives the same exact-byte revalidation and no arbitrary arguments.
 - Live closeout requires an accepted job, a landing commit contained in `origin/main`, a successful
-  GitHub `Production` deployment for that exact SHA, HTTP 200 from the fixed canonical app URL, proof
-  still bound to the job's immutable original base, and a durable content-hashed packet under
+  GitHub `Production` deployment for the exact SHA that authenticated Vercel inspection proves is
+  currently attached to the canonical alias, HTTP 200 from that fixed app URL, proof still bound to
+  the job's immutable original base, and a durable content-hashed packet under
   `docs/audits/factory/jobs/`. Caller-authored production proof is not accepted. The named landing
   commit's content fingerprint must equal the harness-proven bytes; every harness/review artifact is
   reopened and re-hashed; and the packet records approved base, reviewer verdicts, and the
@@ -118,7 +121,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 357 focused assertions after fourteenth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 364 focused assertions after fifteenth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,238 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -369,6 +372,18 @@ recursive force-delete cleanup command.
   syntax. The regression executes the hook-rewritten command through the installed Git Bash and
   requires the permitted ledger transition to `verifying`. Fresh exact-commit acceptance is still
   required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `ba27784d4e80ee541be39ac146a1f8b4a3200eae` returned `BLOCKERS`: factory custody prevented an
+  accepted risky job from running the exact committed-HEAD Sol wrapper required by the existing
+  merge guard, and closeout inferred the currently served commit from historical GitHub deployment
+  state plus an unbound HTTP 200. Landing custody now permits only the protected canonical proof
+  wrapper after exact committed-byte revalidation. Production verification now resolves the
+  deployment currently attached to the fixed Vercel alias, requires `READY` main-branch metadata
+  bound internally to this GitHub repository and commit, selects a successful GitHub Production
+  record for that same SHA, and compares the alias-bound SHA to the landing commit. A focused live
+  read-only check resolved `croprxsolutions.app` to Vercel deployment
+  `dpl_651MbCbYv4WBeEWB9x3JxCGzAAad` at `2fd55fea6ccc83400a68e5d9492a5df24d8a233c`.
+  Fresh exact-commit acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
