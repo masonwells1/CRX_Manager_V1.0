@@ -123,7 +123,15 @@ if (transportEnv.length > 0) {
 // And the same variables arriving from the surrounding shell. Unlike GIT_CONFIG*,
 // an inherited one is NOT neutralised by this guard sharing the environment: it
 // changes what the push runs, not what the guard reads.
-const inheritedTransport = environmentCarriesTransportOverride(process.env);
+let trustedGitExecPath = null;
+try {
+  const cleanExecEnv = { ...process.env };
+  delete cleanExecEnv.GIT_EXEC_PATH;
+  trustedGitExecPath = execFileSync("git", ["--exec-path"], {
+    encoding: "utf8", env: cleanExecEnv, windowsHide: true,
+  }).trim();
+} catch { /* fail closed below when GIT_EXEC_PATH is present */ }
+const inheritedTransport = environmentCarriesTransportOverride(process.env, trustedGitExecPath);
 if (inheritedTransport.length > 0) {
   deny(`CODEX GATE: this shell already has transport variables set (${inheritedTransport.join(", ")}) whose values are outside the sanctioned keepalive shape. They select a command git executes, so the push could reach production regardless of the destination this guard inspected. Unset them before pushing.`);
 }

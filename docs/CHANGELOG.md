@@ -2,6 +2,13 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-31 — Push and backup transport identity hardening
+
+The push guard now catches PowerShell's stop-parsing spelling of `git push` and
+validates inherited `GIT_EXEC_PATH` against Git's real executable directory.
+Remote memory verification explicitly targets GitHub.com and strips ambient
+GitHub Enterprise host selection.
+
 ## 2026-07-30 — Memory snapshots verify remote bytes and safe pruning
 
 The private-memory workflow now downloads and SHA-256 verifies every remote note,

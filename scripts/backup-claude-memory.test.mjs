@@ -23,6 +23,7 @@ import {
   ghProbeAnswer,
   ghProbeCommand,
   redactUrl,
+  remoteReadCommand,
   scanForSecrets,
   stage,
   unsafeSnapshotName,
@@ -1058,6 +1059,13 @@ try {
     eq(spec.env.GITHUB_HOST, undefined, "and GITHUB_HOST");
     eq(spec.env.GH_ENTERPRISE_TOKEN, undefined, "and the enterprise token");
     eq(spec.env.PATH, "/usr/bin", "the rest of the environment is passed through");
+
+    const remoteSpec = remoteReadCommand("repos/masonwells1/CRX_Backups/contents/claude-memory", false, {
+      GH_HOST: "ghe.example.com", GITHUB_HOST: "ghe.example.com", PATH: "/usr/bin",
+    });
+    ok(remoteSpec.args.includes("github.com"), "remote byte verification pins github.com explicitly");
+    eq(remoteSpec.env.GH_HOST, undefined, "remote verification also strips GH_HOST");
+    eq(remoteSpec.env.GITHUB_HOST, undefined, "and GITHUB_HOST");
 
     const answered = (body) => ghProbeAnswer({ status: 0, stdout: JSON.stringify(body) });
     eq(

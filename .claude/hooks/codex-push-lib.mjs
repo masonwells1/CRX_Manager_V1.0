@@ -49,6 +49,7 @@ export function isGitPush(cmd) {
 export function pushHiddenByShellComposition(cmd) {
   const text = String(cmd || "");
   const unwrapped = text
+    .replace(/--%(?=\s)/g, "")      // PowerShell stop-parsing token: git --% push
     .replace(/`\r?\n/g, "")          // PowerShell line continuation
     .replace(/`(?=[^\r\n])/g, "")    // PowerShell character escape: pu`sh
     .replace(/\\\r?\n/g, "")         // POSIX shell line continuation
@@ -903,13 +904,23 @@ export function pushUsesTransportEnv(cmd) {
 // it. The residual risk is stated rather than hidden: a GIT_EXEC_PATH planted in
 // an earlier segment is indistinguishable from git's own export, so this rule
 // cannot see it.
-const INHERITED_TRANSPORT_ENV_NAME_SET = new Set(
-  TRANSPORT_ENV_NAMES.filter((name) => name !== "GIT_EXEC_PATH"),
-);
-export function environmentCarriesTransportOverride(env) {
-  return Object.keys(env || {}).filter(
-    (key) => INHERITED_TRANSPORT_ENV_NAME_SET.has(key.toUpperCase()) && !transportValueIsAllowed(key, env[key]),
-  );
+const INHERITED_TRANSPORT_ENV_NAME_SET = new Set(TRANSPORT_ENV_NAMES);
+const normalizedExecutablePath = (value) => path.resolve(String(value || "")).replace(/\\/g, "/").toLowerCase();
+export function environmentCarriesTransportOverride(env, trustedGitExecPath) {
+  const checksGitExecPath = arguments.length >= 2;
+  return Object.keys(env || {}).filter((key) => {
+    const upper = key.toUpperCase();
+    if (!INHERITED_TRANSPORT_ENV_NAME_SET.has(upper)) return false;
+    if (upper === "GIT_EXEC_PATH") {
+      // Git exports its own exec path into hooks. Compare it with a clean
+      // `git --exec-path` lookup; a planted value is executable search-path
+      // control and must be denied. Callers that omit the second argument keep
+      // the pure helper's historical behavior for compatibility.
+      return checksGitExecPath && (!trustedGitExecPath ||
+        normalizedExecutablePath(env[key]) !== normalizedExecutablePath(trustedGitExecPath));
+    }
+    return !transportValueIsAllowed(key, env[key]);
+  });
 }
 
 // URL rewrites are the other way inline-free config can redirect a push:

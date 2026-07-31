@@ -99,11 +99,22 @@ export function __setLinkStat(fn) { linkStat = fn || lstatSync; }
 let dirRead = readdirSync;
 export function __setDirRead(fn) { dirRead = fn || readdirSync; }
 
-const defaultRemoteRead = (apiPath, raw = false) => spawnSync(
-  "gh",
-  ["api", apiPath, ...(raw ? ["-H", "Accept: application/vnd.github.raw"] : [])],
-  { encoding: null, maxBuffer: 16 * 1024 * 1024 },
-);
+export function remoteReadCommand(apiPath, raw = false, baseEnv = process.env) {
+  const env = { ...baseEnv };
+  for (const name of GH_HOST_ENV) delete env[name];
+  return {
+    command: "gh",
+    args: ["api", "--hostname", "github.com", apiPath,
+      ...(raw ? ["-H", "Accept: application/vnd.github.raw"] : [])],
+    env,
+  };
+}
+const defaultRemoteRead = (apiPath, raw = false) => {
+  const spec = remoteReadCommand(apiPath, raw);
+  return spawnSync(spec.command, spec.args, {
+    encoding: null, maxBuffer: 16 * 1024 * 1024, env: spec.env, windowsHide: true,
+  });
+};
 let remoteRead = defaultRemoteRead;
 export function __setRemoteRead(fn) { remoteRead = fn || defaultRemoteRead; }
 
@@ -503,7 +514,13 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
         `      git@github.com:masonwells1/CRX_Backups.git, then re-run. Nothing was written.`
       );
     }
-    const inheritedTransport = environmentCarriesTransportOverride(process.env);
+    const cleanExecEnv = { ...env };
+    delete cleanExecEnv.GIT_EXEC_PATH;
+    const execPathAnswer = spawnSync("git", ["--exec-path"], {
+      encoding: "utf8", env: cleanExecEnv, windowsHide: true,
+    });
+    const trustedGitExecPath = execPathAnswer.status === 0 ? String(execPathAnswer.stdout || "").trim() : null;
+    const inheritedTransport = environmentCarriesTransportOverride(process.env, trustedGitExecPath);
     if (inheritedTransport.length > 0) {
       return (
         `FAIL: refusing to ${verb} — this shell has transport variables set\n` +

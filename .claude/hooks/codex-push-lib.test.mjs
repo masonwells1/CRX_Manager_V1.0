@@ -513,6 +513,10 @@ assert.equal(
   "including a PowerShell backtick escape inside `push`",
 );
 assert.equal(
+  pushHiddenByShellComposition("git --% push origin HEAD:main"), true,
+  "PowerShell's stop-parsing token cannot hide push",
+);
+assert.equal(
   pushHiddenByShellComposition("git pu\\sh origin HEAD:main"), true,
   "including a POSIX shell backslash escape inside `push`",
 );
@@ -735,6 +739,20 @@ assert.deepEqual(
 assert.deepEqual(
   environmentCarriesTransportOverride({ GIT_EXEC_PATH: "C:/Program Files/Git/mingw64/libexec/git-core" }),
   [], "an inherited GIT_EXEC_PATH is git's own export, not a finding",
+);
+assert.deepEqual(
+  environmentCarriesTransportOverride(
+    { GIT_EXEC_PATH: "C:/tmp/planted" },
+    "C:/Program Files/Git/mingw64/libexec/git-core",
+  ),
+  ["GIT_EXEC_PATH"], "a planted inherited GIT_EXEC_PATH is reported",
+);
+assert.deepEqual(
+  environmentCarriesTransportOverride(
+    { GIT_EXEC_PATH: "C:\\Program Files\\Git\\mingw64\\libexec\\git-core" },
+    "C:/Program Files/Git/mingw64/libexec/git-core",
+  ),
+  [], "git's own exported exec path survives slash differences",
 );
 assert.deepEqual(
   pushUsesTransportEnv(`GIT_EXEC_PATH=/tmp/evil git push origin main`),
@@ -1184,6 +1202,11 @@ assert.equal(pushDestinationToken("git push"), null);
       "and a PowerShell backtick escape cannot splice `push` past the hook",
     );
     deniedBecause(
+      "git --% push origin HEAD:main",
+      /quoting or command substitution/i,
+      "and PowerShell's stop-parsing token cannot hide `push` from the hook",
+    );
+    deniedBecause(
       "git pu\\sh origin HEAD:main",
       /quoting or command substitution/i,
       "and a POSIX shell backslash escape cannot splice `push` past the hook",
@@ -1335,6 +1358,11 @@ assert.equal(pushDestinationToken("git push"), null);
       assert.match(multiplePushUrls.reason, /CODEX GATE/, "the full hook explains the denial");
     } finally {
       git(["config", "--unset-all", "remote.origin.pushurl"], work);
+    }
+    {
+      const result = runHook(push, { GIT_EXEC_PATH: path.join(tmp, "planted-git-helpers") });
+      assert.equal(result.decision, "deny", "a planted inherited GIT_EXEC_PATH denies");
+      assert.match(result.reason || "", /GIT_EXEC_PATH/, "and the denial names it");
     }
 
     // Git substitutes insteadOf as raw text, not path segments. The configured
