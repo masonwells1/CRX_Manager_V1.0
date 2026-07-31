@@ -16,6 +16,7 @@ import {
   INDEX_FILE,
   MANIFEST,
   SNAPSHOT_KIND,
+  __setGitSpawn,
   __setDirRead,
   __setLinkStat,
   __setRemoteRead,
@@ -266,6 +267,27 @@ try {
       [INDEX_FILE]: "# Memory Index\n- [a](a.md) — hook\n",
       "a.md": "---\nname: a\n---\n\nCommission split for a real person.\n",
     });
+    // Repository discovery is a security decision, not a best-effort hint.
+    // Only Git's explicit "not a repository" answer permits an outside-repo
+    // destination; missing Git and every ambiguous discovery failure park.
+    {
+      const unavailable = path.join(root, "git-unavailable-destination");
+      __setGitSpawn(() => ({ status: null, stdout: "", stderr: "", error: Object.assign(new Error("ENOENT"), { code: "ENOENT" }) }));
+      const run = captured(() => stage(unavailable, notes));
+      eq(run.value, 1, "unavailable Git fails repository discovery closed");
+      ok(/could not determine whether this destination is inside a repository/.test(run.said), "the refusal explains the ambiguity");
+      ok(!readdirSafe(unavailable), "and unavailable Git writes nothing");
+      __setGitSpawn();
+    }
+    {
+      const unsafe = path.join(root, "git-discovery-error-destination");
+      __setGitSpawn(() => ({ status: 128, stdout: "", stderr: "fatal: detected dubious ownership in repository", error: undefined }));
+      const run = captured(() => stage(unsafe, notes));
+      eq(run.value, 1, "safe.directory and other discovery errors fail closed");
+      ok(/could not determine whether this destination is inside a repository/.test(run.said), "the discovery error is not treated as outside Git");
+      ok(!readdirSafe(unsafe), "and a discovery error writes nothing");
+      __setGitSpawn();
+    }
     // The scrubbed environment is NOT optional. git exports GIT_DIR into every
     // hook it runs, and `git init` under an inherited GIT_DIR re-initialises THAT
     // repository instead of the directory named by `-C` — which, the first time
@@ -1144,6 +1166,7 @@ try {
 
   console.log(`OK - backup-claude-memory checks passed (${pass} assertions).`);
 } finally {
+  __setGitSpawn();
   rmSync(root, { recursive: true, force: true });
 }
 

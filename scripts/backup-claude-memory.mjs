@@ -99,6 +99,12 @@ export function __setLinkStat(fn) { linkStat = fn || lstatSync; }
 let dirRead = readdirSync;
 export function __setDirRead(fn) { dirRead = fn || readdirSync; }
 
+// Test seam for repository discovery. Production always uses spawnSync; tests
+// substitute only the Git answer so unavailable-Git and permission failures can
+// be proven without changing the workstation running the suite.
+let gitSpawn = spawnSync;
+export function __setGitSpawn(fn) { gitSpawn = fn || spawnSync; }
+
 export function remoteReadCommand(apiPath, raw = false, baseEnv = process.env) {
   const env = { ...baseEnv };
   for (const name of GH_HOST_ENV) delete env[name];
@@ -346,9 +352,29 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
   const probe = nearestExisting(outDir);
   const env = { ...process.env };
   for (const name of GIT_DISCOVERY_ENV) delete env[name];
-  const git = (args, input) => spawnSync("git", ["-C", probe, ...args], { encoding: "utf8", env, input });
+  const git = (args, input) => gitSpawn("git", ["-C", probe, ...args], { encoding: "utf8", env, input });
   const top = git(["rev-parse", "--show-toplevel"]);
-  if (top.status !== 0) return null;                       // not inside a git repo at all
+  if (top.status !== 0) {
+    // A specific "not a repository" answer confirms the path is outside Git.
+    // Every other failure is ambiguous: missing Git, safe.directory, permission,
+    // config and execution errors cannot prove these private notes are
+    // unpublishable, so they fail closed before a byte is written or verified.
+    const notRepository = !top.error && /not a git repository|not inside a work tree/i.test(String(top.stderr || ""));
+    if (notRepository) return null;
+    return (
+      `FAIL: refusing to ${verb} — Git could not determine whether this destination is inside a repository.\n` +
+      `      An unavailable Git executable, permission failure, unsafe-directory check, or other discovery\n` +
+      `      error is not proof that private notes are unpublishable. Fix repository discovery and re-run.\n` +
+      `      Nothing was written.`
+    );
+  }
+  if (!String(top.stdout || "").trim()) {
+    return (
+      `FAIL: refusing to ${verb} — Git reported success without identifying a repository root.\n` +
+      `      The destination's publication risk cannot be proven. Fix repository discovery and re-run.\n` +
+      `      Nothing was written.`
+    );
+  }
 
   // Ask about files INSIDE the destination, not the destination itself: a
   // directory-only pattern (`docs/claude-memory/`) does not match a directory

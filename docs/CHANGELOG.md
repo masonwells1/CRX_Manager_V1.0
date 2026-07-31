@@ -2,6 +2,13 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-31 — Memory destination discovery fails closed
+
+The private-memory backup now distinguishes Git's explicit “not a repository”
+answer from missing-Git, permission, unsafe-directory, configuration, and other
+repository-discovery errors. Ambiguous failures refuse both staging and final
+verification before private notes can become publishable.
+
 ## 2026-07-31 — Dynamic Git subcommands fail closed
 
 The push guard now refuses Git invocations whose subcommand is supplied by a
