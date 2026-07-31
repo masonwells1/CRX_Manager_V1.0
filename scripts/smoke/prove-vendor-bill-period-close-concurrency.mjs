@@ -20,6 +20,7 @@ const BASELINE_MANIFEST = JSON.parse(readFileSync(path.join(BASE, 'manifest.json
 const MIGRATION_SUFFIX = '_vendor_bill_period_close_lock.sql';
 const IDEMPOTENCY_RECHECK_SUFFIX = '_close_accounting_period_idempotency_recheck.sql';
 const IMMUTABLE_DATE_MATH_SUFFIX = '_accounting_period_immutable_date_math.sql';
+const AP_BOUNDARY_HARDENING_SUFFIX = '_ap_period_close_boundary_hardening.sql';
 const migrationDir = path.join(ROOT, 'supabase', 'migrations');
 const migrationMatches = readdirSync(migrationDir)
   .filter((name) => /^\d{14}_/.test(name) && name.endsWith(MIGRATION_SUFFIX));
@@ -33,6 +34,10 @@ const immutableDateMathMatches = readdirSync(migrationDir)
   .filter((name) => /^\d{14}_/.test(name) && name.endsWith(IMMUTABLE_DATE_MATH_SUFFIX));
 assert.equal(immutableDateMathMatches.length, 1, `expected exactly one ${IMMUTABLE_DATE_MATH_SUFFIX} migration, found ${immutableDateMathMatches.join(', ') || 'none'}`);
 const IMMUTABLE_DATE_MATH_MIGRATION = path.join(migrationDir, immutableDateMathMatches[0]);
+const apBoundaryHardeningMatches = readdirSync(migrationDir)
+  .filter((name) => /^\d{14}_/.test(name) && name.endsWith(AP_BOUNDARY_HARDENING_SUFFIX));
+assert.equal(apBoundaryHardeningMatches.length, 1, `expected exactly one ${AP_BOUNDARY_HARDENING_SUFFIX} migration, found ${apBoundaryHardeningMatches.join(', ') || 'none'}`);
+const AP_BOUNDARY_HARDENING_MIGRATION = path.join(migrationDir, apBoundaryHardeningMatches[0]);
 const HELPER_ACL_POSTFLIGHT_SUFFIX = '_vendor_bill_month_lock_helper_acl_postflight.sql';
 const helperAclPostflightMatches = readdirSync(migrationDir)
   .filter((name) => /^\d{14}_/.test(name) && name.endsWith(HELPER_ACL_POSTFLIGHT_SUFFIX));
@@ -163,6 +168,9 @@ assert.deepEqual(
   candidateIndices.map((_, offset) => candidateIndices[0] + offset),
   'the release candidate migrations must be consecutive and in release order',
 );
+const apBoundaryHardeningIndex = pendingMigrations.findIndex((pending) =>
+  path.resolve(pending) === path.resolve(AP_BOUNDARY_HARDENING_MIGRATION));
+assert.ok(apBoundaryHardeningIndex > candidateIndices.at(-1), 'AP boundary hardening must replay after the original release candidate group');
 const preCandidateMigrations = pendingMigrations.slice(0, candidateIndices[0]);
 const postCandidateMigrations = pendingMigrations.slice(candidateIndices.at(-1) + 1);
 assert.ok(
@@ -222,6 +230,9 @@ try {
   const date = '2025-01-15', end = '2025-01-31', monthKey = 2025 * 12 + 1 - 1;
   const bill = (key, d = date) => `${claims()} SELECT public.create_vendor_bill('${vendor}'::uuid,NULL,'proof-${key}','${d}',NULL,NULL,1000,0,NULL,'${key}');`;
   const close = key => `${claims()} SELECT public.close_accounting_period('${end}'::date,'${ADMIN}'::uuid,'${key}');`;
+  const recordPayment = (billId, key, amount = 100) => `${claims()} SELECT public.record_vendor_payment('${billId}'::uuid,${amount},'${date}'::date,'check',NULL,NULL,'${key}');`;
+  const voidPayment = (paymentId, key) => `${claims()} SELECT public.void_vendor_payment('${paymentId}'::uuid,'proof void','${key}');`;
+  const voidBill = (billId, key) => `${claims()} SELECT public.void_vendor_bill('${billId}'::uuid,'proof void','${key}');`;
 
   // Baseline: pause the real writer after its real period check, close, then
   // release it. This proves the old check-then-write race.
@@ -261,6 +272,14 @@ try {
   assert.equal(scalar(`SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['create_vendor_bill','update_vendor_bill','close_accounting_period']) AND (NOT p.prosecdef OR NOT has_function_privilege(p.proowner, 'public._lock_accounting_months(date[],boolean)'::regprocedure, 'EXECUTE'))`), '0');
   assert.equal(scalar(`SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['create_vendor_bill','update_vendor_bill','check_period_open','close_accounting_period']) AND (NOT p.prosecdef OR EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS acl WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE') OR NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') OR NOT has_function_privilege('service_role', p.oid, 'EXECUTE'))`), '0');
   console.log('CANDIDATE_POSTFLIGHT_OWNER_AND_ACL_PASS');
+  assert.equal(scalar(`SELECT count(*) FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = ANY (ARRAY['record_vendor_payment','void_vendor_payment','void_vendor_bill']) AND (NOT p.prosecdef OR NOT has_function_privilege(p.proowner, 'public._lock_accounting_months(date[],boolean)'::regprocedure, 'EXECUTE') OR EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS acl WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE') OR has_function_privilege('anon', p.oid, 'EXECUTE') OR NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') OR NOT has_function_privilege('service_role', p.oid, 'EXECUTE'))`), '0');
+  assert.equal(scalar(`SELECT (has_table_privilege('authenticated', 'public.accounting_periods', 'INSERT') OR has_table_privilege('authenticated', 'public.accounting_periods', 'UPDATE') OR has_table_privilege('authenticated', 'public.accounting_periods', 'DELETE') OR has_table_privilege('authenticated', 'public.accounting_periods', 'TRUNCATE') OR EXISTS (SELECT 1 FROM pg_policy WHERE polrelid='public.accounting_periods'::regclass AND polcmd IN ('a','w','d','*')))::int`), '0');
+  const directPeriodWrite = sql(`BEGIN; ${claims()} SET LOCAL ROLE authenticated; INSERT INTO public.accounting_periods(period_start,period_end,status,closed_by) VALUES ('2031-01-01','2031-01-31','open','${ADMIN}'::uuid); COMMIT;`, { fail: true });
+  assert.notEqual(directPeriodWrite.status, 0, 'authenticated direct accounting-period insert unexpectedly succeeded');
+  assert.match(`${directPeriodWrite.stdout}\n${directPeriodWrite.stderr}`, /permission denied|row-level security/i);
+  assert.equal(scalar(`SELECT count(*) FROM public.accounting_periods WHERE period_start='2031-01-01'`), '0');
+  console.log('CANDIDATE_AP_BOUNDARY_POSTFLIGHT_PASS');
+  console.log('CANDIDATE_ACCOUNTING_PERIODS_DIRECT_WRITE_DENIED_PASS');
   // Same idempotency key: pause the first real close after its exclusive month
   // lock but before its upsert. The current check_idempotency helper serializes
   // this key before that lock, so this schedule proves helper serialization and
@@ -397,5 +416,102 @@ try {
   await h7.done; const forwardOrderResult = await forwardOrder.done; assert.equal(forwardOrderResult.code, 0, forwardOrderResult.err);
   assert.equal(scalar(`SELECT bill_date::text FROM public.vendor_bills WHERE id='${forwardInput}'::uuid`), '2025-02-15');
   console.log('CANDIDATE_UPDATE_CANONICAL_FORWARD_ORDER_PASS');
+
+  // AP writers use the same month-lock boundary as vendor-bill creation. These
+  // disposable barriers fire only after each real RPC has checked the period.
+  sql(`CREATE OR REPLACE FUNCTION public._proof_pause_ap_writer() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_advisory_lock(${KEY}); PERFORM pg_advisory_unlock(${KEY}); RETURN NEW; END$$; CREATE TRIGGER proof_pause_ap_payment_insert BEFORE INSERT ON public.vendor_payments FOR EACH ROW EXECUTE FUNCTION public._proof_pause_ap_writer();`);
+  const recordWriterFirstBill = scalar(`${bill('ap-record-writer-first-bill')}`);
+  const h8 = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(${BARRIER_SECONDS}); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await h8.ready;
+  const recordWriterFirst = session(`BEGIN; SELECT 'AP_RECORD_WRITER_STARTED'; ${recordPayment(recordWriterFirstBill, 'ap-record-writer-first')} COMMIT; SELECT 'AP_RECORD_WRITER_DONE';`, 'AP_RECORD_WRITER_STARTED'); await recordWriterFirst.ready;
+  await waitForBarrierWaiters(1, 'record payment writer-first trigger barrier');
+  await waitForMonthLock(monthKey, 'ShareLock', true, 1, 'record payment writer shared January lock');
+  const recordWriterClose = session(`BEGIN; ${close('ap-record-writer-close')} COMMIT; SELECT 'AP_RECORD_CLOSE_DONE';`, 'AP_RECORD_CLOSE_DONE');
+  await waitForMonthLock(monthKey, 'ExclusiveLock', false, 1, 'record payment close waiting on writer month lock');
+  await h8.done;
+  const [rw, rc] = await Promise.all([recordWriterFirst.done, recordWriterClose.done]); assert.equal(rw.code, 0, rw.err); assert.equal(rc.code, 0, rc.err);
+  assert.equal(scalar(`SELECT count(*) FROM public.vendor_payments WHERE vendor_bill_id='${recordWriterFirstBill}'::uuid`), '1');
+  assert.equal(scalar(`SELECT paid_cents FROM public.vendor_bills WHERE id='${recordWriterFirstBill}'::uuid`), '100');
+  sql(`DROP TRIGGER proof_pause_ap_payment_insert ON public.vendor_payments; DELETE FROM public.vendor_payments WHERE vendor_bill_id='${recordWriterFirstBill}'::uuid; DELETE FROM public.vendor_bills WHERE id='${recordWriterFirstBill}'::uuid; DELETE FROM public.accounting_periods WHERE period_start='2025-01-01';`);
+  console.log('CANDIDATE_AP_RECORD_PAYMENT_WRITER_FIRST_CLOSE_WAITS_PASS');
+
+  const recordCloseFirstBill = scalar(`${bill('ap-record-close-first-bill')}`);
+  sql(`CREATE OR REPLACE FUNCTION public._proof_pause_ap_period() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_advisory_lock(${KEY}); PERFORM pg_advisory_unlock(${KEY}); RETURN NEW; END$$; CREATE TRIGGER proof_pause_ap_period BEFORE INSERT ON public.accounting_periods FOR EACH ROW EXECUTE FUNCTION public._proof_pause_ap_period();`);
+  const h9 = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(${BARRIER_SECONDS}); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await h9.ready;
+  const recordCloseFirst = session(`BEGIN; ${close('ap-record-close-first-close')} COMMIT; SELECT 'AP_RECORD_CLOSE_FIRST_DONE';`, 'AP_RECORD_CLOSE_FIRST_DONE');
+  await waitForBarrierWaiters(1, 'record payment close-first period barrier');
+  const recordBlocked = session(`BEGIN; SELECT 'AP_RECORD_BLOCKED_STARTED'; ${recordPayment(recordCloseFirstBill, 'ap-record-close-first')} COMMIT;`, 'AP_RECORD_BLOCKED_STARTED'); await recordBlocked.ready;
+  await waitForMonthLock(monthKey, 'ShareLock', false, 1, 'record payment waiting on close month lock');
+  await h9.done;
+  const [rcf, recordBlockedResult] = await Promise.all([recordCloseFirst.done, recordBlocked.done]); assert.equal(rcf.code, 0, rcf.err); expectError(recordBlockedResult, 'closed accounting period', 'close-first record payment');
+  assert.equal(scalar(`SELECT count(*) FROM public.vendor_payments WHERE vendor_bill_id='${recordCloseFirstBill}'::uuid`), '0');
+  assert.equal(scalar(`SELECT paid_cents FROM public.vendor_bills WHERE id='${recordCloseFirstBill}'::uuid`), '0');
+  assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='ap-record-close-first'`), '0');
+  sql(`DROP TRIGGER proof_pause_ap_period ON public.accounting_periods; DROP FUNCTION public._proof_pause_ap_period(); DELETE FROM public.accounting_periods WHERE period_start='2025-01-01'; DELETE FROM public.vendor_bills WHERE id='${recordCloseFirstBill}'::uuid;`);
+  console.log('CANDIDATE_AP_RECORD_PAYMENT_CLOSE_FIRST_FAIL_CLOSED_PASS');
+
+  const voidPaymentWriterBill = scalar(`${bill('ap-void-payment-writer-first-bill')}`);
+  const voidPaymentWriterId = scalar(`${recordPayment(voidPaymentWriterBill, 'ap-void-payment-writer-seed', 400)}`);
+  sql(`CREATE TRIGGER proof_pause_ap_payment_void BEFORE UPDATE ON public.vendor_bills FOR EACH ROW EXECUTE FUNCTION public._proof_pause_ap_writer();`);
+  const h10 = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(${BARRIER_SECONDS}); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await h10.ready;
+  const voidPaymentWriter = session(`BEGIN; SELECT 'AP_VOID_PAYMENT_WRITER_STARTED'; ${voidPayment(voidPaymentWriterId, 'ap-void-payment-writer-first')} COMMIT; SELECT 'AP_VOID_PAYMENT_WRITER_DONE';`, 'AP_VOID_PAYMENT_WRITER_STARTED'); await voidPaymentWriter.ready;
+  await waitForBarrierWaiters(1, 'void payment writer-first trigger barrier');
+  await waitForMonthLock(monthKey, 'ShareLock', true, 1, 'void payment writer shared January lock');
+  const voidPaymentWriterClose = session(`BEGIN; ${close('ap-void-payment-writer-close')} COMMIT; SELECT 'AP_VOID_PAYMENT_CLOSE_DONE';`, 'AP_VOID_PAYMENT_CLOSE_DONE');
+  await waitForMonthLock(monthKey, 'ExclusiveLock', false, 1, 'void payment close waiting on writer month lock');
+  await h10.done;
+  const [vpw, vpwc] = await Promise.all([voidPaymentWriter.done, voidPaymentWriterClose.done]); assert.equal(vpw.code, 0, vpw.err); assert.equal(vpwc.code, 0, vpwc.err);
+  assert.equal(scalar(`SELECT (voided_at IS NOT NULL)::int FROM public.vendor_payments WHERE id='${voidPaymentWriterId}'::uuid`), '1');
+  assert.equal(scalar(`SELECT paid_cents FROM public.vendor_bills WHERE id='${voidPaymentWriterBill}'::uuid`), '0');
+  sql(`DROP TRIGGER proof_pause_ap_payment_void ON public.vendor_bills; DELETE FROM public.vendor_payments WHERE vendor_bill_id='${voidPaymentWriterBill}'::uuid; DELETE FROM public.vendor_bills WHERE id='${voidPaymentWriterBill}'::uuid; DELETE FROM public.accounting_periods WHERE period_start='2025-01-01';`);
+  console.log('CANDIDATE_AP_VOID_PAYMENT_WRITER_FIRST_CLOSE_WAITS_PASS');
+
+  const voidPaymentCloseBill = scalar(`${bill('ap-void-payment-close-first-bill')}`);
+  const voidPaymentCloseId = scalar(`${recordPayment(voidPaymentCloseBill, 'ap-void-payment-close-seed', 400)}`);
+  const voidPaymentAuditBefore = scalar(`SELECT count(*) FROM public.financial_audit_log WHERE entity_id IN ('${voidPaymentCloseBill}'::uuid,'${voidPaymentCloseId}'::uuid)`);
+  sql(`CREATE OR REPLACE FUNCTION public._proof_pause_ap_period() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_advisory_lock(${KEY}); PERFORM pg_advisory_unlock(${KEY}); RETURN NEW; END$$; CREATE TRIGGER proof_pause_ap_period BEFORE INSERT ON public.accounting_periods FOR EACH ROW EXECUTE FUNCTION public._proof_pause_ap_period();`);
+  const h11 = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(${BARRIER_SECONDS}); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await h11.ready;
+  const voidPaymentClose = session(`BEGIN; ${close('ap-void-payment-close-first-close')} COMMIT; SELECT 'AP_VOID_PAYMENT_CLOSE_FIRST_DONE';`, 'AP_VOID_PAYMENT_CLOSE_FIRST_DONE');
+  await waitForBarrierWaiters(1, 'void payment close-first period barrier');
+  const voidPaymentBlocked = session(`BEGIN; SELECT 'AP_VOID_PAYMENT_BLOCKED_STARTED'; ${voidPayment(voidPaymentCloseId, 'ap-void-payment-close-first')} COMMIT;`, 'AP_VOID_PAYMENT_BLOCKED_STARTED'); await voidPaymentBlocked.ready;
+  await waitForMonthLock(monthKey, 'ShareLock', false, 1, 'void payment waiting on close month lock');
+  await h11.done;
+  const [vpc, vpb] = await Promise.all([voidPaymentClose.done, voidPaymentBlocked.done]); assert.equal(vpc.code, 0, vpc.err); expectError(vpb, 'closed accounting period', 'close-first void payment');
+  assert.equal(scalar(`SELECT (voided_at IS NULL)::int FROM public.vendor_payments WHERE id='${voidPaymentCloseId}'::uuid`), '1');
+  assert.equal(scalar(`SELECT paid_cents FROM public.vendor_bills WHERE id='${voidPaymentCloseBill}'::uuid`), '400');
+  assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='ap-void-payment-close-first'`), '0');
+  assert.equal(scalar(`SELECT count(*) FROM public.financial_audit_log WHERE entity_id IN ('${voidPaymentCloseBill}'::uuid,'${voidPaymentCloseId}'::uuid)`), voidPaymentAuditBefore);
+  sql(`DROP TRIGGER proof_pause_ap_period ON public.accounting_periods; DROP FUNCTION public._proof_pause_ap_period(); DELETE FROM public.accounting_periods WHERE period_start='2025-01-01'; DELETE FROM public.vendor_payments WHERE vendor_bill_id='${voidPaymentCloseBill}'::uuid; DELETE FROM public.vendor_bills WHERE id='${voidPaymentCloseBill}'::uuid;`);
+  console.log('CANDIDATE_AP_VOID_PAYMENT_CLOSE_FIRST_FAIL_CLOSED_PASS');
+
+  const voidBillWriterFirst = scalar(`${bill('ap-void-bill-writer-first-bill')}`);
+  sql(`CREATE TRIGGER proof_pause_ap_bill_void BEFORE UPDATE ON public.vendor_bills FOR EACH ROW EXECUTE FUNCTION public._proof_pause_ap_writer();`);
+  const h12 = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(${BARRIER_SECONDS}); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await h12.ready;
+  const voidBillWriter = session(`BEGIN; SELECT 'AP_VOID_BILL_WRITER_STARTED'; ${voidBill(voidBillWriterFirst, 'ap-void-bill-writer-first')} COMMIT; SELECT 'AP_VOID_BILL_WRITER_DONE';`, 'AP_VOID_BILL_WRITER_STARTED'); await voidBillWriter.ready;
+  await waitForBarrierWaiters(1, 'void bill writer-first trigger barrier');
+  await waitForMonthLock(monthKey, 'ShareLock', true, 1, 'void bill writer shared January lock');
+  const voidBillWriterClose = session(`BEGIN; ${close('ap-void-bill-writer-close')} COMMIT; SELECT 'AP_VOID_BILL_CLOSE_DONE';`, 'AP_VOID_BILL_CLOSE_DONE');
+  await waitForMonthLock(monthKey, 'ExclusiveLock', false, 1, 'void bill close waiting on writer month lock');
+  await h12.done;
+  const [vbw, vbwc] = await Promise.all([voidBillWriter.done, voidBillWriterClose.done]); assert.equal(vbw.code, 0, vbw.err); assert.equal(vbwc.code, 0, vbwc.err);
+  assert.equal(scalar(`SELECT status FROM public.vendor_bills WHERE id='${voidBillWriterFirst}'::uuid`), 'voided');
+  sql(`DROP TRIGGER proof_pause_ap_bill_void ON public.vendor_bills; DELETE FROM public.vendor_bills WHERE id='${voidBillWriterFirst}'::uuid; DELETE FROM public.accounting_periods WHERE period_start='2025-01-01';`);
+  console.log('CANDIDATE_AP_VOID_BILL_WRITER_FIRST_CLOSE_WAITS_PASS');
+
+  const voidBillCloseFirst = scalar(`${bill('ap-void-bill-close-first-bill')}`);
+  const voidBillAuditBefore = scalar(`SELECT count(*) FROM public.financial_audit_log WHERE entity_id='${voidBillCloseFirst}'::uuid`);
+  sql(`CREATE OR REPLACE FUNCTION public._proof_pause_ap_period() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN PERFORM pg_advisory_lock(${KEY}); PERFORM pg_advisory_unlock(${KEY}); RETURN NEW; END$$; CREATE TRIGGER proof_pause_ap_period BEFORE INSERT ON public.accounting_periods FOR EACH ROW EXECUTE FUNCTION public._proof_pause_ap_period();`);
+  const h13 = session(`BEGIN; SELECT pg_advisory_lock(${KEY}); SELECT 'BARRIER_HELD'; SELECT pg_sleep(${BARRIER_SECONDS}); SELECT pg_advisory_unlock(${KEY}); COMMIT;`, 'BARRIER_HELD'); await h13.ready;
+  const voidBillClose = session(`BEGIN; ${close('ap-void-bill-close-first-close')} COMMIT; SELECT 'AP_VOID_BILL_CLOSE_FIRST_DONE';`, 'AP_VOID_BILL_CLOSE_FIRST_DONE');
+  await waitForBarrierWaiters(1, 'void bill close-first period barrier');
+  const voidBillBlocked = session(`BEGIN; SELECT 'AP_VOID_BILL_BLOCKED_STARTED'; ${voidBill(voidBillCloseFirst, 'ap-void-bill-close-first')} COMMIT;`, 'AP_VOID_BILL_BLOCKED_STARTED'); await voidBillBlocked.ready;
+  await waitForMonthLock(monthKey, 'ShareLock', false, 1, 'void bill waiting on close month lock');
+  await h13.done;
+  const [vbc, vbb] = await Promise.all([voidBillClose.done, voidBillBlocked.done]); assert.equal(vbc.code, 0, vbc.err); expectError(vbb, 'closed accounting period', 'close-first void bill');
+  assert.equal(scalar(`SELECT status FROM public.vendor_bills WHERE id='${voidBillCloseFirst}'::uuid`), 'unpaid');
+  assert.equal(scalar(`SELECT voided_at IS NULL FROM public.vendor_bills WHERE id='${voidBillCloseFirst}'::uuid`), 't');
+  assert.equal(scalar(`SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='ap-void-bill-close-first'`), '0');
+  assert.equal(scalar(`SELECT count(*) FROM public.financial_audit_log WHERE entity_id='${voidBillCloseFirst}'::uuid`), voidBillAuditBefore);
+  sql(`DROP TRIGGER proof_pause_ap_period ON public.accounting_periods; DROP FUNCTION public._proof_pause_ap_period(); DELETE FROM public.accounting_periods WHERE period_start='2025-01-01'; DELETE FROM public.vendor_bills WHERE id='${voidBillCloseFirst}'::uuid; DROP FUNCTION public._proof_pause_ap_writer();`);
+  console.log('CANDIDATE_AP_VOID_BILL_CLOSE_FIRST_FAIL_CLOSED_PASS');
   console.log('VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS');
 } finally { run(['rm', '-f', NAME], { fail: true }); }

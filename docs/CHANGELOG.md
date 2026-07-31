@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — AP accounting-period boundary hardening applied live
+
+The three remaining vendor-AP mutations now join the same accounting-month
+serialization protocol as vendor-bill create/update: payment recording and
+payment voids use the payment month, while bill voids use the original bill
+month. Browser roles also lose direct `accounting_periods` mutation capability;
+active admins retain read access and the governed close/reopen RPC workflow.
+
+The network-isolated PostgreSQL 17 proof observes real advisory-lock behavior in
+both winner orders for every AP path, proves close-first calls fail with no AP,
+audit, activity, or idempotency leakage, denies an authenticated direct period
+write, runs the registered Section 9 rollback chain, and finishes with
+`VENDOR_BILL_PERIOD_CLOSE_CONCURRENCY_PASS`.
+
+The exact migration passed the sanctioned GPT-5.6 Sol reviewer pair and a
+separate Sol-high adversarial pass, then applied live as ledger
+`20260731001654`. Production readback confirmed the three lock/check/mutation
+orders, narrow RPC grants, RLS with the SELECT-only admin policy, and no browser
+period-table writes. The registered live smoke ended
+`SMOKE_PASS_ROLLBACK` with zero fixtures or closed periods left behind. This is
+still AP-only: 26 other live financial period-check callers remain explicitly
+outside its scope.
+
 ## 2026-07-30 — push/backup guard round-23 transport bypasses closed
 
 Closed the final three HIGH findings from the independent review of the local push and agent-memory
