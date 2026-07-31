@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const migration = path.join(root, 'supabase/migrations/20260730201230_quote_customer_row_version_guard.sql');
+const migration = path.join(root, 'supabase/migrations/20260730235031_quote_customer_row_version_guard.sql');
 const previous = path.join(root, 'supabase/migrations/20260722202622_commission_split_lost_update_guard.sql');
 const name = `crx-row-version-proof-${process.pid}-${Date.now().toString(36)}`;
 const createVersionSmokeFiles = [
@@ -54,7 +54,7 @@ function assertSmokeRolloutCompatibility() {
   const verifyGroup = (fileNames, helperName, exactSignature, dynamicCall, directCallPattern) => {
     let canonicalHelper;
     for (const fileName of fileNames) {
-      const source = readFileSync(path.join(smokeRoot, fileName), 'utf8');
+      const source = readFileSync(path.join(smokeRoot, fileName), 'utf8').replace(/\r\n/g, '\n');
       const helper = extractTempHelper(source, helperName);
       canonicalHelper ??= helper;
       assert.equal(

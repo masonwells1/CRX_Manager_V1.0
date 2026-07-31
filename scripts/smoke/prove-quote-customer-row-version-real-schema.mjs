@@ -15,7 +15,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const NAME = `crx-row-version-schema-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
-const candidate = path.join(ROOT, 'supabase', 'migrations', '20260730201230_quote_customer_row_version_guard.sql');
+const candidate = path.join(ROOT, 'supabase', 'migrations', '20260730235031_quote_customer_row_version_guard.sql');
 const smokeFiles = [
   path.join(ROOT, 'scripts', 'smoke', 'smoke-save-quote-customer-row-version.sql'),
   path.join(ROOT, 'scripts', 'smoke', 'smoke-save-quote-drawn-guard.sql'),
@@ -68,8 +68,9 @@ function selectedMigrations() {
   const result = spawnSync(process.execPath, ['scripts/list-post-baseline-migrations.mjs'], { cwd: ROOT, encoding: 'utf8' });
   if (result.status !== 0) throw new Error(result.stderr);
   const migrations = result.stdout.split(/\r?\n/).filter(Boolean).map((relative) => path.join(ROOT, relative));
-  assert.ok(migrations.includes(candidate), 'candidate migration is not in the ledger-selected post-baseline replay');
-  return migrations;
+  const candidateIndex = migrations.indexOf(candidate);
+  assert.notEqual(candidateIndex, -1, 'candidate migration is not in the ledger-selected post-baseline replay');
+  return migrations.slice(0, candidateIndex + 1);
 }
 function assertQuoteLifecycleCoverage(sql) {
   for (const anchor of quoteLifecycleAnchors) {
