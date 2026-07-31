@@ -109,6 +109,9 @@ fingerprint before the ticket or morning decision is re-presented there.
 - During governed operation, any explicit shell `cwd` or `workdir` must resolve to the exact
   governed repository root. Recognized factory commands are rewritten to the canonical absolute
   `scripts/factory.mjs` broker path before a permit or read-only status execution is allowed.
+  The rewrite follows the actual tool shell, not the host operating system: Claude's `Bash` tool
+  receives POSIX/Git-Bash `cd` and environment-assignment syntax on Windows, while `PowerShell`
+  and Codex `shell_command` receive PowerShell syntax.
 - A lane starts only from a clean checkout whose `HEAD` is the exact approved `origin/main` SHA.
   Before evidence acceptance, owner review, and closeout, the factory recomputes committed,
   working-tree, and untracked paths from that base and rejects any path outside the ticket.

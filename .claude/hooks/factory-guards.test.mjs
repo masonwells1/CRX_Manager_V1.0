@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
+  loadFactorySnapshot,
   resolveFactoryPaths,
   writeImmutableTicket,
 } from "../../scripts/factory-state-lib.mjs";
@@ -41,6 +42,17 @@ function denied(result, pattern, message) {
 
 function hookOutput(result) {
   return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput : null;
+}
+
+function bashExecutable() {
+  if (process.platform !== "win32") return "bash";
+  const candidates = [
+    path.join(process.env.ProgramFiles || "C:\\Program Files", "Git", "bin", "bash.exe"),
+    path.join(process.env.LOCALAPPDATA || "", "Programs", "Git", "bin", "bash.exe"),
+  ];
+  const executable = candidates.find((candidate) => candidate && existsSync(candidate));
+  assert.ok(executable, "Windows factory proof requires the Git Bash executable used by Claude's Bash tool");
+  return executable;
 }
 
 {
@@ -523,6 +535,52 @@ function hookOutput(result) {
   );
   assertions++;
   assert.match(factoryCommandHook.updatedInput.command, /Set-Location -LiteralPath/i, "factory commands force the exact governed working directory");
+  const gitBashFactoryCommand = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Bash",
+    tool_input: { command: "node scripts/factory.mjs stage --job lane-job --stage verifying" },
+  });
+  const gitBashFactoryHook = hookOutput(gitBashFactoryCommand);
+  assertions++;
+  assert.equal(gitBashFactoryHook.permissionDecision, "allow", "Git Bash factory commands receive an explicit allow");
+  assertions++;
+  assert.match(
+    gitBashFactoryHook.updatedInput.command,
+    new RegExp(
+      `^cd -- '${root.replace(/\\/g, "/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'`
+      + " && CRX_FACTORY_PERMIT='[a-f0-9-]{36}' node ",
+      "i",
+    ),
+    "Windows Git Bash receives POSIX cwd and permit syntax",
+  );
+  assertions++;
+  assert.doesNotMatch(
+    gitBashFactoryHook.updatedInput.command,
+    /Set-Location|\$env:/i,
+    "Windows Git Bash never receives PowerShell syntax",
+  );
+  const gitBashExecution = spawnSync(bashExecutable(), ["-lc", gitBashFactoryHook.updatedInput.command], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: root,
+      CRX_FACTORY_TEST_MODE: "1",
+      CRX_FACTORY_TEST_STATE_DIR: stateDir,
+    },
+  });
+  assertions++;
+  assert.equal(
+    gitBashExecution.status,
+    0,
+    `Git Bash executes the permit-bearing factory command: ${gitBashExecution.stderr || gitBashExecution.stdout}`,
+  );
+  assertions++;
+  assert.equal(
+    loadFactorySnapshot(paths).jobs.find((job) => job.id === ticket.ticket.id)?.stage,
+    "verifying",
+    "the Git Bash permit handoff performs the governed ledger transition",
+  );
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",

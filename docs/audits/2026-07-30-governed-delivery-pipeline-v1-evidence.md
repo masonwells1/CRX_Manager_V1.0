@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `2fd55fea6ccc83400a68e5d9492a5df24d8a233c`
-State: rebased onto current `origin/main`; eleventh Sol/high publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; latest Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -118,7 +118,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 352 focused assertions after twelfth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 357 focused assertions after fourteenth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,238 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -360,6 +360,15 @@ recursive force-delete cleanup command.
   exact copied path set and SHA-256 values, and expose original mode/object/blob metadata in separate
   base/candidate tree manifests. A regression commits an export-ignored `.gitattributes` and
   migration and proves neither can disappear. Fresh exact-commit acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `ca34b0bad3013069ad4bc3561b317fea1363a80b` returned `BLOCKERS`: permit command rewriting
+  selected PowerShell syntax from the Windows host platform even when the actual tool was Claude's
+  Git-Bash-backed `Bash`. The factory therefore failed closed before every governed Bash CLI
+  transition. Rewriting now follows the tool identity: `Bash` receives POSIX `cd` and environment
+  assignment syntax on Windows, while `PowerShell` and Codex `shell_command` retain PowerShell
+  syntax. The regression executes the hook-rewritten command through the installed Git Bash and
+  requires the permitted ledger transition to `verifying`. Fresh exact-commit acceptance is still
+  required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

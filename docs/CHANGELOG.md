@@ -487,6 +487,14 @@ copied path set and SHA-256 values, and publish mode/object/blob metadata in sep
 tree manifests. An adversarial fixture marks both `.gitattributes` and a migration `export-ignore`
 and proves both remain in the review snapshot, diff, and manifest.
 
+A fourteenth exact-SHA Sol/high acceptance found that permit command syntax followed
+`process.platform` instead of the shell tool. On Windows, Claude's Git-Bash-backed `Bash` tool
+therefore received `Set-Location` and `$env:` PowerShell syntax and could not execute any governed
+factory command. Permit and working-directory rewrites now follow the actual tool identity:
+`Bash` receives POSIX syntax even on Windows, while `PowerShell` and Codex `shell_command` retain
+PowerShell syntax. The regression invokes the installed Git Bash with the hook-rewritten,
+one-time-permit command and requires a real governed ledger transition to `verifying`.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

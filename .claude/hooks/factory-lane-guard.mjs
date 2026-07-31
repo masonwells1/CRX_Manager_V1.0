@@ -30,8 +30,7 @@ function deny(reason) {
 
 function allowWithCommand(payload, command, projectDir) {
   const input = payload?.tool_input || {};
-  const powerShell = process.platform === "win32"
-    || /^(?:PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""));
+  const powerShell = /^(?:PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""));
   const root = path.resolve(projectDir).replace(/\\/g, "/");
   const rootedCommand = powerShell
     ? `Set-Location -LiteralPath '${root.replace(/'/g, "''")}'; ${command}`
@@ -47,8 +46,7 @@ function allowWithCommand(payload, command, projectDir) {
 }
 
 function allowWithPermit(payload, token, canonicalCommand, projectDir) {
-  const powerShell = process.platform === "win32"
-    || /^(?:PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""));
+  const powerShell = /^(?:PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""));
   const trustedCommand = powerShell
     ? `$env:CRX_FACTORY_PERMIT='${token}'; ${canonicalCommand}`
     : `CRX_FACTORY_PERMIT='${token}' ${canonicalCommand}`;
