@@ -118,7 +118,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 338 focused assertions after eleventh Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 352 focused assertions after twelfth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,238 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -343,6 +343,15 @@ recursive force-delete cleanup command.
   shallow, graft, and worktree context variable before either direct Git commands or in-process
   evidence-library calls. A regression injects fake inherited `GIT_DIR`, `GIT_INDEX_FILE`, and
   `GIT_WORK_TREE` values and proves they are removed.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `4ec76495e82408e9a7661acc28933b114eff0d7b` returned `BLOCKERS`: broad MCP reader-name matching
+  could bypass worktree/ignored/secret/symlink target checks, and a secret-bearing pause could fall
+  back into a raw emergency-hold reason exposed by the Board. The repair permits only two exact MCP
+  file-reader identities and subjects every target to the native structured-read checks; all unknown
+  MCP readers are opaque and denied. Pause/resume prompts are secret-scanned before persistence,
+  secret-bearing pauses retain only a prompt hash in emergency state, secret-bearing resumes do
+  nothing, and emergency-hold storage independently sanitizes unsafe reasons. Fresh exact-commit
+  acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

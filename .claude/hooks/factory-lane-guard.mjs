@@ -164,13 +164,18 @@ function isBuildMutation(toolName, toolInput) {
   return isBuildActionUnderHold(toolName, toolInput) || isShellMutation(toolName, toolInput);
 }
 
+function isKnownStructuredFilesystemReadTool(toolName) {
+  return /^(?:mcp__filesystem__read_file|mcp__desktop_commander__read_file)$/i
+    .test(String(toolName || ""));
+}
+
 function isOpaqueExecutionTool(toolName) {
   const name = String(toolName || "");
   if (/^(?:Bash|PowerShell|shell_command)$/i.test(name)) return false;
   if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(name)) return false;
   if (/^(?:Read|Glob|Grep|LS|WebSearch|WebFetch|TaskOutput|TaskList|TaskGet|TodoWrite|AskUserQuestion|view_image)$/i.test(name)) return false;
   if (/^(?:collaboration[._-])?(?:list_agents|send_message|wait_agent)$/i.test(name)) return false;
-  if (/^(?:mcp[_-].*[_-])?(?:read|get|list|search|find|inspect|view|fetch)(?:[_-].*)?$/i.test(name)) return false;
+  if (isKnownStructuredFilesystemReadTool(name)) return false;
   return true;
 }
 
@@ -216,7 +221,8 @@ function structuredMutationContent(toolInput) {
 }
 
 function structuredReadTargets(toolName, toolInput) {
-  if (!/^(?:Read|Glob|Grep|LS)$/i.test(String(toolName || ""))) return [];
+  if (!/^(?:Read|Glob|Grep|LS)$/i.test(String(toolName || ""))
+      && !isKnownStructuredFilesystemReadTool(toolName)) return [];
   const input = toolInput && typeof toolInput === "object" ? toolInput : {};
   return [
     input.file_path,
@@ -274,13 +280,13 @@ function readTargetBlockReason(rawTarget, projectDir, { allowGlob = false } = {}
 
 function governedReadBlockReason(toolName, toolInput, projectDir) {
   const name = String(toolName || "");
-  if (/^(?:Read|Glob|Grep|LS)$/i.test(name)) {
+  if (/^(?:Read|Glob|Grep|LS)$/i.test(name) || isKnownStructuredFilesystemReadTool(name)) {
     const input = toolInput && typeof toolInput === "object" ? toolInput : {};
     if (/^Glob$/i.test(name) && SECRET_PATH_RE.test(String(input.pattern || "").replace(/\\/g, "/"))) {
       return "secret-bearing glob patterns are not readable in a factory lane";
     }
     const targets = structuredReadTargets(name, input);
-    if (/^Read$/i.test(name) && targets.length === 0) {
+    if ((/^Read$/i.test(name) || isKnownStructuredFilesystemReadTool(name)) && targets.length === 0) {
       return "structured read did not expose an exact file target";
     }
     for (const target of targets) {

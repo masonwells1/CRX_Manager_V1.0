@@ -397,6 +397,10 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const { root, paths } = fixture();
   setEmergencyFactoryHold(paths, "Mason requested a pause while the ledger was unavailable.");
   eq(buildFactorySnapshot(paths).held, true, "emergency hold blocks work without a ledger append");
+  setEmergencyFactoryHold(paths, "OPENAI_API_KEY=sk-emergency-reason-must-not-persist");
+  const sanitizedHold = buildFactorySnapshot(paths);
+  ok(!sanitizedHold.holdReason.includes("sk-emergency-reason-must-not-persist"), "emergency hold storage sanitizes secret-bearing reasons");
+  ok(/Reason SHA-256: [a-f0-9]{64}/.test(sanitizedHold.holdReason), "sanitized emergency holds retain only a reason hash");
   clearEmergencyFactoryHold(paths);
   eq(buildFactorySnapshot(paths).held, false, "canonical recovery can clear the emergency hold");
 

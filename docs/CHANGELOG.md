@@ -469,6 +469,15 @@ before publication, and the fixture test now removes repository, index, object, 
 graft, and worktree context variables before any direct Git command or in-process evidence-library
 call. A regression injects the dangerous variables explicitly.
 
+A twelfth exact-SHA Sol/high acceptance found two secret-exposure paths. Broad MCP reader-name
+matching could bypass the native worktree, ignored-file, secret-path, and symlink checks, while a
+secret-bearing pause prompt could fall back into an emergency-hold reason displayed by the Board.
+Only two exact MCP file-reader identities are now permitted and their targets receive the native
+structured-read checks; every unknown MCP reader is opaque and denied. Pause/resume prompts are
+secret-scanned before persistence. A secret-bearing pause activates a fail-safe emergency hold with
+only the prompt SHA-256, a secret-bearing resume changes nothing, and emergency-hold storage also
+sanitizes unsafe reasons independently.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

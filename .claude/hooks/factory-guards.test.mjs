@@ -408,6 +408,28 @@ function hookOutput(result) {
     tool_name: "Read",
     tool_input: { file_path: path.join(root, ".env.local") },
   }), /secret-bearing paths are not readable/i, "active lane cannot read secret-bearing structured paths");
+  const knownMcpRead = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__read_file",
+    tool_input: { path: path.join(root, "package.json") },
+  });
+  assertions++;
+  assert.equal(knownMcpRead.stdout, "", "the exact allowlisted MCP file reader may read a tracked in-worktree file");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__read_file",
+    tool_input: { path: path.join(root, ".env.local") },
+  }), /secret-bearing paths are not readable/i, "allowlisted MCP readers cannot read secret-bearing paths");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__desktop_commander__read_file",
+    tool_input: { path: path.join(root, "..", "outside-worktree.txt") },
+  }), /read target escapes the worktree/i, "allowlisted MCP readers cannot escape the governed worktree");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__unknown_server__read_file",
+    tool_input: { path: path.join(root, "package.json") },
+  }), /direct commands and helper-process execution/i, "unknown MCP readers remain opaque and denied");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",

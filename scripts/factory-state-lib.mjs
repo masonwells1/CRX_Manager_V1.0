@@ -2018,10 +2018,17 @@ export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
 export function setEmergencyFactoryHold(paths, reason) {
   authorizedFactoryWriter(paths);
   ensureFactoryDirs(paths);
+  const requestedReason = requiredText(reason, "emergency hold reason", 1_000);
+  let safeReason = requestedReason;
+  try {
+    rejectSecretBearingText(requestedReason, "Emergency hold reason");
+  } catch {
+    safeReason = `Emergency factory hold; unsafe reason omitted. Reason SHA-256: ${sha256(requestedReason)}.`;
+  }
   const payload = {
     schemaVersion: FACTORY_SCHEMA_VERSION,
     createdAt: new Date().toISOString(),
-    reason: requiredText(reason, "emergency hold reason", 1_000),
+    reason: safeReason,
   };
   writeFileSync(paths.emergencyHoldPath, `${canonicalJson(payload)}\n`, { encoding: "utf8", flag: "w" });
 }

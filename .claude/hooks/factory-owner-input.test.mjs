@@ -319,6 +319,33 @@ function runLaneHook(state, payload) {
 }
 
 {
+  const state = makeState("secret-hold-thread");
+  const secretPrompt = "pause the factory OPENAI_API_KEY=sk-must-never-persist";
+  let result = runHook(state, {
+    prompt: secretPrompt,
+    thread_id: state.sessionId,
+  });
+  ok(result.stdout.includes("emergency global pause"), "a secret-bearing pause still fails safe into a global hold");
+  let snapshot = buildFactorySnapshot(state.paths);
+  equal(snapshot.held, true, "secret-bearing pause activates the emergency hold");
+  equal(snapshot.holdReason.includes("sk-must-never-persist"), false, "emergency hold reason omits secret text");
+  ok(snapshot.holdReason.includes(sha256(secretPrompt)), "emergency hold keeps only the prompt hash for correlation");
+  const persisted = [
+    readFileSync(state.paths.eventsPath, "utf8"),
+    readFileSync(state.paths.emergencyHoldPath, "utf8"),
+  ].join("\n");
+  equal(persisted.includes("sk-must-never-persist"), false, "neither ledger nor emergency state persists the secret");
+  result = runHook(state, {
+    prompt: "resume the factory OPENAI_API_KEY=sk-resume-secret",
+    thread_id: state.sessionId,
+  });
+  ok(result.stdout.includes("did not resume"), "a secret-bearing resume changes no factory state");
+  snapshot = buildFactorySnapshot(state.paths);
+  equal(snapshot.held, true, "secret-bearing resume leaves the emergency hold active");
+  equal(JSON.stringify(snapshot).includes("sk-resume-secret"), false, "secret-bearing resume text is not exposed through board state");
+}
+
+{
   const state = makeEmptyState("natural-factory-thread");
   const result = runShipHook(state, {
     prompt: "run the factory overnight on these jobs",
