@@ -1,7 +1,7 @@
 # CRX Governed Delivery Pipeline V1
 
 Date: 2026-07-30
-Status: IMPLEMENTED — seventeenth Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
+Status: IMPLEMENTED — eighteenth Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
 Owner: Mason Wells
 Implementation driver: Codex
 Independent reviewer: trusted `gpt-5.6-sol` at high reasoning effort
@@ -109,7 +109,7 @@ Writes use an exclusive cross-process lock, bounded retry, append, flush, and re
 
 The event log is hash-chained: every event records the prior accepted event hash and its own canonical hash. Replay fails closed on an invalid interior event, broken chain, duplicate event ID, or invalid schema. A single incomplete trailing JSONL line caused by process interruption is ignored and reported as degraded state; it cannot advance a job or create approval.
 
-Direct mutation of the shared state directory is forbidden. A new PreToolUse state-integrity guard denies `Write`, `Edit`, shell redirection, copy/move/delete, and ad hoc scripting that explicitly targets the resolved `crx-factory` directory. Only the narrowly recognized `node scripts/factory.mjs ...` mutation commands may write there. The board is read-only. Hash-chain verification remains mandatory because command guards reduce accidental/model bypass but are not a cryptographic defense against an actor with unrestricted filesystem authority.
+Direct access to the shared state directory is forbidden. The PreToolUse state-integrity guard recursively inspects path-bearing arguments from every structured tool, denies reads and writes to the resolved `crx-factory` directory, rejects Git `--git-path` indirection, and blocks shell access or mutation that names shared state. Only the narrowly recognized `node scripts/factory.mjs ...` mutation commands and real owner-prompt hook may write there. The board is the read-only projection. Hash-chain and transition verification remain mandatory because command guards reduce accidental/model bypass but are not a cryptographic defense against an actor with unrestricted filesystem authority.
 
 ### Ticket approval receipt
 
@@ -124,6 +124,15 @@ An approval receipt binds:
 - approval scope;
 - freshly fetched `origin/main` base SHA;
 - expiry timestamp, no more than 24 hours after approval.
+
+Every owner-only decision also receives a separate random, write-once receipt under the guard-private
+permit area. Its keyed HMAC-SHA-256 authentication code binds the full event core, including the event ID, timestamp, prior
+ledger hash, actor, session, exact reply, question/ticket/base hashes, and expiry. The ordinary broker
+cannot mint these receipts; only the real owner-prompt hook can. Replay validates the receipt and the
+legal prior stage before accepting an approval, rejection, revision, custody transfer, pause/resume,
+or morning decision. A copied or synthesized ledger/receipt pair without the private installation key
+fails closed. This closes supported-tool pre-seeding and replay routes while preserving the
+documented same-Windows-user limitation.
 
 The lane-start validator recomputes the ticket hash and refuses a mismatch. It refuses missing/unknown session identity, an approval recorded in another session, an expired receipt, or a current `origin/main` different from the receipt's base SHA. There is no normal fallback that erases session binding.
 

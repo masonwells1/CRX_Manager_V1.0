@@ -527,6 +527,17 @@ clear the emergency hold. Resume now recognizes only a tightly bounded standalon
 resume/restart phrase. Negative, qualified, and ambiguous wording fails closed, and all three
 reported bypass phrases are covered by executable regressions.
 
+An eighteenth exact-SHA Sol/high acceptance found that unrecognized structured writers and Git-path
+indirection could target shared factory state, while ledger replay accepted an approval event without
+independently proving the exact prior decision context or its owner-hook origin. Direct state reads or
+writes are now denied across recursively inspected path-bearing tool arguments and shell Git-path
+derivation. Owner-only events receive random write-once receipts minted only inside the real
+owner-prompt hook and bound by a private-key HMAC-SHA-256 code to the complete event plus prior ledger
+hash. Copying or synthesizing ledger/receipt bytes without that installation key fails closed. Replay now rejects unknown
+events and illegal ticket, lane, evidence, review, acceptance, or closeout transitions, including any
+actor, session, ticket, question, base, expiry, decision, or receipt mismatch. This strengthens the
+supported Claude/Codex tool boundary without changing the explicit same-Windows-user limitation.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

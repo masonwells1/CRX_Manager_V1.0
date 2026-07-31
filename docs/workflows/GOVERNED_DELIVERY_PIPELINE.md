@@ -19,16 +19,22 @@ Claude and Codex resolve `git rev-parse --git-common-dir` to one absolute path a
 - one append-only, hash-chained event ledger;
 - copied, content-hashed proof files.
 
-The state lives under `<git-common-dir>/crx-factory/`, so every worktree and both tools see the same queue. An incomplete final ledger line is shown as degraded and cannot advance a job. An interior malformed line, broken hash chain, duplicate event, changed ticket, expired approval, moved `origin/main`, or missing session binding fails closed. Critical decisions first fetch `origin/main`; they do not treat a previously fetched local pointer as current.
+The state lives under `<git-common-dir>/crx-factory/`, so every worktree and both tools see the same queue. An incomplete final ledger line is shown as degraded and cannot advance a job. An interior malformed line, broken hash chain, duplicate or unknown event, illegal stage transition, changed ticket, missing owner-decision receipt, expired approval, moved `origin/main`, or actor/session binding mismatch fails closed. Critical decisions first fetch `origin/main`; they do not treat a previously fetched local pointer as current.
 
 Only the canonical `scripts/factory.mjs` process and the owner-routing hooks may call the state writer.
 The library checks the invoked entrypoint and real call stack; pre-tool guards also block direct state
-paths, factory-internal imports, inline code execution, and governance self-edits in an active lane.
+paths across recursively inspected structured-tool arguments, direct state reads, Git `--git-path`
+indirection, factory-internal imports, inline code execution, and governance self-edits in an active lane.
 Every mutating CLI call additionally consumes a 30-second, single-use permit minted by the real
 PreToolUse hook from that tool call's actual chat identity. Agent-supplied `--session`, `--tool`, or
 permit values cannot create or override identity, and the permit-minting hook cannot be launched as
 an agent command. The permit also records the exact terminal ledger hash seen by the hook. Command
 handling and the final append both fail if any intervening event changes that checkpoint.
+Owner-only events are additionally written with a random, write-once receipt under the private permit
+area. Its keyed HMAC-SHA-256 authentication code binds the complete event core and prior ledger hash; the ordinary CLI broker
+cannot mint it. Replay verifies that receipt plus the exact legal prior stage, ticket, question, base,
+actor, session, expiry, and decision payload before any owner decision changes operational state.
+A copied or synthesized event/receipt pair without the private installation key is rejected.
 These are defense-in-depth controls inside the supported Claude/Codex tool model, not a cryptographic
 security boundary against another arbitrary process running as Mason's Windows account. The hash chain
 detects accidental/torn/tampered history when the reader has an honest prior hash; it does not provide

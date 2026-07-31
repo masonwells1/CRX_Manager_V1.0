@@ -539,6 +539,13 @@ function runLaneHook(state, payload) {
     sessionId: state.sessionId,
     payload: harness,
   });
+  appendFactoryEvent(state.paths, {
+    type: "job-stage",
+    jobId: written.ticket.id,
+    actorTool: "codex",
+    sessionId: state.sessionId,
+    payload: { stage: "in-review", behaviorSummary: "", blocker: "" },
+  });
   const review = runIndependentReviewEvidence(state.paths, {
     job: buildFactorySnapshot(state.paths).jobs[0],
     cwd: fixtureRepo,
@@ -570,6 +577,7 @@ function runLaneHook(state, payload) {
     actorTool: "codex",
     sessionId: state.sessionId,
     payload: {
+      ticketHash: written.hash,
       questionText: reviewQuestion,
       questionHash: sha256(reviewQuestion),
       baseSha: fixtureBase,

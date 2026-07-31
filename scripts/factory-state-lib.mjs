@@ -20,7 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,6 +74,26 @@ export const BOARD_STAGES = new Set([
   "live",
   "rejected",
   "superseded",
+]);
+
+const FACTORY_EVENT_TYPES = new Set([
+  "factory-intent",
+  "factory-intent-cleared",
+  "factory-held",
+  "factory-resumed",
+  "factory-recovered",
+  "ticket-drafted",
+  "ticket-presented",
+  "ticket-approved",
+  "ticket-rejected",
+  "ticket-revision-requested",
+  "job-session-transferred",
+  "lane-started",
+  "job-stage",
+  "review-presented",
+  "evidence-attached",
+  "independent-review-attached",
+  "closeout-prepared",
 ]);
 
 const HIGH_RISK_AREAS = new Set([
@@ -137,6 +157,8 @@ function buildPaths(stateDir) {
     ticketsDir: path.join(stateDir, "tickets"),
     evidenceDir: path.join(stateDir, "evidence"),
     permitsDir: path.join(stateDir, "permits"),
+    ownerReceiptsDir: path.join(stateDir, "permits", "owner-receipts"),
+    ownerReceiptKeyPath: path.join(stateDir, "permits", "owner-receipt.key"),
     intentLatchesDir: path.join(stateDir, "intent-latches"),
     eventsPath: path.join(stateDir, "events.jsonl"),
     lockPath: path.join(stateDir, "events.lock"),
@@ -149,6 +171,7 @@ export function ensureFactoryDirs(paths) {
   mkdirSync(paths.ticketsDir, { recursive: true });
   mkdirSync(paths.evidenceDir, { recursive: true });
   mkdirSync(paths.permitsDir, { recursive: true });
+  mkdirSync(paths.ownerReceiptsDir, { recursive: true });
   mkdirSync(paths.intentLatchesDir, { recursive: true });
 }
 
@@ -464,14 +487,19 @@ const ALLOWED_WRITERS = new Set([
   path.join(FACTORY_ROOT, ".claude", "hooks", "factory-owner-input.mjs"),
   path.join(FACTORY_ROOT, ".claude", "hooks", "ship-intent-reminder.mjs"),
 ].map((value) => path.resolve(value).toLowerCase()));
+const OWNER_DECISION_WRITER = path.resolve(
+  path.join(FACTORY_ROOT, ".claude", "hooks", "factory-owner-input.mjs"),
+).toLowerCase();
 
-function authorizedFactoryWriter(paths) {
+function factoryWriterAuthorization(paths) {
   const invoked = process.argv[1] ? path.resolve(process.argv[1]).toLowerCase() : "";
   const stack = String(new Error().stack || "").toLowerCase().replaceAll("/", "\\");
   const allowed = [...ALLOWED_WRITERS].find((candidate) =>
     invoked === candidate && stack.includes(candidate.replaceAll("/", "\\")),
   );
-  if (allowed && process.execArgv.length === 0) return;
+  if (allowed && process.execArgv.length === 0) {
+    return { invoked, ownerDecisionWriter: invoked === OWNER_DECISION_WRITER, isolatedTest: false };
+  }
 
   const testDir = process.env.CRX_FACTORY_TEST_STATE_DIR
     ? path.resolve(process.env.CRX_FACTORY_TEST_STATE_DIR)
@@ -482,8 +510,129 @@ function authorizedFactoryWriter(paths) {
     && testDir.toLowerCase().startsWith(`${path.resolve(tmpdir()).toLowerCase()}${path.sep}`)
     && /\.test\.mjs$/i.test(invoked)
     && stack.includes(invoked.replaceAll("/", "\\"));
-  if (isIsolatedTest) return;
+  if (isIsolatedTest) {
+    return { invoked, ownerDecisionWriter: true, isolatedTest: true };
+  }
   throw new Error("Factory state mutation is restricted to the canonical CLI and owner hooks.");
+}
+
+function authorizedFactoryWriter(paths) {
+  return factoryWriterAuthorization(paths);
+}
+
+function eventNeedsOwnerReceipt(event) {
+  return new Set([
+    "factory-held",
+    "factory-resumed",
+    "ticket-approved",
+    "ticket-rejected",
+    "ticket-revision-requested",
+    "job-session-transferred",
+  ]).has(event?.type)
+    || (event?.type === "job-stage" && Boolean(event?.payload?.ownerDecision));
+}
+
+function unqualifiedOwnerApproval(value) {
+  return /^(?:yes(?:[,\s]+(?:please|ship it|go ahead|do it))?|approved|approve it|go ahead|do it)[.!]?$/i
+    .test(String(value || "").trim());
+}
+
+function validDecisionLifetime(timestamp, expiresAt) {
+  const issuedMs = Date.parse(timestamp);
+  const expiresMs = Date.parse(expiresAt);
+  return Number.isFinite(issuedMs)
+    && Number.isFinite(expiresMs)
+    && expiresMs > issuedMs
+    && expiresMs <= issuedMs + APPROVAL_TTL_MS;
+}
+
+function ownerReceiptEventCore(event) {
+  const payload = { ...(event?.payload || {}) };
+  delete payload.ownerReceiptId;
+  delete payload.ownerReceiptMac;
+  return canonicalize({
+    schemaVersion: event.schemaVersion,
+    eventId: event.eventId,
+    type: event.type,
+    timestamp: event.timestamp,
+    jobId: event.jobId,
+    actorTool: event.actorTool,
+    sessionId: event.sessionId,
+    previousHash: event.previousHash,
+    payload,
+  });
+}
+
+function readOwnerReceiptKey(paths, { create = false } = {}) {
+  let raw;
+  try {
+    raw = readFileSync(paths.ownerReceiptKeyPath, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT" || !create) throw new Error("Owner decision authentication key is missing.");
+    const generated = `${randomBytes(32).toString("hex")}\n`;
+    try {
+      writeFileSync(paths.ownerReceiptKeyPath, generated, { encoding: "utf8", flag: "wx" });
+      raw = generated;
+    } catch (writeError) {
+      if (writeError?.code !== "EEXIST") throw writeError;
+      raw = readFileSync(paths.ownerReceiptKeyPath, "utf8");
+    }
+  }
+  if (!/^[a-f0-9]{64}\n$/i.test(String(raw || ""))) {
+    throw new Error("Owner decision authentication key is malformed.");
+  }
+  return Buffer.from(raw.trim(), "hex");
+}
+
+function ownerReceiptMac(key, value) {
+  return createHmac("sha256", key).update(canonicalJson(value)).digest("hex");
+}
+
+function writeOwnerDecisionReceipt(paths, event) {
+  ensureFactoryDirs(paths);
+  const key = readOwnerReceiptKey(paths, { create: true });
+  const receiptId = randomUUID();
+  const body = canonicalize({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    receiptId,
+    nonce: randomBytes(32).toString("hex"),
+    eventCoreHash: sha256(canonicalJson(ownerReceiptEventCore(event))),
+    issuedAt: event.timestamp,
+  });
+  const receipt = { ...body, receiptMac: ownerReceiptMac(key, body) };
+  writeFileSync(
+    path.join(paths.ownerReceiptsDir, `${receiptId}.json`),
+    `${canonicalJson(receipt)}\n`,
+    { encoding: "utf8", flag: "wx" },
+  );
+  return { ownerReceiptId: receiptId, ownerReceiptMac: receipt.receiptMac };
+}
+
+function validateOwnerDecisionReceipt(paths, event) {
+  const receiptId = safeId(event?.payload?.ownerReceiptId);
+  const expectedMac = requiredHash(event?.payload?.ownerReceiptMac, "owner receipt authentication code");
+  const target = path.join(paths.ownerReceiptsDir, `${receiptId}.json`);
+  const raw = readFileSync(target, "utf8");
+  const receipt = JSON.parse(raw);
+  if (`${canonicalJson(receipt)}\n` !== raw.replace(/\r\n/g, "\n")) {
+    throw new Error(`Owner decision receipt ${receiptId} is not canonically serialized.`);
+  }
+  const { receiptMac: storedMac, ...body } = receipt;
+  const actualMac = ownerReceiptMac(readOwnerReceiptKey(paths), body);
+  const stored = Buffer.from(requiredHash(storedMac, "stored owner receipt authentication code"), "hex");
+  const expected = Buffer.from(expectedMac, "hex");
+  const actual = Buffer.from(actualMac, "hex");
+  if (!timingSafeEqual(stored, expected) || !timingSafeEqual(actual, expected)) {
+    throw new Error(`Owner decision receipt ${receiptId} failed its keyed authentication check.`);
+  }
+  if (receipt.schemaVersion !== FACTORY_SCHEMA_VERSION
+      || receipt.receiptId !== receiptId
+      || !/^[a-f0-9]{64}$/i.test(String(receipt.nonce || ""))
+      || receipt.issuedAt !== event.timestamp
+      || receipt.eventCoreHash !== sha256(canonicalJson(ownerReceiptEventCore(event)))) {
+    throw new Error(`Owner decision receipt ${receiptId} is not bound to this exact approval event.`);
+  }
+  return receipt;
 }
 
 export function mintFactoryCliPermit(paths, {
@@ -570,9 +719,16 @@ export function validateEventShape(event) {
   if (event.schemaVersion !== FACTORY_SCHEMA_VERSION) throw new Error("Unsupported factory event schema.");
   safeId(event.eventId);
   requiredText(event.type, "event.type", 100);
+  if (!FACTORY_EVENT_TYPES.has(event.type)) throw new Error(`Unsupported factory event type ${event.type}.`);
   requiredText(event.timestamp, "event.timestamp", 100);
+  if (!Number.isFinite(Date.parse(event.timestamp)) || new Date(event.timestamp).toISOString() !== event.timestamp) {
+    throw new Error("event.timestamp must be a canonical ISO-8601 instant.");
+  }
   if (event.jobId !== null) safeId(event.jobId);
   requiredText(event.actorTool, "event.actorTool", 40);
+  if (!new Set(["claude", "codex"]).has(event.actorTool)) {
+    throw new Error("event.actorTool must identify the trusted Claude or Codex owner surface.");
+  }
   requiredText(event.sessionId, "event.sessionId", 200);
   if (!/^[a-f0-9]{64}$/.test(event.previousHash)) throw new Error("event.previousHash must be SHA-256.");
   if (!/^[a-f0-9]{64}$/.test(event.eventHash)) throw new Error("event.eventHash must be SHA-256.");
@@ -635,7 +791,7 @@ export function appendFactoryEvent(paths, {
 }, {
   expectedLastEventHash = "",
 } = {}) {
-  authorizedFactoryWriter(paths);
+  const writer = authorizedFactoryWriter(paths);
   rejectSecretBearingText(canonicalJson(payload), "Factory event");
   const lockFd = acquireLock(paths);
   try {
@@ -647,7 +803,7 @@ export function appendFactoryEvent(paths, {
     if (expectedLastEventHash && previousHash !== expectedLastEventHash) {
       throw new Error("Factory state changed after this decision was presented; re-read and re-present it.");
     }
-    const body = canonicalize({
+    let body = canonicalize({
       schemaVersion: FACTORY_SCHEMA_VERSION,
       eventId: safeId(eventId),
       type: requiredText(type, "type", 100),
@@ -658,6 +814,23 @@ export function appendFactoryEvent(paths, {
       previousHash,
       payload,
     });
+    // Reject malformed or unknown events before an owner-only receipt file can
+    // be allocated. This preliminary hash is replaced after the exact
+    // receipt-bound payload is finalized.
+    validateEventShape({ ...body, eventHash: sha256(canonicalJson(body)) });
+    if (eventNeedsOwnerReceipt(body)) {
+      if (!writer.ownerDecisionWriter) {
+        throw new Error("Owner approval events may be written only by the real owner-prompt hook.");
+      }
+      if (body.payload.ownerReceiptId || body.payload.ownerReceiptMac) {
+        throw new Error("Owner approval receipt fields are minted internally and cannot be supplied by a caller.");
+      }
+      const receipt = writeOwnerDecisionReceipt(paths, body);
+      body = canonicalize({
+        ...body,
+        payload: { ...body.payload, ...receipt },
+      });
+    }
     const event = { ...body, eventHash: sha256(canonicalJson(body)) };
     validateEventShape(event);
     appendFileSync(paths.eventsPath, `${canonicalJson(event)}\n`, "utf8");
@@ -983,11 +1156,13 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       continue;
     }
     if (event.type === "factory-held") {
+      validateOwnerDecisionReceipt(paths, event);
       held = true;
       holdReason = String(event.payload.reason || "Factory paused by Mason.");
       continue;
     }
     if (event.type === "factory-resumed") {
+      validateOwnerDecisionReceipt(paths, event);
       held = false;
       holdReason = "";
       continue;
@@ -1033,7 +1208,9 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
     switch (event.type) {
       case "ticket-drafted": {
         if (existed) {
-          if (job.sessionId !== event.sessionId || (job.laneSessionId && job.laneSessionId !== event.sessionId)) {
+          if (job.sessionId !== event.sessionId
+              || job.actorTool !== event.actorTool
+              || (job.laneSessionId && job.laneSessionId !== event.sessionId)) {
             throw new Error(`Ticket revision for ${job.id} crossed factory session custody.`);
           }
           if (!new Set(["needs-ticket-ok", "rejected", "parked"]).has(job.stage)) {
@@ -1072,6 +1249,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       }
       case "ticket-presented":
         if (!job.ticketHash || job.sessionId !== event.sessionId
+            || job.actorTool !== event.actorTool
             || (job.laneSessionId && job.laneSessionId !== event.sessionId)) {
           throw new Error(`Ticket presentation for ${job.id} crossed factory session custody.`);
         }
@@ -1081,6 +1259,10 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         if (String(event.payload.ticketHash || "") !== job.ticketHash) {
           throw new Error(`Ticket presentation for ${job.id} does not match its current ticket hash.`);
         }
+        if (sha256(String(event.payload.questionText || "")) !== String(event.payload.questionHash || "")
+            || !/^[a-f0-9]{40}$/i.test(String(event.payload.baseSha || ""))) {
+          throw new Error(`Ticket presentation for ${job.id} has an invalid question or base binding.`);
+        }
         job.stage = "needs-ticket-ok";
         job.sessionId = event.sessionId;
         job.actorTool = event.actorTool;
@@ -1089,18 +1271,55 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.baseSha = String(event.payload.baseSha || "");
         break;
       case "ticket-approved":
+        if (!existed
+            || job.stage !== "needs-ticket-ok"
+            || !job.ticketHash
+            || job.sessionId !== event.sessionId
+            || job.actorTool !== event.actorTool
+            || String(event.payload.ticketHash || "") !== job.ticketHash
+            || String(event.payload.questionHash || "") !== job.questionHash
+            || String(event.payload.baseSha || "") !== job.baseSha) {
+          throw new Error(`Ticket approval for ${job.id} is not bound to its current presented ticket, actor, session, question, and base.`);
+        }
+        if (!unqualifiedOwnerApproval(event.payload.ownerReply)) {
+          throw new Error(`Ticket approval for ${job.id} does not contain an unqualified owner approval.`);
+        }
+        if (!validDecisionLifetime(event.timestamp, event.payload.expiresAt)) {
+          throw new Error(`Ticket approval for ${job.id} has an invalid approval lifetime.`);
+        }
+        validateOwnerDecisionReceipt(paths, event);
         job.stage = "queued";
         job.approvalReply = String(event.payload.ownerReply || "");
         job.approvalExpiresAt = String(event.payload.expiresAt || "");
         job.baseSha = String(event.payload.baseSha || job.baseSha);
         break;
       case "ticket-rejected":
-      case "ticket-revision-requested":
+      case "ticket-revision-requested": {
+        if (!existed
+            || job.stage !== "needs-ticket-ok"
+            || !job.ticketHash
+            || job.sessionId !== event.sessionId
+            || job.actorTool !== event.actorTool
+            || String(event.payload.ticketHash || "") !== job.ticketHash
+            || String(event.payload.questionHash || "") !== job.questionHash
+            || String(event.payload.baseSha || "") !== job.baseSha
+            || !String(event.payload.ownerReply || "").trim()) {
+          throw new Error(`Ticket decision for ${job.id} is not bound to its current presented ticket, actor, session, question, and base.`);
+        }
+        validateOwnerDecisionReceipt(paths, event);
         job.stage = "rejected";
         job.blocker = String(event.payload.ownerReply || "Owner requested changes.");
         break;
+      }
       case "lane-started":
-        if (job.stage !== "queued" || job.sessionId !== event.sessionId) {
+        if (job.stage !== "queued"
+            || job.sessionId !== event.sessionId
+            || job.actorTool !== event.actorTool
+            || String(event.payload.ticketHash || "") !== job.ticketHash
+            || String(event.payload.baseSha || "") !== job.baseSha
+            || !String(event.payload.worktree || "").trim()
+            || !job.approvalExpiresAt
+            || Date.parse(job.approvalExpiresAt) <= Date.parse(event.timestamp)) {
           throw new Error(`Lane start for ${job.id} is not bound to its approved chat session.`);
         }
         job.stage = "building";
@@ -1108,7 +1327,12 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         break;
       case "review-presented":
         if (job.stage !== "awaiting-morning-review"
-            || job.sessionId !== event.sessionId) {
+            || job.sessionId !== event.sessionId
+            || job.actorTool !== event.actorTool
+            || String(event.payload.ticketHash || "") !== job.ticketHash
+            || String(event.payload.baseSha || "") !== job.baseSha
+            || sha256(String(event.payload.questionText || "")) !== String(event.payload.questionHash || "")
+            || !validDecisionLifetime(event.timestamp, event.payload.expiresAt)) {
           throw new Error(`Morning review presentation for ${job.id} crossed factory session custody.`);
         }
         job.sessionId = event.sessionId;
@@ -1122,9 +1346,12 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         if (!new Set(["needs-ticket-ok", "queued", "parked", "awaiting-morning-review"]).has(job.stage)) {
           throw new Error(`Factory job ${job.id} cannot transfer chat custody while it is ${job.stage}.`);
         }
-        if (job.sessionId === event.sessionId) {
+        if (job.sessionId === event.sessionId
+            || String(event.payload.priorStage || "") !== job.stage
+            || !String(event.payload.ownerReply || "").trim()) {
           throw new Error(`Factory job ${job.id} is already bound to this chat session.`);
         }
+        validateOwnerDecisionReceipt(paths, event);
         job.sessionId = event.sessionId;
         job.actorTool = event.actorTool;
         job.approvalExpiresAt = "";
@@ -1147,10 +1374,14 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         if (event.payload.stage === "approved-to-land") {
           if (job.stage !== "awaiting-morning-review"
               || job.sessionId !== event.sessionId
+              || job.actorTool !== event.actorTool
               || String(event.payload.ticketHash || "") !== job.ticketHash
-              || String(event.payload.reviewQuestionHash || "") !== job.reviewQuestionHash) {
+              || String(event.payload.reviewQuestionHash || "") !== job.reviewQuestionHash
+              || event.payload.ownerDecision !== "approve"
+              || !unqualifiedOwnerApproval(event.payload.ownerReply)) {
             throw new Error(`Morning acceptance for ${job.id} is not bound to its current reviewed ticket and chat.`);
           }
+          validateOwnerDecisionReceipt(paths, event);
           const acceptedHash = String(event.payload.acceptedRepositoryContentHash || "");
           const acceptedCount = Number(event.payload.acceptedRepositoryFileCount || 0);
           if (!/^[a-f0-9]{64}$/i.test(acceptedHash)
@@ -1160,6 +1391,41 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
           }
           job.acceptedRepositoryContentHash = acceptedHash;
           job.acceptedRepositoryFileCount = acceptedCount;
+        } else if (event.payload.stage === "live") {
+          if (job.stage !== "approved-to-land"
+              || job.sessionId !== event.sessionId
+              || job.actorTool !== event.actorTool
+              || !/^[a-f0-9]{40}$/i.test(String(event.payload.landingCommit || ""))
+              || !String(event.payload.closeoutPacket || "").trim()
+              || !/^[a-f0-9]{64}$/i.test(String(event.payload.closeoutPacketHash || ""))
+              || event.payload.closeoutPacket !== job.closeoutPacket
+              || event.payload.closeoutPacketHash !== job.closeoutPacketHash
+              || event.payload.landingCommit !== job.landingCommit
+              || !/^[a-f0-9]{40}$/i.test(String(event.payload.closeoutCommit || ""))
+              || !event.payload.productionVerification
+              || typeof event.payload.productionVerification !== "object") {
+            throw new Error(`Live transition for ${job.id} is not bound to its accepted result and complete closeout proof.`);
+          }
+        } else if (event.payload.stage === "parked" && job.stage === "awaiting-morning-review") {
+          if (job.sessionId !== event.sessionId
+              || job.actorTool !== event.actorTool
+              || !new Set(["reject", "revise"]).has(event.payload.ownerDecision)
+              || String(event.payload.ticketHash || "") !== job.ticketHash
+              || String(event.payload.reviewQuestionHash || "") !== job.reviewQuestionHash
+              || !String(event.payload.ownerReply || "").trim()
+              || !String(event.payload.blocker || "").trim()) {
+            throw new Error(`Morning rejection for ${job.id} is not bound to its current reviewed ticket and chat.`);
+          }
+          validateOwnerDecisionReceipt(paths, event);
+        } else {
+          const allowed = ALLOWED_AGENT_STAGE_CHANGES.get(job.stage);
+          if (!allowed?.has(event.payload.stage)
+              || job.laneSessionId !== event.sessionId
+              || job.actorTool !== event.actorTool
+              || (event.payload.stage === "awaiting-morning-review" && !String(event.payload.behaviorSummary || "").trim())
+              || (event.payload.stage === "parked" && !String(event.payload.blocker || "").trim())) {
+            throw new Error(`Agent stage transition for ${job.id} from ${job.stage} to ${event.payload.stage} is invalid or crossed lane custody.`);
+          }
         }
         job.stage = event.payload.stage;
         job.behaviorSummary = String(event.payload.behaviorSummary || job.behaviorSummary);
@@ -1176,6 +1442,17 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         }
         break;
       case "closeout-prepared":
+        if (job.stage !== "approved-to-land"
+            || job.sessionId !== event.sessionId
+            || job.actorTool !== event.actorTool
+            || !/^[a-f0-9]{40}$/i.test(String(event.payload.landingCommit || ""))
+            || !String(event.payload.closeoutPacket || "").trim()
+            || !/^[a-f0-9]{64}$/i.test(String(event.payload.closeoutPacketHash || ""))
+            || String(event.payload.ledgerCheckpointHash || "") !== event.previousHash
+            || !event.payload.productionVerification
+            || typeof event.payload.productionVerification !== "object") {
+          throw new Error(`Closeout preparation for ${job.id} is incomplete or crossed accepted-result custody.`);
+        }
         job.landingCommit = String(event.payload.landingCommit || "");
         job.productionVerification = event.payload.productionVerification
           && typeof event.payload.productionVerification === "object"
@@ -1185,6 +1462,13 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.closeoutPacketHash = String(event.payload.closeoutPacketHash || "");
         break;
       case "evidence-attached":
+        if (!new Set(["building", "verifying", "in-review"]).has(job.stage)
+            || job.laneSessionId !== event.sessionId
+            || job.actorTool !== event.actorTool
+            || String(event.payload.ticketHash || "") !== job.ticketHash
+            || !/^[a-f0-9]{64}$/i.test(String(event.payload.sha256 || ""))) {
+          throw new Error(`Harness evidence for ${job.id} is not bound to its active ticket and lane custody.`);
+        }
         job.evidence.push({
           label: String(event.payload.label || "Evidence"),
           kind: String(event.payload.kind || "file"),
@@ -1208,6 +1492,14 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         });
         break;
       case "independent-review-attached":
+        if (job.stage !== "in-review"
+            || job.laneSessionId !== event.sessionId
+            || job.actorTool !== event.actorTool
+            || String(event.payload.ticketHash || "") !== job.ticketHash
+            || event.payload.verdict !== "clean"
+            || !/^[a-f0-9]{64}$/i.test(String(event.payload.sha256 || ""))) {
+          throw new Error(`Independent review for ${job.id} is not bound to its active ticket and in-review lane custody.`);
+        }
         job.reviews.push({
           reviewer: String(event.payload.reviewer || ""),
           model: String(event.payload.model || ""),

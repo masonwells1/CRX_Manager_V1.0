@@ -570,16 +570,17 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     }
     validateCurrentHarnessEvidence(job, cwd, { paths });
     validateCurrentIndependentReview(job, cwd, { paths });
+    const presentedAt = now();
     appendAsActor(paths, {
       type: "review-presented",
       jobId,
-      timestamp: now().toISOString(),
+      timestamp: presentedAt.toISOString(),
       payload: {
         ticketHash: job.ticketHash,
         questionText,
         questionHash: sha256(questionText),
         baseSha,
-        expiresAt: new Date(now().getTime() + APPROVAL_TTL_MS).toISOString(),
+        expiresAt: new Date(presentedAt.getTime() + APPROVAL_TTL_MS).toISOString(),
       },
     }, who);
     process.stdout.write(`${JSON.stringify({

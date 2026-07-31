@@ -20,6 +20,24 @@ function norm(value) {
   return String(value || "").replace(/\\/g, "/").toLowerCase();
 }
 
+function collectPathLikeTargets(value, key = "", output = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectPathLikeTargets(item, key, output);
+    return output;
+  }
+  if (!value || typeof value !== "object") {
+    if (typeof value === "string"
+        && /^(?:file_?path|filepath|path|target|destination|dest|cwd|workdir|directory|root)$/i.test(key)) {
+      output.push(value);
+    }
+    return output;
+  }
+  for (const [childKey, childValue] of Object.entries(value)) {
+    collectPathLikeTargets(childValue, childKey, output);
+  }
+  return output;
+}
+
 let payload;
 try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { nothing(); }
 
@@ -43,6 +61,7 @@ const structuredTargets = [
   ...(Array.isArray(input.edits)
     ? input.edits.flatMap((edit) => [edit?.file_path, edit?.filePath, edit?.path, edit?.target])
     : []),
+  ...collectPathLikeTargets(input),
 ].filter(Boolean).map((value) => norm(value));
 const patchText = typeof rawInput === "string" ? rawInput : String(input.patch || input.input || "");
 for (const match of patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/gm)) {
@@ -65,9 +84,8 @@ if (sessionId) {
   }
 }
 
-if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(toolName)
-    && targets.some((target) => target.startsWith(stateNorm) || target.includes("/crx-factory/"))) {
-  deny("CRX FACTORY STATE GUARD: direct edits to the shared factory ledger/tickets/evidence are forbidden. Use the validated scripts/factory.mjs entrypoint.");
+if (targets.some((target) => target.startsWith(stateNorm) || target.includes("/crx-factory/"))) {
+  deny("CRX FACTORY STATE GUARD: direct tool access to the shared factory ledger/tickets/evidence is forbidden. Use the validated scripts/factory.mjs entrypoint or the read-only Factory Board.");
 }
 const governanceTarget = /(?:^|\/)(?:package\.json|scripts\/(?:factory(?:-[^/]*)?|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|\.claude\/settings(?:\.local)?\.json|\.codex\/hooks\.json|\.codex\/hooks\/(?:codex-hook-adapter|production-action-guard)\.mjs|\.claude\/hooks\/(?:factory-[^/]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib|codex-push-guard|codex-push-lib|pr-merge-guard|review-proof-guard)\.mjs)$/;
 if (targets.some((target) => target.startsWith(permitsNorm))) {
@@ -103,6 +121,7 @@ const mentionsState = commandNorm.includes(stateNorm)
   || commandNorm.includes("/crx-factory/")
   || commandNorm.includes("\\crx-factory\\");
 const derivesCommonDir = /git\s+rev-parse\s+--git-common-dir/i.test(command);
+const derivesFactoryGitPath = /git(?:\.exe)?\s+rev-parse\b[^\r\n;&|]*--git-path\b[^\r\n;&|]*crx[-_/\\]?factory/i.test(command);
 const mutates = /(?:^|[;&|]\s*|\s)(?:remove-item|move-item|copy-item|rename-item|set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|del|erase|mv|cp|writefile|appendfile|unlink|rename|truncate|tee)\b|(?:>>?|2>)|node\s+(?:-e|--eval)\b|python(?:\.exe)?\s+(?:-c|-)\b|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:diff|show|log)\b[^\r\n;&|]*--output(?:=|\s)/i.test(command);
 const opaqueRepoMutation = /\bgit\s+(?:apply\b|checkout\s+--(?:\s|$)|restore\b)/i.test(command);
 const mentionsGovernanceTarget = /(?:^|[\\/\s"'`])(?:package\.json|scripts[\\/](?:factory(?:-[^\\/\s"'`]*)?|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|\.claude[\\/]settings(?:\.local)?\.json|\.codex[\\/]hooks\.json|\.codex[\\/]hooks[\\/](?:codex-hook-adapter|production-action-guard)\.mjs|\.claude[\\/]hooks[\\/](?:factory-[^\\/\s"'`]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib|codex-push-guard|codex-push-lib|pr-merge-guard|review-proof-guard)\.mjs)(?:$|[\s"'`])/i.test(commandNorm);
@@ -111,7 +130,11 @@ if (governedSession && ((mentionsGovernanceTarget && mutates) || opaqueRepoMutat
   deny("CRX FACTORY STATE GUARD: a governed lane cannot mutate its governance implementation through the shell.");
 }
 
-if ((mentionsState || derivesCommonDir) && mutates) {
+if (mentionsState || derivesFactoryGitPath) {
+  deny("CRX FACTORY STATE GUARD: direct shell access to shared factory state is forbidden. Use only the canonical factory CLI or read-only Factory Board.");
+}
+
+if (derivesCommonDir && mutates) {
   deny("CRX FACTORY STATE GUARD: shell mutation of the shared factory directory is forbidden. Use only node scripts/factory.mjs for validated state changes.");
 }
 

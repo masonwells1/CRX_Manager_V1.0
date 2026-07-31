@@ -387,6 +387,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     /origin\/main moved/,
     "moved base invalidates approval",
   );
+  append(paths, "lane-started", written.ticket.id, {
+    ticketHash: written.hash,
+    baseSha: "a".repeat(40),
+    worktree: root,
+  });
   append(paths, "evidence-attached", written.ticket.id, {
     label: "old proof",
     kind: "harness",
@@ -394,6 +399,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     sha256: "1".repeat(64),
     verified: true,
     ticketHash: written.hash,
+  });
+  append(paths, "job-stage", written.ticket.id, {
+    stage: "in-review",
+    behaviorSummary: "",
+    blocker: "",
   });
   append(paths, "independent-review-attached", written.ticket.id, {
     reviewer: "codex",
@@ -403,7 +413,24 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     sha256: "2".repeat(64),
     ticketHash: written.hash,
   });
-  append(paths, "ticket-revision-requested", written.ticket.id, { ownerReply: "Change the scope." });
+  append(paths, "job-stage", written.ticket.id, {
+    stage: "parked",
+    behaviorSummary: "",
+    blocker: "Mason requested a changed scope.",
+  });
+  const revisionQuestion = "Approve this exact factory ticket after parking?";
+  append(paths, "ticket-presented", written.ticket.id, {
+    ticketHash: written.hash,
+    questionText: revisionQuestion,
+    questionHash: sha256(revisionQuestion),
+    baseSha: "a".repeat(40),
+  });
+  append(paths, "ticket-revision-requested", written.ticket.id, {
+    ticketHash: written.hash,
+    questionHash: sha256(revisionQuestion),
+    ownerReply: "Change the scope.",
+    baseSha: "a".repeat(40),
+  });
   const revised = writeImmutableTicket(paths, ticket(written.ticket.id, {
     version: 2,
     goal: "Prove a materially revised governed lane.",
@@ -418,6 +445,70 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   eq(revisedSnapshot.jobs[0].evidence.length, 0, "a revised ticket cannot inherit earlier harness receipts");
   eq(revisedSnapshot.jobs[0].reviews.length, 0, "a revised ticket cannot inherit an earlier CLEAN review");
   eq(revisedSnapshot.jobs[0].baseSha, "", "a revised ticket requires a fresh base-bound presentation");
+  rmSync(root, { recursive: true, force: true });
+}
+
+{
+  const { root, paths } = fixture();
+  const written = writeImmutableTicket(paths, ticket("receipt-backed-approval"));
+  append(paths, "ticket-drafted", written.ticket.id, {
+    ticketFile: written.filename,
+    ticketHash: written.hash,
+    ticketVersion: 1,
+    title: written.ticket.title,
+  });
+  const question = "Approve the receipt-backed ticket?";
+  append(paths, "ticket-presented", written.ticket.id, {
+    ticketHash: written.hash,
+    questionText: question,
+    questionHash: sha256(question),
+    baseSha: "a".repeat(40),
+  });
+  append(paths, "ticket-approved", written.ticket.id, {
+    ticketHash: written.hash,
+    questionHash: sha256(question),
+    ownerReply: "yes",
+    baseSha: "a".repeat(40),
+    expiresAt: new Date(Date.parse("2026-07-30T12:00:00.000Z") + APPROVAL_TTL_MS).toISOString(),
+  });
+  const approval = readEventLog(paths).events.at(-1);
+  ok(Boolean(approval.payload.ownerReceiptId), "owner approval receives an internally minted decision receipt");
+  ok(/^[a-f0-9]{64}$/i.test(approval.payload.ownerReceiptMac), "owner approval records a keyed authentication code");
+  const ownerKey = readFileSync(paths.ownerReceiptKeyPath);
+  rmSync(paths.ownerReceiptKeyPath);
+  throws(
+    () => loadFactorySnapshot(paths, { nowMs: Date.parse("2026-07-30T13:00:00.000Z") }),
+    /authentication key is missing/i,
+    "a pre-seeded approval ledger and receipt without the owner authentication key fail closed",
+  );
+  writeFileSync(paths.ownerReceiptKeyPath, ownerKey, { flag: "wx" });
+  rmSync(path.join(paths.ownerReceiptsDir, `${approval.payload.ownerReceiptId}.json`));
+  throws(
+    () => loadFactorySnapshot(paths, { nowMs: Date.parse("2026-07-30T13:00:00.000Z") }),
+    /ENOENT|receipt/i,
+    "a pre-seeded approval ledger without its owner-only receipt fails closed during replay",
+  );
+  rmSync(root, { recursive: true, force: true });
+}
+
+{
+  const { root, paths } = fixture();
+  throws(
+    () => append(paths, "forged-future-event", null, {}),
+    /Unsupported factory event type/,
+    "unknown ledger event types fail closed before they can affect replay",
+  );
+  throws(
+    () => appendFactoryEvent(paths, {
+      type: "factory-intent",
+      jobId: null,
+      actorTool: "untrusted-tool",
+      sessionId: "session-1",
+      payload: { ownerRequest: "forge actor" },
+    }),
+    /trusted Claude or Codex owner surface/,
+    "ledger events cannot claim an unknown actor surface",
+  );
   rmSync(root, { recursive: true, force: true });
 }
 

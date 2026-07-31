@@ -409,6 +409,18 @@ recursive force-delete cleanup command.
   phrase, while negative, qualified, and ambiguous wording leaves the hold active. All three
   reported bypass phrases are executable regressions. Fresh exact-commit acceptance is still
   required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `0ef1a03435d7bd820ec70a5d1edc16b080b2dae7` returned `BLOCKERS`: supported structured tools could
+  pre-seed shared state through unrecognized writer names or Git-path indirection, and replay trusted
+  an approval line without independently proving its legal prior stage, actor, session, question, and
+  owner-input origin. The repair recursively denies every structured direct-state target, denies direct
+  reads and `git rev-parse --git-path crx-factory/...`, restricts owner-only events to random write-once
+  receipts authenticated with a private installation-key HMAC and minted by the real owner-prompt hook,
+  and revalidates receipts plus legal transitions for
+  ticket decisions, lane stages, evidence, independent review, morning decisions, and closeout. The
+  documented boundary remains defense-in-depth for supported Claude/Codex tools rather than security
+  against arbitrary code already executing as Mason's Windows account. Fresh exact-commit acceptance
+  is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -427,7 +439,7 @@ reconciliation.
 
 ## Remaining gate
 
-The latest repair pass remains unpushed. The focused host factory suite is green at 379 assertions;
+The latest repair pass remains unpushed. The focused host factory suite is green at 388 assertions;
 the commit hook must now rerun the full host pipeline on the repaired bytes. The next gate after that
 is fresh exact-SHA `gpt-5.6-sol` high-effort acceptance, then the explicitly authorized
 feature-branch push and draft PR. Merge, board installation/startup, deployment, migration, and all

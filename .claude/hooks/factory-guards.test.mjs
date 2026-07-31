@@ -9,6 +9,7 @@ import {
   appendFactoryEvent,
   loadFactorySnapshot,
   resolveFactoryPaths,
+  sha256,
   writeImmutableTicket,
 } from "../../scripts/factory-state-lib.mjs";
 
@@ -24,6 +25,7 @@ function run(hook, stateDir, payload) {
     env: {
       ...process.env,
       CLAUDE_PROJECT_DIR: root,
+      CRX_AGENT_SURFACE: "codex",
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: stateDir,
     },
@@ -61,15 +63,27 @@ function bashExecutable() {
   denied(run(integrityHook, stateDir, {
     tool_name: "Write",
     tool_input: { file_path: paths.eventsPath, content: "forged" },
-  }), /direct edits.*forbidden/i, "direct ledger write is denied");
+  }), /shared factory.*forbidden/i, "direct ledger write is denied");
+  denied(run(integrityHook, stateDir, {
+    tool_name: "Read",
+    tool_input: { file_path: paths.eventsPath },
+  }), /shared factory.*forbidden/i, "direct ledger reads are denied in favor of the validated status projection");
+  denied(run(integrityHook, stateDir, {
+    tool_name: "mcp__filesystem__write_file",
+    tool_input: { request: { destination: paths.eventsPath, content: "forged" } },
+  }), /shared factory.*forbidden/i, "unknown structured MCP writers cannot pre-seed the ledger");
   denied(run(integrityHook, stateDir, {
     tool_name: "PowerShell",
     tool_input: { command: `Set-Content -LiteralPath "${paths.eventsPath}" -Value forged` },
-  }), /shell mutation.*forbidden/i, "shell ledger write is denied");
+  }), /shared factory state is forbidden/i, "shell ledger write is denied");
   denied(run(integrityHook, stateDir, {
     tool_name: "PowerShell",
     tool_input: { command: `git diff origin/main...HEAD --output=${paths.eventsPath}` },
-  }), /shell mutation.*forbidden/i, "Git output options cannot overwrite the shared ledger");
+  }), /shared factory state is forbidden/i, "Git output options cannot overwrite the shared ledger");
+  denied(run(integrityHook, stateDir, {
+    tool_name: "PowerShell",
+    tool_input: { command: "git rev-parse --git-path crx-factory/events.jsonl" },
+  }), /direct shell access.*forbidden/i, "Git path indirection cannot disclose the shared ledger path");
   denied(run(integrityHook, stateDir, {
     tool_name: "PowerShell",
     tool_input: {
@@ -350,7 +364,7 @@ function bashExecutable() {
     jobId: ticket.ticket.id,
     actorTool: "codex",
     sessionId,
-    payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: "a".repeat(64), baseSha: "b".repeat(40) },
+    payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: sha256("Approve?"), baseSha: "b".repeat(40) },
   });
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
@@ -369,7 +383,7 @@ function bashExecutable() {
     sessionId,
     payload: {
       ticketHash: ticket.hash,
-      questionHash: "a".repeat(64),
+      questionHash: sha256("Approve?"),
       ownerReply: "yes",
       baseSha: "b".repeat(40),
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -565,6 +579,7 @@ function bashExecutable() {
     env: {
       ...process.env,
       CLAUDE_PROJECT_DIR: root,
+      CRX_AGENT_SURFACE: "codex",
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: stateDir,
     },
@@ -668,21 +683,25 @@ function bashExecutable() {
     deliveryGate: "Use existing ship gates.",
     riskAreas: [],
   });
+  const landingReviewQuestion = "Accept exact result?";
   for (const event of [
     { type: "ticket-drafted", payload: { ticketFile: ticket.filename, ticketHash: ticket.hash, ticketVersion: 1, title: ticket.ticket.title } },
-    { type: "ticket-presented", payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: "a".repeat(64), baseSha: "b".repeat(40) } },
-    { type: "ticket-approved", payload: { ticketHash: ticket.hash, questionHash: "a".repeat(64), ownerReply: "yes", baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "ticket-presented", payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: sha256("Approve?"), baseSha: "b".repeat(40) } },
+    { type: "ticket-approved", payload: { ticketHash: ticket.hash, questionHash: sha256("Approve?"), ownerReply: "yes", baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
     { type: "lane-started", payload: { ticketHash: ticket.hash, baseSha: "b".repeat(40), worktree: root } },
+    { type: "job-stage", payload: { stage: "in-review", behaviorSummary: "", blocker: "" } },
     { type: "job-stage", payload: { stage: "awaiting-morning-review", behaviorSummary: "Proof accepted.", blocker: "" } },
-    { type: "review-presented", payload: { questionText: "Accept exact result?", questionHash: "c".repeat(64), baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "review-presented", payload: { ticketHash: ticket.hash, questionText: landingReviewQuestion, questionHash: sha256(landingReviewQuestion), baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
     {
       type: "job-stage",
       payload: {
         stage: "approved-to-land",
         behaviorSummary: "Proof accepted.",
         blocker: "",
+        ownerReply: "approved",
+        ownerDecision: "approve",
         ticketHash: ticket.hash,
-        reviewQuestionHash: "c".repeat(64),
+        reviewQuestionHash: sha256(landingReviewQuestion),
         acceptedRepositoryContentHash: "d".repeat(64),
         acceptedRepositoryFileCount: 1,
       },
