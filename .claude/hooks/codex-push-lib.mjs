@@ -48,7 +48,6 @@ export function isGitPush(cmd) {
 // only has to stop the accident and the clever-but-not-adversarial case.
 export function pushHiddenByShellComposition(cmd) {
   const text = String(cmd || "");
-  if (isGitPush(text)) return false; // an ordinary push takes the normal path
   const unwrapped = text
     .replace(/`\r?\n/g, "")          // PowerShell line continuation
     .replace(/`(?=[^\r\n])/g, "")    // PowerShell character escape: pu`sh
@@ -56,7 +55,13 @@ export function pushHiddenByShellComposition(cmd) {
     .replace(/\\(?=[^\r\n])/g, "")   // POSIX shell character escape: pu\sh
     .replace(/["']/g, "")
     .replace(/[$`(){}]/g, " ");
-  return isGitPush(unwrapped);
+  const literalPushes = eachPush(text);
+  const executedPushes = eachPush(unwrapped);
+  if (executedPushes.length === 0) return false;
+  if (executedPushes.length !== literalPushes.length) return true;
+  return executedPushes.some((push, index) =>
+    JSON.stringify(splitShellArgs(push.args)) !== JSON.stringify(splitShellArgs(literalPushes[index].args))
+  );
 }
 
 // EVERY push in the command, not just the first. `String.match` without /g and

@@ -16,6 +16,12 @@ Both helpers and their real hook/backup call sites have regression coverage. Eac
 site was mutation-tested to prove the suite fails when the protection is disconnected, and the
 actual hook plus a fresh private `CRX_Backups` clone were exercised on ordinary and denied paths.
 
+The subsequent exact-head proof found one more composition case: an already-visible harmless push
+made the detector stop before examining quote-spliced refspecs or a second hidden push. The detector
+now compares the parsed push list and arguments before and after shell unwrapping. It therefore
+refuses `HEAD:ma"in"` and `git push harmless && git p"us"h --force ...`, while preserving ordinary
+whole-argument quoting such as `git push "origin" "HEAD:main"`.
+
 ## 2026-07-30 — two push guards were blocking pushes they had already cleared
 
 Backing up the agent memory ran into both of them, one after the other. Neither was catching a real

@@ -61,7 +61,7 @@ const cmd = String(payload?.tool_input?.command || "");
 // substitution is refused outright — analysing a spelling the shell rewrites
 // proves nothing about where the objects go.
 if (pushHiddenByShellComposition(cmd)) {
-  deny("CODEX GATE: this command only becomes a `git push` after shell quoting or command substitution (for example `git p\"us\"h`, `$(git push …)`, or a backtick). The review gate reads the command text, so a push spelled that way would be inspected as something it is not. Write the push plainly: `git -C <repo> push <remote> <refspec>`.");
+  deny("CODEX GATE: shell quoting or command substitution changes this push's meaning or reveals an additional push (for example `git p\"us\"h`, `HEAD:ma\"in\"`, `$(git push …)`, or a backtick). The review gate reads command text, so analysing a spelling the shell rewrites would not prove the executed destination, force intent, or refspec. Write each push plainly: `git -C <repo> push <remote> <refspec>`.");
 }
 if (!isGitPush(cmd)) passthrough();
 if (pushContextIsAmbiguous(cmd)) {

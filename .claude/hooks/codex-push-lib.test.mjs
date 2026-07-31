@@ -525,6 +525,22 @@ assert.equal(
   "including a PowerShell line splice inside `push`",
 );
 assert.equal(
+  pushHiddenByShellComposition(`git push origin HEAD:ma"in"`), true,
+  "quote splicing inside a refspec cannot disguise a push to main",
+);
+assert.equal(
+  pushHiddenByShellComposition(`git push origin feature && git p"us"h origin HEAD:main`), true,
+  "a visible harmless push cannot hide a second quote-spliced push",
+);
+assert.equal(
+  pushHiddenByShellComposition(`git push origin feature && git p"us"h --force origin feature`), true,
+  "a visible harmless push cannot hide a second quote-spliced force push",
+);
+assert.equal(
+  pushHiddenByShellComposition(`git push "origin" "HEAD:main"`), false,
+  "ordinary whole-argument quoting remains inspectable",
+);
+assert.equal(
   pushHiddenByShellComposition("$(git push origin HEAD:main)"), true,
   "a command substitution that runs a push is caught",
 );
@@ -1166,6 +1182,21 @@ assert.equal(pushDestinationToken("git push"), null);
       "git pu\\sh origin HEAD:main",
       /quoting or command substitution/i,
       "and a POSIX shell backslash escape cannot splice `push` past the hook",
+    );
+    deniedBecause(
+      `git push origin HEAD:ma"in"`,
+      /quoting or command substitution/i,
+      "quote splicing cannot disguise the main destination from the hook",
+    );
+    deniedBecause(
+      `git push origin feature && git p"us"h origin HEAD:main`,
+      /quoting or command substitution/i,
+      "a visible harmless push cannot hide a second main-bound push",
+    );
+    deniedBecause(
+      `git push origin feature && git p"us"h --force origin feature`,
+      /quoting or command substitution/i,
+      "a visible harmless push cannot hide a second force push",
     );
 
     // Round 18, end-to-end: git's remote-helper syntax hands delivery to an
