@@ -157,8 +157,9 @@ fingerprint before the ticket or morning decision is re-presented there.
   revert is still a descendant. A Vercel alias rollback therefore fails closed even if a newer
   historical GitHub deployment remains successful and the canonical URL still returns HTTP 200.
 - The board binds only to loopback and is read-only.
-- A global hold clears only on an unambiguous affirmative owner resume/restart phrase; negated
-  phrases such as “do not resume” leave the hold active.
+- A global hold clears only on a tightly bounded, standalone affirmative owner resume/restart
+  phrase. Negated, qualified, or ambiguous phrases such as “do not resume,” “under no
+  circumstances resume,” or “I have no plans to resume” leave the hold active.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
 

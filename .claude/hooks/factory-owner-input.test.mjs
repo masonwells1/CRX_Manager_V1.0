@@ -310,11 +310,23 @@ function runLaneHook(state, payload) {
   });
   equal(result.stdout, "", "not-ready-to-restart wording does not clear the factory hold");
   equal(buildFactorySnapshot(state.paths).held, true, "negated restart leaves the global hold active");
+  for (const [prompt, label] of [
+    ["under no circumstances resume the factory", "no-circumstances"],
+    ["I have no plans to resume the factory", "no-plans"],
+    ["anything but resume the factory", "anything-but"],
+  ]) {
+    result = runHook(state, {
+      prompt,
+      thread_id: state.sessionId,
+    });
+    ok(!result.stdout.includes("has resumed"), `${label} wording does not report a factory resume`);
+    equal(buildFactorySnapshot(state.paths).held, true, `${label} wording leaves the global hold active`);
+  }
   result = runHook(state, {
-    prompt: "resume the factory",
+    prompt: "please resume the factory now",
     thread_id: state.sessionId,
   });
-  ok(result.stdout.includes("has resumed"), "owner's plain-English resume is captured");
+  ok(result.stdout.includes("has resumed"), "owner's tightly affirmative plain-English resume is captured");
   equal(buildFactorySnapshot(state.paths).held, false, "only the owner prompt clears the global hold");
 }
 

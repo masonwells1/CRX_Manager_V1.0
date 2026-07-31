@@ -520,6 +520,13 @@ opaque changes cannot reach review under an underclassified ticket; they must be
 approved again. The Sol prompt now names every CRX red line explicitly and treats ticket labels as
 untrusted rather than as the scope of technical scrutiny.
 
+A seventeenth exact-SHA Sol/high acceptance found that broad resume matching could interpret
+explicit negative owner instructions such as “under no circumstances resume the factory,”
+“I have no plans to resume the factory,” and “anything but resume the factory” as permission to
+clear the emergency hold. Resume now recognizes only a tightly bounded standalone affirmative
+resume/restart phrase. Negative, qualified, and ambiguous wording fails closed, and all three
+reported bypass phrases are covered by executable regressions.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

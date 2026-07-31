@@ -3,8 +3,8 @@
 Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
-Current `origin/main` at exact-proof freeze: `2fd55fea6ccc83400a68e5d9492a5df24d8a233c`
-State: rebased onto current `origin/main`; latest Sol/high publication-blocker repair candidate is unpushed
+Current `origin/main` after latest reconciliation: `cabe0341859f586debc99962e656bc9dd644895f`
+State: rebased onto current `origin/main`; seventeenth Sol/high blocker repair is focused-green and unpushed
 
 ## Owner-facing result
 
@@ -130,7 +130,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 373 focused assertions after sixteenth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 379 focused assertions after seventeenth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,238 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -401,6 +401,14 @@ recursive force-delete cleanup command.
   and post-build changed-path/diff-content classification force underclassified work back through
   ticket revision and owner approval. The independent Sol prompt also enforces the full CRX red-line
   set regardless of ticket labels. Fresh exact-commit acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of rebased commit
+  `250f75e60e450090013cc91e87972f0ee28814e4` returned `BLOCKERS`: broad resume detection treated
+  explicit negative owner instructions such as “under no circumstances resume the factory,”
+  “I have no plans to resume the factory,” and “anything but resume the factory” as authorization
+  to clear the emergency hold. Resume now accepts only a tightly bounded standalone affirmative
+  phrase, while negative, qualified, and ambiguous wording leaves the hold active. All three
+  reported bypass phrases are executable regressions. Fresh exact-commit acceptance is still
+  required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -410,15 +418,17 @@ and tests are frozen.
 ## Moving-main check
 
 `origin/main` advanced from `aee913d` through `db9b5ef`, `c0d90ed`, `31cf0abe`, `886fa459`,
-and `2fd55fea`.
+`2fd55fea`, `fe1ac9da`, and `cabe0341`.
 The feature
 commits were rebased onto each current base before exact-SHA publication proof. The latest upstream
-vendor-bill accounting-period close work overlaps only policy/changelog/package surfaces; both
-entries and harness definitions were retained during reconciliation.
+vendor-bill accounting-period close and Quote/Customer row-version rollout overlap this branch only
+in documentation surfaces; the upstream entries and factory evidence were retained during
+reconciliation.
 
 ## Remaining gate
 
-The latest repair pass remains unpushed. Full host verification and the real contained Docker
-factory harness are green at the repaired bytes. The next gate is fresh exact-SHA `gpt-5.6-sol`
-high-effort acceptance, then the explicitly authorized feature-branch push and draft PR. Merge,
-board installation/startup, deployment, migration, and all production actions remain undone.
+The latest repair pass remains unpushed. The focused host factory suite is green at 379 assertions;
+the commit hook must now rerun the full host pipeline on the repaired bytes. The next gate after that
+is fresh exact-SHA `gpt-5.6-sol` high-effort acceptance, then the explicitly authorized
+feature-branch push and draft PR. Merge, board installation/startup, deployment, migration, and all
+production actions remain undone.

@@ -85,13 +85,28 @@ function looksLikeDecisionReply(prompt) {
     .test(String(prompt || ""));
 }
 
+function normalizedFactoryControlText(prompt) {
+  return String(prompt || "").toLowerCase()
+    .replace(/\bfactory\s+board(?:\s+server)?\b/g, "board")
+    .replace(/[,;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasAffirmativeResumePrefix(prompt) {
+  const text = normalizedFactoryControlText(prompt);
+  return /^(?:(?:yes|ok(?:ay)?)(?: please)? |please |go ahead(?: and)? |you (?:can|may) )?(?:resume|restart) (?:the )?factory(?: (?:now|please))?(?:\s|$)/.test(text);
+}
+
 function holdIntent(prompt) {
-  const text = String(prompt || "").toLowerCase()
-    .replace(/\bfactory\s+board(?:\s+server)?\b/g, "board");
+  const text = normalizedFactoryControlText(prompt);
   if (/\b(?:stop|pause|hold)\b.{0,30}\bfactory\b|\bfactory\b.{0,30}\b(?:stop|pause|hold)\b/.test(text)) return "hold";
-  const resumeIntent = /\b(?:resume|restart)\b.{0,30}\bfactory\b|\bfactory\b.{0,30}\b(?:resume|restart)\b/.test(text);
-  const negatedResume = /\b(?:do not|don'?t|never|not|can'?t|cannot|shouldn'?t|mustn'?t)\b.{0,30}\b(?:resume|restart)\b|\b(?:resume|restart)\b.{0,20}\b(?:not|never)\b/.test(text);
-  if (resumeIntent && !negatedResume) return "resume";
+  const explicitResume = text
+    .replace(/[.!?]+$/g, "")
+    .trim();
+  if (/^(?:(?:yes|ok(?:ay)?)(?: please)? |please |go ahead(?: and)? |you (?:can|may) )?(?:resume|restart) (?:the )?factory(?: (?:now|please))?$/.test(explicitResume)) {
+    return "resume";
+  }
   return "";
 }
 
@@ -162,6 +177,13 @@ async function main() {
   }
 
   const requestedHold = holdIntent(prompt);
+  if (!requestedHold && hasAffirmativeResumePrefix(prompt)) {
+    try {
+      rejectSecretBearingText(prompt, "Factory resume request");
+    } catch {
+      emit("CRX Factory did not resume because the request contained secret-shaped text that cannot enter the ledger. Re-state the resume request without credentials or secret material.");
+    }
+  }
   if (requestedHold) {
     if (!sessionId) emit("CRX Factory could not bind this hold request to a chat session, so it changed nothing. Re-state the request in this chat.");
     try {
