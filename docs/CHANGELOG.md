@@ -2,6 +2,14 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-31 — Executable-path and SSH redirection closed
+
+The push guard now rejects Git's `--exec-path` override and earlier command-segment
+changes to `PATH` or `PATHEXT`, preventing substituted transport helpers from
+ignoring the inspected destination. Private-memory staging now requires the exact
+GitHub HTTPS transport; SSH remotes are refused because OpenSSH `HostName` and
+`ProxyCommand` settings can silently replace the nominal GitHub endpoint.
+
 ## 2026-07-31 — Push and backup transport identity hardening
 
 The push guard now catches PowerShell's stop-parsing spelling of `git push` and

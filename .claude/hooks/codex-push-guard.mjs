@@ -19,6 +19,7 @@ import {
   eachPush,
   gitPushCwd,
   isGitPush,
+  pushUsesExecPathOption,
   mainPushSource,
   proofValid,
   pushContextIsAmbiguous,
@@ -62,6 +63,9 @@ const cmd = String(payload?.tool_input?.command || "");
 // proves nothing about where the objects go.
 if (pushHiddenByShellComposition(cmd)) {
   deny("CODEX GATE: shell quoting or command substitution changes this push's meaning or reveals an additional push (for example `git p\"us\"h`, `HEAD:ma\"in\"`, `$(git push …)`, or a backtick). The review gate reads command text, so analysing a spelling the shell rewrites would not prove the executed destination, force intent, or refspec. Write each push plainly: `git -C <repo> push <remote> <refspec>`.");
+}
+if (pushUsesExecPathOption(cmd)) {
+  deny("CODEX GATE: git --exec-path is denied for pushes. It replaces Git's transport helpers, so a planted git-remote-https program can ignore the destination this guard verified. Use Git's normal executable path.");
 }
 if (!isGitPush(cmd)) passthrough();
 if (pushContextIsAmbiguous(cmd)) {

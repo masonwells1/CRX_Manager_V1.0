@@ -518,8 +518,8 @@ try {
       const repo = makeRepo(name, url, "");
       const landing = path.join(repo, "claude-memory");
       const run = captured(() => stage(landing, notes));
-      eq(run.value, 1, `${name}: a non-GitHub HTTPS/SSH backup transport is refused`);
-      ok(/explicit GitHub HTTPS or SSH URL/.test(run.said), `${name}: and the refusal names the required transport`);
+      eq(run.value, 1, `${name}: a non-GitHub HTTPS backup transport is refused`);
+      ok(/explicit GitHub HTTPS URL/.test(run.said), `${name}: and the refusal names the required transport`);
       ok(!readdirSafe(landing), `${name}: and nothing is written`);
     }
     {
@@ -612,7 +612,11 @@ try {
     // A bare `git@` username is the ordinary SSH spelling, not a credential.
     {
       const ssh = makeRepo("ssh-backup-repo", "git@github.com:masonwells1/CRX_Backups.git", "");
-      eq(quiet(() => stage(path.join(ssh, "claude-memory"), notes)), 0, "the plain ssh remote is still fine");
+      const landing = path.join(ssh, "claude-memory");
+      const run = captured(() => stage(landing, notes));
+      eq(run.value, 1, "an SSH remote is refused because OpenSSH configuration can redirect it");
+      ok(/explicit GitHub HTTPS URL/.test(run.said), "the refusal names the required unambiguous transport");
+      ok(!readdirSafe(landing), "and nothing is written");
     }
     // ── round 16: the token detector only knew ONE of the three shapes ───────
     // Round 12 matched `scheme://userinfo@`, which is what git prints for an HTTPS

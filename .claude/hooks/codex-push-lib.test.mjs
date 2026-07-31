@@ -16,6 +16,7 @@ import {
   mainPushSource,
   pushIsForced,
   isGitPush,
+  pushUsesExecPathOption,
   executableTransportSettings,
   urlUsesUnknownTransport,
   environmentSelectsDifferentRepo,
@@ -758,6 +759,19 @@ assert.deepEqual(
   pushUsesTransportEnv(`GIT_EXEC_PATH=/tmp/evil git push origin main`),
   ["GIT_EXEC_PATH"], "writing it into the command is still a deliberate act",
 );
+assert.equal(
+  pushUsesExecPathOption("git --exec-path=C:/relay push origin main"),
+  true, "git's global executable-helper override is denied",
+);
+assert.equal(pushUsesExecPathOption("git --exec-path"), false, "querying the exec path without a push is harmless");
+assert.deepEqual(
+  pushUsesTransportEnv("PATH=C:/relay; git push origin main"),
+  ["PATH"], "an earlier executable search-path change is in scope",
+);
+assert.deepEqual(
+  pushUsesTransportEnv("$env:PATHEXT='.MJS'; git push origin main"),
+  ["PATHEXT"], "PowerShell executable-extension changes are in scope too",
+);
 
 const CRX_URL = "git@github.com:masonwells1/CRX_Manager_V1.0.git";
 assert.equal(
@@ -1108,6 +1122,9 @@ assert.equal(pushDestinationToken("git push"), null);
     deniedBecause(`XDG_CONFIG_HOME=/tmp/evil ${push}`, /XDG_CONFIG_HOME/, "inline XDG_CONFIG_HOME override");
     deniedBecause(`$env:HOME = "/tmp/evil"; ${push}`, /HOME/, "PowerShell HOME override");
     deniedBecause(`SOME_NEW_GIT_VAR=x ${push}`, /SOME_NEW_GIT_VAR/, "any inline assignment the allowlist does not name");
+    deniedBecause(`git --exec-path=${tmp} push origin main`, /--exec-path/, "git's executable-helper override");
+    deniedBecause(`PATH=${tmp}; ${push}`, /PATH/, "an earlier PATH replacement");
+    deniedBecause(`$env:PATHEXT = '.MJS'; ${push}`, /PATHEXT/, "an earlier PowerShell PATHEXT replacement");
     deniedBecause(`git -C ${work} push --recurse-submodules no ${CRX_URL} HEAD:main`, /codex/i, "--recurse-submodules hiding the real destination");
     deniedBecause(`git -C ${work} push --some-future-option x origin main`, /--some-future-option/, "an option the guard cannot account for");
     // Round 9, end-to-end: an arbitrary GIT_SSH_COMMAND, and a production URL

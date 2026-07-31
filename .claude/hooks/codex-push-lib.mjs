@@ -31,6 +31,15 @@ export function isGitPush(cmd) {
   return GIT_PUSH_RE.test(String(cmd || ""));
 }
 
+// `git --exec-path=<dir> push ...` replaces Git's own transport helpers before
+// the push starts. The destination can still look harmless while a planted
+// git-remote-https sends the objects elsewhere, so this executable selector is
+// never valid in a guarded push command.
+export function pushUsesExecPathOption(cmd) {
+  const text = String(cmd || "");
+  return isGitPush(text) && /(?<![A-Za-z0-9_-])--exec-path(?:=|\s|$)/i.test(text);
+}
+
 // A guard that reads command TEXT sees the text; the shell runs something else.
 // Codex's nineteenth 2026-07-30 review probed three spellings that every check
 // in this file missed: `git p"us"h origin HEAD:main`, which the shell
@@ -867,6 +876,7 @@ const TRANSPORT_ENV_NAMES = [
 const TRANSPORT_ENV_RE = new RegExp(
   `(?<![A-Za-z0-9_])(${TRANSPORT_ENV_NAMES.join("|")})(?![A-Za-z0-9_])`, "gi",
 );
+const EXECUTABLE_SEARCH_ENV_RE = /(?<![A-Za-z0-9_])(PATH|PATHEXT)(?![A-Za-z0-9_])/gi;
 function transportValueIsAllowed(name, rawValue) {
   const shape = INLINE_ENV_ALLOWED.get(String(name).toUpperCase());
   if (!shape) return false;
@@ -886,6 +896,10 @@ export function pushUsesTransportEnv(cmd) {
     const assign = /^\s*=\s*("[^"]*"|'[^']*'|[^\s;&|]*)/.exec(text.slice(match.index + match[1].length));
     if (!assign || !transportValueIsAllowed(match[1], assign[1])) offenders.add(match[1]);
   }
+  // Unlike configuration variables, an executable search path changed in an
+  // earlier segment is not shared safely with this already-running guard. It
+  // controls which `git` and `git-remote-*` program the later push executes.
+  for (const match of text.matchAll(EXECUTABLE_SEARCH_ENV_RE)) offenders.add(match[1]);
   return [...offenders];
 }
 // And the same names arriving from the shell the push will inherit. Unlike
