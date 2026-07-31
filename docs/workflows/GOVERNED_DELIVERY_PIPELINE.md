@@ -104,8 +104,12 @@ fingerprint before the ticket or morning decision is re-presented there.
   fail closed. Opaque shell writers, generated helper scripts, and
   MCP process launchers are denied; read commands remain available, and fixed verification harnesses
   run only through the permit-bound `factory.mjs evidence run` broker. Git inspection uses a strict
-  subcommand/token/option allowlist: output-writing, external-diff/text-conversion, paging/config
-  injection, and unknown flags are mutations. Unknown non-shell tools default to opaque execution;
+  metadata-only subcommand/token/option allowlist limited to status, ref/ancestry, and tracked-path
+  inspection: historical object/content reads (`show`, `cat-file`, `log`, or `diff`), output-writing, external-diff/text-conversion, paging/config
+  injection, and unknown flags are denied. Current file content is read through target-visible tools.
+  `node --check` accepts exactly one literal repository-relative `.js`, `.cjs`, or `.mjs` target;
+  option-shaped operands, preload/import flags, command or tool-level environment overrides, and escaping targets are denied.
+  Unknown non-shell tools default to opaque execution;
   only explicit structured read-only tools are exempt. Structured reads and simple shell reads must
   stay inside the worktree and cannot target ignored or secret-bearing paths; dynamic, parent-relative,
   wildcard shell paths, PowerShell providers/drives, literal CR/LF command chaining, alternate

@@ -421,6 +421,15 @@ recursive force-delete cleanup command.
   documented boundary remains defense-in-depth for supported Claude/Codex tools rather than security
   against arbitrary code already executing as Mason's Windows account. Fresh exact-commit acceptance
   is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `ee45580b479767854ca8ddb19d8cf5adeba9ff48` returned `BLOCKERS`: active-lane `node --check`
+  accepted an option-shaped operand that could preload executable code, while Git `show`, `cat-file`,
+  and patch-content reads could expose secret-bearing historical objects outside target-visible read
+  checks. The repair accepts only one literal repository-relative JavaScript syntax-check target,
+  validates that target through the worktree/ignored/secret/symlink boundary, and restricts active-lane
+  Git inspection to non-content metadata. Exact regressions cover Node preload and worktree escape,
+  Git object/history/diff reads, tool-level `NODE_OPTIONS`, and the retained safe syntax-check and Git-status paths. Fresh exact-commit
+  acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -439,7 +448,7 @@ reconciliation.
 
 ## Remaining gate
 
-The latest repair pass remains unpushed. The focused host factory suite is green at 388 assertions;
+The latest repair pass remains unpushed. The focused host factory suite is green at 397 assertions;
 the commit hook must now rerun the full host pipeline on the repaired bytes. The next gate after that
 is fresh exact-SHA `gpt-5.6-sol` high-effort acceptance, then the explicitly authorized
 feature-branch push and draft PR. Merge, board installation/startup, deployment, migration, and all

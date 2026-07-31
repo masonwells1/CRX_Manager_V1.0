@@ -538,6 +538,14 @@ events and illegal ticket, lane, evidence, review, acceptance, or closeout trans
 actor, session, ticket, question, base, expiry, decision, or receipt mismatch. This strengthens the
 supported Claude/Codex tool boundary without changing the explicit same-Windows-user limitation.
 
+A nineteenth exact-SHA Sol/high acceptance found two active-lane read/execution disguises. Node's
+`--check` mode accepted an option-shaped operand that could preload and execute a module, and Git
+`show`, `cat-file`, patch-log, or content diff could disclose secret-bearing historical objects while
+bypassing target-visible read checks. Syntax checking now accepts exactly one literal
+repository-relative JavaScript target and subjects it to worktree, ignored, secret-path, and symlink
+validation; caller-selected command or tool-level environment overrides are also denied. Active-lane Git inspection is limited to status, ref/ancestry, and tracked-path metadata; object, log, and diff reads are denied,
+with current source content available through the guarded structured read tools.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

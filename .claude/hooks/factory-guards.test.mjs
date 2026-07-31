@@ -517,6 +517,58 @@ function bashExecutable() {
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
+    tool_input: { command: "node --check --require=./src/example.ts" },
+  }), /direct commands and helper-process execution/i, "node syntax checking cannot smuggle an executable preload option");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: {
+      command: "node --check scripts/factory.mjs",
+      env: { NODE_OPTIONS: "--require=./src/example.ts" },
+    },
+  }), /environment overrides are forbidden/i, "node syntax checking cannot receive a preload through tool-level environment overrides");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node --check ../outside.mjs" },
+  }), /read target escapes the worktree/i, "node syntax checking cannot escape the governed worktree");
+  const nodeCheckAllowed = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "node --check scripts/factory.mjs" },
+  });
+  assertions++;
+  assert.equal(nodeCheckAllowed.stdout, "", "node syntax checking accepts one literal repository JavaScript target");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git show HEAD~1:.env" },
+  }), /direct commands and helper-process execution/i, "active lane cannot read secret-bearing historical Git objects with show");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: `git cat-file -p ${"a".repeat(40)}` },
+  }), /direct commands and helper-process execution/i, "active lane cannot read arbitrary Git blobs with cat-file");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git log -p -n1" },
+  }), /direct commands and helper-process execution/i, "active lane cannot dump historical patch content through Git log");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git diff --stat origin/main...HEAD" },
+  }), /direct commands and helper-process execution/i, "active lane denies Git diff entirely because filters and historical operands are not target-visible");
+  const gitMetadataAllowed = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git status --short" },
+  });
+  assertions++;
+  assert.equal(gitMetadataAllowed.stdout, "", "active lane retains non-content Git status metadata");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
     tool_input: { command: "rg --pre=node.exe pattern scripts/generated-helper.mjs" },
   }), /direct commands and helper-process execution/i, "active lane cannot use ripgrep preprocessor execution");
   const structuredReadAllowed = run(laneHook, stateDir, {

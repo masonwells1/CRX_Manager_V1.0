@@ -97,7 +97,25 @@ function shellWorkingDirectoryBlockReason(toolName, toolInput, projectDir) {
 
 const SHELL_MUTATION_RE = /(?:^|[;&|]\s*|\s)(?:set-content|add-content|out-file|new-item|remove-item|copy-item|move-item|rename-item|clear-content|set-item|clear-item|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|del|erase|mv|cp|copy|move|xcopy|robocopy|mkdir|md|rmdir|rd|touch|truncate|tee|patch|apply_patch)\b|(?:^|[^<])(?:>>?|[12]>>?)\s*(?!&)|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:add|am|apply|branch\s+(?:-[dDmM]|--delete|--move)|checkout|cherry-pick|clean|commit|merge|mv|rebase|reset|restore|rm|switch\s+-c|tag|push)\b|\bnpm(?:\.cmd)?\s+(?:install|uninstall|update|ci|publish)\b|\bnpx(?:\.cmd)?\b/i;
 const SAFE_NPM_RUN_RE = /^\s*npm(?:\.cmd)?\s+run\s+(?:test(?::[A-Za-z0-9:_-]+)?|lint|typecheck|build|verify-deps|check-doc-drift|check:agent-workflows|check:agent-guidance)\s*$/i;
-const SAFE_NODE_RE = /^\s*node(?:\.exe)?\s+(?:--check\s+\S+|scripts[\\/](?:factory-board|check-doc-drift|verify-deps)\.mjs(?:\s+--[A-Za-z0-9_-]+)*|scripts[\\/]sync-agent-workflows\.mjs\s+--check)\s*$/i;
+const SAFE_NODE_RE = /^\s*node(?:\.exe)?\s+(?:scripts[\\/](?:factory-board|check-doc-drift|verify-deps)\.mjs(?:\s+--[A-Za-z0-9_-]+)*|scripts[\\/]sync-agent-workflows\.mjs\s+--check)\s*$/i;
+function nodeCheckTarget(command) {
+  const match = String(command || "").match(
+    /^\s*node(?:\.exe)?\s+--check\s+((?!-)(?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_.-]+\.(?:mjs|cjs|js))\s*$/i,
+  );
+  return match?.[1] || "";
+}
+
+function shellEnvironmentBlockReason(toolName, toolInput) {
+  if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return "";
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  for (const key of ["env", "environment", "env_vars", "environmentVariables"]) {
+    const value = input[key];
+    if (value && (typeof value !== "object" || Object.keys(value).length > 0)) {
+      return "caller-selected shell environment overrides are forbidden in governed work";
+    }
+  }
+  return "";
+}
 const SAFE_GIT_TOKEN_RE = /^[A-Za-z0-9._/@^~:+,=\\/-]+$/;
 function isSafeGitRead(command) {
   const normalized = String(command || "").trim();
@@ -116,10 +134,10 @@ function isSafeGitRead(command) {
     || /^--?config(?:=|$)/i.test(token))) return false;
   const allowedOptions = new Set([
     "--short", "--branch", "--porcelain", "-s", "-b", "-sb",
-    "--stat", "--name-only", "--name-status", "--check", "--cached", "--staged",
+    "--stat", "--name-only", "--name-status", "--cached", "--staged",
     "--quiet", "--exit-code", "--no-color", "--verify", "--show-toplevel",
-    "--git-common-dir", "--is-inside-work-tree", "--is-ancestor", "-e", "-t",
-    "-p", "--others", "--exclude-standard", "-z", "-v", "--show-current",
+    "--git-common-dir", "--is-inside-work-tree", "--is-ancestor",
+    "--others", "--exclude-standard", "-z", "-v", "--show-current",
     "-vv", "--list", "list", "--oneline", "--decorate",
   ]);
   const optionsSafe = args.every((token) =>
@@ -129,7 +147,8 @@ function isSafeGitRead(command) {
     || /^--max-count=\d+$/i.test(token)
     || /^-n\d+$/i.test(token));
   if (!optionsSafe) return false;
-  if (["status", "diff", "log", "show", "rev-parse", "merge-base", "cat-file", "ls-files"].includes(subcommand)) return true;
+  if (subcommand === "status") return true;
+  if (["rev-parse", "merge-base", "ls-files"].includes(subcommand)) return true;
   if (subcommand === "remote") return args.length === 1 && args[0] === "-v";
   if (subcommand === "branch") return args.every((item) => ["--show-current", "-vv", "--list"].includes(item) || !item.startsWith("-"));
   if (subcommand === "worktree") return args[0] === "list" && args.length === 1;
@@ -149,6 +168,7 @@ function isShellMutation(toolName, toolInput) {
   if (/\$\(|`|\b(?:invoke-expression|iex)\b/i.test(command)) return true;
   if (SAFE_NPM_RUN_RE.test(command)
       || SAFE_NODE_RE.test(command)
+      || Boolean(nodeCheckTarget(command))
       || isSafeGitRead(command)
       || SAFE_SHELL_READ_RE.test(command)
       || SAFE_VERSION_RE.test(command)) {
@@ -298,6 +318,8 @@ function governedReadBlockReason(toolName, toolInput, projectDir) {
   if (/[\r\n]/.test(command)) {
     return "shell reads must contain exactly one command without line breaks";
   }
+  const checkedNodeTarget = nodeCheckTarget(command);
+  if (checkedNodeTarget) return readTargetBlockReason(checkedNodeTarget, projectDir);
   if (!SAFE_SHELL_READ_RE.test(command)) return "";
   if (SECRET_PATH_RE.test(command.replace(/\\/g, "/"))) {
     return "secret-bearing paths are not readable in a factory lane";
@@ -403,7 +425,7 @@ function isActiveLaneShellRead(toolName, toolInput) {
   return isSafeGitRead(command)
     || SAFE_SHELL_READ_RE.test(command)
     || SAFE_VERSION_RE.test(command)
-    || /^\s*node(?:\.exe)?\s+--check\s+\S+\s*$/i.test(command);
+    || Boolean(nodeCheckTarget(command));
 }
 
 function pushProofInvocation(toolName, toolInput, projectDir) {
@@ -469,13 +491,15 @@ const shellWorkingDirectoryBlock = shellWorkingDirectoryBlockReason(
   payload?.tool_input,
   projectDir,
 );
+const shellEnvironmentBlock = shellEnvironmentBlockReason(payload?.tool_name, payload?.tool_input);
 const shellMutation = isShellMutation(payload?.tool_name, payload?.tool_input);
 const opaqueExecution = isOpaqueExecutionTool(payload?.tool_name);
 const shellOutsideInspection = /^(?:Bash|PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""))
   && !isActiveLaneShellRead(payload?.tool_name, payload?.tool_input);
 const buildMutation = isBuildMutation(payload?.tool_name, payload?.tool_input)
   || opaqueExecution
-  || shellOutsideInspection;
+  || shellOutsideInspection
+  || Boolean(shellEnvironmentBlock);
 const factoryCli = factoryCliInvocation(payload?.tool_name, payload?.tool_input, projectDir);
 const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type || payload?.tool_surface || "claude").toLowerCase().includes("codex")
   ? "codex"
@@ -512,6 +536,9 @@ const factoryCliJob = factoryCli?.jobId
   : null;
 
 if (factoryCli) {
+  if (shellEnvironmentBlock) {
+    deny(`CRX FACTORY GATE: ${shellEnvironmentBlock}. The trusted hook supplies the only permitted factory environment value.`);
+  }
   if (shellWorkingDirectoryBlock) {
     deny(`CRX FACTORY GATE: ${shellWorkingDirectoryBlock}. Factory commands must execute from the governed checkout.`);
   }
@@ -551,6 +578,9 @@ const governedJob = sessionJobs.find((job) =>
 if (!hasIntent && !governedJob && !intentRecordFailed) nothing();
 if (shellWorkingDirectoryBlock) {
   deny(`CRX FACTORY GATE: ${shellWorkingDirectoryBlock}. Shell inspection must execute from the governed checkout.`);
+}
+if (shellEnvironmentBlock) {
+  deny(`CRX FACTORY GATE: ${shellEnvironmentBlock}. Remove tool-level environment fields and use the canonical command.`);
 }
 const readBlockReason = governedReadBlockReason(payload?.tool_name, payload?.tool_input, projectDir);
 if (readBlockReason) {
