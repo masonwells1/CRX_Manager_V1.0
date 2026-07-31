@@ -30,6 +30,16 @@ if (immutableDateMathMatches.length !== 1) {
 }
 const immutableDateMathMigration = readFileSync(join(migrationDir, immutableDateMathMatches[0]), 'utf8')
   .replace(/\r\n/g, '\n');
+const apBoundaryHardeningSuffix = '_ap_period_close_boundary_hardening.sql';
+const apBoundaryHardeningMatches = readdirSync(migrationDir)
+  .filter((name) => /^\d{14}_/.test(name) && name.endsWith(apBoundaryHardeningSuffix));
+if (apBoundaryHardeningMatches.length !== 1) {
+  throw new Error(`expected exactly one ${apBoundaryHardeningSuffix} migration, found ${apBoundaryHardeningMatches.join(', ') || 'none'}`);
+}
+const apBoundaryHardeningMigration = readFileSync(
+  join(migrationDir, apBoundaryHardeningMatches[0]),
+  'utf8',
+).replace(/\r\n/g, '\n');
 const helperAclPostflightSuffix = '_vendor_bill_month_lock_helper_acl_postflight.sql';
 const helperAclPostflightMatches = readdirSync(migrationDir)
   .filter((name) => /^\d{14}_/.test(name) && name.endsWith(helperAclPostflightSuffix));
@@ -54,6 +64,12 @@ function recheckBody() {
   const start = idempotencyRecheckMigration.indexOf('CREATE OR REPLACE FUNCTION public.close_accounting_period');
   expect(start).toBeGreaterThan(-1);
   return idempotencyRecheckMigration.slice(start, idempotencyRecheckMigration.indexOf('$function$;', start));
+}
+
+function apBoundaryBody(name: string) {
+  const start = apBoundaryHardeningMigration.indexOf(`CREATE OR REPLACE FUNCTION public.${name}`);
+  expect(start).toBeGreaterThan(-1);
+  return apBoundaryHardeningMigration.slice(start, apBoundaryHardeningMigration.indexOf('$function$;', start));
 }
 
 describe('vendor-bill accounting-period close serialization', () => {
@@ -163,6 +179,73 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(oldCheck).toBeLessThan(newCheck);
   });
 
+  it('extends the same atomic boundary to AP payment and void writers and removes authenticated direct period writes', () => {
+    const recordPayment = apBoundaryBody('record_vendor_payment(');
+    const recordLock = recordPayment.indexOf('_lock_accounting_months(ARRAY[p_payment_date], false)');
+    const recordCheck = recordPayment.indexOf('check_period_open(p_payment_date)');
+    for (const position of [
+      recordPayment.indexOf('FROM vendor_bills WHERE id = p_vendor_bill_id FOR UPDATE'),
+      recordLock,
+      recordCheck,
+      recordPayment.indexOf('INSERT INTO vendor_payments'),
+    ]) {
+      expect(position).toBeGreaterThan(-1);
+    }
+    expect(recordPayment.indexOf('FROM vendor_bills WHERE id = p_vendor_bill_id FOR UPDATE')).toBeLessThan(recordLock);
+    expect(recordLock).toBeLessThan(recordCheck);
+    expect(recordCheck).toBeLessThan(recordPayment.indexOf('INSERT INTO vendor_payments'));
+
+    const voidPayment = apBoundaryBody('void_vendor_payment(');
+    const voidPaymentLock = voidPayment.indexOf('_lock_accounting_months(ARRAY[v_payment.payment_date], false)');
+    const voidPaymentCheck = voidPayment.indexOf('check_period_open(v_payment.payment_date)');
+    for (const position of [
+      voidPayment.indexOf('FROM vendor_payments WHERE id = p_payment_id FOR UPDATE'),
+      voidPayment.indexOf('FROM vendor_bills WHERE id = v_payment.vendor_bill_id FOR UPDATE'),
+      voidPayment.indexOf('deleted_at IS NULL FOR UPDATE'),
+      voidPaymentLock,
+      voidPaymentCheck,
+      voidPayment.indexOf('UPDATE vendor_bills SET'),
+    ]) {
+      expect(position).toBeGreaterThan(-1);
+    }
+    expect(voidPayment.indexOf('FROM vendor_payments WHERE id = p_payment_id FOR UPDATE')).toBeLessThan(voidPaymentLock);
+    expect(voidPayment.indexOf('FROM vendor_bills WHERE id = v_payment.vendor_bill_id FOR UPDATE')).toBeLessThan(voidPaymentLock);
+    expect(voidPayment.indexOf('deleted_at IS NULL FOR UPDATE')).toBeLessThan(voidPaymentLock);
+    expect(voidPaymentLock).toBeLessThan(voidPaymentCheck);
+    expect(voidPaymentCheck).toBeLessThan(voidPayment.indexOf('UPDATE vendor_bills SET'));
+
+    const voidBill = apBoundaryBody('void_vendor_bill(');
+    const voidBillLock = voidBill.indexOf('_lock_accounting_months(ARRAY[v_bill.bill_date], false)');
+    const voidBillCheck = voidBill.indexOf('check_period_open(v_bill.bill_date)');
+    for (const position of [
+      voidBill.indexOf('FROM vendor_bills WHERE id = p_vendor_bill_id FOR UPDATE'),
+      voidBill.indexOf('IF v_active_payments > 0 THEN'),
+      voidBillLock,
+      voidBillCheck,
+      voidBill.indexOf('UPDATE vendor_bills SET'),
+    ]) {
+      expect(position).toBeGreaterThan(-1);
+    }
+    expect(voidBill.indexOf('FROM vendor_bills WHERE id = p_vendor_bill_id FOR UPDATE')).toBeLessThan(voidBillLock);
+    expect(voidBill.indexOf('IF v_active_payments > 0 THEN')).toBeLessThan(voidBillLock);
+    expect(voidBillLock).toBeLessThan(voidBillCheck);
+    expect(voidBillCheck).toBeLessThan(voidBill.indexOf('UPDATE vendor_bills SET'));
+
+    for (const rpc of ['record_vendor_payment', 'void_vendor_payment', 'void_vendor_bill']) {
+      expect(apBoundaryHardeningMigration).toContain(`REVOKE ALL ON FUNCTION public.${rpc}`);
+      expect(apBoundaryHardeningMigration).toContain(`GRANT EXECUTE ON FUNCTION public.${rpc}`);
+    }
+    expect(apBoundaryHardeningMigration).toContain(
+      'REVOKE ALL PRIVILEGES ON TABLE public.accounting_periods FROM PUBLIC, anon, authenticated;',
+    );
+    expect(apBoundaryHardeningMigration).toContain(
+      'GRANT SELECT ON TABLE public.accounting_periods TO authenticated;',
+    );
+    expect(apBoundaryHardeningMigration).toContain(
+      'AP boundary verification: browser role retains direct period mutation privilege',
+    );
+  });
+
   it('keeps the restored-schema concurrency proof and registered business chain', () => {
     const proof = source(
       'scripts', 'smoke', 'prove-vendor-bill-period-close-concurrency.mjs',
@@ -184,12 +267,23 @@ describe('vendor-bill accounting-period close serialization', () => {
     expect(proof).toContain("const MIGRATION_SUFFIX = '_vendor_bill_period_close_lock.sql';");
     expect(proof).toContain("const IDEMPOTENCY_RECHECK_SUFFIX = '_close_accounting_period_idempotency_recheck.sql';");
     expect(proof).toContain("const IMMUTABLE_DATE_MATH_SUFFIX = '_accounting_period_immutable_date_math.sql';");
+    expect(proof).toContain("const AP_BOUNDARY_HARDENING_SUFFIX = '_ap_period_close_boundary_hardening.sql';");
     expect(proof).toContain('waitForDatabaseReadiness');
     expect(proof).toContain("waitForBarrierWaiters(1, 'baseline writer trigger barrier')");
     expect(proof).toContain("waitForSessionLock('same-key-second-close'");
     expect(proof).not.toContain('await waiting(');
     expect(proof).not.toContain('pause(500)');
-    expect(proof.match(/pg_sleep\(\$\{BARRIER_SECONDS\}\)/g)).toHaveLength(9);
+    expect(proof.match(/pg_sleep\(\$\{BARRIER_SECONDS\}\)/g)).toHaveLength(15);
+    for (const marker of [
+      'CANDIDATE_AP_RECORD_PAYMENT_WRITER_FIRST_CLOSE_WAITS_PASS',
+      'CANDIDATE_AP_RECORD_PAYMENT_CLOSE_FIRST_FAIL_CLOSED_PASS',
+      'CANDIDATE_AP_VOID_PAYMENT_WRITER_FIRST_CLOSE_WAITS_PASS',
+      'CANDIDATE_AP_VOID_PAYMENT_CLOSE_FIRST_FAIL_CLOSED_PASS',
+      'CANDIDATE_AP_VOID_BILL_WRITER_FIRST_CLOSE_WAITS_PASS',
+      'CANDIDATE_AP_VOID_BILL_CLOSE_FIRST_FAIL_CLOSED_PASS',
+      'CANDIDATE_ACCOUNTING_PERIODS_DIRECT_WRITE_DENIED_PASS',
+    ]) expect(proof).toContain(marker);
+    expect(proof).toContain("SET LOCAL ROLE authenticated; INSERT INTO public.accounting_periods");
     const deliverySmoke = source('scripts', 'smoke', 'smoke-delivery-accounting-period-guard.sql');
     expect(deliverySmoke).toContain("v_closed_date := DATE '1990-01-15';");
     expect(deliverySmoke).toContain("v_open_date := DATE '1990-02-15';");

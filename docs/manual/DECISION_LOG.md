@@ -9,6 +9,29 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-07-30 — AP period-close hardening stays bounded to three sibling mutators
+
+**Decision (Mason, in-chat — approved the recommended separate hardening job):**
+extend the shared/exclusive accounting-month protocol to
+`record_vendor_payment`, `void_vendor_payment`, and `void_vendor_bill`, and
+remove browser-role direct writes to `accounting_periods`. Keep authenticated
+read access and the governed close/reopen RPCs.
+
+**Why:** these three AP paths were the documented sibling residual from the
+vendor-bill release and share one coherent date rule: payments use the payment
+date; bill voids use the original bill date. Each preserves its existing
+business-row locks, then takes the shared month lock, checks the period, and
+mutates. Close takes the same month lock exclusively and does not lock AP rows,
+so there is no lock cycle.
+
+**Boundary:** do not add the month lock to `reopen_accounting_period` in this
+slice. Reopen currently locks the period row first; adding a later month lock
+would deadlock with close's month-lock-first order. The other financial
+`check_period_open` callers remain a separate global protocol review and this
+AP fix must not be described as covering them.
+
+---
+
 ## 2026-07-30 — Period-close month lock spans the atomic close result
 
 **Decision (Mason, in-chat — "I approve pushing all of this and migrating and making it live",

@@ -1,15 +1,15 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-07-30** (post-apply B7 closeout: Supabase ledger rows `20260730114102_vendor_bill_period_close_lock`, `20260730124308_close_accounting_period_idempotency_recheck`, and `20260730140808_accounting_period_immutable_date_math` are live. Targeted catalog/ACL/constraint proof passed; the final forward correction made the constraint and close-RPC month math explicitly time-zone-independent without changing business rows; the fixed-date delivery rollback-only chain reached expected terminal `ERROR P0001 SMOKE_PASS_ROLLBACK`; the independent post-follow-up all-20 sweep is CLEAN with 7 raw/7 allowlisted/0 new rows across 5 predicates. Earlier resolved and deferred claims below remain unchanged.)
+**Last verified: 2026-07-31** (UTC ledger date; evening 2026-07-30 Chicago. AP period-close boundary live closeout: ledger high-water `20260731001654` with 932 rows; exact function ordering, ACL, RLS/policy, rollback-smoke, zero-remnant, B7 filename, and live-introspection schema-registry proof passed. The bounded AP slice is complete; its 26-caller global residual remains explicit below.)
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
 
-## LOCAL ONLY — Quote and Customer whole-record save protection pending review
+## APPLIED LIVE — Quote and Customer whole-record save protection reconciliation pending
 
-`20260730201230_quote_customer_row_version_guard.sql` is authored locally and **not applied, deployed, or live-verified**. It addresses the known last-write-wins exposure for whole-record `save_quote` and `save_customer` updates with trigger-maintained row versions. The payload is compatible with the old RPCs because their JSON inputs ignore the extra token key: merge/deploy and production-verify the compatible frontend first while the migration remains unapplied; then obtain separate explicit approval, apply the migration in a bounded maintenance window, require browser/PWA refresh for cached bundles, and run postflight/live smoke. Regenerate generated schema/types only after that applied proof. Cached old bundles fail closed after apply until refreshed, but the deployed compatible bundle avoids an all-user outage. No rollout toggle is required. No live claim belongs here until the governed migration and rollback-only smoke chain run.
+The Quote/Customer guard applied live as ledger version `20260730235031` after the compatible frontend landed in PR #290. Its separate B7 filename/schema-registry/postflight reconciliation remains owned by that release lane; this AP closeout records the observed ledger fact only and does not substitute for that lane's full closeout.
 
 The same candidate closes adjacent bypasses: direct crop/lifecycle writes only adopt the returned token when it is exactly the previous token plus one (otherwise they preserve the committed narrow change, clear the local token, and require Reload), and normal browser roles lose direct INSERT/UPDATE/DELETE on `quote_sections`, `quote_items`, and `customer_addresses`. Those children remain readable under their existing policy/SELECT boundary and are written only by the parent-locking `save_quote`/`save_customer` SECURITY DEFINER RPCs; no child-to-parent version trigger is used because it would invert that lock order. Because `save_quote` is elevated, it also mirrors the parent Quote ownership policy before either mutation or idempotent replay: admins may save any Quote, while a sales rep must match `quotes.created_by`; the rollback proof rejects both a direct non-owner save and an attempt to recover another actor's cached result.
 
@@ -17,7 +17,7 @@ After the migration applies, every committed Customer-row update advances the sa
 
 Exact-SHA review found that the first candidate `save_quote` body performed one parent UPDATE for header/status fields and another for calculated totals, so one logical existing-quote save advanced `row_version` from N to N+2 and made the client's exact-next-token check fail closed. The correction consolidates header, status, and totals into one parent UPDATE after the existing upfront `FOR UPDATE` lock and stale-token check. Its rollback proof now requires a created quote to return exactly version 2 (insert default 1 plus one totals/header update), then proves two consecutive existing-quote saves advance exactly N→N+1→N+2 using the first returned token for the second save. A later exact-SHA review exposed that the canonical prover trusted the relocated header block instead of comparing it: the hardened proof now compares every moved assignment field-by-field, mutation-tests deliberate `status` and first-send `sent_at` corruption, and executes draft→sent→sent on the real restored schema to require exact +1 tokens, `sent_at` set then preserved, and commission-split persistence. The real-schema harness now requires both lifecycle failure assertions exactly once and mutation-tests their removal and renaming before Docker or its PASS banner can run, while `smoke-specs.json` documents that lifecycle contract. A further exact-SHA review found that lifecycle validation still ran before the generic row-version guard, so a stale draft tab could receive `Invalid status transition: sent -> draft` after another tab sent the quote and miss the Reload/review UX; the corrected order is split-specific conflict first, generic stale token second, lifecycle/unplanning validation third, and the one parent write last, with static order mutation tests plus a real-schema stale-draft-after-sent rollback case.
 
-## 0f. PARTIALLY RESOLVED — governed vendor-bill create/update race closed; residual paths remain
+## 0f. PARTIALLY RESOLVED — vendor-bill and AP boundary live; global paths remain
 
 **Status: APPLIED LIVE 2026-07-30.** A read-only 2026-07-29 preflight confirmed
 the current production functions can interleave a vendor-bill period check with
@@ -110,13 +110,28 @@ echo its requested path in order, carry an exact body delimiter, and consume the
 output. Any Git size/framing/path failure produces `PARKED STATE UNKNOWN`; it never drops
 unreadable forward SQL and reports a false clean zero.
 
-**Explicit scope residual.** This candidate guarantees only
-`create_vendor_bill` and `update_vendor_bill` date writes. `record_vendor_payment`,
-`void_vendor_payment`, `void_vendor_bill`, and other `check_period_open`-only
-mutators retain the pre-existing close race unless a separately proven coherent
-protocol adds them. Sol adjudication retained this boundary: these AP-only cases
-are a MED residual, while a global protocol is a separate HIGH-risk lane because
-many financial mutators retain the same race. Do not widen this migration here.
+**AP boundary follow-up applied live 2026-07-30.**
+`20260731001654_ap_period_close_boundary_hardening.sql` is the B7 disk record of
+server ledger version `20260731001654` (submitted as
+`20260730233835_ap_period_close_boundary_hardening`). It adds the separately
+proven coherent protocol for `record_vendor_payment`, `void_vendor_payment`, and
+`void_vendor_bill`, and removes every browser-role table capability on
+`accounting_periods` except authenticated SELECT. Admins keep the governed
+close/reopen RPC path. Its disposable PostgreSQL 17 proof covers both winning
+orders for all three AP writers, observes the advisory locks, and requires the
+close-first calls to fail without AP/audit/activity/idempotency side effects.
+Sol-high accepted the exact SQL hash with zero findings and specifically
+rejected adding the month lock to `reopen_accounting_period`, whose existing
+period-row-first order would deadlock with close's month-first order. Live
+catalog proof and the registered Section 9 rollback smoke passed; zero smoke
+fixtures or closed periods remained. Durable evidence:
+`docs/audits/2026-07-30-ap-period-close-boundary-hardening-closeout.md`.
+
+**Remaining scope residual.** This does not claim a global accounting-close
+protocol. Live readback still finds 26 other `check_period_open` callers without
+the month-lock protocol; they remain a separate HIGH-risk review lane. Close still has no
+separate existing-vendor-bill completeness gate, and a pre-existing concurrent
+draft/unposted-invoice writer can still beat close's invoice-completeness scan.
 
 ---
 
