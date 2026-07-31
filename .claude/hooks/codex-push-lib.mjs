@@ -31,6 +31,36 @@ export function isGitPush(cmd) {
   return GIT_PUSH_RE.test(String(cmd || ""));
 }
 
+// The hook must see a literal Git subcommand. Shell variables, command
+// substitutions, splats and globs are expanded only after this review runs, so
+// `$verb='push'; git $verb ...` otherwise looks like a non-push and skips every
+// destination, force and proof check. Refuse the uninspectable Git invocation
+// itself, including dynamic non-pushes, rather than guessing what it becomes.
+export function gitSubcommandIsDynamic(cmd) {
+  const takesValue = new Set(["-c", "-C", "--config-env", "--git-dir", "--work-tree"]);
+  const valueless = new Set(["--no-pager", "--literal-pathspecs", "--%"]);
+  for (const segment of shellSegments(String(cmd || ""))) {
+    const tokens = splitShellArgs(segment);
+    for (let index = 0; index < tokens.length; index += 1) {
+      const binary = tokens[index].replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+      if (binary !== "git" && binary !== "git.exe") continue;
+      let subcommand = index + 1;
+      while (subcommand < tokens.length) {
+        const token = tokens[subcommand];
+        if (takesValue.has(token)) { subcommand += 2; continue; }
+        if (valueless.has(token) || /^--(?:config-env|git-dir|work-tree|exec-path)=/.test(token)) {
+          subcommand += 1;
+          continue;
+        }
+        break;
+      }
+      const token = tokens[subcommand] || "";
+      if (/[$%!*?\[\]{}]/.test(token) || token.startsWith("@")) return true;
+    }
+  }
+  return false;
+}
+
 // `git --exec-path=<dir> push ...` replaces Git's own transport helpers before
 // the push starts. The destination can still look harmless while a planted
 // git-remote-https sends the objects elsewhere, so this executable selector is

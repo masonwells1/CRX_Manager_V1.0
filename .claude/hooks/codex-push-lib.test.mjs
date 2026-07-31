@@ -12,6 +12,7 @@ import {
   claudeProofValid,
   contentIsRisky,
   gitPushCwd,
+  gitSubcommandIsDynamic,
   mainPushIsForced,
   mainPushSource,
   pushIsForced,
@@ -50,6 +51,14 @@ const now = Date.parse("2026-07-13T18:00:00.000Z");
 const sha = "a".repeat(40);
 
 assert.equal(mainPushSource("git push origin HEAD:main", "feature"), "HEAD");
+assert.equal(gitSubcommandIsDynamic("$verb='push'; git $verb origin HEAD:main"), true, "PowerShell variable subcommand");
+assert.equal(gitSubcommandIsDynamic("verb=push; git ${verb} origin HEAD:main"), true, "POSIX variable subcommand");
+assert.equal(gitSubcommandIsDynamic("set verb=push && git %verb% origin HEAD:main"), true, "cmd variable subcommand");
+assert.equal(gitSubcommandIsDynamic("git @args"), true, "PowerShell splatted arguments");
+assert.equal(gitSubcommandIsDynamic("git p*sh origin HEAD:main"), true, "glob-expanded subcommand");
+assert.equal(gitSubcommandIsDynamic("git -C /repo push origin main"), false, "literal push remains inspectable");
+assert.equal(gitSubcommandIsDynamic("git status --short"), false, "literal non-push remains available");
+assert.equal(gitSubcommandIsDynamic("echo '$verb'; npm test"), false, "a variable outside a Git subcommand is irrelevant");
 assert.equal(mainPushSource("git.exe push origin HEAD:main", "feature"), "HEAD");
 assert.equal(mainPushSource('"C:\\Program Files\\Git\\cmd\\git.exe" push origin HEAD:main', "feature"), "HEAD");
 assert.equal(mainPushSource("/usr/bin/git push origin HEAD:main", "feature"), "HEAD");
@@ -1123,6 +1132,7 @@ assert.equal(pushDestinationToken("git push"), null);
     deniedBecause(`$env:HOME = "/tmp/evil"; ${push}`, /HOME/, "PowerShell HOME override");
     deniedBecause(`SOME_NEW_GIT_VAR=x ${push}`, /SOME_NEW_GIT_VAR/, "any inline assignment the allowlist does not name");
     deniedBecause(`git --exec-path=${tmp} push origin main`, /--exec-path/, "git's executable-helper override");
+    deniedBecause(`$verb='push'; git $verb origin HEAD:main`, /subcommand must be written literally/, "PowerShell-expanded Git subcommand");
     deniedBecause(`PATH=${tmp}; ${push}`, /PATH/, "an earlier PATH replacement");
     deniedBecause(`$env:PATHEXT = '.MJS'; ${push}`, /PATHEXT/, "an earlier PowerShell PATHEXT replacement");
     deniedBecause(`git -C ${work} push --recurse-submodules no ${CRX_URL} HEAD:main`, /codex/i, "--recurse-submodules hiding the real destination");

@@ -2,6 +2,13 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-31 — Dynamic Git subcommands fail closed
+
+The push guard now refuses Git invocations whose subcommand is supplied by a
+shell variable, substitution, splat, or glob. This closes the PowerShell
+`$verb='push'; git $verb ...` form that executed a push while all literal-text
+destination, force, and independent-proof checks stood down.
+
 ## 2026-07-31 — Executable-path and SSH redirection closed
 
 The push guard now rejects Git's `--exec-path` override and earlier command-segment

@@ -18,6 +18,7 @@ import {
   contentIsRisky,
   eachPush,
   gitPushCwd,
+  gitSubcommandIsDynamic,
   isGitPush,
   pushUsesExecPathOption,
   mainPushSource,
@@ -56,6 +57,9 @@ let payload;
 try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { passthrough(); }
 
 const cmd = String(payload?.tool_input?.command || "");
+if (gitSubcommandIsDynamic(cmd)) {
+  deny("CODEX GATE: Git's subcommand must be written literally. Shell variables, substitutions, splats, and globs are expanded after this review, so a command such as `$verb='push'; git $verb ...` can execute a push while bypassing every destination, force, and proof check. Write the Git operation plainly (for example `git -C <repo> push <remote> <refspec>`).");
+}
 // Before `isGitPush`, because the point of this check is that `isGitPush` is
 // reading text the shell will not execute (Codex's nineteenth 2026-07-30
 // review). A command that only becomes a push after quote-splicing or command
