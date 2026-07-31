@@ -2,6 +2,12 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — Memory snapshots verify remote bytes and safe pruning
+
+The private-memory workflow now downloads and SHA-256 verifies every remote note,
+rejects ordinary named credential assignments, and validates the complete previous
+snapshot before its manifest may authorize pruning.
+
 ## 2026-07-30 — Private-memory backup rejects Git URL rewrites
 
 The Claude-memory backup now refuses local, global, and inherited

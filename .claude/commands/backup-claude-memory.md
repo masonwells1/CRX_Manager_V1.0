@@ -44,36 +44,17 @@ Commit to `CRX_Backups` with a dated message, then push **to the exact URL the s
 
 ### 5. Confirm — prove *this* snapshot landed remotely
 
-Do not report success from the local clone. Ask GitHub which snapshot it is now holding:
+Do not report success from the local clone. Download every remote note through
+GitHub and verify its exact bytes against the manifest:
 
 ```bash
-gh api repos/masonwells1/CRX_Backups/contents/claude-memory/manifest.json -H "Accept: application/vnd.github.raw" --jq '"\(.completed_at)  \(.file_count) files  \(.total_bytes) bytes"'
+node scripts/backup-claude-memory.mjs --verify-remote <clone>/claude-memory
 ```
 
-Then print the same line from the manifest you just committed:
-
-```bash
-node -e "const m=require(process.argv[1]);console.log(`${m.completed_at}  ${m.file_count} files  ${m.total_bytes} bytes`)" <clone>/claude-memory/manifest.json
-```
-
-**The two lines must be identical, character for character.** `completed_at` is a
-millisecond timestamp unique to that staging run, so a match proves the snapshot on
-GitHub is the one this run produced — not a previous one. A file count alone does
-not: if the push silently failed or landed somewhere else while the previous backup
-happened to hold the same number of notes, a count check reports success over a
-stale backup (Codex's fifteenth 2026-07-30 review). A 404 on the first command means
-nothing landed at all.
-
-As a last cross-check that no note went missing, the remote `.md` count must equal
-that same `file_count`:
-
-```bash
-gh api repos/masonwells1/CRX_Backups/contents/claude-memory --jq '[.[] | select(.name | endswith(".md"))] | length'
-```
-
-Count only the `.md` notes — `manifest.json` lives in that same folder and is **not**
-one of the files it counts, so a bare `length` is always one too high and would never
-match.
+This first re-verifies the local clone, then requires the remote manifest to be
+byte-identical, requires the remote directory to contain exactly the manifest plus
+its listed notes, and downloads and SHA-256 hashes every remote note. A missing,
+filtered, line-ending-normalized, stale, or extra remote file fails the command.
 
 ### 6. Report — one line, plain English
 

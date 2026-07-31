@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -18,6 +18,7 @@ import {
   SNAPSHOT_KIND,
   __setDirRead,
   __setLinkStat,
+  __setRemoteRead,
   __setVisibilityProbe,
   ghProbeAnswer,
   ghProbeCommand,
@@ -26,6 +27,7 @@ import {
   stage,
   unsafeSnapshotName,
   verify,
+  verifyRemote,
 } from "./backup-claude-memory.mjs";
 
 const sha256Hex = (text) => createHash("sha256").update(Buffer.from(text)).digest("hex");
@@ -202,6 +204,24 @@ try {
     eq(hits[0].name, "a.md", "the hit names the right note");
     eq(hits[0].line, 2, "the hit names the right line");
     ok(!JSON.stringify(hits).includes(token), "a hit never echoes the matched credential");
+  }
+  {
+    for (const assignment of [
+      `SUPABASE_DB_PASSWORD=${"A".repeat(40)}`,
+      `service_role_key: "${"B".repeat(40)}"`,
+      `API_SECRET=${"C".repeat(32)}`,
+    ]) {
+      eq(
+        scanForSecrets([{ name: "a.md", buf: Buffer.from(assignment) }]).length,
+        1,
+        "named sensitive assignments are refused even without a vendor token prefix",
+      );
+    }
+    eq(
+      scanForSecrets([{ name: "a.md", buf: Buffer.from("SUPABASE_DB_PASSWORD=<password>") }]).length,
+      0,
+      "a named placeholder remains documentation",
+    );
   }
 
   // ── staging aborts on a secret, and writes nothing ────────────────────────
@@ -741,18 +761,67 @@ try {
       "a.md": "second snapshot\n",
       "zz-crash.md": "this write cannot land\n",
     });
-    let threw = false;
-    try { quiet(() => stage(dest, after)); } catch { threw = true; }
-    ok(threw, "a write that cannot land aborts the staging run");
+    eq(quiet(() => stage(dest, after)), 1, "an invalid previous snapshot aborts before writing");
     ok(
-      !readdirSync(dest).includes(MANIFEST),
-      "the interrupted run leaves no manifest behind",
+      readdirSync(dest).includes(MANIFEST),
+      "the preflight refusal preserves the previous manifest",
     );
     eq(quiet(() => verify(dest)), 1, "so verify refuses the half-written snapshot");
     eq(
-      readFileSync(path.join(dest, "a.md"), "utf8"), "second snapshot\n",
-      "the notes written before the failure are the new ones — the previous snapshot is NOT preserved in place, which is why the manifest must go first",
+      readFileSync(path.join(dest, "a.md"), "utf8"), "first snapshot\n",
+      "and no existing note is overwritten before previous-snapshot validation",
     );
+  }
+
+  // A previous manifest can authorize deletion only after its recorded bytes
+  // still verify. Corrupting the hash must preserve the otherwise-prunable file.
+  {
+    const before = makeSource("prune-authority-before", {
+      [INDEX_FILE]: "# index\n",
+      "stale.md": "keep unless the old manifest is valid\n",
+    });
+    const after = makeSource("prune-authority-after", { [INDEX_FILE]: "# index\n" });
+    const dest = fresh("prune-authority-dest");
+    eq(quiet(() => stage(dest, before)), 0, "prune-authority fixture stages");
+    const bad = readManifest(dest);
+    bad.files.find((entry) => entry.name === "stale.md").sha256 = "0".repeat(64);
+    writeManifest(dest, bad);
+    eq(quiet(() => stage(dest, after)), 1, "a corrupted previous manifest cannot authorize pruning");
+    ok(existsSync(path.join(dest, "stale.md")), "the unrelated stale note remains untouched");
+  }
+
+  // Post-push verification reads every remote object and checks its exact hash.
+  {
+    const remoteDir = fresh("remote-proof");
+    const source = makeSource("remote-proof-source", {
+      [INDEX_FILE]: "# index\n",
+      "a.md": "exact remote bytes\n",
+    });
+    eq(quiet(() => stage(remoteDir, source)), 0, "remote-proof fixture stages");
+    const localManifest = readFileSync(path.join(remoteDir, MANIFEST));
+    const manifest = JSON.parse(localManifest);
+    const files = new Map([
+      [MANIFEST, localManifest],
+      ...manifest.files.map((entry) => [entry.name, readFileSync(path.join(remoteDir, entry.name))]),
+    ]);
+    const reader = (apiPath, raw) => {
+      if (!raw) {
+        return {
+          status: 0,
+          stdout: Buffer.from(JSON.stringify([...files.keys()].map((name) => ({ name })))),
+        };
+      }
+      const name = decodeURIComponent(apiPath.split("/").at(-1));
+      return files.has(name) ? { status: 0, stdout: files.get(name) } : { status: 1, stdout: Buffer.alloc(0) };
+    };
+    try {
+      __setRemoteRead(reader);
+      eq(quiet(() => verifyRemote(remoteDir)), 0, "every exact remote byte verifies");
+      files.set("a.md", Buffer.from("changed by a clean filter\n"));
+      eq(quiet(() => verifyRemote(remoteDir)), 1, "a remotely altered note fails SHA-256 verification");
+    } finally {
+      __setRemoteRead(null);
+    }
   }
 
   // ── round 25: never overwrite an existing hard-linked destination file ───
@@ -785,9 +854,13 @@ try {
     const atomicDest = fresh("hardlink-atomic-destination");
     eq(quiet(() => stage(atomicDest, notes)), 0, "atomic fixture begins with a valid snapshot");
     const atomicOutside = path.join(outsideDir, "atomic-outside.md");
-    writeFileSync(atomicOutside, "also do not overwrite me\n");
+    writeFileSync(atomicOutside, "new private note\n");
     unlinkSync(path.join(atomicDest, "a.md"));
     linkSync(atomicOutside, path.join(atomicDest, "a.md"));
+    const changedNotes = makeSource("hardlink-atomic-updated-source", {
+      [INDEX_FILE]: "# Memory Index\n- [a](a.md) — hook\n",
+      "a.md": "updated private note\n",
+    });
     const linkedDest = path.resolve(atomicDest, "a.md");
     try {
       __setLinkStat((p) => {
@@ -795,10 +868,10 @@ try {
         if (path.resolve(p) === linkedDest) Object.defineProperty(info, "nlink", { value: 1 });
         return info;
       });
-      eq(quiet(() => stage(atomicDest, notes)), 0, "atomic replacement remains safe if link-count detection misses");
-      eq(readFileSync(path.join(atomicDest, "a.md"), "utf8"), "new private note\n", "the snapshot receives the new note");
+      eq(quiet(() => stage(atomicDest, changedNotes)), 0, "atomic replacement remains safe if link-count detection misses");
+      eq(readFileSync(path.join(atomicDest, "a.md"), "utf8"), "updated private note\n", "the snapshot receives the new note");
       eq(
-        readFileSync(atomicOutside, "utf8"), "also do not overwrite me\n",
+        readFileSync(atomicOutside, "utf8"), "new private note\n",
         "while the former hard-link target still remains untouched",
       );
     } finally {

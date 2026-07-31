@@ -21,6 +21,8 @@
 //   --source <dir>       source memory dir; auto-discovered when omitted
 //   --verify <dir>       re-check an existing staged dir against its own manifest
 //                        (use before committing, and after a restore)
+//   --verify-remote <dir> after pushing, download every remote note and prove
+//                        its bytes match the local manifest
 //
 // Safety properties:
 //   - read-only against the source: it is only ever opened for reading
@@ -96,6 +98,14 @@ export function __setLinkStat(fn) { linkStat = fn || lstatSync; }
 // always reads the real directory.
 let dirRead = readdirSync;
 export function __setDirRead(fn) { dirRead = fn || readdirSync; }
+
+const defaultRemoteRead = (apiPath, raw = false) => spawnSync(
+  "gh",
+  ["api", apiPath, ...(raw ? ["-H", "Accept: application/vnd.github.raw"] : [])],
+  { encoding: null, maxBuffer: 16 * 1024 * 1024 },
+);
+let remoteRead = defaultRemoteRead;
+export function __setRemoteRead(fn) { remoteRead = fn || defaultRemoteRead; }
 
 const mdFiles = (dir) =>
   dirRead(dir)
@@ -561,6 +571,11 @@ function assertSafeDestination(outDir, source, names) {
   if (previous?.kind !== SNAPSHOT_KIND || !Array.isArray(previous.files)) {
     return `FAIL: ${MANIFEST} in ${outDir} is not a memory snapshot manifest. Nothing was changed.`;
   }
+  // A previous manifest is deletion authority: only names it recorded may be
+  // pruned. Verify its structure, names, sizes and hashes before trusting it.
+  if (verify(outDir) !== 0) {
+    return `FAIL: the previous snapshot in ${outDir} is not valid, so it cannot authorize pruning. Nothing was changed.`;
+  }
   return { previous };
 }
 
@@ -585,6 +600,9 @@ const SECRET_RES = [
   // credentials, so the password segment must not start with a placeholder
   // delimiter and must not contain one.
   [/\bpostgres(?:ql)?:\/\/[^:\s]+:(?![<{$])[^@\s<>{}$]{6,}@/, "database URL with inline password"],
+  // Named assignments catch ordinary project credentials whose values have no
+  // vendor-specific prefix. Placeholders remain valid documentation.
+  [/\b(?=[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|PRIVATE_KEY|SERVICE_ROLE_KEY|API_KEY))[A-Z][A-Z0-9_]*\s*[:=]\s*["']?(?![<{$])[^"'`\s]{8,}/i, "sensitive variable assignment"],
 ];
 // Scans BUFFERS, not paths. Codex's fourth 2026-07-30 review found a race in the
 // earlier path-based version: staging read every file once to scan it and a
@@ -918,6 +936,49 @@ function verify(dir) {
   return 0;
 }
 
+function verifyRemote(dir) {
+  if (verify(dir) !== 0) return 1;
+  const localManifestBytes = readFileSync(path.join(dir, MANIFEST));
+  const manifest = JSON.parse(localManifestBytes.toString("utf8"));
+  const base = "repos/masonwells1/CRX_Backups/contents/claude-memory";
+  const remoteManifest = remoteRead(`${base}/${MANIFEST}`, true);
+  if (remoteManifest.status !== 0 || !Buffer.isBuffer(remoteManifest.stdout)) {
+    console.error(`FAIL: could not download the remote ${MANIFEST}; the pushed snapshot is unproven.`);
+    return 1;
+  }
+  if (!remoteManifest.stdout.equals(localManifestBytes)) {
+    console.error(`FAIL: remote ${MANIFEST} differs byte-for-byte from the local snapshot.`);
+    return 1;
+  }
+  const listing = remoteRead(base, false);
+  let remoteNames;
+  try {
+    remoteNames = JSON.parse(Buffer.from(listing.stdout ?? []).toString("utf8")).map((entry) => entry.name).sort();
+  } catch {
+    console.error("FAIL: could not enumerate the remote snapshot directory.");
+    return 1;
+  }
+  const expectedNames = [MANIFEST, ...manifest.files.map((entry) => entry.name)].sort();
+  if (JSON.stringify(remoteNames) !== JSON.stringify(expectedNames)) {
+    console.error("FAIL: remote snapshot file list differs from the manifest.");
+    return 1;
+  }
+  const problems = [];
+  for (const entry of manifest.files) {
+    const result = remoteRead(`${base}/${encodeURIComponent(entry.name)}`, true);
+    const bytes = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout ?? []);
+    if (result.status !== 0) problems.push(`missing remotely: ${entry.name}`);
+    else if (bytes.length !== entry.bytes || sha256(bytes) !== entry.sha256) problems.push(`remote bytes differ: ${entry.name}`);
+  }
+  if (problems.length > 0) {
+    console.error(`FAIL: ${problems.length} remote note(s) do not match ${MANIFEST}.`);
+    for (const problem of problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+  console.log(`OK: all ${manifest.files.length} remote files match their recorded SHA-256 hashes.`);
+  return 0;
+}
+
 function main(argv) {
   // A flag's value must not be another flag. Without this, `--stage --source x`
   // reads "--source" as the destination and this script happily creates a
@@ -932,18 +993,20 @@ function main(argv) {
 
   const stageDir = flag("--stage");
   const verifyDir = flag("--verify");
-  if (stageDir && verifyDir) usage("pass either --stage or --verify, not both");
-  if (!stageDir && !verifyDir) usage("nothing to do");
+  const remoteDir = flag("--verify-remote");
+  if ([stageDir, verifyDir, remoteDir].filter(Boolean).length > 1) usage("pass exactly one operation");
+  if (!stageDir && !verifyDir && !remoteDir) usage("nothing to do");
   if (stageDir === null && argv.includes("--stage")) usage("--stage needs a directory");
   if (verifyDir === null && argv.includes("--verify")) usage("--verify needs a directory");
+  if (remoteDir === null && argv.includes("--verify-remote")) usage("--verify-remote needs a directory");
 
-  return stageDir ? stage(stageDir, flag("--source")) : verify(verifyDir);
+  return stageDir ? stage(stageDir, flag("--source")) : verifyDir ? verify(verifyDir) : verifyRemote(remoteDir);
 }
 
 // Exported so the tests can call the real functions rather than re-implementing
 // them. Importing this file must therefore NOT run the CLI, hence the
 // invoked-directly check below.
-export { scanForSecrets, stage, verify, SNAPSHOT_KIND, MANIFEST, INDEX_FILE };
+export { scanForSecrets, stage, verify, verifyRemote, SNAPSHOT_KIND, MANIFEST, INDEX_FILE };
 
 
 const invokedDirectly =
