@@ -106,6 +106,22 @@ describe('money and inventory gauntlet fixes', () => {
     expect(quoteBuilder).toContain('p_reason: normalizedReason');
   });
 
+  it('deduplicates QuoteBuilder conversion side effects by stable order ID', () => {
+    expect(quoteBuilder).toContain(
+      'const firedConvertSideEffects = useRef<Set<string>>(new Set());',
+    );
+    expect(quoteBuilder).toContain(
+      '&& !firedConvertSideEffects.current.has(result.order_id);',
+    );
+    expect(quoteBuilder).toContain(
+      'firedConvertSideEffects.current.add(result.order_id);',
+    );
+    expect(quoteBuilder).toContain('if (shouldFireConversionSideEffects) {');
+    expect(quoteBuilder.indexOf('firedConvertSideEffects.current.add(result.order_id);')).toBeLessThan(
+      quoteBuilder.indexOf("trackBusinessEvent('quote_converted_to_order'"),
+    );
+  });
+
   it('requires an active delivery actor and uses the effective completion business date', () => {
     expect(access).toContain('WHERE id = v_actor AND is_active = true');
     expect(access).toContain('IF v_actor_role IS NULL OR NOT (');
