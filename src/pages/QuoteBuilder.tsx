@@ -225,6 +225,11 @@ export default function QuoteBuilder() {
     resetKey: resetSaveQuoteIdempotencyKey,
   } = useIdempotencyKey('save_quote', profile?.id || '');
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
+  // A committed conversion can be replayed from the idempotency cache with
+  // status:'created'. Keep that marker so a lost response can still trigger
+  // the client-only email/alerts once, but suppress duplicate side effects if
+  // this mounted page observes the same stable order_id more than once.
+  const firedConvertSideEffects = useRef<Set<string>>(new Set());
   const plannedHoldsIdem = useIdempotencyKey('create_planned_holds', profile?.id || '');
   const saveTemplateIdem = useIdempotencyKey('save_quote_template', profile?.id || '');
   const fromTemplateIdem = useIdempotencyKey('create_quote_from_template', profile?.id || '');
@@ -2545,6 +2550,11 @@ export default function QuoteBuilder() {
       } else {
         toast('success', `Order ${result.order_number || ''} created`);
       }
+      const shouldFireConversionSideEffects = !alreadyConverted
+        && !firedConvertSideEffects.current.has(result.order_id);
+      if (shouldFireConversionSideEffects) {
+        firedConvertSideEffects.current.add(result.order_id);
+      }
 
       // Show any inventory warnings returned by the server.
       if (result.warnings && result.warnings.length > 0) {
@@ -2552,7 +2562,7 @@ export default function QuoteBuilder() {
       }
       // A server replay for an accepted Quote returns the existing Order. Do
       // not emit creation telemetry, alerts, or customer email a second time.
-      if (!alreadyConverted) {
+      if (shouldFireConversionSideEffects) {
         trackBusinessEvent('quote_converted_to_order', {
           message: `Quote converted → Order ${result.order_number || ''}`,
           data: { orderId: result.order_id, orderNumber: result.order_number ?? '', quoteId: savedId },

@@ -46,6 +46,40 @@ period-table writes. The registered live smoke ended
 still AP-only: 26 other live financial period-check callers remain explicitly
 outside its scope.
 
+## 2026-07-30 — Quote and Customer row-version guard applied live
+
+The frontend-first compatibility bundle landed through PR #290 before the
+governed database cutover. Migration
+`20260730201230_quote_customer_row_version_guard` then applied successfully;
+Supabase assigned ledger version `20260730235031`, and the disk file was
+B7-renamed without changing its normalized SQL blob. Live postflight confirmed
+both `row_version bigint NOT NULL DEFAULT 1` columns, enabled bump triggers,
+single public lifecycle overloads, fixed-search-path SECURITY DEFINER wrappers,
+private service-only implementations, authenticated/service execution without
+anon execution, and read-only browser access to the protected child tables.
+
+The primary Quote/Customer chain plus planned-hold, restore/version, and
+drawn-booking companion chains each reached exact `SMOKE_PASS_ROLLBACK`.
+Independent cleanup found zero `[SMOKE]` customers, products, quotes, or
+profiles. All 21 live invariant predicates passed with zero unallowlisted
+findings. A later independent apply,
+`20260730233835_ap_period_close_boundary_hardening`, advanced the live ledger to
+high-water `20260731001654` with 932 rows. The final schema-registry refresh
+therefore records that current high-water while retaining both row-version
+columns and the applied `20260730201230_quote_customer_row_version_guard` name.
+The disposable real-schema prover now deterministically replays only through
+the row-version candidate, so later independently landed migrations do not
+invalidate its historical boundary proof.
+
+PR-review follow-up preserved the applied migration byte-for-byte and closed
+the replay-side-effect risk in the compatible client instead. A cached
+Quote-to-Order result deliberately retains `status:'created'` so a lost
+response can still emit the client-only email and alerts on its first observed
+retry; `QuoteBuilder` now mirrors the Quotes list's stable-`order_id` latch so
+the same mounted page cannot emit them twice. The stale Known Issues entry that
+still described whole-record lost updates as open now points to the resolved
+live rollout.
+
 ## 2026-07-30 — push/backup guard round-23 transport bypasses closed
 
 Closed the final three HIGH findings from the independent review of the local push and agent-memory
@@ -899,8 +933,9 @@ and replay ownership, exact one-time token advancement, drawn-ledger
 compatibility, and planned-hold synchronization. Registered lifecycle smokes
 now dispatch against both the live legacy RPC signatures and the pending
 row-version signatures, and the candidate was restamped above the live
-migration ledger high-water without changing its SQL content. The migration
-remains unapplied.
+migration ledger high-water without changing its SQL content. At that point the
+migration remained unapplied; the live apply and B7 closeout are recorded in
+the entry above.
 
 ## 2026-07-30 — Quote and Customer stale-save recovery was hardened before merge
 
@@ -991,8 +1026,10 @@ absence to the legacy-compatible `null` token.
 Verification passed
 4,127 tests with 123 skipped, 3/3 isolated Playwright flows, both disposable
 PostgreSQL proofs, typecheck, lint, build, docs, and a zero-violation changed-migration
-SQL audit. Migration `20260730201230_quote_customer_row_version_guard.sql` remains
-unapplied; frontend-first deployment and live migration apply remain separate gates.
+SQL audit. At that point migration
+`20260730201230_quote_customer_row_version_guard.sql` remained unapplied and
+frontend-first deployment and live migration apply were separate gates; both
+gates have since closed under live ledger version `20260730235031`.
 
 ## 2026-07-30 — Vendor-bill accounting-period close lock applied
 
