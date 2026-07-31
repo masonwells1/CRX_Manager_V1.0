@@ -240,11 +240,11 @@ for (const pushCmd of pushCommands) {
   // to production from a checkout whose configured remote is something else.
   // So: (1) resolve the push's ACTUAL destination URL, and (2) keep the
   // configured-remotes check as a second line of defence. Both fail CLOSED.
-  let destinationUrl = "";
+  let destinationUrls = [];
   try {
     const destinationToken = pushDestinationToken(pushCmd);
     if (destinationToken && destinationLooksLikeUrl(destinationToken)) {
-      destinationUrl = destinationToken;
+      destinationUrls = [destinationToken];
     } else {
       // No destination named → git resolves its own default, in this order.
       const config = (key) => { try { return git(["config", "--get", key], pushRepoDir); } catch { return ""; } };
@@ -253,12 +253,15 @@ for (const pushCmd of pushCommands) {
         || config("remote.pushDefault")
         || config(`branch.${branch}.remote`)
         || "origin";
-      destinationUrl = git(["remote", "get-url", "--push", remoteName], pushRepoDir);
+      destinationUrls = git(["remote", "get-url", "--push", "--all", remoteName], pushRepoDir)
+        .split(/\r?\n/)
+        .map((url) => url.trim())
+        .filter(Boolean);
     }
   } catch (_error) {
     // Fail CLOSED: urlIsGuardedApp("") is true, so an unresolvable destination
     // gates the push instead of waving it through.
-    destinationUrl = "";
+    destinationUrls = [""];
   }
   let remoteList = "";
   try {
@@ -300,7 +303,7 @@ for (const pushCmd of pushCommands) {
     deny(`CODEX GATE: this checkout configures git settings that name a program to carry the push (${namedPrograms.join(", ")}). That program decides where the objects actually go, so no destination check here can be trusted. Unset them with \`git config --unset <setting>\` and push normally — git's own defaults need none of them.`);
   }
   if (
-    !urlIsGuardedApp(destinationUrl) &&
+    !destinationUrls.some((url) => urlIsGuardedApp(url)) &&
     !repoIsGuardedApp(remoteList) &&
     !rewritesReachGuardedApp(urlRewrites)
   ) continue;

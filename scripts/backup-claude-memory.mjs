@@ -40,10 +40,10 @@
 
 import {
   existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync,
-  unlinkSync, writeFileSync,
+  renameSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   canonicalRepoId,
   environmentCarriesTransportOverride,
@@ -106,10 +106,17 @@ const mdFiles = (dir) =>
 // Refuse to write THROUGH a link. The destination check above decides which
 // repository the directory belongs to; a symlink inside it escapes that decision
 // entirely, so the write is refused rather than redirected.
-function symlinkRefusal(dest) {
+function linkRefusal(dest) {
   let info;
   try { info = linkStat(dest); } catch { return null; }    // does not exist yet — normal
-  if (!info.isSymbolicLink()) return null;
+  if (!info.isSymbolicLink() && !(info.isFile() && info.nlink > 1)) return null;
+  if (info.isFile() && info.nlink > 1) {
+    return (
+      `FAIL: refusing to write — ${dest} has multiple hard links.\n` +
+      `      Writing it in place would also overwrite another file outside the\n` +
+      `      verified snapshot directory. Remove the linked file and re-run.`
+    );
+  }
   return (
     `FAIL: refusing to write — ${dest} is a symbolic link.\n` +
     `      Writing through it would put the notes wherever it points, outside the\n` +
@@ -658,7 +665,7 @@ function stage(outDir, sourceArg) {
   const manifestPath = path.join(outDir, MANIFEST);
   // Checked before the unlink: existsSync says false for a DANGLING link, which
   // would then survive to be written through.
-  const linkedManifest = symlinkRefusal(manifestPath);
+  const linkedManifest = linkRefusal(manifestPath);
   if (linkedManifest) { console.error(linkedManifest); return 1; }
   if (existsSync(manifestPath)) unlinkSync(manifestPath);
 
@@ -667,9 +674,18 @@ function stage(outDir, sourceArg) {
   for (const { name, buf } of entries) {
     // `buf` is the SAME buffer the secret scan above inspected — not a re-read.
     const dest = path.join(outDir, name);
-    const linked = symlinkRefusal(dest);
+    const linked = linkRefusal(dest);
     if (linked) { console.error(linked); return 1; }
-    writeFileSync(dest, buf);
+    // Never truncate an existing inode in place. A newly-created sibling cannot
+    // already be linked elsewhere; atomically replacing the directory entry
+    // keeps even an unexpected alias from receiving private note bytes.
+    const temp = path.join(outDir, `.${name}.${process.pid}.${randomUUID()}.tmp`);
+    try {
+      writeFileSync(temp, buf, { flag: "wx", mode: 0o600 });
+      renameSync(temp, dest);
+    } finally {
+      if (existsSync(temp)) unlinkSync(temp);
+    }
     // Re-read what actually landed: a short write must fail the run, not ship.
     const wrote = readFileSync(dest);
     const digest = sha256(buf);

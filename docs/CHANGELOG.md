@@ -28,6 +28,13 @@ suffix `Manager_V1.0.git` therefore reached production while the guard treated i
 The rewrite classifier now follows those raw-prefix semantics, with helper and full-hook regression
 tests proving the partial repository-name form is gated.
 
+The next exact-head review closed two adjacent filesystem/transport routes. Named remotes now have
+every configured push URL classified, rather than only the first, so a later custom helper cannot
+relay the same push around the proof gate. Memory staging also refuses existing files with multiple
+hard links and writes each note to a newly created sibling before atomically replacing its
+destination entry. That prevents private note bytes from overwriting another path that shares the
+same underlying file.
+
 ## 2026-07-30 — two push guards were blocking pushes they had already cleared
 
 Backing up the agent memory ran into both of them, one after the other. Neither was catching a real

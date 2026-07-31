@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -676,6 +676,57 @@ try {
       readFileSync(path.join(dest, "a.md"), "utf8"), "second snapshot\n",
       "the notes written before the failure are the new ones — the previous snapshot is NOT preserved in place, which is why the manifest must go first",
     );
+  }
+
+  // ── round 25: never overwrite an existing hard-linked destination file ───
+  // Unlike a symlink, a hard link reports as a regular file. Writing it in
+  // place changes every name for that inode, including files outside the
+  // verified snapshot directory.
+  {
+    const notes = makeSource("hardlink-source", {
+      [INDEX_FILE]: "# Memory Index\n- [a](a.md) — hook\n",
+      "a.md": "new private note\n",
+    });
+    const dest = fresh("hardlink-destination");
+    eq(quiet(() => stage(dest, notes)), 0, "hard-link fixture begins with a valid snapshot");
+
+    const outsideDir = fresh("hardlink-outside");
+    const outside = path.join(outsideDir, "unrelated-public-file.md");
+    writeFileSync(outside, "do not overwrite me\n");
+    unlinkSync(path.join(dest, "a.md"));
+    linkSync(outside, path.join(dest, "a.md"));
+
+    eq(quiet(() => stage(dest, notes)), 1, "staging refuses an existing hard-linked note");
+    eq(
+      readFileSync(outside, "utf8"), "do not overwrite me\n",
+      "and the other hard-link name remains untouched",
+    );
+
+    // Prove the replacement strategy independently of the nlink refusal. Hide
+    // the hard-link count at the test seam: staging may proceed, but replacing
+    // the directory entry must still leave the outside inode unchanged.
+    const atomicDest = fresh("hardlink-atomic-destination");
+    eq(quiet(() => stage(atomicDest, notes)), 0, "atomic fixture begins with a valid snapshot");
+    const atomicOutside = path.join(outsideDir, "atomic-outside.md");
+    writeFileSync(atomicOutside, "also do not overwrite me\n");
+    unlinkSync(path.join(atomicDest, "a.md"));
+    linkSync(atomicOutside, path.join(atomicDest, "a.md"));
+    const linkedDest = path.resolve(atomicDest, "a.md");
+    try {
+      __setLinkStat((p) => {
+        const info = lstatSync(p);
+        if (path.resolve(p) === linkedDest) Object.defineProperty(info, "nlink", { value: 1 });
+        return info;
+      });
+      eq(quiet(() => stage(atomicDest, notes)), 0, "atomic replacement remains safe if link-count detection misses");
+      eq(readFileSync(path.join(atomicDest, "a.md"), "utf8"), "new private note\n", "the snapshot receives the new note");
+      eq(
+        readFileSync(atomicOutside, "utf8"), "also do not overwrite me\n",
+        "while the former hard-link target still remains untouched",
+      );
+    } finally {
+      __setLinkStat(null);
+    }
   }
 
   // ── round 14: never follow a symbolic link, in either direction ───────────

@@ -1324,6 +1324,19 @@ assert.equal(pushDestinationToken("git push"), null);
     }
     assert.equal(runHook(push).decision, "allow", "and unsetting them restores an ordinary push");
 
+    // A named remote can push to every configured pushurl. The first URL is the
+    // harmless local bare repo; the second invokes a custom remote helper that
+    // can deliver the same objects anywhere. The hook must inspect them all.
+    try {
+      git(["remote", "set-url", "--add", "--push", "origin", dest], work);
+      git(["remote", "set-url", "--add", "--push", "origin", "relay://example.invalid/harmless.git"], work);
+      const multiplePushUrls = runHook(push);
+      assert.equal(multiplePushUrls.decision, "deny", "a later unknown-transport pushurl is gated");
+      assert.match(multiplePushUrls.reason, /CODEX GATE/, "the full hook explains the denial");
+    } finally {
+      git(["config", "--unset-all", "remote.origin.pushurl"], work);
+    }
+
     // Git substitutes insteadOf as raw text, not path segments. The configured
     // base plus the suffix of this destination becomes the production URL.
     // Exercise the actual hook so its effective-URL lookup, not only the helper,
