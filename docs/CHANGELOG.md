@@ -462,6 +462,13 @@ receipt at each landing action; alternate refs or drift require parking, fresh p
 owner decision. The two-phase closeout remains possible only through its one exact broker-generated,
 ledger-hashed packet file.
 
+The final pre-commit run also exposed a hook-context leak in the new morning-acceptance fixture:
+repository-local Git variables inherited from pre-commit could redirect `git init` into CRX's shared
+Git directory. The interrupted test temporarily set `core.bare=true`; the setting was restored
+before publication, and the fixture test now removes repository, index, object, prefix, shallow,
+graft, and worktree context variables before any direct Git command or in-process evidence-library
+call. A regression injects the dangerous variables explicitly.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

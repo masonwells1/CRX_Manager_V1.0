@@ -17,6 +17,30 @@ import {
   writeImmutableTicket,
 } from "../../scripts/factory-state-lib.mjs";
 
+const GIT_REPOSITORY_ENVIRONMENT_NAMES = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_DIR",
+  "GIT_GRAFT_FILE",
+  "GIT_IMPLICIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_PREFIX",
+  "GIT_SHALLOW_FILE",
+  "GIT_WORK_TREE",
+];
+
+function sanitizedFixtureGitEnvironment(source = process.env) {
+  const env = { ...source };
+  for (const name of GIT_REPOSITORY_ENVIRONMENT_NAMES) delete env[name];
+  return env;
+}
+
+// Git hooks may export repository-local variables to their child processes.
+// This test creates and inspects a second repository, so remove that context
+// before even the first root/base lookup or any in-process library call.
+for (const name of GIT_REPOSITORY_ENVIRONMENT_NAMES) delete process.env[name];
+
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "../..");
 const hook = path.join(root, ".claude", "hooks", "factory-owner-input.mjs");
 const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
@@ -130,7 +154,10 @@ function runShipHook(state, payload) {
     transcript_path: transcript,
   });
   equal(result.status, 0, "Codex-shaped payload exits cleanly");
-  ok(result.stdout.includes("recorded Mason's exact approval"), "exact yes is recorded");
+  ok(
+    result.stdout.includes("recorded Mason's exact approval"),
+    `exact yes is recorded (stdout=${result.stdout.trim()} stderr=${result.stderr.trim()})`,
+  );
   const snapshot = buildFactorySnapshot(state.paths);
   equal(snapshot.jobs[0].stage, "queued", "approved ticket enters queue");
   equal(snapshot.jobs[0].approvalReply, "yes", "verbatim owner reply is retained");
@@ -376,16 +403,33 @@ function runLaneHook(state, payload) {
     },
   }, null, 2)}\n`);
   writeFileSync(path.join(fixtureRepo, "src", "result.txt"), "base result\n");
+  const fixtureGitEnv = sanitizedFixtureGitEnvironment({
+    ...process.env,
+    // Reproduce the repository-local variables Git may expose to a pre-commit
+    // hook. Fixture commands must never inherit them and mutate the real repo.
+    GIT_DIR: path.join(root, ".git"),
+    GIT_INDEX_FILE: path.join(root, ".git", "index"),
+    GIT_WORK_TREE: root,
+  });
+  equal(fixtureGitEnv.GIT_DIR, undefined, "fixture Git environment removes inherited repository context");
   for (const args of [
     ["init", "-q", "-b", "main"],
     ["add", "package.json", "src/result.txt"],
     ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "base"],
     ["update-ref", "refs/remotes/origin/main", "HEAD"],
   ]) {
-    const gitResult = spawnSync("git", args, { cwd: fixtureRepo, encoding: "utf8" });
+    const gitResult = spawnSync("git", args, {
+      cwd: fixtureRepo,
+      encoding: "utf8",
+      env: fixtureGitEnv,
+    });
     equal(gitResult.status, 0, gitResult.stderr);
   }
-  const fixtureBase = spawnSync("git", ["rev-parse", "HEAD"], { cwd: fixtureRepo, encoding: "utf8" }).stdout.trim();
+  const fixtureBase = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: fixtureRepo,
+    encoding: "utf8",
+    env: fixtureGitEnv,
+  }).stdout.trim();
   const written = writeImmutableTicket(state.paths, {
     id: "morning-acceptance-job",
     version: 1,
