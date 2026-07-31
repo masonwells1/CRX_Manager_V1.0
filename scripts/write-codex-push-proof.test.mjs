@@ -2,7 +2,7 @@
 // Tests for the Codex push-proof wrapper (scripts/write-codex-push-proof.mjs).
 // Run: node scripts/write-codex-push-proof.test.mjs
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -148,8 +148,17 @@ assert.equal(scrubbedEnvironment.USERPROFILE, undefined, "reviewer environment d
   execFileSync("git", ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", "commit", "-qm", "base"], { cwd: source, stdio: "ignore" });
   execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: source, stdio: "ignore" });
   writeFileSync(path.join(source, "tracked.txt"), "candidate\n");
+  mkdirSync(path.join(source, "supabase", "migrations"), { recursive: true });
+  writeFileSync(
+    path.join(source, ".gitattributes"),
+    ".gitattributes export-ignore\nsupabase/migrations/hidden.sql export-ignore\n",
+  );
+  writeFileSync(
+    path.join(source, "supabase", "migrations", "hidden.sql"),
+    "-- This risky candidate file must never disappear from review.\n",
+  );
   writeFileSync(path.join(source, ".env"), "GITHUB_TOKEN=must-not-copy\n");
-  execFileSync("git", ["add", "tracked.txt"], { cwd: source, stdio: "ignore" });
+  execFileSync("git", ["add", "tracked.txt", ".gitattributes", "supabase/migrations/hidden.sql"], { cwd: source, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", "commit", "-qm", "candidate"], { cwd: source, stdio: "ignore" });
   const sanitized = createSanitizedReviewWorkspace({
     sourceRoot: source,
@@ -160,9 +169,38 @@ assert.equal(scrubbedEnvironment.USERPROFILE, undefined, "reviewer environment d
   assert.equal(existsSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", ".env")), false, "ignored environment files are absent");
   assert.equal(readFileSync(path.join(sanitized.root, "BASE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"), "base\n");
   assert.equal(readFileSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"), "candidate\n");
+  assert.equal(
+    existsSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", ".gitattributes")),
+    true,
+    "candidate-controlled export-ignore cannot hide .gitattributes from the reviewer",
+  );
+  assert.equal(
+    existsSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", "supabase", "migrations", "hidden.sql")),
+    true,
+    "candidate-controlled export-ignore cannot hide a risky tracked file from the reviewer",
+  );
+  const candidateTreeManifest = JSON.parse(
+    readFileSync(path.join(sanitized.root, "CANDIDATE_TREE_MANIFEST.json"), "utf8"),
+  );
+  const candidateManifestPaths = candidateTreeManifest.entries.map((entry) => entry.path);
+  assert.ok(candidateManifestPaths.includes(".gitattributes"), "candidate tree manifest binds .gitattributes");
+  assert.ok(
+    candidateManifestPaths.includes("supabase/migrations/hidden.sql"),
+    "candidate tree manifest binds export-ignored risky file",
+  );
+  assert.ok(
+    candidateTreeManifest.entries.every((entry) =>
+      /^[0-7]{6}$/.test(entry.gitMode)
+      && /^[a-f0-9]{40,64}$/.test(entry.objectId)
+      && /^[a-f0-9]{64}$/.test(entry.blobSha256)
+      && /^[a-f0-9]{64}$/.test(entry.snapshotSha256)),
+    "commit tree manifest binds Git mode, object id, raw blob hash, and copied bytes",
+  );
   const reviewPacketText = [
     readFileSync(path.join(sanitized.root, "REVIEW_DIFF.patch"), "utf8"),
     readFileSync(path.join(sanitized.root, "REVIEW_MANIFEST.json"), "utf8"),
+    readFileSync(path.join(sanitized.root, "BASE_TREE_MANIFEST.json"), "utf8"),
+    readFileSync(path.join(sanitized.root, "CANDIDATE_TREE_MANIFEST.json"), "utf8"),
   ].join("\n").replace(/\\/g, "/");
   assert.match(reviewPacketText, /-base[\s\S]*\+candidate/);
   assert.equal(

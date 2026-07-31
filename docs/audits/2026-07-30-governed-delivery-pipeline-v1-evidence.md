@@ -352,6 +352,14 @@ recursive force-delete cleanup command.
   secret-bearing pauses retain only a prompt hash in emergency state, secret-bearing resumes do
   nothing, and emergency-hold storage independently sanitizes unsafe reasons. Fresh exact-commit
   acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `ec38964819c2ba10386bb446216e00a35faf31fe` returned `BLOCKERS`: commit snapshots used
+  `git archive`, so candidate-controlled `export-ignore` attributes could hide a risky tracked file
+  and the attribute rule itself from the sanitized reviewer packet. Commit packets now use trusted
+  `git ls-tree` plus raw `git cat-file --batch` extraction, recompute every Git object ID, verify the
+  exact copied path set and SHA-256 values, and expose original mode/object/blob metadata in separate
+  base/candidate tree manifests. A regression commits an export-ignored `.gitattributes` and
+  migration and proves neither can disappear. Fresh exact-commit acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

@@ -478,6 +478,15 @@ secret-scanned before persistence. A secret-bearing pause activates a fail-safe 
 only the prompt SHA-256, a secret-bearing resume changes nothing, and emergency-hold storage also
 sanitizes unsafe reasons independently.
 
+A thirteenth exact-SHA Sol/high acceptance found that commit review packets used `git archive`,
+which honors branch-controlled `.gitattributes export-ignore`. A candidate could therefore hide a
+risky tracked file—and the attribute rule itself—from the reviewer while still requesting a proof
+bound to the full HEAD. Commit snapshots now enumerate the exact tree with trusted `git ls-tree`,
+read raw blobs through `git cat-file --batch`, recompute each Git object ID, verify the complete
+copied path set and SHA-256 values, and publish mode/object/blob metadata in separate base/candidate
+tree manifests. An adversarial fixture marks both `.gitattributes` and a migration `export-ignore`
+and proves both remain in the review snapshot, diff, and manifest.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

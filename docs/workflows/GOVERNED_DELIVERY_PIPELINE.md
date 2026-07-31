@@ -114,7 +114,11 @@ fingerprint before the ticket or morning decision is re-presented there.
   working-tree, and untracked paths from that base and rejects any path outside the ticket.
 - Independent Sol review never runs in the host checkout. Trusted bootstrap creates a disposable,
   Git-free packet containing exact base bytes, tracked/non-ignored candidate bytes, a precomputed
-  diff with fixed relative snapshot headers, and a SHA manifest. Packet regression checks reject
+  diff with fixed relative snapshot headers, and SHA manifests. Commit snapshots use trusted
+  `git ls-tree` enumeration plus raw `git cat-file --batch` blobs—not `git archive`, so
+  candidate-controlled `.gitattributes export-ignore` cannot hide a file. The broker recomputes
+  every Git object ID, verifies the exact copied path set and SHA-256 values, and exposes original
+  modes/object IDs in separate base/candidate tree manifests. Packet regression checks reject
   source-checkout, temporary review-root, or user-profile paths. Ignored files, factory session
   state, host profile paths, and repository Git metadata are not exposed to the reviewer.
 - The authoritative factory CLI, state broker, read-only Board, and `package.json` test wiring are

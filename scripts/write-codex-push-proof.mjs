@@ -42,6 +42,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -81,15 +82,6 @@ export function worktreeIsClean(cwd) {
   return out !== STATUS_UNAVAILABLE && out.trim() === "";
 }
 
-function fixedTarExecutable() {
-  const candidates = process.platform === "win32"
-    ? ["C:\\Windows\\System32\\tar.exe"]
-    : ["/usr/bin/tar", "/bin/tar"];
-  const executable = candidates.find((candidate) => existsSync(candidate));
-  if (!executable) throw new Error("A fixed trusted tar executable is required to build the sanitized review workspace.");
-  return executable;
-}
-
 function fixedGitExecutable() {
   const candidates = process.platform === "win32"
     ? ["C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\bin\\git.exe"]
@@ -108,40 +100,193 @@ function assertSanitizedReviewRoot(reviewRoot) {
   return resolved;
 }
 
-function neutralizeSnapshotSymlinks(directory) {
+function sha256Bytes(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function safeSnapshotTarget(destination, relative) {
+  const normalized = String(relative || "").replace(/\\/g, "/");
+  if (!normalized
+      || normalized.startsWith("/")
+      || normalized.includes("\\")
+      || path.posix.normalize(normalized) !== normalized
+      || normalized.split("/").some((part) => !part || part === "." || part === "..")) {
+    throw new Error(`Commit tree contains an unsafe review path: ${relative}`);
+  }
+  const target = path.resolve(destination, ...normalized.split("/"));
+  const targetRelative = path.relative(destination, target);
+  if (targetRelative === ".." || targetRelative.startsWith(`..${path.sep}`) || path.isAbsolute(targetRelative)) {
+    throw new Error(`Repository path escapes the sanitized review workspace: ${relative}`);
+  }
+  return target;
+}
+
+function snapshotFilePaths(directory, prefix = "") {
+  const out = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     const target = path.join(directory, entry.name);
     const stat = lstatSync(target);
     if (stat.isSymbolicLink()) {
-      const linkTarget = readlinkSync(target);
-      unlinkSync(target);
-      writeFileSync(target, `SANITIZED_SYMLINK_TARGET:${linkTarget}\n`, "utf8");
-    } else if (stat.isDirectory()) {
-      neutralizeSnapshotSymlinks(target);
+      throw new Error(`Sanitized snapshot unexpectedly contains a symlink: ${relative}`);
+    }
+    if (stat.isDirectory()) out.push(...snapshotFilePaths(target, relative));
+    else if (stat.isFile()) out.push(relative.replace(/\\/g, "/"));
+    else throw new Error(`Sanitized snapshot contains an unsupported entry: ${relative}`);
+  }
+  return out.sort();
+}
+
+function verifySnapshotFiles(destination, entries) {
+  const expectedPaths = entries.map((entry) => entry.path).sort();
+  const actualPaths = snapshotFilePaths(destination);
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+    throw new Error("Sanitized snapshot path set does not match its trusted source enumeration.");
+  }
+  for (const entry of entries) {
+    const target = safeSnapshotTarget(destination, entry.path);
+    const bytes = readFileSync(target);
+    if (sha256Bytes(bytes) !== entry.snapshotSha256) {
+      throw new Error(`Sanitized snapshot bytes do not match the verified manifest: ${entry.path}`);
     }
   }
 }
 
-function copyCommitSnapshot(sourceRoot, commitSha, destination) {
-  mkdirSync(destination, { recursive: true });
-  const archive = execFileSync(fixedGitExecutable(), ["archive", "--format=tar", commitSha], {
+function parseCommitTree(sourceRoot, commitSha) {
+  const treeBytes = execFileSync(fixedGitExecutable(), [
+    "ls-tree",
+    "-r",
+    "-z",
+    "--full-tree",
+    commitSha,
+  ], {
     cwd: sourceRoot,
     encoding: null,
     timeout: 120_000,
     stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer: 512 * 1024 * 1024,
+    maxBuffer: 256 * 1024 * 1024,
   });
-  const extracted = spawnSync(fixedTarExecutable(), ["-xf", "-", "-C", destination], {
-    input: archive,
+  const records = treeBytes.toString("utf8").split("\0").filter(Boolean);
+  if (records.some((record) => record.includes("\uFFFD"))) {
+    throw new Error("Commit tree contains a path that cannot be represented safely as UTF-8.");
+  }
+  const seenTargets = new Set();
+  return records.map((record) => {
+    const match = /^([0-7]{6}) ([a-z]+) ([a-f0-9]{40,64})\t([\s\S]+)$/.exec(record);
+    if (!match) throw new Error("Commit tree enumeration returned a malformed entry.");
+    const [, gitMode, objectType, objectId, relative] = match;
+    if (objectType !== "blob" || !["100644", "100755", "120000"].includes(gitMode)) {
+      throw new Error(`Unsupported commit-tree entry ${gitMode} ${objectType}: ${relative}`);
+    }
+    safeSnapshotTarget(sourceRoot, relative);
+    const collisionKey = process.platform === "win32" ? relative.toLowerCase() : relative;
+    if (seenTargets.has(collisionKey)) {
+      throw new Error(`Commit tree contains a case-colliding review path: ${relative}`);
+    }
+    seenTargets.add(collisionKey);
+    return { path: relative, gitMode, objectType, objectId };
+  });
+}
+
+function readCommitBlobs(sourceRoot, entries) {
+  if (entries.length === 0) return [];
+  const result = spawnSync(fixedGitExecutable(), ["cat-file", "--batch"], {
+    cwd: sourceRoot,
+    input: `${entries.map((entry) => entry.objectId).join("\n")}\n`,
     encoding: null,
     shell: false,
     timeout: 120_000,
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: 512 * 1024 * 1024,
   });
-  if (extracted.error || extracted.status !== 0) {
-    throw extracted.error || new Error(`Sanitized commit extraction failed with exit ${extracted.status}.`);
+  if (result.error || result.status !== 0) {
+    throw result.error || new Error(`Trusted blob extraction failed with exit ${result.status}.`);
   }
-  neutralizeSnapshotSymlinks(destination);
+  const output = result.stdout;
+  let cursor = 0;
+  const blobs = entries.map((entry) => {
+    const newline = output.indexOf(0x0a, cursor);
+    if (newline < 0) throw new Error(`Missing blob header for ${entry.path}.`);
+    const header = output.subarray(cursor, newline).toString("utf8");
+    const match = /^([a-f0-9]{40,64}) blob ([0-9]+)$/.exec(header);
+    if (!match || match[1] !== entry.objectId) {
+      throw new Error(`Blob header does not match the enumerated tree object for ${entry.path}.`);
+    }
+    const size = Number(match[2]);
+    if (!Number.isSafeInteger(size) || size < 0 || newline + 1 + size >= output.length) {
+      throw new Error(`Blob size is invalid for ${entry.path}.`);
+    }
+    const start = newline + 1;
+    const end = start + size;
+    const bytes = Buffer.from(output.subarray(start, end));
+    if (output[end] !== 0x0a) throw new Error(`Blob framing is invalid for ${entry.path}.`);
+    const objectAlgorithm = entry.objectId.length === 40 ? "sha1" : "sha256";
+    const computedObjectId = createHash(objectAlgorithm)
+      .update(Buffer.from(`blob ${size}\0`, "utf8"))
+      .update(bytes)
+      .digest("hex");
+    if (computedObjectId !== entry.objectId) {
+      throw new Error(`Raw blob bytes do not match the enumerated Git object for ${entry.path}.`);
+    }
+    cursor = end + 1;
+    return bytes;
+  });
+  if (cursor !== output.length) {
+    throw new Error("Trusted blob extraction returned unexpected trailing data.");
+  }
+  return blobs;
+}
+
+function copyCommitSnapshot(sourceRoot, commitSha, destination) {
+  mkdirSync(destination, { recursive: true });
+  const tree = parseCommitTree(sourceRoot, commitSha);
+  const blobs = readCommitBlobs(sourceRoot, tree);
+  const entries = tree.map((entry, index) => {
+    const blob = blobs[index];
+    const snapshotBytes = entry.gitMode === "120000"
+      ? Buffer.from(`SANITIZED_SYMLINK_TARGET:${blob.toString("utf8")}\n`, "utf8")
+      : blob;
+    const target = safeSnapshotTarget(destination, entry.path);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, snapshotBytes);
+    return {
+      ...entry,
+      blobSize: blob.length,
+      blobSha256: sha256Bytes(blob),
+      snapshotSha256: sha256Bytes(snapshotBytes),
+    };
+  });
+  verifySnapshotFiles(destination, entries);
+  return {
+    schemaVersion: 1,
+    source: "git-ls-tree-and-cat-file",
+    commitSha,
+    entries,
+  };
+}
+
+function workingTreeSnapshotManifest(destination, listed) {
+  const entries = listed.map((relative) => {
+    const target = safeSnapshotTarget(destination, relative);
+    return {
+      path: relative.replace(/\\/g, "/"),
+      source: "tracked-or-nonignored-working-tree",
+      snapshotSha256: sha256Bytes(readFileSync(target)),
+    };
+  });
+  verifySnapshotFiles(destination, entries);
+  return {
+    schemaVersion: 1,
+    source: "tracked-and-nonignored-working-tree",
+    entries,
+  };
+}
+
+function writeTreeManifest(reviewRoot, name, manifest) {
+  writeFileSync(
+    path.join(reviewRoot, name),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 function copyWorkingTreeSnapshot(sourceRoot, destination) {
@@ -153,13 +298,15 @@ function copyWorkingTreeSnapshot(sourceRoot, destination) {
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 256 * 1024 * 1024,
   }).split("\0").filter(Boolean);
+  const seenTargets = new Set();
   for (const relative of listed) {
     const source = path.resolve(sourceRoot, relative);
-    const target = path.resolve(destination, relative);
-    const targetRelative = path.relative(destination, target);
-    if (targetRelative === ".." || targetRelative.startsWith(`..${path.sep}`) || path.isAbsolute(targetRelative)) {
-      throw new Error(`Repository path escapes the sanitized review workspace: ${relative}`);
+    const target = safeSnapshotTarget(destination, relative);
+    const collisionKey = process.platform === "win32" ? relative.toLowerCase() : relative;
+    if (seenTargets.has(collisionKey)) {
+      throw new Error(`Working tree contains a case-colliding review path: ${relative}`);
     }
+    seenTargets.add(collisionKey);
     if (!existsSync(source)) continue;
     const stat = lstatSync(source);
     mkdirSync(path.dirname(target), { recursive: true });
@@ -171,6 +318,8 @@ function copyWorkingTreeSnapshot(sourceRoot, destination) {
       throw new Error(`Unsupported repository entry in sanitized review workspace: ${relative}`);
     }
   }
+  return workingTreeSnapshotManifest(destination, listed.filter((relative) =>
+    existsSync(path.resolve(sourceRoot, relative))));
 }
 
 export function createSanitizedReviewWorkspace({
@@ -188,14 +337,17 @@ export function createSanitizedReviewWorkspace({
   const baseDir = path.join(reviewRoot, "BASE_SNAPSHOT");
   const candidateDir = path.join(reviewRoot, "CANDIDATE_SNAPSHOT");
   try {
-    copyCommitSnapshot(source, baseSha, baseDir);
+    const baseTreeManifest = copyCommitSnapshot(source, baseSha, baseDir);
+    let candidateTreeManifest;
     if (candidateRef) {
       const candidateSha = runGit(["rev-parse", `${candidateRef}^{commit}`], { cwd: source });
       if (candidateSha !== headSha) throw new Error("Sanitized review candidate must be the exact current HEAD.");
-      copyCommitSnapshot(source, candidateSha, candidateDir);
+      candidateTreeManifest = copyCommitSnapshot(source, candidateSha, candidateDir);
     } else {
-      copyWorkingTreeSnapshot(source, candidateDir);
+      candidateTreeManifest = copyWorkingTreeSnapshot(source, candidateDir);
     }
+    writeTreeManifest(reviewRoot, "BASE_TREE_MANIFEST.json", baseTreeManifest);
+    writeTreeManifest(reviewRoot, "CANDIDATE_TREE_MANIFEST.json", candidateTreeManifest);
     const diff = spawnSync(fixedGitExecutable(), [
       "diff",
       "--no-index",
@@ -221,6 +373,8 @@ export function createSanitizedReviewWorkspace({
       schemaVersion: 1,
       sourceExposure: "tracked-and-nonignored-snapshots-only",
       gitMetadataExposure: "none",
+      commitSnapshotConstruction: "git-ls-tree-and-cat-file",
+      treeManifests: ["BASE_TREE_MANIFEST.json", "CANDIDATE_TREE_MANIFEST.json"],
       baseSha,
       headSha,
       candidateMode: candidateRef ? "exact-head-commit" : "tracked-and-nonignored-working-tree",
@@ -440,6 +594,8 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
     "  CANDIDATE_SNAPSHOT/ is the exact candidate tree.",
     "  REVIEW_DIFF.patch is their precomputed binary diff.",
     "  REVIEW_MANIFEST.json binds the packet to exact base and HEAD SHAs.",
+    "  BASE_TREE_MANIFEST.json and CANDIDATE_TREE_MANIFEST.json bind every exact path,",
+    "  Git mode/object/blob (for commit snapshots), and copied-file SHA-256.",
     "Inspect only this packet. Do not traverse outside this directory. Do NOT modify anything,",
     "push, deploy, or run any write/network command — this is a read-only review.",
     "",
