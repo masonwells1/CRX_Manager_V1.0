@@ -13,9 +13,12 @@ import {
   pendingTicketForSession,
   pendingReviewForSession,
   refreshOriginMain,
+  repositoryContentFingerprint,
   resolveHookFactoryPaths,
   setEmergencyFactoryHold,
   sha256,
+  validateCurrentHarnessEvidence,
+  validateCurrentIndependentReview,
 } from "../../scripts/factory-state-lib.mjs";
 
 function emit(additionalContext = "") {
@@ -256,6 +259,22 @@ async function main() {
     if (!job.reviewExpiresAt || Date.parse(job.reviewExpiresAt) <= Date.now()) {
       emit("CRX Factory recorded no morning decision because the review question expired. Re-present it in this chat.");
     }
+    let acceptedRepository;
+    if (disposition === "approve") {
+      try {
+        acceptedRepository = repositoryContentFingerprint(projectDir);
+        validateCurrentHarnessEvidence(job, projectDir, {
+          paths,
+          repositoryFingerprint: acceptedRepository,
+        });
+        validateCurrentIndependentReview(job, projectDir, {
+          paths,
+          repositoryFingerprint: acceptedRepository,
+        });
+      } catch (error) {
+        emit(`CRX Factory recorded no morning decision because the reviewed repository result is no longer exact (${error.message}). Re-run proof and re-present the review.`);
+      }
+    }
     const nextStage = disposition === "approve" ? "approved-to-land" : "parked";
     appendFactoryEvent(paths, {
       type: "job-stage",
@@ -271,6 +290,10 @@ async function main() {
         ownerDecision: disposition,
         ticketHash: job.ticketHash,
         reviewQuestionHash: decision.questionHash,
+        ...(disposition === "approve" ? {
+          acceptedRepositoryContentHash: acceptedRepository.repositoryContentHash,
+          acceptedRepositoryFileCount: acceptedRepository.repositoryFileCount,
+        } : {}),
       },
     }, { expectedLastEventHash: snapshot.lastEventHash });
     emit(disposition === "approve"

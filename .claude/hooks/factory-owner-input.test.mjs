@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
   buildFactorySnapshot,
+  canonicalMorningReviewQuestion,
   hasFactoryIntentFailureLatch,
   resolveFactoryPaths,
+  runHarnessEvidence,
+  runIndependentReviewEvidence,
   sha256,
   writeImmutableTicket,
 } from "../../scripts/factory-state-lib.mjs";
@@ -87,12 +90,13 @@ function makeState(sessionId = "codex-thread-1") {
 }
 
 function runHook(state, payload) {
+  const projectRoot = state.root || root;
   return spawnSync(process.execPath, [hook], {
-    cwd: root,
+    cwd: projectRoot,
     encoding: "utf8",
     env: {
       ...process.env,
-      CLAUDE_PROJECT_DIR: root,
+      CLAUDE_PROJECT_DIR: projectRoot,
       CRX_AGENT_SURFACE: "codex",
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: state.dir,
@@ -363,56 +367,145 @@ function runLaneHook(state, payload) {
 }
 
 {
-  const state = makeState("morning-thread");
+  const state = makeEmptyState("morning-thread");
+  const fixtureRepo = path.join(state.dir, "repo");
+  mkdirSync(path.join(fixtureRepo, "src"), { recursive: true });
+  writeFileSync(path.join(fixtureRepo, "package.json"), `${JSON.stringify({
+    scripts: {
+      "verify-deps": "node -e \"process.stdout.write('OWNER_ACCEPTANCE_HARNESS_PASS')\"",
+    },
+  }, null, 2)}\n`);
+  writeFileSync(path.join(fixtureRepo, "src", "result.txt"), "base result\n");
+  for (const args of [
+    ["init", "-q", "-b", "main"],
+    ["add", "package.json", "src/result.txt"],
+    ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "base"],
+    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+  ]) {
+    const gitResult = spawnSync("git", args, { cwd: fixtureRepo, encoding: "utf8" });
+    equal(gitResult.status, 0, gitResult.stderr);
+  }
+  const fixtureBase = spawnSync("git", ["rev-parse", "HEAD"], { cwd: fixtureRepo, encoding: "utf8" }).stdout.trim();
+  const written = writeImmutableTicket(state.paths, {
+    id: "morning-acceptance-job",
+    version: 1,
+    title: "Bind exact morning result",
+    goal: "Keep accepted repository bytes immutable through landing.",
+    definitionOfDone: ["Morning acceptance records the exact reviewed repository fingerprint."],
+    mustNotChange: ["Anything outside src/result.txt."],
+    allowedPaths: ["src/result.txt"],
+    proofRequirements: ["Contained harness and independent Sol review."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Use existing ship gates.",
+    riskAreas: [],
+  });
+  const ticketQuestion = "Approve exact morning fixture?";
+  for (const event of [
+    {
+      type: "ticket-drafted",
+      payload: {
+        ticketFile: written.filename,
+        ticketHash: written.hash,
+        ticketVersion: 1,
+        title: written.ticket.title,
+      },
+    },
+    {
+      type: "ticket-presented",
+      payload: {
+        ticketHash: written.hash,
+        questionText: ticketQuestion,
+        questionHash: sha256(ticketQuestion),
+        baseSha: fixtureBase,
+      },
+    },
+    {
+      type: "ticket-approved",
+      payload: {
+        ticketHash: written.hash,
+        questionHash: sha256(ticketQuestion),
+        ownerReply: "yes",
+        baseSha: fixtureBase,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    },
+    {
+      type: "lane-started",
+      payload: { ticketHash: written.hash, baseSha: fixtureBase, worktree: fixtureRepo },
+    },
+  ]) {
+    appendFactoryEvent(state.paths, {
+      ...event,
+      jobId: written.ticket.id,
+      actorTool: "codex",
+      sessionId: state.sessionId,
+    });
+  }
+  writeFileSync(path.join(fixtureRepo, "src", "result.txt"), "reviewed result\n");
+  const harness = runHarnessEvidence(state.paths, {
+    jobId: written.ticket.id,
+    ticketHash: written.hash,
+    label: "Owner acceptance harness",
+    scriptName: "verify-deps",
+    cwd: fixtureRepo,
+  });
   appendFactoryEvent(state.paths, {
-    type: "ticket-approved",
-    jobId: state.jobId,
+    type: "evidence-attached",
+    jobId: written.ticket.id,
     actorTool: "codex",
     sessionId: state.sessionId,
-    payload: {
-      ticketHash: buildFactorySnapshot(state.paths).jobs[0].ticketHash,
-      questionHash: sha256(state.question),
-      ownerReply: "yes",
-      baseSha,
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    payload: harness,
+  });
+  const review = runIndependentReviewEvidence(state.paths, {
+    job: buildFactorySnapshot(state.paths).jobs[0],
+    cwd: fixtureRepo,
+    env: {
+      ...process.env,
+      CRX_FACTORY_TEST_MODE: "1",
+      CRX_FACTORY_TEST_STATE_DIR: state.dir,
     },
   });
   appendFactoryEvent(state.paths, {
-    type: "lane-started",
-    jobId: state.jobId,
+    type: "independent-review-attached",
+    jobId: written.ticket.id,
     actorTool: "codex",
     sessionId: state.sessionId,
-    payload: { ticketHash: buildFactorySnapshot(state.paths).jobs[0].ticketHash, baseSha, worktree: root },
+    payload: review,
   });
   appendFactoryEvent(state.paths, {
     type: "job-stage",
-    jobId: state.jobId,
+    jobId: written.ticket.id,
     actorTool: "codex",
     sessionId: state.sessionId,
-    payload: { stage: "awaiting-morning-review", behaviorSummary: "The behavior proof passed.", blocker: "" },
+    payload: { stage: "awaiting-morning-review", behaviorSummary: "The exact reviewed result is ready.", blocker: "" },
   });
-  const reviewQuestion = `Accept completed job ${state.jobId} for the existing ship gates?`;
+  const reviewedJob = buildFactorySnapshot(state.paths).jobs[0];
+  const reviewQuestion = canonicalMorningReviewQuestion(reviewedJob);
   appendFactoryEvent(state.paths, {
     type: "review-presented",
-    jobId: state.jobId,
+    jobId: written.ticket.id,
     actorTool: "codex",
     sessionId: state.sessionId,
     payload: {
       questionText: reviewQuestion,
       questionHash: sha256(reviewQuestion),
-      baseSha,
+      baseSha: fixtureBase,
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     },
   });
   const transcript = path.join(state.dir, "morning.jsonl");
   writeFileSync(transcript, `${JSON.stringify({ role: "assistant", content: reviewQuestion })}\n`);
+  state.root = fixtureRepo;
   const result = runHook(state, {
     prompt: "approved",
     thread_id: state.sessionId,
     transcript_path: transcript,
   });
   ok(result.stdout.includes("approved to enter the existing /ship landing gates"), "morning acceptance is captured in chat");
-  equal(buildFactorySnapshot(state.paths).jobs[0].stage, "approved-to-land", "morning acceptance does not self-label the job live");
+  const accepted = buildFactorySnapshot(state.paths).jobs[0];
+  equal(accepted.stage, "approved-to-land", "morning acceptance does not self-label the job live");
+  equal(accepted.acceptedRepositoryContentHash, review.repositoryContentHash, "morning acceptance binds the exact independently reviewed repository hash");
+  equal(accepted.acceptedRepositoryFileCount, review.repositoryFileCount, "morning acceptance binds the exact reviewed file count");
 }
 
 console.log(`factory-owner-input: ${assertions} assertions passed`);

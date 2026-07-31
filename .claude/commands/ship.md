@@ -13,7 +13,7 @@ Before any implementation:
 3. Mason's ordinary chat reply is captured by the shared owner-input hook. Start the lane only through `node scripts/factory.mjs lane start`; direct build writes fail closed before that check passes.
 4. Run the existing `/ship` implementation, proof, and independent-review gates. Capture the ticket-approved, fixed-allowlist repository harness through `node scripts/factory.mjs evidence run`; its resolved `origin/main` script body and output are hashed, and copied or self-labeled files alone do not satisfy the proof gate.
 5. Move through `verifying` and `in-review`, then to `awaiting-morning-review` only with a behavior summary and CLI-executed harness proof. Present the morning decision through `node scripts/factory.mjs review present`.
-6. A chat acceptance means `approved-to-land`, not `live`. All ordinary `/ship` commit, push, merge, production, migration, and destructive-action gates still apply.
+6. A chat acceptance means `approved-to-land`, not `live`. It binds the exact reviewed repository fingerprint and retains factory custody through commit, feature push, PR, merge, and the broker-hashed closeout packet. Only the narrow landing commands are available; any drift requires parking, fresh proof, and a newly presented owner decision. All ordinary `/ship` production, migration, and destructive-action gates still apply.
 
 The owner sees only the chat and the read-only Factory Board described in `/fleet`. Commands and state files are agent-facing implementation details.
 

@@ -593,7 +593,20 @@ function hookOutput(result) {
     { type: "ticket-presented", payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: "a".repeat(64), baseSha: "b".repeat(40) } },
     { type: "ticket-approved", payload: { ticketHash: ticket.hash, questionHash: "a".repeat(64), ownerReply: "yes", baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
     { type: "lane-started", payload: { ticketHash: ticket.hash, baseSha: "b".repeat(40), worktree: root } },
-    { type: "job-stage", payload: { stage: "approved-to-land", behaviorSummary: "Proof accepted.", blocker: "" } },
+    { type: "job-stage", payload: { stage: "awaiting-morning-review", behaviorSummary: "Proof accepted.", blocker: "" } },
+    { type: "review-presented", payload: { questionText: "Accept exact result?", questionHash: "c".repeat(64), baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    {
+      type: "job-stage",
+      payload: {
+        stage: "approved-to-land",
+        behaviorSummary: "Proof accepted.",
+        blocker: "",
+        ticketHash: ticket.hash,
+        reviewQuestionHash: "c".repeat(64),
+        acceptedRepositoryContentHash: "d".repeat(64),
+        acceptedRepositoryFileCount: 1,
+      },
+    },
   ]) {
     appendFactoryEvent(paths, {
       ...event,
@@ -607,8 +620,27 @@ function hookOutput(result) {
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "landing.ts") },
   });
-  assertions++;
-  assert.equal(landingWrite.stdout, "", "approved-to-land releases factory custody to the existing ship gates");
+  denied(landingWrite, /only exact-byte.*landing commands/i, "approved-to-land retains custody and blocks post-acceptance source edits");
+  denied(run(laneHook, stateDir, {
+    thread_id: "different-landing-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "landing.ts") },
+  }), /under factory custody/i, "approved-to-land blocks parallel chats until landing completes or the job is parked");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git push origin other-ref:factory-result" },
+  }), /only exact-byte.*landing commands|alternate local refs/i, "approved-to-land rejects pushes sourced from alternate local refs");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "gh pr create -H other-ref" },
+  }), /only exact-byte.*landing commands/i, "approved-to-land rejects the short PR head override alias");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "gh pr create -B release" },
+  }), /only exact-byte.*landing commands/i, "approved-to-land rejects the short PR base override alias");
 }
 
 {

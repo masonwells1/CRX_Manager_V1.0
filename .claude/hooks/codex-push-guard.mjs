@@ -22,9 +22,11 @@ import {
   proofValid,
   pushContextIsAmbiguous,
   pushIsForced,
+  pushTargetsCurrentHead,
   pushUsesBulkMode,
   riskyFiles,
 } from "./codex-push-lib.mjs";
+import { validateApprovedFactoryLanding } from "../../scripts/factory-state-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
 function deny(reason) {
@@ -84,6 +86,15 @@ for (const pushCmd of pushCommands) {
     branch = git(["rev-parse", "--abbrev-ref", "HEAD"], pushRepoDir);
   } catch (error) {
     deny(`CODEX GATE: could not determine the repository/branch selected by this push, so it is denied. ${error?.message || error}`);
+  }
+
+  try {
+    const factoryLanding = validateApprovedFactoryLanding(pushRepoDir, { commitish: "HEAD" });
+    if (factoryLanding.required && !pushTargetsCurrentHead(pushCmd, branch)) {
+      deny("CODEX GATE: a factory-approved landing may push only this checkout's exact current HEAD. Alternate local refs require parking, fresh proof, and a new owner acceptance.");
+    }
+  } catch (error) {
+    deny(`CODEX GATE: factory landing proof no longer matches the pushed bytes (${error.message}). Park the job, rerun evidence and Sol/high review, and re-present Mason's morning decision.`);
   }
 
   const srcRef = mainPushSource(pushCmd, branch);

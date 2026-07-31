@@ -14,12 +14,14 @@ import {
   proofValid,
   pushContextIsAmbiguous,
   pushIsForced,
+  pushTargetsCurrentHead,
   pushUsesBulkMode,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
   riskyFiles,
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
+import { validateApprovedFactoryLanding } from "../../scripts/factory-state-lib.mjs";
 
 const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch)$/i;
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
@@ -490,6 +492,16 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "so the merge cannot be bound to the base it will actually land on and is denied (fail closed)."
     );
   }
+  try {
+    validateApprovedFactoryLanding(repoDir, {
+      commitish: pullRequest.headRefOid,
+      expectedBaseSha: String(pullRequest.baseRefOid),
+    });
+  } catch (error) {
+    return denied(
+      `CODEX PRODUCTION GATE: factory landing proof no longer matches this PR head/base (${error.message}). Park the job, rerun evidence and Sol/high review, and re-present Mason's exact morning decision before merge.`
+    );
+  }
   if (!pullRequestChecksGreen(pullRequest)) {
     return denied(
       "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
@@ -654,6 +666,15 @@ export function evaluateProductionAction({
     if (/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:\s|:)(master|production)(?:\s|$)/i.test(segment) ||
         ((currentBranch === "master" || currentBranch === "production") && /\bgit\b[^\r\n;&|]*\bpush\b/i.test(segment))) {
       return denied("CODEX PRODUCTION GATE: pushes to master/production remain blocked.");
+    }
+
+    try {
+      const factoryLanding = validateApprovedFactoryLanding(pushRepoDir, { commitish: "HEAD" });
+      if (factoryLanding.required && !pushTargetsCurrentHead(segment, currentBranch)) {
+        return denied("CODEX PRODUCTION GATE: a factory-approved landing may push only this checkout's exact current HEAD. Alternate local refs require parking, fresh proof, and a new owner acceptance.");
+      }
+    } catch (error) {
+      return denied(`CODEX PRODUCTION GATE: factory landing proof no longer matches the pushed bytes (${error.message}). Park the job, rerun evidence and Sol/high review, and re-present Mason's morning decision.`);
     }
 
     const sourceRef = mainPushSource(segment, currentBranch);

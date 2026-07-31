@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` at exact-proof freeze: `2fd55fea6ccc83400a68e5d9492a5df24d8a233c`
-State: rebased onto current `origin/main`; tenth Sol/high publication-blocker repair candidate is unpushed
+State: rebased onto current `origin/main`; eleventh Sol/high publication-blocker repair candidate is unpushed
 
 ## Owner-facing result
 
@@ -59,7 +59,7 @@ pipeline remains the delivery engine and all of its landing and production gates
   arbitrary local-file evidence route has been removed. A separate fixed-prompt, read-only Codex run
   must then return one terminal CLEAN verdict bound to the exact base and repository fingerprint;
   branch harness success alone cannot advance the job to morning review.
-- Throughout factory custody—from ticket decision through the morning decision—native edits,
+- Throughout factory custody—from ticket decision through exact landing and closeout—native edits,
   MCP filesystem tools, shell writes/redirection, Git mutations, unknown repository scripts, and
   opaque helper execution from other or fresh chats are denied. The winning lane
   uses structured target-visible edits and read-only shell inspection; opaque shell/helper/MCP process
@@ -73,8 +73,12 @@ pipeline remains the delivery engine and all of its landing and production gates
   A torn final line has a backup-first repair path, and a failed ledger pause creates an emergency hold
   that still blocks lane writes.
 - Morning chat acceptance produces only `approved-to-land`, never `live`.
-- `approved-to-land` releases factory custody so the ordinary `/ship` commit, push, PR, and production
-  guards can run; the factory cannot deadlock its own landing lifecycle.
+- `approved-to-land` records the exact independently reviewed repository hash/file count and retains
+  custody. Only narrow staging, commit, feature-push, PR-read/create, immediate merge, and base-refresh
+  commands remain available. The lane, Claude push/merge guards, and Codex production guard revalidate
+  the accepted fingerprint, ticket scope, original or authoritative merge base, harness artifacts,
+  and Sol/high receipt. Drift or an alternate source ref fails closed and requires parking, fresh
+  proof, and a newly presented owner decision.
 - Live closeout requires an accepted job, a landing commit contained in `origin/main`, a successful
   GitHub `Production` deployment for that exact SHA, HTTP 200 from the fixed canonical app URL, proof
   still bound to the job's immutable original base, and a durable content-hashed packet under
@@ -94,6 +98,8 @@ pipeline remains the delivery engine and all of its landing and production gates
   the job `approved-to-land`; `live` is refused until those exact bytes are committed into
   `origin/main`, then production is rechecked and the packet-containing commit is recorded. An
   already-live retry returns the verified packet, and conflicting landing/packet retries are refused.
+  Landing custody permits that follow-up only when the broker-recorded packet is the sole candidate
+  change and its bytes match the ledger SHA-256.
 - A governed lane cannot edit any trusted writer hook, imported hook library, hook manifest, Codex
   adapter, factory implementation, or npm harness definition. This includes the local Claude settings
   manifest that can disable all hooks, plus in-place and opaque Git shell mutation routes.
@@ -112,9 +118,9 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 322 focused assertions after tenth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 337 focused assertions after eleventh Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
-| contained `npm run build` | PASS — pinned image, no network, 4,235 modules transformed |
+| contained `npm run build` | PASS — pinned image, no network, 4,238 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
 | `npm run typecheck` | PASS |
 | `npm run lint` | PASS |
@@ -321,6 +327,15 @@ recursive force-delete cleanup command.
   guards classify PowerShell item/property/ACL writers and aliases as mutations; and regressions
   cover LF/CRLF read-then-write attempts against governance targets. Fresh exact-commit acceptance
   is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `c74b7c400c0058cafa71f2537522b02ab811e75e` returned `BLOCKERS`: morning acceptance moved a
+  job to `approved-to-land` but released factory custody before commit/push/merge, while the exact
+  byte check ran only during post-merge closeout. The repair records the accepted repository
+  fingerprint in the owner event, retains one-lane custody through landing, and makes commit,
+  feature-push, and both Claude/Codex merge paths revalidate the exact accepted bytes, ticket scope,
+  authoritative base, harness, and Sol/high receipt. Any mismatch requires parking and a new
+  proof/owner decision. The trusted two-phase closeout packet remains landable only as the sole exact
+  broker-hashed follow-up file. Fresh exact-commit acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

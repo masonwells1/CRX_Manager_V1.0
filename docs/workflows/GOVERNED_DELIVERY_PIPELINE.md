@@ -169,8 +169,13 @@ may change Git's commit/tree identifiers while preserving the exact reviewed fil
 file-byte change still invalidates the review. A passing branch-controlled harness without this
 independent verdict cannot reach morning review.
 Morning presentation reruns both harness and independent-review validation and requires the original
-base to remain current after a fresh fetch. Once Mason accepts, factory custody ends and the ordinary
-`/ship` commit/PR guards become authoritative. After landing, closeout validates proof against the
+base to remain current after a fresh fetch. Mason's acceptance records the exact independently
+reviewed repository content hash and file count. Factory custody continues through staging, commit,
+feature push, PR creation, and merge; the lane, Claude push/merge guards, and Codex production guard
+all compare the candidate against that accepted fingerprint, ticket scope, original base, harness
+receipt, and Sol/high review. Only narrow `/ship` landing commands are available. Any source drift,
+alternate-ref push, moved merge base, or mismatched PR head requires the job to be parked, re-proven,
+and presented to Mason again. After landing, closeout validates proof against the
 job's immutable original base, proves that the landing commit is contained in current `origin/main`,
 and computes the commit's own tree/content fingerprint. The landing commit must contain the exact
 bytes that passed the accepted harness. Harness and independent-review artifacts are reopened and
@@ -190,7 +195,9 @@ happens after the packet is created, the next call reuses the byte-identical pac
 record `live` only after the exact packet bytes are committed into `origin/main`; it rechecks the
 exact-SHA deployment and canonical URL first and records the packet-containing commit. Conflicting
 packet or landing retries fail closed; retrying a completed closeout returns the already-recorded
-packet without appending another `live` event.
+packet without appending another `live` event. Landing custody permits that follow-up commit only
+when the sole change from the current landing base is the broker-recorded packet path and its bytes
+match the ledger SHA-256.
 All mutating factory commands use the permit's expected-last-event hash under the same exclusive
 writer lock, so two simultaneous starts or a stale presentation/revision command cannot both pass an
 older snapshot. The CLI and ledger replay independently enforce current session custody and eligible

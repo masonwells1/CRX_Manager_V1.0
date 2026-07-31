@@ -11,6 +11,7 @@ import {
   canonicalTicketApprovalQuestion,
   loadFactorySnapshot,
   mintFactoryCliPermit,
+  validateApprovedFactoryLanding,
   resolveFactoryPaths,
 } from "./factory-state-lib.mjs";
 import {
@@ -321,6 +322,7 @@ assertions++;
 assert.equal(status.stdout.includes(snapshot.jobs[0].ticketHash), false, "status JSON does not expose ticket hashes");
 
 const reviewed = loadFactorySnapshot(paths);
+const acceptedReview = [...reviewed.jobs[0].reviews].reverse().find((item) => item.verdict === "clean");
 appendFactoryEvent(paths, {
   type: "job-stage",
   jobId,
@@ -334,8 +336,21 @@ appendFactoryEvent(paths, {
     ownerDecision: "approve",
     ticketHash: reviewed.jobs[0].ticketHash,
     reviewQuestionHash: reviewed.jobs[0].reviewQuestionHash,
+    acceptedRepositoryContentHash: acceptedReview.repositoryContentHash,
+    acceptedRepositoryFileCount: acceptedReview.repositoryFileCount,
   },
 });
+const approvedLanding = validateApprovedFactoryLanding(fixtureRepo, { paths });
+assertions++;
+assert.equal(approvedLanding.required, true, "owner acceptance activates exact-byte landing custody");
+writeFileSync(path.join(fixtureRepo, "feature.txt"), "drift after owner acceptance\n");
+assertions++;
+assert.throws(
+  () => validateApprovedFactoryLanding(fixtureRepo, { paths }),
+  /bytes changed after Mason accepted/i,
+  "post-acceptance working-tree drift blocks landing",
+);
+writeFileSync(path.join(fixtureRepo, "feature.txt"), "real governed implementation change\n");
 let gitResult = spawnSync("git", ["add", "feature.txt"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
 gitResult = spawnSync("git", [
@@ -344,6 +359,9 @@ gitResult = spawnSync("git", [
   "commit", "-qm", "land real governed change",
 ], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
+const committedLanding = validateApprovedFactoryLanding(fixtureRepo, { paths, commitish: "HEAD" });
+assertions++;
+assert.equal(committedLanding.repository.repositoryContentHash, acceptedReview.repositoryContentHash, "commit retains the exact owner-accepted repository bytes");
 gitResult = spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
 const closeoutArgs = [
@@ -398,6 +416,9 @@ assert.equal(loadFactorySnapshot(paths).jobs[0].stage, "approved-to-land", "pack
 const prematureCloseout = run(closeoutArgs);
 assertions++;
 assert.notEqual(prematureCloseout.status, 0, "closeout refuses live until the exact packet is contained in origin/main");
+const packetWorkingLanding = validateApprovedFactoryLanding(fixtureRepo, { paths });
+assertions++;
+assert.equal(packetWorkingLanding.mode, "closeout-packet", "landing custody permits only the exact broker-generated closeout packet after accepted code lands");
 gitResult = spawnSync("git", ["add", "docs/audits/factory/jobs"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
 gitResult = spawnSync("git", [
@@ -406,6 +427,9 @@ gitResult = spawnSync("git", [
   "commit", "-qm", "land closeout packet",
 ], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
+const packetCommitLanding = validateApprovedFactoryLanding(fixtureRepo, { paths, commitish: "HEAD" });
+assertions++;
+assert.equal(packetCommitLanding.mode, "closeout-packet", "push/merge validation accepts the exact committed closeout packet and no broader drift");
 gitResult = spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
 const closed = run(closeoutArgs);

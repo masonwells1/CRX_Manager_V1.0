@@ -122,6 +122,32 @@ export function pushTargetsMain(cmd, currentBranch) {
   return mainPushSource(cmd, currentBranch) !== null;
 }
 
+// A factory-approved landing may push only the current checkout's exact HEAD.
+// The remote/destination may vary (feature branch first, main only through its
+// separate protected gate), but an alternate local source ref would bypass the
+// repository fingerprint Mason accepted.
+export function pushTargetsCurrentHead(cmd, currentBranch) {
+  const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
+  if (argsText == null || !String(currentBranch || "").trim()) return false;
+  const tokens = splitShellArgs(argsText);
+  if (tokens.some((token) =>
+    token === "--delete"
+    || /^--de\S*$/.test(token)
+    || /^-[A-Za-z]*d[A-Za-z]*$/.test(token)
+    || ["--all", "--branches", "--mirror", "--prune"].includes(token))) {
+    return false;
+  }
+  const positional = tokens.filter((token) => !token.startsWith("-"));
+  const refspecs = positional.slice(1);
+  if (refspecs.length === 0) return true;
+  if (refspecs.length !== 1) return false;
+  const refspec = refspecs[0];
+  const source = (refspec.includes(":") ? refspec.split(":")[0] : refspec)
+    .replace(/^\+/, "")
+    .replace(/^refs\/heads\//, "");
+  return source === "HEAD" || source === String(currentBranch).replace(/^refs\/heads\//, "");
+}
+
 // Any push is forced when it carries a history-rewriting force flag anywhere
 // after `push`, or uses Git's `+<src>:<dst>` force-refspec syntax. This scan is
 // deliberately independent of target resolution: AGENTS.md requires approval

@@ -1,7 +1,7 @@
 # CRX Governed Delivery Pipeline V1
 
 Date: 2026-07-30
-Status: IMPLEMENTED — tenth Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
+Status: IMPLEMENTED — eleventh Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
 Owner: Mason Wells
 Implementation driver: Codex
 Independent reviewer: trusted `gpt-5.6-sol` at high reasoning effort
@@ -30,6 +30,8 @@ Mason never runs commands, edits ticket files, reviews code, or operates a separ
 - The pilot permits one active build lane. Multi-lane dispatch remains disabled until pilot metrics justify it.
 - One read-only local Factory Board shows job title, current plain-English stage, last activity, behavior summary, blocker/owner need, and attached evidence.
 - Approval or rejection of a finished job happens in chat; the board has no write controls.
+- Morning acceptance binds the exact reviewed repository fingerprint and retains custody through
+  commit, feature push, PR, merge, and the broker-hashed closeout packet.
 - Existing `/ship`, review, push, merge, migration, edge-function, deletion, secret, permission, and production gates are preserved.
 - Focused tests, agent-workflow parity tests, board rendering, and an independent `gpt-5.6-sol` high-effort review of the exact candidate pass.
 - Work stops before commit for Mason.
@@ -196,6 +198,8 @@ cannot perform build writes.
     added content;
   - rejects literal CR/LF before shell read classification and treats PowerShell item/property/ACL
     writers and their aliases as mutations;
+  - after morning acceptance, permits only exact-byte landing commands and requires drift to return
+    through fresh proof plus a newly presented owner decision;
   - does not weaken or replace any existing guard.
 - `.claude/hooks/factory-state-integrity-guard.mjs`
   - blocks direct writes, rewrites, deletion, or ad hoc script access to the shared factory state directory;

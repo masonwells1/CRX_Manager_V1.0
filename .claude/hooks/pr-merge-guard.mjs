@@ -37,6 +37,7 @@ import {
   pullRequestChecksGreen,
   riskyFiles,
 } from "./codex-push-lib.mjs";
+import { validateApprovedFactoryLanding } from "../../scripts/factory-state-lib.mjs";
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 
@@ -130,6 +131,14 @@ function gateRequest(request) {
     deny(`PR MERGE GATE: merges into protected branch "${base}" are always blocked.`);
   }
   if (base !== "main") return; // feature-branch merges are not production landings
+  try {
+    validateApprovedFactoryLanding(projectDir, {
+      commitish: pr.headRefOid,
+      expectedBaseSha: String(pr.baseRefOid || ""),
+    });
+  } catch (error) {
+    deny(`PR MERGE GATE: factory landing proof no longer matches this PR head/base (${error.message}). Park the job, rerun evidence and Sol/high review, and re-present Mason's exact morning decision before merge.`);
+  }
 
   // ── green-pipeline requirement ─────────────────────────────────────────────
   // `--auto` defers the merge to GitHub, which itself enforces the required

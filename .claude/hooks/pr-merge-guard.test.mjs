@@ -151,5 +151,9 @@ ok(
   "listWorktreesFromProjectDir actually shells out to `git worktree list --porcelain`",
 );
 ok(!/const\s+stateDir\s*=\s*path\.join\(/.test(guardSource), "the single-directory proof scan that made PR #252 unmergeable has not returned");
+ok(
+  /validateApprovedFactoryLanding\(\s*projectDir\s*,\s*\{[\s\S]{0,220}?commitish:\s*pr\.headRefOid[\s\S]{0,160}?expectedBaseSha:\s*String\(pr\.baseRefOid/.test(guardSource),
+  "main merge binds factory acceptance to GitHub's exact PR head and current base",
+);
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);

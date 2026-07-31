@@ -453,6 +453,15 @@ read-only classification. The lane, shared-state integrity, and production guard
 PowerShell item/property/ACL writers and their common aliases as mutations, with LF and CRLF
 read-then-write regressions pinned against governance targets.
 
+An eleventh exact-SHA Sol/high acceptance found that morning acceptance released factory custody
+before commit, push, and merge, while exact-byte validation happened only during post-merge
+closeout. Morning acceptance now records the exact independently reviewed repository hash and file
+count, and one-lane custody continues through landing. The lane guard, Claude push/merge guards, and
+Codex production guard revalidate the accepted bytes, ticket scope, base, harness, and Sol/high
+receipt at each landing action; alternate refs or drift require parking, fresh proof, and another
+owner decision. The two-phase closeout remains possible only through its one exact broker-generated,
+ledger-hashed packet file.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

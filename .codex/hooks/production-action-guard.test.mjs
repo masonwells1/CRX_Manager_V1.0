@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -12,6 +12,23 @@ const projectRoot = process.cwd();
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
 const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-guard.mjs");
 const tempRoots = [];
+const productionGuardSource = readFileSync(guardPath, "utf8");
+const claudePushGuardSource = readFileSync(claudeGuardPath, "utf8");
+assert.match(
+  productionGuardSource,
+  /validateApprovedFactoryLanding\(\s*repoDir\s*,\s*\{[\s\S]{0,220}?commitish:\s*pullRequest\.headRefOid[\s\S]{0,180}?expectedBaseSha:\s*String\(pullRequest\.baseRefOid\)/,
+  "Codex merge gate binds a factory landing to the exact GitHub head/base",
+);
+assert.match(
+  productionGuardSource,
+  /validateApprovedFactoryLanding\(\s*pushRepoDir\s*,\s*\{\s*commitish:\s*"HEAD"\s*\}\s*\)/,
+  "Codex feature/main pushes revalidate the exact factory-approved HEAD",
+);
+assert.match(
+  claudePushGuardSource,
+  /validateApprovedFactoryLanding\(\s*pushRepoDir\s*,\s*\{\s*commitish:\s*"HEAD"\s*\}\s*\)/,
+  "Claude feature/main pushes revalidate the exact factory-approved HEAD",
+);
 
 function git(cwd, args) {
   const env = { ...process.env };

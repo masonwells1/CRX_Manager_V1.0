@@ -11,7 +11,9 @@ import {
   mintFactoryCliPermit,
   rejectSecretBearingText,
   resolveHookFactoryPaths,
+  validateApprovedFactoryLanding,
 } from "../../scripts/factory-state-lib.mjs";
+import { isGitPush, pushTargetsCurrentHead } from "./codex-push-lib.mjs";
 import { isBuildActionUnderHold } from "./hold-latch-lib.mjs";
 
 function nothing() { process.exit(0); }
@@ -400,6 +402,42 @@ function isActiveLaneShellRead(toolName, toolInput) {
     || /^\s*node(?:\.exe)?\s+--check\s+\S+\s*$/i.test(command);
 }
 
+function approvedLandingShellAction(toolName, toolInput, projectDir) {
+  if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return "";
+  const command = String(toolInput?.command || "").trim();
+  if (!command || /[\r\n;&|<>`$(){}[\]*?!~%]/.test(command)) return "";
+  if (/^git(?:\.exe)?\s+fetch\s+(?:--no-tags\s+)?origin\s+main\s*$/i.test(command)) return "refresh-base";
+  if (/^git(?:\.exe)?\s+add\b/i.test(command)
+      && !/\b(?:--pathspec-from-file|--interactive|--patch)\b|(?:^|\s)-[ip](?:\s|$)/i.test(command)) {
+    return "stage";
+  }
+  if (/^git(?:\.exe)?\s+commit\b/i.test(command)
+      && !/\b(?:--amend|--fixup|--squash|--reuse-message|--no-verify|--pathspec-from-file)\b|(?:^|\s)-(?:c|C|n)(?:\s|$)/.test(command)) {
+    return "commit";
+  }
+  if (isGitPush(command)) {
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: projectDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    }).trim();
+    return pushTargetsCurrentHead(command, branch) ? "push" : "";
+  }
+  if (/^gh(?:\.exe)?\s+pr\s+create\b/i.test(command)
+      && !/(?:^|\s)-(?:H|B)(?:\s|$)/.test(command)
+      && !/\s--body-file(?:=|\s)|\s--head(?:=|\s)(?!HEAD\b)/i.test(command)
+      && !/\s--base(?:=|\s)(?!main\b)/i.test(command)) {
+    return "pr-create";
+  }
+  if (/^gh(?:\.exe)?\s+pr\s+merge(?:\s+\d+)?(?:\s+--(?:squash|merge|rebase|delete-branch))*\s*$/i.test(command)
+      && !/\s--auto\b/i.test(command)) {
+    return "merge";
+  }
+  if (/^gh(?:\.exe)?\s+pr\s+(?:view|checks)(?:\s|$)/i.test(command)) return "pr-read";
+  return "";
+}
+
 let payload;
 try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { nothing(); }
 
@@ -487,8 +525,7 @@ if (!sessionId) nothing();
 const sessionJobs = snapshot.jobs.filter((job) => job.sessionId === sessionId);
 const hasIntent = snapshot.factoryIntentSessions.includes(sessionId);
 const governedJob = sessionJobs.find((job) =>
-  ACTIVE_STAGES.has(job.stage)
-  || ["needs-ticket-ok", "queued", "awaiting-morning-review", "parked"].includes(job.stage),
+  FACTORY_CUSTODY_STAGES.has(job.stage) || job.stage === "parked",
 );
 if (!hasIntent && !governedJob && !intentRecordFailed) nothing();
 if (shellWorkingDirectoryBlock) {
@@ -530,6 +567,25 @@ if (ACTIVE_STAGES.has(governedJob.stage)) {
   }
   if (shellMutation || opaqueExecution || !isActiveLaneShellRead(payload?.tool_name, payload?.tool_input)) {
     deny("CRX FACTORY GATE: direct commands and helper-process execution are disabled inside an active lane. Use structured Write/Edit/apply_patch operations, read-only shell inspection, or the permit-bound factory CLI (including evidence run for fixed harnesses) so every mutation target remains visible to the guards.");
+  }
+  nothing();
+}
+if (governedJob.stage === "approved-to-land") {
+  const landingAction = approvedLandingShellAction(
+    payload?.tool_name,
+    payload?.tool_input,
+    projectDir,
+  );
+  if (!landingAction) {
+    deny(`CRX FACTORY GATE: job ${governedJob.id} is approved to land, so only exact-byte /ship landing commands are available. Source edits, alternate-ref pushes, auto-merge, and other mutations require parking the job, fresh proof, and a new morning acceptance.`);
+  }
+  try {
+    validateApprovedFactoryLanding(projectDir, {
+      paths,
+      commitish: ["push", "pr-create", "merge"].includes(landingAction) ? "HEAD" : "",
+    });
+  } catch (error) {
+    deny(`CRX FACTORY GATE: the accepted landing bytes are no longer valid (${error.message}). Park the job, rerun evidence and Sol/high review, and re-present the exact morning decision before landing.`);
   }
   nothing();
 }

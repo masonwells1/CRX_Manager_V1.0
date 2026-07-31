@@ -42,6 +42,7 @@ export const FACTORY_CUSTODY_STAGES = new Set([
   "queued",
   ...ACTIVE_STAGES,
   "awaiting-morning-review",
+  "approved-to-land",
 ]);
 export const STALE_LOCK_MS = 5 * 60 * 1000;
 export const FACTORY_CLI_PERMIT_TTL_MS = 30 * 1000;
@@ -264,6 +265,11 @@ export function canonicalMorningReviewQuestion(job) {
   const reviews = (job.reviews || [])
     .filter((item) => item.verdict === "clean")
     .map((item) => `- ${item.reviewer}/${item.model}/${item.reasoningEffort}: CLEAN (${item.sha256.slice(0, 12)})`);
+  const exactResult = [...(job.reviews || [])].reverse()
+    .find((item) => item.verdict === "clean"
+      && /^[a-f0-9]{64}$/i.test(String(item.repositoryContentHash || ""))
+      && Number.isInteger(item.repositoryFileCount)
+      && item.repositoryFileCount > 0);
   return [
     `Accept factory job "${job.title}" (${job.id}, ticket ${job.ticketHash.slice(0, 12)}) into the existing /ship landing gates?`,
     "",
@@ -274,6 +280,10 @@ export function canonicalMorningReviewQuestion(job) {
     "",
     "Independent review:",
     ...reviews,
+    "",
+    exactResult
+      ? `Exact reviewed repository result: ${exactResult.repositoryContentHash.slice(0, 16)} across ${exactResult.repositoryFileCount} files.`
+      : "Exact reviewed repository result: unavailable (do not accept).",
     "",
     "This acceptance does not merge, deploy, migrate, change live data, or make the job live.",
     "Reply yes to accept this exact result into /ship, or no/revise to park it?",
@@ -907,6 +917,8 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       closeoutPacket: "",
       closeoutPacketHash: "",
       closeoutCommit: "",
+      acceptedRepositoryContentHash: "",
+      acceptedRepositoryFileCount: 0,
       evidence: [],
       reviews: [],
       lastActivity: event.timestamp,
@@ -945,6 +957,8 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.reviewExpiresAt = "";
         job.behaviorSummary = "";
         job.blocker = "";
+        job.acceptedRepositoryContentHash = "";
+        job.acceptedRepositoryFileCount = 0;
         job.ticketHash = String(event.payload.ticketHash || "");
         job.ticketFile = String(event.payload.ticketFile || "");
         const loaded = readTicket(paths, job.ticketFile);
@@ -1027,6 +1041,23 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         break;
       case "job-stage":
         if (!BOARD_STAGES.has(event.payload.stage)) throw new Error(`Unknown board stage ${event.payload.stage}.`);
+        if (event.payload.stage === "approved-to-land") {
+          if (job.stage !== "awaiting-morning-review"
+              || job.sessionId !== event.sessionId
+              || String(event.payload.ticketHash || "") !== job.ticketHash
+              || String(event.payload.reviewQuestionHash || "") !== job.reviewQuestionHash) {
+            throw new Error(`Morning acceptance for ${job.id} is not bound to its current reviewed ticket and chat.`);
+          }
+          const acceptedHash = String(event.payload.acceptedRepositoryContentHash || "");
+          const acceptedCount = Number(event.payload.acceptedRepositoryFileCount || 0);
+          if (!/^[a-f0-9]{64}$/i.test(acceptedHash)
+              || !Number.isInteger(acceptedCount)
+              || acceptedCount <= 0) {
+            throw new Error(`Morning acceptance for ${job.id} is missing its exact repository fingerprint.`);
+          }
+          job.acceptedRepositoryContentHash = acceptedHash;
+          job.acceptedRepositoryFileCount = acceptedCount;
+        }
         job.stage = event.payload.stage;
         job.behaviorSummary = String(event.payload.behaviorSummary || job.behaviorSummary);
         job.blocker = String(event.payload.blocker || "");
@@ -1217,8 +1248,9 @@ export function validateLaneStart({
   const loaded = readTicket(resolvePathsFromSnapshot(snapshot), job.ticketFile);
   if (loaded.hash !== job.ticketHash) throw new Error("Ticket bytes changed after approval.");
   if (cwd) validateRepositoryScope(job, cwd, { requireCleanBase: true });
-  const active = activeJobs(snapshot).filter((candidate) => candidate.id !== jobId);
-  if (active.length > 0) throw new Error(`Pilot allows one active lane; ${active[0].id} is still ${active[0].stage}.`);
+  const custody = snapshot.jobs.filter((candidate) =>
+    candidate.id !== jobId && FACTORY_CUSTODY_STAGES.has(candidate.stage));
+  if (custody.length > 0) throw new Error(`Pilot allows one custody window; ${custody[0].id} is still ${custody[0].stage}.`);
   return job;
 }
 
@@ -1880,6 +1912,107 @@ export function validateCurrentIndependentReview(job, cwd = FACTORY_ROOT, {
     throw new Error("Independent Codex review file metadata no longer matches the ledger.");
   }
   return accepted;
+}
+
+export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
+  paths = resolveHookFactoryPaths(cwd),
+  commitish = "",
+  expectedBaseSha = "",
+} = {}) {
+  const snapshot = loadFactorySnapshot(paths);
+  const approved = snapshot.jobs.filter((job) => job.stage === "approved-to-land");
+  if (approved.length === 0) return { required: false };
+  if (approved.length !== 1) {
+    throw new Error("Factory landing is blocked because more than one job is approved to land.");
+  }
+  const job = approved[0];
+  const authoritativeBase = expectedBaseSha || currentOriginMain(cwd);
+  if (!/^[a-f0-9]{40}$/i.test(String(authoritativeBase || ""))) {
+    throw new Error("The factory landing base is not an exact commit SHA.");
+  }
+  if (!/^[a-f0-9]{64}$/i.test(String(job.acceptedRepositoryContentHash || ""))
+      || !Number.isInteger(job.acceptedRepositoryFileCount)
+      || job.acceptedRepositoryFileCount <= 0) {
+    throw new Error("Mason's factory acceptance is not bound to an exact repository fingerprint.");
+  }
+  const repository = commitish
+    ? repositoryCommitFingerprint(cwd, commitish)
+    : repositoryContentFingerprint(cwd);
+  if (repository.repositoryContentHash === job.acceptedRepositoryContentHash
+      && repository.repositoryFileCount === job.acceptedRepositoryFileCount) {
+    if (authoritativeBase !== job.baseSha) {
+      throw new Error("origin/main moved after Mason accepted the factory result.");
+    }
+    validateRepositoryScope(job, cwd, { commitish: repository.commitSha || "" });
+    validateCurrentHarnessEvidence(job, cwd, {
+      paths,
+      requireCurrentBase: false,
+      repositoryFingerprint: repository,
+    });
+    validateCurrentIndependentReview(job, cwd, {
+      paths,
+      repositoryFingerprint: repository,
+    });
+    return { required: true, mode: "accepted-result", job, repository };
+  }
+
+  // Closeout is deliberately two-phase: after the accepted code lands and its
+  // production deployment is verified, the trusted broker writes one durable
+  // packet that must itself land. Permit that one extra file without reopening
+  // general edit scope, and continue validating the original accepted bytes.
+  const packet = String(job.closeoutPacket || "").replace(/\\/g, "/");
+  if (!packet
+      || path.isAbsolute(packet)
+      || packet.startsWith("../")
+      || !/^docs\/audits\/factory\/jobs\/[A-Za-z0-9._-]+\.md$/.test(packet)
+      || !/^[a-f0-9]{64}$/i.test(String(job.closeoutPacketHash || ""))
+      || !/^[a-f0-9]{40}$/i.test(String(job.landingCommit || ""))) {
+    throw new Error("Repository bytes changed after Mason accepted the factory result.");
+  }
+  const acceptedLanding = repositoryCommitFingerprint(cwd, job.landingCommit);
+  if (acceptedLanding.repositoryContentHash !== job.acceptedRepositoryContentHash
+      || acceptedLanding.repositoryFileCount !== job.acceptedRepositoryFileCount) {
+    throw new Error("The recorded landing commit no longer matches Mason's accepted repository bytes.");
+  }
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", job.landingCommit, authoritativeBase], {
+      cwd,
+      stdio: "ignore",
+    });
+  } catch {
+    throw new Error("The current landing base does not contain the accepted factory result.");
+  }
+  const packetChanges = changedRepositoryPaths(cwd, authoritativeBase, {
+    commitish: repository.commitSha || "",
+  });
+  if (packetChanges.length !== 1 || packetChanges[0].replace(/\\/g, "/") !== packet) {
+    throw new Error("Closeout landing may change only the exact broker-generated factory packet.");
+  }
+  const packetBytes = repository.commitSha
+    ? execFileSync("git", ["show", `${repository.commitSha}:${packet}`], {
+        cwd,
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+    : readFileSync(path.join(resolveRepoRoot(cwd), packet));
+  if (sha256(packetBytes) !== job.closeoutPacketHash) {
+    throw new Error("The closeout packet bytes no longer match the broker-recorded SHA-256.");
+  }
+  validateCurrentHarnessEvidence(job, cwd, {
+    paths,
+    requireCurrentBase: false,
+    repositoryFingerprint: acceptedLanding,
+  });
+  validateCurrentIndependentReview(job, cwd, {
+    paths,
+    repositoryFingerprint: acceptedLanding,
+  });
+  return {
+    required: true,
+    mode: "closeout-packet",
+    job,
+    repository,
+    acceptedLanding,
+  };
 }
 
 export function setEmergencyFactoryHold(paths, reason) {

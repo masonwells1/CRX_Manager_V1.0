@@ -11,6 +11,7 @@ import {
   mainPushSource,
   pushIsForced,
   pushContextIsAmbiguous,
+  pushTargetsCurrentHead,
   pushUsesBulkMode,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
@@ -29,6 +30,11 @@ assert.equal(mainPushSource("/usr/bin/git push origin HEAD:main", "feature"), "H
 assert.equal(mainPushSource("git -C ../repo push origin release:main", "feature"), "release");
 assert.equal(mainPushSource("git push origin :main", "feature"), "DELETE");
 assert.equal(mainPushSource("git push origin feature", "feature"), null);
+assert.equal(pushTargetsCurrentHead("git push -u origin feature", "feature"), true);
+assert.equal(pushTargetsCurrentHead("git push origin HEAD:factory-result", "feature"), true);
+assert.equal(pushTargetsCurrentHead("git push origin release:factory-result", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin feature other", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin :factory-result", "feature"), false);
 assert.equal(mainPushSource("git push --all origin", "feature"), "main");
 assert.equal(mainPushSource("git push origin --branches", "feature"), "main");
 assert.equal(mainPushSource("git push --mirror origin", "feature"), "main");
