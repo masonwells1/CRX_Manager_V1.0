@@ -508,6 +508,18 @@ main-branch deployment from the governed repository with internally matching Git
 a successful GitHub Production record for that same SHA, and compares that alias-bound SHA to the
 landing commit. A rollback behind the job therefore cannot be labeled `live`.
 
+A sixteenth exact-SHA Sol/high acceptance found that descendant ancestry still allowed a later
+revert to stand in for the accepted behavior, and that high-risk handling trusted the ticket's
+self-declared `riskAreas`. Production proof now requires exact equality to the commit expected in
+each phase: the accepted landing commit before packet preparation, then the sole packet-containing
+closeout commit before `live`. `ahead` is rejected because a revert is still a descendant.
+Ticket drafting automatically requires recognized risk controls for known risky paths, and the
+post-build broker independently classifies exact changed paths plus changed diff content. Money,
+inventory, commission, auth/RLS/permission, lifecycle, idempotency, migration, governance, and
+opaque changes cannot reach review under an underclassified ticket; they must be revised and
+approved again. The Sol prompt now names every CRX red line explicitly and treats ticket labels as
+untrusted rather than as the scope of technical scrutiny.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

@@ -27,6 +27,11 @@ pipeline remains the delivery engine and all of its landing and production gates
   completion conditions, prohibitions, exact allowed repository paths, proof, delivery gate, and any
   high-risk example/forbidden outcome.
   The same session, ticket hash, freshly fetched `origin/main`, and a receipt no older than 24 hours are required.
+- Known risky allowed paths cannot be presented without a recognized risk area, worked business
+  example, and forbidden outcome. After implementation, the broker independently classifies the
+  exact changed path set and changed diff content; money, inventory, commission, auth/RLS/permission,
+  lifecycle, idempotency, migration, governance, and opaque/unscannable changes under a low-risk
+  ticket are parked for revision and fresh owner approval before independent review.
 - The morning question is likewise canonical and includes the exact behavior summary, harness receipts,
   independent-review receipt, ticket hash, and a warning that acceptance is not merge/deploy/live.
 - Qualified yes, side-question yes, missing transcript, cross-session reply, machine prompt, moved base,
@@ -57,7 +62,8 @@ pipeline remains the delivery engine and all of its landing and production gates
   emergency-holds on indirect host mutation, refuses secret-shaped stdout/stderr before persistence,
   and deletes the disposable workspace. Source or test edits after the harness invalidate it. The
   arbitrary local-file evidence route has been removed. A separate fixed-prompt, read-only Codex run
-  must then return one terminal CLEAN verdict bound to the exact base and repository fingerprint;
+  independently enforces the complete CRX red-line set regardless of ticket risk labels and must
+  return one terminal CLEAN verdict bound to the exact base and repository fingerprint;
   branch harness success alone cannot advance the job to morning review.
 - Throughout factory custody—from ticket decision through exact landing and closeout—native edits,
   MCP filesystem tools, shell writes/redirection, Git mutations, unknown repository scripts, and
@@ -89,6 +95,9 @@ pipeline remains the delivery engine and all of its landing and production gates
   commit's content fingerprint must equal the harness-proven bytes; every harness/review artifact is
   reopened and re-hashed; and the packet records approved base, reviewer verdicts, and the
   pre-closeout ledger checkpoint.
+- Production equality is phase-exact, not ancestry-only: packet preparation requires the alias to
+  serve the accepted landing commit, while final `live` recording requires the alias to serve the
+  sole packet-containing closeout commit. A later descendant or revert is not accepted.
 - A chat can clear its recorded factory intent and return to the normal guarded workflow without
   starting a lane or abandoning the chat.
 - Only a real owner chat prompt can resume a global or emergency hold. The agent CLI has no
@@ -121,7 +130,7 @@ pipeline remains the delivery engine and all of its landing and production gates
 
 | Check | Result |
 |---|---|
-| `npm run test:factory` | PASS — 5 files, 364 focused assertions after fifteenth Sol/high blocker remediation |
+| `npm run test:factory` | PASS — 5 files, 373 focused assertions after sixteenth Sol/high blocker remediation |
 | contained `npm run test:factory` | PASS — pinned image, no network, disposable workspace |
 | contained `npm run build` | PASS — pinned image, no network, 4,238 modules transformed |
 | `npm run test:agent-workflows` | PASS — factory tests plus shared hook/workflow/parity checks |
@@ -384,6 +393,14 @@ recursive force-delete cleanup command.
   read-only check resolved `croprxsolutions.app` to Vercel deployment
   `dpl_651MbCbYv4WBeEWB9x3JxCGzAAad` at `2fd55fea6ccc83400a68e5d9492a5df24d8a233c`.
   Fresh exact-commit acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `b882bcd5d4a8fa2b4b3414e526d6cb3ae76010e8` returned `BLOCKERS`: ancestry-only production proof
+  could label a later revert live, and high-risk owner/reviewer controls trusted the ticket's
+  self-declared risk labels. Each closeout phase now requires the alias-bound commit to be exactly
+  the expected landing or packet commit; `ahead` is explicitly rejected. Draft-time path inference
+  and post-build changed-path/diff-content classification force underclassified work back through
+  ticket revision and owner approval. The independent Sol prompt also enforces the full CRX red-line
+  set regardless of ticket labels. Fresh exact-commit acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance

@@ -221,6 +221,7 @@ const RISKY_PATH_RES = [
   /(^|\/)\.codex\/hooks\//i,
   /(^|\/)\.github\/workflows\//i,
   /(^|\/)\.husky\//i,
+  /(^|\/)\.(?:gitattributes|gitmodules)$/i,
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
   /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
@@ -252,7 +253,7 @@ export function riskyFiles(files) {
 // character, so there's no word boundary between "total" and "_cents"). Only
 // the trailing \b is meaningful for that one; the other three are matched as
 // whole identifiers.
-const RISKY_CONTENT_RE = /_cents\b|\bfinancial_audit_log\b|\ballocate_payment\b|\bapply_prepay\b/;
+const RISKY_CONTENT_RE = /_cents\b|\bfinancial_audit_log\b|\ballocate_payment\b|\bapply_prepay\b|\bauth\.uid\s*\(|\bsecurity\s+definer\b|\b(?:rls|row.level.security|policy|grant|permission|idempoten\w*|inventory|commission|lifecycle)\b|\b(?:is_admin|is_sales_rep|is_driver|is_applicator)\s*\(|\.(?:insert|update|upsert|delete|rpc)\s*\(|\b(?:status|stage|lifecycle_state|role|quantity|amount|price|total|balance|profit|margin)\s*(?:===?|!==?|:|=)/i;
 export function contentIsRisky(diffText) {
   return RISKY_CONTENT_RE.test(String(diffText || ""));
 }

@@ -121,7 +121,7 @@ function base64(value) {
   assertions++;
   assert.equal(productionComparisonAccepts("identical"), true, "the exact landing commit is accepted");
   assertions++;
-  assert.equal(productionComparisonAccepts("ahead"), true, "a current deployed descendant is accepted");
+  assert.equal(productionComparisonAccepts("ahead"), false, "a later descendant or revert cannot stand in for the exact expected deployment");
   assertions++;
   assert.throws(
     () => selectCurrentProductionDeployment(deployments, [
@@ -288,6 +288,19 @@ const summaryText = "The supported CLI completed the governed flow.";
 const summaryArgs = ["--summary-base64", base64(summaryText)];
 pass(run(["stage", "--job", jobId, "--stage", "verifying"]), "advance to verification");
 pass(run(["stage", "--job", jobId, "--stage", "in-review"]), "advance to review");
+writeFileSync(
+  path.join(fixtureRepo, "feature.txt"),
+  "await supabase.from('profiles').update({ role: 'admin' });\n",
+);
+pass(
+  run(["evidence", "run", "--job", jobId, "--harness", "verify-deps", "--label", "Underclassified harness"]),
+  "run proof before automatic risk classification",
+);
+const underclassifiedReview = run(["review", "run", "--job", jobId]);
+assertions++;
+assert.notEqual(underclassifiedReview.status, 0, "content-level permission work cannot reach independent review under a low-risk ticket");
+assertions++;
+assert.match(underclassifiedReview.stderr, /automatically high-risk.*underclassified/i, "underclassified work is sent back for ticket revision and owner approval");
 writeFileSync(path.join(fixtureRepo, "feature.txt"), "real governed implementation change\n");
 const arbitrarySummary = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", path.join(fixtureDir, "summary.txt")]);
 assertions++;
@@ -340,9 +353,9 @@ const snapshot = loadFactorySnapshot(paths);
 assertions++;
 assert.equal(snapshot.jobs[0].stage, "awaiting-morning-review");
 assertions++;
-assert.equal(snapshot.jobs[0].evidence.length, 1);
+assert.equal(snapshot.jobs[0].evidence.length, 2);
 assertions++;
-assert.equal(snapshot.jobs[0].evidence.filter((item) => item.verified).length, 1);
+assert.equal(snapshot.jobs[0].evidence.filter((item) => item.verified).length, 2);
 assertions++;
 assert.equal(snapshot.jobs[0].reviews.filter((item) => item.verdict === "clean").length, 1);
 assertions++;
@@ -539,6 +552,12 @@ assertions++;
 assert.equal(existsSync(JSON.parse(closed.stdout).closeoutPacket), true, "closeout writes a durable packet");
 assertions++;
 assert.match(live.jobs[0].closeoutCommit, /^[a-f0-9]{40}$/, "live state records the commit containing the closeout packet");
+assertions++;
+assert.equal(
+  live.jobs[0].productionVerification.deployedCommit,
+  live.jobs[0].closeoutCommit,
+  "final live attestation requires the exact packet-containing closeout commit at the production alias",
+);
 const repeatedCloseout = run(closeoutArgs);
 pass(repeatedCloseout, "repeat an already successful closeout");
 assertions++;

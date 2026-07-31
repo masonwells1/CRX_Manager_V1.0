@@ -275,15 +275,24 @@ export function selectCurrentProductionDeployment(deployments, statuses, deploye
 }
 
 export function productionComparisonAccepts(status) {
-  return ["ahead", "identical"].includes(String(status || "").toLowerCase());
+  return String(status || "").toLowerCase() === "identical";
 }
 
-async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
+async function verifyProductionLanding({
+  cwd,
+  landingCommit,
+  expectedDeploymentCommit = landingCommit,
+  paths,
+  env,
+}) {
+  if (!/^[a-f0-9]{40}$/i.test(String(expectedDeploymentCommit || ""))) {
+    throw new Error("Production verification requires the exact commit expected at the canonical alias.");
+  }
   if (isIsolatedFactoryTest(paths, env)) {
     return {
       repository: FACTORY_GITHUB_REPOSITORY,
       landingCommit,
-      deployedCommit: landingCommit,
+      deployedCommit: expectedDeploymentCommit,
       deploymentId: 1,
       deploymentStatusId: 1,
       deploymentState: "success",
@@ -357,7 +366,7 @@ async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
   try {
     comparison = JSON.parse(execFileSync(fixedGitHubExecutable(), [
       "api",
-      `repos/${FACTORY_GITHUB_REPOSITORY}/compare/${landingCommit}...${accepted.deployment.sha}`,
+      `repos/${FACTORY_GITHUB_REPOSITORY}/compare/${expectedDeploymentCommit}...${accepted.deployment.sha}`,
     ], {
       cwd,
       encoding: "utf8",
@@ -365,10 +374,10 @@ async function verifyProductionLanding({ cwd, landingCommit, paths, env }) {
       timeout: 30_000,
     }));
   } catch {
-    throw new Error("Could not prove that the current Production deployment contains the landing commit.");
+    throw new Error("Could not compare the canonical production deployment to the exact expected commit.");
   }
   if (!productionComparisonAccepts(comparison?.status)) {
-    throw new Error("The current Production deployment is not the landing commit or a proven descendant.");
+    throw new Error("The canonical production alias is not serving the exact expected commit; descendants and reverts do not qualify.");
   }
   let response;
   try {
@@ -774,6 +783,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       const productionVerification = await verifyProductionLanding({
         cwd,
         landingCommit,
+        expectedDeploymentCommit: closeoutCommit,
         paths,
         env,
       });
@@ -831,7 +841,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       `- GitHub repository: \`${productionVerification.repository}\``,
       `- Vercel deployment currently attached to the canonical alias: \`${productionVerification.vercelDeploymentId}\``,
       `- Matching GitHub Production deployment: \`${productionVerification.deploymentId}\``,
-      `- Alias-bound deployed commit: \`${productionVerification.deployedCommit}\` (landing or proven descendant)`,
+      `- Alias-bound deployed commit: \`${productionVerification.deployedCommit}\` (exact expected commit for this closeout phase)`,
       `- Deployment status: \`${productionVerification.deploymentState}\` (status \`${productionVerification.deploymentStatusId}\`)`,
       `- Canonical URL: ${productionVerification.productionUrl}`,
       `- Canonical URL response: HTTP ${productionVerification.httpStatus}`,

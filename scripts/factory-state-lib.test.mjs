@@ -21,6 +21,7 @@ import {
   canonicalJson,
   consumeFactoryCliPermit,
   FACTORY_REVIEW_TOKEN,
+  factoryChangeRequiresHighRiskControls,
   factoryIndependentReviewPrompt,
   factoryReviewVerdict,
   independentReviewerEnvironment,
@@ -148,6 +149,23 @@ function ticket(id = "factory-test-1", overrides = {}) {
   });
   ok(reviewPrompt.includes(canonicalJson(normalizedTicket)), "independent reviewer receives the complete canonical approved ticket unchanged");
   ok(reviewPrompt.includes(ticketHash(normalizedTicket)), "independent reviewer receives the exact approved ticket hash");
+  ok(reviewPrompt.includes("Do not trust the ticket's riskAreas as complete"), "independent reviewer enforces CRX red lines independently of ticket labels");
+  ok(
+    factoryChangeRequiresHighRiskControls(
+      ["src/components/Feature.tsx"],
+      "await supabase.from('profiles').update({ role: 'admin' })",
+    ),
+    "content-level permission writes are automatically high-risk even under an ordinary path",
+  );
+  eq(
+    factoryChangeRequiresHighRiskControls(["src/components/EmptyState.tsx"], "render an empty state"),
+    false,
+    "ordinary UI prose is not automatically high-risk",
+  );
+  ok(
+    factoryChangeRequiresHighRiskControls([".gitattributes"], "*.ts binary"),
+    "Git attribute changes cannot hide content from automatic risk classification",
+  );
   const reviewerEnv = independentReviewerEnvironment({
     ...process.env,
     OPENAI_API_KEY: "must-not-pass",
@@ -170,6 +188,16 @@ function ticket(id = "factory-test-1", overrides = {}) {
     () => normalizeTicket(ticket("escaping-ticket", { allowedPaths: ["../outside"] })),
     /literal repository-relative/,
     "ticket path scope rejects traversal",
+  );
+  throws(
+    () => normalizeTicket(ticket("underclassified-migration", {
+      allowedPaths: ["supabase/migrations/"],
+      riskAreas: [],
+      businessExample: "",
+      forbiddenOutcome: "",
+    })),
+    /riskAreas must declare/i,
+    "high-risk allowed paths cannot be approved under a self-declared low-risk ticket",
   );
 }
 

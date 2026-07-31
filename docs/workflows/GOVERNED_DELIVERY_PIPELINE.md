@@ -136,6 +136,12 @@ fingerprint before the ticket or morning decision is re-presented there.
   ledger append fails, build writes and mutating factory commands stay blocked until recovery and
   successful owner-prompt re-submit clears the latch. The owner text is secret-scanned before any
   persistence; the latch stores only its SHA-256 and rejection flag, never the raw prompt.
+- Ticket risk is not trusted as an agent-supplied label. Known risky allowed paths require a
+  recognized risk area, worked business example, and forbidden outcome before presentation. After
+  implementation, the broker independently classifies exact changed paths and changed diff content
+  for money, inventory, commission, auth/RLS/permissions, lifecycle, idempotency, migration,
+  protected-governance, and opaque/unscannable changes. An underclassified result cannot run the
+  independent review; it must be parked, revised, and approved again.
 - Governed Git reads cannot redirect to another checkout with `git -C`; shell-read operands are
   individually checked for containment, ignored/secret paths, and symlink escape. Exact repository
   fingerprints bind Git mode and object type as well as path and blob bytes.
@@ -145,9 +151,11 @@ fingerprint before the ticket or morning decision is re-presented there.
 - A job becomes `live` only when authenticated Vercel inspection resolves the deployment currently
   attached to the fixed canonical production alias, that deployment is `READY`, its Git source is
   the governed repository's exact `main` commit, and a matching GitHub Production deployment has a
-  newest status of `success`. GitHub compare must prove the alias-bound SHA is the recorded landing
-  commit or a descendant. A Vercel alias rollback therefore fails closed even if a newer historical
-  GitHub deployment remains successful and the canonical URL still returns HTTP 200.
+  newest status of `success`. GitHub compare must report `identical` against the exact commit
+  expected in that phase: the accepted landing commit while preparing the packet, then the
+  packet-only closeout commit while recording `live`. Descendants never substitute because a later
+  revert is still a descendant. A Vercel alias rollback therefore fails closed even if a newer
+  historical GitHub deployment remains successful and the canonical URL still returns HTTP 200.
 - The board binds only to loopback and is read-only.
 - A global hold clears only on an unambiguous affirmative owner resume/restart phrase; negated
   phrases such as “do not resume” leave the hold active.
@@ -173,7 +181,9 @@ disposable workspace, emergency-holds on detected indirect host mutation, and re
 harness output before it can become a Board artifact. It rechecks the repository fingerprint before
 morning review and closeout, so later source or test edits invalidate stale proof. A separate trusted
 Codex executable then performs a fixed-prompt, read-only review. The prompt includes the complete
-canonical approved ticket and its hash. The process receives only a small operating-system/tool-path
+canonical approved ticket and its hash, but treats the ticket's risk labels as incomplete and
+independently enforces every CRX money, inventory, auth/RLS/permission, lifecycle, idempotency,
+migration, secret, and production red line. The process receives only a small operating-system/tool-path
 environment allowlist, not inherited API, Supabase, GitHub, or application credentials. It runs
 ephemerally with user plugins/MCP configuration disabled and explicit `gpt-5.6-sol` / high reasoning.
 Its unique
@@ -199,8 +209,9 @@ The CLI has no arbitrary
 local-file evidence route. Production verification is performed by the trusted broker: authenticated
 Vercel metadata must bind the canonical alias to a `READY` deployment from this repository's exact
 `main` SHA, GitHub must report a successful `Production` deployment for that same alias-bound SHA,
-GitHub compare must prove landing ancestry, and the fixed canonical app URL must answer HTTP 200
-without a redirect. Caller-supplied production prose is neither accepted nor persisted. The
+GitHub compare must prove exact equality to the commit expected for the current closeout phase, and
+the fixed canonical app URL must answer HTTP 200 without a redirect. Caller-supplied production prose
+is neither accepted nor persisted. The
 persistence scan still covers every ticket and ledger payload, including raw JWT/Supabase-key
 shapes and common GitHub, AWS, Google, Slack, Stripe, named-password, API-key, and access-token forms.
 
