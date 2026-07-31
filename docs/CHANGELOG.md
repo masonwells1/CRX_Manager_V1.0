@@ -2,6 +2,14 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-30 — Private-memory backup rejects Git URL rewrites
+
+The Claude-memory backup now refuses local, global, and inherited
+`url.*.insteadOf` / `url.*.pushInsteadOf` settings before writing into the
+private backup clone. These settings can make Git push somewhere other than
+the verified remote URL. Regression coverage preserves the ordinary
+private-backup path after all rewrites are cleared.
+
 ## 2026-07-30 — AP accounting-period boundary hardening applied live
 
 The three remaining vendor-AP mutations now join the same accounting-month

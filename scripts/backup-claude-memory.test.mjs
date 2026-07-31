@@ -306,6 +306,83 @@ try {
       "staging into the private backup clone is allowed even though the files are tracked there",
     );
 
+    // ── round 26: Git can rewrite a verified URL immediately before push ─────
+    // `git remote -v` keeps showing the approved private repository, while these
+    // settings cause the later push to use a different address. Cover all three
+    // configuration sources the real process can inherit.
+    {
+      const localKey = "url.https://example.invalid/local/.pushInsteadOf";
+      const localDest = path.join(backupRepo, "claude-memory-local-url-rewrite");
+      try {
+        assert.equal(
+          spawnSync(
+            "git",
+            ["-C", backupRepo, "config", "--local", localKey, "https://github.com/masonwells1/CRX_Backups.git"],
+            { encoding: "utf8", env: cleanEnv },
+          ).status,
+          0,
+          "test fixture: could not set the local URL rewrite",
+        );
+        const run = captured(() => stage(localDest, notes));
+        eq(run.value, 1, "a local pushInsteadOf rewrite is refused");
+        ok(/URL rewrite settings are active/.test(run.said), "and the refusal explains the hidden redirect");
+        ok(!readdirSafe(localDest), "and the local rewrite is refused before anything is written");
+      } finally {
+        spawnSync("git", ["-C", backupRepo, "config", "--local", "--unset-all", localKey], {
+          encoding: "utf8", env: cleanEnv,
+        });
+      }
+    }
+    {
+      const globalFile = path.join(root, "round-26-global.gitconfig");
+      const globalKey = "url.https://example.invalid/global/.insteadOf";
+      const previous = process.env.GIT_CONFIG_GLOBAL;
+      try {
+        assert.equal(
+          spawnSync(
+            "git",
+            ["config", "--file", globalFile, globalKey, "https://github.com/masonwells1/CRX_Backups.git"],
+            { encoding: "utf8", env: cleanEnv },
+          ).status,
+          0,
+          "test fixture: could not set the isolated global URL rewrite",
+        );
+        process.env.GIT_CONFIG_GLOBAL = globalFile;
+        const dest = path.join(backupRepo, "claude-memory-global-url-rewrite");
+        const run = captured(() => stage(dest, notes));
+        eq(run.value, 1, "a global insteadOf rewrite is refused");
+        ok(!readdirSafe(dest), "and the global rewrite is refused before anything is written");
+      } finally {
+        if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = previous;
+      }
+    }
+    {
+      const previous = new Map(
+        ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]
+          .map((name) => [name, process.env[name]]),
+      );
+      try {
+        process.env.GIT_CONFIG_COUNT = "1";
+        process.env.GIT_CONFIG_KEY_0 = "url.https://example.invalid/inherited/.pushInsteadOf";
+        process.env.GIT_CONFIG_VALUE_0 = "https://github.com/masonwells1/CRX_Backups.git";
+        const dest = path.join(backupRepo, "claude-memory-inherited-url-rewrite");
+        const run = captured(() => stage(dest, notes));
+        eq(run.value, 1, "an inherited pushInsteadOf rewrite is refused");
+        ok(!readdirSafe(dest), "and the inherited rewrite is refused before anything is written");
+      } finally {
+        for (const [name, value] of previous) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+    }
+    eq(
+      quiet(() => stage(path.join(backupRepo, "claude-memory-url-rewrite-cleared"), notes)),
+      0,
+      "clearing every URL rewrite restores the ordinary private-backup path",
+    );
+
     // A plain directory outside any repo is unaffected.
     eq(quiet(() => stage(path.join(root, "plain-destination"), notes)), 0, "a destination outside any repo still works");
 

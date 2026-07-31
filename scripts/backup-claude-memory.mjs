@@ -307,6 +307,13 @@ export function backupUrlUsesApprovedGitHubTransport(url) {
     || /^git@github\.com:/i.test(text);
 }
 
+export function gitUrlRewriteSettings(configOutput) {
+  return String(configOutput ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.split("=", 1)[0].trim().toLowerCase())
+    .filter((key) => /^url\..+\.(?:push)?insteadof$/.test(key));
+}
+
 // `verb` only shapes the refusal wording. `--verify` runs this same check in the
 // snapshot's FINAL location, because that is the directory the runbook commits and
 // pushes from, and until round fifteen nothing checked it: the documented flow
@@ -364,6 +371,25 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
     .filter((line) => /\(push\)\s*$/.test(line))
     .map((line) => line.trim().split(/\s+/)[1] || "")
     .filter(Boolean);
+  const configList = git(["config", "--list"]);
+  if (configList.status !== 0) {
+    return (
+      `FAIL: refusing to ${verb} — git could not enumerate the configuration that controls\n` +
+      `      this checkout's push destination. Without that answer, the printed remote URL is\n` +
+      `      not proof of where the private notes would go. Fix \`git config --list\` and re-run.\n` +
+      `      Nothing was written.`
+    );
+  }
+  const urlRewrites = gitUrlRewriteSettings(configList.stdout);
+  if (urlRewrites.length > 0) {
+    return (
+      `FAIL: refusing to ${verb} — Git URL rewrite settings are active\n` +
+      `      (${urlRewrites.join(", ")}). \`url.*.insteadOf\` and \`url.*.pushInsteadOf\` can\n` +
+      `      silently replace the verified private-backup address when the runbook pushes.\n` +
+      `      Remove those settings from the local, global, or inherited Git configuration and\n` +
+      `      re-run. Nothing was written.`
+    );
+  }
 
   // A remote URL can carry a credential (`https://<token>@github.com/...`), and
   // canonical identity deliberately ignores it — so a token-bearing URL was
@@ -477,7 +503,7 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
         `      re-run. Nothing was written.`
       );
     }
-    const namedPrograms = executableTransportSettings(String(git(["config", "--list"]).stdout || ""));
+    const namedPrograms = executableTransportSettings(configList.stdout);
     if (namedPrograms.length > 0) {
       return (
         `FAIL: refusing to ${verb} — this checkout configures git settings that name a program to\n` +
