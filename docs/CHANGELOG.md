@@ -22,6 +22,12 @@ now compares the parsed push list and arguments before and after shell unwrappin
 refuses `HEAD:ma"in"` and `git push harmless && git p"us"h --force ...`, while preserving ordinary
 whole-argument quoting such as `git push "origin" "HEAD:main"`.
 
+A second exact-head proof found that Git's URL rewriting also substitutes partial path text, not
+only complete owner/repository segments. A base ending in `masonwells1/CRX_` plus the destination
+suffix `Manager_V1.0.git` therefore reached production while the guard treated it as unrelated.
+The rewrite classifier now follows those raw-prefix semantics, with helper and full-hook regression
+tests proving the partial repository-name form is gated.
+
 ## 2026-07-30 — two push guards were blocking pushes they had already cleared
 
 Backing up the agent memory ran into both of them, one after the other. Neither was catching a real

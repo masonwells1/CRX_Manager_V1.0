@@ -617,6 +617,11 @@ assert.equal(
   "an owner-level prefix rewrite reaches production",
 );
 assert.equal(
+  rewritesReachGuardedApp("url.git@github.com:masonwells1/CRX_.insteadof crx:"),
+  true,
+  "a partial repository-name prefix reaches production because git substitutes raw prefixes",
+);
+assert.equal(
   rewritesReachGuardedApp("url.https://github.com/masonwells1/.pushinsteadof ghm:"),
   true,
   "the https spelling of the same prefix too",
@@ -1318,6 +1323,19 @@ assert.equal(pushDestinationToken("git push"), null);
       }
     }
     assert.equal(runHook(push).decision, "allow", "and unsetting them restores an ordinary push");
+
+    // Git substitutes insteadOf as raw text, not path segments. The configured
+    // base plus the suffix of this destination becomes the production URL.
+    // Exercise the actual hook so its effective-URL lookup, not only the helper,
+    // must see the completed repository name.
+    try {
+      git(["config", "url.git@github.com:masonwells1/CRX_.insteadOf", "crx:"], work);
+      const partialRewrite = runHook(`git -C ${work} push crx:Manager_V1.0.git HEAD:main`);
+      assert.equal(partialRewrite.decision, "deny", "a partial repository-name rewrite is gated end-to-end");
+      assert.match(partialRewrite.reason, /CODEX GATE/, "the actual hook explains the production gate");
+    } finally {
+      git(["config", "--unset-all", "url.git@github.com:masonwells1/CRX_.insteadOf"], work);
+    }
 
     // Controls: the guard must not have become a blanket denier. Both of these
     // run all the way through the destination lookups against the scratch repo.

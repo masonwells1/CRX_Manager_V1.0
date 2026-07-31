@@ -950,7 +950,11 @@ function rewriteBaseReachesGuardedApp(rawBase) {
   // Path, not host — an aliased base (`github-crx:masonwells1/`) rewrites to the
   // production repo exactly like `git@github.com:masonwells1/` does.
   const p = idPath(id);
-  return p !== "" && (p === GUARDED_REPO_PATH || GUARDED_REPO_PATH.startsWith(`${p}/`));
+  // Git substitutes raw prefixes, not path segments. That means both an owner
+  // prefix (`.../masonwells1/`) and a partial repository name
+  // (`.../masonwells1/CRX_`) can be completed by the destination's suffix.
+  // Classify any non-empty canonical path prefix of the guarded repository.
+  return p !== "" && GUARDED_REPO_PATH.startsWith(p);
 }
 
 // A push can also be risky by CONTENT even when no file's PATH matches the
