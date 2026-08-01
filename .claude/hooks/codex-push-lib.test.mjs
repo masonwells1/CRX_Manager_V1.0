@@ -309,7 +309,8 @@ assert.equal(pushDestinationToken("git push -u origin main"), "origin");
 assert.equal(pushDestinationToken("git push -o ci.skip origin main"), "origin");
 assert.equal(pushDestinationToken("git push --push-option=ci.skip origin main"), "origin");
 assert.equal(pushDestinationToken("git push --receive-pack /usr/bin/rp origin main"), "origin");
-// `--repo=<url>` names the destination even with a positional present.
+// `--repo=<url>` and `--repo <url>` name the destination when no positional
+// destination is present. A positional destination wins in the cases below.
 assert.equal(pushDestinationToken("git push --repo=git@github.com:masonwells1/CRX_Manager_V1.0.git"), "git@github.com:masonwells1/CRX_Manager_V1.0.git");
 assert.equal(pushDestinationToken("git push --repo git@github.com:masonwells1/CRX_Backups.git"), "git@github.com:masonwells1/CRX_Backups.git");
 

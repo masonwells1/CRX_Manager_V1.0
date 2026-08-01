@@ -50,6 +50,7 @@ import {
   canonicalRepoId,
   environmentCarriesTransportOverride,
   executableTransportSettings,
+  gitUrlRewriteSettings,
   urlUsesUnknownTransport,
 } from "../.claude/hooks/codex-push-lib.mjs";
 import os from "node:os";
@@ -332,13 +333,6 @@ export function redactUrl(url) {
 export function backupUrlUsesApprovedGitHubTransport(url) {
   const text = String(url ?? "").trim();
   return /^https:\/\/github\.com\//i.test(text);
-}
-
-export function gitUrlRewriteSettings(configOutput) {
-  return String(configOutput ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.split("=", 1)[0].trim().toLowerCase())
-    .filter((key) => /^url\..+\.(?:push)?insteadof$/.test(key));
 }
 
 // `verb` only shapes the refusal wording. `--verify` runs this same check in the

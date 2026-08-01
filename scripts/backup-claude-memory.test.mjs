@@ -778,10 +778,8 @@ try {
     eq(quiet(() => stage(dest, before)), 0, "the first snapshot stages cleanly");
     eq(quiet(() => verify(dest)), 0, "and verifies");
 
-    // `zz-crash.md` sorts last, so the earlier notes are already overwritten by
-    // the time the copy hits it — a genuine mid-run failure, not a pre-flight one.
-    // Making the destination path a DIRECTORY is the portable way to force the
-    // write to throw.
+    // An unexpected directory is rejected while the previous snapshot is
+    // verified during preflight, before staging overwrites any existing note.
     mkdirSync(path.join(dest, "zz-crash.md"), { recursive: true });
     const after = makeSource("interrupted-source-b", {
       [INDEX_FILE]: "# index\n- two\n",
@@ -865,13 +863,15 @@ try {
 
     const outsideDir = fresh("hardlink-outside");
     const outside = path.join(outsideDir, "unrelated-public-file.md");
-    writeFileSync(outside, "do not overwrite me\n");
+    writeFileSync(outside, "new private note\n");
     unlinkSync(path.join(dest, "a.md"));
     linkSync(outside, path.join(dest, "a.md"));
 
-    eq(quiet(() => stage(dest, notes)), 1, "staging refuses an existing hard-linked note");
+    const hardLinkRun = captured(() => stage(dest, notes));
+    eq(hardLinkRun.value, 1, "staging refuses an existing hard-linked note");
+    ok(/multiple hard links/i.test(hardLinkRun.said), "the refusal names the multiple-hard-link hazard");
     eq(
-      readFileSync(outside, "utf8"), "do not overwrite me\n",
+      readFileSync(outside, "utf8"), "new private note\n",
       "and the other hard-link name remains untouched",
     );
 
@@ -1079,7 +1079,7 @@ try {
   // answered about compared to the expected one.
   {
     const spec = ghProbeCommand({ GH_HOST: "ghe.example.com", GITHUB_HOST: "ghe.example.com", PATH: "/usr/bin" });
-    ok(spec.args.includes("https://github.com/masonwells1/CRX_Backups"), "the probe asks about a full github.com URL");
+    eq(spec.args[2], "https://github.com/masonwells1/CRX_Backups", "the probe asks about the exact full github.com URL");
     ok(!spec.args.some((a) => /^masonwells1\//.test(a)), "never a bare owner/repo, which GH_HOST would redirect");
     eq(spec.env.GH_HOST, undefined, "GH_HOST is stripped from the child environment");
     eq(spec.env.GITHUB_HOST, undefined, "and GITHUB_HOST");
@@ -1089,7 +1089,7 @@ try {
     const remoteSpec = remoteReadCommand("repos/masonwells1/CRX_Backups/contents/claude-memory", false, {
       GH_HOST: "ghe.example.com", GITHUB_HOST: "ghe.example.com", PATH: "/usr/bin",
     });
-    ok(remoteSpec.args.includes("github.com"), "remote byte verification pins github.com explicitly");
+    eq(remoteSpec.args[2], "github.com", "remote byte verification pins github.com explicitly");
     eq(remoteSpec.env.GH_HOST, undefined, "remote verification also strips GH_HOST");
     eq(remoteSpec.env.GITHUB_HOST, undefined, "and GITHUB_HOST");
 
@@ -1162,6 +1162,12 @@ try {
     ok(/OK: 3 files match/.test(result.stdout), "CLI --verify reports the file count");
     const bad = spawnSync(process.execPath, [SCRIPT, "--verify", path.join(root, "bogus-empty-manifest")], { encoding: "utf8" });
     eq(bad.status, 1, "CLI --verify exits 1 on the empty-manifest directory");
+    const flagAsValue = spawnSync(process.execPath, [SCRIPT, "--stage", "--source", "x"], { encoding: "utf8" });
+    eq(flagAsValue.status, 2, "CLI rejects a flag-shaped --stage value with usage status 2");
+    const missingVerify = spawnSync(process.execPath, [SCRIPT, "--verify"], { encoding: "utf8" });
+    eq(missingVerify.status, 2, "CLI rejects a missing --verify directory with usage status 2");
+    const twoOperations = spawnSync(process.execPath, [SCRIPT, "--stage", staged, "--verify", staged], { encoding: "utf8" });
+    eq(twoOperations.status, 2, "CLI rejects two operations with usage status 2");
   }
 
   console.log(`OK - backup-claude-memory checks passed (${pass} assertions).`);

@@ -141,7 +141,11 @@ try {
   const cleanExecEnv = { ...process.env };
   delete cleanExecEnv.GIT_EXEC_PATH;
   trustedGitExecPath = execFileSync("git", ["--exec-path"], {
-    encoding: "utf8", env: cleanExecEnv, windowsHide: true,
+    encoding: "utf8",
+    env: cleanExecEnv,
+    windowsHide: true,
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "ignore"],
   }).trim();
 } catch { /* fail closed below when GIT_EXEC_PATH is present */ }
 const inheritedTransport = environmentCarriesTransportOverride(process.env, trustedGitExecPath);

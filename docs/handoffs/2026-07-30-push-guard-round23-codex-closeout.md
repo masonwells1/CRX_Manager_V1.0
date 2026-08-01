@@ -1,49 +1,36 @@
 # Handoff: close out the push-guard review loop (PR #289)
 
-**Status:** PARKED at round 23. Three HIGH findings open. No Codex proof exists, so the merge gate
-correctly refuses PR #289.
+**Status:** COMPLETE. All round-23 HIGH findings are closed, the exact-head Codex proof returned
+CLEAN, and commit `5e022b64` was pushed to PR #289. GitHub review follow-ups are recorded in later
+commits on the same PR.
 
 **Worktree:** `C:\Users\mason\.claude\worktrees\secdef-pricing-guard\CRX_Manager`
-**Branch:** `claude/claude-memory-ignore-and-offsite-20260729` — 26 commits ahead of its own remote,
-unpushed. Working tree clean.
+**Branch:** `claude/claude-memory-ignore-and-offsite-20260729`
 **PR:** https://github.com/masonwells1/CRX_Manager_V1.0/pull/289
 
-## Why this is parked rather than fixed
+## Closeout
 
-Rounds 16–23 are eight consecutive review rounds on the *review tooling itself* — the push guard and
-the off-site memory backup. Every round's findings are real and every round's fixes are proven and
-mutation-tested, but each fix adds surface for the next review, so the loop has not converged. It
-was stopped deliberately, not because a fix failed. Nothing here touches the CRX Manager app: the
-branch contains no SQL, migration, `src/`, money, RLS, or lifecycle changes (Codex confirmed this in
-rounds 22 and 23).
+Rounds 16–23 hardened the push guard and off-site memory backup without touching CRX application
+code, SQL, migrations, money, RLS, or lifecycle behavior. Every security predicate was regression-
+and mutation-tested, and the real hook and backup paths were exercised before the exact-head proof.
 
-## The three open findings (Codex round 23, verbatim substance)
+## The three round-23 findings — closed
 
-1. **HIGH — backup destination verification accepts non-GitHub transports.**
-   `BUILTIN_TRANSPORT_SCHEMES` in `.claude/hooks/codex-push-lib.mjs` trusts `file`, `http` and `git`.
-   `file://github.com/masonwells1/CRX_Backups.git` therefore canonicalizes to the approved private
-   backup repo and passes `destinationIsPublishable()` in `scripts/backup-claude-memory.mjs`, while
-   actually naming a filesystem/UNC path. Fix direction Codex gave: the *backup* path should require
-   an explicit GitHub HTTPS/SSH form rather than reuse the push guard's broader scheme list. Note the
-   two callers want different strictness — a local bare repo is a legitimate push destination, but
-   never a legitimate backup destination.
+1. **CLOSED — backup destination transport.** `backupUrlUsesApprovedGitHubTransport()` now requires
+   explicit GitHub HTTPS for the backup path. Local, `file:`, `git:`, plain HTTP, SSH-rewritten, and
+   unknown transports remain unavailable to the backup even where the general push guard permits a
+   local repository.
 
-2. **HIGH — PowerShell/bash backslash-splicing bypasses the whole guard.**
-   ``git pu`sh …`` executes as `git push` in PowerShell, but both `isGitPush()` and
-   `pushHiddenByShellComposition()` return false, so `codex-push-guard.mjs` exits before every check.
-   `pushHiddenByShellComposition` already strips quotes and substitution punctuation; it does not
-   strip backtick-escapes or bash `\` line-splices. Same shape as round 19 — extend that unwrapping,
-   do not add a new detector.
+2. **CLOSED — shell-spliced push spellings.** `pushHiddenByShellComposition()` now unwraps PowerShell
+   backticks, POSIX backslashes and line splices, and Windows Command Prompt carets before deciding
+   whether the shell will execute a hidden `git push`. Each spelling is denied by the actual hook.
 
-3. **HIGH — `remote.<name>.vcs` is an unchecked executable transport.**
-   `EXECUTABLE_TRANSPORT_KEYS` (round 21) does not list it; git invokes `git-remote-<vcs>` for it.
-   Add `/^remote\..+\.vcs$/`. Codex also flags the deliberate inherited-`GIT_EXEC_PATH` exemption as
-   a related open route — that exemption is documented in the file with its reason (git exports the
-   variable into every hook it runs, so denying on it denied every ordinary push); do not remove it
-   without a replacement that distinguishes git's own export from a planted one.
+3. **CLOSED — executable transports.** `remote.<name>.vcs` is classified as executable transport
+   configuration. Inherited `GIT_EXEC_PATH` is allowed only when it exactly matches a fresh
+   `git --exec-path` lookup performed with a clean environment; planted or unverifiable values fail
+   closed. The lookup is time-bounded so the hook cannot hang indefinitely.
 
-**Non-blocking:** the documented SSH keepalive includes `TCPKeepAlive=yes`, which the allowlist at
-`transportValueIsAllowed` rejects.
+The documented SSH keepalive and its allowlist now agree.
 
 ## Working agreements this loop established — keep them
 
@@ -67,8 +54,7 @@ checks are green, CodeRabbit's review is read and answered, and the PR merges.
 
 ## Also outstanding, independent of the above
 
-The private `CRX_Backups` snapshot has **not** been pushed. A clone sits at
-`<scratchpad>/CRX_Backups` with local commit `db3f352` (185 notes) unpushed, plus fresh staging
-output for 190 files. `git@github.com:masonwells1/CRX_Backups.git` still has no `claude-memory/`
-folder. Verify a landing by comparing `completed_at` / `file_count` / `total_bytes` character for
-character — a push there has silently failed before.
+The private `CRX_Backups` snapshot remains a separate operation. After any push there, run
+`--verify-remote`: it requires the remote `manifest.json` to be byte-identical to the local one,
+requires the remote listing to contain exactly the manifest plus its recorded notes, and downloads
+and SHA-256 hashes every note. Do not treat a successful `git push` message alone as landing proof.

@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-01 — PR #289 automated-review findings closed
+
+The final GitHub review pass added a five-second bound to Git executable-path
+discovery, moved Git URL-rewrite key parsing into the shared push library, and
+strengthened the backup hard-link and CLI exit-code tests. CodeQL's two high
+alerts were test-only substring checks; the assertions now compare the exact
+GitHub arguments instead. The backup runbook now counts both privacy lookups
+during a re-stage, and the round-23 handoff records the completed controls and
+byte-identical remote verification procedure.
+
 ## 2026-08-01 — Command Prompt caret-spliced pushes are visible
 
 The push guard now unwraps the Windows Command Prompt caret escape before

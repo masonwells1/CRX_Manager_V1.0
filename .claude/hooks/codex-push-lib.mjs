@@ -1040,6 +1040,16 @@ function rewriteBaseReachesGuardedApp(rawBase) {
   return p !== "" && GUARDED_REPO_PATH.startsWith(p);
 }
 
+// Extract rewrite-setting names from `git config --list` output. Backup and
+// push guards share this parser so new rewrite spellings cannot drift between
+// the two security boundaries.
+export function gitUrlRewriteSettings(configOutput) {
+  return String(configOutput ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.split("=", 1)[0].trim().toLowerCase())
+    .filter((key) => /^url\..+\.(?:push)?insteadof$/.test(key));
+}
+
 // A push can also be risky by CONTENT even when no file's PATH matches the
 // patterns above — e.g. a helper file outside the usual risky paths that still
 // touches cents-math or writes financial_audit_log / prepay / payment-allocation
