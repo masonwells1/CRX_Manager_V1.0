@@ -77,9 +77,14 @@ assert.equal(mainPushSource("git -C ../repo push origin release:main", "feature"
 assert.equal(mainPushSource("git push origin :main", "feature"), "DELETE");
 assert.equal(mainPushSource("git push origin feature", "feature"), null);
 assert.equal(pushTargetsCurrentHead("git push -u origin feature", "feature"), true);
-assert.equal(pushTargetsCurrentHead("git push origin feature:factory-result", "FEATURE"), true);
-assert.equal(pushTargetsCurrentHead("git push origin refs/heads/FEATURE:factory-result", "refs/heads/feature"), true);
-assert.equal(pushTargetsCurrentHead("git push origin HEAD:factory-result", "feature"), true);
+assert.equal(pushTargetsCurrentHead("git push origin feature:feature", "FEATURE"), true);
+assert.equal(pushTargetsCurrentHead("git push origin refs/heads/FEATURE:refs/heads/feature", "refs/heads/feature"), true);
+assert.equal(pushTargetsCurrentHead("git push origin HEAD:feature", "feature"), true);
+assert.equal(pushTargetsCurrentHead("git push origin HEAD:production", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin feature:factory-result", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push upstream HEAD:feature", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin HEAD:main", "main"), false);
 assert.equal(pushTargetsCurrentHead("git push origin release:factory-result", "feature"), false);
 assert.equal(pushTargetsCurrentHead("git push origin feature other", "feature"), false);
 assert.equal(pushTargetsCurrentHead("git push origin :factory-result", "feature"), false);

@@ -488,6 +488,17 @@ requires the elevated sandbox backend. A real nested Codex probe returned `PACKE
 review output is hashed and omitted from the durable capture. Focused proof for the wrapper and the
 factory state library passed; full commit-hook and exact-SHA proof are pending on the repaired bytes.
 
+After `origin/main` advanced to `abdbafabfa6841785280ef9bbbc4032e3c6cb391`, merge commit
+`5c99c641f28cacf523b21b69f76e9317619df820` retained both the upstream push-guard hardening and the
+factory controls. Factory and correction-guard suites passed, but the fresh exact-SHA Sol/high review
+returned `BLOCKERS` for two HIGH authority leaks: factory custody allowed current `HEAD` to target an
+arbitrary branch such as `production`, and file-consuming `git commit` / `gh pr create` options could
+publish ignored secret text in commit or PR metadata outside the tree fingerprint. The repair permits
+only an explicit `origin` push of current `HEAD` to the matching non-protected feature branch and
+rejects commit file/template/pathspec inputs plus PR body-file/template/fill/recovery inputs. Focused
+regressions now cover the protected-branch and metadata-disclosure routes. Fresh exact-SHA acceptance
+is required before the branch moves again.
+
 Mason explicitly authorized making PR #296 ready, merging it to `main`, allowing and verifying its
 automatic Vercel production deployment, and starting the loopback-only read-only Factory Board on
 `127.0.0.1:4177`. His later statement “I authorize everything including database migrations and

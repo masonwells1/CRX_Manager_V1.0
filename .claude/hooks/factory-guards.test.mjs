@@ -797,6 +797,21 @@ function bashExecutable() {
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
+    tool_input: { command: "git push origin HEAD:production" },
+  }), /only exact-byte.*landing commands/i, "approved-to-land cannot grant a push to a protected production branch");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git commit -F .env" },
+  }), /only exact-byte.*landing commands/i, "approved-to-land rejects commit messages read from ignored files");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git commit --template=.env -m release" },
+  }), /only exact-byte.*landing commands/i, "approved-to-land rejects commit templates read from ignored files");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
     tool_input: { command: "gh pr create -H other-ref" },
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects the short PR head override alias");
   denied(run(laneHook, stateDir, {
@@ -804,6 +819,16 @@ function bashExecutable() {
     tool_name: "PowerShell",
     tool_input: { command: "gh pr create -B release" },
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects the short PR base override alias");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "gh pr create --template .env" },
+  }), /only exact-byte.*landing commands/i, "approved-to-land rejects PR bodies read from ignored templates");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "gh pr create --fill" },
+  }), /only exact-byte.*landing commands/i, "approved-to-land rejects PR bodies synthesized from unreviewed commit metadata");
 }
 
 {

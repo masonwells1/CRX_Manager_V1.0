@@ -262,17 +262,18 @@ export function pushTargetsMain(cmd, currentBranch) {
   return mainPushSource(cmd, currentBranch) !== null;
 }
 
-// A factory-approved landing may push only the current checkout's exact HEAD.
-// The remote/destination may vary (feature branch first, main only through its
-// separate protected gate), but an alternate local source ref would bypass the
-// repository fingerprint Mason accepted.
+// A factory-approved landing may push only the current checkout's exact HEAD to
+// the matching feature branch on origin. Protected branches land through the
+// ordinary PR merge gate; allowing an arbitrary destination here would let
+// factory approval become new production authority.
 export function pushTargetsCurrentHead(cmd, currentBranch) {
   const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
   const normalizedBranch = String(currentBranch || "")
     .trim()
     .replace(/^refs\/heads\//i, "")
     .toLowerCase();
-  if (argsText == null || !normalizedBranch) return false;
+  if (argsText == null || !normalizedBranch
+      || ["main", "master", "production"].includes(normalizedBranch)) return false;
   const tokens = splitShellArgs(argsText);
   if (tokens.some((token) =>
     token === "--delete"
@@ -281,16 +282,20 @@ export function pushTargetsCurrentHead(cmd, currentBranch) {
     || ["--all", "--branches", "--mirror", "--prune"].includes(token))) {
     return false;
   }
+  if (tokens.some((token) => token.startsWith("-")
+      && !["-u", "--set-upstream"].includes(token))) return false;
   const positional = tokens.filter((token) => !token.startsWith("-"));
-  const refspecs = positional.slice(1);
-  if (refspecs.length === 0) return true;
-  if (refspecs.length !== 1) return false;
-  const refspec = refspecs[0];
+  if (positional.length !== 2 || positional[0].toLowerCase() !== "origin") return false;
+  const refspec = positional[1];
   const source = (refspec.includes(":") ? refspec.split(":")[0] : refspec)
     .replace(/^\+/, "")
     .replace(/^refs\/heads\//i, "")
     .toLowerCase();
-  return source === "head" || source === normalizedBranch;
+  const destination = (refspec.includes(":") ? refspec.split(":").at(-1) : refspec)
+    .replace(/^refs\/heads\//i, "")
+    .toLowerCase();
+  return (source === "head" || source === normalizedBranch)
+    && destination === normalizedBranch;
 }
 
 // Any push is forced when it carries a history-rewriting force flag anywhere

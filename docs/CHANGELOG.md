@@ -19,6 +19,14 @@ both approval questions state that boundary. The fixed Sol/high review charter
 now tests for a real independent-gate bypass instead of treating the documented
 same-Windows-user limitation itself as CRX database actor forgery.
 
+The post-reconciliation Sol/high pass found two remaining landing leaks. Factory
+approval could send current `HEAD` to an arbitrary remote branch such as
+`production`, and file-consuming commit/PR options could publish ignored secret
+text as metadata. Factory pushes are now restricted to the matching non-protected
+feature branch on `origin`; protected branches still land only through the normal
+PR merge gate. Landing custody also rejects commit message/template files and PR
+body/template/fill inputs. Executable regressions cover both disclosure routes.
+
 ## 2026-08-01 — PR #289 automated-review findings closed
 
 The final GitHub review pass added a five-second bound to Git executable-path

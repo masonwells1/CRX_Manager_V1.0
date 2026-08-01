@@ -454,7 +454,7 @@ function approvedLandingShellAction(toolName, toolInput, projectDir) {
     return "stage";
   }
   if (/^git(?:\.exe)?\s+commit\b/i.test(command)
-      && !/\b(?:--amend|--fixup|--squash|--reuse-message|--no-verify|--pathspec-from-file)\b|(?:^|\s)-(?:c|C|n)(?:\s|$)/.test(command)) {
+      && !/\b(?:--amend|--fixup|--squash|--reuse-message|--reedit-message|--no-verify)\b|(?:^|\s)--(?:file|template|pathspec-from-file)(?:=|\s)|(?:^|\s)-[A-Za-z]*[cCFn](?:[^\s]*|\s)/.test(command)) {
     return "commit";
   }
   if (isGitPush(command)) {
@@ -475,7 +475,7 @@ function approvedLandingShellAction(toolName, toolInput, projectDir) {
   }
   if (/^gh(?:\.exe)?\s+pr\s+create\b/i.test(command)
       && !/(?:^|\s)-(?:H|B)(?:\s|$)/.test(command)
-      && !/\s--body-file(?:=|\s)|\s--head(?:=|\s)(?!HEAD\b)/i.test(command)
+      && !/(?:^|\s)-(?:F|T|f)(?:[^\s]*|\s)|\s--(?:body-file|template|fill|fill-first|fill-verbose|recover)(?:=|\s|$)|\s--head(?:=|\s)(?!HEAD\b)/i.test(command)
       && !/\s--base(?:=|\s)(?!main\b)/i.test(command)) {
     return "pr-create";
   }
