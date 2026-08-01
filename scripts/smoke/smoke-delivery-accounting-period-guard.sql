@@ -59,47 +59,26 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_SETUP: active non-delivery profile required';
   END IF;
 
-  SELECT gs::date INTO v_closed_date
-  FROM generate_series(DATE '1990-01-15', DATE '1999-12-15', interval '1 month') AS gs
-  WHERE NOT EXISTS (
-    SELECT 1 FROM public.accounting_periods ap
-    WHERE gs::date BETWEEN ap.period_start AND ap.period_end
-  )
-  ORDER BY gs
-  LIMIT 1;
+  -- Fixed, historical, disposable months prevent the proof from drifting as
+  -- the calendar advances. Refuse to touch them if real historical data uses
+  -- any one of the three months; the terminal exception rolls every fixture
+  -- back, including the two smoke-only closed rows created below.
+  v_closed_date := DATE '1990-01-15';
+  v_open_date := DATE '1990-02-15';
+  v_second_open_date := DATE '1990-03-15';
 
-  SELECT gs::date INTO v_open_date
-  FROM generate_series(CURRENT_DATE, CURRENT_DATE - 365, interval '-1 day') AS gs
-  WHERE NOT EXISTS (
-    SELECT 1 FROM public.accounting_periods ap
-    WHERE gs::date BETWEEN ap.period_start AND ap.period_end
-  )
-  ORDER BY gs DESC
-  LIMIT 1;
-
-  SELECT gs::date INTO v_second_open_date
-  FROM generate_series(CURRENT_DATE, CURRENT_DATE - 365, interval '-1 day') AS gs
-  WHERE gs::date <> v_open_date
-    AND NOT EXISTS (
-      SELECT 1 FROM public.accounting_periods ap
-      WHERE gs::date BETWEEN ap.period_start AND ap.period_end
-    )
-  ORDER BY gs DESC
-  LIMIT 1;
-
-  IF v_closed_date IS NULL OR v_open_date IS NULL OR v_second_open_date IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_SETUP: could not find isolated closed/open dates';
+  IF EXISTS (
+    SELECT 1
+    FROM public.accounting_periods AS ap
+    WHERE ap.period_start <= DATE '1990-03-31'
+      AND ap.period_end >= DATE '1990-01-01'
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: fixed historical delivery-proof months are not isolated';
   END IF;
 
   v_closed_at := (v_closed_date::timestamp + time '12:00') AT TIME ZONE 'America/Chicago';
-  v_open_at := CASE
-    WHEN v_open_date = CURRENT_DATE THEN clock_timestamp() - interval '1 minute'
-    ELSE (v_open_date::timestamp + time '12:00') AT TIME ZONE 'America/Chicago'
-  END;
-  v_second_open_at := CASE
-    WHEN v_second_open_date = CURRENT_DATE THEN clock_timestamp() - interval '2 minutes'
-    ELSE (v_second_open_date::timestamp + time '12:00') AT TIME ZONE 'America/Chicago'
-  END;
+  v_open_at := (v_open_date::timestamp + time '12:00') AT TIME ZONE 'America/Chicago';
+  v_second_open_at := (v_second_open_date::timestamp + time '12:00') AT TIME ZONE 'America/Chicago';
 
   PERFORM set_config(
     'request.jwt.claims',
@@ -110,7 +89,9 @@ BEGIN
   INSERT INTO public.accounting_periods (
     period_start, period_end, status, closed_by, closed_at, notes
   ) VALUES (
-    v_closed_date, v_closed_date, 'closed', v_admin, now(),
+    date_trunc('month', v_closed_date)::date,
+    (date_trunc('month', v_closed_date) + interval '1 month - 1 day')::date,
+    'closed', v_admin, now(),
     '[SMOKE] complete_delivery closed-period guard'
   ) RETURNING id INTO v_closed_period;
 
@@ -119,10 +100,10 @@ BEGIN
   RETURNING id INTO v_customer;
 
   INSERT INTO public.products (
-    product_name, unit_size, current_cost, epa_registration, product_form
+    product_name, unit_size, epa_registration, product_form
   ) VALUES (
     '[SMOKE] Delivery Period Product ' || v_suffix,
-    'GL', 6, '[SMOKE]-DEL-PERIOD-' || v_suffix, 'liquid'
+    'GL', '[SMOKE]-DEL-PERIOD-' || v_suffix, 'liquid'
   ) RETURNING id INTO v_product;
 
   INSERT INTO public.inventory (
@@ -271,6 +252,7 @@ BEGIN
     json_build_object('sub', v_unauthorized, 'role', 'authenticated')::text,
     true
   );
+  PERFORM set_config('request.jwt.claim.sub', v_unauthorized::text, true);
 
   BEGIN
     PERFORM public.complete_delivery(
@@ -297,6 +279,7 @@ BEGIN
     json_build_object('sub', v_admin, 'role', 'authenticated')::text,
     true
   );
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   SELECT count(*) INTO v_count
   FROM public.idempotency_keys
@@ -307,7 +290,8 @@ BEGIN
   END IF;
 
   -- A browser-authorized direct rewrite cannot move a completed delivery into
-  -- a closed period. This exercises the table path, not an RPC wrapper.
+  -- a closed period. This exercises the real enforce_delivery_accounting_period
+  -- trigger path, not an RPC wrapper.
   BEGIN
     EXECUTE 'SET LOCAL ROLE authenticated';
     UPDATE public.deliveries
@@ -370,7 +354,9 @@ BEGIN
   INSERT INTO public.accounting_periods (
     period_start, period_end, status, closed_by, closed_at, notes
   ) VALUES (
-    v_open_date, v_open_date, 'closed', v_admin, now(),
+    date_trunc('month', v_open_date)::date,
+    (date_trunc('month', v_open_date) + interval '1 month - 1 day')::date,
+    'closed', v_admin, now(),
     '[SMOKE] void_delivery closed-period guard'
   ) RETURNING id INTO v_open_period;
 

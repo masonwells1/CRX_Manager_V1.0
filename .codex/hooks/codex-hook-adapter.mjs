@@ -64,7 +64,7 @@ async function main() {
   const result = spawnSync(process.execPath, [target], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: root },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: root, CRX_AGENT_SURFACE: "codex" },
     input,
   });
 

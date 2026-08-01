@@ -37,6 +37,7 @@ import {
   pullRequestChecksGreen,
   riskyFiles,
 } from "./codex-push-lib.mjs";
+import { validateApprovedFactoryLanding } from "../../scripts/factory-state-lib.mjs";
 
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 
@@ -115,7 +116,7 @@ function gateRequest(request) {
     // merge actually lands on. The proof must be bound to THAT, not to the local
     // origin/main, which can be stale (Codex round-6: a proof reviewed against an
     // old local base validated while GitHub merged onto newer main content).
-    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,statusCheckRollup");
+    viewArgs.push("--json", "baseRefName,baseRefOid,headRefOid,mergeStateStatus,statusCheckRollup,autoMergeRequest");
     if (request.repo) viewArgs.push("--repo", request.repo);
     pr = JSON.parse(gh(viewArgs));
     if (!pr?.baseRefName || !pr?.headRefOid || !pr?.baseRefOid) {
@@ -129,7 +130,24 @@ function gateRequest(request) {
   if (base === "master" || base === "production") {
     deny(`PR MERGE GATE: merges into protected branch "${base}" are always blocked.`);
   }
-  if (base !== "main") return; // feature-branch merges are not production landings
+  // AUTHORITY-MONOTONIC: factory state only adds exact-byte restrictions.
+  // Green CI and the ordinary risky-diff/Sol proof path below stay authoritative.
+  let factoryLanding;
+  try {
+    factoryLanding = validateApprovedFactoryLanding(projectDir, {
+      commitish: pr.headRefOid,
+      expectedBaseSha: String(pr.baseRefOid || ""),
+    });
+  } catch (error) {
+    deny(`PR MERGE GATE: factory landing proof no longer matches this PR head/base (${error.message}). Park the job, rerun evidence and Sol/high review, and re-present Mason's exact morning decision before merge.`);
+  }
+  if (factoryLanding.required && base !== "main") {
+    deny("PR MERGE GATE: factory custody may merge only the exact accepted pull request into main; feature-branch PR merges are not landing actions.");
+  }
+  if (base !== "main") return; // ordinary feature-branch merges are not production landings
+  if (factoryLanding.required && (request.auto || pr.autoMergeRequest)) {
+    deny("PR MERGE GATE: factory custody forbids requested or pre-enabled auto-merge. Disable it, wait for green checks, and perform one immediate exact-head merge.");
+  }
 
   // ── green-pipeline requirement ─────────────────────────────────────────────
   // `--auto` defers the merge to GitHub, which itself enforces the required
@@ -166,7 +184,7 @@ function gateRequest(request) {
       deny(`PR MERGE GATE: could not inspect this pull request's full diff for money/security risk, so the merge is denied (fail closed). ${error?.message || error}`);
     }
   }
-  if (risky.length === 0 && !contentFlagged) return;
+  if (risky.length === 0 && !contentFlagged && !factoryLanding.required) return;
 
   // ── risky merge: --auto is denied outright ─────────────────────────────────
   // Auto-merge defers the landing until GitHub's checks pass — AFTER this hook
@@ -204,7 +222,9 @@ function gateRequest(request) {
   }
   if (valid) return;
 
-  const riskyDescription = risky.length > 0
+  const riskyDescription = factoryLanding.required && risky.length === 0 && !contentFlagged
+    ? "is a factory-approved landing, which always requires the independent exact-SHA proof regardless of ordinary path classification"
+    : risky.length > 0
     ? `changes ${risky.length} risky file(s) that need an independent Codex verdict FIRST:\n` +
       risky.slice(0, 6).map((f) => "  " + f).join("\n") +
       (risky.length > 6 ? `\n  ... and ${risky.length - 6} more` : "")

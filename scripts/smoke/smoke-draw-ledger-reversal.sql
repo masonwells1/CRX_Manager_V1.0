@@ -38,6 +38,33 @@
 --       'accepted' (booking stays closed — historical semantic)
 -- ============================================================================
 
+CREATE OR REPLACE FUNCTION pg_temp.convert_quote_to_order_smoke(
+  p_quote_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text,
+  p_expected_row_version bigint
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $helper$
+DECLARE
+  v_result jsonb;
+BEGIN
+  IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.convert_quote_to_order($1, $2, $3, $4)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
+  RETURN public.convert_quote_to_order(
+    p_quote_id,
+    p_performed_by,
+    p_idempotency_key
+  );
+END;
+$helper$;
+
 DO $$
 DECLARE
   v_admin uuid;
@@ -94,6 +121,7 @@ BEGIN
   END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   -- ── fixtures ─────────────────────────────────────────────────────────────
   INSERT INTO customers (farm_name)
@@ -319,7 +347,12 @@ BEGIN
     price_per_unit, current_cost, total_units_needed, unit_size)
   VALUES (v_q2, v_sec, v_product, 10, 6, 300, 'gal');
 
-  SELECT convert_quote_to_order(v_q2) INTO v_res;
+  SELECT pg_temp.convert_quote_to_order_smoke(
+    v_q2,
+    v_admin,
+    NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q2)
+  ) INTO v_res;
   IF v_res->>'status' IS DISTINCT FROM 'created' THEN
     RAISE EXCEPTION 'S3: convert returned %, expected created', v_res;
   END IF;

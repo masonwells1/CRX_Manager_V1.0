@@ -11,6 +11,7 @@ interface ConfirmModalProps {
   title: string;
   message: string;
   confirmLabel?: string;
+  cancelLabel?: string;
   variant?: ConfirmVariant;
   icon?: LucideIcon;
   loading?: boolean;
@@ -35,6 +36,7 @@ export default function ConfirmModal({
   title,
   message,
   confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
   variant = 'danger',
   icon,
   loading = false,
@@ -46,11 +48,12 @@ export default function ConfirmModal({
     <Modal
       open={open}
       onClose={onClose}
+      closeDisabled={loading}
       title={title}
       footer={
         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-          <Button variant="ghost" onClick={onClose} className="min-h-11 w-full sm:w-auto">
-            Cancel
+          <Button variant="ghost" onClick={onClose} disabled={loading} className="min-h-11 w-full sm:w-auto">
+            {cancelLabel}
           </Button>
           <Button
             variant={variant === 'info' ? 'primary' : 'danger'}

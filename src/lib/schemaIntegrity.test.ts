@@ -595,10 +595,8 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
  * All 157 public functions were patched in migration 20260332100000.
  */
 const SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP: string[] = [
-  'check_period_open',
   'close_accounting_period',
   'complete_delivery',
-  'compute_season',
   'confirm_delivery',
   'convert_quote_to_order',
   'create_commission_payment',
@@ -640,6 +638,25 @@ const SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP: string[] = [
   'void_invoice',
   'void_payment',
   'void_vendor_bill',
+];
+
+/**
+ * Narrow fully-qualified SECURITY DEFINER exception: an exactly empty
+ * search_path is allowed only while every body reference is schema-qualified.
+ * Keep this separate from the pg_temp list so live proof fails if the function
+ * drifts to any mutable path.
+ */
+const SECURITY_DEFINER_FUNCTIONS_REQUIRING_EMPTY_SEARCH_PATH: string[] = [
+  'check_period_open',
+];
+
+/**
+ * Functions whose invoker mode and public-only search_path are security
+ * boundaries. Keep them out of SECURITY DEFINER path checks and prove both
+ * live catalog properties directly instead.
+ */
+const FUNCTIONS_REQUIRING_SECURITY_INVOKER: string[] = [
+  'compute_season',
 ];
 
 /**
@@ -789,9 +806,34 @@ describe('Schema Integrity: SECURITY DEFINER pg_temp Contracts', () => {
   });
 
   it('all function names are valid snake_case', () => {
-    for (const name of SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP) {
+    for (const name of [
+      ...SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP,
+      ...SECURITY_DEFINER_FUNCTIONS_REQUIRING_EMPTY_SEARCH_PATH,
+      ...FUNCTIONS_REQUIRING_SECURITY_INVOKER,
+    ]) {
       expect(name).toBeTruthy();
       expect(name).toMatch(/^[a-z][a-z0-9_]*$/);
+    }
+  });
+
+  it('empty-search-path exceptions are narrow, explicit, and disjoint from pg_temp', () => {
+    expect(SECURITY_DEFINER_FUNCTIONS_REQUIRING_EMPTY_SEARCH_PATH).toEqual([
+      'check_period_open',
+    ]);
+    const pgTempSet = new Set(SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP);
+    for (const name of SECURITY_DEFINER_FUNCTIONS_REQUIRING_EMPTY_SEARCH_PATH) {
+      expect(pgTempSet.has(name)).toBe(false);
+    }
+  });
+
+  it('public-path security-invoker contracts are narrow and disjoint from definer contracts', () => {
+    expect(FUNCTIONS_REQUIRING_SECURITY_INVOKER).toEqual(['compute_season']);
+    const definerSet = new Set([
+      ...SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP,
+      ...SECURITY_DEFINER_FUNCTIONS_REQUIRING_EMPTY_SEARCH_PATH,
+    ]);
+    for (const name of FUNCTIONS_REQUIRING_SECURITY_INVOKER) {
+      expect(definerSet.has(name)).toBe(false);
     }
   });
 
@@ -812,7 +854,7 @@ describe('Schema Integrity: SECURITY DEFINER pg_temp Contracts', () => {
   //   WHERE pronamespace = 'public'::regnamespace
   //   AND prosecdef = true
   //   AND (proconfig IS NULL OR NOT proconfig::text LIKE '%pg_temp%');
-  // Expected: 0 rows (all SECURITY DEFINER functions have pg_temp)
+  // Expected: 0 rows after excluding the exact-empty-search-path allowlist.
 });
 
 // ─── Exported for use in E2E tests ──────────────────────────────────────
@@ -824,5 +866,7 @@ export {
   CHECK_CONSTRAINT_CONTRACTS,
   MUTATING_RPCS_WITH_IDEMPOTENCY,
   SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP,
+  SECURITY_DEFINER_FUNCTIONS_REQUIRING_EMPTY_SEARCH_PATH,
+  FUNCTIONS_REQUIRING_SECURITY_INVOKER,
   FUNCTIONS_MUST_NOT_HAVE_OVERLOADS,
 };

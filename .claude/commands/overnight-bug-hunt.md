@@ -66,12 +66,18 @@ Every finder must return `executionStatus=VERIFIED` with a concrete non-empty `e
 Before the Codex finding gate, compare every candidate's files, symbols, RPCs, and lifecycle against the mission document's exclusions and current active worktrees. Collision candidates are deferred, never fixed or counted as a dry-cycle finding.
 
 ### Step 2 — CODEX FINDING-GATE (independent confirmation)
-Hand the candidate findings to Codex as an independent second model (`gpt-5.6-sol`, the live config default; record the agent that produced the verdict). **Always invoke Codex through the `node scripts/overnight-codex-gate.mjs` wrapper** — it rides the `Bash(node scripts/:*)` permission allow-list, so an UNATTENDED run never pauses for approval (a raw `codex exec` is NOT allow-listed and would stall the loop). The wrapper resolves the binary version-proof, runs `codex exec --sandbox read-only`, and closes stdin. Write the candidate digest to a file first, then:
+Hand the candidate findings to a separate Codex review session (explicit `gpt-5.6-sol` at high effort;
+record the agent and effort that produced the verdict). **Always invoke Codex through the
+`node scripts/overnight-codex-gate.mjs` wrapper** — it rides the `Bash(node scripts/:*)` permission
+allow-list, so an UNATTENDED run never pauses for approval (a raw `codex exec` is NOT allow-listed
+and would stall the loop). The wrapper resolves the binary version-proof, isolates user configuration,
+runs an ephemeral `codex exec --sandbox read-only` with Sol/high pinned, and closes stdin. Write the
+candidate digest to a file first, then:
 ```bash
 # Build the prompt file: per finding — title, file, one-line evidence, impact, severity.
 # Keep it to <=3-4 findings per call (more times out at high reasoning).
 cat > .claude/session-state/finding-gate-prompt.txt <<'EOF'
-Independent second-model gate for the CRX overnight bug hunt. READ-ONLY repo + migration access (the sandbox CANNOT reach the live DB, so ground against repo/migration files). For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
+Independent Sol/high gate for the CRX overnight bug hunt. READ-ONLY repo + migration access (the sandbox CANNOT reach the live DB, so ground against repo/migration files). For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
 <paste the 3-4 candidate findings here>
 EOF
 node scripts/overnight-codex-gate.mjs .claude/session-state/finding-gate-prompt.txt \

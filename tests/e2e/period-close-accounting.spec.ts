@@ -91,10 +91,27 @@ async function createCustomer(
  * (reopen it so future test runs aren't blocked)
  */
 async function reopenTestPeriod(page: import('@playwright/test').Page) {
-  await supabaseRest(page, 'PATCH',
-    `accounting_periods?period_start=eq.${PERIOD_START}&period_end=eq.${PERIOD_END}`,
-    { status: 'open', closed_by: null, closed_at: null }
-  ).catch(() => {}); // ignore if not found
+  const periods = asArray<Record<string, unknown>>(
+    await supabaseRest(
+      page,
+      'GET',
+      `accounting_periods?select=id,status&period_start=eq.${PERIOD_START}&period_end=eq.${PERIOD_END}`,
+    ),
+    'test accounting period cleanup',
+  );
+  if (periods.length === 0) return;
+  if (periods.length !== 1) {
+    throw new Error(`Expected one test accounting period, found ${periods.length}`);
+  }
+  if (periods[0].status !== 'closed') return;
+
+  const userId = await getUserId(page);
+  await supabaseRpc(page, 'reopen_accounting_period', {
+    p_period_id: periods[0].id,
+    p_reason: 'E2E cleanup: reopen shared test month',
+    p_performed_by: userId,
+    p_idempotency_key: `e2e-period-reopen-${periods[0].id}-${Date.now()}`,
+  });
 }
 
 /** Update a draft invoice through its governed RPC, preserving every line. */

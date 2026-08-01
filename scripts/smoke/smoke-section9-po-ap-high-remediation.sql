@@ -13,6 +13,11 @@ DECLARE
   v_po_item uuid;
   v_billed_po uuid;
   v_bill uuid;
+  v_payment uuid;
+  v_void_bill_po uuid;
+  v_void_bill uuid;
+  v_period uuid;
+  v_period_count integer;
   v_receipt uuid;
   v_result jsonb;
   v_items jsonb;
@@ -21,8 +26,9 @@ DECLARE
   v_secondary_before numeric;
   v_secondary_after numeric;
   v_status text;
-  v_old_date date := CURRENT_DATE - 400;
-  v_closed_period uuid;
+  -- Fixed pre-history fixture: never select a rolling date that could collide
+  -- with real accounting history as time passes.
+  v_old_date date := DATE '1990-01-15';
   v_err text;
   v_suffix text := substr(md5(random()::text), 1, 8);
 BEGIN
@@ -43,11 +49,31 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_SETUP: active admin and product required';
   END IF;
 
+  -- Keep the fixed pre-history month collision-safe. The rollback chain never
+  -- closes an existing historical period or attempts a close that a real
+  -- unposted invoice would reject.
+  IF EXISTS (
+    SELECT 1
+    FROM public.accounting_periods ap
+    WHERE ap.period_start <= (date_trunc('month', v_old_date) + interval '1 month - 1 day')::date
+      AND ap.period_end >= date_trunc('month', v_old_date)::date
+  ) OR EXISTS (
+    SELECT 1
+    FROM public.invoices i
+    WHERE i.invoice_date BETWEEN date_trunc('month', v_old_date)::date
+      AND (date_trunc('month', v_old_date) + interval '1 month - 1 day')::date
+      AND i.status IN ('draft', 'unposted')
+      AND i.deleted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: fixed pre-history month % is occupied', v_old_date;
+  END IF;
+
   PERFORM set_config(
     'request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text,
     true
   );
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   SELECT COALESCE(SUM(GREATEST(
     poi.quantity_ordered - COALESCE(poi.quantity_received, 0),
@@ -293,7 +319,7 @@ BEGIN
     p_vendor_id := v_vendor,
     p_purchase_order_id := v_billed_po,
     p_bill_number := 'SMK-S9-BILL-' || v_suffix,
-    p_bill_date := CURRENT_DATE,
+    p_bill_date := v_old_date,
     p_subtotal_cents := 100,
     p_idempotency_key := 'smk-s9-bill-create-' || v_suffix
   );
@@ -334,6 +360,25 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: vendors retains a browser write policy';
   END IF;
+  IF has_table_privilege('authenticated', 'public.accounting_periods', 'INSERT')
+     OR has_table_privilege('authenticated', 'public.accounting_periods', 'UPDATE')
+     OR has_table_privilege('authenticated', 'public.accounting_periods', 'DELETE')
+     OR has_table_privilege('authenticated', 'public.accounting_periods', 'TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.accounting_periods', 'REFERENCES')
+     OR has_table_privilege('authenticated', 'public.accounting_periods', 'TRIGGER')
+     OR has_table_privilege('authenticated', 'public.accounting_periods', 'MAINTAIN')
+     OR NOT has_table_privilege('authenticated', 'public.accounting_periods', 'SELECT')
+     OR has_table_privilege('anon', 'public.accounting_periods', 'SELECT')
+     OR has_table_privilege('anon', 'public.accounting_periods', 'MAINTAIN') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated retains accounting-period mutation grant';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_policy
+    WHERE polrelid = 'public.accounting_periods'::regclass
+      AND polcmd IN ('a', 'w', 'd', '*')
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: accounting_periods retains a browser write policy';
+  END IF;
 
   -- Current aging is truthful; unsupported past/future dates fail closed.
   PERFORM * FROM public.get_ap_aging(
@@ -364,27 +409,57 @@ BEGIN
     END IF;
   END;
 
-  -- Simulate a legacy unpaid bill whose original period is now closed. The
-  -- update must reject before moving its date or changing its money.
-  UPDATE public.vendor_bills
-  SET bill_date = v_old_date,
-      due_date = v_old_date + 30
-  WHERE id = v_bill;
-  INSERT INTO public.accounting_periods (
-    period_start,
-    period_end,
-    status,
-    closed_by,
-    closed_at,
-    notes
-  ) VALUES (
-    v_old_date,
-    v_old_date,
-    'closed',
+  -- Create a real payment and a second no-payment bill in the same fixed month.
+  -- After close, each AP reversal/mutation must fail before changing history.
+  v_payment := public.record_vendor_payment(
+    p_vendor_bill_id := v_bill,
+    p_amount_cents := 25,
+    p_payment_date := v_old_date,
+    p_payment_method := 'check',
+    p_reference_number := 'SMK-S9-PAY-' || v_suffix,
+    p_notes := 'Section 9 AP period boundary',
+    p_idempotency_key := 'smk-s9-payment-' || v_suffix
+  );
+
+  v_result := public.save_purchase_order(
+    NULL,
+    jsonb_build_object(
+      'po_number', 'SMK-S9-VOID-BILL-' || v_suffix,
+      'vendor', v_vendor_name,
+      'status', 'draft'
+    ),
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product,
+      'product_name', v_product_name,
+      'quantity_ordered', 1,
+      'unit_cost_cents', 100,
+      'unit_size', v_unit_size
+    )),
     v_admin,
-    now(),
-    '[SMOKE] Section 9 old bill period'
-  ) RETURNING id INTO v_closed_period;
+    'smk-s9-void-bill-po-create-' || v_suffix
+  );
+  v_void_bill_po := (v_result->>'po_id')::uuid;
+  PERFORM public.submit_purchase_order(
+    v_void_bill_po,
+    v_admin,
+    'smk-s9-void-bill-po-submit-' || v_suffix
+  );
+  v_void_bill := public.create_vendor_bill(
+    p_vendor_id := v_vendor,
+    p_purchase_order_id := v_void_bill_po,
+    p_bill_number := 'SMK-S9-VOID-BILL-' || v_suffix,
+    p_bill_date := v_old_date,
+    p_subtotal_cents := 100,
+    p_idempotency_key := 'smk-s9-void-bill-create-' || v_suffix
+  );
+
+  -- Close through the real RPC. This makes the registered PO/AP chain cover
+  -- the authoritative check_period_open refusals, not a hand-written closed row.
+  PERFORM public.close_accounting_period(
+    (date_trunc('month', v_old_date) + interval '1 month - 1 day')::date,
+    v_admin,
+    'smk-s9-close-old-period-' || v_suffix
+  );
 
   BEGIN
     PERFORM public.update_vendor_bill(
@@ -400,7 +475,7 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err NOT LIKE '%closed%' AND v_err NOT LIKE '%CLOSED%' THEN
+    IF v_err NOT LIKE 'Date % falls in closed accounting period%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong closed-old-period error: %', v_err;
     END IF;
   END;
@@ -409,6 +484,138 @@ BEGIN
      OR (SELECT total_cents FROM public.vendor_bills WHERE id = v_bill)
        IS DISTINCT FROM 100::bigint THEN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected closed-period edit leaked a change';
+  END IF;
+
+  BEGIN
+    PERFORM public.record_vendor_payment(
+      p_vendor_bill_id := v_bill,
+      p_amount_cents := 10,
+      p_payment_date := v_old_date,
+      p_payment_method := 'check',
+      p_reference_number := 'SMK-S9-CLOSED-PAY-' || v_suffix,
+      p_notes := 'must fail in closed payment month',
+      p_idempotency_key := 'smk-s9-closed-payment-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: recorded vendor payment in closed period';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'Date % falls in closed accounting period%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong closed-payment error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT paid_cents FROM public.vendor_bills WHERE id = v_bill)
+       IS DISTINCT FROM 25::bigint
+     OR (SELECT count(*) FROM public.vendor_payments WHERE vendor_bill_id = v_bill)
+       IS DISTINCT FROM 1::bigint
+     OR EXISTS (
+       SELECT 1 FROM public.idempotency_keys
+       WHERE idempotency_key = 'smk-s9-closed-payment-' || v_suffix
+         AND operation = 'record_vendor_payment'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected closed-period payment leaked a change';
+  END IF;
+
+  BEGIN
+    PERFORM public.void_vendor_payment(
+      v_payment,
+      'must fail in original closed payment month',
+      'smk-s9-closed-payment-void-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: voided vendor payment in closed period';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'Date % falls in closed accounting period%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong closed-payment-void error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT voided_at FROM public.vendor_payments WHERE id = v_payment) IS NOT NULL
+     OR (SELECT paid_cents FROM public.vendor_bills WHERE id = v_bill)
+       IS DISTINCT FROM 25::bigint
+     OR EXISTS (
+       SELECT 1 FROM public.idempotency_keys
+       WHERE idempotency_key = 'smk-s9-closed-payment-void-' || v_suffix
+         AND operation = 'void_vendor_payment'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected closed-period payment void leaked a change';
+  END IF;
+
+  BEGIN
+    PERFORM public.void_vendor_bill(
+      v_void_bill,
+      'must fail in original closed bill month',
+      'smk-s9-closed-bill-void-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: voided vendor bill in closed period';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'Date % falls in closed accounting period%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong closed-bill-void error: %', v_err;
+    END IF;
+  END;
+  IF (SELECT status FROM public.vendor_bills WHERE id = v_void_bill)
+       IS DISTINCT FROM 'unpaid'
+     OR EXISTS (
+       SELECT 1 FROM public.idempotency_keys
+       WHERE idempotency_key = 'smk-s9-closed-bill-void-' || v_suffix
+         AND operation = 'void_vendor_bill'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected closed-period bill void leaked a change';
+  END IF;
+
+  -- The authenticated browser role can still read the closed row but cannot
+  -- bypass the RPC boundary to reopen it directly.
+  BEGIN
+    EXECUTE 'SET LOCAL ROLE authenticated';
+    SELECT count(*) INTO v_period_count
+    FROM public.accounting_periods
+    WHERE period_start = date_trunc('month', v_old_date)::date;
+    IF v_period_count <> 1 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: authenticated SELECT lost accounting-period row';
+    END IF;
+    BEGIN
+      UPDATE public.accounting_periods
+      SET status = 'open'
+      WHERE period_start = date_trunc('month', v_old_date)::date;
+      RAISE EXCEPTION 'SMOKE_FAIL: authenticated directly reopened accounting period';
+    EXCEPTION WHEN insufficient_privilege THEN
+      NULL;
+    END;
+    EXECUTE 'RESET ROLE';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    EXECUTE 'RESET ROLE';
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE EXCEPTION '%', v_err; END IF;
+    RAISE EXCEPTION 'SMOKE_FAIL: direct period write proof failed unexpectedly: %', v_err;
+  END;
+
+  -- Revoking direct table access must not break the governed RPC boundary.
+  SELECT id INTO v_period
+  FROM public.accounting_periods
+  WHERE period_start = date_trunc('month', v_old_date)::date;
+  BEGIN
+    EXECUTE 'SET LOCAL ROLE authenticated';
+    PERFORM public.reopen_accounting_period(
+      v_period,
+      'Section 9 governed RPC access proof',
+      v_admin,
+      'smk-s9-rpc-reopen-' || v_suffix
+    );
+    PERFORM public.close_accounting_period(
+      (date_trunc('month', v_old_date) + interval '1 month - 1 day')::date,
+      v_admin,
+      'smk-s9-rpc-reclose-' || v_suffix
+    );
+    EXECUTE 'RESET ROLE';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    EXECUTE 'RESET ROLE';
+    RAISE EXCEPTION 'SMOKE_FAIL: governed period RPC access failed: %', v_err;
+  END;
+  IF (SELECT status FROM public.accounting_periods WHERE id = v_period) <> 'closed' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: governed reopen/reclose did not leave period closed';
   END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

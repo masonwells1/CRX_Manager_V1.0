@@ -13,6 +13,7 @@ import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { convertQuoteToOrderWithRowVersion } from '../lib/quoteLifecycleRpc';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -181,14 +182,15 @@ export default function Quotes() {
     setConverting(true);
     try {
       const idemKey = convertQuoteIdem.getKey();
-      const { data, error } = await supabase.rpc('convert_quote_to_order', {
+      const { data, error } = await convertQuoteToOrderWithRowVersion({
         p_quote_id: convertTarget.id,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
+        p_expected_row_version: convertTarget.row_version ?? null,
       });
       if (error) throw error;
       convertQuoteIdem.resetKey();
-      const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[] }>(data, 'convert_quote_to_order');
+      const result = data;
       if (result.status === 'already_converted') {
         toast('info', 'This booking was already converted — opening the order.');
       } else {
@@ -233,6 +235,12 @@ export default function Quotes() {
         toast('warning', 'This booking has partial draw-downs — draw the remaining balance from the quote instead of converting.');
       } else if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
         toast('error', 'This booking is closed — only sent or revised quotes can be converted.');
+      } else if (hasRpcCode(err, RpcErrorCodes.QUOTE_STALE_WRITE)
+        || hasRpcCode(err, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
+        convertQuoteIdem.resetKey();
+        closeConvert();
+        await fetchQuotes();
+        toast('warning', 'This quote changed before conversion. Review the refreshed quote before trying again.');
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
         toast('error', sanitizeError(err));

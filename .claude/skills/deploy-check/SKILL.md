@@ -128,8 +128,8 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 4. **Read CodeRabbit's automated review and fix every real issue it raises** (standing policy,
    Mason 2026-07-17). CodeRabbit reviews every PR on the public repo, is advisory rather than
    blocking, and its nitpicks may be dismissed with a one-line reason. It is the broad every-PR
-   pass; the Codex cross-model proof remains the hard gate for risky money/RLS/migration diffs —
-   both run, neither replaces the other.
+   pass; a separate exact-SHA `gpt-5.6-sol` high-effort proof remains the hard gate for risky
+   money/RLS/migration diffs — both run, neither replaces the other.
 5. Merge. **The merge is the deploy.**
 
 Landing regular reversible code with the full pipeline green is covered by Mason's standing push

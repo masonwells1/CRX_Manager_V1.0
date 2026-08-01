@@ -2,25 +2,46 @@
 // Tests for the Codex push-proof wrapper (scripts/write-codex-push-proof.mjs).
 // Run: node scripts/write-codex-push-proof.test.mjs
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import {
   buildCodexExecArgs,
   buildCodexPushProof,
   buildCodexReviewPrompt,
   CODEX_VERDICT_TOKEN,
+  CODEX_REVIEW_EFFORT,
+  CODEX_REVIEW_MODEL,
+  CODEX_REVIEW_PERMISSION_CONFIG,
+  CODEX_REVIEW_PERMISSION_PROFILE,
   codexExecutable,
   codexPushProofPath,
+  codexReviewerEnvironment,
   codexReviewProofVerdict,
+  createSanitizedReviewWorkspace,
   DEFAULT_TIMEOUT_SEC,
   defaultCodexBinRoot,
   GUARDED_BASE,
   parseArgs,
+  removeSanitizedReviewWorkspace,
+  safeReviewCaptureText,
   timeoutMessage,
   worktreeIsClean,
 } from "./write-codex-push-proof.mjs";
+import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
 // Cross-check against the REAL guard validator so the minted proof shape can
 // never silently drift from what codex-push-guard actually accepts.
 import { proofValid } from "../.claude/hooks/codex-push-lib.mjs";
+
+// Git hooks export repository-local GIT_* variables. A scratch `git init`
+// must never inherit them or it can target/reinitialize the caller's real
+// worktree administrative directory instead of the disposable fixture.
+for (const name of gitLocalEnvironmentNames()) delete process.env[name];
+for (const name of Object.keys(process.env)) {
+  if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) delete process.env[name];
+}
 
 // ── arg parsing ──────────────────────────────────────────────────────────────
 const dflt = parseArgs([]);
@@ -69,23 +90,188 @@ assert.equal(GUARDED_BASE, "origin/main", "review base is pinned to the guard's 
 // ── Codex invocation: fixed review prompt + read-only exec args ───────────────
 const prompt = buildCodexReviewPrompt();
 assert.match(prompt, /INDEPENDENT pre-push security review/i);
-assert.match(prompt, /git diff origin\/main\.\.\.HEAD/, "prompt pins the guarded base diff");
+assert.match(prompt, /candidate snapshot adds versus origin\/main/, "prompt pins the guarded base");
+assert.match(prompt, /sanitized, Git-free review packet/i, "prompt restricts review to the sanitized packet");
 assert.match(prompt, /untrusted DATA/i, "prompt treats diff content as untrusted");
+assert.match(prompt, /coordination-only threat model/i, "review prompt applies the documented factory trust model");
+assert.match(prompt, /authority monotonicity/i, "review prompt requires factory state to add restrictions without granting authority");
+assert.match(prompt, /factory state alone weakens or replaces.*independent gates/is, "review still blocks any real factory-to-production bypass");
 assert.ok(
   prompt.includes(`${CODEX_VERDICT_TOKEN}: CLEAN`) && prompt.includes(`${CODEX_VERDICT_TOKEN}: BLOCKERS`),
   "prompt demands the machine verdict token in both forms",
 );
 
-const args = buildCodexExecArgs({ root: "/repo/root", prompt });
+const args = buildCodexExecArgs({ root: "/repo/root", prompt, platform: "win32" });
 assert.deepEqual(
   args,
-  ["exec", "--sandbox", "read-only", "-C", "/repo/root", "-c", "approval_policy=never", "-"],
+  [
+    "exec",
+    "--skip-git-repo-check",
+    "--ephemeral",
+    "--ignore-user-config",
+    "--model",
+    "gpt-5.6-sol",
+    "-c",
+    'model_reasoning_effort="high"',
+    "-c",
+    'windows.sandbox="elevated"',
+    "-C",
+    "/repo/root",
+    "-c",
+    "approval_policy=never",
+    "-c",
+    'default_permissions="packet-review"',
+    "-c",
+    CODEX_REVIEW_PERMISSION_CONFIG,
+    "--disable",
+    "hooks",
+    "-",
+  ],
 );
-// SECURITY: read-only sandbox; `-` requires the wrapper to feed its fixed prompt
-// directly through stdin with shell:false, so metacharacters can never execute.
-assert.equal(args[1], "--sandbox");
-assert.equal(args[2], "read-only");
+// SECURITY: an OS-enforced deny-root profile exposes only minimal runtime files
+// plus the sanitized packet. `-` feeds the fixed prompt through stdin with
+// shell:false, so metacharacters can never execute.
+assert.ok(args.includes(`default_permissions="${CODEX_REVIEW_PERMISSION_PROFILE}"`));
+assert.ok(CODEX_REVIEW_PERMISSION_CONFIG.includes('":root" = "deny"'));
+assert.ok(CODEX_REVIEW_PERMISSION_CONFIG.includes('":workspace_roots" = { "." = "read" }'));
+assert.ok(CODEX_REVIEW_PERMISSION_CONFIG.includes("network = { enabled = false }"));
+assert.equal(args[args.indexOf("--model") + 1], CODEX_REVIEW_MODEL);
+assert.ok(args.includes(`model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`));
+assert.ok(args.includes("--ignore-user-config"));
+assert.ok(args.includes("--ephemeral"));
+assert.ok(args.includes("--skip-git-repo-check"), "Git-free sanitized packets use the explicit trusted no-repository mode");
+assert.equal(args[args.indexOf("--disable") + 1], "hooks", "project hooks stay disabled inside the independent reviewer");
 assert.equal(args[args.length - 1], "-", "Codex reads the fixed prompt from wrapper-owned stdin");
+
+const scrubbedEnvironment = codexReviewerEnvironment({
+  ...process.env,
+  OPENAI_API_KEY: "must-not-pass",
+  GITHUB_TOKEN: "must-not-pass",
+  USERPROFILE: "C:\\Users\\secret-bearing-profile",
+  CODEX_HOME: "C:\\Users\\secret-bearing-profile\\.codex",
+});
+assert.equal(scrubbedEnvironment.OPENAI_API_KEY, undefined, "reviewer environment omits API keys");
+assert.equal(scrubbedEnvironment.GITHUB_TOKEN, undefined, "reviewer environment omits GitHub credentials");
+assert.equal(scrubbedEnvironment.USERPROFILE, "C:\\Users\\secret-bearing-profile", "reviewer retains the platform profile needed for Codex authentication");
+assert.equal(scrubbedEnvironment.CODEX_HOME, "C:\\Users\\secret-bearing-profile\\.codex", "reviewer retains the explicit Codex authentication home");
+assert.equal(
+  safeReviewCaptureText("OPENAI_API_KEY=sk-this-must-not-persist", "STDOUT").includes("sk-this-must-not-persist"),
+  false,
+  "raw review captures omit secret-shaped output",
+);
+assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary clean review/);
+
+{
+  const source = mkdtempSync(path.join(tmpdir(), "crx-review-source-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: source, stdio: "ignore" });
+  writeFileSync(path.join(source, ".gitignore"), ".env\n.claude/session-state/\n");
+  writeFileSync(path.join(source, "tracked.txt"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: source, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", "commit", "-qm", "base"], { cwd: source, stdio: "ignore" });
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: source, stdio: "ignore" });
+  writeFileSync(path.join(source, "tracked.txt"), "candidate\n");
+  mkdirSync(path.join(source, "supabase", "migrations"), { recursive: true });
+  writeFileSync(
+    path.join(source, ".gitattributes"),
+    ".gitattributes export-ignore\nsupabase/migrations/hidden.sql export-ignore\n",
+  );
+  writeFileSync(
+    path.join(source, "supabase", "migrations", "hidden.sql"),
+    "-- This risky candidate file must never disappear from review.\n",
+  );
+  writeFileSync(path.join(source, ".env"), "GITHUB_TOKEN=must-not-copy\n");
+  execFileSync("git", ["add", "tracked.txt", ".gitattributes", "supabase/migrations/hidden.sql"], { cwd: source, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", "commit", "-qm", "candidate"], { cwd: source, stdio: "ignore" });
+  const sanitized = createSanitizedReviewWorkspace({
+    sourceRoot: source,
+    baseRef: "origin/main",
+    candidateRef: "HEAD",
+  });
+  assert.equal(existsSync(path.join(sanitized.root, ".git")), false, "sanitized review workspace contains no Git directory");
+  assert.equal(existsSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", ".env")), false, "ignored environment files are absent");
+  assert.equal(readFileSync(path.join(sanitized.root, "BASE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"), "base\n");
+  assert.equal(readFileSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"), "candidate\n");
+  assert.equal(
+    existsSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", ".gitattributes")),
+    true,
+    "candidate-controlled export-ignore cannot hide .gitattributes from the reviewer",
+  );
+  assert.equal(
+    existsSync(path.join(sanitized.root, "CANDIDATE_SNAPSHOT", "supabase", "migrations", "hidden.sql")),
+    true,
+    "candidate-controlled export-ignore cannot hide a risky tracked file from the reviewer",
+  );
+  const candidateTreeManifest = JSON.parse(
+    readFileSync(path.join(sanitized.root, "CANDIDATE_TREE_MANIFEST.json"), "utf8"),
+  );
+  const candidateManifestPaths = candidateTreeManifest.entries.map((entry) => entry.path);
+  assert.ok(candidateManifestPaths.includes(".gitattributes"), "candidate tree manifest binds .gitattributes");
+  assert.ok(
+    candidateManifestPaths.includes("supabase/migrations/hidden.sql"),
+    "candidate tree manifest binds export-ignored risky file",
+  );
+  assert.ok(
+    candidateTreeManifest.entries.every((entry) =>
+      /^[0-7]{6}$/.test(entry.gitMode)
+      && /^[a-f0-9]{40,64}$/.test(entry.objectId)
+      && /^[a-f0-9]{64}$/.test(entry.blobSha256)
+      && /^[a-f0-9]{64}$/.test(entry.snapshotSha256)),
+    "commit tree manifest binds Git mode, object id, raw blob hash, and copied bytes",
+  );
+  const reviewPacketText = [
+    readFileSync(path.join(sanitized.root, "REVIEW_DIFF.patch"), "utf8"),
+    readFileSync(path.join(sanitized.root, "REVIEW_MANIFEST.json"), "utf8"),
+    readFileSync(path.join(sanitized.root, "BASE_TREE_MANIFEST.json"), "utf8"),
+    readFileSync(path.join(sanitized.root, "CANDIDATE_TREE_MANIFEST.json"), "utf8"),
+  ].join("\n").replace(/\\/g, "/");
+  assert.match(reviewPacketText, /-base[\s\S]*\+candidate/);
+  assert.equal(
+    reviewPacketText.includes(sanitized.root.replace(/\\/g, "/")),
+    false,
+    "review packet does not disclose its temporary review root",
+  );
+  assert.equal(
+    reviewPacketText.includes(source.replace(/\\/g, "/")),
+    false,
+    "review packet does not disclose the source checkout path",
+  );
+  assert.doesNotMatch(reviewPacketText, /[A-Za-z]:\/Users\//i, "review packet does not disclose a Windows user profile path");
+  removeSanitizedReviewWorkspace(sanitized.root);
+
+  try {
+    symlinkSync("missing-target.txt", path.join(source, "dangling-review-link.txt"), "file");
+    const workingTreePacket = createSanitizedReviewWorkspace({
+      sourceRoot: source,
+      baseRef: "origin/main",
+    });
+    assert.equal(
+      readFileSync(path.join(workingTreePacket.root, "CANDIDATE_SNAPSHOT", "dangling-review-link.txt"), "utf8"),
+      "SANITIZED_SYMLINK_TARGET:missing-target.txt\n",
+      "dangling symlinks remain visible as sanitized candidate entries",
+    );
+    const workingTreeManifest = JSON.parse(readFileSync(path.join(workingTreePacket.root, "CANDIDATE_TREE_MANIFEST.json"), "utf8"));
+    assert.ok(workingTreeManifest.entries.some((entry) => entry.path === "dangling-review-link.txt"), "dangling symlink is bound into the candidate manifest");
+    removeSanitizedReviewWorkspace(workingTreePacket.root);
+  } catch (error) {
+    if (!new Set(["EPERM", "EACCES", "UNKNOWN"]).has(error?.code)) throw error;
+  }
+  writeFileSync(path.join(source, "tracked.txt"), "working tree\n");
+  writeFileSync(path.join(source, "untracked.txt"), "nonignored\n");
+  const workingPacket = createSanitizedReviewWorkspace({ sourceRoot: source, baseRef: "origin/main" });
+  assert.equal(
+    readFileSync(path.join(workingPacket.root, "CANDIDATE_SNAPSHOT", "tracked.txt"), "utf8").replace(/\r\n/g, "\n"),
+    "working tree\n",
+    "factory review packet includes current tracked working-tree bytes",
+  );
+  assert.equal(
+    readFileSync(path.join(workingPacket.root, "CANDIDATE_SNAPSHOT", "untracked.txt"), "utf8").replace(/\r\n/g, "\n"),
+    "nonignored\n",
+    "factory review packet includes non-ignored untracked candidate bytes",
+  );
+  assert.equal(existsSync(path.join(workingPacket.root, "CANDIDATE_SNAPSHOT", ".env")), false, "working-tree packet still excludes ignored secrets");
+  removeSanitizedReviewWorkspace(workingPacket.root);
+  rmSync(source, { recursive: true, force: true });
+}
 
 // ── verdict parsing: DETERMINISTIC machine token, no prose heuristics ─────────
 // Codex must end its reply with exactly one `CODEX_PROOF_VERDICT: CLEAN|BLOCKERS`
@@ -163,11 +349,15 @@ assert.equal(proof.codex_ran, true);
 assert.equal(proof.verdict, "clean");
 assert.equal(proof.head_sha, HEAD);
 assert.equal(proof.base_sha, BASE, "proof records the reviewed origin/main base");
+assert.equal(proof.model, CODEX_REVIEW_MODEL, "proof records mandatory Sol reviewer");
+assert.equal(proof.reasoning_effort, CODEX_REVIEW_EFFORT, "proof records mandatory high effort");
 assert.ok(proof.timestamp, "proof carries a timestamp");
 // The minted proof must PASS the guard's own validator for the exact head.
 assert.equal(proofValid(proof, HEAD, now), true, "minted proof validates against codex-push-guard's proofValid");
 // …and against the guard's full check including the base it gates on.
 assert.equal(proofValid(proof, HEAD, now, BASE), true, "minted proof validates against the exact head AND base");
+assert.equal(proofValid({ ...proof, model: "gpt-5.6-terra" }, HEAD, now, BASE), false, "non-Sol proof is rejected");
+assert.equal(proofValid({ ...proof, reasoning_effort: "medium" }, HEAD, now, BASE), false, "non-high proof is rejected");
 // …and be rejected for the wrong head / moved base / stale / bad verdict.
 assert.equal(proofValid(proof, "b".repeat(40), now), false, "wrong head_sha → invalid");
 assert.equal(proofValid(proof, HEAD, now, "d".repeat(40)), false, "moved origin/main base → invalid");

@@ -50,6 +50,12 @@ describe('ConfirmModal', () => {
     expect(screen.getByText('Yes, Delete')).toBeInTheDocument();
   });
 
+  it('uses a custom reachable secondary label without changing existing callers', () => {
+    render(<ConfirmModal {...defaultProps} cancelLabel="Keep editing" />);
+    expect(screen.getByText('Keep editing')).toBeInTheDocument();
+    expect(screen.getByText('Keep editing').closest('button')?.className).toContain('min-h-11');
+  });
+
   it('applies danger variant styles by default', () => {
     render(<ConfirmModal {...defaultProps} />);
     const messageContainer = screen.getByText(defaultProps.message).closest('div');
