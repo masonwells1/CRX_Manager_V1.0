@@ -2,6 +2,47 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-01 — Factory two-touchpoint authority model corrected
+
+The factory keeps Mason's exact two owner surfaces—ordinary Claude/Codex chat and
+one read-only Factory Board—without pretending a repository hook can
+cryptographically authenticate the human behind a Windows account. Ticket and
+morning decisions remain exact, timestamped coordination records. Their keyed
+receipt now has the narrower, accurate meaning of canonical hook-origin and
+event-integrity evidence.
+
+The hard invariant is authority monotonicity: factory state may narrow and
+sequence reversible work already authorized by Mason's request and repository
+policy, but it never grants or replaces push, merge, CI, deploy, migration,
+live-data, secret, permission, or destructive-action authority. The Board and
+both approval questions state that boundary. The fixed Sol/high review charter
+now tests for a real independent-gate bypass instead of treating the documented
+same-Windows-user limitation itself as CRX database actor forgery.
+
+The post-reconciliation Sol/high pass found two remaining landing leaks. Factory
+approval could send current `HEAD` to an arbitrary remote branch such as
+`production`, and file-consuming commit/PR options could publish ignored secret
+text as metadata. Factory pushes are now restricted to the matching non-protected
+feature branch on `origin`; protected branches still land only through the normal
+PR merge gate. Landing custody also rejects commit message/template files and PR
+body/template/fill inputs. Executable regressions cover both disclosure routes.
+
+The next Sol/high pass found that structured `Grep` validated its base path but
+not its glob/include/ignore selectors. Those selectors now pass through the same
+contained, non-secret, non-ignored path validation as `Glob`; no-ignore, hidden,
+and symlink-following visibility overrides fail closed. Glob metacharacters are
+normalized for secret detection, and every `no_ignore_*` spelling is denied.
+Regressions cover `.env`, brace-disguised `.env`, `*.key`, no-ignore variants,
+and hidden-file searches.
+
+The following Sol/high pass found that landing custody could still merge an
+unrelated numeric or non-main PR, and that a feature push could trigger a
+previously enabled auto-merge without an immediate exact-head gate. Both Claude
+and Codex guards now require the canonical fresh Sol/high proof before a factory
+feature push, refuse pushes while any open PR for that head has auto-merge
+enabled, validate factory binding before every non-main merge early return, and
+permit only the accepted `base=main` head with green checks and an exact proof.
+
 ## 2026-08-01 — PR #289 automated-review findings closed
 
 The final GitHub review pass added a five-second bound to Git executable-path
@@ -1149,6 +1190,330 @@ the whole-calendar-month constraint.
 The live schema-integrity tripwire now guards the exact month-lock calls in
 both vendor-bill writers and period close, so a later function re-emission
 cannot silently reopen the race.
+## 2026-07-30 — Governed factory pilot adds chat approvals and one read-only board
+
+The existing `/ship` delivery pipeline now has a governed, single-lane factory entry for plain-English
+autonomous or overnight requests. Mason still uses only chat: the session drafts a mission ticket,
+presents one exact yes/no question, and records his verbatim response. A 24-hour receipt binds that
+response to the chat session, immutable ticket hash, question fingerprint, and current `origin/main`.
+The deterministic lane-start gate refuses missing, expired, cross-session, changed-ticket, moved-base,
+globally paused, or second-active-lane work.
+
+Claude and Codex share one append-only, hash-chained ledger under the absolute Git common directory,
+so state follows the repository across worktrees without per-tool copies. Direct paths, direct library
+invocation, inline-code bypasses, and governance self-edits in an active lane are blocked, while the
+writer checks the canonical process and call stack; these are strong agent-tool controls rather than
+a claim of operating-system cryptographic isolation. An interrupted final JSONL line degrades
+read-only display but cannot advance work. Legal session-bound stage transitions, a behavior summary,
+and successful CLI-executed repository harness proof are required before a job can reach morning
+review. Its name must be in both the immutable approved ticket and a fixed allowlist; its resolved
+npm body must match `origin/main`, and the command/body/package/base/output hashes are rechecked.
+Copied or self-labeled files do not qualify. The active pilot lane also blocks build writes from
+fresh parallel chats. A stale lock has a validated age/process-checked
+recovery path, and an emergency hold still blocks lanes if the ledger cannot record Mason's pause.
+Mason's later chat acceptance means only
+`approved-to-land`; it never self-certifies a job as live. A live closeout additionally requires a
+commit already contained in `origin/main`, authenticated Vercel proof of the exact `READY` main
+commit currently attached to the canonical production alias, a successful GitHub Production
+deployment for that same SHA, HTTP 200 from the fixed canonical app URL, re-hashed attached proof,
+and a durable content-hashed
+packet under `docs/audits/factory/jobs/`. Packet preparation does not mark the job live. The exact
+packet must first be committed into `origin/main`; closeout then rechecks production and records the
+packet-containing commit.
+
+The single owner output is `npm run factory:board`: a loopback-only, read-only page extending `/fleet`
+with one card per job, plain-English status, behavior result, blocker, and linked proof. It has no
+forms or decision controls; accept, reject, pause, resume, and revise remain normal chat. Multi-lane
+dispatch stays disabled until the pilot proves safe behavior and trustworthy hard cost enforcement
+exists. Existing `/ship` review, commit, PR, production, migration, deletion, secret, and permission
+gates are unchanged.
+
+Proof includes focused state/CLI/hook/board tests, Claude–Codex manifest parity, synced workflow
+adapters, and a real narrow-screen browser pass. Fable-low independently approved the revised design
+and reviewed the implementation in three bounded rounds. Every reported issue was remediated locally,
+including a final post-landing closeout regression, but the third-round `NEEDS-WORK` result exhausted
+the original review-loop cap. Mason then explicitly authorized a fresh acceptance review. That review
+confirmed every earlier fix and found four more actionable gaps: an agent-runnable resume command,
+Factory Board wording that could resume the global factory, natural overnight requests that could miss
+factory routing, and a non-idempotent closeout retry. The current candidate removes the agent resume
+surface, distinguishes Board process language, routes direct factory execution phrases, makes closeout
+retry-safe, and also redacts internal session identifiers from the Board API. It remains uncommitted
+until a new independent Fable acceptance evaluates these exact repaired bytes. That next acceptance
+confirmed those five repairs and found three additional governance gaps plus one ambiguous resume
+phrase. The current candidate now protects every trusted writer/import/manifest from governed-lane
+edits, limits corrupt-state denial to mutations while preserving diagnostics and recovery, makes
+pre-ticket intent clearing owner-chat-only, and requires explicit resume/restart wording.
+A later acceptance pass confirmed all four repairs and found one remaining governance-edit route
+through `.claude/settings.local.json` plus in-place/opaque shell mutators. The final candidate protects
+that local hook-disabling manifest, denies `sed -i`, `perl -i`, `tee`, `git apply`,
+`git checkout --`, and `git restore` governance rewrites from governed sessions, accepts the natural
+unqualified reply “yes, ship it,” and explains decision-like replies that remain too ambiguous to bind.
+The first trusted Codex exact-head publication review then found three HIGH control gaps that the
+earlier Fable passes missed: shell writes were not classified as lane mutations, harness evidence was
+not bound to the code bytes it proved, and the mutating CLI trusted caller-supplied session/tool flags.
+Publication stopped. The repair classifies native, MCP, shell/redirection, Git, and unknown-script
+writes across ticket/pause/one-lane gates; fingerprints every tracked and non-ignored repository file
+before and after a harness and rechecks it before review/closeout; redacts status identity; and requires
+each mutating CLI call to consume a 30-second, single-use permit minted from the real PreToolUse
+session. Direct permit injection, reading, forwarding, hook invocation, and identity-flag overrides
+fail closed. A second trusted Codex publication review then found four more trust-boundary gaps.
+Closeout now fingerprints the actual landing commit and requires it to contain the exact harness-proven
+bytes; simultaneous lane starts use the ledger's compare-and-swap hash so only one can win; arbitrary
+local-file evidence attachment is removed; the later seventh review replaces bounded production text
+with machine-checked deployment and HTTP proof. Active lanes may use structured file edits and fixed verification commands, but
+opaque shell/helper/MCP process execution is denied so a generated helper cannot hide its mutation
+targets from the guards. A third trusted Codex publication review then found two remaining HIGH
+execution boundaries: command substitution could still reach the permit path, and a branch-modified
+harness dependency could execute directly on the credentialed workstation. Factory CLI recognition
+now accepts only a strict shell-metacharacter-free argument grammar. Production harnesses execute in
+a pinned Docker image whose dependency layer is built from `origin/main` with install scripts
+disabled; the harness gets no inherited credentials, no network, no Linux capabilities, a read-only
+container root, bounded resources, and only a disposable copy of tracked/non-ignored repository
+bytes. The original checkout and ignored files are exposed only to the separate no-network bootstrap
+container, never the harness process, and the disposable workspace is deleted after each run. Both a
+real contained factory test run and a real contained production build pass. The focused host suite
+now covers 205 adversarial assertions before another exact-SHA review.
+
+A fourth trusted Codex publication review found that the pilot still overstated the authenticity of
+same-user disk state, allowed approval wording detached from ticket content, accepted a
+branch-controlled harness without a mandatory independent verdict, and resolved `origin/main`
+without fetching. The repair now describes the hash-chained ledger and Board accurately as
+coordination/audit state—not an operating-system security boundary or landing authority—and blocks
+cross-session writes/helper execution throughout the nonterminal custody window. Ticket and morning
+questions are generated only by the CLI from the exact ticket/result/proof; no caller-written
+question is accepted. Critical decisions fetch `origin/main`, and morning review requires a
+fixed-prompt read-only Codex CLEAN receipt bound to the complete repository fingerprint. The Board
+shows that reviewer receipt beside harness proof. Merge, deployment, migration, live-data, and
+production authority remain exclusively with the existing `/ship`, GitHub, and owner gates.
+A fifth trusted Codex publication review then exposed two execution bypasses and a persistence gap:
+Git inspection accepted output-writing options, raw orchestration tools could evade mutation
+classification, and a raw JWT could enter tracked proof. Git reads now use a strict option/token
+allowlist, unknown non-read tools default to opaque execution, and all ticket/event payloads receive
+expanded cloud-token/JWT scanning before persistence.
+A sixth Codex pass then caught executable ripgrep preprocessing, stale-base rebinding at morning
+presentation, “any one” handling of a multi-harness ticket, and a custody deadlock after acceptance.
+Shell ripgrep is no longer a read exemption; morning presentation freshly revalidates the immutable
+base, every required harness, and exact independent review; the reviewer prompt lists those
+harnesses; and `approved-to-land` exits factory custody into the ordinary `/ship` lifecycle.
+A seventh Codex pass found that arbitrary prose could still self-certify production, a closeout packet
+could disappear with its worktree and omitted key provenance, and evidence files were not reopened
+before acceptance. Caller-supplied production proof is removed. The trusted broker now requires a
+successful GitHub `Production` deployment for the exact landing SHA and HTTP 200 from the canonical
+app URL. Harness and review files are re-hashed at morning and closeout, while the two-phase packet
+records approved base, reviewer verdicts, landing SHA, and the pre-closeout ledger checkpoint and
+must itself land in `origin/main` before `live`.
+An eighth pass found four deeper lifecycle/isolation gaps. Review acceptance no longer requires the
+pre-commit HEAD SHA to equal the later landing commit; it requires the exact complete repository
+content fingerprint, with a regression that changes and commits a real tracked file. Tickets now
+approve literal file or directory prefixes, and active structured edits reject hidden targets,
+worktree or symlink escapes, `.git`, ignored/secret-bearing files, and anything outside that scope.
+The independent prompt carries the complete canonical ticket and hash. Its process is ephemeral,
+disables user plugins/MCP configuration, runs explicit `gpt-5.6-sol` at high reasoning, and receives a minimal
+tool/OS environment rather than inherited credentials. The Board receipt stores only a bounded CLEAN
+summary plus output hashes/counts—not raw process output.
+Mason then retired Claude/Fable from all active adversarial gates because those credits were nearly
+exhausted. Factory acceptance, risky push/merge proof, unattended overnight review, and migration
+review charters now pin `gpt-5.6-sol` with high reasoning explicitly. The trusted wrappers run
+ephemerally with user configuration disabled where supported, and the shared risky-change validator
+rejects proofs that do not record both `model: gpt-5.6-sol` and `reasoning_effort: high`. Claude review
+tools remain available only when Mason explicitly requests Claude; they are no longer a mandatory
+publication or factory gate.
+The first exact-SHA Sol/high acceptance correctly blocked publication because the factory imported
+review arguments from an editable proof wrapper and the repository policy still described a
+mandatory cross-model gate. The repair records Mason's Sol/high decision in the canonical policy,
+disables branch-controlled project hooks inside every independent reviewer invocation, and makes the
+factory guard protect the complete reviewer/proof trust chain from structured and shell self-edits.
+A second exact-SHA Sol/high acceptance found four more trust gaps: revised tickets retained old
+receipts, the live-migration consumer did not validate reviewer model/effort, patch payloads could
+hide governance destinations, and future factory-broker edits were absent from the risky registry.
+Ticket revisions now clear active proof/decision state and every harness/review receipt binds the
+ticket hash; migration apply requires recorded Sol/high identity; patch, input, raw patch, and move
+destinations are inspected; and the authoritative factory CLI/state broker is both risky and
+protected.
+A third exact-SHA Sol/high acceptance found that factory-command permits were issued before
+cross-session custody checks, ticket presentation could rewind an existing job, governed reads could
+reach secret-bearing files, and runtime harnesses could inspect the shared Git directory. The repair
+binds every permit and resulting append to the exact terminal ledger hash, validates session custody
+and eligible transitions in the hook, CLI, and replay layer, and permits cross-tool takeover only
+after Mason explicitly requests it through the real owner-input hook (which revokes the old
+approval/fingerprint). Governed reads now stay inside tracked/non-secret worktree paths, wildcard or
+dynamic shell reads and secret-shaped additions fail closed, and branch-controlled harness code sees
+only a new sanitized Git repository inside its disposable volume—not shared Git objects, config,
+other worktrees, or factory state.
+A fourth exact-SHA Sol/high acceptance found that nominally read-only PowerShell commands could
+still traverse non-filesystem providers such as `Env:`, exposing inherited credentials without a
+secret-shaped path. Governed shell reads now reject provider-qualified names, named PowerShell
+drives, and drive-relative paths; focused regressions cover environment, registry, certificate,
+and relative-drive forms.
+A fifth exact-SHA Sol/high acceptance found two custody gaps: a newly approved lane could inherit
+unrelated changes already present in its worktree, and an independent reviewer could read ignored
+host files while reviewing in place. Lane start now requires a clean checkout exactly at the
+approved base, while evidence, owner-review, and closeout validation recompute the complete
+base-to-candidate path set and reject anything outside the ticket. Factory and push-proof review now
+run in disposable Git-free packets containing only exact base bytes, tracked/non-ignored candidate
+bytes, a precomputed diff, and a SHA manifest; ignored secrets, session state, host profile paths,
+and shared Git metadata are not exposed. The trusted Codex invocation uses the explicit
+`--skip-git-repo-check` compatibility flag because the packet deliberately contains no `.git`;
+read-only sandboxing, disabled hooks, fixed stdin, and exact SHA binding remain enforced.
+A sixth exact-SHA Sol/high acceptance found three remaining fail-open paths. Intent routing now
+writes a durable per-session failure latch before appending the ledger and clears it only after
+success, so a stale ledger lock blocks both build writes and mutating factory commands until
+recovery and owner-prompt re-submit. Governed Git inspection no longer accepts `git -C`, and every
+literal shell-read operand is checked for worktree containment, ignored/secret paths, and symlink
+escape. Repository and landing fingerprints now bind Git mode and object type in addition to path
+and blob identity, preventing a regular-file proof from validating a symlink or executable-mode
+change.
+A seventh exact-SHA Sol/high acceptance found that permit-bound summary/blocker file flags could
+read arbitrary host files and that closeout accepted historical deployment success after rollback.
+The factory CLI no longer accepts caller-selected ticket, summary, blocker, or recovery files;
+bounded canonical base64 carries the text directly, and secret-shaped operational text is rejected
+before persistence. Closeout now selects the newest Production deployment, requires its newest
+status to be `success`, and uses GitHub compare ancestry to prove the currently deployed SHA is the
+landing commit or a descendant.
+An eighth exact-SHA Sol/high acceptance found that the read-only Factory Board and `package.json`
+test wiring were not consistently classified as risky/protected, and that absolute temporary/profile
+paths remained in sanitized diff headers. Both trust-chain surfaces are now protected from lane
+self-editing and require Sol/high review when changed. Review diffs use fixed relative snapshot
+operands, with regression proof that neither the source checkout nor the temporary review-root/user
+profile path appears in the packet artifacts. Commit-bound closeout revalidation reads test wiring
+from the frozen landing commit rather than the caller's mutable working tree. Scratch review-packet
+tests also strip hook-inherited repository-local Git variables before initializing a disposable
+repository, preventing the test from targeting the caller's real Git administration directory.
+A ninth exact-SHA Sol/high acceptance found that caller-selected shell working directories could
+execute an approved-looking read or permit-bearing relative factory command in another checkout,
+that the factory-intent failure latch could retain a raw secret-bearing owner prompt, and that
+negated resume language could clear the global hold. Governed shell actions now require any explicit
+`cwd`/`workdir` to resolve to the exact governed repository root, and recognized factory commands
+are rewritten to the canonical absolute broker path before execution. Intent routing scans before
+persistence and latches store only the prompt SHA-256 plus a rejection flag. Negated resume/restart
+phrases leave the factory paused.
+
+A tenth exact-SHA Sol/high acceptance found that a command beginning with a permitted PowerShell
+read could include a literal newline followed by `Set-Item`, bypassing both the single-command
+assumption and incomplete mutation verb registries. Governed shell commands now reject CR/LF before
+read-only classification. The lane, shared-state integrity, and production guards also classify
+PowerShell item/property/ACL writers and their common aliases as mutations, with LF and CRLF
+read-then-write regressions pinned against governance targets.
+
+An eleventh exact-SHA Sol/high acceptance found that morning acceptance released factory custody
+before commit, push, and merge, while exact-byte validation happened only during post-merge
+closeout. Morning acceptance now records the exact independently reviewed repository hash and file
+count, and one-lane custody continues through landing. The lane guard, Claude push/merge guards, and
+Codex production guard revalidate the accepted bytes, ticket scope, base, harness, and Sol/high
+receipt at each landing action; alternate refs or drift require parking, fresh proof, and another
+owner decision. The two-phase closeout remains possible only through its one exact broker-generated,
+ledger-hashed packet file.
+
+The final pre-commit run also exposed a hook-context leak in the new morning-acceptance fixture:
+repository-local Git variables inherited from pre-commit could redirect `git init` into CRX's shared
+Git directory. The interrupted test temporarily set `core.bare=true`; the setting was restored
+before publication, and the fixture test now removes repository, index, object, prefix, shallow,
+graft, and worktree context variables before any direct Git command or in-process evidence-library
+call. A regression injects the dangerous variables explicitly.
+
+A twelfth exact-SHA Sol/high acceptance found two secret-exposure paths. Broad MCP reader-name
+matching could bypass the native worktree, ignored-file, secret-path, and symlink checks, while a
+secret-bearing pause prompt could fall back into an emergency-hold reason displayed by the Board.
+Only two exact MCP file-reader identities are now permitted and their targets receive the native
+structured-read checks; every unknown MCP reader is opaque and denied. Pause/resume prompts are
+secret-scanned before persistence. A secret-bearing pause activates a fail-safe emergency hold with
+only the prompt SHA-256, a secret-bearing resume changes nothing, and emergency-hold storage also
+sanitizes unsafe reasons independently.
+
+A thirteenth exact-SHA Sol/high acceptance found that commit review packets used `git archive`,
+which honors branch-controlled `.gitattributes export-ignore`. A candidate could therefore hide a
+risky tracked file—and the attribute rule itself—from the reviewer while still requesting a proof
+bound to the full HEAD. Commit snapshots now enumerate the exact tree with trusted `git ls-tree`,
+read raw blobs through `git cat-file --batch`, recompute each Git object ID, verify the complete
+copied path set and SHA-256 values, and publish mode/object/blob metadata in separate base/candidate
+tree manifests. An adversarial fixture marks both `.gitattributes` and a migration `export-ignore`
+and proves both remain in the review snapshot, diff, and manifest.
+
+A fourteenth exact-SHA Sol/high acceptance found that permit command syntax followed
+`process.platform` instead of the shell tool. On Windows, Claude's Git-Bash-backed `Bash` tool
+therefore received `Set-Location` and `$env:` PowerShell syntax and could not execute any governed
+factory command. Permit and working-directory rewrites now follow the actual tool identity:
+`Bash` receives POSIX syntax even on Windows, while `PowerShell` and Codex `shell_command` retain
+PowerShell syntax. The regression invokes the installed Git Bash with the hook-rewritten,
+one-time-permit command and requires a real governed ledger transition to `verifying`.
+
+A fifteenth exact-SHA Sol/high acceptance found two landing deadlocks/truth gaps. First, factory
+custody blocked `write-codex-push-proof.mjs` after commit even though the existing risky merge guard
+requires that exact-SHA receipt. Landing custody now permits only that protected wrapper after
+revalidating the committed owner-accepted bytes and rewrites it to the canonical absolute path.
+Second, a historical successful GitHub deployment plus HTTP 200 could not identify the commit
+actually serving after a Vercel alias rollback. Closeout now resolves the deployment currently
+attached to `croprxsolutions.app` through authenticated Vercel inspection, requires a `READY`
+main-branch deployment from the governed repository with internally matching Git metadata, requires
+a successful GitHub Production record for that same SHA, and compares that alias-bound SHA to the
+landing commit. A rollback behind the job therefore cannot be labeled `live`.
+
+A sixteenth exact-SHA Sol/high acceptance found that descendant ancestry still allowed a later
+revert to stand in for the accepted behavior, and that high-risk handling trusted the ticket's
+self-declared `riskAreas`. Production proof now requires exact equality to the commit expected in
+each phase: the accepted landing commit before packet preparation, then the sole packet-containing
+closeout commit before `live`. `ahead` is rejected because a revert is still a descendant.
+Ticket drafting automatically requires recognized risk controls for known risky paths, and the
+post-build broker independently classifies exact changed paths plus changed diff content. Money,
+inventory, commission, auth/RLS/permission, lifecycle, idempotency, migration, governance, and
+opaque changes cannot reach review under an underclassified ticket; they must be revised and
+approved again. The Sol prompt now names every CRX red line explicitly and treats ticket labels as
+untrusted rather than as the scope of technical scrutiny.
+
+A seventeenth exact-SHA Sol/high acceptance found that broad resume matching could interpret
+explicit negative owner instructions such as “under no circumstances resume the factory,”
+“I have no plans to resume the factory,” and “anything but resume the factory” as permission to
+clear the emergency hold. Resume now recognizes only a tightly bounded standalone affirmative
+resume/restart phrase. Negative, qualified, and ambiguous wording fails closed, and all three
+reported bypass phrases are covered by executable regressions.
+
+An eighteenth exact-SHA Sol/high acceptance found that unrecognized structured writers and Git-path
+indirection could target shared factory state, while ledger replay accepted an approval event without
+independently proving the exact prior decision context or its owner-hook origin. Direct state reads or
+writes are now denied across recursively inspected path-bearing tool arguments and shell Git-path
+derivation. Owner-only events receive random write-once receipts minted only inside the real
+owner-prompt hook and bound by a private-key HMAC-SHA-256 code to the complete event plus prior ledger
+hash. Copying or synthesizing ledger/receipt bytes without that installation key fails closed. Replay now rejects unknown
+events and illegal ticket, lane, evidence, review, acceptance, or closeout transitions, including any
+actor, session, ticket, question, base, expiry, decision, or receipt mismatch. This strengthens the
+supported Claude/Codex tool boundary without changing the explicit same-Windows-user limitation.
+
+A nineteenth exact-SHA Sol/high acceptance found two active-lane read/execution disguises. Node's
+`--check` mode accepted an option-shaped operand that could preload and execute a module, and Git
+`show`, `cat-file`, patch-log, or content diff could disclose secret-bearing historical objects while
+bypassing target-visible read checks. Syntax checking now accepts exactly one literal
+repository-relative JavaScript target and subjects it to worktree, ignored, secret-path, and symlink
+validation; caller-selected command or tool-level environment overrides are also denied. Active-lane Git inspection is limited to status, ref/ancestry, and tracked-path metadata; object, log, and diff reads are denied,
+with current source content available through the guarded structured read tools.
+
+PR #296's first non-draft CodeRabbit pass then exercised the implementation as an actual landing
+candidate and reported 18 inline findings plus 12 consolidated hardening items. All were repaired
+before merge. The repairs fail closed when a hook payload has no session identity, pin Git branch
+resolution to the trusted executable, share ticket path-scope logic, normalize push refs internally,
+and protect the complete factory hook set from direct production-guard edits. Owner chat now treats
+“don't pause the factory” as a negated hold and matches complete job IDs, so `job-1` cannot capture a
+request for `job-10`. Ticket hashes use canonical LF bytes on Windows; repository proof includes
+symlink target text and dangling links; stale one-time permits receive bounded cleanup; test fixtures
+restore their environment and temporary state. Closeout packet paths are confined to
+`docs/audits/factory/jobs/`, production deployment selection is stable for the entire verification,
+and missing Board verdict data renders as `UNKNOWN` instead of crashing. Reviewer packets retain only
+the minimum profile variables Codex needs while continuing to strip service credentials. The focused
+factory suite now passes 413 assertions, and the repository-wide proof passes 311 Vitest files / 4,129
+tests, lint, TypeScript, the 4,238-module production build, workflow parity, production-action guards,
+dependency integrity, and documentation drift. A fresh exact-commit Sol/high receipt and post-push
+GitHub/CodeRabbit acceptance remain required before merge.
+
+The next exact-SHA Sol/high review found one remaining HIGH secret-exposure boundary: the sanitized
+packet limited repository content, but the reviewer's older `read-only` sandbox still allowed
+model-issued commands to read Mason's broader Windows profile because the parent process retained
+`CODEX_HOME`, `HOME`, and `USERPROFILE` for authentication. The wrapper now selects a custom Codex
+permission profile with a deny-root filesystem policy, read access only to the current packet and
+minimal runtime paths, no network, and the elevated native Windows sandbox. Authentication remains
+available only to the parent Codex process; a real nested reviewer probe read the packet successfully
+and was denied access to `C:\Users\mason\.codex\config.toml`. If reviewer stdout or stderr ever
+contains secret-shaped text, the durable capture now stores only an omission marker and SHA-256
+instead of the raw output. The factory reviewer reuses the same hardened execution arguments.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

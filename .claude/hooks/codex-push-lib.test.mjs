@@ -25,6 +25,7 @@ import {
   pushNamesRemoteProgram,
   pushHiddenByShellComposition,
   pushContextIsAmbiguous,
+  pushTargetsCurrentHead,
   pushUsesBulkMode,
   reviewProofPathMentioned,
   reviewStateDirectoryMentioned,
@@ -75,6 +76,18 @@ assert.equal(mainPushSource("/usr/bin/git push origin HEAD:main", "feature"), "H
 assert.equal(mainPushSource("git -C ../repo push origin release:main", "feature"), "release");
 assert.equal(mainPushSource("git push origin :main", "feature"), "DELETE");
 assert.equal(mainPushSource("git push origin feature", "feature"), null);
+assert.equal(pushTargetsCurrentHead("git push -u origin feature", "feature"), true);
+assert.equal(pushTargetsCurrentHead("git push origin feature:feature", "FEATURE"), true);
+assert.equal(pushTargetsCurrentHead("git push origin refs/heads/FEATURE:refs/heads/feature", "refs/heads/feature"), true);
+assert.equal(pushTargetsCurrentHead("git push origin HEAD:feature", "feature"), true);
+assert.equal(pushTargetsCurrentHead("git push origin HEAD:production", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin feature:factory-result", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push upstream HEAD:feature", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin HEAD:main", "main"), false);
+assert.equal(pushTargetsCurrentHead("git push origin release:factory-result", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin feature other", "feature"), false);
+assert.equal(pushTargetsCurrentHead("git push origin :factory-result", "feature"), false);
 assert.equal(mainPushSource("git push --all origin", "feature"), "main");
 assert.equal(mainPushSource("git push origin --branches", "feature"), "main");
 assert.equal(mainPushSource("git push --mirror origin", "feature"), "main");
@@ -149,6 +162,12 @@ assert.deepEqual(riskyFiles(["src/pages/Home.tsx", "supabase/migrations/1.sql"])
 // gate machinery — editing them must itself require the second-model verdict.
 assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
+assert.deepEqual(riskyFiles(["scripts/overnight-codex-gate.mjs"]), ["scripts/overnight-codex-gate.mjs"]);
+assert.deepEqual(
+  riskyFiles(["scripts/factory.mjs", "scripts/factory-state-lib.mjs", "scripts/factory-board.mjs", "package.json"]),
+  ["scripts/factory.mjs", "scripts/factory-state-lib.mjs", "scripts/factory-board.mjs", "package.json"],
+  "authoritative factory brokers, board, and test wiring always require Sol/high review",
+);
 // Codex round-8 (PR #142): the hook-registration surfaces — a PR that
 // de-registers a guard by editing only these must still require the verdict.
 assert.deepEqual(riskyFiles([".claude/settings.json"]), [".claude/settings.json"]);
@@ -675,12 +694,22 @@ assert.equal(
 );
 
 const base = "c".repeat(40);
-const codexProof = { codex_ran: true, verdict: "clean", head_sha: sha, base_sha: base, timestamp: new Date(now).toISOString() };
+const codexProof = {
+  codex_ran: true,
+  verdict: "clean",
+  model: "gpt-5.6-sol",
+  reasoning_effort: "high",
+  head_sha: sha,
+  base_sha: base,
+  timestamp: new Date(now).toISOString(),
+};
 assert.equal(proofValid(codexProof, sha, now), true);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 1000).toISOString() }, sha, now), true);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now - 30 * 60 * 1000 - 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, timestamp: new Date(now + 1).toISOString() }, sha, now), false);
 assert.equal(proofValid({ ...codexProof, head_sha: "" }, sha, now), false);
+assert.equal(proofValid({ ...codexProof, model: "gpt-5.6-terra" }, sha, now), false);
+assert.equal(proofValid({ ...codexProof, reasoning_effort: "medium" }, sha, now), false);
 assert.equal(
   proofValid({ ...codexProof, verdict: "blockers-fixed" }, sha, now),
   false,

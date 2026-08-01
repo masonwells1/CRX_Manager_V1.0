@@ -262,6 +262,42 @@ export function pushTargetsMain(cmd, currentBranch) {
   return mainPushSource(cmd, currentBranch) !== null;
 }
 
+// A factory-approved landing may push only the current checkout's exact HEAD to
+// the matching feature branch on origin. Protected branches land through the
+// ordinary PR merge gate; allowing an arbitrary destination here would let
+// factory approval become new production authority.
+export function pushTargetsCurrentHead(cmd, currentBranch) {
+  const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
+  const normalizedBranch = String(currentBranch || "")
+    .trim()
+    .replace(/^refs\/heads\//i, "")
+    .toLowerCase();
+  if (argsText == null || !normalizedBranch
+      || ["main", "master", "production"].includes(normalizedBranch)) return false;
+  const tokens = splitShellArgs(argsText);
+  if (tokens.some((token) =>
+    token === "--delete"
+    || /^--de\S*$/.test(token)
+    || /^-[A-Za-z]*d[A-Za-z]*$/.test(token)
+    || ["--all", "--branches", "--mirror", "--prune"].includes(token))) {
+    return false;
+  }
+  if (tokens.some((token) => token.startsWith("-")
+      && !["-u", "--set-upstream"].includes(token))) return false;
+  const positional = tokens.filter((token) => !token.startsWith("-"));
+  if (positional.length !== 2 || positional[0].toLowerCase() !== "origin") return false;
+  const refspec = positional[1];
+  const source = (refspec.includes(":") ? refspec.split(":")[0] : refspec)
+    .replace(/^\+/, "")
+    .replace(/^refs\/heads\//i, "")
+    .toLowerCase();
+  const destination = (refspec.includes(":") ? refspec.split(":").at(-1) : refspec)
+    .replace(/^refs\/heads\//i, "")
+    .toLowerCase();
+  return (source === "head" || source === normalizedBranch)
+    && destination === normalizedBranch;
+}
+
 // Any push is forced when it carries a history-rewriting force flag anywhere
 // after `push`, or uses Git's `+<src>:<dst>` force-refspec syntax. This scan is
 // deliberately independent of target resolution: AGENTS.md requires approval
@@ -319,7 +355,7 @@ export function extractPatchDestinations(text) {
   return out;
 }
 
-// A changed file is "risky" (needs an independent second-model verdict) when it
+// A changed file is "risky" (needs a separate Sol/high verdict) when it
 // touches migrations, edge functions, money/RLS-shaped code, or the guardrail
 // machinery that decides whether a change can reach main. Guard hooks, CI,
 // Husky, and the review wrapper are explicit here so a self-modification cannot
@@ -335,8 +371,12 @@ const RISKY_PATH_RES = [
   /(^|\/)\.codex\/hooks\//i,
   /(^|\/)\.github\/workflows\//i,
   /(^|\/)\.husky\//i,
+  /(^|\/)\.(?:gitattributes|gitmodules)$/i,
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
+  /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
+  /(^|\/)scripts\/factory(?:-(?:state-lib|board))?\.mjs$/i,
+  /(^|\/)package\.json$/i,
   // Reviewer charters are executable review instructions for the migration
   // proof gate (write-apply-proofs runs each .claude/agents/<reviewer>.md as a
   // machine-verdict Codex run) — editing one weakens the gate, so charter
@@ -1064,7 +1104,7 @@ export function gitUrlRewriteSettings(configOutput) {
 // character, so there's no word boundary between "total" and "_cents"). Only
 // the trailing \b is meaningful for that one; the other three are matched as
 // whole identifiers.
-const RISKY_CONTENT_RE = /_cents\b|\bfinancial_audit_log\b|\ballocate_payment\b|\bapply_prepay\b/;
+const RISKY_CONTENT_RE = /_cents\b|\bfinancial_audit_log\b|\ballocate_payment\b|\bapply_prepay\b|\bauth\.uid\s*\(|\bsecurity\s+definer\b|\b(?:rls|row.level.security|policy|grant|permission|idempoten\w*|inventory|commission|lifecycle)\b|\b(?:is_admin|is_sales_rep|is_driver|is_applicator)\s*\(|\.(?:insert|update|upsert|delete|rpc)\s*\(|\b(?:status|stage|lifecycle_state|role|quantity|amount|price|total|balance|profit|margin)\s*(?:===?|!==?|:|=)/i;
 export function contentIsRisky(diffText) {
   return RISKY_CONTENT_RE.test(String(diffText || ""));
 }
@@ -1096,7 +1136,9 @@ function reviewProofValid(data, headSha, nowMs, ranKey, expectedBaseSha) {
 
 // Validate Claude's existing Codex-review proof shape.
 export function proofValid(data, headSha, nowMs, expectedBaseSha) {
-  return reviewProofValid(data, headSha, nowMs, "codex_ran", expectedBaseSha);
+  return reviewProofValid(data, headSha, nowMs, "codex_ran", expectedBaseSha)
+    && data.model === "gpt-5.6-sol"
+    && data.reasoning_effort === "high";
 }
 
 // Mirror validation for Codex's Claude-review proof shape.
