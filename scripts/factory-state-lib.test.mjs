@@ -54,7 +54,19 @@ import {
   validateRepositoryScope,
   writeImmutableTicket,
 } from "./factory-state-lib.mjs";
+
 import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
+
+const pendingFixtureCleanups = new Set();
+process.on("exit", () => {
+  for (const cleanup of pendingFixtureCleanups) {
+    try {
+      cleanup();
+    } catch {
+      // Best-effort cleanup must not hide the test failure that triggered exit.
+    }
+  }
+});
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
 // Git hooks export repository-local GIT_* variables. Scrub them before any
@@ -124,13 +136,18 @@ function fixture() {
   process.env.CRX_FACTORY_TEST_MODE = "1";
   process.env.CRX_FACTORY_TEST_STATE_DIR = env.CRX_FACTORY_TEST_STATE_DIR;
   const paths = resolveFactoryPaths(root, env);
+  let active = true;
   const cleanup = () => {
+    if (!active) return;
+    active = false;
+    pendingFixtureCleanups.delete(cleanup);
     if (previousTestMode === undefined) delete process.env.CRX_FACTORY_TEST_MODE;
     else process.env.CRX_FACTORY_TEST_MODE = previousTestMode;
     if (previousStateDir === undefined) delete process.env.CRX_FACTORY_TEST_STATE_DIR;
     else process.env.CRX_FACTORY_TEST_STATE_DIR = previousStateDir;
     rmSync(root, { recursive: true, force: true });
   };
+  pendingFixtureCleanups.add(cleanup);
   return { root, env, paths, cleanup };
 }
 
