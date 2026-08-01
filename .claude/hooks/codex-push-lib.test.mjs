@@ -541,6 +541,10 @@ assert.equal(
   "including a POSIX shell backslash escape inside `push`",
 );
 assert.equal(
+  pushHiddenByShellComposition('cmd /d /c "git pu^sh origin HEAD:main"'), true,
+  "including cmd.exe caret escaping inside `push`",
+);
+assert.equal(
   pushHiddenByShellComposition("git pu\\\nsh origin HEAD:main"), true,
   "including a POSIX shell line splice inside `push`",
 );
@@ -1240,6 +1244,11 @@ assert.equal(pushDestinationToken("git push"), null);
       "git pu`sh origin HEAD:main",
       /quoting or command substitution/i,
       "and a PowerShell backtick escape cannot splice `push` past the hook",
+    );
+    deniedBecause(
+      'cmd /d /c "git pu^sh origin HEAD:main"',
+      /quoting or command substitution/i,
+      "and cmd.exe caret escaping cannot splice `push` past the hook",
     );
     deniedBecause(
       "git --% push origin HEAD:main",

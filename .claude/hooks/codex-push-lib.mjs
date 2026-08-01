@@ -120,6 +120,7 @@ export function pushHiddenByShellComposition(cmd) {
     .replace(/`(?=[^\r\n])/g, "")    // PowerShell character escape: pu`sh
     .replace(/\\\r?\n/g, "")         // POSIX shell line continuation
     .replace(/\\(?=[^\r\n])/g, "")   // POSIX shell character escape: pu\sh
+    .replace(/\^(?=[^\r\n])/g, "")    // cmd.exe character escape: pu^sh
     .replace(/["']/g, "")
     .replace(/[$`(){}]/g, " ");
   const literalPushes = eachPush(text);

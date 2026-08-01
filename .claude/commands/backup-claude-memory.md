@@ -4,7 +4,7 @@ Mason does not type this command name. Run this flow when he says anything like:
 
 **Why not this repo:** `CRX_Manager_V1.0` is **PUBLIC**, and the notes carry real commission payouts naming real people (e.g. per-recipient dollar amounts from the H1 commission backfill). `docs/claude-memory/` is gitignored for exactly this reason — never remove that ignore rule. `CRX_Backups` is private and already holds the weekly encrypted DB dump, so it is the right home.
 
-**Read-only guarantee:** the source memory dir is only ever opened for reading, and the notes themselves never leave the machine by any route the script controls — the push is done by the driving session with `git`. The script makes exactly one network call, and it sends nothing: `gh repo view masonwells1/CRX_Backups --json visibility`, to confirm the destination is still private before staging into it. `gh` holds the credential, so the script never sees a token.
+**Read-only guarantee:** the source memory dir is only ever opened for reading, and the notes themselves never leave the machine by any route the script controls — the push is done by the driving session with `git`. Staging and local verification make one metadata-only GitHub request to confirm the destination is private. `--verify-remote` additionally downloads the remote manifest, directory listing, and each note so it can compare every byte; these reads send no note contents. `gh` holds the credential, so the script never sees a token.
 
 ## Steps
 

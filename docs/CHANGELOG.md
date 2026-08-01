@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-01 — Command Prompt caret-spliced pushes are visible
+
+The push guard now unwraps the Windows Command Prompt caret escape before
+comparing shell execution with literal command text, so
+`cmd /c "git pu^sh ..."` is refused before it can bypass the destination, force,
+and proof gates. The memory-backup runbook now accurately distinguishes its
+single staging visibility request from the per-file reads used by remote byte
+verification.
+
 ## 2026-07-31 — Unknown Git global options cannot hide pushes
 
 The push guard now refuses unrecognized Git global options before a later
