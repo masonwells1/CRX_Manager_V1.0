@@ -2,6 +2,53 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-01 — Monthly integrity check (2026-08-01): ran 10 reconciliation checks against live DB. 3 FAIL — Inventory Ledger (10 products), Delivery-Invoice Qty Parity (157 pairs), Pre-booked Inventory (1 product). Created docs/reports/integrity-report-monthly.md and opened PR #295. No code changes.
+
+Monthly integrity check (2026-08-01): ran 10 reconciliation checks against live DB. 3 FAIL — Inventory Ledger (10 products), Delivery-Invoice Qty Parity (157 pairs), Pre-booked Inventory (1 product). Created docs/reports/integrity-report-monthly.md and opened PR #295. No code changes.
+
+- **Commits this session** (git log -15 (fallback — no author-matched commits in the last 12h)):
+  - `1c1a4b0b chore(ops): monthly integrity report — 2026-08-01`
+  - `cabe0341 Record live Quote and Customer row-version rollout (#294)`
+  - `fe1ac9da Harden AP accounting-period boundaries (#293)`
+  - `2fd55fea Prevent stale Quote and Customer saves (#290)`
+  - `886fa459 Fix vendor bill accounting-period close race (#291)`
+  - `31cf0abe test(smoke): close six blind spots in the phase3 prover identity and RLS checks (#292)`
+  - `c0d90ed4 feat(sweeps): standing name-vs-return-policy detector (#286)`
+  - `db9b5efc fix(smoke): make the phase3 return-policy prover runnable again (#284)`
+  - `aee913df fix(git): repin the renumbered Phase 3 Stage A migration to LF (#288)`
+  - `e83aed90 fix(db): bind save_field activity actor (#285)`
+  - `1a78c237 docs(fleet): add a liveness probe to /fleet, archive the PR #231 post-mortem (#283)`
+  - `dfeb48bd feat(products): Supplier Pricing Phase 3 Stage C return-policy classification (#282)`
+  - `0567425b fix(fleet): stop counting retired drafts from frozen worktree snapshots (#279)`
+  - `453e332b docs: recover ten unlanded review documents before branch/worktree cleanup (#281)`
+  - `149c8b00 docs(gauntlet): close inventory net position backlog (#280)`
+- **Migrations touched** (last 15 commits (fallback)):
+  - `supabase/migrations/20260730235031_quote_customer_row_version_guard.sql`
+  - `supabase/migrations/20260731001654_ap_period_close_boundary_hardening.sql`
+  - `supabase/migrations/20260730201230_quote_customer_row_version_guard.sql`
+  - `supabase/migrations/20260730114102_vendor_bill_period_close_lock.sql`
+  - `supabase/migrations/20260730124308_close_accounting_period_idempotency_recheck.sql`
+  - `supabase/migrations/20260730140808_accounting_period_immutable_date_math.sql`
+  - `supabase/migrations/20260730174628_vendor_bill_month_lock_helper_acl_postflight.sql`
+  - `supabase/migrations/20260729222311_bind_save_field_actor.sql`
+  - `supabase/migrations/20260729213733_supplier_pricing_phase3c_return_policy_classification.sql`
+  - `supabase/migrations/20260729163243_harden_profile_directory_followups.sql`
+  - `supabase/migrations/20260729151850_harden_profile_directory_followups.sql`
+  - `supabase/migrations/20260729125227_secure_profile_public_directory.sql`
+  - `supabase/migrations/20260729125251_pin_contact_sync_search_path.sql`
+  - `supabase/migrations/20260729125314_application_service_cost_exact_text.sql`
+  - `supabase/migrations/20260729015706_application_service_cost_admin_only.sql`
+  - `supabase/migrations/20260729035923_application_service_atomic_save.sql`
+  - `supabase/migrations/20260729122730_application_service_cost_exact_text.sql`
+  - `supabase/migrations/20260729043000_secure_profile_public_directory.sql`
+  - `supabase/migrations/20260729043100_pin_contact_sync_search_path.sql`
+  - `supabase/migrations/20260728235500_secure_profile_public_directory.sql`
+  - `supabase/migrations/20260728235600_pin_contact_sync_search_path.sql`
+  - `supabase/migrations/20260728231350_revoke_anon_execute_non_policy_functions.sql`
+  - `supabase/migrations/20260728233459_revoke_anon_execute_rls_role_helpers.sql`
+  - `supabase/migrations/20260728193100_revoke_anon_execute_rls_role_helpers.sql`
+  - `supabase/migrations/20260728193000_revoke_anon_execute_non_policy_functions.sql`
+
 ## 2026-07-30 — AP accounting-period boundary hardening applied live
 
 The three remaining vendor-AP mutations now join the same accounting-month
