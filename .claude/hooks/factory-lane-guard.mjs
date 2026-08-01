@@ -9,6 +9,7 @@ import {
   hasFactoryIntentFailureLatch,
   loadFactorySnapshot,
   mintFactoryCliPermit,
+  pathAllowedByTicket,
   rejectSecretBearingText,
   resolveHookFactoryPaths,
   validateApprovedFactoryLanding,
@@ -78,13 +79,13 @@ function shellWorkingDirectoryBlockReason(toolName, toolInput, projectDir) {
   if (!/^(?:Bash|PowerShell|shell_command)$/i.test(String(toolName || ""))) return "";
   const input = toolInput && typeof toolInput === "object" ? toolInput : {};
   const root = path.resolve(projectDir);
-  const realRoot = realpathSync(root);
   for (const [key, value] of [["cwd", input.cwd], ["workdir", input.workdir]]) {
     if (value == null || String(value).trim() === "") continue;
     const text = String(value).trim();
     if (/[\0\r\n$%~*?[\]{}()]/.test(text)) {
       return `${key} is dynamic or ambiguous`;
     }
+    const realRoot = realpathSync(root);
     const candidate = path.resolve(root, text);
     if (!existsSync(candidate)
         || !isInside(root, candidate)
@@ -401,11 +402,9 @@ function structuredMutationBlockReason(toolName, toolInput, projectDir, allowedP
       return `target resolves outside the worktree through a symlink: ${relative}`;
     }
     if (ignoredByGit(root, relative)) return `ignored paths are outside factory proof: ${relative}`;
-    const allowed = (allowedPaths || []).some((entry) => {
-      const normalized = String(entry).replace(/\\/g, "/").replace(/^\.\//, "");
-      return normalized.endsWith("/") ? relative.startsWith(normalized) : relative === normalized;
-    });
-    if (!allowed) return `target is outside the approved ticket paths: ${relative}`;
+    if (!pathAllowedByTicket(relative, allowedPaths)) {
+      return `target is outside the approved ticket paths: ${relative}`;
+    }
   }
   const mutationContent = structuredMutationContent(toolInput);
   if (mutationContent) {
@@ -459,12 +458,19 @@ function approvedLandingShellAction(toolName, toolInput, projectDir) {
     return "commit";
   }
   if (isGitPush(command)) {
-    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-      cwd: projectDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
-    }).trim();
+    const executable = fixedGitExecutable();
+    if (!executable) return "";
+    let branch;
+    try {
+      branch = execFileSync(executable, ["rev-parse", "--abbrev-ref", "HEAD"], {
+        cwd: projectDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5_000,
+      }).trim();
+    } catch {
+      return "";
+    }
     return pushTargetsCurrentHead(command, branch) ? "push" : "";
   }
   if (/^gh(?:\.exe)?\s+pr\s+create\b/i.test(command)

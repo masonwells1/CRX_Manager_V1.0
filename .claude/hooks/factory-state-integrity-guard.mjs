@@ -70,10 +70,10 @@ for (const match of patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Mo
 const targets = [...new Set(structuredTargets)];
 const projectDir = path.resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 const sessionId = String(payload?.session_id || payload?.thread_id || payload?.conversation_id || "").trim();
-let governedSession = false;
+let governedSession = !sessionId;
 if (sessionId) {
   try {
-    const snapshot = loadFactorySnapshot(resolveHookFactoryPaths(projectDir));
+    const snapshot = loadFactorySnapshot(factoryPaths);
     governedSession = snapshot.factoryIntentSessions.includes(sessionId)
       || snapshot.jobs.some((job) =>
         job.sessionId === sessionId

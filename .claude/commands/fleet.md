@@ -6,7 +6,7 @@ Use this when Mason asks anything like: "where are we", "status", "progress", "c
 
 For governed factory jobs, the single owner-facing output is the read-only Factory Board:
 
-```
+```shell
 npm run factory:board
 ```
 

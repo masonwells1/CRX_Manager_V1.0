@@ -128,7 +128,11 @@ export function pushTargetsMain(cmd, currentBranch) {
 // repository fingerprint Mason accepted.
 export function pushTargetsCurrentHead(cmd, currentBranch) {
   const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
-  if (argsText == null || !String(currentBranch || "").trim()) return false;
+  const normalizedBranch = String(currentBranch || "")
+    .trim()
+    .replace(/^refs\/heads\//i, "")
+    .toLowerCase();
+  if (argsText == null || !normalizedBranch) return false;
   const tokens = splitShellArgs(argsText);
   if (tokens.some((token) =>
     token === "--delete"
@@ -144,8 +148,9 @@ export function pushTargetsCurrentHead(cmd, currentBranch) {
   const refspec = refspecs[0];
   const source = (refspec.includes(":") ? refspec.split(":")[0] : refspec)
     .replace(/^\+/, "")
-    .replace(/^refs\/heads\//, "");
-  return source === "HEAD" || source === String(currentBranch).replace(/^refs\/heads\//, "");
+    .replace(/^refs\/heads\//i, "")
+    .toLowerCase();
+  return source === "head" || source === normalizedBranch;
 }
 
 // Any push is forced when it carries a history-rewriting force flag anywhere

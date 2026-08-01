@@ -253,25 +253,33 @@ export function selectCurrentVercelAliasDeployment(inspection, deployment) {
 }
 
 export function selectCurrentProductionDeployment(deployments, statuses, deployedCommit) {
-  if (!/^[a-f0-9]{40}$/i.test(String(deployedCommit || ""))) {
-    throw new Error("The Vercel production alias did not identify an exact deployed commit.");
-  }
-  const production = Array.isArray(deployments)
-    ? deployments.filter((item) =>
-      /^[a-f0-9]{40}$/i.test(String(item?.sha || ""))
-      && String(item?.environment || "").toLowerCase() === "production"
-      && String(item.sha).toLowerCase() === String(deployedCommit).toLowerCase())
-      .sort(newestFirst)
-    : [];
-  const deployment = production[0];
-  if (!deployment) {
-    throw new Error("GitHub has no successful Production deployment record for the commit currently attached to the Vercel production alias.");
-  }
+  const deployment = currentProductionDeployment(deployments, deployedCommit);
+  return successfulProductionDeployment(deployment, statuses);
+}
+
+function successfulProductionDeployment(deployment, statuses) {
   const latestStatus = Array.isArray(statuses) ? [...statuses].sort(newestFirst)[0] : null;
   if (!latestStatus || String(latestStatus.state || "").toLowerCase() !== "success") {
     throw new Error("The newest Production deployment is not currently successful.");
   }
   return { deployment, status: latestStatus };
+}
+
+export function currentProductionDeployment(deployments, deployedCommit) {
+  if (!/^[a-f0-9]{40}$/i.test(String(deployedCommit || ""))) {
+    throw new Error("The Vercel production alias did not identify an exact deployed commit.");
+  }
+  const deployment = Array.isArray(deployments)
+    ? deployments.filter((item) =>
+      /^[a-f0-9]{40}$/i.test(String(item?.sha || ""))
+      && String(item?.environment || "").toLowerCase() === "production"
+      && String(item.sha).toLowerCase() === String(deployedCommit).toLowerCase())
+      .sort(newestFirst)[0]
+    : null;
+  if (!deployment) {
+    throw new Error("GitHub has no successful Production deployment record for the commit currently attached to the Vercel production alias.");
+  }
+  return deployment;
 }
 
 export function productionComparisonAccepts(status) {
@@ -334,12 +342,7 @@ async function verifyProductionLanding({
   } catch {
     throw new Error("Could not read current GitHub Production deployment records.");
   }
-  const currentProduction = Array.isArray(deployments)
-    ? [...deployments].filter((item) =>
-      /^[a-f0-9]{40}$/i.test(String(item?.sha || ""))
-      && String(item?.environment || "").toLowerCase() === "production"
-      && String(item.sha).toLowerCase() === currentAlias.deployedCommit.toLowerCase()).sort(newestFirst)[0]
-    : null;
+  const currentProduction = currentProductionDeployment(deployments, currentAlias.deployedCommit);
   if (!currentProduction?.id) {
     throw new Error("GitHub has no Production deployment record for the commit currently attached to the Vercel production alias.");
   }
@@ -357,11 +360,7 @@ async function verifyProductionLanding({
   } catch {
     throw new Error("Could not read the current Production deployment status.");
   }
-  const accepted = selectCurrentProductionDeployment(
-    deployments,
-    statuses,
-    currentAlias.deployedCommit,
-  );
+  const accepted = successfulProductionDeployment(currentProduction, statuses);
   let comparison;
   try {
     comparison = JSON.parse(execFileSync(fixedGitHubExecutable(), [
@@ -440,6 +439,21 @@ function printStatus(snapshot, asJson) {
     process.stdout.write(`- ${job.title} [${job.stage}] · ${job.lastActivity}\n`);
     if (job.blocker) process.stdout.write(`  Needs attention: ${job.blocker}\n`);
   }
+}
+
+export function resolveRecordedCloseoutPacket(cwd, recordedValue) {
+  const raw = String(recordedValue || "").trim();
+  const normalized = raw.replace(/\\/g, "/");
+  if (path.isAbsolute(raw)
+      || !/^docs\/audits\/factory\/jobs\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.md$/.test(normalized)) {
+    throw new Error("The ledger-recorded closeout packet path is outside the supported factory closeout directory.");
+  }
+  const absolute = path.resolve(cwd, normalized);
+  const relative = path.relative(cwd, absolute).replace(/\\/g, "/");
+  if (relative !== normalized) {
+    throw new Error("The ledger-recorded closeout packet path escapes the governed repository.");
+  }
+  return { absolute, relative };
 }
 
 export async function runFactoryCli(argv = process.argv.slice(2), {
@@ -711,8 +725,8 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       if (job.landingCommit !== landingCommit) {
         throw new Error(`Job ${jobId} is already live with a different closeout record.`);
       }
-      const recordedPath = path.resolve(cwd, job.closeoutPacket);
-      if (!job.closeoutPacket || !existsSync(recordedPath)) {
+      const { absolute: recordedPath } = resolveRecordedCloseoutPacket(cwd, job.closeoutPacket);
+      if (!existsSync(recordedPath)) {
         throw new Error(`Job ${jobId} is live but its recorded closeout packet is missing.`);
       }
       const recordedHash = sha256(readFileSync(recordedPath));
@@ -759,11 +773,10 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       if (job.landingCommit !== landingCommit) {
         throw new Error(`Job ${jobId} has a closeout packet for a different landing commit.`);
       }
-      const recordedPath = path.resolve(cwd, job.closeoutPacket);
+      const { absolute: recordedPath, relative: relativePacket } = resolveRecordedCloseoutPacket(cwd, job.closeoutPacket);
       if (!existsSync(recordedPath) || sha256(readFileSync(recordedPath)) !== job.closeoutPacketHash) {
         throw new Error(`Job ${jobId} closeout packet is missing or no longer matches the ledger.`);
       }
-      const relativePacket = path.relative(cwd, recordedPath).replace(/\\/g, "/");
       let landedPacket;
       try {
         landedPacket = execFileSync("git", ["show", `origin/main:${relativePacket}`], {

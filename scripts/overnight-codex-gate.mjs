@@ -25,6 +25,7 @@
 import { spawnSync, execSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { CODEX_REVIEW_EFFORT, CODEX_REVIEW_MODEL } from './write-codex-push-proof.mjs'
 
 function fail(msg, code = 2) {
   console.error(`[overnight-codex-gate] ${msg}`)
@@ -67,7 +68,7 @@ function resolveCodex() {
 const codex = resolveCodex()
 const args = [
   'exec', '--ephemeral', '--ignore-user-config',
-  '--model', 'gpt-5.6-sol', '-c', 'model_reasoning_effort="high"',
+  '--model', CODEX_REVIEW_MODEL, '-c', `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
   '--sandbox', 'read-only', '-C', repoRoot, prompt,
 ]
 

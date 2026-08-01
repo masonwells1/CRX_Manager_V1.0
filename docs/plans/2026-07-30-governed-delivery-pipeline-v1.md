@@ -1,11 +1,11 @@
 # CRX Governed Delivery Pipeline V1
 
 Date: 2026-07-30
-Status: IMPLEMENTED — twentieth Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
+Status: IMPLEMENTED — PR #296 ready-state review repairs awaiting fresh exact-SHA acceptance
 Owner: Mason Wells
 Implementation driver: Codex
 Independent reviewer: trusted `gpt-5.6-sol` at high reasoning effort
-Publication gate: fresh exact-SHA Sol high-effort acceptance before the authorized feature-branch push and draft PR; no merge, deploy, live migration, or live-data change
+Publication gate: fresh exact-SHA Sol high-effort acceptance plus fresh GitHub/CodeRabbit checks before the authorized PR #296 merge and automatic Vercel deployment; no migration or live-data change exists in this PR
 
 ## Goal
 
@@ -36,7 +36,7 @@ Mason never runs commands, edits ticket files, reviews code, or operates a separ
   commit, feature push, PR, merge, and the broker-hashed closeout packet.
 - Existing `/ship`, review, push, merge, migration, edge-function, deletion, secret, permission, and production gates are preserved.
 - Focused tests, agent-workflow parity tests, board rendering, and an independent `gpt-5.6-sol` high-effort review of the exact candidate pass.
-- Work stops before commit for Mason.
+- Publication stops at each existing outward-action gate unless Mason has approved it in the active conversation. Mason has approved this branch's commit/push, PR #296 merge, automatic Vercel deployment, and local Board startup.
 
 ## Non-goals
 
@@ -224,7 +224,7 @@ cannot perform build writes.
 - `.claude/commands/ship.md`
   - factory-managed substantial jobs must draft/present/validate a ticket before implementation;
   - the existing trivial/substantial split remains;
-  - uncommitted V1 work parks before commit in this implementation session.
+  - factory work still obeys the ordinary commit/push/merge gates; this implementation's current publication actions are separately owner-authorized.
 - `.claude/commands/fleet.md`
   - status requests lead with Factory Board state and keep existing worktree/parked-migration evidence.
 - `.claude/hooks/ship-intent-reminder.mjs`

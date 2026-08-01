@@ -156,6 +156,9 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/factory-state-lib.mjs" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "scripts/factory-board.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/factory-board.mjs" } }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".claude/hooks/factory-lane-guard.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: ".claude/hooks/factory-owner-input.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch: "*** Update File: .claude/hooks/factory-state-integrity-guard.mjs\n@@\n-old\n+new" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "package.json" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "package.json" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/write-apply-proofs.mjs" } }).blocked, true);

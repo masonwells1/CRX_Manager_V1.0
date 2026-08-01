@@ -87,7 +87,9 @@ raises an emergency hold if the contained child indirectly mutates a protected h
 Secret-shaped harness output is rejected before persistence. While
 one pilot lane is active, other chats' build writes deny, even from a fresh session. Closeout also
 fingerprints the named landing commit and requires its content to equal the harness-proven bytes;
-production proof comes from exact-SHA GitHub deployment status plus the fixed app URL, not caller text. Lane start uses an
+production proof requires the canonical Vercel production alias to resolve to a READY deployment
+for the repository's exact main commit, corroborated by exact-SHA GitHub deployment status and the
+fixed app URL—not caller text. Lane start uses an
 expected-last-event compare-and-swap under the ledger lock so concurrent starts have one winner.
 
 Governed lanes cannot edit any trusted factory writer, its imported hook libraries, the Claude/Codex

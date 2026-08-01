@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +17,17 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
 const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integrity-guard.mjs");
 let assertions = 0;
+const temporaryStateDirs = new Set();
+
+function temporaryStateDir(prefix) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
+  temporaryStateDirs.add(dir);
+  return dir;
+}
+
+process.on("exit", () => {
+  for (const dir of temporaryStateDirs) rmSync(dir, { recursive: true, force: true });
+});
 
 function run(hook, stateDir, payload) {
   return spawnSync(process.execPath, [hook], {
@@ -28,6 +39,7 @@ function run(hook, stateDir, payload) {
       CRX_AGENT_SURFACE: "codex",
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: stateDir,
+      NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-hook-test",
     },
     input: JSON.stringify(payload),
   });
@@ -58,7 +70,7 @@ function bashExecutable() {
 }
 
 {
-  const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-integrity-"));
+  const stateDir = temporaryStateDir("crx-factory-integrity-");
   const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
   denied(run(integrityHook, stateDir, {
     tool_name: "Write",
@@ -116,7 +128,7 @@ function bashExecutable() {
 
 {
   const sessionId = "factory-intent-thread";
-  const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-lane-"));
+  const stateDir = temporaryStateDir("crx-factory-lane-");
   process.env.CRX_FACTORY_TEST_MODE = "1";
   process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
   const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
@@ -719,7 +731,7 @@ function bashExecutable() {
 
 {
   const sessionId = "landing-thread";
-  const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-landing-"));
+  const stateDir = temporaryStateDir("crx-factory-landing-");
   process.env.CRX_FACTORY_TEST_MODE = "1";
   process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
   const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
@@ -795,7 +807,7 @@ function bashExecutable() {
 }
 
 {
-  const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-corrupt-"));
+  const stateDir = temporaryStateDir("crx-factory-corrupt-");
   const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
   writeFileSync(paths.eventsPath, "{not-valid-json}\n");
   const readResult = run(laneHook, stateDir, {

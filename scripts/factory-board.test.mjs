@@ -41,6 +41,11 @@ ok(html.includes("&lt;img src=x"), "escaped title remains readable");
 ok(html.includes("Ready for your review"), "friendly stage label is rendered");
 ok(html.includes("Browser proof"), "machine-attached proof is visible");
 ok(html.includes("Independent codex review: CLEAN"), "independent reviewer receipt is visible");
+const missingVerdictHtml = renderFactoryBoard({
+  ...snapshot,
+  jobs: [{ ...snapshot.jobs[0], reviews: [{ reviewer: "codex", filename: "review.json" }] }],
+});
+ok(missingVerdictHtml.includes("Independent codex review: UNKNOWN"), "incomplete review metadata degrades visibly instead of crashing the Board");
 ok(html.includes("does not authenticate the Windows user or grant new authority"), "board states its coordination-only authority boundary");
 ok(/read-only coordination record/i.test(html), "board footer describes the ledger as coordination rather than authorization");
 ok(html.includes("@media (max-width:640px)"), "board has a narrow viewport layout");

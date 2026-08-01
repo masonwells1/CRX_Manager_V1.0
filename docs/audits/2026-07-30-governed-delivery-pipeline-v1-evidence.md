@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` after latest reconciliation: `cabe0341859f586debc99962e656bc9dd644895f`
-State: rebased onto current `origin/main`; seventeenth Sol/high blocker repair is focused-green and unpushed
+State: PR #296 is ready for review; CodeRabbit ready-state findings repaired locally; fresh exact-commit acceptance pending
 
 ## Owner-facing result
 
@@ -460,10 +460,25 @@ reconciliation.
 
 ## Remaining gate
 
-The latest repair pass remains unpushed. The coordination-only repair is green at 402 focused factory
-assertions (119 guard, 78 owner-input, 22 Board, 85 CLI, 98 state-library), 311 Vitest files / 4,129
-passing tests / 123 skipped, lint, TypeScript, production-action guard, workflow parity, dependency
-integrity, documentation drift, and the 4,238-module production build. The commit hook must rerun the
-full governed pipeline on the staged bytes. The next gate after that is fresh exact-SHA `gpt-5.6-sol` high-effort acceptance, then the explicitly authorized
-feature-branch push and draft PR. Merge, board installation/startup, deployment, migration, and all
-production actions remain undone.
+PR #296's first non-draft CodeRabbit review completed against commit
+`7eda35cbf04a2c78182e10651dd643b5621346d3` and produced 18 inline findings plus 12 consolidated
+hardening items. Every item was reproduced or conservatively hardened before this evidence update.
+The repair covers missing-session fail-closed behavior, trusted Git branch resolution, exact job-ID
+matching, negated hold language, canonical cross-platform ticket hashing, symlink/dangling-link proof,
+bounded stale-permit cleanup, closeout path confinement, stable production-deployment selection,
+Board fallback rendering, reviewer environment minimization, hook protection, and test cleanup.
+
+The local repair is green at 413 focused factory assertions (119 guard, 83 owner-input, 23 Board,
+89 CLI, 99 state-library), 311 Vitest files / 4,129 passing tests / 123 skipped, lint, TypeScript,
+production-action guard, workflow parity, dependency integrity, documentation drift, and the
+4,238-module production build. `origin/main` remains
+`cabe0341859f586debc99962e656bc9dd644895f`; the branch was 0 behind / 34 ahead before this repair
+commit. The commit hook must rerun the full governed pipeline on the staged bytes. The next gates are
+a fresh exact-SHA `gpt-5.6-sol` high-effort CLEAN receipt, feature-branch push, and fresh GitHub plus
+CodeRabbit acceptance.
+
+Mason explicitly authorized making PR #296 ready, merging it to `main`, allowing and verifying its
+automatic Vercel production deployment, and starting the loopback-only read-only Factory Board on
+`127.0.0.1:4177`. His later statement “I authorize everything including database migrations and
+anything continue” does not create a migration action here: this PR contains no database migration or
+live-data change. Merge, deployment, and Board startup remain undone until the review gates above pass.

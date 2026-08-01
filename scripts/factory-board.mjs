@@ -44,7 +44,7 @@ function jobCard(job) {
   const proofItems = [
     ...job.evidence,
     ...(job.reviews || []).map((item) => ({
-      label: `Independent ${item.reviewer} review: ${item.verdict.toUpperCase()}`,
+      label: `Independent ${item.reviewer} review: ${String(item.verdict || "unknown").toUpperCase()}`,
       kind: item.model ? `${item.model}/${item.reasoningEffort || "unknown effort"}` : "review",
       filename: item.filename,
     })),

@@ -16,6 +16,7 @@ import {
 } from "./factory-state-lib.mjs";
 import {
   productionComparisonAccepts,
+  resolveRecordedCloseoutPacket,
   selectCurrentProductionDeployment,
   selectCurrentVercelAliasDeployment,
 } from "./factory.mjs";
@@ -31,6 +32,10 @@ const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-cli-"));
 const fixtureDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-fixture-"));
 const fixtureRepo = path.join(fixtureDir, "repo");
+process.on("exit", () => {
+  rmSync(stateDir, { recursive: true, force: true });
+  rmSync(fixtureDir, { recursive: true, force: true });
+});
 mkdirSync(fixtureRepo, { recursive: true });
 writeFileSync(path.join(fixtureRepo, "package.json"), `${JSON.stringify({
   scripts: {
@@ -131,6 +136,17 @@ function base64(value) {
     /not currently successful/i,
     "a newer inactive status overrides historical success",
   );
+  const validCloseout = resolveRecordedCloseoutPacket(fixtureRepo, "docs/audits/factory/jobs/example.md");
+  assertions++;
+  assert.equal(validCloseout.relative, "docs/audits/factory/jobs/example.md", "recorded closeout packets stay in the governed job directory");
+  for (const unsafePath of ["../outside.md", path.resolve(fixtureRepo, "outside.md"), "docs/audits/factory/other.md"]) {
+    assertions++;
+    assert.throws(
+      () => resolveRecordedCloseoutPacket(fixtureRepo, unsafePath),
+      /closeout packet path/i,
+      `recorded closeout packet rejects unsafe path: ${unsafePath}`,
+    );
+  }
 }
 
 function run(args, identity = { sessionId, actorTool: "codex" }) {
@@ -428,6 +444,7 @@ const pushProofHook = spawnSync(process.execPath, [laneHook], {
     CRX_AGENT_SURFACE: "codex",
     CRX_FACTORY_TEST_MODE: "1",
     CRX_FACTORY_TEST_STATE_DIR: stateDir,
+    NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-hook-test",
   },
   input: JSON.stringify({
     thread_id: sessionId,
@@ -458,6 +475,7 @@ const widenedPushProofHook = spawnSync(process.execPath, [laneHook], {
     CRX_AGENT_SURFACE: "codex",
     CRX_FACTORY_TEST_MODE: "1",
     CRX_FACTORY_TEST_STATE_DIR: stateDir,
+    NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-hook-test",
   },
   input: JSON.stringify({
     thread_id: sessionId,
@@ -475,11 +493,12 @@ assert.match(
 );
 gitResult = spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
-const closeoutArgs = [
+const closeoutArgsFor = (landingCommit) => [
   "closeout", "write",
   "--job", jobId,
-  "--landing-commit", gitHead(fixtureRepo),
+  "--landing-commit", landingCommit,
 ];
+const closeoutArgs = closeoutArgsFor(gitHead(fixtureRepo));
 writeFileSync(path.join(fixtureRepo, "old.txt"), "old landing content\n");
 gitResult = spawnSync("git", ["add", "old.txt"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
@@ -494,7 +513,7 @@ assert.equal(gitResult.status, 0, gitResult.stderr);
 gitResult = spawnSync("git", ["reset"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
 rmSync(path.join(fixtureRepo, "old.txt"));
-const wrongLanding = run(closeoutArgs.map((value) => value === gitHead(fixtureRepo) ? differentAncestor : value));
+const wrongLanding = run(closeoutArgsFor(differentAncestor));
 assertions++;
 assert.notEqual(wrongLanding.status, 0, "closeout refuses an origin/main ancestor whose content differs from the proven bytes");
 writeFileSync(paths.lockPath, `${JSON.stringify({
@@ -562,7 +581,7 @@ const repeatedCloseout = run(closeoutArgs);
 pass(repeatedCloseout, "repeat an already successful closeout");
 assertions++;
 assert.equal(JSON.parse(repeatedCloseout.stdout).alreadyClosed, true, "successful closeout retry is idempotent");
-const conflictingCloseout = run(closeoutArgs.map((value, index) => index === 4 ? differentAncestor : value));
+const conflictingCloseout = run(closeoutArgsFor(differentAncestor));
 assertions++;
 assert.notEqual(conflictingCloseout.status, 0, "idempotent closeout refuses a conflicting landing commit");
 

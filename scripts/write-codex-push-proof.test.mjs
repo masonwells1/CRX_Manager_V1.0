@@ -2,7 +2,7 @@
 // Tests for the Codex push-proof wrapper (scripts/write-codex-push-proof.mjs).
 // Run: node scripts/write-codex-push-proof.test.mjs
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -137,10 +137,12 @@ const scrubbedEnvironment = codexReviewerEnvironment({
   OPENAI_API_KEY: "must-not-pass",
   GITHUB_TOKEN: "must-not-pass",
   USERPROFILE: "C:\\Users\\secret-bearing-profile",
+  CODEX_HOME: "C:\\Users\\secret-bearing-profile\\.codex",
 });
 assert.equal(scrubbedEnvironment.OPENAI_API_KEY, undefined, "reviewer environment omits API keys");
 assert.equal(scrubbedEnvironment.GITHUB_TOKEN, undefined, "reviewer environment omits GitHub credentials");
-assert.equal(scrubbedEnvironment.USERPROFILE, undefined, "reviewer environment does not disclose the host profile");
+assert.equal(scrubbedEnvironment.USERPROFILE, "C:\\Users\\secret-bearing-profile", "reviewer retains the platform profile needed for Codex authentication");
+assert.equal(scrubbedEnvironment.CODEX_HOME, "C:\\Users\\secret-bearing-profile\\.codex", "reviewer retains the explicit Codex authentication home");
 
 {
   const source = mkdtempSync(path.join(tmpdir(), "crx-review-source-"));
@@ -218,6 +220,24 @@ assert.equal(scrubbedEnvironment.USERPROFILE, undefined, "reviewer environment d
   );
   assert.doesNotMatch(reviewPacketText, /[A-Za-z]:\/Users\//i, "review packet does not disclose a Windows user profile path");
   removeSanitizedReviewWorkspace(sanitized.root);
+
+  try {
+    symlinkSync("missing-target.txt", path.join(source, "dangling-review-link.txt"), "file");
+    const workingTreePacket = createSanitizedReviewWorkspace({
+      sourceRoot: source,
+      baseRef: "origin/main",
+    });
+    assert.equal(
+      readFileSync(path.join(workingTreePacket.root, "CANDIDATE_SNAPSHOT", "dangling-review-link.txt"), "utf8"),
+      "SANITIZED_SYMLINK_TARGET:missing-target.txt\n",
+      "dangling symlinks remain visible as sanitized candidate entries",
+    );
+    const workingTreeManifest = JSON.parse(readFileSync(path.join(workingTreePacket.root, "CANDIDATE_TREE_MANIFEST.json"), "utf8"));
+    assert.ok(workingTreeManifest.entries.some((entry) => entry.path === "dangling-review-link.txt"), "dangling symlink is bound into the candidate manifest");
+    removeSanitizedReviewWorkspace(workingTreePacket.root);
+  } catch (error) {
+    if (!new Set(["EPERM", "EACCES", "UNKNOWN"]).has(error?.code)) throw error;
+  }
   writeFileSync(path.join(source, "tracked.txt"), "working tree\n");
   writeFileSync(path.join(source, "untracked.txt"), "nonignored\n");
   const workingPacket = createSanitizedReviewWorkspace({ sourceRoot: source, baseRef: "origin/main" });

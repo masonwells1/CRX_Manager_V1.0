@@ -260,7 +260,7 @@ decision; it does not brick unrelated read-only work.
 
 Do not edit or delete a lock or ledger by hand. Use the validated agent-facing recovery route:
 
-```
+```shell
 node scripts/factory.mjs recover unlock --reason-base64 <base64-plain-text-reason>
 node scripts/factory.mjs recover torn-tail --reason-base64 <base64-plain-text-reason>
 ```

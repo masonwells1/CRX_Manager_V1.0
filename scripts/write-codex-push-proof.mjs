@@ -299,6 +299,7 @@ function copyWorkingTreeSnapshot(sourceRoot, destination) {
     maxBuffer: 256 * 1024 * 1024,
   }).split("\0").filter(Boolean);
   const seenTargets = new Set();
+  const copied = [];
   for (const relative of listed) {
     const source = path.resolve(sourceRoot, relative);
     const target = safeSnapshotTarget(destination, relative);
@@ -307,8 +308,13 @@ function copyWorkingTreeSnapshot(sourceRoot, destination) {
       throw new Error(`Working tree contains a case-colliding review path: ${relative}`);
     }
     seenTargets.add(collisionKey);
-    if (!existsSync(source)) continue;
-    const stat = lstatSync(source);
+    let stat;
+    try {
+      stat = lstatSync(source);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
     mkdirSync(path.dirname(target), { recursive: true });
     if (stat.isSymbolicLink()) {
       writeFileSync(target, `SANITIZED_SYMLINK_TARGET:${readlinkSync(source)}\n`, "utf8");
@@ -317,9 +323,9 @@ function copyWorkingTreeSnapshot(sourceRoot, destination) {
     } else {
       throw new Error(`Unsupported repository entry in sanitized review workspace: ${relative}`);
     }
+    copied.push(relative);
   }
-  return workingTreeSnapshotManifest(destination, listed.filter((relative) =>
-    existsSync(path.resolve(sourceRoot, relative))));
+  return workingTreeSnapshotManifest(destination, copied);
 }
 
 export function createSanitizedReviewWorkspace({
@@ -404,6 +410,12 @@ export function codexReviewerEnvironment(env = process.env, reviewRoot = tmpdir(
     PATH: trustedPath,
     SystemRoot: env.SystemRoot,
     SYSTEMROOT: env.SYSTEMROOT,
+    CODEX_HOME: env.CODEX_HOME || path.join(
+      process.platform === "win32" ? (env.USERPROFILE || homedir()) : (env.HOME || homedir()),
+      ".codex",
+    ),
+    HOME: env.HOME,
+    USERPROFILE: env.USERPROFILE,
     TEMP: reviewRoot,
     TMP: reviewRoot,
     LANG: env.LANG,
@@ -603,6 +615,8 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
     "Security and SECURITY DEFINER safety (search_path, grants, actor-forgery); idempotency",
     "on mutating RPCs; migration drift (CHECK supersets, function-overload collisions);",
     "entity-lifecycle invariants; and any production / data-loss / secret-exposure risk.",
+    // Keep the same-user dismissal directly coupled to authority monotonicity. The documented
+    // limitation is acceptable only while independent authorization gates remain fail-closed.
     "For repository-local factory automation, apply its documented coordination-only threat model:",
     "chat-derived ledger events and the Board coordinate already-authorized reversible work; they are",
     "not authentication or authorization boundaries against an arbitrary process already running as",

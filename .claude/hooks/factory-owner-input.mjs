@@ -100,7 +100,9 @@ function hasAffirmativeResumePrefix(prompt) {
 
 function holdIntent(prompt) {
   const text = normalizedFactoryControlText(prompt);
-  if (/\b(?:stop|pause|hold)\b.{0,30}\bfactory\b|\bfactory\b.{0,30}\b(?:stop|pause|hold)\b/.test(text)) return "hold";
+  const holdMention = /\b(?:stop|pause|hold)\b.{0,30}\bfactory\b|\bfactory\b.{0,30}\b(?:stop|pause|hold)\b/.test(text);
+  const negatedHold = /\b(?:don'?t|do not|never)\s+(?:stop|pause|hold)\b.{0,30}\bfactory\b|\bfactory\b.{0,30}\b(?:don'?t|do not|never)\s+(?:stop|pause|hold)\b/.test(text);
+  if (holdMention && !negatedHold) return "hold";
   const explicitResume = text
     .replace(/[.!?]+$/g, "")
     .trim();
@@ -126,6 +128,13 @@ function custodyTransferIntent(prompt) {
     || /\b(?:take over|re-present)\b.{0,40}\b(?:factory\s+)?(?:job|ticket|review|decision)\b/.test(text);
 }
 
+function mentionsExactJobId(prompt, jobId) {
+  const escaped = String(jobId || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!escaped) return false;
+  return new RegExp(`(?:^|[^A-Za-z0-9._-])${escaped}(?=$|[^A-Za-z0-9._-])`, "i")
+    .test(String(prompt || ""));
+}
+
 async function main() {
   let payload;
   try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
@@ -145,17 +154,12 @@ async function main() {
     }
     const snapshot = loadFactorySnapshot(paths);
     const transferableStages = new Set(["needs-ticket-ok", "queued", "parked", "awaiting-morning-review"]);
-    const candidates = snapshot.jobs.filter((job) =>
+    const transferable = snapshot.jobs.filter((job) =>
       transferableStages.has(job.stage)
-      && job.sessionId !== sessionId
-      && (!prompt.toLowerCase().includes(job.id.toLowerCase())
-        ? !snapshot.jobs.some((candidate) =>
-            candidate.id !== job.id
-            && transferableStages.has(candidate.stage)
-            && candidate.sessionId !== sessionId
-            && prompt.toLowerCase().includes(candidate.id.toLowerCase()))
-        : true),
-    );
+      && job.sessionId !== sessionId);
+    const named = transferable.filter((job) => mentionsExactJobId(prompt, job.id));
+    const promptNamesUnknownJob = /\b(?:job|ticket)-[A-Za-z0-9._-]+\b/i.test(prompt) && named.length === 0;
+    const candidates = named.length > 0 ? named : (promptNamesUnknownJob ? [] : transferable);
     if (candidates.length !== 1) {
       emit("CRX Factory recorded no custody transfer because the request did not identify exactly one transferable job. Name the job shown on the Factory Board and ask to move it to this chat.");
     }

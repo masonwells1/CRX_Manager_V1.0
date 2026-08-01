@@ -462,10 +462,11 @@ export function readTicket(paths, filename) {
   const fullPath = path.join(paths.ticketsDir, safe);
   const bytes = readFileSync(fullPath, "utf8");
   const ticket = normalizeTicket(JSON.parse(bytes));
-  if (ticketBytes(ticket) !== bytes.replace(/\r\n/g, "\n")) {
+  const canonicalBytes = bytes.replace(/\r\n/g, "\n");
+  if (ticketBytes(ticket) !== canonicalBytes) {
     throw new Error(`Ticket ${safe} is not canonically serialized.`);
   }
-  return { ticket, hash: sha256(bytes), filename: safe, fullPath };
+  return { ticket, hash: sha256(canonicalBytes), filename: safe, fullPath };
 }
 
 function sleepMs(ms) {
@@ -654,6 +655,7 @@ export function mintFactoryCliPermit(paths, {
 }) {
   authorizedFactoryWriter(paths);
   ensureFactoryDirs(paths);
+  cleanupExpiredFactoryCliPermits(paths, nowMs);
   const token = randomUUID();
   const payload = canonicalize({
     schemaVersion: FACTORY_SCHEMA_VERSION,
@@ -670,6 +672,25 @@ export function mintFactoryCliPermit(paths, {
     { encoding: "utf8", flag: "wx" },
   );
   return payload;
+}
+
+function cleanupExpiredFactoryCliPermits(paths, nowMs) {
+  let entries;
+  try {
+    entries = readdirSync(paths.permitsDir).sort().slice(0, 256);
+  } catch {
+    return;
+  }
+  const permitName = /^[a-f0-9-]{36}(?:\.json|\.consuming-\d+)$/i;
+  for (const entry of entries) {
+    if (!permitName.test(entry)) continue;
+    const target = path.join(paths.permitsDir, entry);
+    try {
+      if (nowMs - statSync(target).mtimeMs > FACTORY_CLI_PERMIT_TTL_MS) unlinkSync(target);
+    } catch {
+      // Cleanup is bounded and best-effort; minting the new atomic permit remains authoritative.
+    }
+  }
 }
 
 export function consumeFactoryCliPermit(paths, token, {
@@ -713,9 +734,16 @@ export function consumeFactoryCliPermit(paths, token, {
 }
 
 function releaseLock(paths, fd) {
-  try { closeSync(fd); } finally {
-    try { unlinkSync(paths.lockPath); } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
+  try {
+    closeSync(fd);
+  } catch (error) {
+    process.stderr.write(`Factory cleanup warning: could not close the ledger lock (${error?.message || error}).\n`);
+  }
+  try {
+    unlinkSync(paths.lockPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      process.stderr.write(`Factory cleanup warning: could not remove the ledger lock (${error?.message || error}).\n`);
     }
   }
 }
@@ -880,7 +908,14 @@ export function repositoryContentFingerprint(cwd = process.cwd()) {
   const listed = git(
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
     repoRoot,
-  ).split("\0").filter(Boolean).filter((relative) => existsSync(path.join(repoRoot, relative)))
+  ).split("\0").filter(Boolean).filter((relative) => {
+    try {
+      lstatSync(path.join(repoRoot, relative));
+      return true;
+    } catch {
+      return false;
+    }
+  })
     .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
   if (listed.some((relative) => relative.includes("\n"))) {
     throw new Error("Repository fingerprint does not support newline characters in file names.");
@@ -891,13 +926,20 @@ export function repositoryContentFingerprint(cwd = process.cwd()) {
       if (!match) throw new Error("Could not parse Git index mode for repository fingerprint.");
       return [match[2], match[1]];
     }));
-  const objectIds = listed.length === 0 ? [] : execFileSync("git", ["hash-object", "--stdin-paths"], {
-    cwd: repoRoot,
-    input: `${listed.join("\n")}\n`,
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "ignore"],
-    maxBuffer: 256 * 1024 * 1024,
-  }).trim().split(/\r?\n/);
+  const objectIds = listed.map((relative) => {
+    const source = path.join(repoRoot, relative);
+    const stat = lstatSync(source);
+    const input = stat.isSymbolicLink()
+      ? Buffer.from(readlinkSync(source), "utf8")
+      : readFileSync(source);
+    return execFileSync("git", ["hash-object", "--stdin"], {
+      cwd: repoRoot,
+      input,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+      maxBuffer: 256 * 1024 * 1024,
+    }).trim();
+  });
   if (objectIds.length !== listed.length) {
     throw new Error("Git did not return one content object ID for every repository file.");
   }
@@ -959,7 +1001,7 @@ export function repositoryCommitFingerprint(cwd = process.cwd(), commitish = "HE
   };
 }
 
-function pathAllowedByTicket(relative, allowedPaths) {
+export function pathAllowedByTicket(relative, allowedPaths) {
   const normalizedRelative = String(relative).replace(/\\/g, "/").replace(/^\.\//, "");
   return (allowedPaths || []).some((entry) => {
     const normalized = String(entry).replace(/\\/g, "/").replace(/^\.\//, "");
@@ -1920,6 +1962,8 @@ export function runFactoryHarnessSandbox(cwd, scriptName) {
     "Factory harness disposable workspace creation",
   );
   let result;
+  let primaryError;
+  let cleanupError;
   try {
     bootstrapFactoryHarnessWorkspace(cwd, sandbox, workspaceVolume);
     const args = factoryHarnessSandboxArgs({
@@ -1934,13 +1978,26 @@ export function runFactoryHarnessSandbox(cwd, scriptName) {
       timeout: 15 * 60 * 1000,
       maxBuffer: 20 * 1024 * 1024,
     });
+  } catch (error) {
+    primaryError = error;
   } finally {
     runDocker(["container", "rm", "--force", containerName], { cwd, timeout: 30_000 });
-    requireSuccessfulProcess(
-      runDocker(["volume", "rm", "--force", workspaceVolume], { cwd, timeout: 30_000 }),
-      "Factory harness disposable workspace cleanup",
-    );
+    try {
+      requireSuccessfulProcess(
+        runDocker(["volume", "rm", "--force", workspaceVolume], { cwd, timeout: 30_000 }),
+        "Factory harness disposable workspace cleanup",
+      );
+    } catch (error) {
+      cleanupError = error;
+    }
   }
+  if (primaryError) {
+    if (cleanupError) {
+      process.stderr.write(`Factory cleanup warning: ${cleanupError?.message || cleanupError}\n`);
+    }
+    throw primaryError;
+  }
+  if (cleanupError) throw cleanupError;
   return { ...result, ...sandbox, networkMode: "none", workspaceMode: "disposable-volume" };
 }
 

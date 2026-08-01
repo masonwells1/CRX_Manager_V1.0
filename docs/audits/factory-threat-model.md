@@ -31,6 +31,12 @@ The factory is a local, single-owner coordination system with two owner surfaces
 - Factory state → release guards: optional additional exact-byte restrictions only; independent risk classification, Sol proof, CI, branch protection, and production rules still decide the action.
 - Ledger/evidence → Board: read-only loopback HTTP projection; state-changing methods and controls are absent.
 
+The independent-review prompt deliberately couples its same-Windows-user limitation to authority
+monotonicity. A reviewer may dismiss same-user hook imitation as outside this pilot only while it
+also verifies that factory state cannot weaken or replace push, merge, CI, deployment, migration,
+live-data, secret, permission, or destructive-action gates. Removing either half invalidates the
+threat-model exception and must be treated as a blocker.
+
 #### Diagram
 
 ```mermaid

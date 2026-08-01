@@ -16,19 +16,9 @@ import {
   sha256,
   writeImmutableTicket,
 } from "../../scripts/factory-state-lib.mjs";
+import { gitLocalEnvironmentNames } from "./git-test-env.mjs";
 
-const GIT_REPOSITORY_ENVIRONMENT_NAMES = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_COMMON_DIR",
-  "GIT_DIR",
-  "GIT_GRAFT_FILE",
-  "GIT_IMPLICIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_PREFIX",
-  "GIT_SHALLOW_FILE",
-  "GIT_WORK_TREE",
-];
+const GIT_REPOSITORY_ENVIRONMENT_NAMES = gitLocalEnvironmentNames();
 
 function sanitizedFixtureGitEnvironment(source = process.env) {
   const env = { ...source };
@@ -69,11 +59,9 @@ function makeEmptyState(sessionId = "codex-thread-1") {
   return { dir, paths, sessionId };
 }
 
-function makeState(sessionId = "codex-thread-1") {
-  const empty = makeEmptyState(sessionId);
-  const { dir, paths } = empty;
+function addPresentedTicket(paths, sessionId, jobId) {
   const written = writeImmutableTicket(paths, {
-    id: `job-${path.basename(dir)}`,
+    id: jobId,
     version: 1,
     title: "Prove chat approval",
     goal: "Prove exact transcript-bound approval.",
@@ -110,7 +98,14 @@ function makeState(sessionId = "codex-thread-1") {
       baseSha,
     },
   });
-  return { dir, paths, jobId: written.ticket.id, question, sessionId };
+  return { jobId: written.ticket.id, question };
+}
+
+function makeState(sessionId = "codex-thread-1", explicitJobId = "") {
+  const empty = makeEmptyState(sessionId);
+  const { dir, paths } = empty;
+  const presented = addPresentedTicket(paths, sessionId, explicitJobId || `job-${path.basename(dir)}`);
+  return { dir, paths, ...presented, sessionId };
 }
 
 function runHook(state, payload) {
@@ -124,6 +119,7 @@ function runHook(state, payload) {
       CRX_AGENT_SURFACE: "codex",
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: state.dir,
+      NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-owner-input-test",
     },
     input: JSON.stringify(payload),
   });
@@ -139,6 +135,7 @@ function runShipHook(state, payload) {
       CRX_AGENT_SURFACE: "codex",
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: state.dir,
+      NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-owner-input-test",
     },
     input: JSON.stringify(payload),
   });
@@ -227,6 +224,7 @@ function runLaneHook(state, payload) {
       CRX_AGENT_SURFACE: "codex",
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: state.dir,
+      NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-owner-input-test",
     },
     input: JSON.stringify(payload),
   });
@@ -243,6 +241,19 @@ function runLaneHook(state, payload) {
   equal(transferred.sessionId, "new-transfer-thread", "owner-authorized transfer binds the job to the new chat");
   equal(transferred.stage, "needs-ticket-ok", "owner-authorized transfer requires a fresh ticket presentation and approval");
   equal(transferred.questionHash, "", "owner-authorized transfer invalidates the old decision fingerprint");
+}
+
+{
+  const state = makeState("collision-owner-1", "job-1");
+  addPresentedTicket(state.paths, "collision-owner-10", "job-10");
+  const result = runHook(state, {
+    prompt: "take over factory ticket job-10 in this chat",
+    thread_id: "collision-new-thread",
+  });
+  ok(result.stdout.includes("moved job-10"), "custody transfer matches the complete job ID, not a substring");
+  const jobs = buildFactorySnapshot(state.paths).jobs;
+  equal(jobs.find((job) => job.id === "job-1").sessionId, "collision-owner-1", "job-1 custody is unchanged");
+  equal(jobs.find((job) => job.id === "job-10").sessionId, "collision-new-thread", "job-10 moves to the requested chat");
 }
 
 {
@@ -281,6 +292,12 @@ function runLaneHook(state, payload) {
 {
   const state = makeState("hold-thread");
   let result = runHook(state, {
+    prompt: "don't pause the factory",
+    thread_id: state.sessionId,
+  });
+  equal(result.stdout, "", "negated pause wording does not activate the factory hold");
+  equal(buildFactorySnapshot(state.paths).held, false, "don't-pause leaves the factory running");
+  result = runHook(state, {
     prompt: "pause the factory",
     thread_id: state.sessionId,
   });

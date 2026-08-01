@@ -1,5 +1,10 @@
 # Codex to Claude Handoff - Factory Publication Review
 
+> Historical handoff note (2026-08-01): this artifact records the earlier advisory Claude review
+> point. PR #296 now exists and is ready for review. Always fetch `origin/main`, inspect the PR and
+> current working tree, and treat every branch count, SHA, proof result, and “not started” statement
+> below as historical rather than current publication evidence.
+
 **Date:** 2026-07-31
 **Requested by:** Mason (CRX Manager)
 **Author:** Codex
@@ -17,7 +22,9 @@ safe and complete, and what must be corrected before any further commit, push, o
 - Primary scope: current uncommitted work plus branch
   `claude/autonomous-factory-review-275248` versus current `origin/main`.
 - Pre-repair committed parent after latest rebase: `3068e775927d1c26ae53a54520c73bb60562e9ef`.
-- Current local `origin/main`: `cabe0341859f586debc99962e656bc9dd644895f`.
+- Recorded `origin/main` snapshot when this handoff was written: `cabe0341859f586debc99962e656bc9dd644895f`.
+  This is historical evidence only. Run `git fetch --no-tags origin main` and resolve the fetched
+  remote commit before trusting ancestry, behind counts, rebase status, or exact-SHA claims.
 - Repository: `git@github.com:masonwells1/CRX_Manager_V1.0.git`.
 - Goal: a governed autonomous software-factory pilot with exactly two owner surfaces—ordinary
   Claude/Codex chat and one read-only Factory Board—while preserving all existing CRX landing,
@@ -148,8 +155,11 @@ performing another outward/irreversible action.
 
 ## First Action
 
-Run `git status --short --branch`, confirm the current branch/base/dirty files, and inspect the
-uncommitted diff before trusting any claim in this handoff.
+Run `npm run graph:refresh` before broad source reading so the structural review starts from the
+repository's current local Graphify map. Then run `git fetch --no-tags origin main`, resolve the
+freshly fetched remote SHA, run `git status --short --branch`, confirm the current
+branch/base/dirty files against that fresh remote state, and inspect the uncommitted diff before
+trusting any claim in this handoff.
 
 ## Safety Boundaries
 

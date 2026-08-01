@@ -563,6 +563,23 @@ repository-relative JavaScript target and subjects it to worktree, ignored, secr
 validation; caller-selected command or tool-level environment overrides are also denied. Active-lane Git inspection is limited to status, ref/ancestry, and tracked-path metadata; object, log, and diff reads are denied,
 with current source content available through the guarded structured read tools.
 
+PR #296's first non-draft CodeRabbit pass then exercised the implementation as an actual landing
+candidate and reported 18 inline findings plus 12 consolidated hardening items. All were repaired
+before merge. The repairs fail closed when a hook payload has no session identity, pin Git branch
+resolution to the trusted executable, share ticket path-scope logic, normalize push refs internally,
+and protect the complete factory hook set from direct production-guard edits. Owner chat now treats
+“don't pause the factory” as a negated hold and matches complete job IDs, so `job-1` cannot capture a
+request for `job-10`. Ticket hashes use canonical LF bytes on Windows; repository proof includes
+symlink target text and dangling links; stale one-time permits receive bounded cleanup; test fixtures
+restore their environment and temporary state. Closeout packet paths are confined to
+`docs/audits/factory/jobs/`, production deployment selection is stable for the entire verification,
+and missing Board verdict data renders as `UNKNOWN` instead of crashing. Reviewer packets retain only
+the minimum profile variables Codex needs while continuing to strip service credentials. The focused
+factory suite now passes 413 assertions, and the repository-wide proof passes 311 Vitest files / 4,129
+tests, lint, TypeScript, the 4,238-module production build, workflow parity, production-action guards,
+dependency integrity, and documentation drift. A fresh exact-commit Sol/high receipt and post-push
+GitHub/CodeRabbit acceptance remain required before merge.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

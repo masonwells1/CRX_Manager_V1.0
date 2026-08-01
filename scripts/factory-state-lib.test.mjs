@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -34,6 +35,7 @@ import {
   loadFactorySnapshot,
   mintFactoryCliPermit,
   normalizeTicket,
+  readTicket,
   readEventLog,
   recoverFactoryState,
   rejectSecretBearingText,
@@ -116,11 +118,20 @@ if (process.env.CRX_FACTORY_SANDBOX !== "1") {
 
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "crx-factory-state-"));
+  const previousTestMode = process.env.CRX_FACTORY_TEST_MODE;
+  const previousStateDir = process.env.CRX_FACTORY_TEST_STATE_DIR;
   const env = { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: path.join(root, "state") };
   process.env.CRX_FACTORY_TEST_MODE = "1";
   process.env.CRX_FACTORY_TEST_STATE_DIR = env.CRX_FACTORY_TEST_STATE_DIR;
   const paths = resolveFactoryPaths(root, env);
-  return { root, env, paths };
+  const cleanup = () => {
+    if (previousTestMode === undefined) delete process.env.CRX_FACTORY_TEST_MODE;
+    else process.env.CRX_FACTORY_TEST_MODE = previousTestMode;
+    if (previousStateDir === undefined) delete process.env.CRX_FACTORY_TEST_STATE_DIR;
+    else process.env.CRX_FACTORY_TEST_STATE_DIR = previousStateDir;
+    rmSync(root, { recursive: true, force: true });
+  };
+  return { root, env, paths, cleanup };
 }
 
 function ticket(id = "factory-test-1", overrides = {}) {
@@ -231,7 +242,7 @@ throws(
 );
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   throws(
     () => appendFactoryEvent(paths, {
       type: "factory-intent",
@@ -243,7 +254,7 @@ throws(
     /credential or secret/,
     "secret-shaped arbitrary event fields are rejected before ledger persistence",
   );
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 function append(paths, type, jobId, payload = {}, options = {}) {
@@ -258,7 +269,7 @@ function append(paths, type, jobId, payload = {}, options = {}) {
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   const issued = mintFactoryCliPermit(paths, {
     sessionId: "trusted-session",
     actorTool: "codex",
@@ -286,11 +297,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     /expired before use/,
     "expired CLI permit is refused",
   );
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   const written = writeImmutableTicket(paths, ticket("custody-replay"));
   append(paths, "ticket-drafted", written.ticket.id, {
     ticketFile: written.filename,
@@ -309,11 +320,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     /crossed factory session custody/,
     "ledger replay rejects cross-session ticket takeover even if a forged event reaches disk",
   );
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   const staleSnapshot = loadFactorySnapshot(paths);
   appendFactoryEvent(paths, {
     type: "factory-intent",
@@ -334,14 +345,16 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     "stale lifecycle compare-and-swap refuses a second concurrent writer",
   );
   eq(loadFactorySnapshot(paths).factoryIntentSessions, ["lane-race-winner"], "only the compare-and-swap winner reaches the ledger");
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   const written = writeImmutableTicket(paths, ticket());
   eq(written.hash, ticketHash(written.ticket), "ticket hash binds canonical bytes");
   ok(readFileSync(written.fullPath, "utf8").endsWith("\n"), "immutable ticket is newline-terminated");
+  writeFileSync(written.fullPath, readFileSync(written.fullPath, "utf8").replace(/\n/g, "\r\n"));
+  eq(readTicket(paths, written.filename).hash, written.hash, "ticket verification hashes canonical LF bytes on every platform");
   throws(
     () => writeImmutableTicket(paths, ticket("bad-example", { businessExample: "" })),
     /businessExample is required/,
@@ -466,11 +479,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   eq(revisedSnapshot.jobs[0].evidence.length, 0, "a revised ticket cannot inherit earlier harness receipts");
   eq(revisedSnapshot.jobs[0].reviews.length, 0, "a revised ticket cannot inherit an earlier CLEAN review");
   eq(revisedSnapshot.jobs[0].baseSha, "", "a revised ticket requires a fresh base-bound presentation");
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   const written = writeImmutableTicket(paths, ticket("receipt-backed-approval"));
   append(paths, "ticket-drafted", written.ticket.id, {
     ticketFile: written.filename,
@@ -509,11 +522,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     /ENOENT|receipt/i,
     "a pre-seeded approval ledger without its hook-origin receipt fails closed during replay",
   );
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   throws(
     () => append(paths, "forged-future-event", null, {}),
     /Unsupported factory event type/,
@@ -530,11 +543,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     /trusted Claude or Codex owner surface/,
     "ledger events cannot claim an unknown actor surface",
   );
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   setEmergencyFactoryHold(paths, "Mason requested a pause while the ledger was unavailable.");
   eq(buildFactorySnapshot(paths).held, true, "emergency hold blocks work without a ledger append");
   setEmergencyFactoryHold(paths, "OPENAI_API_KEY=sk-emergency-reason-must-not-persist");
@@ -563,11 +576,11 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   });
   ok(repaired.backup.includes("torn-events"), "torn-tail recovery preserves the original bytes");
   eq(readEventLog(paths).degraded, false, "torn-tail recovery restores a readable chain");
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   append(paths, "factory-intent", null, { ownerRequest: "run factory overnight" });
   append(paths, "factory-held", null, { reason: "Mason paused it." });
   let snapshot = buildFactorySnapshot(paths);
@@ -578,22 +591,22 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   snapshot = buildFactorySnapshot(paths);
   eq(snapshot.factoryIntentSessions, [], "factory intent can be cleared");
   eq(snapshot.held, false, "global resume clears hold");
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   append(paths, "factory-intent", null, { ownerRequest: "x" });
   const original = readFileSync(paths.eventsPath, "utf8");
   const event = JSON.parse(original.trim());
   event.payload.ownerRequest = "tampered";
   writeFileSync(paths.eventsPath, `${canonicalJson(event)}\n`, "utf8");
   throws(() => readEventLog(paths), /Event hash mismatch/, "tampered event is rejected");
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   append(paths, "factory-intent", null, { ownerRequest: "x" });
   appendFileSync(paths.eventsPath, '{"schemaVersion":1', "utf8");
   const log = readEventLog(paths);
@@ -604,7 +617,7 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     /incomplete trailing event/,
     "no new event appends while torn tail exists",
   );
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
@@ -653,6 +666,14 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     "factory lane starts only from a clean checkout at the approved base",
   );
   eq(initialCommit.repositoryContentHash, before.repositoryContentHash, "commit fingerprint matches identical working-tree bytes");
+  try {
+    symlinkSync("missing-target.txt", path.join(fingerprintRepo, "dangling-link.txt"));
+    const dangling = repositoryContentFingerprint(fingerprintRepo);
+    ok(dangling.repositoryContentHash !== before.repositoryContentHash, "working-tree proof includes dangling symlink target text");
+    rmSync(path.join(fingerprintRepo, "dangling-link.txt"));
+  } catch (error) {
+    if (!new Set(["EPERM", "EACCES", "UNKNOWN"]).has(error?.code)) throw error;
+  }
   writeFileSync(path.join(fingerprintRepo, "source.txt"), "after\n");
   eq(
     validateRepositoryScope(scopedJob, fingerprintRepo).join(","),
@@ -707,7 +728,7 @@ function append(paths, type, jobId, payload = {}, options = {}) {
 }
 
 {
-  const { root, paths } = fixture();
+  const { root, paths, cleanup } = fixture();
   const harnessRepo = mkdtempSync(path.join(tmpdir(), "crx-factory-harness-state-"));
   writeFileSync(path.join(harnessRepo, "package.json"), `${JSON.stringify({
     scripts: {
@@ -738,7 +759,7 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   ok(existsSync(paths.emergencyHoldPath), "indirect harness mutation creates an emergency hold");
   delete process.env.FACTORY_MUTATE_TARGET;
   rmSync(harnessRepo, { recursive: true, force: true });
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
 }
 
 {
