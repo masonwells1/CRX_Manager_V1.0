@@ -780,7 +780,9 @@ function append(paths, type, jobId, payload = {}, options = {}) {
 }
 
 {
-  const proofBaseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+  const proofBaseSha = execFileSync("git", ["rev-parse", "HEAD^"], { cwd: repoRoot, encoding: "utf8" }).trim();
+  const currentBaseSha = execFileSync("git", ["rev-parse", "origin/main"], { cwd: repoRoot, encoding: "utf8" }).trim();
+  ok(proofBaseSha !== currentBaseSha, "harness proof fixture uses a base older than current origin/main");
   const committedRepository = repositoryCommitFingerprint(repoRoot, proofBaseSha);
   const packageBytes = execFileSync("git", ["show", `${proofBaseSha}:package.json`], { cwd: repoRoot });
   const packageJson = JSON.parse(packageBytes);
