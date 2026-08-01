@@ -1168,6 +1168,12 @@ try {
     eq(missingVerify.status, 2, "CLI rejects a missing --verify directory with usage status 2");
     const twoOperations = spawnSync(process.execPath, [SCRIPT, "--stage", staged, "--verify", staged], { encoding: "utf8" });
     eq(twoOperations.status, 2, "CLI rejects two operations with usage status 2");
+    const missingSource = spawnSync(process.execPath, [SCRIPT, "--stage", staged, "--source"], { encoding: "utf8" });
+    eq(missingSource.status, 2, "CLI rejects a missing --source directory with usage status 2");
+    const sourceAsFlag = spawnSync(process.execPath, [SCRIPT, "--stage", staged, "--source", "--verify"], { encoding: "utf8" });
+    eq(sourceAsFlag.status, 2, "CLI rejects a flag-shaped --source value with usage status 2");
+    const unknownFlag = spawnSync(process.execPath, [SCRIPT, "--verify", staged, "--mystery", "x"], { encoding: "utf8" });
+    eq(unknownFlag.status, 2, "CLI rejects unknown arguments with usage status 2");
   }
 
   console.log(`OK - backup-claude-memory checks passed (${pass} assertions).`);

@@ -10,7 +10,11 @@ strengthened the backup hard-link and CLI exit-code tests. CodeQL's two high
 alerts were test-only substring checks; the assertions now compare the exact
 GitHub arguments instead. The backup runbook now counts both privacy lookups
 during a re-stage, and the round-23 handoff records the completed controls and
-byte-identical remote verification procedure.
+byte-identical remote verification procedure. The resumed exact-head review
+then found that PowerShell expression concatenation could still assemble the
+`push` subcommand and that a missing `--source` silently fell back to discovery;
+the shared detector now collapses literal joins and the CLI rejects missing,
+flag-shaped, and unknown arguments.
 
 ## 2026-08-01 — Command Prompt caret-spliced pushes are visible
 

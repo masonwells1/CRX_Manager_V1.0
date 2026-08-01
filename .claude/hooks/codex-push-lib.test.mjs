@@ -546,6 +546,14 @@ assert.equal(
   "including cmd.exe caret escaping inside `push`",
 );
 assert.equal(
+  pushHiddenByShellComposition("git ('pu'+'sh') origin HEAD:main"), true,
+  "including PowerShell expression concatenation inside `push`",
+);
+assert.equal(
+  pushHiddenByShellComposition("git ('p'+'u'+'sh') origin HEAD:main"), true,
+  "including repeated PowerShell expression concatenation inside `push`",
+);
+assert.equal(
   pushHiddenByShellComposition("git pu\\\nsh origin HEAD:main"), true,
   "including a POSIX shell line splice inside `push`",
 );
@@ -1250,6 +1258,11 @@ assert.equal(pushDestinationToken("git push"), null);
       'cmd /d /c "git pu^sh origin HEAD:main"',
       /quoting or command substitution/i,
       "and cmd.exe caret escaping cannot splice `push` past the hook",
+    );
+    deniedBecause(
+      "git ('pu'+'sh') origin HEAD:main",
+      /quoting or command substitution/i,
+      "and PowerShell expression concatenation cannot build `push` past the hook",
     );
     deniedBecause(
       "git --% push origin HEAD:main",

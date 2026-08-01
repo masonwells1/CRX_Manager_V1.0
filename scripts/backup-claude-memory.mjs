@@ -1031,13 +1031,21 @@ function main(argv) {
   const stageDir = flag("--stage");
   const verifyDir = flag("--verify");
   const remoteDir = flag("--verify-remote");
+  const sourceDir = flag("--source");
   if ([stageDir, verifyDir, remoteDir].filter(Boolean).length > 1) usage("pass exactly one operation");
   if (!stageDir && !verifyDir && !remoteDir) usage("nothing to do");
   if (stageDir === null && argv.includes("--stage")) usage("--stage needs a directory");
   if (verifyDir === null && argv.includes("--verify")) usage("--verify needs a directory");
   if (remoteDir === null && argv.includes("--verify-remote")) usage("--verify-remote needs a directory");
+  if (sourceDir === null && argv.includes("--source")) usage("--source needs a directory");
 
-  return stageDir ? stage(stageDir, flag("--source")) : verifyDir ? verify(verifyDir) : verifyRemote(remoteDir);
+  const valueFlags = new Set(["--stage", "--verify", "--verify-remote", "--source"]);
+  for (let i = 0; i < argv.length; i += 1) {
+    if (!valueFlags.has(argv[i])) usage(`unknown argument: ${argv[i]}`);
+    i += 1;
+  }
+
+  return stageDir ? stage(stageDir, sourceDir) : verifyDir ? verify(verifyDir) : verifyRemote(remoteDir);
 }
 
 // Exported so the tests can call the real functions rather than re-implementing

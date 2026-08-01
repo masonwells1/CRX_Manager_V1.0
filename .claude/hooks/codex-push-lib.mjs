@@ -114,7 +114,12 @@ export function pushUsesExecPathOption(cmd) {
 // only has to stop the accident and the clever-but-not-adversarial case.
 export function pushHiddenByShellComposition(cmd) {
   const text = String(cmd || "");
-  const unwrapped = text
+  const joined = text.replace(/\(([^()\r\n]+)\)/g, (whole, body) => {
+    const parts = body.split(/\s*\+\s*/);
+    if (parts.length < 2 || parts.some((part) => !/^(['"])[^'"\r\n]*\1$/.test(part))) return whole;
+    return parts.map((part) => part.slice(1, -1)).join("");
+  });
+  const unwrapped = joined
     .replace(/--%(?=\s)/g, "")      // PowerShell stop-parsing token: git --% push
     .replace(/`\r?\n/g, "")          // PowerShell line continuation
     .replace(/`(?=[^\r\n])/g, "")    // PowerShell character escape: pu`sh

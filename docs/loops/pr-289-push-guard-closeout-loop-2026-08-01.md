@@ -46,3 +46,9 @@ remains separate and is not part of this loop.
 6. Run `node scripts/write-codex-push-proof.mjs --timeout 1500` with no `--base`.
 7. On CLEAN only: push the named branch, wait for required checks, read and answer CodeRabbit, merge,
    and verify PR state plus `main` ancestry.
+
+## Cycle ledger
+
+- Cycle 1: BLOCKERS — confirmed PowerShell expression-concatenated `push` bypass; MEDIUM missing or
+  flag-shaped `--source` fallback. Both fixed with helper, actual-hook, and CLI regressions; awaiting
+  mutation proof, full pipeline, and exact-head re-review.
