@@ -157,7 +157,17 @@ function isSafeGitRead(command) {
 }
 const SAFE_SHELL_READ_RE = /^\s*(?:findstr|where(?:\.exe)?|ls|dir|pwd|Get-Location|Get-Content|Get-ChildItem|Get-Item|Test-Path|Resolve-Path|Select-String|Measure-Object)(?:\s+[^\r\n;&|<>]*)?\s*$/i;
 const SAFE_VERSION_RE = /^\s*(?:node|npm|gh|git)(?:\.exe|\.cmd)?\s+--version\s*$/i;
-const SECRET_PATH_RE = /(?:^|[\s\\/'"])(?:\.env(?:\.|$)|[^\s\\/'"]*\.(?:pem|key|p12|pfx)|credentials?(?:\.|$)|secrets?(?:\.|$)|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.|$))/i;
+const SECRET_PATH_RE = /(?:^|[\s\\/'"])(?:\.env(?:[./]|$)|[^\s\\/'"]*\.(?:pem|key|p12|pfx)|credentials?(?:[./]|$)|secrets?(?:[./]|$)|id_(?:rsa|dsa|ecdsa|ed25519)(?:[./]|$))/i;
+
+function secretReadSelector(value) {
+  const normalized = String(value || "").replace(/\\/g, "/");
+  const collapsedGlob = normalized
+    .replace(/\[([A-Za-z0-9._-])\]/g, "$1")
+    .replace(/[*?[\]{}!,]/g, "/");
+  return SECRET_PATH_RE.test(normalized)
+    || SECRET_PATH_RE.test(collapsedGlob)
+    || /\{[^}]*?(?:\.env|\b(?:pem|key|p12|pfx|credentials?|secrets?|id_(?:rsa|dsa|ecdsa|ed25519))\b)[^}]*}/i.test(normalized);
+}
 const POWERSHELL_PROVIDER_PATH_RE = /(?:^|[\s"'`])(?:[A-Za-z_][\w.-]*::|[A-Za-z_][\w.-]{1,}:|[A-Za-z]:(?![\\/]))/i;
 
 function isShellMutation(toolName, toolInput) {
@@ -280,7 +290,7 @@ function grepVisibilityBlockReason(toolName, toolInput) {
   const input = toolInput && typeof toolInput === "object" ? toolInput : {};
   const unsafe = Object.entries(input).find(([key, value]) => {
     const normalized = key.replace(/[^a-z]/gi, "").toLowerCase();
-    return ["noignore", "noignorevcs", "noignoreparent", "hidden", "follow"].includes(normalized)
+    return (normalized.startsWith("noignore") || ["hidden", "follow"].includes(normalized))
       && value !== false && value != null && value !== "";
   });
   return unsafe ? `Grep option ${unsafe[0]} may expose hidden, ignored, or symlinked files` : "";
@@ -310,7 +320,7 @@ function readTargetBlockReason(rawTarget, projectDir, { allowGlob = false } = {}
   if (normalizedText === ".git" || normalizedText.startsWith(".git/") || normalizedText.includes("/.git/")) {
     return `Git internals are not readable in a factory lane: ${text}`;
   }
-  if (SECRET_PATH_RE.test(text.replace(/\\/g, "/"))) {
+  if (secretReadSelector(text)) {
     return `secret-bearing paths are not readable in a factory lane: ${text}`;
   }
   const stablePrefix = allowGlob ? text.split(/[*?[\]{}]/, 1)[0] || "." : text;
@@ -357,7 +367,7 @@ function governedReadBlockReason(toolName, toolInput, projectDir) {
   const checkedNodeTarget = nodeCheckTarget(command);
   if (checkedNodeTarget) return readTargetBlockReason(checkedNodeTarget, projectDir);
   if (!SAFE_SHELL_READ_RE.test(command)) return "";
-  if (SECRET_PATH_RE.test(command.replace(/\\/g, "/"))) {
+  if (secretReadSelector(command)) {
     return "secret-bearing paths are not readable in a factory lane";
   }
   if (POWERSHELL_PROVIDER_PATH_RE.test(command)) {

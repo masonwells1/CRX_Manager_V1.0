@@ -454,6 +454,11 @@ function bashExecutable() {
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Grep",
+    tool_input: { pattern: "token", path: root, glob: "**/{.env,*.ts}", output_mode: "content" },
+  }), /secret-bearing paths are not readable/i, "glob metacharacters cannot disguise a secret Grep selector");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Grep",
     tool_input: { pattern: "PRIVATE", path: root, include: "*.key", output_mode: "content" },
   }), /secret-bearing paths are not readable/i, "active lane validates every Grep include selector against key files");
   denied(run(laneHook, stateDir, {
@@ -461,6 +466,11 @@ function bashExecutable() {
     tool_name: "Grep",
     tool_input: { pattern: "token", path: root, no_ignore: true, output_mode: "content" },
   }), /may expose hidden, ignored, or symlinked files/i, "active lane rejects Grep no-ignore visibility overrides");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Grep",
+    tool_input: { pattern: "token", path: root, no_ignore_global: true, output_mode: "content" },
+  }), /may expose hidden, ignored, or symlinked files/i, "active lane rejects every Grep no-ignore variant");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Grep",

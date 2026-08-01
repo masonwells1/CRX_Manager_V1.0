@@ -30,8 +30,10 @@ body/template/fill inputs. Executable regressions cover both disclosure routes.
 The next Sol/high pass found that structured `Grep` validated its base path but
 not its glob/include/ignore selectors. Those selectors now pass through the same
 contained, non-secret, non-ignored path validation as `Glob`; no-ignore, hidden,
-and symlink-following visibility overrides fail closed. Regressions cover `.env`,
-`*.key`, `no_ignore`, and hidden-file searches.
+and symlink-following visibility overrides fail closed. Glob metacharacters are
+normalized for secret detection, and every `no_ignore_*` spelling is denied.
+Regressions cover `.env`, brace-disguised `.env`, `*.key`, no-ignore variants,
+and hidden-file searches.
 
 ## 2026-08-01 — PR #289 automated-review findings closed
 
