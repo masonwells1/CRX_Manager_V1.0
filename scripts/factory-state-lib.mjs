@@ -115,8 +115,13 @@ const MAX_RISK_SCAN_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_RISK_SCAN_TOTAL_BYTES = 10 * 1024 * 1024;
 
 function git(args, cwd) {
+  const env = { ...process.env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) {
+    if (env[key] === "") delete env[key];
+  }
   return execFileSync("git", args, {
     cwd,
+    env,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   }).trim();
