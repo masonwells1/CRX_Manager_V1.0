@@ -61,6 +61,33 @@ export function gitSubcommandIsDynamic(cmd) {
   return false;
 }
 
+// A valid but unlisted Git GLOBAL option makes the literal push parser stop at
+// the option and classify the whole command as a non-push. Refuse unknown
+// options whenever a later token is the literal `push`, before the guard's early
+// non-push exit. Supported inspectable options mirror GIT_GLOBAL_OPTS above.
+export function unknownGitGlobalOptions(cmd) {
+  const offenders = new Set();
+  const takesValue = new Set(["-c", "-C", "--config-env", "--git-dir", "--work-tree"]);
+  const valueless = new Set(["--no-pager", "--literal-pathspecs", "--%"]);
+  for (const segment of shellSegments(String(cmd || ""))) {
+    const tokens = splitShellArgs(segment);
+    for (let index = 0; index < tokens.length; index += 1) {
+      const binary = tokens[index].replace(/\\/g, "/").split("/").pop()?.toLowerCase();
+      if (binary !== "git" && binary !== "git.exe") continue;
+      for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
+        const token = tokens[cursor];
+        if (token === "push") break;
+        if (takesValue.has(token)) { cursor += 1; continue; }
+        if (valueless.has(token) || /^--(?:config-env|git-dir|work-tree|exec-path)=/.test(token)) continue;
+        if (token === "--exec-path") continue;
+        if (token.startsWith("-") && tokens.slice(cursor + 1).includes("push")) offenders.add(token);
+        break;
+      }
+    }
+  }
+  return [...offenders];
+}
+
 // `git --exec-path=<dir> push ...` replaces Git's own transport helpers before
 // the push starts. The destination can still look harmless while a planted
 // git-remote-https sends the objects elsewhere, so this executable selector is

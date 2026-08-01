@@ -35,6 +35,7 @@ import {
   pushSetsInlineEnv,
   shellSegments,
   unknownPushOptions,
+  unknownGitGlobalOptions,
   environmentCarriesConfigOverride,
   environmentCarriesTransportOverride,
   environmentSelectsDifferentRepo,
@@ -70,6 +71,10 @@ if (pushHiddenByShellComposition(cmd)) {
 }
 if (pushUsesExecPathOption(cmd)) {
   deny("CODEX GATE: git --exec-path is denied for pushes. It replaces Git's transport helpers, so a planted git-remote-https program can ignore the destination this guard verified. Use Git's normal executable path.");
+}
+const strangeGlobalOptions = unknownGitGlobalOptions(cmd);
+if (strangeGlobalOptions.length > 0) {
+  deny(`CODEX GATE: this command places unrecognised Git global options before push (${strangeGlobalOptions.join(", ")}). The literal push parser cannot safely determine which later token is the subcommand, so allowing it would skip every destination, force, and proof check. Use the supported plain form: \`git -C <repo> push <remote> <refspec>\`.`);
 }
 if (!isGitPush(cmd)) passthrough();
 if (pushContextIsAmbiguous(cmd)) {

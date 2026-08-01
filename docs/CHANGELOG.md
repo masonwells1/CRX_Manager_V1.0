@@ -2,6 +2,13 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-07-31 — Unknown Git global options cannot hide pushes
+
+The push guard now refuses unrecognized Git global options before a later
+literal `push`, closing valid spellings such as `git --no-optional-locks push`
+that previously reached the early non-push exit before destination, force, and
+independent-proof checks ran.
+
 ## 2026-07-31 — Memory destination discovery fails closed
 
 The private-memory backup now distinguishes Git's explicit “not a repository”

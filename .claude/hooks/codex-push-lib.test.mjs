@@ -42,6 +42,7 @@ import {
   pushSetsInlineEnv,
   shellSegments,
   unknownPushOptions,
+  unknownGitGlobalOptions,
   environmentCarriesConfigOverride,
   rewritesReachGuardedApp,
   riskyFiles,
@@ -59,6 +60,15 @@ assert.equal(gitSubcommandIsDynamic("git p*sh origin HEAD:main"), true, "glob-ex
 assert.equal(gitSubcommandIsDynamic("git -C /repo push origin main"), false, "literal push remains inspectable");
 assert.equal(gitSubcommandIsDynamic("git status --short"), false, "literal non-push remains available");
 assert.equal(gitSubcommandIsDynamic("echo '$verb'; npm test"), false, "a variable outside a Git subcommand is irrelevant");
+for (const option of ["--no-optional-locks", "--paginate", "--bare", "--glob-pathspecs"]) {
+  assert.deepEqual(
+    unknownGitGlobalOptions(`git ${option} push origin HEAD:main`),
+    [option], `${option} cannot hide a later push`,
+  );
+}
+assert.deepEqual(unknownGitGlobalOptions("git -C /repo push origin main"), [], "supported -C remains inspectable");
+assert.deepEqual(unknownGitGlobalOptions("git --no-pager push origin main"), [], "supported --no-pager remains inspectable");
+assert.deepEqual(unknownGitGlobalOptions("git --no-optional-locks status"), [], "an option before a non-push is outside this gate");
 assert.equal(mainPushSource("git.exe push origin HEAD:main", "feature"), "HEAD");
 assert.equal(mainPushSource('"C:\\Program Files\\Git\\cmd\\git.exe" push origin HEAD:main', "feature"), "HEAD");
 assert.equal(mainPushSource("/usr/bin/git push origin HEAD:main", "feature"), "HEAD");
@@ -1133,6 +1143,9 @@ assert.equal(pushDestinationToken("git push"), null);
     deniedBecause(`SOME_NEW_GIT_VAR=x ${push}`, /SOME_NEW_GIT_VAR/, "any inline assignment the allowlist does not name");
     deniedBecause(`git --exec-path=${tmp} push origin main`, /--exec-path/, "git's executable-helper override");
     deniedBecause(`$verb='push'; git $verb origin HEAD:main`, /subcommand must be written literally/, "PowerShell-expanded Git subcommand");
+    for (const option of ["--no-optional-locks", "--paginate", "--bare", "--glob-pathspecs"]) {
+      deniedBecause(`git ${option} push origin HEAD:main`, /unrecognised Git global options/, `${option} before push`);
+    }
     deniedBecause(`PATH=${tmp}; ${push}`, /PATH/, "an earlier PATH replacement");
     deniedBecause(`$env:PATHEXT = '.MJS'; ${push}`, /PATHEXT/, "an earlier PowerShell PATHEXT replacement");
     deniedBecause(`git -C ${work} push --recurse-submodules no ${CRX_URL} HEAD:main`, /codex/i, "--recurse-submodules hiding the real destination");
