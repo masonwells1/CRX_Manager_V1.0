@@ -14,6 +14,8 @@ import {
   CODEX_VERDICT_TOKEN,
   CODEX_REVIEW_EFFORT,
   CODEX_REVIEW_MODEL,
+  CODEX_REVIEW_PERMISSION_CONFIG,
+  CODEX_REVIEW_PERMISSION_PROFILE,
   codexExecutable,
   codexPushProofPath,
   codexReviewerEnvironment,
@@ -24,6 +26,7 @@ import {
   GUARDED_BASE,
   parseArgs,
   removeSanitizedReviewWorkspace,
+  safeReviewCaptureText,
   timeoutMessage,
   worktreeIsClean,
 } from "./write-codex-push-proof.mjs";
@@ -98,7 +101,7 @@ assert.ok(
   "prompt demands the machine verdict token in both forms",
 );
 
-const args = buildCodexExecArgs({ root: "/repo/root", prompt });
+const args = buildCodexExecArgs({ root: "/repo/root", prompt, platform: "win32" });
 assert.deepEqual(
   args,
   [
@@ -110,20 +113,28 @@ assert.deepEqual(
     "gpt-5.6-sol",
     "-c",
     'model_reasoning_effort="high"',
-    "--sandbox",
-    "read-only",
+    "-c",
+    'windows.sandbox="elevated"',
     "-C",
     "/repo/root",
     "-c",
     "approval_policy=never",
+    "-c",
+    'default_permissions="packet-review"',
+    "-c",
+    CODEX_REVIEW_PERMISSION_CONFIG,
     "--disable",
     "hooks",
     "-",
   ],
 );
-// SECURITY: read-only sandbox; `-` requires the wrapper to feed its fixed prompt
-// directly through stdin with shell:false, so metacharacters can never execute.
-assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
+// SECURITY: an OS-enforced deny-root profile exposes only minimal runtime files
+// plus the sanitized packet. `-` feeds the fixed prompt through stdin with
+// shell:false, so metacharacters can never execute.
+assert.ok(args.includes(`default_permissions="${CODEX_REVIEW_PERMISSION_PROFILE}"`));
+assert.ok(CODEX_REVIEW_PERMISSION_CONFIG.includes('":root" = "deny"'));
+assert.ok(CODEX_REVIEW_PERMISSION_CONFIG.includes('":workspace_roots" = { "." = "read" }'));
+assert.ok(CODEX_REVIEW_PERMISSION_CONFIG.includes("network = { enabled = false }"));
 assert.equal(args[args.indexOf("--model") + 1], CODEX_REVIEW_MODEL);
 assert.ok(args.includes(`model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`));
 assert.ok(args.includes("--ignore-user-config"));
@@ -143,6 +154,12 @@ assert.equal(scrubbedEnvironment.OPENAI_API_KEY, undefined, "reviewer environmen
 assert.equal(scrubbedEnvironment.GITHUB_TOKEN, undefined, "reviewer environment omits GitHub credentials");
 assert.equal(scrubbedEnvironment.USERPROFILE, "C:\\Users\\secret-bearing-profile", "reviewer retains the platform profile needed for Codex authentication");
 assert.equal(scrubbedEnvironment.CODEX_HOME, "C:\\Users\\secret-bearing-profile\\.codex", "reviewer retains the explicit Codex authentication home");
+assert.equal(
+  safeReviewCaptureText("OPENAI_API_KEY=sk-this-must-not-persist", "STDOUT").includes("sk-this-must-not-persist"),
+  false,
+  "raw review captures omit secret-shaped output",
+);
+assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary clean review/);
 
 {
   const source = mkdtempSync(path.join(tmpdir(), "crx-review-source-"));

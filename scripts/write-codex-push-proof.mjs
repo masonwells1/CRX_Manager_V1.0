@@ -473,6 +473,10 @@ export function codexExecutable({
 
 export const CODEX_REVIEW_MODEL = "gpt-5.6-sol";
 export const CODEX_REVIEW_EFFORT = "high";
+export const CODEX_REVIEW_PERMISSION_PROFILE = "packet-review";
+export const CODEX_REVIEW_PERMISSION_CONFIG =
+  'permissions.packet-review={ filesystem = { ":root" = "deny", ":minimal" = "read", ' +
+  '":workspace_roots" = { "." = "read" } }, network = { enabled = false } }';
 
 // ── which Codex agent produced the verdict ───────────────────────────────────
 // Legacy helper retained for callers that inspect workstation configuration.
@@ -635,13 +639,14 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
   ].join("\n");
 }
 
-export function buildCodexExecArgs({ root, prompt }) {
-  // `exec` runs the fixed review prompt with a read-only sandbox (no file writes /
-  // outward tools even if the workstation default is danger-full-access) and no
+export function buildCodexExecArgs({ root, prompt, platform = process.platform }) {
+  // `exec` runs the fixed review prompt with a packet-only permission profile
+  // (no reads outside the sanitized packet/minimal runtime, no writes, no network)
+  // even if the workstation default is danger-full-access, and with no
   // approval prompts (so an unattended run never hangs). `-` makes Codex read
   // the fixed prompt from stdin; the wrapper supplies it directly with
   // shell:false, so its metacharacters can never reach a shell.
-  return [
+  const args = [
     "exec",
     "--skip-git-repo-check",
     "--ephemeral",
@@ -650,19 +655,36 @@ export function buildCodexExecArgs({ root, prompt }) {
     CODEX_REVIEW_MODEL,
     "-c",
     `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
-    "--sandbox",
-    "read-only",
     "-C",
     root,
     "-c",
     "approval_policy=never",
+    "-c",
+    `default_permissions="${CODEX_REVIEW_PERMISSION_PROFILE}"`,
+    "-c",
+    CODEX_REVIEW_PERMISSION_CONFIG,
     "--disable",
     "hooks",
     "-",
   ];
+  if (platform === "win32") {
+    // Read-deny permission profiles require the stronger native Windows backend.
+    // Keep auth in the parent Codex process; its model-issued commands receive
+    // the dedicated restricted user and cannot read the real profile/CODEX_HOME.
+    args.splice(args.indexOf("-C"), 0, "-c", 'windows.sandbox="elevated"');
+  }
+  return args;
 }
 
-function captureReviewOutput(root, result) {
+const REVIEW_CAPTURE_SECRET_RE = /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|SUPABASE_SERVICE_ROLE_KEY|OPENAI_API_KEY|GITHUB_TOKEN|github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:sk|rk|pk)_live_[A-Za-z0-9]{16,}|(?:password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*\S+)/i;
+
+export function safeReviewCaptureText(value, label) {
+  const text = String(value || "");
+  if (!REVIEW_CAPTURE_SECRET_RE.test(text)) return text;
+  return `[${label} omitted because it contained secret-shaped text; SHA-256 ${sha256Bytes(Buffer.from(text, "utf8"))}]`;
+}
+
+export function captureReviewOutput(root, result) {
   const outPath = path.join(root, ".claude", "session-state", "codex-review-latest.txt");
   mkdirSync(path.dirname(outPath), { recursive: true });
   const body = [
@@ -673,11 +695,11 @@ function captureReviewOutput(root, result) {
     "",
     "## STDOUT",
     "",
-    result.stdout || "",
+    safeReviewCaptureText(result.stdout, "STDOUT"),
     "",
     "## STDERR",
     "",
-    result.stderr || "",
+    safeReviewCaptureText(result.stderr, "STDERR"),
   ].join("\n");
   writeFileSync(outPath, body, "utf8");
   return outPath;

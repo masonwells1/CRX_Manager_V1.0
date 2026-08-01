@@ -580,6 +580,17 @@ tests, lint, TypeScript, the 4,238-module production build, workflow parity, pro
 dependency integrity, and documentation drift. A fresh exact-commit Sol/high receipt and post-push
 GitHub/CodeRabbit acceptance remain required before merge.
 
+The next exact-SHA Sol/high review found one remaining HIGH secret-exposure boundary: the sanitized
+packet limited repository content, but the reviewer's older `read-only` sandbox still allowed
+model-issued commands to read Mason's broader Windows profile because the parent process retained
+`CODEX_HOME`, `HOME`, and `USERPROFILE` for authentication. The wrapper now selects a custom Codex
+permission profile with a deny-root filesystem policy, read access only to the current packet and
+minimal runtime paths, no network, and the elevated native Windows sandbox. Authentication remains
+available only to the parent Codex process; a real nested reviewer probe read the packet successfully
+and was denied access to `C:\Users\mason\.codex\config.toml`. If reviewer stdout or stderr ever
+contains secret-shaped text, the durable capture now stores only an omission marker and SHA-256
+instead of the raw output. The factory reviewer reuses the same hardened execution arguments.
+
 ## 2026-07-29 — Renumbering Phase 3 Stage A silently dropped its line-ending pin
 
 Stage A shipped as `20260723193312_product_families_return_policy_foundation.sql`, but

@@ -4,7 +4,7 @@ Date: 2026-07-30
 Branch: `claude/autonomous-factory-review-275248`
 Base at start: `aee913df43ca1321ce1060fdb8f3dc2a89bbc790`
 Current `origin/main` after latest reconciliation: `cabe0341859f586debc99962e656bc9dd644895f`
-State: PR #296 is ready for review; CodeRabbit ready-state findings repaired locally; fresh exact-commit acceptance pending
+State: PR #296 is ready for review; CodeRabbit and reviewer read-confinement findings repaired locally; fresh exact-commit acceptance pending
 
 ## Owner-facing result
 
@@ -476,6 +476,17 @@ production-action guard, workflow parity, dependency integrity, documentation dr
 commit. The commit hook must rerun the full governed pipeline on the staged bytes. The next gates are
 a fresh exact-SHA `gpt-5.6-sol` high-effort CLEAN receipt, feature-branch push, and fresh GitHub plus
 CodeRabbit acceptance.
+
+The first post-CodeRabbit exact-SHA Sol/high run reviewed commit
+`aeade91dd38f11c1b8906e75f59f374d9c46aada` and returned `BLOCKERS` for one HIGH issue: retaining
+profile variables for Codex authentication under the older broad read-only sandbox still exposed
+Mason's profile to model-issued commands. No proof was minted and nothing was pushed. The repaired
+wrapper now uses a custom deny-root permission profile: minimal runtime plus the sanitized review
+packet are readable, all other filesystem paths are denied, network is disabled, and native Windows
+requires the elevated sandbox backend. A real nested Codex probe returned `PACKET_READ=ALLOWED` and
+`PROFILE_READ=DENIED` when the denied target was `C:\Users\mason\.codex\config.toml`. Secret-shaped
+review output is hashed and omitted from the durable capture. Focused proof for the wrapper and the
+factory state library passed; full commit-hook and exact-SHA proof are pending on the repaired bytes.
 
 Mason explicitly authorized making PR #296 ready, merging it to `main`, allowing and verifying its
 automatic Vercel production deployment, and starting the loopback-only read-only Factory Board on
