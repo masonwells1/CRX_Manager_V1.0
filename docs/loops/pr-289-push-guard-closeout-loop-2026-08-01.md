@@ -54,5 +54,14 @@ remains separate and is not part of this loop.
   proof and the full pipeline passed before Cycle 2 review.
 - Cycle 2: BLOCKERS — confirmed that raw Git URL-rewrite setting names could expose URL user
   information in refusal logs. Fixed by reporting only the active-setting count, with a real Git
-  config regression proving a credential marker never reaches output; awaiting the full pipeline
-  and Cycle 3 exact-head review.
+  config regression proving a credential marker never reaches output; the full pipeline passed.
+- Cycle 3: CLEAN — the sanctioned proof wrapper returned `CODEX_PROOF_VERDICT: CLEAN` for exact HEAD
+  `4dd928d27b442d3b1b8c6ad31bf29d5b969d577d`, bound to `origin/main`
+  `cabe0341859f586debc99962e656bc9dd644895f`. The exact branch was pushed; CodeRabbit then identified
+  this stale loop status while GitHub's final checks were running, and it is corrected here.
+
+## Terminal status
+
+**READY FOR APPROVAL:** All fix/re-review cycles are complete and the security review is clean. This
+documentation-only correction must receive a fresh exact-head CLEAN proof before its commit is pushed;
+after that, the remaining delivery work is GitHub checks, CodeRabbit acknowledgement, and PR merge.
