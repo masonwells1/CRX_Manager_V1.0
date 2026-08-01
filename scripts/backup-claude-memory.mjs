@@ -425,7 +425,8 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
   if (urlRewrites.length > 0) {
     return (
       `FAIL: refusing to ${verb} — Git URL rewrite settings are active\n` +
-      `      (${urlRewrites.join(", ")}). \`url.*.insteadOf\` and \`url.*.pushInsteadOf\` can\n` +
+      `      (${urlRewrites.length} setting${urlRewrites.length === 1 ? "" : "s"}). ` +
+      `\`url.*.insteadOf\` and \`url.*.pushInsteadOf\` can\n` +
       `      silently replace the verified private-backup address when the runbook pushes.\n` +
       `      Remove those settings from the local, global, or inherited Git configuration and\n` +
       `      re-run. Nothing was written.`

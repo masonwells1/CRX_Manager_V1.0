@@ -15,6 +15,9 @@ then found that PowerShell expression concatenation could still assemble the
 `push` subcommand and that a missing `--source` silently fell back to discovery;
 the shared detector now collapses literal joins and the CLI rejects missing,
 flag-shaped, and unknown arguments.
+Cycle 2 found that a Git URL-rewrite setting name could itself contain URL user
+information; backup refusals now report only the number of active rewrite
+settings, never their raw credential-bearing names.
 
 ## 2026-08-01 — Command Prompt caret-spliced pushes are visible
 

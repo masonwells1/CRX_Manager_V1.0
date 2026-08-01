@@ -354,7 +354,8 @@ try {
     // settings cause the later push to use a different address. Cover all three
     // configuration sources the real process can inherit.
     {
-      const localKey = "url.https://example.invalid/local/.pushInsteadOf";
+      const credentialMarker = "credential-marker-for-test";
+      const localKey = `url.https://${credentialMarker}@example.invalid/local/.pushInsteadOf`;
       const localDest = path.join(backupRepo, "claude-memory-local-url-rewrite");
       try {
         assert.equal(
@@ -369,6 +370,7 @@ try {
         const run = captured(() => stage(localDest, notes));
         eq(run.value, 1, "a local pushInsteadOf rewrite is refused");
         ok(/URL rewrite settings are active/.test(run.said), "and the refusal explains the hidden redirect");
+        ok(!run.said.includes(credentialMarker), "and the refusal never prints URL user information from the setting name");
         ok(!readdirSafe(localDest), "and the local rewrite is refused before anything is written");
       } finally {
         spawnSync("git", ["-C", backupRepo, "config", "--local", "--unset-all", localKey], {

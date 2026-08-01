@@ -50,5 +50,9 @@ remains separate and is not part of this loop.
 ## Cycle ledger
 
 - Cycle 1: BLOCKERS — confirmed PowerShell expression-concatenated `push` bypass; MEDIUM missing or
-  flag-shaped `--source` fallback. Both fixed with helper, actual-hook, and CLI regressions; awaiting
-  mutation proof, full pipeline, and exact-head re-review.
+  flag-shaped `--source` fallback. Both fixed with helper, actual-hook, and CLI regressions; mutation
+  proof and the full pipeline passed before Cycle 2 review.
+- Cycle 2: BLOCKERS — confirmed that raw Git URL-rewrite setting names could expose URL user
+  information in refusal logs. Fixed by reporting only the active-setting count, with a real Git
+  config regression proving a credential marker never reaches output; awaiting the full pipeline
+  and Cycle 3 exact-head review.
