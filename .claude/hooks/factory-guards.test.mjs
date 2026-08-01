@@ -95,13 +95,13 @@ function bashExecutable() {
     tool_input: {
       command: "node .claude/hooks/factory-owner-input.mjs",
     },
-  }), /trusted factory identity\/owner hooks may run only/i, "agents cannot invoke the trusted owner-input hook as a command");
+  }), /canonical factory hook entrypoints are reserved/i, "supported commands cannot directly invoke the owner-input hook");
   denied(run(integrityHook, stateDir, {
     tool_name: "PowerShell",
     tool_input: {
       command: "node .claude/hooks/factory-lane-guard.mjs",
     },
-  }), /trusted factory identity\/owner hooks may run only/i, "agents cannot invoke the permit-minting lane hook as a command");
+  }), /canonical factory hook entrypoints are reserved/i, "supported commands cannot directly invoke the permit-minting lane hook");
   denied(run(integrityHook, stateDir, {
     tool_name: "PowerShell",
     tool_input: { command: "$env:CRX_FACTORY_PERMIT='forged'; node scripts/factory.mjs status" },

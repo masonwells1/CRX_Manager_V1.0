@@ -430,6 +430,18 @@ recursive force-delete cleanup command.
   Git inspection to non-content metadata. Exact regressions cover Node preload and worktree escape,
   Git object/history/diff reads, tool-level `NODE_OPTIONS`, and the retained safe syntax-check and Git-status paths. Fresh exact-commit
   acceptance is still required.
+- Trusted Codex exact-SHA Sol/high acceptance of commit
+  `10ff3d39258074bc89142c9b1f6a2201e8e79c9f` returned `BLOCKERS`: a same-Windows-user
+  process can indirectly invoke the repository owner-input hook, so its HMAC proves the canonical
+  script ran rather than proving Mason authored the decision. Mason then explicitly retained the
+  exact two-touchpoint rule, ruling out a PIN, Windows Hello, separate broker UI, or third ceremony.
+  The redesign therefore makes the actual authority model explicit: chat decisions, the ledger, and
+  the Board are coordination/audit state only; factory state may add restrictions but never grant or
+  replace independent push, merge, CI, deploy, migration, live-data, secret, permission, or
+  destructive-action authority. Receipt names/messages now describe hook-origin integrity, both
+  owner questions and the Board display the boundary, the fixed Sol charter tests authority
+  monotonicity, and the threat model records arbitrary same-account code as outside the pilot's
+  authentication boundary. Fresh exact-commit acceptance is still required.
 
 The latest review capture is
 `.claude/session-state/codex-review-latest.txt` (`CODEX_PROOF_VERDICT: BLOCKERS`). The acceptance
@@ -448,8 +460,10 @@ reconciliation.
 
 ## Remaining gate
 
-The latest repair pass remains unpushed. The focused host factory suite is green at 397 assertions;
-the commit hook must now rerun the full host pipeline on the repaired bytes. The next gate after that
-is fresh exact-SHA `gpt-5.6-sol` high-effort acceptance, then the explicitly authorized
+The latest repair pass remains unpushed. The coordination-only repair is green at 402 focused factory
+assertions (119 guard, 78 owner-input, 22 Board, 85 CLI, 98 state-library), 311 Vitest files / 4,129
+passing tests / 123 skipped, lint, TypeScript, production-action guard, workflow parity, dependency
+integrity, documentation drift, and the 4,238-module production build. The commit hook must rerun the
+full governed pipeline on the staged bytes. The next gate after that is fresh exact-SHA `gpt-5.6-sol` high-effort acceptance, then the explicitly authorized
 feature-branch push and draft PR. Merge, board installation/startup, deployment, migration, and all
 production actions remain undone.

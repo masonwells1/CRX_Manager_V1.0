@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildFactorySnapshot,
+  FACTORY_AUTHORITY_NOTICE,
   resolveFactoryPaths,
   safeId,
 } from "./factory-state-lib.mjs";
@@ -81,7 +82,7 @@ function jobCard(job) {
 export function renderFactoryBoard(snapshot) {
   const held = snapshot.held
     ? `<section class="banner danger"><strong>Factory paused.</strong> ${escapeHtml(snapshot.holdReason || "No new work will start.")}</section>`
-    : `<section class="banner good"><strong>Factory ready.</strong> Existing CRX production and destructive-action gates remain in force.</section>`;
+    : `<section class="banner good"><strong>Factory ready.</strong> ${escapeHtml(FACTORY_AUTHORITY_NOTICE)}</section>`;
   const warning = snapshot.warning
     ? `<section class="banner warn"><strong>Ledger warning.</strong> ${escapeHtml(snapshot.warning)}</section>`
     : "";
@@ -147,7 +148,7 @@ export function renderFactoryBoard(snapshot) {
     <header>
       <div>
         <h1>Factory Board</h1>
-        <p class="sub">One read-only view of CRX jobs. Approvals happen in ordinary chat.</p>
+        <p class="sub">One read-only coordination view of CRX jobs. Approvals happen in ordinary chat.</p>
       </div>
       <div class="counts" aria-label="Factory summary">
         <div class="count"><strong>${active}</strong><span>working now</span></div>
@@ -157,7 +158,7 @@ export function renderFactoryBoard(snapshot) {
     ${held}
     ${warning}
     <section class="jobs" aria-label="Factory jobs">${jobs}</section>
-    <footer>Refreshes every 15 seconds · Read-only · No merge, deploy, migration, or data controls</footer>
+    <footer>Refreshes every 15 seconds · Read-only coordination record · No merge, deploy, migration, or data controls</footer>
   </main>
 </body>
 </html>`;

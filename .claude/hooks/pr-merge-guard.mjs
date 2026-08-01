@@ -131,6 +131,8 @@ function gateRequest(request) {
     deny(`PR MERGE GATE: merges into protected branch "${base}" are always blocked.`);
   }
   if (base !== "main") return; // feature-branch merges are not production landings
+  // AUTHORITY-MONOTONIC: factory state only adds exact-byte restrictions.
+  // Green CI and the ordinary risky-diff/Sol proof path below stay authoritative.
   try {
     validateApprovedFactoryLanding(projectDir, {
       commitish: pr.headRefOid,

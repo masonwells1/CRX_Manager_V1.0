@@ -2,6 +2,23 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-01 — Factory two-touchpoint authority model corrected
+
+The factory keeps Mason's exact two owner surfaces—ordinary Claude/Codex chat and
+one read-only Factory Board—without pretending a repository hook can
+cryptographically authenticate the human behind a Windows account. Ticket and
+morning decisions remain exact, timestamped coordination records. Their keyed
+receipt now has the narrower, accurate meaning of canonical hook-origin and
+event-integrity evidence.
+
+The hard invariant is authority monotonicity: factory state may narrow and
+sequence reversible work already authorized by Mason's request and repository
+policy, but it never grants or replaces push, merge, CI, deploy, migration,
+live-data, secret, permission, or destructive-action authority. The Board and
+both approval questions state that boundary. The fixed Sol/high review charter
+now tests for a real independent-gate bypass instead of treating the documented
+same-Windows-user limitation itself as CRX database actor forgery.
+
 ## 2026-07-30 — AP accounting-period boundary hardening applied live
 
 The three remaining vendor-AP mutations now join the same accounting-month

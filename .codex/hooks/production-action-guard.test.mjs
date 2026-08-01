@@ -11,13 +11,32 @@ import { evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen 
 const projectRoot = process.cwd();
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
 const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-guard.mjs");
+const prMergeGuardPath = path.join(projectRoot, ".claude", "hooks", "pr-merge-guard.mjs");
+const migrationApplyGuardPath = path.join(projectRoot, ".claude", "hooks", "migration-apply-guard.mjs");
 const tempRoots = [];
 const productionGuardSource = readFileSync(guardPath, "utf8");
 const claudePushGuardSource = readFileSync(claudeGuardPath, "utf8");
+const prMergeGuardSource = readFileSync(prMergeGuardPath, "utf8");
+const migrationApplyGuardSource = readFileSync(migrationApplyGuardPath, "utf8");
 assert.match(
   productionGuardSource,
   /validateApprovedFactoryLanding\(\s*repoDir\s*,\s*\{[\s\S]{0,220}?commitish:\s*pullRequest\.headRefOid[\s\S]{0,180}?expectedBaseSha:\s*String\(pullRequest\.baseRefOid\)/,
   "Codex merge gate binds a factory landing to the exact GitHub head/base",
+);
+assert.match(
+  productionGuardSource,
+  /validateApprovedFactoryLanding\([\s\S]{0,500}?if \(!pullRequestChecksGreen\(pullRequest\)\)[\s\S]{0,500}?return gateMainChange\(/,
+  "factory merge validation only adds restrictions before independent CI and risk/proof gates",
+);
+assert.match(
+  prMergeGuardSource,
+  /validateApprovedFactoryLanding\([\s\S]{0,700}?pullRequestChecksGreen\(pr\)[\s\S]{0,900}?const risky = riskyFiles\(files\)/,
+  "Claude factory merge validation cannot replace independent CI and risky-diff classification",
+);
+assert.equal(
+  migrationApplyGuardSource.includes("factory-state-lib.mjs"),
+  false,
+  "factory coordination state has no authority input into the live migration gate",
 );
 assert.match(
   productionGuardSource,

@@ -36,6 +36,11 @@ import {
 import { contentIsRisky, riskyFiles } from "../.claude/hooks/codex-push-lib.mjs";
 
 export const FACTORY_SCHEMA_VERSION = 1;
+export const FACTORY_AUTHORITY_MODEL = "coordination-only-v1";
+export const FACTORY_AUTHORITY_NOTICE = [
+  "Factory approval coordinates already-authorized reversible repository work; it does not authenticate the Windows user or grant new authority.",
+  "Push, merge, deploy, migration, live-data, secret, permission, and destructive-action gates remain independent and authoritative.",
+].join(" ");
 export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 export const ACTIVE_STAGES = new Set(["building", "verifying", "in-review"]);
 export const FACTORY_CUSTODY_STAGES = new Set([
@@ -278,7 +283,12 @@ export function canonicalTicketApprovalQuestion(ticketInput) {
   if (ticket.forbiddenOutcome) {
     lines.push("", `Forbidden outcome: ${ticket.forbiddenOutcome}`);
   }
-  lines.push("", "Reply yes to approve exactly this ticket, or no/revise to stop it?");
+  lines.push(
+    "",
+    FACTORY_AUTHORITY_NOTICE,
+    "",
+    "Reply yes to approve exactly this ticket, or no/revise to stop it?",
+  );
   return lines.join("\n");
 }
 
@@ -312,6 +322,7 @@ export function canonicalMorningReviewQuestion(job) {
       ? `Exact reviewed repository result: ${exactResult.repositoryContentHash.slice(0, 16)} across ${exactResult.repositoryFileCount} files.`
       : "Exact reviewed repository result: unavailable (do not accept).",
     "",
+    FACTORY_AUTHORITY_NOTICE,
     "This acceptance does not merge, deploy, migrate, change live data, or make the job live.",
     "Reply yes to accept this exact result into /ship, or no/revise to park it?",
   ].join("\n");
@@ -520,7 +531,7 @@ function authorizedFactoryWriter(paths) {
   return factoryWriterAuthorization(paths);
 }
 
-function eventNeedsOwnerReceipt(event) {
+function eventNeedsHookOriginReceipt(event) {
   return new Set([
     "factory-held",
     "factory-resumed",
@@ -546,7 +557,7 @@ function validDecisionLifetime(timestamp, expiresAt) {
     && expiresMs <= issuedMs + APPROVAL_TTL_MS;
 }
 
-function ownerReceiptEventCore(event) {
+function hookOriginReceiptEventCore(event) {
   const payload = { ...(event?.payload || {}) };
   delete payload.ownerReceiptId;
   delete payload.ownerReceiptMac;
@@ -563,12 +574,12 @@ function ownerReceiptEventCore(event) {
   });
 }
 
-function readOwnerReceiptKey(paths, { create = false } = {}) {
+function readHookOriginReceiptKey(paths, { create = false } = {}) {
   let raw;
   try {
     raw = readFileSync(paths.ownerReceiptKeyPath, "utf8");
   } catch (error) {
-    if (error?.code !== "ENOENT" || !create) throw new Error("Owner decision authentication key is missing.");
+    if (error?.code !== "ENOENT" || !create) throw new Error("Factory hook-origin receipt key is missing.");
     const generated = `${randomBytes(32).toString("hex")}\n`;
     try {
       writeFileSync(paths.ownerReceiptKeyPath, generated, { encoding: "utf8", flag: "wx" });
@@ -579,27 +590,27 @@ function readOwnerReceiptKey(paths, { create = false } = {}) {
     }
   }
   if (!/^[a-f0-9]{64}\n$/i.test(String(raw || ""))) {
-    throw new Error("Owner decision authentication key is malformed.");
+    throw new Error("Factory hook-origin receipt key is malformed.");
   }
   return Buffer.from(raw.trim(), "hex");
 }
 
-function ownerReceiptMac(key, value) {
+function hookOriginReceiptMac(key, value) {
   return createHmac("sha256", key).update(canonicalJson(value)).digest("hex");
 }
 
-function writeOwnerDecisionReceipt(paths, event) {
+function writeHookOriginReceipt(paths, event) {
   ensureFactoryDirs(paths);
-  const key = readOwnerReceiptKey(paths, { create: true });
+  const key = readHookOriginReceiptKey(paths, { create: true });
   const receiptId = randomUUID();
   const body = canonicalize({
     schemaVersion: FACTORY_SCHEMA_VERSION,
     receiptId,
     nonce: randomBytes(32).toString("hex"),
-    eventCoreHash: sha256(canonicalJson(ownerReceiptEventCore(event))),
+    eventCoreHash: sha256(canonicalJson(hookOriginReceiptEventCore(event))),
     issuedAt: event.timestamp,
   });
-  const receipt = { ...body, receiptMac: ownerReceiptMac(key, body) };
+  const receipt = { ...body, receiptMac: hookOriginReceiptMac(key, body) };
   writeFileSync(
     path.join(paths.ownerReceiptsDir, `${receiptId}.json`),
     `${canonicalJson(receipt)}\n`,
@@ -608,29 +619,29 @@ function writeOwnerDecisionReceipt(paths, event) {
   return { ownerReceiptId: receiptId, ownerReceiptMac: receipt.receiptMac };
 }
 
-function validateOwnerDecisionReceipt(paths, event) {
+function validateHookOriginReceipt(paths, event) {
   const receiptId = safeId(event?.payload?.ownerReceiptId);
-  const expectedMac = requiredHash(event?.payload?.ownerReceiptMac, "owner receipt authentication code");
+  const expectedMac = requiredHash(event?.payload?.ownerReceiptMac, "hook-origin receipt authentication code");
   const target = path.join(paths.ownerReceiptsDir, `${receiptId}.json`);
   const raw = readFileSync(target, "utf8");
   const receipt = JSON.parse(raw);
   if (`${canonicalJson(receipt)}\n` !== raw.replace(/\r\n/g, "\n")) {
-    throw new Error(`Owner decision receipt ${receiptId} is not canonically serialized.`);
+    throw new Error(`Factory hook-origin receipt ${receiptId} is not canonically serialized.`);
   }
   const { receiptMac: storedMac, ...body } = receipt;
-  const actualMac = ownerReceiptMac(readOwnerReceiptKey(paths), body);
-  const stored = Buffer.from(requiredHash(storedMac, "stored owner receipt authentication code"), "hex");
+  const actualMac = hookOriginReceiptMac(readHookOriginReceiptKey(paths), body);
+  const stored = Buffer.from(requiredHash(storedMac, "stored hook-origin receipt authentication code"), "hex");
   const expected = Buffer.from(expectedMac, "hex");
   const actual = Buffer.from(actualMac, "hex");
   if (!timingSafeEqual(stored, expected) || !timingSafeEqual(actual, expected)) {
-    throw new Error(`Owner decision receipt ${receiptId} failed its keyed authentication check.`);
+    throw new Error(`Factory hook-origin receipt ${receiptId} failed its keyed integrity check.`);
   }
   if (receipt.schemaVersion !== FACTORY_SCHEMA_VERSION
       || receipt.receiptId !== receiptId
       || !/^[a-f0-9]{64}$/i.test(String(receipt.nonce || ""))
       || receipt.issuedAt !== event.timestamp
-      || receipt.eventCoreHash !== sha256(canonicalJson(ownerReceiptEventCore(event)))) {
-    throw new Error(`Owner decision receipt ${receiptId} is not bound to this exact approval event.`);
+      || receipt.eventCoreHash !== sha256(canonicalJson(hookOriginReceiptEventCore(event)))) {
+    throw new Error(`Factory hook-origin receipt ${receiptId} is not bound to this exact coordination event.`);
   }
   return receipt;
 }
@@ -814,18 +825,18 @@ export function appendFactoryEvent(paths, {
       previousHash,
       payload,
     });
-    // Reject malformed or unknown events before an owner-only receipt file can
+    // Reject malformed or unknown events before a hook-origin receipt file can
     // be allocated. This preliminary hash is replaced after the exact
     // receipt-bound payload is finalized.
     validateEventShape({ ...body, eventHash: sha256(canonicalJson(body)) });
-    if (eventNeedsOwnerReceipt(body)) {
+    if (eventNeedsHookOriginReceipt(body)) {
       if (!writer.ownerDecisionWriter) {
-        throw new Error("Owner approval events may be written only by the real owner-prompt hook.");
+        throw new Error("Owner coordination events may be written only by the canonical owner-input hook.");
       }
       if (body.payload.ownerReceiptId || body.payload.ownerReceiptMac) {
-        throw new Error("Owner approval receipt fields are minted internally and cannot be supplied by a caller.");
+        throw new Error("Hook-origin receipt fields are minted internally and cannot be supplied by a caller.");
       }
-      const receipt = writeOwnerDecisionReceipt(paths, body);
+      const receipt = writeHookOriginReceipt(paths, body);
       body = canonicalize({
         ...body,
         payload: { ...body.payload, ...receipt },
@@ -1156,13 +1167,13 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       continue;
     }
     if (event.type === "factory-held") {
-      validateOwnerDecisionReceipt(paths, event);
+      validateHookOriginReceipt(paths, event);
       held = true;
       holdReason = String(event.payload.reason || "Factory paused by Mason.");
       continue;
     }
     if (event.type === "factory-resumed") {
-      validateOwnerDecisionReceipt(paths, event);
+      validateHookOriginReceipt(paths, event);
       held = false;
       holdReason = "";
       continue;
@@ -1287,7 +1298,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         if (!validDecisionLifetime(event.timestamp, event.payload.expiresAt)) {
           throw new Error(`Ticket approval for ${job.id} has an invalid approval lifetime.`);
         }
-        validateOwnerDecisionReceipt(paths, event);
+        validateHookOriginReceipt(paths, event);
         job.stage = "queued";
         job.approvalReply = String(event.payload.ownerReply || "");
         job.approvalExpiresAt = String(event.payload.expiresAt || "");
@@ -1306,7 +1317,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
             || !String(event.payload.ownerReply || "").trim()) {
           throw new Error(`Ticket decision for ${job.id} is not bound to its current presented ticket, actor, session, question, and base.`);
         }
-        validateOwnerDecisionReceipt(paths, event);
+        validateHookOriginReceipt(paths, event);
         job.stage = "rejected";
         job.blocker = String(event.payload.ownerReply || "Owner requested changes.");
         break;
@@ -1351,7 +1362,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
             || !String(event.payload.ownerReply || "").trim()) {
           throw new Error(`Factory job ${job.id} is already bound to this chat session.`);
         }
-        validateOwnerDecisionReceipt(paths, event);
+        validateHookOriginReceipt(paths, event);
         job.sessionId = event.sessionId;
         job.actorTool = event.actorTool;
         job.approvalExpiresAt = "";
@@ -1381,7 +1392,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
               || !unqualifiedOwnerApproval(event.payload.ownerReply)) {
             throw new Error(`Morning acceptance for ${job.id} is not bound to its current reviewed ticket and chat.`);
           }
-          validateOwnerDecisionReceipt(paths, event);
+          validateHookOriginReceipt(paths, event);
           const acceptedHash = String(event.payload.acceptedRepositoryContentHash || "");
           const acceptedCount = Number(event.payload.acceptedRepositoryFileCount || 0);
           if (!/^[a-f0-9]{64}$/i.test(acceptedHash)
@@ -1416,7 +1427,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
               || !String(event.payload.blocker || "").trim()) {
             throw new Error(`Morning rejection for ${job.id} is not bound to its current reviewed ticket and chat.`);
           }
-          validateOwnerDecisionReceipt(paths, event);
+          validateHookOriginReceipt(paths, event);
         } else {
           const allowed = ALLOWED_AGENT_STAGE_CHANGES.get(job.stage);
           if (!allowed?.has(event.payload.stage)

@@ -492,6 +492,8 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "so the merge cannot be bound to the base it will actually land on and is denied (fail closed)."
     );
   }
+  // AUTHORITY-MONOTONIC: factory state can only add exact-byte restrictions.
+  // It never returns an allow decision; CI and risk/proof gates below remain authoritative.
   try {
     validateApprovedFactoryLanding(repoDir, {
       commitish: pullRequest.headRefOid,
@@ -668,6 +670,8 @@ export function evaluateProductionAction({
       return denied("CODEX PRODUCTION GATE: pushes to master/production remain blocked.");
     }
 
+    // AUTHORITY-MONOTONIC: this validation can only deny. The ordinary main
+    // risk/proof gate below still decides whether a protected push is allowed.
     try {
       const factoryLanding = validateApprovedFactoryLanding(pushRepoDir, { commitish: "HEAD" });
       if (factoryLanding.required && !pushTargetsCurrentHead(segment, currentBranch)) {

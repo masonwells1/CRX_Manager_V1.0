@@ -107,7 +107,7 @@ if (/crx_factory_permit/i.test(command) || commandNorm.includes("/crx-factory/pe
   deny("CRX FACTORY STATE GUARD: agents cannot read, set, or forward trusted factory CLI permits.");
 }
 if (/\bnode(?:\.exe)?\b[^\r\n;&|]*(?:factory-owner-input|factory-lane-guard|ship-intent-reminder)\.mjs\b/i.test(commandNorm)) {
-  deny("CRX FACTORY STATE GUARD: trusted factory identity/owner hooks may run only through their real hook events. Agents cannot invoke them as commands.");
+  deny("CRX FACTORY STATE GUARD: canonical factory hook entrypoints are reserved for the supported hook workflow. Direct named invocation is denied; these local hooks are coordination controls, not Windows-user authentication.");
 }
 const factoryInternals = /factory-state-lib\.mjs|appendfactoryevent|writeimmutableticket|runharnessevidence|recoverfactorystate|mintfactoryclipermit|consumefactoryclipermit/i.test(command);
 const dynamicExecution = /\bnode(?:\.exe)?\s+(?:-e|--eval|-p|--print)\b|\bpython(?:\.exe)?\s+(?:-c|-)\b|\b(?:invoke-expression|iex)\b|(?:<<|@['\"])/i.test(command);

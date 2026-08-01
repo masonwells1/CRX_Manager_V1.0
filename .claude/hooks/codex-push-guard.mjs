@@ -88,6 +88,8 @@ for (const pushCmd of pushCommands) {
     deny(`CODEX GATE: could not determine the repository/branch selected by this push, so it is denied. ${error?.message || error}`);
   }
 
+  // AUTHORITY-MONOTONIC: factory state can only add exact-byte restrictions;
+  // the ordinary main risk classification and Sol proof checks below still run.
   try {
     const factoryLanding = validateApprovedFactoryLanding(pushRepoDir, { commitish: "HEAD" });
     if (factoryLanding.required && !pushTargetsCurrentHead(pushCmd, branch)) {

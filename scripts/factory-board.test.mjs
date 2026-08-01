@@ -41,6 +41,8 @@ ok(html.includes("&lt;img src=x"), "escaped title remains readable");
 ok(html.includes("Ready for your review"), "friendly stage label is rendered");
 ok(html.includes("Browser proof"), "machine-attached proof is visible");
 ok(html.includes("Independent codex review: CLEAN"), "independent reviewer receipt is visible");
+ok(html.includes("does not authenticate the Windows user or grant new authority"), "board states its coordination-only authority boundary");
+ok(/read-only coordination record/i.test(html), "board footer describes the ledger as coordination rather than authorization");
 ok(html.includes("@media (max-width:640px)"), "board has a narrow viewport layout");
 ok(!/<form|<button|method=/i.test(html), "board contains no mutation controls");
 const projected = projectFactoryBoardState({

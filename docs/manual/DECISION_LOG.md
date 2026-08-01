@@ -1,11 +1,33 @@
 # Decision Log
 
-Last verified: 2026-07-30
+Last verified: 2026-08-01
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-01 — Factory retains exactly two touchpoints and coordination-only authority
+
+**Decision (Mason, in chat — “yes so the 2x touch point rule”):** keep ordinary
+Claude/Codex chat as the only owner input/approval surface and one read-only
+Factory Board as the only owner output surface. Do not add Windows Hello, a PIN,
+a standalone app, commands, forms, or a third interface.
+
+**Security meaning:** chat-derived factory records coordinate and audit work;
+they are not cryptographic authentication against arbitrary code already
+running as Mason's Windows account. Factory state may only add restrictions to
+ordinary reversible work already authorized by Mason's request and repository
+policy. It may never grant or replace push, merge, CI, deployment, migration,
+live-data, secret, permission, or destructive-action authority. Those existing
+gates remain independently authoritative.
+
+**Why:** the official Claude/Codex command-hook contract supplies ordinary JSON
+on standard input and documents no platform-signed user-event token. Strong
+same-account human authentication would require another owner ceremony, which
+would violate the chosen two-touchpoint product rule.
 
 ---
 

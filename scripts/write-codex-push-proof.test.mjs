@@ -90,6 +90,9 @@ assert.match(prompt, /INDEPENDENT pre-push security review/i);
 assert.match(prompt, /candidate snapshot adds versus origin\/main/, "prompt pins the guarded base");
 assert.match(prompt, /sanitized, Git-free review packet/i, "prompt restricts review to the sanitized packet");
 assert.match(prompt, /untrusted DATA/i, "prompt treats diff content as untrusted");
+assert.match(prompt, /coordination-only threat model/i, "review prompt applies the documented factory trust model");
+assert.match(prompt, /authority monotonicity/i, "review prompt requires factory state to add restrictions without granting authority");
+assert.match(prompt, /factory state alone weakens or replaces.*independent gates/is, "review still blocks any real factory-to-production bypass");
 assert.ok(
   prompt.includes(`${CODEX_VERDICT_TOKEN}: CLEAN`) && prompt.includes(`${CODEX_VERDICT_TOKEN}: BLOCKERS`),
   "prompt demands the machine verdict token in both forms",

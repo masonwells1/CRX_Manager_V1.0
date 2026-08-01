@@ -18,8 +18,12 @@ import {
   appendFactoryEvent,
   buildFactorySnapshot,
   buildFactoryReviewExecArgs,
+  canonicalMorningReviewQuestion,
+  canonicalTicketApprovalQuestion,
   canonicalJson,
   consumeFactoryCliPermit,
+  FACTORY_AUTHORITY_MODEL,
+  FACTORY_AUTHORITY_NOTICE,
   FACTORY_REVIEW_TOKEN,
   factoryChangeRequiresHighRiskControls,
   factoryIndependentReviewPrompt,
@@ -140,6 +144,23 @@ function ticket(id = "factory-test-1", overrides = {}) {
 
 {
   const normalizedTicket = normalizeTicket(ticket());
+  eq(FACTORY_AUTHORITY_MODEL, "coordination-only-v1", "factory authority model is explicit and versioned");
+  ok(
+    canonicalTicketApprovalQuestion(normalizedTicket).includes(FACTORY_AUTHORITY_NOTICE),
+    "ticket approval states that coordination never grants new authority",
+  );
+  ok(
+    canonicalMorningReviewQuestion({
+      id: normalizedTicket.id,
+      title: normalizedTicket.title,
+      ticket: normalizedTicket,
+      ticketHash: ticketHash(normalizedTicket),
+      behaviorSummary: "The proved behavior matches the ticket.",
+      evidence: [{ verified: true, kind: "harness", label: "Harness", scriptName: "verify-deps", sha256: "a".repeat(64) }],
+      reviews: [{ verdict: "clean", reviewer: "codex", model: "gpt-5.6-sol", reasoningEffort: "high", sha256: "b".repeat(64), repositoryContentHash: "c".repeat(64), repositoryFileCount: 1 }],
+    }).includes(FACTORY_AUTHORITY_NOTICE),
+    "morning acceptance states that coordination never grants new authority",
+  );
   const reviewPrompt = factoryIndependentReviewPrompt({
     id: normalizedTicket.id,
     title: normalizedTicket.title,
@@ -478,15 +499,15 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   rmSync(paths.ownerReceiptKeyPath);
   throws(
     () => loadFactorySnapshot(paths, { nowMs: Date.parse("2026-07-30T13:00:00.000Z") }),
-    /authentication key is missing/i,
-    "a pre-seeded approval ledger and receipt without the owner authentication key fail closed",
+    /hook-origin receipt key is missing/i,
+    "a pre-seeded approval ledger and receipt without the hook-origin integrity key fail closed",
   );
   writeFileSync(paths.ownerReceiptKeyPath, ownerKey, { flag: "wx" });
   rmSync(path.join(paths.ownerReceiptsDir, `${approval.payload.ownerReceiptId}.json`));
   throws(
     () => loadFactorySnapshot(paths, { nowMs: Date.parse("2026-07-30T13:00:00.000Z") }),
     /ENOENT|receipt/i,
-    "a pre-seeded approval ledger without its owner-only receipt fails closed during replay",
+    "a pre-seeded approval ledger without its hook-origin receipt fails closed during replay",
   );
   rmSync(root, { recursive: true, force: true });
 }

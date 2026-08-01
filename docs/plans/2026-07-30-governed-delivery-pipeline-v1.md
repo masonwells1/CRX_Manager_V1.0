@@ -1,7 +1,7 @@
 # CRX Governed Delivery Pipeline V1
 
 Date: 2026-07-30
-Status: IMPLEMENTED — nineteenth Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
+Status: IMPLEMENTED — twentieth Sol/high publication-blocker repair pass awaiting fresh exact-SHA acceptance
 Owner: Mason Wells
 Implementation driver: Codex
 Independent reviewer: trusted `gpt-5.6-sol` at high reasoning effort
@@ -24,6 +24,8 @@ Mason never runs commands, edits ticket files, reviews code, or operates a separ
 - The session drafts and presents one plain-English mission ticket, including the exact repository
   files or directory prefixes the lane may change.
 - An unambiguous owner reply is recorded verbatim with timestamp, session identity, ticket ID, and ticket SHA-256.
+- The chat receipt is explicitly a coordination/integrity record, not cryptographic Windows-user authentication.
+- Authority is monotonic: factory state may add restrictions and sequencing, but cannot grant or replace push, merge, CI, deploy, migration, live-data, secret, permission, or destructive-action authority.
 - Changing the ticket after approval changes its hash and invalidates the approval.
 - A deterministic lane-start guard refuses an unapproved, stale, ambiguous, held, or conflicting job.
 - Claude and Codex use one shared event ledger and ticket store resolved from Git's common directory, not per-worktree or per-tool copies.
@@ -109,9 +111,9 @@ Writes use an exclusive cross-process lock, bounded retry, append, flush, and re
 
 The event log is hash-chained: every event records the prior accepted event hash and its own canonical hash. Replay fails closed on an invalid interior event, broken chain, duplicate event ID, or invalid schema. A single incomplete trailing JSONL line caused by process interruption is ignored and reported as degraded state; it cannot advance a job or create approval.
 
-Direct access to the shared state directory is forbidden. The PreToolUse state-integrity guard recursively inspects path-bearing arguments from every structured tool, denies reads and writes to the resolved `crx-factory` directory, rejects Git `--git-path` indirection, and blocks shell access or mutation that names shared state. Only the narrowly recognized `node scripts/factory.mjs ...` mutation commands and real owner-prompt hook may write there. The board is the read-only projection. Hash-chain and transition verification remain mandatory because command guards reduce accidental/model bypass but are not a cryptographic defense against an actor with unrestricted filesystem authority.
+Direct access to the shared state directory is forbidden in the supported tool workflow. The PreToolUse state-integrity guard recursively inspects path-bearing arguments from every structured tool, denies reads and writes to the resolved `crx-factory` directory, rejects Git `--git-path` indirection, and blocks shell access or mutation that names shared state. Only the narrowly recognized `node scripts/factory.mjs ...` mutation commands and canonical owner-input hook write there during supported operation. The board is the read-only projection. Hash-chain and transition verification remain mandatory because command guards reduce accidental/model bypass but are not a cryptographic defense against an actor with unrestricted same-user process or filesystem authority.
 
-### Ticket approval receipt
+### Ticket approval coordination receipt
 
 An approval receipt binds:
 
@@ -125,20 +127,21 @@ An approval receipt binds:
 - freshly fetched `origin/main` base SHA;
 - expiry timestamp, no more than 24 hours after approval.
 
-Every owner-only decision also receives a separate random, write-once receipt under the guard-private
-permit area. Its keyed HMAC-SHA-256 authentication code binds the full event core, including the event ID, timestamp, prior
+Every chat decision also receives a separate random, write-once hook-origin receipt under the guard-private
+permit area. Its keyed HMAC-SHA-256 integrity code binds the full event core, including the event ID, timestamp, prior
 ledger hash, actor, session, exact reply, question/ticket/base hashes, and expiry. The ordinary broker
-cannot mint these receipts; only the real owner-prompt hook can. Replay validates the receipt and the
+does not mint these receipts; the canonical owner-input hook does. Replay validates the receipt and the
 legal prior stage before accepting an approval, rejection, revision, custody transfer, pause/resume,
 or morning decision. A copied or synthesized ledger/receipt pair without the private installation key
 fails closed. This closes supported-tool pre-seeding and replay routes while preserving the
-documented same-Windows-user limitation.
+documented same-Windows-user limitation. The receipt proves hook origin and event integrity, not
+Mason's identity; it grants no authority outside the coordination workflow.
 
 The lane-start validator recomputes the ticket hash and refuses a mismatch. It refuses missing/unknown session identity, an approval recorded in another session, an expired receipt, or a current `origin/main` different from the receipt's base SHA. There is no normal fallback that erases session binding.
 
 If Mason answers from the other tool or a new chat, the owner-input hook records no approval. Mason
-may explicitly ask that chat to take over the named factory job. Only the real owner-prompt hook can
-record this custody transfer; it revokes any prior approval/question fingerprint, after which the
+may explicitly ask that chat to take over the named factory job. The canonical owner-input hook
+records this coordination transfer and revokes any prior approval/question fingerprint, after which the
 session re-presents the canonical ticket or morning question and Mason still answers in ordinary words.
 
 ### Durable closeout

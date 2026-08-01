@@ -147,6 +147,7 @@ emit([
     "FACTORY-MANAGED REQUEST:",
     "  Before any implementation, draft the mission ticket, register it with scripts/factory.mjs in the shared Git-common-dir ledger, present exactly one approval question, and ask nothing else.",
     "  Mason's chat reply is processed by factory-owner-input.mjs. Start work only through the deterministic factory lane-start command after approval.",
+    "  Ticket approval is a coordination record for already-authorized reversible work; it never replaces push, merge, deploy, migration, live-data, or destructive-action gates.",
     "  The Factory Board is the only owner output surface; do not introduce another command or form for Mason.",
   ] : []),
   "",

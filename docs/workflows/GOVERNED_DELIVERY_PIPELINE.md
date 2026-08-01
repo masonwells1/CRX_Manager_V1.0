@@ -19,27 +19,30 @@ Claude and Codex resolve `git rev-parse --git-common-dir` to one absolute path a
 - one append-only, hash-chained event ledger;
 - copied, content-hashed proof files.
 
-The state lives under `<git-common-dir>/crx-factory/`, so every worktree and both tools see the same queue. An incomplete final ledger line is shown as degraded and cannot advance a job. An interior malformed line, broken hash chain, duplicate or unknown event, illegal stage transition, changed ticket, missing owner-decision receipt, expired approval, moved `origin/main`, or actor/session binding mismatch fails closed. Critical decisions first fetch `origin/main`; they do not treat a previously fetched local pointer as current.
+The state lives under `<git-common-dir>/crx-factory/`, so every worktree and both tools see the same queue. An incomplete final ledger line is shown as degraded and cannot advance a job. An interior malformed line, broken hash chain, duplicate or unknown event, illegal stage transition, changed ticket, missing hook-origin receipt, expired approval, moved `origin/main`, or actor/session binding mismatch fails closed. Critical decisions first fetch `origin/main`; they do not treat a previously fetched local pointer as current.
 
 Only the canonical `scripts/factory.mjs` process and the owner-routing hooks may call the state writer.
 The library checks the invoked entrypoint and real call stack; pre-tool guards also block direct state
 paths across recursively inspected structured-tool arguments, direct state reads, Git `--git-path`
 indirection, factory-internal imports, inline code execution, and governance self-edits in an active lane.
-Every mutating CLI call additionally consumes a 30-second, single-use permit minted by the real
+Every mutating CLI call additionally consumes a 30-second, single-use permit minted by the canonical
 PreToolUse hook from that tool call's actual chat identity. Agent-supplied `--session`, `--tool`, or
-permit values cannot create or override identity, and the permit-minting hook cannot be launched as
-an agent command. The permit also records the exact terminal ledger hash seen by the hook. Command
+permit values cannot create or override identity inside the supported tool route. The permit also records the exact terminal ledger hash seen by the hook. Command
 handling and the final append both fail if any intervening event changes that checkpoint.
-Owner-only events are additionally written with a random, write-once receipt under the private permit
-area. Its keyed HMAC-SHA-256 authentication code binds the complete event core and prior ledger hash; the ordinary CLI broker
-cannot mint it. Replay verifies that receipt plus the exact legal prior stage, ticket, question, base,
+Chat-decision events are additionally written with a random, write-once hook-origin receipt under the private permit
+area. Its keyed HMAC-SHA-256 integrity code binds the complete event core and prior ledger hash; the ordinary CLI broker
+does not mint it. Replay verifies that receipt plus the exact legal prior stage, ticket, question, base,
 actor, session, expiry, and decision payload before any owner decision changes operational state.
 A copied or synthesized event/receipt pair without the private installation key is rejected.
-These are defense-in-depth controls inside the supported Claude/Codex tool model, not a cryptographic
-security boundary against another arbitrary process running as Mason's Windows account. The hash chain
+The receipt proves that the canonical hook produced the record; it does not prove that Mason, rather
+than another process already running as his Windows account, supplied the event. These are
+defense-in-depth controls inside the supported Claude/Codex tool model, not a cryptographic security
+boundary against another same-user process. The hash chain
 detects accidental/torn/tampered history when the reader has an honest prior hash; it does not provide
 authenticity against a same-user program that rewrites the whole ledger. Therefore the ledger and Board
-are operational coordination/audit surfaces, never authority to merge, deploy, migrate, alter live data,
+are operational coordination/audit surfaces. Factory approval only narrows and sequences reversible
+work already authorized by Mason's request and repository policy; it never creates new authority to
+push, merge, deploy, migrate, alter live data,
 or bypass `/ship`, GitHub review, branch protection, and production approval gates. Installing this pilot
 on a shared or hostile workstation is out of scope. The supported commands are agent-facing implementation
 details, not owner interfaces.
@@ -66,14 +69,14 @@ flowchart LR
   J --> K["Existing commit, PR, production, and live gates"]
 ```
 
-An acceptance never means “live.” It means the job may enter the existing `/ship` landing gates. Production deployments, live database changes, destructive actions, secrets, permissions, and other existing hard gates remain unchanged.
+An acceptance never means “live” and never becomes a security credential. It means the coordination state may advance to the existing `/ship` landing gates. Those gates still make their own decision from exact bytes, Sol/high proof, GitHub state, CI, and the standing production rules. Production deployments, live database changes, destructive actions, secrets, permissions, and other existing hard gates remain unchanged.
 
-Pause and resume are owner-only controls. Mason says them in ordinary chat. The agent CLI has no
-hold/resume command, the trusted owner-input hook cannot be launched as an agent command, and wording
+Pause and resume are chat-only owner controls in the supported workflow. Mason says them in ordinary chat. The agent CLI has no
+hold/resume command, and wording
 about stopping or restarting the Factory Board changes only the Board process—not the global hold.
 Only explicit `resume` or `restart` language lifts a hold; a sentence about continuing work later does not.
 
-## Exact approval rule
+## Exact operational approval rule
 
 An approval is valid only when all of these are true:
 
@@ -85,9 +88,14 @@ An approval is valid only when all of these are true:
 - the session identifier matches; build-stage and evidence changes stay bound to the lane-start session;
 - for a mission ticket, a fresh `git fetch origin main` still matches the recorded base and the receipt has not expired after 24 hours.
 
+This rule protects against ambiguity, stale state, and ordinary agent mistakes. It is not user
+authentication against arbitrary same-account code. The authority-monotonicity rule is the hard
+design invariant: no factory event can replace or weaken an independent release, production,
+migration, live-data, secret, permission, or destructive-action gate.
+
 “Yes, but…”, “yes, except…”, or similar language is a revision request. A reply in another tool or a
 new chat does not carry over. Mason may explicitly ask the new chat to take over the named factory
-job; only that real owner-prompt hook may transfer custody, and it revokes the old approval/question
+job; the canonical owner-input hook records the transfer and revokes the old approval/question
 fingerprint before the ticket or morning decision is re-presented there.
 
 ## Pilot limits
