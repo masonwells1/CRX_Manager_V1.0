@@ -42,6 +42,12 @@ INV-*.pdf
 backups/
 *.dump
 
+# Claude agent memory mirror — NEVER commit. This repo is PUBLIC and the memory
+# notes carry real commission payouts naming real people (see the 2026-07-29
+# CHANGELOG entry). The private off-site copy is masonwells1/CRX_Backups; snapshot
+# it with `node scripts/backup-claude-memory.mjs` (see .claude/commands/backup-claude-memory.md).
+docs/claude-memory/
+
 # Claude Code runtime state (regenerated per machine)
 .claude/scheduled_tasks.lock
 .claude/worktrees/
