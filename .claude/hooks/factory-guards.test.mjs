@@ -446,6 +446,26 @@ function bashExecutable() {
     tool_name: "Read",
     tool_input: { file_path: path.join(root, ".env.local") },
   }), /secret-bearing paths are not readable/i, "active lane cannot read secret-bearing structured paths");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Grep",
+    tool_input: { pattern: "token", path: root, glob: ".env", output_mode: "content" },
+  }), /secret-bearing paths are not readable/i, "active lane validates Grep glob selectors against secret paths");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Grep",
+    tool_input: { pattern: "PRIVATE", path: root, include: "*.key", output_mode: "content" },
+  }), /secret-bearing paths are not readable/i, "active lane validates every Grep include selector against key files");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Grep",
+    tool_input: { pattern: "token", path: root, no_ignore: true, output_mode: "content" },
+  }), /may expose hidden, ignored, or symlinked files/i, "active lane rejects Grep no-ignore visibility overrides");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Grep",
+    tool_input: { pattern: "token", path: root, hidden: true, output_mode: "content" },
+  }), /may expose hidden, ignored, or symlinked files/i, "active lane rejects Grep hidden-file visibility overrides");
   const knownMcpRead = run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "mcp__filesystem__read_file",

@@ -27,6 +27,12 @@ feature branch on `origin`; protected branches still land only through the norma
 PR merge gate. Landing custody also rejects commit message/template files and PR
 body/template/fill inputs. Executable regressions cover both disclosure routes.
 
+The next Sol/high pass found that structured `Grep` validated its base path but
+not its glob/include/ignore selectors. Those selectors now pass through the same
+contained, non-secret, non-ignored path validation as `Glob`; no-ignore, hidden,
+and symlink-following visibility overrides fail closed. Regressions cover `.env`,
+`*.key`, `no_ignore`, and hidden-file searches.
+
 ## 2026-08-01 — PR #289 automated-review findings closed
 
 The final GitHub review pass added a five-second bound to Git executable-path

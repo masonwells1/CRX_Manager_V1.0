@@ -499,6 +499,15 @@ rejects commit file/template/pathspec inputs plus PR body-file/template/fill/rec
 regressions now cover the protected-branch and metadata-disclosure routes. Fresh exact-SHA acceptance
 is required before the branch moves again.
 
+The fresh exact-SHA Sol/high review of repair commit
+`bc476861bdd7499d5b85cdef59f2756fc8b01e70` returned `BLOCKERS` for one HIGH supported-tool leak:
+`Grep` constrained its base `path` but did not validate glob/include/ignore selectors, allowing
+secret-bearing ignored files to be requested through content output. All structured Grep selectors
+now use the same contained, secret-path, symlink, and ignored-prefix validation as governed Glob
+reads; non-literal selectors and no-ignore, hidden, or symlink-following visibility overrides fail
+closed. Exact `.env`, `*.key`, `no_ignore`, and hidden-file regressions pass. Fresh exact-SHA
+acceptance remains required.
+
 Mason explicitly authorized making PR #296 ready, merging it to `main`, allowing and verifying its
 automatic Vercel production deployment, and starting the loopback-only read-only Factory Board on
 `127.0.0.1:4177`. His later statement “I authorize everything including database migrations and

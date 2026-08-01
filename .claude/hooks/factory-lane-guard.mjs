@@ -254,6 +254,38 @@ function structuredReadTargets(toolName, toolInput) {
   ].filter(Boolean).map(String);
 }
 
+function structuredReadSelectors(toolName, toolInput) {
+  const name = String(toolName || "");
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  const selectorNames = new Set([
+    "glob", "globs", "include", "includes", "exclude", "excludes",
+    "ignore", "ignores", "includeglob", "excludeglob", "ignoreglob", "iglob",
+  ]);
+  const selectors = [];
+  for (const [key, value] of Object.entries(input)) {
+    const normalized = key.replace(/[^a-z]/gi, "").toLowerCase();
+    if (!selectorNames.has(normalized)) continue;
+    const values = Array.isArray(value) ? value : [value];
+    if (values.some((item) => typeof item !== "string")) {
+      return { selectors: [], invalid: `structured ${name} selector ${key} is not a literal string` };
+    }
+    selectors.push(...values);
+  }
+  if (/^Glob$/i.test(name) && typeof input.pattern === "string") selectors.push(input.pattern);
+  return { selectors, invalid: "" };
+}
+
+function grepVisibilityBlockReason(toolName, toolInput) {
+  if (!/^Grep$/i.test(String(toolName || ""))) return "";
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  const unsafe = Object.entries(input).find(([key, value]) => {
+    const normalized = key.replace(/[^a-z]/gi, "").toLowerCase();
+    return ["noignore", "noignorevcs", "noignoreparent", "hidden", "follow"].includes(normalized)
+      && value !== false && value != null && value !== "";
+  });
+  return unsafe ? `Grep option ${unsafe[0]} may expose hidden, ignored, or symlinked files` : "";
+}
+
 function nearestExistingPath(candidate) {
   let current = candidate;
   while (!existsSync(current)) {
@@ -288,11 +320,9 @@ function readTargetBlockReason(rawTarget, projectDir, { allowGlob = false } = {}
   if (!existing || !isInside(realpathSync(root), realpathSync(existing))) {
     return `read target resolves outside the worktree through a symlink: ${text}`;
   }
-  if (!allowGlob) {
-    const relative = path.relative(root, absolute).replace(/\\/g, "/");
-    if (relative && ignoredByGit(root, relative)) {
-      return `ignored paths are not readable in a factory lane: ${relative}`;
-    }
+  const relative = path.relative(root, absolute).replace(/\\/g, "/");
+  if (relative && ignoredByGit(root, relative)) {
+    return `ignored paths are not readable in a factory lane: ${relative}`;
   }
   return "";
 }
@@ -301,15 +331,20 @@ function governedReadBlockReason(toolName, toolInput, projectDir) {
   const name = String(toolName || "");
   if (/^(?:Read|Glob|Grep|LS)$/i.test(name) || isKnownStructuredFilesystemReadTool(name)) {
     const input = toolInput && typeof toolInput === "object" ? toolInput : {};
-    if (/^Glob$/i.test(name) && SECRET_PATH_RE.test(String(input.pattern || "").replace(/\\/g, "/"))) {
-      return "secret-bearing glob patterns are not readable in a factory lane";
-    }
+    const visibilityReason = grepVisibilityBlockReason(name, input);
+    if (visibilityReason) return visibilityReason;
     const targets = structuredReadTargets(name, input);
     if ((/^Read$/i.test(name) || isKnownStructuredFilesystemReadTool(name)) && targets.length === 0) {
       return "structured read did not expose an exact file target";
     }
     for (const target of targets) {
       const reason = readTargetBlockReason(target, projectDir, { allowGlob: /^Glob$/i.test(name) });
+      if (reason) return reason;
+    }
+    const { selectors, invalid } = structuredReadSelectors(name, input);
+    if (invalid) return invalid;
+    for (const selector of selectors) {
+      const reason = readTargetBlockReason(selector, projectDir, { allowGlob: true });
       if (reason) return reason;
     }
     return "";
