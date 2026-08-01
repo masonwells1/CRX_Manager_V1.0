@@ -150,6 +150,10 @@ fingerprint before the ticket or morning decision is re-presented there.
   guard. The hook revalidates the accepted fingerprint at committed `HEAD` and rewrites the command
   to the protected absolute wrapper path; arbitrary scripts, flags, source edits, and parallel
   sessions remain blocked.
+- Every factory feature push requires that canonical fresh proof and a GitHub check that no open PR
+  for the branch has auto-merge enabled. Factory merges validate before any non-main early return,
+  accept only the exact approved head into `main`, require green checks plus the same proof, and deny
+  both requested and pre-enabled auto-merge.
 - Factory-intent routing writes a separate per-session failure latch before the shared ledger. If
   ledger append fails, build writes and mutating factory commands stay blocked until recovery and
   successful owner-prompt re-submit clears the latch. The owner text is secret-scanned before any

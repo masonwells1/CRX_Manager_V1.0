@@ -35,6 +35,14 @@ normalized for secret detection, and every `no_ignore_*` spelling is denied.
 Regressions cover `.env`, brace-disguised `.env`, `*.key`, no-ignore variants,
 and hidden-file searches.
 
+The following Sol/high pass found that landing custody could still merge an
+unrelated numeric or non-main PR, and that a feature push could trigger a
+previously enabled auto-merge without an immediate exact-head gate. Both Claude
+and Codex guards now require the canonical fresh Sol/high proof before a factory
+feature push, refuse pushes while any open PR for that head has auto-merge
+enabled, validate factory binding before every non-main merge early return, and
+permit only the accepted `base=main` head with green checks and an exact proof.
+
 ## 2026-08-01 — PR #289 automated-review findings closed
 
 The final GitHub review pass added a five-second bound to Git executable-path

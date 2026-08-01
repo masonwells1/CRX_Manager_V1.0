@@ -155,5 +155,12 @@ ok(
   /validateApprovedFactoryLanding\(\s*projectDir\s*,\s*\{[\s\S]{0,220}?commitish:\s*pr\.headRefOid[\s\S]{0,160}?expectedBaseSha:\s*String\(pr\.baseRefOid/.test(guardSource),
   "main merge binds factory acceptance to GitHub's exact PR head and current base",
 );
+ok(
+  guardSource.indexOf("validateApprovedFactoryLanding(projectDir") < guardSource.indexOf('if (base !== "main") return'),
+  "factory binding runs before the ordinary non-main PR early return",
+);
+ok(/factoryLanding\.required\s*&&\s*base\s*!==\s*"main"/.test(guardSource), "factory custody rejects non-main PR merges");
+ok(/factoryLanding\.required\s*&&\s*\(request\.auto\s*\|\|\s*pr\.autoMergeRequest\)/.test(guardSource), "factory custody rejects requested and pre-enabled auto-merge");
+ok(/risky\.length\s*===\s*0\s*&&\s*!contentFlagged\s*&&\s*!factoryLanding\.required/.test(guardSource), "factory merges cannot skip the exact-SHA proof as non-risky");
 
 console.log(`pr-merge-guard: ${pass} assertions passed`);

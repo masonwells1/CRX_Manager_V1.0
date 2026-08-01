@@ -508,6 +508,17 @@ reads; non-literal selectors and no-ignore, hidden, or symlink-following visibil
 closed. Exact `.env`, `*.key`, `no_ignore`, and hidden-file regressions pass. Fresh exact-SHA
 acceptance remains required.
 
+The next exact-SHA Sol/high review of commit
+`7032bb069ff78a5a8e26f2d4537e04ba4c587284` returned `BLOCKERS` for one HIGH landing-chain bypass:
+factory custody could invoke a merge for an unrelated numeric or non-main PR because merge guards
+returned before factory binding, while a feature push could trigger a previously enabled auto-merge
+without an immediate exact-head proof gate. Both Claude and Codex push paths now require the canonical
+fresh `codex-review-<HEAD>.json` proof for every factory feature push and fail closed if GitHub cannot
+prove auto-merge is disabled for the open head PR. Both merge paths validate factory state before the
+non-main early return, deny requested or pre-enabled auto-merge, require `base=main`, bind the accepted
+head/base, require green GitHub checks, and require the exact Sol/high proof even when ordinary path
+classification is non-risky. Fresh exact-SHA acceptance remains required.
+
 Mason explicitly authorized making PR #296 ready, merging it to `main`, allowing and verifying its
 automatic Vercel production deployment, and starting the loopback-only read-only Factory Board on
 `127.0.0.1:4177`. His later statement “I authorize everything including database migrations and

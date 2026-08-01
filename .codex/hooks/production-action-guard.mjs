@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -11,6 +11,7 @@ import {
   gitPushCwd,
   isGitPush,
   mainPushSource,
+  proofSearchDirs,
   proofValid,
   pushContextIsAmbiguous,
   pushIsForced,
@@ -162,6 +163,32 @@ function proofRequirement(headSha, riskDescription, detail, baseSha) {
     `\"timestamp\":\"<ISO-8601, 0-30 minutes old>\"}. ` +
     `The proof is bound to both the exact pushed SHA and that exact base; future-dated, stale, base-moved, malformed, or BOM-corrupted proof is refused.`
   );
+}
+
+export function factoryExactProofValid({ repoDir, headSha, baseSha, nowMs, runGit }) {
+  let worktreeList = "";
+  try { worktreeList = runGit(["worktree", "list", "--porcelain"], repoDir); } catch { /* primary checkout still checked */ }
+  for (const stateDir of proofSearchDirs(repoDir, () => worktreeList)) {
+    try {
+      if (!existsSync(stateDir)) continue;
+      for (const filename of readdirSync(stateDir)) {
+        if (!/^codex-review-[A-Za-z0-9_.-]+\.json$/.test(filename)) continue;
+        let proof;
+        try { proof = JSON.parse(readFileSync(path.join(stateDir, filename), "utf8")); } catch { continue; }
+        if (proofValid(proof, headSha, nowMs, baseSha)) return true;
+      }
+    } catch { /* unreadable state directory contributes no proof */ }
+  }
+  return false;
+}
+
+function factoryAutoMergeEnabled({ branch, repoDir, runGh }) {
+  const pullRequests = JSON.parse(runGh([
+    "pr", "list", "--head", branch, "--state", "open",
+    "--json", "headRefOid,baseRefName,autoMergeRequest",
+  ], repoDir));
+  if (!Array.isArray(pullRequests)) throw new Error("GitHub returned a non-array PR list");
+  return pullRequests.some((pullRequest) => pullRequest?.autoMergeRequest);
 }
 
 function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authoritativeBaseSha }) {
@@ -445,7 +472,7 @@ function resolvePullRequest({ request, repoDir, runGh }) {
   // baseRefOid is GitHub's CURRENT tip of the base branch — the commit the merge
   // will actually land on. Without it the gate falls back to local origin/main,
   // which can be stale (Codex P1, 2026-07-25).
-  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,statusCheckRollup");
+  args.push("--json", "baseRefName,baseRefOid,headRefName,headRefOid,mergeStateStatus,statusCheckRollup,autoMergeRequest");
   if (request.repo) args.push("--repo", request.repo);
   const data = JSON.parse(runGh(args, repoDir));
   // baseRefOid is required only for main-bound merges; gatePullRequestMerge
@@ -485,6 +512,20 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
   if (base === "master" || base === "production") {
     return denied(`CODEX PRODUCTION GATE: merges to protected branch ${base} remain blocked.`);
   }
+  let factoryLanding;
+  try {
+    factoryLanding = validateApprovedFactoryLanding(repoDir, {
+      commitish: pullRequest.headRefOid,
+      expectedBaseSha: String(pullRequest.baseRefOid || ""),
+    });
+  } catch (error) {
+    return denied(
+      `CODEX PRODUCTION GATE: factory landing proof no longer matches this PR head/base (${error?.message || error}). Park the job, rerun evidence and Sol/high review, and re-present Mason's exact morning decision before merge.`
+    );
+  }
+  if (factoryLanding.required && base !== "main") {
+    return denied("CODEX PRODUCTION GATE: factory custody may merge only the exact accepted pull request into main; feature-branch PR merges are not landing actions.");
+  }
   if (base !== "main") return { blocked: false };
   if (!pullRequest.baseRefOid) {
     return denied(
@@ -492,21 +533,26 @@ function gatePullRequestMerge({ request, repoDir, nowMs, runGit, runGh }) {
       "so the merge cannot be bound to the base it will actually land on and is denied (fail closed)."
     );
   }
-  // AUTHORITY-MONOTONIC: factory state can only add exact-byte restrictions.
-  // It never returns an allow decision; CI and risk/proof gates below remain authoritative.
-  try {
-    validateApprovedFactoryLanding(repoDir, {
-      commitish: pullRequest.headRefOid,
-      expectedBaseSha: String(pullRequest.baseRefOid),
-    });
-  } catch (error) {
-    return denied(
-      `CODEX PRODUCTION GATE: factory landing proof no longer matches this PR head/base (${error?.message || error}). Park the job, rerun evidence and Sol/high review, and re-present Mason's exact morning decision before merge.`
-    );
+  if (factoryLanding.required && (request.auto || pullRequest.autoMergeRequest)) {
+    return denied("CODEX PRODUCTION GATE: factory custody forbids requested or pre-enabled auto-merge. Disable it, wait for green checks, and perform one immediate exact-head merge.");
   }
   if (!pullRequestChecksGreen(pullRequest)) {
     return denied(
       "CODEX PRODUCTION GATE: this pull request is not merge-ready with a fully green GitHub pipeline. Wait until mergeStateStatus is CLEAN and every reported check is completed successfully, neutral, or skipped."
+    );
+  }
+  if (factoryLanding.required && !factoryExactProofValid({
+    repoDir,
+    headSha: pullRequest.headRefOid,
+    baseSha: pullRequest.baseRefOid,
+    nowMs,
+    runGit,
+  })) {
+    return proofRequirement(
+      pullRequest.headRefOid,
+      "a factory-approved merge requires an independent exact-SHA proof even when ordinary path classification is non-risky",
+      "Missing, stale, or mismatched canonical Sol/high proof for the accepted factory PR head/base.",
+      pullRequest.baseRefOid,
     );
   }
   return gateMainChange({
@@ -672,13 +718,39 @@ export function evaluateProductionAction({
 
     // AUTHORITY-MONOTONIC: this validation can only deny. The ordinary main
     // risk/proof gate below still decides whether a protected push is allowed.
+    let factoryLanding;
     try {
-      const factoryLanding = validateApprovedFactoryLanding(pushRepoDir, { commitish: "HEAD" });
+      factoryLanding = validateApprovedFactoryLanding(pushRepoDir, { commitish: "HEAD" });
       if (factoryLanding.required && !pushTargetsCurrentHead(segment, currentBranch)) {
         return denied("CODEX PRODUCTION GATE: a factory-approved landing may push only this checkout's exact current HEAD. Alternate local refs require parking, fresh proof, and a new owner acceptance.");
       }
     } catch (error) {
       return denied(`CODEX PRODUCTION GATE: factory landing proof no longer matches the pushed bytes (${error?.message || error}). Park the job, rerun evidence and Sol/high review, and re-present Mason's morning decision.`);
+    }
+    if (factoryLanding.required) {
+      let headSha;
+      let baseSha;
+      try {
+        headSha = runGit(["rev-parse", "--verify", "HEAD"], pushRepoDir);
+        baseSha = runGit(["rev-parse", "--verify", "origin/main"], pushRepoDir);
+      } catch (error) {
+        return denied(`CODEX PRODUCTION GATE: could not bind the factory feature push to exact HEAD/base commits (${error?.message || error}).`);
+      }
+      if (!factoryExactProofValid({ repoDir: pushRepoDir, headSha, baseSha, nowMs, runGit })) {
+        return proofRequirement(
+          headSha,
+          "a factory-approved feature push requires an independent exact-SHA proof",
+          "Missing, stale, or mismatched canonical Sol/high proof for the accepted factory HEAD/base.",
+          baseSha,
+        );
+      }
+      try {
+        if (factoryAutoMergeEnabled({ branch: currentBranch, repoDir: pushRepoDir, runGh })) {
+          return denied("CODEX PRODUCTION GATE: this factory feature branch already has auto-merge enabled. Disable it before pushing so the exact PR head, base, green checks, and Sol proof are verified at an immediate merge gate.");
+        }
+      } catch (error) {
+        return denied(`CODEX PRODUCTION GATE: could not verify that factory feature-branch auto-merge is disabled, so the push is denied (fail closed). ${error?.message || error}`);
+      }
     }
 
     const sourceRef = mainPushSource(segment, currentBranch);

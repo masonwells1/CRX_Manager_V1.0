@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
+import { evaluateProductionAction, factoryExactProofValid, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
 
 const projectRoot = process.cwd();
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
@@ -20,19 +20,19 @@ const prMergeGuardSource = readFileSync(prMergeGuardPath, "utf8");
 const migrationApplyGuardSource = readFileSync(migrationApplyGuardPath, "utf8");
 assert.match(
   productionGuardSource,
-  /validateApprovedFactoryLanding\(\s*repoDir\s*,\s*\{[\s\S]{0,220}?commitish:\s*pullRequest\.headRefOid[\s\S]{0,180}?expectedBaseSha:\s*String\(pullRequest\.baseRefOid\)/,
+  /validateApprovedFactoryLanding\(\s*repoDir\s*,\s*\{[\s\S]{0,220}?commitish:\s*pullRequest\.headRefOid[\s\S]{0,180}?expectedBaseSha:\s*String\(pullRequest\.baseRefOid\s*\|\|\s*""\)/,
   "Codex merge gate binds a factory landing to the exact GitHub head/base",
 );
-assert.match(
-  productionGuardSource,
-  /validateApprovedFactoryLanding\([\s\S]{0,500}?if \(!pullRequestChecksGreen\(pullRequest\)\)[\s\S]{0,500}?return gateMainChange\(/,
-  "factory merge validation only adds restrictions before independent CI and risk/proof gates",
-);
-assert.match(
-  prMergeGuardSource,
-  /validateApprovedFactoryLanding\([\s\S]{0,700}?pullRequestChecksGreen\(pr\)[\s\S]{0,900}?const risky = riskyFiles\(files\)/,
-  "Claude factory merge validation cannot replace independent CI and risky-diff classification",
-);
+const codexFactoryMergeIndex = productionGuardSource.indexOf("factoryLanding = validateApprovedFactoryLanding(repoDir");
+const codexGreenIndex = productionGuardSource.indexOf("if (!pullRequestChecksGreen(pullRequest))", codexFactoryMergeIndex);
+const codexMainGateIndex = productionGuardSource.indexOf("return gateMainChange({", codexGreenIndex);
+assert.ok(codexFactoryMergeIndex >= 0 && codexFactoryMergeIndex < codexGreenIndex && codexGreenIndex < codexMainGateIndex,
+  "factory merge validation only adds restrictions before independent CI and risk/proof gates");
+const claudeFactoryMergeIndex = prMergeGuardSource.indexOf("factoryLanding = validateApprovedFactoryLanding(projectDir");
+const claudeGreenIndex = prMergeGuardSource.indexOf("pullRequestChecksGreen(pr)", claudeFactoryMergeIndex);
+const claudeRiskIndex = prMergeGuardSource.indexOf("const risky = riskyFiles(files)", claudeGreenIndex);
+assert.ok(claudeFactoryMergeIndex >= 0 && claudeFactoryMergeIndex < claudeGreenIndex && claudeGreenIndex < claudeRiskIndex,
+  "Claude factory merge validation cannot replace independent CI and risky-diff classification");
 assert.equal(
   migrationApplyGuardSource.includes("factory-state-lib.mjs"),
   false,
@@ -48,6 +48,12 @@ assert.match(
   /validateApprovedFactoryLanding\(\s*pushRepoDir\s*,\s*\{\s*commitish:\s*"HEAD"\s*\}\s*\)/,
   "Claude feature/main pushes revalidate the exact factory-approved HEAD",
 );
+assert.match(productionGuardSource, /factoryLanding\.required[\s\S]{0,500}?factoryExactProofValid/, "Codex factory feature pushes require an exact-SHA proof");
+assert.match(claudePushGuardSource, /factoryLandingRequired[\s\S]{0,900}?proofValid/, "Claude factory feature pushes require an exact-SHA proof");
+assert.match(productionGuardSource, /factoryLanding\.required[\s\S]{0,400}?autoMergeRequest/, "Codex factory merges reject requested or pre-enabled auto-merge");
+assert.match(prMergeGuardSource, /factoryLanding\.required[\s\S]{0,400}?autoMergeRequest/, "Claude factory merges reject requested or pre-enabled auto-merge");
+assert.match(productionGuardSource, /factoryLanding\.required\s*&&\s*base\s*!==\s*"main"/, "Codex factory merges cannot target a feature base");
+assert.match(prMergeGuardSource, /factoryLanding\.required\s*&&\s*base\s*!==\s*"main"/, "Claude factory merges cannot target a feature base");
 
 function git(cwd, args) {
   const env = { ...process.env };
@@ -206,6 +212,23 @@ try {
     base_sha: risky.base,
     timestamp: new Date(now).toISOString(),
   };
+  const proofGit = (args, cwd) => git(cwd, args);
+  assert.equal(factoryExactProofValid({
+    repoDir: risky.repo,
+    headSha: risky.sha,
+    baseSha: risky.base,
+    nowMs: now,
+    runGit: proofGit,
+  }), false, "factory exact-SHA proof check fails closed when no proof exists");
+  writeProof(risky.repo, valid);
+  assert.equal(factoryExactProofValid({
+    repoDir: risky.repo,
+    headSha: risky.sha,
+    baseSha: risky.base,
+    nowMs: now,
+    runGit: proofGit,
+  }), true, "factory exact-SHA proof check accepts the canonical current proof");
+  unlinkSync(proofPath(risky.repo));
 
   const movedShellGuard = runClaudePushGuard("git push origin HEAD:main", ordinary.repo, risky.repo);
   assert.match(movedShellGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects the hook payload cwd after a prior shell cd");
