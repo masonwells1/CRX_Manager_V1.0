@@ -2,6 +2,13 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-01 — Monthly integrity snapshot recorded
+
+A read-only production reconciliation checked ten month-end integrity areas and
+recorded seven passes plus three categories requiring business review. The
+snapshot is preserved in `docs/reports/integrity-report-monthly.md`; no live
+records were corrected or otherwise changed as part of this reporting work.
+
 ## 2026-08-01 — Factory two-touchpoint authority model corrected
 
 The factory keeps Mason's exact two owner surfaces—ordinary Claude/Codex chat and
