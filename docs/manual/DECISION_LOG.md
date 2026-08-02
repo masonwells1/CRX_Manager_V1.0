@@ -1,11 +1,33 @@
 # Decision Log
 
-Last verified: 2026-07-30
+Last verified: 2026-08-01
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-01 — Factory retains exactly two touchpoints and coordination-only authority
+
+**Decision (Mason, in chat — “yes so the 2x touch point rule”):** keep ordinary
+Claude/Codex chat as the only owner input/approval surface and one read-only
+Factory Board as the only owner output surface. Do not add Windows Hello, a PIN,
+a standalone app, commands, forms, or a third interface.
+
+**Security meaning:** chat-derived factory records coordinate and audit work;
+they are not cryptographic authentication against arbitrary code already
+running as Mason's Windows account. Factory state may only add restrictions to
+ordinary reversible work already authorized by Mason's request and repository
+policy. It may never grant or replace push, merge, CI, deployment, migration,
+live-data, secret, permission, or destructive-action authority. Those existing
+gates remain independently authoritative.
+
+**Why:** the official Claude/Codex command-hook contract supplies ordinary JSON
+on standard input and documents no platform-signed user-event token. Strong
+same-account human authentication would require another owner ceremony, which
+would violate the chosen two-touchpoint product rule.
 
 ---
 
@@ -61,6 +83,25 @@ searches `pg_temp` implicitly first with an empty path, so full qualification �
 empty path alone — is the protection.
 **What this forbids/implies:** never remove a function from the pg_temp contract silently;
 move a reviewed exception to the exact-empty allowlist and keep every relation schema-qualified.
+
+---
+
+## 2026-07-30 — SETTLED: active adversarial review uses independent Sol/high sessions
+
+**Decision (Mason, in chat):** Claude/Fable credits are nearly exhausted, so all active adversarial
+review gates now use `gpt-5.6-sol` at high reasoning effort. Claude/Fable review remains available
+only when Mason explicitly asks for it; it is not a mandatory factory, publication, migration, or
+overnight gate.
+
+**Why:** the independent check must remain hard and reproducible without consuming a second paid
+review pool that is no longer reliably available. This deliberately accepts the limitation that the
+builder and reviewer may share a model family. Independence now comes from a separate ephemeral,
+read-only review process with user configuration and project hooks disabled, plus exact
+base/SHA/content binding and deterministic fail-closed proof validation.
+
+**Operative rule:** factory acceptance, risky push/merge proof, migration review, and unattended
+review explicitly pin `model: gpt-5.6-sol` and `reasoning_effort: high`. A proof missing either value,
+or not bound to the exact reviewed bytes, is invalid. CodeRabbit remains the broad every-PR review.
 
 ---
 

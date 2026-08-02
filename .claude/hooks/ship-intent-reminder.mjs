@@ -18,6 +18,14 @@
 
 import { readFileSync } from "node:fs";
 import { isMachineGenerated, PUSH_POLICY } from "./prompt-source-lib.mjs";
+import {
+  appendFactoryEvent,
+  clearFactoryIntentFailureLatch,
+  rejectSecretBearingText,
+  resolveHookFactoryPaths,
+  setFactoryIntentFailureLatch,
+  sha256,
+} from "../../scripts/factory-state-lib.mjs";
 
 function emit(extra) {
   if (extra) {
@@ -59,7 +67,71 @@ const triggerPatterns = [
   /\b(?:build|implement|create|add|fix|wire(?:\s+up)?|set\s+up)\b/, // substantive coding verbs
 ];
 
-if (!triggerPatterns.some((pattern) => pattern.test(prompt))) emit();
+const shipIntent = triggerPatterns.some((pattern) => pattern.test(prompt));
+const factoryIndicator = [
+  /\bfactory\b/,
+  /\bautonomous(?:ly)?\b/,
+  /\bovernight\b/,
+  /\bwhile\s+i(?:'m| am)\s+(?:asleep|sleeping|away|gone)\b/,
+  /\bmany\s+jobs?\b/,
+].some((pattern) => pattern.test(prompt));
+const standaloneFactoryIntent = [
+  /\b(?:run|start|use|activate|launch)\b.{0,50}\bfactory\b/,
+  /\bfactory\b.{0,50}\b(?:run|start|overnight|autonomous(?:ly)?|jobs?)\b/,
+  /\b(?:run|start)\b.{0,50}\bovernight\b/,
+  /\bwhile\s+i(?:'m| am)\s+(?:asleep|sleeping|away|gone)\b/,
+].some((pattern) => pattern.test(prompt));
+const factoryIntent = standaloneFactoryIntent || (shipIntent && factoryIndicator);
+
+if (!shipIntent && !factoryIntent) emit();
+
+if (factoryIntent) {
+  const sessionId = String(payload?.session_id || payload?.thread_id || payload?.conversation_id || "").trim();
+  if (sessionId) {
+    const paths = resolveHookFactoryPaths(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+    const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type || payload?.tool_surface || "claude").toLowerCase().includes("codex")
+      ? "codex"
+      : "claude";
+    let latched = false;
+    try {
+      const ownerRequest = rawPrompt.slice(0, 1_000);
+      let ownerRequestRejected = false;
+      let ownerRequestError = null;
+      try {
+        rejectSecretBearingText(ownerRequest, "factory owner request");
+      } catch (error) {
+        ownerRequestRejected = true;
+        ownerRequestError = error;
+      }
+      setFactoryIntentFailureLatch(paths, {
+        sessionId,
+        actorTool,
+        ownerRequestHash: sha256(ownerRequest),
+        ownerRequestRejected,
+      });
+      latched = true;
+      if (ownerRequestError) throw ownerRequestError;
+      appendFactoryEvent(
+        paths,
+        {
+          type: "factory-intent",
+          jobId: null,
+          actorTool,
+          sessionId,
+          payload: { ownerRequest },
+        },
+      );
+      clearFactoryIntentFailureLatch(paths, sessionId);
+    } catch (error) {
+      if (!latched) {
+        process.stderr.write(`FACTORY INTENT LATCH FAILED: ${error.message}\n`);
+        process.exit(2);
+      }
+      // The separate per-session latch deliberately remains. PreToolUse denies
+      // build writes until this exact prompt is re-submitted and ledger append succeeds.
+    }
+  }
+}
 
 emit([
   "CRX Ship-It reminder:",
@@ -70,6 +142,14 @@ emit([
   "  Step 0.5 size it + write a plain-English plan for Mason's OK on real (multi-file / SQL / money / RLS) changes",
   "  -> implement -> Step 2.5 prove it actually RUNS (not just 'tests pass') -> scoped review fan-out + fix (hard cap 3 rounds) -> migration/Codex gates.",
   "Tell Mason in ONE line you're running it through /ship; do NOT make him type the command.",
+  ...(factoryIntent ? [
+    "",
+    "FACTORY-MANAGED REQUEST:",
+    "  Before any implementation, draft the mission ticket, register it with scripts/factory.mjs in the shared Git-common-dir ledger, present exactly one approval question, and ask nothing else.",
+    "  Mason's chat reply is processed by factory-owner-input.mjs. Start work only through the deterministic factory lane-start command after approval.",
+    "  Ticket approval is a coordination record for already-authorized reversible work; it never replaces push, merge, deploy, migration, live-data, or destructive-action gates.",
+    "  The Factory Board is the only owner output surface; do not introduce another command or form for Mason.",
+  ] : []),
   "",
   PUSH_POLICY,
   "",

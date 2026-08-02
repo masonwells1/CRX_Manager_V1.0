@@ -171,7 +171,12 @@ function armAutopilot(stateDir, hoursFromNow) {
     const codexProofPath = path.join(stateDir, `codex-review-mig-${MIG}.json`);
     const writeCodexProof = (query, overrides = {}) =>
       writeFileSync(codexProofPath, JSON.stringify({
-        queryHash: sha(query), verdict: "clean", timestamp: new Date().toISOString(), ...overrides,
+        queryHash: sha(query),
+        verdict: "clean",
+        model: "gpt-5.6-sol",
+        reasoning_effort: "high",
+        timestamp: new Date().toISOString(),
+        ...overrides,
       }));
 
     // 6b. Codex proof with a NEEDS-WORK verdict → DENIED (Codex R4 P1: a run
@@ -191,12 +196,21 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "ARMED run: Codex proof older than 30 min is denied");
 
-    // 6e. Fresh, content-bound, clean Codex proof → allowed (the point of arming).
+    // 6e. A clean proof from an unrecorded or weaker reviewer identity cannot
+    //     satisfy the newly pinned Sol/high gate.
+    writeCodexProof(BENIGN_SQL, { model: undefined, reasoning_effort: undefined });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "ARMED run: proof missing Sol/high identity is denied");
+    writeCodexProof(BENIGN_SQL, { model: "gpt-5.6-terra", reasoning_effort: "xhigh" });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "ARMED run: non-Sol/non-high proof identity is denied");
+
+    // 6f. Fresh, content-bound, clean Sol/high proof → allowed (the point of arming).
     writeCodexProof(BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
     ok(!isDeny(r), "ARMED run: reviewer proof + fresh content-bound clean Codex proof applies hands-free");
 
-    // 6f. Reviewer proof lacking queryHash → DENIED even with a good Codex
+    // 6g. Reviewer proof lacking queryHash → DENIED even with a good Codex
     //     proof (hands-free applies must be content-bound end to end).
     writeFileSync(path.join(stateDir, `migration-review-${MIG}.json`), JSON.stringify({
       migration: MIG,
@@ -209,7 +223,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r), "ARMED run: reviewer proof without queryHash is denied — content binding required");
     ok(/queryHash/i.test(r.stdout), "deny message names the missing queryHash");
 
-    // 6g. Reviewer proof missing a required reviewer name → DENIED (Codex R5
+    // 6h. Reviewer proof missing a required reviewer name → DENIED (Codex R5
     //     P1: a minimal hand-written proof with no reviewers array reached
     //     allow even though neither reviewer ran).
     writeProof(stateDir, BENIGN_SQL, { reviewers: ["rls-security-reviewer"] });
@@ -220,7 +234,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "ARMED run: reviewer proof with NO reviewers array is denied");
 
-    // 6h. FUTURE-dated Codex proof → DENIED (Codex R5 P2).
+    // 6i. FUTURE-dated Codex proof → DENIED (Codex R5 P2).
     writeProof(stateDir, BENIGN_SQL);
     writeCodexProof(BENIGN_SQL, { timestamp: new Date(Date.now() + 600_000).toISOString() });
     r = runHook(call(BENIGN_SQL), tmp);

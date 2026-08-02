@@ -2,16 +2,58 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { evaluateProductionAction, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
+import { evaluateProductionAction, factoryExactProofValid, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
 
 const projectRoot = process.cwd();
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
 const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-guard.mjs");
+const prMergeGuardPath = path.join(projectRoot, ".claude", "hooks", "pr-merge-guard.mjs");
+const migrationApplyGuardPath = path.join(projectRoot, ".claude", "hooks", "migration-apply-guard.mjs");
 const tempRoots = [];
+const productionGuardSource = readFileSync(guardPath, "utf8");
+const claudePushGuardSource = readFileSync(claudeGuardPath, "utf8");
+const prMergeGuardSource = readFileSync(prMergeGuardPath, "utf8");
+const migrationApplyGuardSource = readFileSync(migrationApplyGuardPath, "utf8");
+assert.match(
+  productionGuardSource,
+  /validateApprovedFactoryLanding\(\s*repoDir\s*,\s*\{[\s\S]{0,220}?commitish:\s*pullRequest\.headRefOid[\s\S]{0,180}?expectedBaseSha:\s*String\(pullRequest\.baseRefOid\s*\|\|\s*""\)/,
+  "Codex merge gate binds a factory landing to the exact GitHub head/base",
+);
+const codexFactoryMergeIndex = productionGuardSource.indexOf("factoryLanding = validateApprovedFactoryLanding(repoDir");
+const codexGreenIndex = productionGuardSource.indexOf("if (!pullRequestChecksGreen(pullRequest))", codexFactoryMergeIndex);
+const codexMainGateIndex = productionGuardSource.indexOf("return gateMainChange({", codexGreenIndex);
+assert.ok(codexFactoryMergeIndex >= 0 && codexFactoryMergeIndex < codexGreenIndex && codexGreenIndex < codexMainGateIndex,
+  "factory merge validation only adds restrictions before independent CI and risk/proof gates");
+const claudeFactoryMergeIndex = prMergeGuardSource.indexOf("factoryLanding = validateApprovedFactoryLanding(projectDir");
+const claudeGreenIndex = prMergeGuardSource.indexOf("pullRequestChecksGreen(pr)", claudeFactoryMergeIndex);
+const claudeRiskIndex = prMergeGuardSource.indexOf("const risky = riskyFiles(files)", claudeGreenIndex);
+assert.ok(claudeFactoryMergeIndex >= 0 && claudeFactoryMergeIndex < claudeGreenIndex && claudeGreenIndex < claudeRiskIndex,
+  "Claude factory merge validation cannot replace independent CI and risky-diff classification");
+assert.equal(
+  migrationApplyGuardSource.includes("factory-state-lib.mjs"),
+  false,
+  "factory coordination state has no authority input into the live migration gate",
+);
+assert.match(
+  productionGuardSource,
+  /validateApprovedFactoryLanding\(\s*pushRepoDir\s*,\s*\{\s*commitish:\s*"HEAD"\s*\}\s*\)/,
+  "Codex feature/main pushes revalidate the exact factory-approved HEAD",
+);
+assert.match(
+  claudePushGuardSource,
+  /validateApprovedFactoryLanding\(\s*pushRepoDir\s*,\s*\{\s*commitish:\s*"HEAD"\s*\}\s*\)/,
+  "Claude feature/main pushes revalidate the exact factory-approved HEAD",
+);
+assert.match(productionGuardSource, /factoryLanding\.required[\s\S]{0,500}?factoryExactProofValid/, "Codex factory feature pushes require an exact-SHA proof");
+assert.match(claudePushGuardSource, /factoryLandingRequired[\s\S]{0,900}?proofValid/, "Claude factory feature pushes require an exact-SHA proof");
+assert.match(productionGuardSource, /factoryLanding\.required[\s\S]{0,400}?autoMergeRequest/, "Codex factory merges reject requested or pre-enabled auto-merge");
+assert.match(prMergeGuardSource, /factoryLanding\.required[\s\S]{0,400}?autoMergeRequest/, "Claude factory merges reject requested or pre-enabled auto-merge");
+assert.match(productionGuardSource, /factoryLanding\.required\s*&&\s*base\s*!==\s*"main"/, "Codex factory merges cannot target a feature base");
+assert.match(prMergeGuardSource, /factoryLanding\.required\s*&&\s*base\s*!==\s*"main"/, "Claude factory merges cannot target a feature base");
 
 function git(cwd, args) {
   const env = { ...process.env };
@@ -44,7 +86,7 @@ function makeRepo(changePath, changeContent) {
 }
 
 function proofPath(repo) {
-  return path.join(repo, ".claude", "session-state", "claude-review-push.json");
+  return path.join(repo, ".claude", "session-state", `codex-review-${git(repo, ["rev-parse", "HEAD"])}.json`);
 }
 
 function writeProof(repo, proof) {
@@ -115,6 +157,18 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/write-codex-push-proof.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "repo\\scripts\\write-codex-push-proof.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/write-codex-push-proof.mjs" } }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/factory.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "scripts/factory-state-lib.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/factory-state-lib.mjs" } }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "scripts/factory-board.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/factory-board.mjs" } }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: ".claude/hooks/factory-lane-guard.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: ".claude/hooks/factory-owner-input.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "apply_patch", toolInput: { patch: "*** Update File: .claude/hooks/factory-state-integrity-guard.mjs\n@@\n-old\n+new" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "package.json" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "package.json" } }).blocked, false);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/write-apply-proofs.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/overnight-codex-gate.mjs" } }).blocked, true);
   for (const command of [
     "rm .claude/hooks/review-proof-guard.mjs",
     "rm .claude/hooks/codex-push-guard.mjs;ls",
@@ -123,6 +177,9 @@ try {
     "copy x .codex/hooks/production-action-guard.mjs>nul",
     "sed -i s/a/b/ .codex/hooks/production-action-guard.mjs",
     "printf x > .claude/hooks/codex-push-guard.mjs",
+    "Set-Item -Path .codex/hooks/production-action-guard.mjs -Value forged",
+    "si -Path .codex/hooks/production-action-guard.mjs -Value forged",
+    "Get-Content package.json\nSet-Item -Path .claude/hooks/factory-lane-guard.mjs -Value forged",
   ]) {
     assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command } }).blocked, true, `natural harness mutation denied: ${command}`);
   }
@@ -141,18 +198,37 @@ try {
   assert.equal(
     evaluatePush(guardrailChange.repo).blocked,
     true,
-    "guardrail self-modification requires Claude proof even without risky content keywords",
+    "guardrail self-modification requires Sol proof even without risky content keywords",
   );
 
   const risky = makeRepo("supabase/migrations/20260713000000_test.sql", "select 1;\n");
   const now = Date.now();
   const valid = {
-    claude_ran: true,
+    codex_ran: true,
     verdict: "clean",
+    model: "gpt-5.6-sol",
+    reasoning_effort: "high",
     head_sha: risky.sha,
     base_sha: risky.base,
     timestamp: new Date(now).toISOString(),
   };
+  const proofGit = (args, cwd) => git(cwd, args);
+  assert.equal(factoryExactProofValid({
+    repoDir: risky.repo,
+    headSha: risky.sha,
+    baseSha: risky.base,
+    nowMs: now,
+    runGit: proofGit,
+  }), false, "factory exact-SHA proof check fails closed when no proof exists");
+  writeProof(risky.repo, valid);
+  assert.equal(factoryExactProofValid({
+    repoDir: risky.repo,
+    headSha: risky.sha,
+    baseSha: risky.base,
+    nowMs: now,
+    runGit: proofGit,
+  }), true, "factory exact-SHA proof check accepts the canonical current proof");
+  unlinkSync(proofPath(risky.repo));
 
   const movedShellGuard = runClaudePushGuard("git push origin HEAD:main", ordinary.repo, risky.repo);
   assert.match(movedShellGuard.stdout, /"permissionDecision":"deny"/, "Claude guard inspects the hook payload cwd after a prior shell cd");
@@ -269,7 +345,14 @@ try {
   writeProof(risky.repo, { ...valid, base_sha: "e".repeat(40) });
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "proof bound to a moved origin/main base is denied");
   // A proof with no base_sha at all fails closed once the guard resolves a base.
-  writeProof(risky.repo, { claude_ran: true, verdict: "clean", head_sha: risky.sha, timestamp: new Date(now).toISOString() });
+  writeProof(risky.repo, {
+    codex_ran: true,
+    verdict: "clean",
+    model: "gpt-5.6-sol",
+    reasoning_effort: "high",
+    head_sha: risky.sha,
+    timestamp: new Date(now).toISOString(),
+  });
   assert.equal(evaluatePush(risky.repo, now).blocked, true, "base-less proof fails closed under base binding");
 
   writeProof(risky.repo, { ...valid, verdict: "ship" });
@@ -347,7 +430,7 @@ try {
     repoDir: risky.repo,
     nowMs: now,
     runGh: () => mainPrJson,
-  }).blocked, true, "risky gh merge to main is denied without Claude proof");
+  }).blocked, true, "risky gh merge to main is denied without Sol proof");
   writeProof(risky.repo, valid);
   assert.equal(evaluateProductionAction({
     toolName: "PowerShell",
@@ -488,6 +571,7 @@ try {
   // R5-3: a forged proof whose FILENAME falls outside the path-matcher charset
   // (contains a space) must not be loaded by Claude's push gate either.
   {
+    unlinkSync(proofPath(risky.repo));
     mkdirSync(path.join(risky.repo, ".claude", "session-state"), { recursive: true });
     writeFileSync(
       path.join(risky.repo, ".claude", "session-state", "codex-review-forged proof.json"),
@@ -497,6 +581,7 @@ try {
     const spacedProofGuard = runClaudePushGuard(`git -C "${risky.repo}" push origin HEAD:main`, projectRoot);
     assert.match(spacedProofGuard.stdout, /"permissionDecision":"deny"/, "space-named forged proof is not loaded by the proof loader");
     unlinkSync(path.join(risky.repo, ".claude", "session-state", "codex-review-forged proof.json"));
+    writeProof(risky.repo, valid);
   }
   // R5-4: doc patches that merely MENTION guard/proof paths are allowed;
   // patches whose DESTINATION is a proof or guard file stay denied.

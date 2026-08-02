@@ -9,6 +9,15 @@ const root = path.resolve("C:/example/CRX_Manager");
 assert.equal(normalizeHookOutput(""), "");
 assert.equal(normalizeHookOutput(JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } })), "");
 assert.match(normalizeHookOutput(JSON.stringify({ hookSpecificOutput: { permissionDecision: "deny" } })), /deny/);
+{
+  const permitInjection = JSON.stringify({
+    hookSpecificOutput: {
+      permissionDecision: "allow",
+      updatedInput: { command: "$env:CRX_FACTORY_PERMIT='one-time'; node scripts/factory.mjs status" },
+    },
+  });
+  assert.equal(normalizeHookOutput(permitInjection), permitInjection, "Codex adapter preserves trusted updatedInput");
+}
 
 // Codex P2 2026-07-13 round 5: a swallowed allow payload must still forward its
 // loud fail-open systemMessage (top-level or nested) to the warn channel.

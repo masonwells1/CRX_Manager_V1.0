@@ -2,6 +2,21 @@ Drive a coding job from "implement" all the way to "reviewed, committed, and shi
 
 **The job** is everything after `/ship` (e.g. `/ship add a CSV export button to the AR aging report`). If no job text was given, ask Mason what the job is, then proceed.
 
+## Governed Factory entry (plain-English autonomous requests)
+
+When Mason asks conversationally for the factory, autonomous work, overnight work, or a batch of jobs, this `/ship` pipeline remains the delivery engine. Do not create a parallel workflow.
+
+Before any implementation:
+
+1. Draft one plain-English mission ticket, including the exact repository harness name that will prove it, and register it through `node scripts/factory.mjs ticket draft`.
+2. Present it through `node scripts/factory.mjs ticket present`, then send the exact recorded approval question as the final assistant message. Ask nothing else until Mason replies.
+3. Mason's ordinary chat reply is captured by the shared owner-input hook. Start the lane only through `node scripts/factory.mjs lane start`; direct build writes fail closed before that check passes.
+4. Run the existing `/ship` implementation, proof, and independent-review gates. Capture the ticket-approved, fixed-allowlist repository harness through `node scripts/factory.mjs evidence run`; its resolved `origin/main` script body and output are hashed, and copied or self-labeled files alone do not satisfy the proof gate.
+5. Move through `verifying` and `in-review`, then to `awaiting-morning-review` only with a behavior summary and CLI-executed harness proof. Present the morning decision through `node scripts/factory.mjs review present`.
+6. A chat acceptance means `approved-to-land`, not `live`. It binds the exact reviewed repository fingerprint and retains factory custody through commit, feature push, PR, merge, and the broker-hashed closeout packet. Only the narrow landing commands are available; any drift requires parking, fresh proof, and a newly presented owner decision. All ordinary `/ship` production, migration, and destructive-action gates still apply.
+
+The owner sees only the chat and the read-only Factory Board described in `/fleet`. Commands and state files are agent-facing implementation details.
+
 Autonomy boundary (Mason's standing choices — do not exceed without asking):
 - **Migrations:** in an ordinary interactive session, NEVER apply a migration to the live DB without Mason's explicit approval in the current conversation. Settled exception (Mason, 2026-07-13): in a pre-authorized hands-free run — Mason explicitly asked for the run AND autopilot is armed (`node .claude/hooks/autopilot-arm.mjs --hours N`) — a migration may apply without a per-migration in-chat OK once the hard proof gate passes (fresh same-session apply-guard proof + Codex verdict for SQL/RLS/money changes). Migrations that DELETE/TRUNCATE business rows or DROP data-bearing tables/columns are NEVER autonomous, armed or not.
 - **Edge functions:** NEVER deploy an edge function without Mason's explicit approval.
@@ -111,10 +126,14 @@ If the migration touches a CHECK constraint, function with an existing name, or 
 
 Decide if the change is **Codex-worthy**: it touches a migration, RLS/RPC security, a money path, or an Edge Function. (A pure CSS/copy/layout change is NOT worthy — note that and skip to Step 7.)
 
-If worthy, run an **independent Codex (gpt-5.6-sol) review directly via the headless CLI** — invoke `/codex-review` (scope `--base origin/main`, after `git fetch origin`, so a stale local `main` can't distort the diff). It runs `codex review` non-interactively, captures findings to `.claude/session-state/codex-review-latest.txt`, and returns a verdict (SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK). No paste loop.
+If worthy, run a **separate Codex review pinned to `gpt-5.6-sol` at high effort directly via the
+headless CLI** — invoke `/codex-review` (scope `--base origin/main`, after `git fetch origin`, so a
+stale local `main` can't distort the diff). It runs `codex review` non-interactively, captures
+findings to `.claude/session-state/codex-review-latest.txt`, and returns a verdict
+(SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK). No paste loop.
 
 Then act on the result like any other reviewer:
-- **BLOCKER / HIGH** → feed back into the Step 4 auto-fix loop (read the cited line, confirm it's real, fix, re-verify, re-dispatch the scoped subagents), then **re-run `/codex-review` until the verdict is SHIP or SHIP-WITH-FOLLOWUPS**. If Claude genuinely disagrees with a Codex BLOCKER, do NOT silently override — surface both positions to Mason and stop.
+- **BLOCKER / HIGH** → feed back into the Step 4 auto-fix loop (read the cited line, confirm it's real, fix, re-verify, re-dispatch the scoped subagents), then **re-run `/codex-review` until the verdict is SHIP or SHIP-WITH-FOLLOWUPS**. If the active session genuinely disagrees with a Codex BLOCKER, do NOT silently override — surface both positions to Mason and stop.
 - **MED / LOW / NIT** → fix the cheap ones; list the rest as deferred in the Step 8 summary. Don't loop on them.
 - Optionally write a disposition doc `docs/audits/<date>-claude-disposition-of-codex-<slug>.md` if the batch warrants a tracked record.
 

@@ -7,7 +7,7 @@
 // ONLY when ALL charters return CLEAN with the file content unchanged — mints
 // BOTH proofs the guard checks: migration-review-<name>.json (reviewer half,
 // every listed reviewer = a run that genuinely happened) and
-// codex-review-mig-<name>.json (second-model half). Written with Node (clean
+// codex-review-mig-<name>.json (separate Sol/high half). Written with Node (clean
 // UTF-8, no BOM — a BOM blocks the guard hook's JSON parse).
 //
 // queryHash is computed from the on-disk migration file (CRLF→LF normalized) —
@@ -17,8 +17,8 @@
 //
 // There is deliberately NO way to stamp a proof without the Codex run:
 //   --codex-verdict <v> was REMOVED 2026-07-16 (scaffolding design review):
-//   a caller-supplied verdict let one command mint the second-model gate
-//   without any second model running.
+//   a caller-supplied verdict let one command mint the Sol/high gate
+//   without any separate Sol/high reviewer process running.
 //   Unconditional reviewer-proof stamping was REMOVED the same day (Codex
 //   round-3 review of PR #142): a "clean, both reviewers ran" JSON written on
 //   the caller's say-so is assertion, not evidence. The subagent reviewers
@@ -29,7 +29,8 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import {
-  codexConfiguredModel,
+  CODEX_REVIEW_EFFORT,
+  CODEX_REVIEW_MODEL,
   codexExecutable,
   codexReviewProofVerdict,
   CODEX_VERDICT_TOKEN,
@@ -40,7 +41,7 @@ const rawArgs = process.argv.slice(2);
 if (rawArgs.includes('--codex-verdict')) {
   console.error(
     '--codex-verdict was removed (2026-07-16): a CLI-supplied verdict let a session\n' +
-    'mint the second-model gate without Codex actually running. Just pass the\n' +
+    'mint the Sol/high gate without Codex actually running. Just pass the\n' +
     'migration name(s) — the wrapper now always runs the trusted Codex CLI itself\n' +
     'and only mints on a CLEAN machine verdict.'
   );
@@ -119,7 +120,9 @@ function runCodexCharter(codexBin, reviewerName, migRelPath, safe) {
   // This does NOT weaken the gate: the child is still --sandbox read-only, and the
   // single-token / terminal-token / hash-binding / 30-min-expiry rules all still apply.
   const result = spawnSync(codexBin, [
-    'exec', '--sandbox', 'read-only', '-C', process.cwd(), '-c', 'approval_policy=never',
+    'exec', '--ephemeral', '--ignore-user-config',
+    '--model', CODEX_REVIEW_MODEL, '-c', `model_reasoning_effort="${CODEX_REVIEW_EFFORT}"`,
+    '--sandbox', 'read-only', '-C', process.cwd(), '-c', 'approval_policy=never',
     '--disable', 'hooks', prompt,
   ], {
     cwd: process.cwd(),
@@ -196,16 +199,18 @@ for (const name of names) {
   }, null, 2), { encoding: 'utf8' });
   console.log(`wrote ${reviewerFile}`);
   const codexFile = path.join(stateDir, `codex-review-mig-${safe}.json`);
-  // Record WHICH Codex agent produced the verdict (gpt-5.6-sol/terra/luna). No
-  // `-m` is passed above, so the run uses the configured default; naming it here
-  // makes the security proof auditable after the fact. Audit trail only.
-  const codexModel = codexConfiguredModel();
   writeFileSync(
     codexFile,
-    JSON.stringify({ queryHash, verdict: 'clean', model: codexModel, timestamp: ts }, null, 2),
+    JSON.stringify({
+      queryHash,
+      verdict: 'clean',
+      model: CODEX_REVIEW_MODEL,
+      reasoning_effort: CODEX_REVIEW_EFFORT,
+      timestamp: ts,
+    }, null, 2),
     { encoding: 'utf8' },
   );
-  console.log(`wrote ${codexFile} (all reviewer charters returned CLEAN machine verdicts from ${codexModel})`);
+  console.log(`wrote ${codexFile} (all reviewer charters returned CLEAN machine verdicts from ${CODEX_REVIEW_MODEL}/${CODEX_REVIEW_EFFORT})`);
 }
 
 process.exit(exitCode);

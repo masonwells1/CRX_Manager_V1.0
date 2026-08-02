@@ -187,7 +187,14 @@ ok(contentIsRisky("+  await allocate_payment(x, y);"), "diff calling allocate_pa
 ok(contentIsRisky("+  insert into financial_audit_log (...) values (...);"), "diff touching financial_audit_log flagged risky by content");
 ok(contentIsRisky("+  apply_prepay(customer_id, amount);"), "diff calling apply_prepay flagged risky by content");
 ok(!contentIsRisky("+  const label = 'hello world';"), "an ordinary diff is not flagged risky by content");
-const good = { codex_ran: true, verdict: "clean", head_sha: "abc", timestamp: new Date().toISOString() };
+const good = {
+  codex_ran: true,
+  verdict: "clean",
+  model: "gpt-5.6-sol",
+  reasoning_effort: "high",
+  head_sha: "abc",
+  timestamp: new Date().toISOString(),
+};
 ok(proofValid(good, "abc", Date.now()), "valid proof");
 ok(!proofValid(good, "different", Date.now()), "wrong HEAD → invalid");
 ok(!proofValid({ ...good, codex_ran: false }, "abc", Date.now()), "codex_ran false → invalid");

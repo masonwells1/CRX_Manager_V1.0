@@ -26,7 +26,7 @@ The workflow runs `rls-security-reviewer` + `migration-drift-reviewer` + `typesc
    node scripts/write-apply-proofs.mjs <migration-name-without-.sql>
    ```
    The wrapper ALWAYS runs a real, read-only review with the trusted Codex CLI and mints
-   the proof pair (reviewer half + second-model half) only on a CLEAN machine verdict —
+   the proof pair (reviewer-charter half + separate Sol/high half) only on a CLEAN machine verdict —
    there is no way to stamp a proof without that run (a BLOCKERS or failed run mints
    nothing; fix the findings or park the migration).
    IMPORTANT: the migration name must substring-match the `name` you will pass to
