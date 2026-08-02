@@ -8,7 +8,7 @@ import QuickDeliveryModal from './QuickDeliveryModal';
 
 // ── Mocks ────────────────────────────────────────────────────────────────
 
-const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit } = vi.hoisted(() => {
+const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit, mockResetKey } = vi.hoisted(() => {
   const mockOrder = vi.fn().mockReturnThis();
   const mockIn = vi.fn().mockReturnThis();
   const mockEq = vi.fn().mockReturnThis();
@@ -41,8 +41,9 @@ const { mockFrom, mockRpc, mockToast, mockNavigate, mockLimit } = vi.hoisted(() 
   const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
   const mockToast = vi.fn();
   const mockNavigate = vi.fn();
+  const mockResetKey = vi.fn();
 
-  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr, mockLimit };
+  return { mockFrom, mockRpc, mockToast, mockNavigate, mockSelect, mockEq, mockOrder, mockIn, mockOr, mockLimit, mockResetKey };
 });
 
 vi.mock('../../lib/db', () => ({
@@ -66,7 +67,7 @@ vi.mock('react-router-dom', () => ({
 }));
 
 vi.mock('../../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
+  useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: mockResetKey }),
 }));
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -201,6 +202,7 @@ describe('QuickDeliveryModal', () => {
     await renderModal();
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
     expect(defaultProps.onClose).toHaveBeenCalledTimes(1);
+    expect(mockResetKey).not.toHaveBeenCalled();
   });
 
   it('fetches products and drivers when opened', async () => {
