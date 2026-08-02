@@ -18,7 +18,7 @@ DO $proof$
 DECLARE
   v_payload jsonb := (SELECT value FROM phase1a_xlsx_proof WHERE key = 'payload');
 BEGIN
-  IF v_payload->>'formatVersion' <> 'crx-product-pricing-phase1a-v1'
+  IF v_payload->>'formatVersion' <> 'crx-product-pricing-phase2-v2'
      OR (v_payload->>'rowCount')::integer <> 3
      OR jsonb_array_length(v_payload->'rows') <> 3 THEN
     RAISE EXCEPTION 'XLSX_SMOKE_FAIL: parser payload contract is wrong: %', v_payload;

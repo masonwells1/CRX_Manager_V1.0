@@ -301,6 +301,60 @@ BEGIN
 END;
 $proof$;
 
+-- A complete worksheet may be reordered by an operator. Preview identity is
+-- Product UUID-based, not positional: retain every manifest row and prove the
+-- corresponding Product effects survive a reversed row order. Duplicate,
+-- missing, unknown, and token/version tampering still fail closed elsewhere
+-- in this same disposable harness.
+INSERT INTO phase1a_proof(key, value)
+SELECT 'rows-main-reversed', jsonb_agg(submitted.value ORDER BY submitted.ordinality DESC)
+FROM phase1a_proof e
+CROSS JOIN LATERAL jsonb_array_elements(e.value) WITH ORDINALITY AS submitted(value, ordinality)
+WHERE e.key = 'rows-main';
+
+INSERT INTO phase1a_proof(key, value)
+SELECT 'preview-main-reversed', public.preview_product_pricing_changes(
+  'pricing_worksheet',
+  (SELECT (value->>'export_id')::uuid FROM phase1a_proof WHERE key = 'export-main'),
+  value,
+  '11111111-1111-4111-8111-111111111111'::uuid,
+  'phase1a-preview-main-reversed'
+)
+FROM phase1a_proof
+WHERE key = 'rows-main-reversed';
+
+DO $proof$
+DECLARE
+  v_preview jsonb := (SELECT value FROM phase1a_proof WHERE key = 'preview-main-reversed');
+BEGIN
+  IF v_preview->>'status' <> 'previewed'
+     OR (v_preview->>'apply_allowed')::boolean IS DISTINCT FROM true
+     OR (v_preview->>'ready_count')::integer <> 3
+     OR (v_preview->>'conflict_count')::integer <> 0
+     OR (v_preview->>'invalid_count')::integer <> 0
+     OR NOT EXISTS (
+       SELECT 1 FROM jsonb_array_elements(v_preview->'rows') row_value
+       WHERE row_value->>'product_id' = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1'
+         AND row_value#>>'{effect,cost}' = '90.00'
+         AND row_value#>>'{effect,tier1_price}' = '112.50'
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM jsonb_array_elements(v_preview->'rows') row_value
+       WHERE row_value->>'product_id' = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2'
+         AND row_value#>>'{effect,cost}' = '60.00'
+         AND row_value#>>'{effect,tier2_price}' = '80.00'
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM jsonb_array_elements(v_preview->'rows') row_value
+       WHERE row_value->>'product_id' = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3'
+         AND row_value#>>'{effect,cost}' = '45.00'
+         AND row_value#>>'{effect,tier3_price}' = '64.29'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: reordered worksheet was not previewed by Product UUID: %', v_preview;
+  END IF;
+END;
+$proof$;
+
 INSERT INTO phase1a_proof(key, value)
 SELECT
   'apply-main',

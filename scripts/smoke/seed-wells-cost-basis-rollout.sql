@@ -109,6 +109,7 @@ SELECT ('30000000-0000-4000-8000-' || lpad(sequence::text, 12, '0'))::uuid,
        ('10000000-0000-4000-8000-' || lpad(sequence::text, 12, '0'))::uuid,
        'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee7',
        ('20000000-0000-4000-8000-' || lpad(sequence::text, 12, '0'))::uuid,
-       'quote', 1000 + sequence, 'gal', 1, current_date,
+       'quote', 1000 + sequence, 'gal', 1,
+       (now() AT TIME ZONE 'America/Chicago')::date,
        '11111111-1111-4111-8111-111111111111'
 FROM products;
