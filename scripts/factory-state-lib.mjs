@@ -359,6 +359,10 @@ export function rejectSecretBearingText(value, label = "evidence") {
   return text;
 }
 
+function validatedEvidenceLabel(value) {
+  return rejectSecretBearingText(requiredText(value, "evidence label", 200), "Evidence label");
+}
+
 function requiredStringArray(value, label, { min = 1, max = 30 } = {}) {
   if (!Array.isArray(value) || value.length < min || value.length > max) {
     throw new Error(`${label} must contain ${min}-${max} items.`);
@@ -2192,6 +2196,7 @@ export function runHarnessEvidence(paths, {
   capturedAt = new Date().toISOString(),
 }) {
   authorizedFactoryWriter(paths);
+  const evidenceLabel = validatedEvidenceLabel(label);
   if (!/^[a-f0-9]{64}$/i.test(String(approvedTicketHash || ""))) {
     throw new Error("Harness evidence requires the exact approved ticket hash.");
   }
@@ -2276,7 +2281,7 @@ export function runHarnessEvidence(paths, {
     }
   }
   return {
-    label: requiredText(label, "evidence label", 200),
+    label: evidenceLabel,
     kind: "harness",
     filename,
     sha256: hash,
@@ -2332,7 +2337,7 @@ export function runAndAttachHarnessEvidence(paths, {
   now = () => new Date(),
 }) {
   authorizedFactoryWriter(paths);
-  const evidenceLabel = requiredText(label, "evidence label", 200);
+  const evidenceLabel = validatedEvidenceLabel(label);
   const lock = acquireHarnessRunLock(paths, jobId);
   let evidence;
   try {

@@ -1053,6 +1053,21 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   throws(
     () => runAndAttachHarnessEvidence(paths, {
       jobId: written.ticket.id,
+      label: "GITHUB_TOKEN=secret-shaped-value",
+      scriptName: "verify-deps",
+      sessionId: "session-1",
+      actorTool: "codex",
+      expectedLastEventHash: beforeRun.lastEventHash,
+      currentBaseSha: baseSha,
+      cwd: harnessRepo,
+    }),
+    /evidence label appears to contain a credential or secret/i,
+    "a secret-shaped evidence label is refused before the harness executes",
+  );
+  eq(existsSync(paths.emergencyHoldPath), false, "a secret-shaped evidence label cannot trigger harness side effects");
+  throws(
+    () => runAndAttachHarnessEvidence(paths, {
+      jobId: written.ticket.id,
       label: "",
       scriptName: "verify-deps",
       sessionId: "session-1",
