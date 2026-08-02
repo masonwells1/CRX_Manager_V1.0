@@ -345,6 +345,17 @@ function runLaneHook(state, payload) {
   });
   ok(result.stdout.includes("has resumed"), "owner's tightly affirmative plain-English resume is captured");
   equal(buildFactorySnapshot(state.paths).held, false, "only the owner prompt clears the global hold");
+  const resumedLedgerHash = buildFactorySnapshot(state.paths).lastEventHash;
+  result = runHook(state, {
+    prompt: "resume factory",
+    thread_id: state.sessionId,
+  });
+  ok(result.stdout.includes("already running"), "a replayed resume is reported as an idempotent no-op");
+  equal(
+    buildFactorySnapshot(state.paths).lastEventHash,
+    resumedLedgerHash,
+    "a replayed resume does not append a duplicate ledger event",
+  );
 }
 
 {

@@ -172,6 +172,7 @@ function buildPaths(stateDir) {
     intentLatchesDir: path.join(stateDir, "intent-latches"),
     eventsPath: path.join(stateDir, "events.jsonl"),
     lockPath: path.join(stateDir, "events.lock"),
+    harnessRunsDir: path.join(stateDir, "harness-runs"),
     emergencyHoldPath: path.join(stateDir, "EMERGENCY-HOLD.json"),
     recoveryDir: path.join(stateDir, "recovery"),
   };
@@ -183,6 +184,7 @@ export function ensureFactoryDirs(paths) {
   mkdirSync(paths.permitsDir, { recursive: true });
   mkdirSync(paths.ownerReceiptsDir, { recursive: true });
   mkdirSync(paths.intentLatchesDir, { recursive: true });
+  mkdirSync(paths.harnessRunsDir, { recursive: true });
 }
 
 function factoryIntentLatchPath(paths, sessionId) {
@@ -492,6 +494,61 @@ function acquireLock(paths, timeoutMs = 5_000) {
         throw new Error(`Factory ledger lock timed out after ${timeoutMs}ms.`);
       }
       sleepMs(25);
+    }
+  }
+}
+
+function harnessRunLockPath(paths, jobId) {
+  const safeJob = safeId(jobId);
+  return path.join(paths.harnessRunsDir, `${sha256(safeJob)}.json`);
+}
+
+function acquireHarnessRunLock(paths, jobId) {
+  ensureFactoryDirs(paths);
+  const target = harnessRunLockPath(paths, jobId);
+  while (true) {
+    try {
+      const fd = openSync(target, "wx");
+      writeSync(fd, `${canonicalJson({
+        schemaVersion: FACTORY_SCHEMA_VERSION,
+        jobId: safeId(jobId),
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+      })}\n`);
+      return { fd, target };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      let metadata = {};
+      try { metadata = JSON.parse(readFileSync(target, "utf8")); } catch {}
+      let lockMtimeMs;
+      try { lockMtimeMs = statSync(target).mtimeMs; } catch (statError) {
+        if (statError?.code === "ENOENT") continue;
+        throw statError;
+      }
+      const ageMs = Date.now() - (Date.parse(metadata.createdAt) || lockMtimeMs);
+      if (ageMs >= STALE_LOCK_MS && !processIsAlive(Number(metadata.pid))) {
+        mkdirSync(paths.recoveryDir, { recursive: true });
+        const backup = path.join(
+          paths.recoveryDir,
+          `stale-harness-run-${sha256(String(jobId)).slice(0, 12)}-${Date.now()}.json`,
+        );
+        try {
+          renameSync(target, backup);
+          continue;
+        } catch (recoveryError) {
+          if (recoveryError?.code === "ENOENT") continue;
+          throw recoveryError;
+        }
+      }
+      throw new Error(`Factory evidence run already in progress for job ${safeId(jobId)}; duplicate or replayed harness execution was refused.`);
+    }
+  }
+}
+
+function releaseHarnessRunLock(lock) {
+  try { closeSync(lock.fd); } finally {
+    try { unlinkSync(lock.target); } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
     }
   }
 }
@@ -824,7 +881,7 @@ export function readEventLog(paths) {
   return { events, degraded, warning };
 }
 
-export function appendFactoryEvent(paths, {
+function appendFactoryEventLocked(paths, writer, current, {
   type,
   jobId = null,
   actorTool,
@@ -832,11 +889,48 @@ export function appendFactoryEvent(paths, {
   payload = {},
   timestamp = new Date().toISOString(),
   eventId = randomUUID(),
-}, {
+}) {
+  const previousHash = current.events.at(-1)?.eventHash || "0".repeat(64);
+  let body = canonicalize({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    eventId: safeId(eventId),
+    type: requiredText(type, "type", 100),
+    timestamp: requiredText(timestamp, "timestamp", 100),
+    jobId: jobId === null ? null : safeId(jobId),
+    actorTool: requiredText(actorTool, "actorTool", 40),
+    sessionId: requiredText(sessionId, "sessionId", 200),
+    previousHash,
+    payload,
+  });
+  // Reject malformed or unknown events before a hook-origin receipt file can
+  // be allocated. This preliminary hash is replaced after the exact
+  // receipt-bound payload is finalized.
+  validateEventShape({ ...body, eventHash: sha256(canonicalJson(body)) });
+  if (eventNeedsHookOriginReceipt(body)) {
+    if (!writer.ownerDecisionWriter) {
+      throw new Error("Owner coordination events may be written only by the canonical owner-input hook.");
+    }
+    if (body.payload.ownerReceiptId || body.payload.ownerReceiptMac) {
+      throw new Error("Hook-origin receipt fields are minted internally and cannot be supplied by a caller.");
+    }
+    const receipt = writeHookOriginReceipt(paths, body);
+    body = canonicalize({
+      ...body,
+      payload: { ...body.payload, ...receipt },
+    });
+  }
+  const event = { ...body, eventHash: sha256(canonicalJson(body)) };
+  validateEventShape(event);
+  appendFileSync(paths.eventsPath, `${canonicalJson(event)}\n`, "utf8");
+  return event;
+}
+
+export function appendFactoryEvent(paths, eventInput, {
   expectedLastEventHash = "",
+  requireFactoryRunning = false,
 } = {}) {
   const writer = authorizedFactoryWriter(paths);
-  rejectSecretBearingText(canonicalJson(payload), "Factory event");
+  rejectSecretBearingText(canonicalJson(eventInput.payload || {}), "Factory event");
   const lockFd = acquireLock(paths);
   try {
     const current = readEventLog(paths);
@@ -847,38 +941,36 @@ export function appendFactoryEvent(paths, {
     if (expectedLastEventHash && previousHash !== expectedLastEventHash) {
       throw new Error("Factory state changed after this decision was presented; re-read and re-present it.");
     }
-    let body = canonicalize({
-      schemaVersion: FACTORY_SCHEMA_VERSION,
-      eventId: safeId(eventId),
-      type: requiredText(type, "type", 100),
-      timestamp: requiredText(timestamp, "timestamp", 100),
-      jobId: jobId === null ? null : safeId(jobId),
-      actorTool: requiredText(actorTool, "actorTool", 40),
-      sessionId: requiredText(sessionId, "sessionId", 200),
-      previousHash,
-      payload,
-    });
-    // Reject malformed or unknown events before a hook-origin receipt file can
-    // be allocated. This preliminary hash is replaced after the exact
-    // receipt-bound payload is finalized.
-    validateEventShape({ ...body, eventHash: sha256(canonicalJson(body)) });
-    if (eventNeedsHookOriginReceipt(body)) {
-      if (!writer.ownerDecisionWriter) {
-        throw new Error("Owner coordination events may be written only by the canonical owner-input hook.");
-      }
-      if (body.payload.ownerReceiptId || body.payload.ownerReceiptMac) {
-        throw new Error("Hook-origin receipt fields are minted internally and cannot be supplied by a caller.");
-      }
-      const receipt = writeHookOriginReceipt(paths, body);
-      body = canonicalize({
-        ...body,
-        payload: { ...body.payload, ...receipt },
-      });
+    if (requireFactoryRunning && factoryHeldFromCurrent(paths, current)) {
+      throw new Error("Factory was paused before evidence attachment; the receipt was not attached.");
     }
-    const event = { ...body, eventHash: sha256(canonicalJson(body)) };
-    validateEventShape(event);
-    appendFileSync(paths.eventsPath, `${canonicalJson(event)}\n`, "utf8");
-    return event;
+    return appendFactoryEventLocked(paths, writer, current, eventInput);
+  } finally {
+    releaseLock(paths, lockFd);
+  }
+}
+
+export function appendFactoryControlEvent(paths, eventInput) {
+  const writer = authorizedFactoryWriter(paths);
+  if (!writer.ownerDecisionWriter) {
+    throw new Error("Factory hold and resume controls may be written only by the canonical owner-input hook.");
+  }
+  if (!new Set(["factory-held", "factory-resumed"]).has(eventInput?.type)) {
+    throw new Error("Factory control event must be factory-held or factory-resumed.");
+  }
+  rejectSecretBearingText(canonicalJson(eventInput.payload || {}), "Factory control event");
+  const lockFd = acquireLock(paths);
+  try {
+    const current = readEventLog(paths);
+    if (current.degraded) {
+      throw new Error("Factory ledger has an incomplete trailing event; repair or archive it before appending.");
+    }
+    const held = factoryHeldFromCurrent(paths, current);
+    const desiredHeld = eventInput.type === "factory-held";
+    if (held === desiredHeld) return { changed: false, held };
+    const event = appendFactoryEventLocked(paths, writer, current, eventInput);
+    if (!desiredHeld) clearEmergencyFactoryHoldUnlocked(paths);
+    return { changed: true, held: desiredHeld, event };
   } finally {
     releaseLock(paths, lockFd);
   }
@@ -1167,13 +1259,14 @@ export function validateRepositoryScope(job, cwd = FACTORY_ROOT, {
   return changed;
 }
 
-function directoryContentFingerprint(root) {
+function directoryContentFingerprint(root, { ignoreRelative = () => false } = {}) {
   const base = path.resolve(root);
   const listed = [];
   function visit(directory) {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const fullPath = path.join(directory, entry.name);
       const relative = path.relative(base, fullPath).replace(/\\/g, "/");
+      if (ignoreRelative(relative, entry)) continue;
       if (entry.isDirectory()) visit(fullPath);
       else listed.push({ fullPath, relative });
     }
@@ -1195,6 +1288,21 @@ function directoryContentFingerprint(root) {
     }
   }
   return hash.digest("hex");
+}
+
+function factoryProtectedContentFingerprint(paths) {
+  const coordinationOnly = (relative) => relative === "events.jsonl"
+    || relative === "events.lock"
+    || relative === "EMERGENCY-HOLD.json"
+    || relative === "permits"
+    || relative.startsWith("permits/")
+    || relative === "intent-latches"
+    || relative.startsWith("intent-latches/")
+    || relative === "harness-runs"
+    || relative.startsWith("harness-runs/")
+    || relative === "recovery"
+    || relative.startsWith("recovery/");
+  return directoryContentFingerprint(paths.stateDir, { ignoreRelative: coordinationOnly });
 }
 
 export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
@@ -1481,6 +1589,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
               || job.laneSessionId !== event.sessionId
               || job.actorTool !== event.actorTool
               || (event.payload.stage === "awaiting-morning-review" && !String(event.payload.behaviorSummary || "").trim())
+              || (job.stage === "parked" && event.payload.stage === "parked" && !String(event.payload.behaviorSummary || "").trim())
               || (event.payload.stage === "parked" && !String(event.payload.blocker || "").trim())) {
             throw new Error(`Agent stage transition for ${job.id} from ${job.stage} to ${event.payload.stage} is invalid or crossed lane custody.`);
           }
@@ -1646,6 +1755,7 @@ const ALLOWED_AGENT_STAGE_CHANGES = new Map([
   ["building", new Set(["verifying", "in-review", "parked"])],
   ["verifying", new Set(["in-review", "parked"])],
   ["in-review", new Set(["awaiting-morning-review", "parked"])],
+  ["parked", new Set(["parked"])],
   ["approved-to-land", new Set(["parked"])],
 ]);
 
@@ -1675,6 +1785,9 @@ export function validateStageChange(snapshot, jobId, nextStage, {
   }
   if (nextStage === "parked" && !String(blocker || "").trim()) {
     throw new Error("A plain-English blocker is required when parking a job.");
+  }
+  if (job.stage === "parked" && nextStage === "parked" && !String(behaviorSummary || "").trim()) {
+    throw new Error("A plain-English behavior summary is required when refreshing a parked job.");
   }
   return job;
 }
@@ -2012,6 +2125,7 @@ export function runHarnessEvidence(paths, {
   label,
   scriptName,
   cwd = FACTORY_ROOT,
+  capturedAt = new Date().toISOString(),
 }) {
   authorizedFactoryWriter(paths);
   if (!/^[a-f0-9]{64}$/i.test(String(approvedTicketHash || ""))) {
@@ -2027,7 +2141,7 @@ export function runHarnessEvidence(paths, {
     throw new Error(`Harness ${scriptName} differs from its reviewed origin/main script body.`);
   }
   const repositoryBefore = repositoryContentFingerprint(cwd);
-  const factoryStateBefore = directoryContentFingerprint(paths.stateDir);
+  const factoryStateBefore = factoryProtectedContentFingerprint(paths);
   const result = isolatedHarnessTestMode(paths, cwd)
     ? { ...runIsolatedTestHarness(cwd, scriptName), testSandbox: true }
     : runFactoryHarnessSandbox(cwd, scriptName);
@@ -2043,7 +2157,7 @@ export function runHarnessEvidence(paths, {
     throw error;
   }
   const repositoryAfter = repositoryContentFingerprint(cwd);
-  const factoryStateAfter = directoryContentFingerprint(paths.stateDir);
+  const factoryStateAfter = factoryProtectedContentFingerprint(paths);
   if (repositoryAfter.repositoryContentHash !== repositoryBefore.repositoryContentHash
       || factoryStateAfter !== factoryStateBefore) {
     setEmergencyFactoryHold(paths, `Harness ${scriptName} mutated protected repository or factory-state bytes.`);
@@ -2061,7 +2175,7 @@ export function runHarnessEvidence(paths, {
     packageJsonHash: sha256(readFileSync(path.join(cwd, "package.json"))),
     ...repositoryAfter,
     exitCode: result.status,
-    capturedAt: new Date().toISOString(),
+    capturedAt: new Date(capturedAt).toISOString(),
     stdout: String(result.stdout || ""),
     stderr: String(result.stderr || ""),
     sandbox: result.testSandbox ? {
@@ -2086,7 +2200,17 @@ export function runHarnessEvidence(paths, {
   mkdirSync(jobDir, { recursive: true });
   const filename = `${hash.slice(0, 12)}-${safeId(scriptName.replaceAll(":", "-"))}.json`;
   const target = path.join(jobDir, filename);
-  writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
+  let createdArtifact = false;
+  try {
+    writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
+    createdArtifact = true;
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    const existing = readFileSync(target);
+    if (!existing.equals(Buffer.from(bytes, "utf8"))) {
+      throw new Error(`Existing harness artifact ${filename} does not match its content-derived identity.`);
+    }
+  }
   return {
     label: requiredText(label, "evidence label", 200),
     kind: "harness",
@@ -2106,7 +2230,96 @@ export function runHarnessEvidence(paths, {
     repositoryContentHash: payload.repositoryContentHash,
     repositoryFileCount: payload.repositoryFileCount,
     sandbox: payload.sandbox,
+    createdArtifact,
   };
+}
+
+function harnessEvidenceEventPayload(evidence) {
+  return {
+    label: evidence.label,
+    kind: evidence.kind,
+    filename: evidence.filename,
+    sha256: evidence.sha256,
+    verified: true,
+    sourceCommand: evidence.sourceCommand,
+    scriptName: evidence.scriptName,
+    scriptBodyHash: evidence.scriptBodyHash,
+    baseScriptBodyHash: evidence.baseScriptBodyHash,
+    baseSha: evidence.baseSha,
+    packageJsonHash: evidence.packageJsonHash,
+    headSha: evidence.headSha,
+    headTreeSha: evidence.headTreeSha,
+    repositoryContentHash: evidence.repositoryContentHash,
+    repositoryFileCount: evidence.repositoryFileCount,
+    ticketHash: evidence.ticketHash,
+    sandbox: evidence.sandbox,
+  };
+}
+
+export function runAndAttachHarnessEvidence(paths, {
+  jobId,
+  label,
+  scriptName,
+  sessionId,
+  actorTool,
+  expectedLastEventHash,
+  currentBaseSha,
+  cwd = FACTORY_ROOT,
+  timestamp = new Date().toISOString(),
+}) {
+  authorizedFactoryWriter(paths);
+  const lock = acquireHarnessRunLock(paths, jobId);
+  let evidence;
+  try {
+    const snapshot = loadFactorySnapshot(paths);
+    if (snapshot.lastEventHash !== expectedLastEventHash) {
+      throw new Error("Factory state changed after this evidence command was authorized; retry from the current board state.");
+    }
+    const job = validateLaneActor(snapshot, jobId, sessionId);
+    if (job.actorTool !== actorTool) {
+      throw new Error(`Factory job ${jobId} is bound to another agent tool.`);
+    }
+    if (job.baseSha !== currentBaseSha) {
+      throw new Error("origin/main moved after ticket approval; park and re-present the job before minting proof.");
+    }
+    if (!job.ticket?.proofHarnesses?.includes(scriptName)) {
+      throw new Error(`Harness ${scriptName} was not approved in mission ticket ${jobId}.`);
+    }
+    evidence = runHarnessEvidence(paths, {
+      jobId,
+      ticketHash: job.ticketHash,
+      label,
+      scriptName,
+      cwd,
+    });
+    const attachmentSnapshot = loadFactorySnapshot(paths);
+    if (attachmentSnapshot.held) {
+      throw new Error(`Factory was paused while harness ${scriptName} ran; its evidence was not attached.`);
+    }
+    appendFactoryEvent(paths, {
+      type: "evidence-attached",
+      jobId,
+      actorTool,
+      sessionId,
+      timestamp,
+      payload: harnessEvidenceEventPayload(evidence),
+    }, {
+      expectedLastEventHash: snapshot.lastEventHash,
+      requireFactoryRunning: true,
+    });
+    return evidence;
+  } catch (error) {
+    if (evidence?.createdArtifact) {
+      try { unlinkSync(evidence.fullPath); } catch (cleanupError) {
+        if (cleanupError?.code !== "ENOENT") {
+          process.stderr.write(`Factory cleanup warning: unattached harness artifact remains at ${evidence.filename}.\n`);
+        }
+      }
+    }
+    throw error;
+  } finally {
+    releaseHarnessRunLock(lock);
+  }
 }
 
 function readBoundEvidenceArtifact(paths, job, item, description) {
@@ -2256,7 +2469,7 @@ export function runIndependentReviewEvidence(paths, {
   const repositoryBefore = repositoryContentFingerprint(cwd);
   validateRepositoryScope(job, cwd);
   validateFactoryRiskClassification(job, cwd);
-  const stateBefore = directoryContentFingerprint(paths.stateDir);
+  const stateBefore = factoryProtectedContentFingerprint(paths);
   const isolatedTest = env.CRX_FACTORY_TEST_MODE === "1"
     && path.resolve(cwd).toLowerCase().startsWith(`${path.resolve(tmpdir()).toLowerCase()}${path.sep}`);
   let result;
@@ -2302,7 +2515,7 @@ export function runIndependentReviewEvidence(paths, {
   rejectSecretBearingText(result.stdout, "Independent review stdout");
   rejectSecretBearingText(result.stderr, "Independent review stderr");
   const repositoryAfter = repositoryContentFingerprint(cwd);
-  const stateAfter = directoryContentFingerprint(paths.stateDir);
+  const stateAfter = factoryProtectedContentFingerprint(paths);
   if (repositoryAfter.repositoryContentHash !== repositoryBefore.repositoryContentHash
       || stateAfter !== stateBefore) {
     setEmergencyFactoryHold(paths, "Independent review mutated protected repository or factory-state bytes.");
@@ -2492,8 +2705,16 @@ export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
   };
 }
 
-export function setEmergencyFactoryHold(paths, reason) {
-  authorizedFactoryWriter(paths);
+function factoryHeldFromCurrent(paths, current) {
+  let held = false;
+  for (const event of current.events) {
+    if (event.type === "factory-held") held = true;
+    if (event.type === "factory-resumed") held = false;
+  }
+  return held || existsSync(paths.emergencyHoldPath);
+}
+
+function setEmergencyFactoryHoldUnlocked(paths, reason) {
   ensureFactoryDirs(paths);
   const requestedReason = requiredText(reason, "emergency hold reason", 1_000);
   let safeReason = requestedReason;
@@ -2510,10 +2731,33 @@ export function setEmergencyFactoryHold(paths, reason) {
   writeFileSync(paths.emergencyHoldPath, `${canonicalJson(payload)}\n`, { encoding: "utf8", flag: "w" });
 }
 
-export function clearEmergencyFactoryHold(paths) {
-  authorizedFactoryWriter(paths);
+function clearEmergencyFactoryHoldUnlocked(paths) {
   try { unlinkSync(paths.emergencyHoldPath); } catch (error) {
     if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+export function setEmergencyFactoryHold(paths, reason, { ledgerUnavailable = false } = {}) {
+  authorizedFactoryWriter(paths);
+  if (ledgerUnavailable) {
+    setEmergencyFactoryHoldUnlocked(paths, reason);
+    return;
+  }
+  const lockFd = acquireLock(paths);
+  try {
+    setEmergencyFactoryHoldUnlocked(paths, reason);
+  } finally {
+    releaseLock(paths, lockFd);
+  }
+}
+
+export function clearEmergencyFactoryHold(paths) {
+  authorizedFactoryWriter(paths);
+  const lockFd = acquireLock(paths);
+  try {
+    clearEmergencyFactoryHoldUnlocked(paths);
+  } finally {
+    releaseLock(paths, lockFd);
   }
 }
 

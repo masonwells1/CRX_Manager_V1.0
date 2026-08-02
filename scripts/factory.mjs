@@ -21,7 +21,7 @@ import {
   repositoryCommitFingerprint,
   rejectSecretBearingText,
   resolveFactoryPaths,
-  runHarnessEvidence,
+  runAndAttachHarnessEvidence,
   runIndependentReviewEvidence,
   sha256,
   validateLaneActor,
@@ -657,46 +657,18 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "evidence" && action === "run") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
-    const job = validateLaneActor(snapshot, jobId, who.sessionId);
-    if (job.baseSha !== refreshOriginMain(cwd, env)) {
-      throw new Error("origin/main moved after ticket approval; park and re-present the job before minting proof.");
-    }
     const harness = required(flags, "harness");
-    if (!job.ticket?.proofHarnesses?.includes(harness)) {
-      throw new Error(`Harness ${harness} was not approved in mission ticket ${jobId}.`);
-    }
-    const evidence = runHarnessEvidence(paths, {
+    const evidence = runAndAttachHarnessEvidence(paths, {
       jobId,
-      ticketHash: job.ticketHash,
       label: required(flags, "label"),
       scriptName: harness,
+      sessionId: who.sessionId,
+      actorTool: who.actorTool,
+      expectedLastEventHash: who.expectedLastEventHash,
+      currentBaseSha: refreshOriginMain(cwd, env),
       cwd,
-    });
-    appendAsActor(paths, {
-      type: "evidence-attached",
-      jobId,
       timestamp: now().toISOString(),
-      payload: {
-        label: evidence.label,
-        kind: evidence.kind,
-        filename: evidence.filename,
-        sha256: evidence.sha256,
-        verified: true,
-        sourceCommand: evidence.sourceCommand,
-        scriptName: evidence.scriptName,
-        scriptBodyHash: evidence.scriptBodyHash,
-        baseScriptBodyHash: evidence.baseScriptBodyHash,
-        baseSha: evidence.baseSha,
-        packageJsonHash: evidence.packageJsonHash,
-        headSha: evidence.headSha,
-        headTreeSha: evidence.headTreeSha,
-        repositoryContentHash: evidence.repositoryContentHash,
-        repositoryFileCount: evidence.repositoryFileCount,
-        ticketHash: evidence.ticketHash,
-        sandbox: evidence.sandbox,
-      },
-    }, who);
+    });
     process.stdout.write(`${JSON.stringify({
       jobId,
       label: evidence.label,

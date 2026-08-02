@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -39,7 +39,7 @@ process.on("exit", () => {
 mkdirSync(fixtureRepo, { recursive: true });
 writeFileSync(path.join(fixtureRepo, "package.json"), `${JSON.stringify({
   scripts: {
-    "verify-deps": "node -e \"process.stdout.write('FACTORY_TEST_HARNESS_PASS')\"",
+    "verify-deps": "node -e \"Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500);process.stdout.write('FACTORY_TEST_HARNESS_PASS')\"",
   },
 }, null, 2)}\n`);
 for (const args of [
@@ -273,6 +273,65 @@ appendFactoryEvent(paths, {
   },
 });
 pass(run(["lane", "start", "--job", jobId]), "start lane");
+
+const concurrentCheckpoint = loadFactorySnapshot(paths).lastEventHash;
+const firstEvidencePermit = mintFactoryCliPermit(paths, {
+  sessionId,
+  actorTool: "codex",
+  expectedLastEventHash: concurrentCheckpoint,
+});
+const replayedEvidencePermit = mintFactoryCliPermit(paths, {
+  sessionId,
+  actorTool: "codex",
+  expectedLastEventHash: concurrentCheckpoint,
+});
+const firstEvidence = spawn(process.execPath, [
+  script,
+  "evidence", "run",
+  "--job", jobId,
+  "--harness", "verify-deps",
+  "--label", "single-flight primary",
+], {
+  cwd: root,
+  env: { ...env, CRX_FACTORY_PERMIT: firstEvidencePermit.token },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+let firstEvidenceStdout = "";
+let firstEvidenceStderr = "";
+firstEvidence.stdout.setEncoding("utf8");
+firstEvidence.stderr.setEncoding("utf8");
+firstEvidence.stdout.on("data", (chunk) => { firstEvidenceStdout += chunk; });
+firstEvidence.stderr.on("data", (chunk) => { firstEvidenceStderr += chunk; });
+const lockDeadline = Date.now() + 5_000;
+while (readdirSync(paths.harnessRunsDir).length === 0 && Date.now() < lockDeadline) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+}
+assertions++;
+assert.ok(readdirSync(paths.harnessRunsDir).length > 0, "the primary harness acquires its per-job single-flight lock");
+const replayedEvidence = spawnSync(process.execPath, [
+  script,
+  "evidence", "run",
+  "--job", jobId,
+  "--harness", "verify-deps",
+  "--label", "single-flight replay",
+], {
+  cwd: root,
+  env: { ...env, CRX_FACTORY_PERMIT: replayedEvidencePermit.token },
+  encoding: "utf8",
+});
+const firstEvidenceStatus = await new Promise((resolve) => firstEvidence.once("close", resolve));
+assertions++;
+assert.equal(firstEvidenceStatus, 0, `the primary harness completes without a false factory hold: ${firstEvidenceStderr}`);
+assertions++;
+assert.match(firstEvidenceStdout, /single-flight primary/, "the primary harness attaches its evidence receipt");
+assertions++;
+assert.notEqual(replayedEvidence.status, 0, "a replayed same-job harness is refused before it executes");
+assertions++;
+assert.match(replayedEvidence.stderr, /evidence run already in progress.*replayed harness execution was refused/i, "the duplicate refusal explains the single-flight guard");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).jobs[0].evidence.length, 1, "only the primary concurrent harness attaches evidence");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).held, false, "legitimate permit churn does not trigger an emergency factory hold");
 const rewindActiveLane = run(["ticket", "present", "--job", jobId]);
 assertions++;
 assert.notEqual(rewindActiveLane.status, 0, "the owning chat cannot rewind an active lane through ticket presentation");
@@ -369,9 +428,9 @@ const snapshot = loadFactorySnapshot(paths);
 assertions++;
 assert.equal(snapshot.jobs[0].stage, "awaiting-morning-review");
 assertions++;
-assert.equal(snapshot.jobs[0].evidence.length, 2);
+assert.equal(snapshot.jobs[0].evidence.length, 3);
 assertions++;
-assert.equal(snapshot.jobs[0].evidence.filter((item) => item.verified).length, 2);
+assert.equal(snapshot.jobs[0].evidence.filter((item) => item.verified).length, 3);
 assertions++;
 assert.equal(snapshot.jobs[0].reviews.filter((item) => item.verdict === "clean").length, 1);
 assertions++;

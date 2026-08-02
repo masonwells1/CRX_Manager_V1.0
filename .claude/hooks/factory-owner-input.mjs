@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import { isMachineGenerated } from "./prompt-source-lib.mjs";
 import {
   APPROVAL_TTL_MS,
+  appendFactoryControlEvent,
   appendFactoryEvent,
-  clearEmergencyFactoryHold,
   loadFactorySnapshot,
   normalizeOwnerQuestion,
   pendingTicketForSession,
@@ -203,7 +203,7 @@ async function main() {
       emit("CRX Factory did not resume because the request contained secret-shaped text that cannot enter the ledger. Re-state the resume request without credentials or secret material.");
     }
     try {
-      appendFactoryEvent(paths, {
+      const controlResult = appendFactoryControlEvent(paths, {
         type: requestedHold === "hold" ? "factory-held" : "factory-resumed",
         jobId: null,
         actorTool,
@@ -213,14 +213,26 @@ async function main() {
           ownerReply: prompt.slice(0, 500),
         },
       });
-      if (requestedHold === "resume") clearEmergencyFactoryHold(paths);
+      if (!controlResult.changed) {
+        emit(requestedHold === "hold"
+          ? "CRX Factory is already globally paused. The repeated pause request changed no ledger state."
+          : "CRX Factory is already running. The repeated resume request changed no ledger state.");
+      }
     } catch (error) {
       if (requestedHold === "hold") {
         setEmergencyFactoryHold(
           paths,
           `Mason requested a factory pause, but the ledger was unavailable. Prompt SHA-256: ${sha256(prompt)}.`,
+          { ledgerUnavailable: true },
         );
         emit("CRX Factory entered an emergency global pause because the normal ledger could not record Mason's request. Build writes are blocked until the ledger is recovered through the supported factory recovery command.");
+      }
+      if (requestedHold === "resume") {
+        try {
+          if (!loadFactorySnapshot(paths).held) {
+            emit("CRX Factory is already running. A concurrent repeated resume request changed no additional ledger state.");
+          }
+        } catch {}
       }
       throw error;
     }

@@ -75,6 +75,10 @@ Pause and resume are chat-only owner controls in the supported workflow. Mason s
 hold/resume command, and wording
 about stopping or restarting the Factory Board changes only the Board process—not the global hold.
 Only explicit `resume` or `restart` language lifts a hold; a sentence about continuing work later does not.
+Pause/resume state evaluation and its conditional append share the ledger writer lock. If the chat
+client reconnects or replays the same resume prompt after the factory is already running, the
+owner-input hook reports an idempotent no-op and appends no duplicate ledger event. A newer opposite
+control cannot be lost behind a stale no-op check.
 
 ## Exact operational approval rule
 
@@ -170,6 +174,19 @@ fingerprint before the ticket or morning decision is re-presented there.
 - Permit-bound factory commands never read caller-selected files. Ticket JSON and short
   summary/blocker/recovery text travel as bounded canonical base64; secret-shaped operational text
   is rejected before it can enter the ledger or board.
+- Evidence execution is single-flight per job. A concurrent or transcript-replayed harness command
+  is refused before the repository harness runs. The harness mutation check ignores only legitimate
+  coordination churn such as its protected run lock, one-time permit consumption, owner receipts,
+  and append-only ledger events; it still protects immutable tickets, attached evidence, and
+  unexpected state files. A raw-byte-identical content-addressed write is
+  idempotent. A crash orphan remains unattached and cannot validate proof; a normal retry records a
+  new capture timestamp and creates fresh evidence. The broker rechecks the global pause after the
+  harness exits and refuses to attach its receipt if a pause arrived while it ran. Emergency-pause
+  writes and the final running-state check plus receipt append serialize through the ledger lock, so
+  a pause cannot land between that check and append.
+- A parked job stays terminal. Its original lane session may refresh only the plain-English behavior
+  result and a nonempty blocker while keeping the stage `parked`; another session, an empty result,
+  an empty blocker, or any attempted stage advance fails closed.
 - A job becomes `live` only when authenticated Vercel inspection resolves the deployment currently
   attached to the fixed canonical production alias, that deployment is `READY`, its Git source is
   the governed repository's exact `main` commit, and a matching GitHub Production deployment has a

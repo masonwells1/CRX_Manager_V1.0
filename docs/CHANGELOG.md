@@ -2,6 +2,28 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-02 — Factory resume replay and parked-Board repair
+
+The factory now serializes owner pause/resume evaluation and its conditional
+append under the ledger lock. A repeated plain-English resume is an idempotent
+no-op, while a newer opposite control cannot be lost behind a stale state check.
+Evidence execution has a per-job single-flight lock:
+one harness may run, while a concurrent transcript replay is refused before it
+executes or attaches a second receipt. Permit consumption, valid owner receipts,
+and append-only coordination events no longer look like harness-authored state
+mutation; tickets, evidence, and unexpected state files remain protected.
+
+Content-addressed harness writes are idempotent only when their complete bytes
+match. An interrupted artifact stays unattached and cannot validate proof; a
+normal retry has a new capture timestamp and produces a fresh receipt. Raw byte
+identity is required, and a pause arriving while a harness runs prevents its
+receipt from attaching. Emergency-pause writes and the final running-state
+check plus receipt append share the ledger lock, closing the last check-to-append
+window. A parked job may now refresh its owner-facing result
+and nonempty blocker only from its original lane session; the refresh remains
+parked and cannot reopen, advance, or transfer the job. The incident and
+acceptance evidence are recorded in `docs/audits/2026-08-02-factory-resume-replay-repair.md`.
+
 ## 2026-08-01 — Monthly integrity snapshot recorded
 
 A read-only production reconciliation checked ten month-end integrity areas and
