@@ -18,10 +18,11 @@ Content-addressed harness writes are idempotent only when their complete bytes
 match. An interrupted artifact stays unattached and cannot validate proof; a
 normal retry has a new capture timestamp and produces a fresh receipt. Raw byte
 identity is required, and a pause arriving while a harness runs prevents its
-receipt from attaching. Emergency-pause writes normally share the ledger lock
-and fall back to a direct fail-safe marker if that lock times out; the final
-running-state check plus receipt append stay atomic, closing the last
-check-to-append window. Evidence metadata is rejected before a harness starts,
+receipt from attaching. Emergency-pause writers and conditional evidence
+attachment share a dedicated hold fence. A pause falls back to a direct
+fail-safe marker inside that fence if the ledger lock times out; the final
+running-state check plus receipt append also stay ledger-atomic, closing the
+last check-to-append window. Evidence metadata is rejected before a harness starts,
 and attached events record the actual append time. A parked job may now refresh its owner-facing result
 and nonempty blocker only from its original lane session; the refresh remains
 parked and cannot reopen, advance, or transfer the job. The incident and

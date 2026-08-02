@@ -174,6 +174,7 @@ function buildPaths(stateDir) {
     lockPath: path.join(stateDir, "events.lock"),
     harnessRunsDir: path.join(stateDir, "harness-runs"),
     emergencyHoldPath: path.join(stateDir, "EMERGENCY-HOLD.json"),
+    emergencyHoldFencePath: path.join(stateDir, "EMERGENCY-HOLD.lock"),
     recoveryDir: path.join(stateDir, "recovery"),
   };
 }
@@ -494,6 +495,55 @@ function acquireLock(paths, timeoutMs = 5_000) {
         throw new Error(`Factory ledger lock timed out after ${timeoutMs}ms.`);
       }
       sleepMs(25);
+    }
+  }
+}
+
+function acquireEmergencyHoldFence(paths) {
+  ensureFactoryDirs(paths);
+  while (true) {
+    try {
+      const fd = openSync(paths.emergencyHoldFencePath, "wx");
+      writeSync(fd, `${canonicalJson({
+        schemaVersion: FACTORY_SCHEMA_VERSION,
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+      })}\n`);
+      return fd;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      let metadata = {};
+      let lockMtimeMs;
+      try { metadata = JSON.parse(readFileSync(paths.emergencyHoldFencePath, "utf8")); } catch {}
+      try { lockMtimeMs = statSync(paths.emergencyHoldFencePath).mtimeMs; } catch (statError) {
+        if (statError?.code === "ENOENT") continue;
+        throw statError;
+      }
+      const ageMs = Date.now() - (Date.parse(metadata.createdAt) || lockMtimeMs);
+      const ownerPid = Number(metadata.pid);
+      if (ageMs >= 1_000 && (!Number.isInteger(ownerPid) || !processIsAlive(ownerPid))) {
+        mkdirSync(paths.recoveryDir, { recursive: true });
+        const backup = path.join(paths.recoveryDir, `stale-emergency-hold-fence-${Date.now()}.json`);
+        try {
+          renameSync(paths.emergencyHoldFencePath, backup);
+          continue;
+        } catch (recoveryError) {
+          if (recoveryError?.code === "ENOENT") continue;
+          throw recoveryError;
+        }
+      }
+      sleepMs(25);
+    }
+  }
+}
+
+function releaseEmergencyHoldFence(paths, fd) {
+  try { closeSync(fd); } catch (error) {
+    process.stderr.write(`Factory cleanup warning: could not close the emergency-hold fence (${error?.message || error}).\n`);
+  }
+  try { unlinkSync(paths.emergencyHoldFencePath); } catch (error) {
+    if (error?.code !== "ENOENT") {
+      process.stderr.write(`Factory cleanup warning: could not remove the emergency-hold fence (${error?.message || error}).\n`);
     }
   }
 }
@@ -934,22 +984,27 @@ export function appendFactoryEvent(paths, eventInput, {
 } = {}) {
   const writer = authorizedFactoryWriter(paths);
   rejectSecretBearingText(canonicalJson(eventInput.payload || {}), "Factory event");
-  const lockFd = acquireLock(paths);
+  const holdFenceFd = requireFactoryRunning ? acquireEmergencyHoldFence(paths) : null;
   try {
-    const current = readEventLog(paths);
-    if (current.degraded) {
-      throw new Error("Factory ledger has an incomplete trailing event; repair or archive it before appending.");
+    const lockFd = acquireLock(paths);
+    try {
+      const current = readEventLog(paths);
+      if (current.degraded) {
+        throw new Error("Factory ledger has an incomplete trailing event; repair or archive it before appending.");
+      }
+      const previousHash = current.events.at(-1)?.eventHash || "0".repeat(64);
+      if (expectedLastEventHash && previousHash !== expectedLastEventHash) {
+        throw new Error("Factory state changed after this decision was presented; re-read and re-present it.");
+      }
+      if (requireFactoryRunning && factoryHeldFromCurrent(paths, current)) {
+        throw new Error("Factory was paused before evidence attachment; the receipt was not attached.");
+      }
+      return appendFactoryEventLocked(paths, writer, current, eventInput);
+    } finally {
+      releaseLock(paths, lockFd);
     }
-    const previousHash = current.events.at(-1)?.eventHash || "0".repeat(64);
-    if (expectedLastEventHash && previousHash !== expectedLastEventHash) {
-      throw new Error("Factory state changed after this decision was presented; re-read and re-present it.");
-    }
-    if (requireFactoryRunning && factoryHeldFromCurrent(paths, current)) {
-      throw new Error("Factory was paused before evidence attachment; the receipt was not attached.");
-    }
-    return appendFactoryEventLocked(paths, writer, current, eventInput);
   } finally {
-    releaseLock(paths, lockFd);
+    if (holdFenceFd !== null) releaseEmergencyHoldFence(paths, holdFenceFd);
   }
 }
 
@@ -1297,6 +1352,7 @@ function factoryProtectedContentFingerprint(paths) {
   const coordinationOnly = (relative) => relative === "events.jsonl"
     || relative === "events.lock"
     || relative === "EMERGENCY-HOLD.json"
+    || relative === "EMERGENCY-HOLD.lock"
     || /^permits\/[a-f0-9-]{36}(?:\.json|\.consuming-\d+)$/i.test(relative)
     || relative === "permits/owner-receipts"
     || relative === "intent-latches"
@@ -2747,32 +2803,42 @@ export function setEmergencyFactoryHold(paths, reason, {
   lockTimeoutMs = 5_000,
 } = {}) {
   authorizedFactoryWriter(paths);
-  if (ledgerUnavailable) {
-    setEmergencyFactoryHoldUnlocked(paths, reason);
-    return;
-  }
-  let lockFd;
+  const holdFenceFd = acquireEmergencyHoldFence(paths);
   try {
-    lockFd = acquireLock(paths, lockTimeoutMs);
-  } catch (error) {
-    setEmergencyFactoryHoldUnlocked(paths, reason);
-    process.stderr.write(`Factory safety warning: emergency hold bypassed the unavailable ledger lock (${error?.message || error}).\n`);
-    return;
-  }
-  try {
-    setEmergencyFactoryHoldUnlocked(paths, reason);
+    if (ledgerUnavailable) {
+      setEmergencyFactoryHoldUnlocked(paths, reason);
+      return;
+    }
+    let lockFd;
+    try {
+      lockFd = acquireLock(paths, lockTimeoutMs);
+    } catch (error) {
+      setEmergencyFactoryHoldUnlocked(paths, reason);
+      process.stderr.write(`Factory safety warning: emergency hold bypassed the unavailable ledger lock (${error?.message || error}).\n`);
+      return;
+    }
+    try {
+      setEmergencyFactoryHoldUnlocked(paths, reason);
+    } finally {
+      releaseLock(paths, lockFd);
+    }
   } finally {
-    releaseLock(paths, lockFd);
+    releaseEmergencyHoldFence(paths, holdFenceFd);
   }
 }
 
 export function clearEmergencyFactoryHold(paths) {
   authorizedFactoryWriter(paths);
-  const lockFd = acquireLock(paths);
+  const holdFenceFd = acquireEmergencyHoldFence(paths);
   try {
-    clearEmergencyFactoryHoldUnlocked(paths);
+    const lockFd = acquireLock(paths);
+    try {
+      clearEmergencyFactoryHoldUnlocked(paths);
+    } finally {
+      releaseLock(paths, lockFd);
+    }
   } finally {
-    releaseLock(paths, lockFd);
+    releaseEmergencyHoldFence(paths, holdFenceFd);
   }
 }
 

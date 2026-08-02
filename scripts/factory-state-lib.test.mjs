@@ -12,7 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -153,6 +153,21 @@ function fixture() {
   };
   pendingFixtureCleanups.add(cleanup);
   return { root, env, paths, cleanup };
+}
+
+function holdFactoryFence(target, delayMs = 500) {
+  const child = spawn(process.execPath, [
+    "-e",
+    "const fs=require('node:fs');const target=process.argv[1];const delay=Number(process.argv[2]);const fd=fs.openSync(target,'wx');fs.writeSync(fd,JSON.stringify({pid:process.pid,createdAt:new Date().toISOString()})+'\\n');fs.closeSync(fd);setTimeout(()=>fs.unlinkSync(target),delay);",
+    target,
+    String(delayMs),
+  ], { stdio: "ignore" });
+  const deadline = Date.now() + 5_000;
+  while (!existsSync(target) && Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  ok(existsSync(target), "the test helper acquired the emergency-hold fence");
+  return child;
 }
 
 function ticket(id = "factory-test-1", overrides = {}) {
@@ -637,6 +652,34 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   eq(buildFactorySnapshot(paths).lastEventHash, sanitizedHold.lastEventHash, "the atomic held-state refusal appends no event");
   clearEmergencyFactoryHold(paths);
   eq(buildFactorySnapshot(paths).held, false, "canonical recovery can clear the emergency hold");
+
+  holdFactoryFence(paths.emergencyHoldFencePath);
+  const fencedPauseStartedAt = Date.now();
+  setEmergencyFactoryHold(paths, "A pause waits for the in-flight attachment fence.", { ledgerUnavailable: true });
+  ok(Date.now() - fencedPauseStartedAt >= 250, "emergency-pause persistence honors the shared attachment fence");
+  clearEmergencyFactoryHold(paths);
+
+  holdFactoryFence(paths.emergencyHoldFencePath);
+  const fencedAppendStartedAt = Date.now();
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    actorTool: "codex",
+    sessionId: "session-1",
+    payload: { ownerRequest: "prove conditional append fencing" },
+  }, { requireFactoryRunning: true });
+  ok(Date.now() - fencedAppendStartedAt >= 250, "conditional evidence-style append honors the shared emergency-hold fence");
+
+  writeFileSync(paths.emergencyHoldFencePath, `${JSON.stringify({
+    pid: 99999999,
+    createdAt: new Date(Date.now() - 10_000).toISOString(),
+  })}\n`);
+  setEmergencyFactoryHold(paths, "A dead fence owner cannot strand an emergency pause.", { ledgerUnavailable: true });
+  ok(
+    readdirSync(paths.recoveryDir).some((entry) => entry.startsWith("stale-emergency-hold-fence-")),
+    "a stale emergency-hold fence is archived before pause persistence continues",
+  );
+  clearEmergencyFactoryHold(paths);
 
   writeFileSync(paths.lockPath, `${JSON.stringify({
     pid: process.pid,
