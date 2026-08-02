@@ -619,7 +619,11 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     const job = validateLaneActor(snapshot, jobId, who.sessionId, {
       allowedStages: new Set(["in-review"]),
     });
-    const review = runIndependentReviewEvidence(paths, { job, cwd, env });
+    const reviewArtifact = runIndependentReviewEvidence(paths, { job, cwd, env });
+    const { fullPath, createdArtifact, ...review } = reviewArtifact;
+    if (!createdArtifact) {
+      throw new Error(`Independent-review evidence ${review.filename} already exists; refusing to attach or delete a pre-existing artifact.`);
+    }
     try {
       appendAsActor(paths, {
         type: "independent-review-attached",
@@ -628,7 +632,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         payload: review,
       }, who, who.expectedLastEventHash, { requireFactoryRunning: true });
     } catch (error) {
-      try { unlinkSync(path.join(paths.evidenceDir, jobId, review.filename)); } catch (cleanupError) {
+      try { unlinkSync(fullPath); } catch (cleanupError) {
         if (cleanupError?.code !== "ENOENT") {
           process.stderr.write(`Factory cleanup warning: could not remove unattached independent-review evidence (${cleanupError?.message || cleanupError}).\n`);
         }

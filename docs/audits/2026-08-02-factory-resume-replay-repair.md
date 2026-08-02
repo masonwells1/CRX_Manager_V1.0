@@ -34,7 +34,9 @@ shown as attached proof and is not deleted or promoted.
   timestamp and produces fresh evidence rather than promoting the orphan.
 - The broker reloads shared state after each harness or independent review. A
   pause that arrives during execution prevents the resulting receipt from
-  attaching and the newly created unattached artifact is removed.
+  attaching and the newly created unattached artifact is removed by the exact
+  writer-returned path. A pre-existing content-addressed review artifact fails
+  before attachment and is never removed by cleanup.
   Emergency-pause persistence, owner control transitions, and conditional
   evidence attachment share a dedicated hold fence. Persistence
   normally also serializes through the ledger lock and falls back to a direct

@@ -515,7 +515,9 @@ function acquireEmergencyHoldFence(paths) {
       })}\n`);
       return fd;
     } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
+      const windowsExistingFence = new Set(["EPERM", "EACCES"]).has(error?.code)
+        && existsSync(paths.emergencyHoldFencePath);
+      if (error?.code !== "EEXIST" && !windowsExistingFence) throw error;
       let metadata = {};
       let lockMtimeMs;
       try { metadata = JSON.parse(readFileSync(paths.emergencyHoldFencePath, "utf8")); } catch {}
@@ -2604,6 +2606,9 @@ export function runIndependentReviewEvidence(paths, {
     setEmergencyFactoryHold(paths, "Independent review mutated protected repository or factory-state bytes.");
     throw new Error("Protected repository or factory-state content changed during independent review.");
   }
+  const capturedAt = isolatedTest && env.CRX_FACTORY_TEST_REVIEW_CAPTURED_AT
+    ? new Date(env.CRX_FACTORY_TEST_REVIEW_CAPTURED_AT).toISOString()
+    : new Date().toISOString();
   const payload = {
     schemaVersion: FACTORY_SCHEMA_VERSION,
     reviewer: "codex",
@@ -2613,7 +2618,7 @@ export function runIndependentReviewEvidence(paths, {
     baseSha,
     ticketHash: job.ticketHash,
     ...repositoryAfter,
-    capturedAt: new Date().toISOString(),
+    capturedAt,
     reportSummary: `Independent Codex review returned ${FACTORY_REVIEW_TOKEN}: CLEAN.`,
     stdoutSha256: sha256(String(result.stdout || "")),
     stdoutBytes: Buffer.byteLength(String(result.stdout || "")),
@@ -2626,7 +2631,17 @@ export function runIndependentReviewEvidence(paths, {
   mkdirSync(jobDir, { recursive: true });
   const filename = `${hash.slice(0, 12)}-independent-codex-review.json`;
   const target = path.join(jobDir, filename);
-  writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
+  let createdArtifact = false;
+  try {
+    writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
+    createdArtifact = true;
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    const existing = readFileSync(target);
+    if (!existing.equals(Buffer.from(bytes, "utf8"))) {
+      throw new Error(`Existing independent-review artifact ${filename} does not match its content-derived identity.`);
+    }
+  }
   return {
     reviewer: payload.reviewer,
     model: payload.model,
@@ -2640,6 +2655,8 @@ export function runIndependentReviewEvidence(paths, {
     headTreeSha: payload.headTreeSha,
     repositoryContentHash: payload.repositoryContentHash,
     repositoryFileCount: payload.repositoryFileCount,
+    fullPath: target,
+    createdArtifact,
   };
 }
 

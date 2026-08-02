@@ -394,7 +394,7 @@ const reviewArtifactsBeforePause = readdirSync(path.join(paths.evidenceDir, jobI
 const pausedReview = run(
   ["review", "run", "--job", jobId],
   { sessionId, actorTool: "codex" },
-  { CRX_FACTORY_TEST_REVIEW_HOLD: "1" },
+  { CRX_FACTORY_TEST_REVIEW_HOLD: "1", CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:00.000Z" },
 );
 assertions++;
 assert.notEqual(pausedReview.status, 0, "a marker-only pause arriving during independent review blocks attachment");
@@ -409,9 +409,31 @@ assert.equal(
   "a paused independent review cleans up its unattached artifact",
 );
 clearEmergencyFactoryHold(paths);
-pass(run(["review", "run", "--job", jobId]), "run independent Codex review");
+pass(
+  run(
+    ["review", "run", "--job", jobId],
+    { sessionId, actorTool: "codex" },
+    { CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:00.000Z" },
+  ),
+  "run independent Codex review",
+);
 const reviewReceipt = loadFactorySnapshot(paths).jobs[0].reviews[0];
 const reviewArtifact = JSON.parse(readFileSync(path.join(paths.evidenceDir, jobId, reviewReceipt.filename), "utf8"));
+const repeatedReview = run(
+  ["review", "run", "--job", jobId],
+  { sessionId, actorTool: "codex" },
+  { CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:00.000Z" },
+);
+assertions++;
+assert.notEqual(repeatedReview.status, 0, "a pre-existing independent-review artifact is never reattached");
+assertions++;
+assert.match(repeatedReview.stderr, /already exists.*refusing to attach or delete/i, "the pre-existing review fails before ledger attachment");
+assertions++;
+assert.equal(existsSync(path.join(paths.evidenceDir, jobId, reviewReceipt.filename)), true, "the pre-existing review artifact is not deleted");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).jobs[0].reviews.length, 1, "the failed replay appends no duplicate review receipt");
+assertions++;
+assert.equal(readFileSync(paths.eventsPath, "utf8").includes("createdArtifact"), false, "writer-only review metadata never enters the shared ledger");
 assertions++;
 assert.equal("stdout" in reviewArtifact || "stderr" in reviewArtifact, false, "review receipt does not persist unrestricted process output");
 assertions++;

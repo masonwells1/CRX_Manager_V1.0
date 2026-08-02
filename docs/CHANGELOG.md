@@ -26,8 +26,12 @@ running-state check plus receipt append also stay ledger-atomic, closing the
 last check-to-append window. The owner control transition performs that fallback
 itself without releasing and reacquiring the fence; a two-process contention
 regression proves an already-waiting attachment observes the marker and is
-refused. A pause arriving during independent review refuses
-attachment and cleans up its new artifact. Evidence metadata is rejected before
+refused. Windows `EPERM`/`EACCES` create-once results are treated as fence
+contention only when the fence path actually exists, preserving fail-closed
+behavior without flaky concurrent pauses. A pause arriving during independent review refuses
+attachment and cleans up only the exact artifact path created by that review.
+A pre-existing content-addressed review artifact is neither attached nor
+deleted. Evidence metadata is rejected before
 a harness starts, and attached events record the actual append time. A parked
 job may now refresh its owner-facing result
 and nonempty blocker only from its original lane session; the refresh remains
