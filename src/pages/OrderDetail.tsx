@@ -571,7 +571,6 @@ export default function OrderDetail() {
             p_idempotency_key: cancelKey,
           });
           if (error) throw error;
-          cancelOrderIdem.resetKey();
           const result = assertRpcResult<{
             success: boolean;
             mode?: 'full_cancel' | 'remainder_closed';
@@ -584,6 +583,7 @@ export default function OrderDetail() {
             posted_invoices_flagged: number;
             paid_commissions_flagged: number;
           }>(cancelResult, 'cancel_order');
+          cancelOrderIdem.resetKey();
           // Show summary toast with cascade details
           if (result && result.success) {
             const remainderClosed = result.mode === 'remainder_closed';
@@ -673,7 +673,6 @@ export default function OrderDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      voidOrderIdem.resetKey();
       const voided = assertRpcResult<{
         inventory_products_restored?: number;
         commissions_cancelled?: number;
@@ -681,6 +680,7 @@ export default function OrderDetail() {
         posted_invoices_flagged?: number;
         paid_commissions_flagged?: number;
       }>(voidResult, 'void_order');
+      voidOrderIdem.resetKey();
 
       const parts: string[] = ['Order voided.'];
       if ((voided.inventory_products_restored ?? 0) > 0)
@@ -866,8 +866,8 @@ export default function OrderDetail() {
             p_idempotency_key: splitKey,
           });
           if (error) throw error;
-          splitInvoiceIdem.resetKey();
           const ids = assertRpcResult<string[]>(data, 'create_split_invoices_from_order');
+          splitInvoiceIdem.resetKey();
           if (!ids || ids.length === 0) {
             throw new Error('No split invoices were generated — the order has no billable (positive) amount allocated to a customer.');
           }
@@ -881,8 +881,8 @@ export default function OrderDetail() {
           p_idempotency_key: invoiceKey,
         });
         if (error) throw error;
-        createInvoiceIdem.resetKey();
         const invoiceId = assertRpcResult<string>(data, 'create_invoice_from_order');
+        createInvoiceIdem.resetKey();
         navigate(`/invoices/${invoiceId}`);
       },
       toast,

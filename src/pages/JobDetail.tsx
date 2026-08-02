@@ -2221,8 +2221,8 @@ export default function JobDetail() {
         displacementCommitted = true;
         notifyDisplacedApplicators(id as string);
       }
-      saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
+      saveJobIdem.resetKey();
       const savedJobIdForNotify = isNew ? result.job_id : (id as string);
 
       // Field-app parity #6 + #10: persist the ground crew AND the loader-worksheet
@@ -2450,8 +2450,8 @@ export default function JobDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      completeJobIdem.resetKey();
       const result = assertRpcResult<CompleteJobResult>(data, 'complete_job');
+      completeJobIdem.resetKey();
       if (profile) logActivity({ event: 'job_completed', description: `Job ${jobNumber} completed → App Record ${result.record_number}`, performedBy: profile.id });
       toast('success', `Job completed! Application record ${result.record_number} created.`);
       setShowCompleteModal(false);
@@ -2504,8 +2504,8 @@ export default function JobDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
+      transferJobIdem.resetKey();
       setIsDirty(false);
       if (result.split && (result.invoice_count ?? 0) > 1) {
         // U7 multi-owner split: one payable invoice was created per field owner. Navigate to

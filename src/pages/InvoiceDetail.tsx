@@ -944,8 +944,8 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      transferToSchedulingIdem.resetKey();
       const result = assertRpcResult<{ job_id: string; job_number: string }>(data, 'transfer_invoice_to_job');
+      transferToSchedulingIdem.resetKey();
       setShowTransferToSchedulingModal(false);
       toast('success', `Invoice returned to scheduling — job ${result.job_number} reopened`);
       navigate(`/jobs/${result.job_id}`);

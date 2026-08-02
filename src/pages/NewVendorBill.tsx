@@ -157,8 +157,8 @@ export default function NewVendorBill() {
       });
 
       if (error) throw error;
-      createBillIdem.resetKey();
       assertRpcResult(data, 'create_vendor_bill');
+      createBillIdem.resetKey();
 
       toast('success', 'Vendor bill created');
       navigate(`/accounts-payable/bills/${data}`);

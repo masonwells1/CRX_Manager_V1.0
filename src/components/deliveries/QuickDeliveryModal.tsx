@@ -351,9 +351,8 @@ export default function QuickDeliveryModal({
       });
 
       if (error) throw error;
-      quickDeliveryIdem.resetKey();
-
       const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null; credit_warning?: boolean; stock_warning?: boolean; short_stock_count?: number }>(data, 'create_quick_delivery');
+      quickDeliveryIdem.resetKey();
       const invoiceMsg = result.invoice_number
         ? ` with draft invoice ${result.invoice_number}`
         : ' (no invoice created)';

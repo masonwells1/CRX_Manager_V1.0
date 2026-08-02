@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-02 — RPC retry keys retained until success is proven
+
+Mutation callers across quoting, orders, deliveries, invoices, payments,
+prepay, field work, returns, finance charges, and vendor bills now validate the
+RPC success payload before discarding the action's idempotency key. A silently
+missing response therefore retains the same key for a safe retry instead of
+creating a new mutation identity that could repeat already-committed work.
+
+An app-wide regression check prevents reset-before-assert ordering from
+returning. No SQL, live data, business math, or lifecycle behavior changed.
+The verification record is in
+`docs/audits/codex-driven-bug-hunt/2026-08-02-idempotency-reset-order-hardening.md`.
+
 ## 2026-08-01 — Monthly integrity snapshot recorded
 
 A read-only production reconciliation checked ten month-end integrity areas and

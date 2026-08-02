@@ -309,8 +309,9 @@ export default function Invoices() {
           p_idempotency_key: voidKey,
         });
         if (error) throw error;
+        const result = assertRpcResult(data, 'batch_void_invoices');
         batchVoidIdem.resetKey();
-        return assertRpcResult(data, 'batch_void_invoices');
+        return result;
       },
       toast,
       successMessage: `Voided ${ids.length} invoice(s)`,
@@ -442,8 +443,9 @@ export default function Invoices() {
           p_idempotency_key: deleteKey,
         });
         if (error) throw error;
+        const result = assertRpcResult<number>(data, 'delete_invoices');
         batchDeleteIdem.resetKey();
-        return assertRpcResult<number>(data, 'delete_invoices');
+        return result;
       },
       toast,
       setLoading: setDeleting,
