@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn } from './idempotency';
+import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -90,5 +90,14 @@ describe('isMissingIntentBindingColumn', () => {
     })).toBe(true);
     expect(isMissingIntentBindingColumn({ code: 'PGRST204', message: 'another column missing' })).toBe(false);
     expect(isMissingIntentBindingColumn({ code: '42501', message: 'request_fingerprint denied' })).toBe(false);
+  });
+});
+
+describe('legacyIntentChanged', () => {
+  it('reuses an unresolved key only for identical old-schema retries', () => {
+    const first = { key: 'same-key', intent: '{"quantity":1}' };
+    expect(legacyIntentChanged(first, { ...first })).toBe(false);
+    expect(legacyIntentChanged(first, { key: 'same-key', intent: '{"quantity":2}' })).toBe(true);
+    expect(legacyIntentChanged(first, { key: 'new-key', intent: '{"quantity":2}' })).toBe(false);
   });
 });

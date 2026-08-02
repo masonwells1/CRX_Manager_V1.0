@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn } from '../lib/idempotency';
+import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
@@ -93,6 +93,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     'save_invoice',
     `${profile?.id || ''}:${routeArea || 'all'}:${id || 'unknown'}`,
   );
+  const legacySaveIntentRef = useRef<{ key: string; intent: string } | null>(null);
   const postIdem = useIdempotencyKey('post_invoice', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_invoice', profile?.id || '');
   // PR-08 (2026-05-10): switched from record_invoice_payment to allocate_payment
@@ -703,7 +704,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('error', 'Please select a customer');
       return;
     }
-    const outcome = await runCriticalAction<'saved' | 'reconciled'>({
+    const outcome = await runCriticalAction<'saved' | 'reconciled' | 'blocked'>({
       action: async () => {
         const payload = {
           id: isNew ? undefined : id,
@@ -755,17 +756,22 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           quoted_price_cents: it.quoted_price_cents,
         }));
 
+        const idemKey = saveIdem.getKey();
+        const intent = JSON.stringify({ invoice: payload, items: itemsPayload });
         const capability = await supabase
           .from('idempotency_keys')
           .select('request_fingerprint')
           .limit(1);
         if (capability.error) {
           if (!isMissingIntentBindingColumn(capability.error)) throw capability.error;
-          // Frontend-first deployment compatibility: the old RPC cannot detect
-          // changed intent, so retain its historical per-attempt key behavior.
-          saveIdem.resetKey();
+          // Frontend-first deployment compatibility: reuse an ambiguous key only
+          // for byte-identical input. The old RPC cannot reconcile edited intent.
+          if (legacyIntentChanged(legacySaveIntentRef.current, { key: idemKey, intent })) {
+            toast('warning', 'The previous save may already have completed. Reload this invoice before submitting different changes.');
+            return 'blocked';
+          }
+          legacySaveIntentRef.current = { key: idemKey, intent };
         }
-        const idemKey = saveIdem.getKey();
         const { data, error } = await supabase.rpc('save_invoice', {
           p_invoice: payload,
           p_items: itemsPayload,
@@ -777,6 +783,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           const committedInvoiceId = receipt?.invoice_id;
           if (typeof committedInvoiceId === 'string') {
             saveIdem.resetKey();
+            legacySaveIntentRef.current = null;
             await fetchInvoice(committedInvoiceId);
             toast('warning', 'The earlier save already completed. The saved invoice has been reopened so you can review it before making another change.');
             if (id !== committedInvoiceId) {
@@ -787,6 +794,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           throw error;
         }
         saveIdem.resetKey();
+        legacySaveIntentRef.current = null;
 
         if (isNew && data) {
           const savedId = assertRpcResult<string>(data, 'save_invoice');

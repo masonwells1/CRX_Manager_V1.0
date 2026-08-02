@@ -34,6 +34,15 @@ export function isMissingIntentBindingColumn(error: unknown): boolean {
     && candidate.message.includes('request_fingerprint');
 }
 
+export type LegacyIntentSnapshot = { key: string; intent: string };
+
+export function legacyIntentChanged(
+  previous: LegacyIntentSnapshot | null,
+  current: LegacyIntentSnapshot,
+): boolean {
+  return previous?.key === current.key && previous.intent !== current.intent;
+}
+
 /**
  * Extracts the committed receipt returned in an IDEMPOTENCY_INTENT_MISMATCH
  * error. PostgREST errors are plain objects, so do not use instanceof Error.
