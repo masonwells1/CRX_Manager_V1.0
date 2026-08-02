@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { buildSync } from 'esbuild';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const files = [
@@ -27,10 +30,15 @@ const files = [
   ['po-reassignment-guard.sql', 'supabase/migrations/20260722080226_lock_received_po_cost_snapshot_across_product_reassignment.sql'],
   ['workbook-v2.sql', 'supabase/migrations/20260722091359_supplier_pricing_workbook_v2_product_info.sql'],
   ['inner-rpc-revoke.sql', 'supabase/migrations/20260722100456_revoke_inner_pricing_rpc_access.sql'],
+  ['xlsx-export.sql', 'scripts/smoke/export-supplier-pricing-phase1a-workbook.sql'],
+  ['xlsx-current-wrappers.sql', 'scripts/smoke/smoke-supplier-cost-basis-phase2-xlsx.sql'],
   ['smoke.sql', 'scripts/smoke/smoke-supplier-cost-basis-phase2.sql'],
 ];
 const container = `crx-pricing-phase2-proof-${process.pid}-${Date.now()}`;
 const password = 'phase2-disposable-proof';
+const workbookRoundtripScript = path.join(
+  repoRoot, 'scripts', 'smoke', 'roundtrip-supplier-pricing-phase1a-workbook.ts',
+);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -54,6 +62,14 @@ function psql(file) {
     '-f', `/tmp/${file}`);
 }
 
+function psqlCapture(file) {
+  return run('docker', [
+    'exec', '-e', `PGPASSWORD=${password}`, container,
+    'psql', '-qAt', '-U', 'postgres', '-d', 'postgres', '-X',
+    '-v', 'ON_ERROR_STOP=1', '-f', `/tmp/${file}`,
+  ], { capture: true }).stdout.trim();
+}
+
 function psqlExpectedFailure(file, token) {
   const result = run('docker', [
     'exec', '-e', `PGPASSWORD=${password}`, container, 'psql',
@@ -70,6 +86,10 @@ function psqlExpectedFailure(file, token) {
 }
 
 let started = false;
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crx-phase2-xlsx-'));
+let workbookRoundtripBundle;
+let costBasisRowsBundle;
+let supplierEvidenceWorkbookBundle;
 try {
   docker('run', '--detach', '--name', container, '--network', 'none',
     '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=512m',
@@ -91,6 +111,7 @@ try {
     docker('cp', path.join(repoRoot, source), `${container}:/tmp/${target}`);
   }
   for (const [target] of files) {
+    if (target === 'xlsx-export.sql' || target === 'xlsx-current-wrappers.sql' || target === 'smoke.sql') continue;
     console.log(`[phase2-proof] applying ${target}`);
     if (target === 'wells-rollout-flag-true.sql'
         || target === 'wells-rollout-flag-missing.sql') {
@@ -103,6 +124,107 @@ try {
       psql(target);
     }
   }
+  console.log('[phase2-proof] exercising supplier-evidence .xlsx generator/parser through current wrappers');
+  const exportOutput = psqlCapture('xlsx-export.sql');
+  const exportLine = exportOutput.split(/\r?\n/).find((line) => line.trim().startsWith('{'));
+  if (!exportLine) throw new Error(`Workbook export RPC did not return JSON: ${exportOutput}`);
+  const exportPayload = JSON.parse(exportLine);
+  if (!Array.isArray(exportPayload.rows) || exportPayload.rows.length !== 3) {
+    throw new Error('Workbook export RPC did not return the expected 3 Product rows');
+  }
+  const exportJsonPath = path.join(tempDir, 'export.json');
+  const parsedPayloadPath = path.join(tempDir, 'parsed.json');
+  const exportedWorkbookPath = path.join(tempDir, 'export.xlsx');
+  const proofOutputDir = path.join(repoRoot, 'output', 'phase2-db');
+  fs.mkdirSync(proofOutputDir, { recursive: true });
+  // Keep the temporary ESM bundle under the repo so external packages resolve
+  // through this checkout's node_modules; the guarded finally cleanup removes it.
+  workbookRoundtripBundle = path.join(
+    proofOutputDir, `.roundtrip-supplier-evidence-${process.pid}-${Date.now()}.mjs`,
+  );
+  const costBasisRowsEntry = path.join(tempDir, 'cost-basis-rows-entry.ts');
+  costBasisRowsBundle = path.join(
+    proofOutputDir, `.cost-basis-rows-${process.pid}-${Date.now()}.mjs`,
+  );
+  const supplierEvidenceWorkbookEntry = path.join(tempDir, 'supplier-evidence-workbook-entry.ts');
+  supplierEvidenceWorkbookBundle = path.join(
+    proofOutputDir, `.supplier-evidence-workbook-${process.pid}-${Date.now()}.mjs`,
+  );
+  const editedWorkbookPath = path.join(proofOutputDir, 'phase2-supplier-evidence-xlsx-to-real-db.xlsx');
+  fs.writeFileSync(exportJsonPath, JSON.stringify(exportPayload));
+  fs.writeFileSync(
+    costBasisRowsEntry,
+    `export { costBasisRows } from ${JSON.stringify(
+      path.join(repoRoot, 'src', 'lib', 'productPricing.ts'),
+    )};\n`,
+  );
+  fs.writeFileSync(
+    supplierEvidenceWorkbookEntry,
+    `export {\n  generateProductPricingWorkbookWithSupplierEvidence,\n  parseProductPricingWorkbookWithSupplierEvidence,\n} from ${JSON.stringify(
+      path.join(repoRoot, 'src', 'lib', 'productPricingSupplierEvidenceWorkbook.ts'),
+    )};\n`,
+  );
+  buildSync({
+    entryPoints: [workbookRoundtripScript],
+    outfile: workbookRoundtripBundle,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    packages: 'external',
+  });
+  buildSync({
+    entryPoints: [costBasisRowsEntry],
+    outfile: costBasisRowsBundle,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    packages: 'external',
+    define: {
+      'import.meta.env': JSON.stringify({
+        VITE_SUPABASE_URL: 'https://example.invalid',
+        VITE_SUPABASE_ANON_KEY: 'disposable-workbook-proof-key',
+      }),
+      window: 'globalThis',
+    },
+  });
+  buildSync({
+    entryPoints: [supplierEvidenceWorkbookEntry],
+    outfile: supplierEvidenceWorkbookBundle,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    packages: 'external',
+    define: {
+      'import.meta.env': JSON.stringify({
+        VITE_SUPABASE_URL: 'https://example.invalid',
+        VITE_SUPABASE_ANON_KEY: 'disposable-workbook-proof-key',
+      }),
+      window: 'globalThis',
+    },
+  });
+  run(process.execPath, [
+    workbookRoundtripBundle, exportJsonPath, parsedPayloadPath, exportedWorkbookPath,
+    editedWorkbookPath, 'supplier-evidence',
+  ], {
+    env: {
+      ...process.env,
+      CRX_COST_BASIS_ROWS_MODULE: pathToFileURL(costBasisRowsBundle).href,
+      CRX_SUPPLIER_EVIDENCE_WORKBOOK_MODULE: pathToFileURL(supplierEvidenceWorkbookBundle).href,
+    },
+  });
+  console.log('[phase2-proof] PHASE2_XLSX_GENERATE_PARSE_PASS');
+  docker('cp', parsedPayloadPath, `${container}:/tmp/phase2-workbook-payload.json`);
+  psql('xlsx-current-wrappers.sql');
+  console.log('[phase2-proof] exercising existing Phase 2 smoke');
+  psql('smoke.sql');
 } finally {
   if (started) run('docker', ['rm', '-f', container], { allowFailure: true });
+  if (workbookRoundtripBundle) fs.rmSync(workbookRoundtripBundle, { force: true });
+  if (costBasisRowsBundle) fs.rmSync(costBasisRowsBundle, { force: true });
+  if (supplierEvidenceWorkbookBundle) fs.rmSync(supplierEvidenceWorkbookBundle, { force: true });
+  const resolvedTemp = path.resolve(tempDir);
+  const resolvedRoot = path.resolve(os.tmpdir()) + path.sep;
+  if (resolvedTemp.startsWith(resolvedRoot)) {
+    fs.rmSync(resolvedTemp, { recursive: true, force: true });
+  }
 }

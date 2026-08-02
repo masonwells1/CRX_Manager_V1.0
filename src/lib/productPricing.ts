@@ -376,7 +376,7 @@ function normalizeApplyPricingResult(result: ApplyPricingResultWire): ApplyPrici
   };
 }
 
-function costBasisRows(
+export function costBasisRows(
   rows: ReadonlyArray<PricingPreviewInputRow | PricingWorksheetPreviewRow>,
   source: PricingSource,
 ): Array<PricingPreviewInputRow | PricingWorksheetPreviewRow> {

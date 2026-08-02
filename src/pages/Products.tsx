@@ -766,7 +766,7 @@ export default function Products() {
               onDeselectAll={clearSelection}
             />
           )}
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
           {/* Download All dropdown */}
           <div className="relative">
             <Button
