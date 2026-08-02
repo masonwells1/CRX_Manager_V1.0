@@ -26,6 +26,14 @@ type IdempotencyMismatchDetail = {
   result?: Record<string, unknown>;
 };
 
+export function isMissingIntentBindingColumn(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  if (candidate.code !== 'PGRST204' && candidate.code !== '42703') return false;
+  return typeof candidate.message === 'string'
+    && candidate.message.includes('request_fingerprint');
+}
+
 /**
  * Extracts the committed receipt returned in an IDEMPOTENCY_INTENT_MISMATCH
  * error. PostgREST errors are plain objects, so do not use instanceof Error.

@@ -365,5 +365,6 @@ BEGIN
      OR NOT has_function_privilege('authenticated', 'public.create_quick_delivery(uuid,jsonb,uuid,date,text,uuid,text,boolean)', 'EXECUTE') THEN
     RAISE EXCEPTION 'authenticated execution grant missing';
   END IF;
+
 END;
 $verify$;

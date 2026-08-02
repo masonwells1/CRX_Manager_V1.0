@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { generateIdempotencyKey, getIdempotencyMismatchResult } from '../lib/idempotency';
+import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
@@ -755,6 +755,16 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           quoted_price_cents: it.quoted_price_cents,
         }));
 
+        const capability = await supabase
+          .from('idempotency_keys')
+          .select('request_fingerprint')
+          .limit(1);
+        if (capability.error) {
+          if (!isMissingIntentBindingColumn(capability.error)) throw capability.error;
+          // Frontend-first deployment compatibility: the old RPC cannot detect
+          // changed intent, so retain its historical per-attempt key behavior.
+          saveIdem.resetKey();
+        }
         const idemKey = saveIdem.getKey();
         const { data, error } = await supabase.rpc('save_invoice', {
           p_invoice: payload,

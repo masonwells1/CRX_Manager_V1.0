@@ -16,7 +16,10 @@ access to the committed entity and return the same visible reconciliation
 signal instead of either duplicating the mutation or reporting edited input as
 successfully saved. The invoice and Quick Delivery interfaces preserve an
 unresolved key across ambiguous failures and reload or open the authoritative
-committed record before allowing another attempt.
+committed record before allowing another attempt. A read-only server capability
+probe keeps the frontend on its historical per-attempt key behavior if Vercel
+deploys before this migration, so the code and database release gates remain
+safe and independent.
 
 ## 2026-08-01 — Monthly integrity snapshot recorded
 

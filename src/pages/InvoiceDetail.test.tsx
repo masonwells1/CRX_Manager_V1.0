@@ -101,6 +101,14 @@ function renderInvoiceDetail(id = 'inv-123') {
   );
 }
 
+function mockIntentAwareRpc(result: { data: unknown; error: unknown }) {
+  mockRpc.mockImplementation((name: string) => Promise.resolve(
+    name === 'idempotency_intent_binding_enabled'
+      ? { data: true, error: null }
+      : result,
+  ));
+}
+
 describe('InvoiceDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -132,7 +140,7 @@ describe('InvoiceDetail', () => {
       }
       return buildChain({ data: [], error: null });
     });
-    mockRpc.mockResolvedValue({
+    mockIntentAwareRpc({
       data: null,
       error: {
         message: 'IDEMPOTENCY_INTENT_MISMATCH',
@@ -377,7 +385,7 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
 
   it('sends preset terms and explicitly clears due_date', async () => {
     setupInvoice('draft', 'Net 30', '2026-04-14');
-    mockRpc.mockResolvedValue({ data: null, error: null });
+    mockIntentAwareRpc({ data: null, error: null });
     renderInvoiceDetail('inv-terms');
     await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -385,13 +393,14 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
       expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.objectContaining({
         p_invoice: expect.objectContaining({ payment_terms: 'Net 30' }),
       }));
-      expect(mockRpc.mock.calls[0][1].p_invoice).toHaveProperty('due_date', null);
+      const saveCall = mockRpc.mock.calls.find(([name]) => name === 'save_invoice');
+      expect(saveCall?.[1].p_invoice).toHaveProperty('due_date', null);
     });
   });
 
   it('clears custom terms and explicitly clears due_date when switching to customer default', async () => {
     setupInvoice('draft', 'Due 45 days after invoice', '2026-05-01');
-    mockRpc.mockResolvedValue({ data: null, error: null });
+    mockIntentAwareRpc({ data: null, error: null });
     renderInvoiceDetail('inv-terms');
     await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
     fireEvent.change(screen.getByRole('combobox', { name: 'Payment Terms' }), { target: { value: 'Customer default' } });
@@ -400,13 +409,14 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
       expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.objectContaining({
         p_invoice: expect.objectContaining({ payment_terms: null }),
       }));
-      expect(mockRpc.mock.calls[0][1].p_invoice).toHaveProperty('due_date', null);
+      const saveCall = mockRpc.mock.calls.find(([name]) => name === 'save_invoice');
+      expect(saveCall?.[1].p_invoice).toHaveProperty('due_date', null);
     });
   });
 
   it('round-trips custom due date with the original custom terms text', async () => {
     setupInvoice('draft', 'Due 45 days after invoice', '2026-05-01');
-    mockRpc.mockResolvedValue({ data: null, error: null });
+    mockIntentAwareRpc({ data: null, error: null });
     renderInvoiceDetail('inv-terms');
     await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -427,7 +437,7 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
 
   it('uses the customer default terms to recognize a stamped due date when invoice terms are null', async () => {
     setupInvoice('unposted', null, '2026-03-30', 'Net 15');
-    mockRpc.mockResolvedValue({ data: null, error: null });
+    mockIntentAwareRpc({ data: null, error: null });
     renderInvoiceDetail('inv-terms');
     await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
     expect(screen.getByRole('combobox', { name: 'Payment Terms' })).toHaveValue('Customer default');
@@ -437,7 +447,8 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
       expect(mockRpc).toHaveBeenCalledWith('save_invoice', expect.objectContaining({
         p_invoice: expect.objectContaining({ payment_terms: null, due_date: null }),
       }));
-      expect(mockRpc.mock.calls[0][1].p_invoice.payment_terms).not.toBe('Custom');
+      const saveCall = mockRpc.mock.calls.find(([name]) => name === 'save_invoice');
+      expect(saveCall?.[1].p_invoice.payment_terms).not.toBe('Custom');
     });
   });
 

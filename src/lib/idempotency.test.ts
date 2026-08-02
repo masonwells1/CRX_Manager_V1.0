@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdempotencyKey, getIdempotencyMismatchResult } from './idempotency';
+import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -75,5 +75,20 @@ describe('getIdempotencyMismatchResult', () => {
         result: { delivery_id: 'delivery-1' },
       }),
     }, 'save_invoice')).toBeNull();
+  });
+});
+
+describe('isMissingIntentBindingColumn', () => {
+  it('accepts only missing-column errors naming the fingerprint column', () => {
+    expect(isMissingIntentBindingColumn({
+      code: 'PGRST204',
+      message: "Could not find the 'request_fingerprint' column",
+    })).toBe(true);
+    expect(isMissingIntentBindingColumn({
+      code: '42703',
+      message: 'column request_fingerprint does not exist',
+    })).toBe(true);
+    expect(isMissingIntentBindingColumn({ code: 'PGRST204', message: 'another column missing' })).toBe(false);
+    expect(isMissingIntentBindingColumn({ code: '42501', message: 'request_fingerprint denied' })).toBe(false);
   });
 });

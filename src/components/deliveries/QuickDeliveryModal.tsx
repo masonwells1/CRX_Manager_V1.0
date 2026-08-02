@@ -13,7 +13,7 @@ import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
-import { getIdempotencyMismatchResult } from '../../lib/idempotency';
+import { getIdempotencyMismatchResult, isMissingIntentBindingColumn } from '../../lib/idempotency';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { formatCents as fmtCurrency } from '../../lib/money';
@@ -334,6 +334,15 @@ export default function QuickDeliveryModal({
 
     setSubmitting(true);
     try {
+      const capability = await supabase
+        .from('idempotency_keys')
+        .select('request_fingerprint')
+        .limit(1);
+      if (capability.error) {
+        if (!isMissingIntentBindingColumn(capability.error)) throw capability.error;
+        // Preserve compatibility when Vercel deploys before the migration.
+        quickDeliveryIdem.resetKey();
+      }
       const key = quickDeliveryIdem.getKey();
       const { data, error } = await supabase.rpc('create_quick_delivery', {
         p_customer_id: selectedCustomer.id,
