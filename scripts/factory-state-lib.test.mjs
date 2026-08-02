@@ -782,6 +782,40 @@ function append(paths, type, jobId, payload = {}, options = {}) {
 }
 
 {
+  const { paths, cleanup } = fixture();
+  mkdirSync(path.dirname(paths.emergencyHoldFencePath), { recursive: true });
+  writeFileSync(paths.emergencyHoldFencePath, `${JSON.stringify({
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  })}\n`);
+  const startedAt = Date.now();
+  const paused = appendFactoryControlEvent(paths, {
+    type: "factory-held",
+    jobId: null,
+    actorTool: "codex",
+    sessionId: "session-1",
+    payload: { reason: "stuck fence pause", ownerReply: "pause factory" },
+  }, { lockTimeoutMs: 25, emergencyFallbackReason: "Stuck-fence fallback test." });
+  ok(Date.now() - startedAt < 500, "a live but stuck fence has a bounded wait");
+  eq(paused.emergencyFallback, true, "a timed-out pause uses the fail-closed emergency marker");
+  eq(buildFactorySnapshot(paths).held, true, "the emergency marker keeps the factory paused after fence timeout");
+  throws(
+    () => appendFactoryControlEvent(paths, {
+      type: "factory-resumed",
+      jobId: null,
+      actorTool: "codex",
+      sessionId: "session-1",
+      payload: { reason: "unsafe stuck-fence resume", ownerReply: "resume factory" },
+    }, { lockTimeoutMs: 25 }),
+    /emergency-hold fence timed out/,
+    "a resume cannot clear the fail-closed marker while the coordination fence is stuck",
+  );
+  rmSync(paths.emergencyHoldFencePath);
+  clearEmergencyFactoryHold(paths);
+  cleanup();
+}
+
+{
   const { root, env, paths, cleanup } = fixture();
   append(paths, "factory-intent", null, { ownerRequest: "prove atomic pause fallback" });
   const checkpoint = loadFactorySnapshot(paths).lastEventHash;

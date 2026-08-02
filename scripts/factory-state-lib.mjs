@@ -503,8 +503,9 @@ function acquireLock(paths, timeoutMs = 5_000) {
   }
 }
 
-function acquireEmergencyHoldFence(paths) {
+function acquireEmergencyHoldFence(paths, timeoutMs = 5_000) {
   ensureFactoryDirs(paths);
+  const start = Date.now();
   while (true) {
     try {
       const fd = openSync(paths.emergencyHoldFencePath, "wx");
@@ -537,6 +538,9 @@ function acquireEmergencyHoldFence(paths) {
           if (recoveryError?.code === "ENOENT") continue;
           throw recoveryError;
         }
+      }
+      if (Date.now() - start >= timeoutMs) {
+        throw new Error(`Factory emergency-hold fence timed out after ${timeoutMs}ms.`);
       }
       sleepMs(25);
     }
@@ -1027,7 +1031,17 @@ export function appendFactoryControlEvent(paths, eventInput, {
   }
   rejectSecretBearingText(canonicalJson(eventInput.payload || {}), "Factory control event");
   const desiredHeld = eventInput.type === "factory-held";
-  const holdFenceFd = acquireEmergencyHoldFence(paths);
+  let holdFenceFd;
+  try {
+    holdFenceFd = acquireEmergencyHoldFence(paths, lockTimeoutMs);
+  } catch (error) {
+    if (!desiredHeld) throw error;
+    const fallbackReason = emergencyFallbackReason
+      || `Mason requested a factory pause, but the coordination fence was unavailable. Control SHA-256: ${sha256(canonicalJson(eventInput))}.`;
+    setEmergencyFactoryHoldUnlocked(paths, fallbackReason);
+    process.stderr.write(`Factory safety warning: owner pause used the emergency hold because the coordination fence was unavailable (${error?.message || error}).\n`);
+    return { changed: true, held: true, emergencyFallback: true };
+  }
   let lockFd;
   try {
     try {
@@ -1051,7 +1065,7 @@ export function appendFactoryControlEvent(paths, eventInput, {
     }
   } finally {
     if (lockFd !== undefined) releaseLock(paths, lockFd);
-    releaseEmergencyHoldFence(paths, holdFenceFd);
+    if (holdFenceFd !== undefined) releaseEmergencyHoldFence(paths, holdFenceFd);
   }
 }
 
@@ -2843,7 +2857,14 @@ export function setEmergencyFactoryHold(paths, reason, {
   lockTimeoutMs = 5_000,
 } = {}) {
   authorizedFactoryWriter(paths);
-  const holdFenceFd = acquireEmergencyHoldFence(paths);
+  let holdFenceFd;
+  try {
+    holdFenceFd = acquireEmergencyHoldFence(paths, lockTimeoutMs);
+  } catch (error) {
+    setEmergencyFactoryHoldUnlocked(paths, reason);
+    process.stderr.write(`Factory safety warning: emergency hold bypassed the unavailable coordination fence (${error?.message || error}).\n`);
+    return;
+  }
   try {
     if (ledgerUnavailable) {
       setEmergencyFactoryHoldUnlocked(paths, reason);
@@ -2863,7 +2884,7 @@ export function setEmergencyFactoryHold(paths, reason, {
       releaseLock(paths, lockFd);
     }
   } finally {
-    releaseEmergencyHoldFence(paths, holdFenceFd);
+    if (holdFenceFd !== undefined) releaseEmergencyHoldFence(paths, holdFenceFd);
   }
 }
 

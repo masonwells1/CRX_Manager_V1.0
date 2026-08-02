@@ -41,6 +41,8 @@ shown as attached proof and is not deleted or promoted.
   evidence attachment share a dedicated hold fence. Persistence
   normally also serializes through the ledger lock and falls back to a direct
   fail-safe marker, still inside the hold fence, if that lock times out. The
+  fence wait itself is bounded: a pause falls back to the fail-safe marker if a
+  live owner is stuck, while resume and evidence attachment remain refused.
   final running-state check plus receipt append stay atomic under the ledger
   lock, eliminating the check-to-append interval.
 - The original lane session may replace a parked job's plain-English behavior
@@ -59,7 +61,8 @@ Focused executable checks cover:
 3. raw-byte-identical content-addressed write idempotence and identity binding;
 4. refusal and cleanup when an emergency pause arrives during a harness, plus
    atomic held-state refusal, shared hold-fence ordering, and fail-safe
-   persistence during ledger-lock contention;
+   persistence during ledger-lock or live-fence contention, plus refusal to
+   resume across a stuck fence;
 5. early metadata refusal before harness execution, validation of hold/resume
    receipts, refusal and artifact cleanup when a marker-only pause arrives
    during independent review, and continued detection of unexpected state

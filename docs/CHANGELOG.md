@@ -28,7 +28,9 @@ itself without releasing and reacquiring the fence; a two-process contention
 regression proves an already-waiting attachment observes the marker and is
 refused. Windows `EPERM`/`EACCES` create-once results are treated as fence
 contention only when the fence path actually exists, preserving fail-closed
-behavior without flaky concurrent pauses. A pause arriving during independent review refuses
+behavior without flaky concurrent pauses. A live but stuck emergency-hold
+fence now has a bounded wait; pause requests fall back to the fail-closed
+emergency marker, while resume and evidence attachment remain refused. A pause arriving during independent review refuses
 attachment and cleans up only the exact artifact path created by that review.
 A pre-existing content-addressed review artifact is neither attached nor
 deleted. Evidence metadata is rejected before

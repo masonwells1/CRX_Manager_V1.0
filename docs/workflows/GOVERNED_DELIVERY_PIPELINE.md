@@ -185,7 +185,9 @@ fingerprint before the ticket or morning decision is re-presented there.
   writers, owner hold/resume transitions, and conditional evidence attachment first serialize
   through a dedicated hold fence. If
   the ledger lock remains unavailable through its bounded timeout, the fail-safe writes the
-  emergency marker while it still owns that fence rather than dropping the pause. The final
+  emergency marker while it still owns that fence rather than dropping the pause. A live but
+  stuck fence is bounded by the same coordination timeout: evidence attachment and resume fail
+  closed, while a pause writes the emergency marker and reports the fallback. The final
   running-state check plus receipt append also remain atomic under the ledger lock, so a pause
   cannot land between that check and append.
 - A parked job stays terminal. Its original lane session may refresh only the plain-English behavior
