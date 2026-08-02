@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { generateIdempotencyKey, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
@@ -89,7 +89,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const { toast } = useToast();
   const isAdmin = profile?.role === 'admin';
   const isAdminOrRep = isAdmin || profile?.role === 'sales_rep';
-  const saveIdem = useIdempotencyKey('save_invoice', profile?.id || '');
+  const saveIdem = useIdempotencyKey(
+    'save_invoice',
+    `${profile?.id || ''}:${routeArea || 'all'}:${id || 'unknown'}`,
+  );
   const postIdem = useIdempotencyKey('post_invoice', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_invoice', profile?.id || '');
   // PR-08 (2026-05-10): switched from record_invoice_payment to allocate_payment
@@ -696,18 +699,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('error', 'This is a split-billing invoice — open it from the Split Billing editor to make changes.');
       return;
     }
-    // Codex P2 fix (PR #59, 2026-05-16): reset saveIdem at the top of every
-    // save attempt. The invoice form is always-editable in-page (no separate
-    // edit toggle), so any change between failed submits constitutes a new
-    // intent. Reset-per-click means each save attempt gets a fresh key;
-    // a true network retry (without user edits) is handled by the RPC's
-    // own retry logic and not the React handler.
-    saveIdem.resetKey();
     if (!invoice.customer_id) {
       toast('error', 'Please select a customer');
       return;
     }
-    await runCriticalAction({
+    const outcome = await runCriticalAction<'saved' | 'reconciled'>({
       action: async () => {
         const payload = {
           id: isNew ? undefined : id,
@@ -766,21 +762,37 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           p_idempotency_key: idemKey,
         });
 
-        if (error) throw error;
+        if (error) {
+          const receipt = getIdempotencyMismatchResult(error, 'save_invoice');
+          const committedInvoiceId = receipt?.invoice_id;
+          if (typeof committedInvoiceId === 'string') {
+            saveIdem.resetKey();
+            await fetchInvoice(committedInvoiceId);
+            toast('warning', 'The earlier save already completed. The saved invoice has been reopened so you can review it before making another change.');
+            if (id !== committedInvoiceId) {
+              navigate(`/invoices/${committedInvoiceId}`, { replace: true });
+            }
+            return 'reconciled';
+          }
+          throw error;
+        }
         saveIdem.resetKey();
 
         if (isNew && data) {
           const savedId = assertRpcResult<string>(data, 'save_invoice');
           navigate(`/invoices/${savedId}`, { replace: true });
         } else {
-          fetchInvoice(id!);
+          await fetchInvoice(id!);
         }
+        return 'saved';
       },
       toast,
-      successMessage: isNew ? 'Invoice created' : 'Invoice saved',
       setLoading: setSaving,
       sentryTag: 'save_invoice',
     });
+    if (outcome === 'saved') {
+      toast('success', isNew ? 'Invoice created' : 'Invoice saved');
+    }
   };
 
   // Post invoice

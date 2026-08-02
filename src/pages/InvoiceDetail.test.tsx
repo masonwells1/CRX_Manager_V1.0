@@ -114,6 +114,46 @@ describe('InvoiceDetail', () => {
     expect(mockFrom).toHaveBeenCalled();
   });
 
+  it('reloads the authoritative invoice and suppresses false success after an intent mismatch', async () => {
+    const committedInvoice = {
+      id: 'inv-reconcile', invoice_number: 'INV-RECONCILE', status: 'draft', invoice_type: 'chemical_sale',
+      customer_id: 'cust-1', order_id: 'ord-1', total_amount_cents: 10000,
+      balance_cents: 10000, invoice_date: '2026-03-15', due_date: null,
+      purchase_order_ref: 'COMMITTED-PO', created_at: '2026-03-15T00:00:00Z',
+    };
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        return buildChain({
+          data: [1, 2, 4, 5].includes(invoiceCalls) ? committedInvoice : [],
+          error: null,
+        });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: {
+        message: 'IDEMPOTENCY_INTENT_MISMATCH',
+        details: JSON.stringify({
+          operation: 'save_invoice',
+          result: { invoice_id: 'inv-reconcile' },
+        }),
+      },
+    });
+
+    renderInvoiceDetail('inv-reconcile');
+    const poInput = await screen.findByPlaceholderText('Customer PO #');
+    fireEvent.change(poInput, { target: { value: 'UNSAVED-SECOND-INTENT' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Customer PO #')).toHaveValue('COMMITTED-PO'));
+    expect(invoiceCalls).toBeGreaterThanOrEqual(4);
+    expect(mockToast).toHaveBeenCalledWith('warning', expect.stringContaining('earlier save already completed'));
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Invoice saved');
+  });
+
   it('shows Invoice not found for invalid ID', async () => {
     mockFrom.mockImplementation(() => buildChain({ data: null, error: null }));
     renderInvoiceDetail('bad-id');

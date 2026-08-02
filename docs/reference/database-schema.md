@@ -136,7 +136,7 @@
 - `field_crop_history` - Tracks multi-year crop rotation per field per season (id, field_id, season, crop_type, variety, planting_date, harvest_date, yield_per_acre, yield_unit, notes, created_at). Auto-populated via `snapshot_field_crop_history()` trigger on field crop_type changes. RLS enabled for authenticated users.
 
 ## System / Infrastructure
-- `idempotency_keys` - Idempotent operation cache (idempotency_key UNIQUE, operation, result jsonb, expires_at — auto-cleanup after 24h)
+- `idempotency_keys` - Idempotent operation cache (idempotency_key UNIQUE, operation, result jsonb, optional server-derived request_fingerprint + request_actor_id binding, expires_at — auto-cleanup after 24h)
 - `offline_action_receipts` — **LIVE** (`20260714171331`, `20260714171800`, `20260714172135`, `20260714203709`): permanent server acknowledgement for approved offline `complete_delivery` / `complete_job` actions. Immutable client action UUID + permanent idempotency key + optional queued entity `updated_at` snapshot, statuses `received` / `succeeded` / `needs_review`, sanitized target/payload-drift failures, audited `already_completed` / `abandoned` office-resolution metadata, and target-row locking from the final snapshot check through canonical completion. Office resolution never changes the receipt to `succeeded`, never reruns the business action, and never deletes the receipt. Direct authenticated table access remains denied; clients use sanitized RPCs.
 
 ### Supplier Pricing Phase 1a — additive bootstrap and enforcement cutover LIVE

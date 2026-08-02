@@ -20,3 +20,43 @@ export function generateIdempotencyKey(operation: string, userId: string): strin
   const uuid = crypto.randomUUID();
   return `${operation}:${userId}:${uuid}`;
 }
+
+type IdempotencyMismatchDetail = {
+  operation?: string;
+  result?: Record<string, unknown>;
+};
+
+/**
+ * Extracts the committed receipt returned in an IDEMPOTENCY_INTENT_MISMATCH
+ * error. PostgREST errors are plain objects, so do not use instanceof Error.
+ */
+export function getIdempotencyMismatchResult(
+  error: unknown,
+  expectedOperation: string,
+): Record<string, unknown> | null {
+  if (!error || typeof error !== 'object') return null;
+
+  const candidate = error as { message?: unknown; details?: unknown };
+  if (
+    typeof candidate.message !== 'string'
+    || candidate.message !== 'IDEMPOTENCY_INTENT_MISMATCH'
+    || typeof candidate.details !== 'string'
+  ) {
+    return null;
+  }
+
+  try {
+    const detail = JSON.parse(candidate.details) as IdempotencyMismatchDetail;
+    if (
+      detail.operation !== expectedOperation
+      || !detail.result
+      || typeof detail.result !== 'object'
+      || Array.isArray(detail.result)
+    ) {
+      return null;
+    }
+    return detail.result;
+  } catch {
+    return null;
+  }
+}

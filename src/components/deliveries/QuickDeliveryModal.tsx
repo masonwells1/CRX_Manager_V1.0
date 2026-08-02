@@ -13,6 +13,7 @@ import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { getIdempotencyMismatchResult } from '../../lib/idempotency';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { formatCents as fmtCurrency } from '../../lib/money';
@@ -350,7 +351,19 @@ export default function QuickDeliveryModal({
         p_skip_invoice: !createInvoice,
       });
 
-      if (error) throw error;
+      if (error) {
+        const receipt = getIdempotencyMismatchResult(error, 'create_quick_delivery');
+        const committedDeliveryId = receipt?.delivery_id;
+        if (typeof committedDeliveryId === 'string') {
+          quickDeliveryIdem.resetKey();
+          toast('warning', 'The earlier quick delivery already completed. Opening the committed delivery instead of creating a duplicate.');
+          onClose();
+          onCreated?.();
+          navigate(`/deliveries/${committedDeliveryId}`);
+          return;
+        }
+        throw error;
+      }
       quickDeliveryIdem.resetKey();
 
       const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null; credit_warning?: boolean; stock_warning?: boolean; short_stock_count?: number }>(data, 'create_quick_delivery');

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdempotencyKey } from './idempotency';
+import { generateIdempotencyKey, getIdempotencyMismatchResult } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -46,5 +46,34 @@ describe('generateIdempotencyKey', () => {
     // UUID v4 has specific version/variant bits
     expect(uuid[14]).toBe('4'); // version nibble
     expect(['8', '9', 'a', 'b']).toContain(uuid[19]); // variant nibble
+  });
+});
+
+describe('getIdempotencyMismatchResult', () => {
+  it('returns the committed receipt for the expected operation', () => {
+    const result = getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({
+        operation: 'save_invoice',
+        result: { invoice_id: 'invoice-1' },
+      }),
+    }, 'save_invoice');
+
+    expect(result).toEqual({ invoice_id: 'invoice-1' });
+  });
+
+  it('fails closed for malformed details or another operation', () => {
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: '{not-json',
+    }, 'save_invoice')).toBeNull();
+
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({
+        operation: 'create_quick_delivery',
+        result: { delivery_id: 'delivery-1' },
+      }),
+    }, 'save_invoice')).toBeNull();
   });
 });

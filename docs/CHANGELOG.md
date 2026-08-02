@@ -2,6 +2,22 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-02 — Invoice and Quick Delivery retries bound to mutation intent
+
+Server-side idempotency receipts for `save_invoice` and
+`create_quick_delivery` now bind the authenticated actor and a SHA-256
+fingerprint of the semantic request. Reusing a key for changed input fails
+closed and returns the previously committed entity for visible reconciliation,
+preventing edited forms from silently replaying an older invoice or delivery.
+
+Pre-migration receipts cannot prove their original actor or request. During
+their remaining expiry window, the wrappers therefore validate the caller's
+access to the committed entity and return the same visible reconciliation
+signal instead of either duplicating the mutation or reporting edited input as
+successfully saved. The invoice and Quick Delivery interfaces preserve an
+unresolved key across ambiguous failures and reload or open the authoritative
+committed record before allowing another attempt.
+
 ## 2026-08-01 — Monthly integrity snapshot recorded
 
 A read-only production reconciliation checked ten month-end integrity areas and
