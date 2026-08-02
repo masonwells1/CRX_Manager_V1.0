@@ -182,8 +182,10 @@ fingerprint before the ticket or morning decision is re-presented there.
   idempotent. A crash orphan remains unattached and cannot validate proof; a normal retry records a
   new capture timestamp and creates fresh evidence. The broker rechecks the global pause after the
   harness exits and refuses to attach its receipt if a pause arrived while it ran. Emergency-pause
-  writes and the final running-state check plus receipt append serialize through the ledger lock, so
-  a pause cannot land between that check and append.
+  writes normally serialize through the ledger lock; if that lock remains unavailable through its
+  bounded timeout, the fail-safe writes the emergency marker directly rather than dropping the
+  pause. The final running-state check plus receipt append remain atomic under the lock, so a pause
+  cannot land between that check and append.
 - A parked job stays terminal. Its original lane session may refresh only the plain-English behavior
   result and a nonempty blocker while keeping the stage `parked`; another session, an empty result,
   an empty blocker, or any attempted stage advance fails closed.

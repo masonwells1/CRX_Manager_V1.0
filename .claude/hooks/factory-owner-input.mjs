@@ -227,13 +227,6 @@ async function main() {
         );
         emit("CRX Factory entered an emergency global pause because the normal ledger could not record Mason's request. Build writes are blocked until the ledger is recovered through the supported factory recovery command.");
       }
-      if (requestedHold === "resume") {
-        try {
-          if (!loadFactorySnapshot(paths).held) {
-            emit("CRX Factory is already running. A concurrent repeated resume request changed no additional ledger state.");
-          }
-        } catch {}
-      }
       throw error;
     }
     emit(`CRX Factory ${requestedHold === "hold" ? "is now globally paused" : "has resumed"}. Tell Mason in one plain-English sentence. Existing production and destructive-action gates remain unchanged.`);

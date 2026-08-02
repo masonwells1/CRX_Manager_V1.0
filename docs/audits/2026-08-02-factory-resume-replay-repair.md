@@ -25,8 +25,8 @@ shown as attached proof and is not deleted or promoted.
 - The harness mutation fingerprint excludes only mutable coordination records:
   the protected single-flight lock, append-only event file, its short lock,
   emergency hold, one-time permits, owner receipts, intent latches, and recovery
-  records. Immutable tickets, evidence artifacts, and unknown state paths remain
-  covered.
+  records. The owner-receipt authentication key, immutable tickets, evidence
+  artifacts, and unknown state paths remain covered.
 - A raw-byte-identical content-addressed artifact write is idempotent. If a process
   stops after writing evidence but before ledger attachment, that orphan remains
   unattached and cannot validate proof. A normal retry records a new capture
@@ -34,8 +34,10 @@ shown as attached proof and is not deleted or promoted.
 - The broker reloads shared state after the harness finishes. A pause that
   arrives during execution prevents the resulting receipt from attaching and
   the newly created unattached artifact is removed. Emergency-pause persistence
-  and the final running-state check plus receipt append serialize through the
-  ledger lock, eliminating the check-to-append interval.
+  normally serializes through the ledger lock and falls back to a direct
+  fail-safe marker if the lock times out. The final running-state check plus
+  receipt append stay atomic under the lock, eliminating the check-to-append
+  interval.
 - The original lane session may replace a parked job's plain-English behavior
   summary and nonempty blocker while remaining parked. No other session can do
   so, and this path cannot reopen or advance the job.
@@ -50,8 +52,10 @@ Focused executable checks cover:
    receipt, and no emergency hold;
 3. raw-byte-identical content-addressed write idempotence and identity binding;
 4. refusal and cleanup when an emergency pause arrives during a harness, plus
-   atomic held-state refusal with no appended event;
-5. continued detection of an unexpected factory-state write by a harness;
+   atomic held-state refusal and fail-safe persistence during lock contention;
+5. early metadata refusal before harness execution, validation of hold/resume
+   receipts, and continued detection of unexpected state writes including
+   replacement of the owner-receipt authentication key;
 6. parked-to-parked summary/blocker refresh, cross-session refusal, empty-field
    refusal, and unchanged parked stage.
 

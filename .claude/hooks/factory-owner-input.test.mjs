@@ -350,7 +350,10 @@ function runLaneHook(state, payload) {
     prompt: "resume factory",
     thread_id: state.sessionId,
   });
-  ok(result.stdout.includes("already running"), "a replayed resume is reported as an idempotent no-op");
+  ok(
+    result.stdout.includes("The repeated resume request changed no ledger state"),
+    "a replayed resume takes the idempotent no-op path, not an error-recovery path",
+  );
   equal(
     buildFactorySnapshot(state.paths).lastEventHash,
     resumedLedgerHash,

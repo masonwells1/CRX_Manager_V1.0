@@ -667,7 +667,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       expectedLastEventHash: who.expectedLastEventHash,
       currentBaseSha: refreshOriginMain(cwd, env),
       cwd,
-      timestamp: now().toISOString(),
+      now,
     });
     process.stdout.write(`${JSON.stringify({
       jobId,

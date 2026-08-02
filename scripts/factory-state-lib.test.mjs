@@ -639,6 +639,15 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   eq(buildFactorySnapshot(paths).held, false, "canonical recovery can clear the emergency hold");
 
   writeFileSync(paths.lockPath, `${JSON.stringify({
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  })}\n`);
+  setEmergencyFactoryHold(paths, "A contended ledger must not drop this pause.", { lockTimeoutMs: 25 });
+  eq(buildFactorySnapshot(paths).held, true, "ledger-lock contention falls back to a fail-safe emergency hold");
+  rmSync(paths.lockPath);
+  clearEmergencyFactoryHold(paths);
+
+  writeFileSync(paths.lockPath, `${JSON.stringify({
     pid: 99999999,
     createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
   })}\n`);
@@ -705,6 +714,25 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   });
   eq(pausedAgain.changed, true, "a pause serialized after a resume is not lost as a stale no-op");
   eq(loadFactorySnapshot(paths).held, true, "the last serialized owner control determines the final hold state");
+  cleanup();
+}
+
+{
+  const { paths, cleanup } = fixture();
+  append(paths, "factory-held", null, { reason: "protect receipt", ownerReply: "pause factory" });
+  const hold = readEventLog(paths).events.at(-1);
+  rmSync(path.join(paths.ownerReceiptsDir, `${hold.payload.ownerReceiptId}.json`));
+  throws(
+    () => appendFactoryControlEvent(paths, {
+      type: "factory-resumed",
+      jobId: null,
+      actorTool: "codex",
+      sessionId: "session-1",
+      payload: { reason: "must fail closed", ownerReply: "resume factory" },
+    }),
+    /ENOENT|receipt/i,
+    "the lock-held control evaluator refuses a hold event whose hook-origin receipt is missing",
+  );
   cleanup();
 }
 
@@ -858,7 +886,8 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     execFileSync("git", args, { cwd: harnessRepo, stdio: "ignore" });
   }
   mkdirSync(paths.stateDir, { recursive: true });
-  process.env.FACTORY_MUTATE_TARGET = path.join(paths.stateDir, "forged.txt");
+  mkdirSync(paths.permitsDir, { recursive: true });
+  process.env.FACTORY_MUTATE_TARGET = path.join(paths.permitsDir, "forged.txt");
   throws(
     () => runHarnessEvidence(paths, {
       jobId: "state-mutation-proof",
@@ -868,9 +897,24 @@ function append(paths, type, jobId, payload = {}, options = {}) {
       cwd: harnessRepo,
     }),
     /factory is held for review/,
-    "trusted harness broker detects indirect mutation of factory state",
+    "trusted harness broker detects an unexpected file inside the mutable permits directory",
   );
   ok(existsSync(paths.emergencyHoldPath), "indirect harness mutation creates an emergency hold");
+  clearEmergencyFactoryHold(paths);
+  append(paths, "factory-held", null, { reason: "create the owner receipt key", ownerReply: "pause factory" });
+  process.env.FACTORY_MUTATE_TARGET = paths.ownerReceiptKeyPath;
+  throws(
+    () => runHarnessEvidence(paths, {
+      jobId: "owner-key-mutation-proof",
+      ticketHash: "b".repeat(64),
+      label: "must protect owner key",
+      scriptName: "verify-deps",
+      cwd: harnessRepo,
+    }),
+    /factory is held for review/,
+    "trusted harness broker detects replacement of the owner receipt authentication key",
+  );
+  ok(existsSync(paths.emergencyHoldPath), "owner receipt key mutation creates an emergency hold");
   delete process.env.FACTORY_MUTATE_TARGET;
   rmSync(harnessRepo, { recursive: true, force: true });
   cleanup();
@@ -960,6 +1004,23 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     worktree: harnessRepo,
   });
   const beforeRun = loadFactorySnapshot(paths);
+  throws(
+    () => runAndAttachHarnessEvidence(paths, {
+      jobId: written.ticket.id,
+      label: "",
+      scriptName: "verify-deps",
+      sessionId: "session-1",
+      actorTool: "codex",
+      expectedLastEventHash: beforeRun.lastEventHash,
+      currentBaseSha: baseSha,
+      cwd: harnessRepo,
+    }),
+    /evidence label is required/,
+    "an invalid evidence label is refused before the harness executes",
+  );
+  eq(existsSync(paths.emergencyHoldPath), false, "invalid evidence metadata cannot trigger harness side effects");
+  const preRunEvidenceDir = path.join(paths.evidenceDir, written.ticket.id);
+  eq(existsSync(preRunEvidenceDir) ? readdirSync(preRunEvidenceDir).length : 0, 0, "invalid evidence metadata creates no artifact");
   throws(
     () => runAndAttachHarnessEvidence(paths, {
       jobId: written.ticket.id,

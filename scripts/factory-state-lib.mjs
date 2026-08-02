@@ -546,9 +546,12 @@ function acquireHarnessRunLock(paths, jobId) {
 }
 
 function releaseHarnessRunLock(lock) {
-  try { closeSync(lock.fd); } finally {
-    try { unlinkSync(lock.target); } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
+  try { closeSync(lock.fd); } catch (error) {
+    process.stderr.write(`Factory cleanup warning: could not close the harness run lock (${error?.message || error}).\n`);
+  }
+  try { unlinkSync(lock.target); } catch (error) {
+    if (error?.code !== "ENOENT") {
+      process.stderr.write(`Factory cleanup warning: could not remove the harness run lock (${error?.message || error}).\n`);
     }
   }
 }
@@ -1294,8 +1297,8 @@ function factoryProtectedContentFingerprint(paths) {
   const coordinationOnly = (relative) => relative === "events.jsonl"
     || relative === "events.lock"
     || relative === "EMERGENCY-HOLD.json"
-    || relative === "permits"
-    || relative.startsWith("permits/")
+    || /^permits\/[a-f0-9-]{36}(?:\.json|\.consuming-\d+)$/i.test(relative)
+    || relative === "permits/owner-receipts"
     || relative === "intent-latches"
     || relative.startsWith("intent-latches/")
     || relative === "harness-runs"
@@ -2265,9 +2268,10 @@ export function runAndAttachHarnessEvidence(paths, {
   expectedLastEventHash,
   currentBaseSha,
   cwd = FACTORY_ROOT,
-  timestamp = new Date().toISOString(),
+  now = () => new Date(),
 }) {
   authorizedFactoryWriter(paths);
+  const evidenceLabel = requiredText(label, "evidence label", 200);
   const lock = acquireHarnessRunLock(paths, jobId);
   let evidence;
   try {
@@ -2288,7 +2292,7 @@ export function runAndAttachHarnessEvidence(paths, {
     evidence = runHarnessEvidence(paths, {
       jobId,
       ticketHash: job.ticketHash,
-      label,
+      label: evidenceLabel,
       scriptName,
       cwd,
     });
@@ -2301,7 +2305,7 @@ export function runAndAttachHarnessEvidence(paths, {
       jobId,
       actorTool,
       sessionId,
-      timestamp,
+      timestamp: now().toISOString(),
       payload: harnessEvidenceEventPayload(evidence),
     }, {
       expectedLastEventHash: snapshot.lastEventHash,
@@ -2708,8 +2712,9 @@ export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
 function factoryHeldFromCurrent(paths, current) {
   let held = false;
   for (const event of current.events) {
-    if (event.type === "factory-held") held = true;
-    if (event.type === "factory-resumed") held = false;
+    if (event.type !== "factory-held" && event.type !== "factory-resumed") continue;
+    validateHookOriginReceipt(paths, event);
+    held = event.type === "factory-held";
   }
   return held || existsSync(paths.emergencyHoldPath);
 }
@@ -2737,13 +2742,23 @@ function clearEmergencyFactoryHoldUnlocked(paths) {
   }
 }
 
-export function setEmergencyFactoryHold(paths, reason, { ledgerUnavailable = false } = {}) {
+export function setEmergencyFactoryHold(paths, reason, {
+  ledgerUnavailable = false,
+  lockTimeoutMs = 5_000,
+} = {}) {
   authorizedFactoryWriter(paths);
   if (ledgerUnavailable) {
     setEmergencyFactoryHoldUnlocked(paths, reason);
     return;
   }
-  const lockFd = acquireLock(paths);
+  let lockFd;
+  try {
+    lockFd = acquireLock(paths, lockTimeoutMs);
+  } catch (error) {
+    setEmergencyFactoryHoldUnlocked(paths, reason);
+    process.stderr.write(`Factory safety warning: emergency hold bypassed the unavailable ledger lock (${error?.message || error}).\n`);
+    return;
+  }
   try {
     setEmergencyFactoryHoldUnlocked(paths, reason);
   } finally {

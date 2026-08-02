@@ -39,7 +39,7 @@ process.on("exit", () => {
 mkdirSync(fixtureRepo, { recursive: true });
 writeFileSync(path.join(fixtureRepo, "package.json"), `${JSON.stringify({
   scripts: {
-    "verify-deps": "node -e \"Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500);process.stdout.write('FACTORY_TEST_HARNESS_PASS')\"",
+    "verify-deps": "node -e \"Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Number(process.env.CRX_FACTORY_TEST_HARNESS_DELAY_MS||500));process.stdout.write('FACTORY_TEST_HARNESS_PASS')\"",
   },
 }, null, 2)}\n`);
 for (const args of [
@@ -293,7 +293,7 @@ const firstEvidence = spawn(process.execPath, [
   "--label", "single-flight primary",
 ], {
   cwd: root,
-  env: { ...env, CRX_FACTORY_PERMIT: firstEvidencePermit.token },
+  env: { ...env, CRX_FACTORY_PERMIT: firstEvidencePermit.token, CRX_FACTORY_TEST_HARNESS_DELAY_MS: "3000" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let firstEvidenceStdout = "";
