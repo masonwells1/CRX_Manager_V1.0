@@ -9,6 +9,7 @@ import {
   appendFactoryEvent,
   canonicalMorningReviewQuestion,
   canonicalTicketApprovalQuestion,
+  clearEmergencyFactoryHold,
   loadFactorySnapshot,
   mintFactoryCliPermit,
   validateApprovedFactoryLanding,
@@ -149,7 +150,7 @@ function base64(value) {
   }
 }
 
-function run(args, identity = { sessionId, actorTool: "codex" }) {
+function run(args, identity = { sessionId, actorTool: "codex" }, extraEnv = {}) {
   const readOnly = args[0] === "status";
   const permit = readOnly ? null : mintFactoryCliPermit(paths, {
     ...identity,
@@ -159,6 +160,7 @@ function run(args, identity = { sessionId, actorTool: "codex" }) {
     cwd: root,
     env: {
       ...env,
+      ...extraEnv,
       ...(permit ? { CRX_FACTORY_PERMIT: permit.token } : {}),
     },
     encoding: "utf8",
@@ -387,6 +389,26 @@ pass(run(["evidence", "run", "--job", jobId, "--harness", "verify-deps", "--labe
 const noIndependentReview = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", ...summaryArgs]);
 assertions++;
 assert.notEqual(noIndependentReview.status, 0, "a passing branch harness cannot self-certify morning review");
+const reviewArtifactsBeforePause = readdirSync(path.join(paths.evidenceDir, jobId))
+  .filter((entry) => entry.endsWith("-independent-codex-review.json")).length;
+const pausedReview = run(
+  ["review", "run", "--job", jobId],
+  { sessionId, actorTool: "codex" },
+  { CRX_FACTORY_TEST_REVIEW_HOLD: "1" },
+);
+assertions++;
+assert.notEqual(pausedReview.status, 0, "a marker-only pause arriving during independent review blocks attachment");
+assertions++;
+assert.match(pausedReview.stderr, /paused before evidence attachment/i, "the paused review fails at the final atomic running-state gate");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).jobs[0].reviews.length, 0, "a paused independent review appends no ledger receipt");
+assertions++;
+assert.equal(
+  readdirSync(path.join(paths.evidenceDir, jobId)).filter((entry) => entry.endsWith("-independent-codex-review.json")).length,
+  reviewArtifactsBeforePause,
+  "a paused independent review cleans up its unattached artifact",
+);
+clearEmergencyFactoryHold(paths);
 pass(run(["review", "run", "--job", jobId]), "run independent Codex review");
 const reviewReceipt = loadFactorySnapshot(paths).jobs[0].reviews[0];
 const reviewArtifact = JSON.parse(readFileSync(path.join(paths.evidenceDir, jobId, reviewReceipt.filename), "utf8"));

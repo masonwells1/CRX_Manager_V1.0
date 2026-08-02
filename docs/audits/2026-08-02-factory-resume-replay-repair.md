@@ -17,9 +17,10 @@ shown as attached proof and is not deleted or promoted.
 
 ## Repair
 
-- Pause/resume state evaluation and its conditional append share one ledger
-  lock. Repeated controls append no event when their state is already active,
-  while a newer opposite control cannot be lost behind a stale no-op check.
+- Pause/resume state evaluation and its conditional append share the hold fence
+  and ledger lock. Repeated controls append no event when their state is already
+  active, while a newer opposite control cannot be lost behind a stale no-op,
+  ledger wait, or emergency-marker fallback.
 - A per-job single-flight lock refuses a second evidence command before its
   harness executes.
 - The harness mutation fingerprint excludes only mutable coordination records:
@@ -31,10 +32,11 @@ shown as attached proof and is not deleted or promoted.
   stops after writing evidence but before ledger attachment, that orphan remains
   unattached and cannot validate proof. A normal retry records a new capture
   timestamp and produces fresh evidence rather than promoting the orphan.
-- The broker reloads shared state after the harness finishes. A pause that
-  arrives during execution prevents the resulting receipt from attaching and
-  the newly created unattached artifact is removed. Emergency-pause persistence
-  and conditional evidence attachment share a dedicated hold fence. Persistence
+- The broker reloads shared state after each harness or independent review. A
+  pause that arrives during execution prevents the resulting receipt from
+  attaching and the newly created unattached artifact is removed.
+  Emergency-pause persistence, owner control transitions, and conditional
+  evidence attachment share a dedicated hold fence. Persistence
   normally also serializes through the ledger lock and falls back to a direct
   fail-safe marker, still inside the hold fence, if that lock times out. The
   final running-state check plus receipt append stay atomic under the ledger
@@ -48,7 +50,8 @@ shown as attached proof and is not deleted or promoted.
 Focused executable checks cover:
 
 1. serialized pause/resume controls, including a replayed no-op with an
-   unchanged terminal hash and a newer opposite control that takes effect;
+   unchanged terminal hash, shared hold-fence ordering, and a newer opposite
+   control that takes effect;
 2. two real concurrent same-job CLI evidence processes, exactly one attached
    receipt, and no emergency hold;
 3. raw-byte-identical content-addressed write idempotence and identity binding;
@@ -56,8 +59,9 @@ Focused executable checks cover:
    atomic held-state refusal, shared hold-fence ordering, and fail-safe
    persistence during ledger-lock contention;
 5. early metadata refusal before harness execution, validation of hold/resume
-   receipts, and continued detection of unexpected state writes including
-   replacement of the owner-receipt authentication key;
+   receipts, refusal and artifact cleanup when a marker-only pause arrives
+   during independent review, and continued detection of unexpected state
+   writes including replacement of the owner-receipt authentication key;
 6. parked-to-parked summary/blocker refresh, cross-session refusal, empty-field
    refusal, and unchanged parked stage.
 

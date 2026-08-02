@@ -731,6 +731,8 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const { paths, cleanup } = fixture();
   append(paths, "factory-held", null, { reason: "initial pause", ownerReply: "pause factory" });
   const heldHash = loadFactorySnapshot(paths).lastEventHash;
+  holdFactoryFence(paths.emergencyHoldFencePath);
+  const fencedControlStartedAt = Date.now();
   const repeatedHold = appendFactoryControlEvent(paths, {
     type: "factory-held",
     jobId: null,
@@ -738,6 +740,7 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     sessionId: "session-1",
     payload: { reason: "repeat pause", ownerReply: "pause factory" },
   });
+  ok(Date.now() - fencedControlStartedAt >= 250, "owner hold/resume transitions honor the shared emergency-hold fence");
   eq(repeatedHold.changed, false, "atomic control transition treats a repeated pause as a no-op");
   eq(loadFactorySnapshot(paths).lastEventHash, heldHash, "atomic repeated pause leaves the ledger hash unchanged");
   const resumed = appendFactoryControlEvent(paths, {

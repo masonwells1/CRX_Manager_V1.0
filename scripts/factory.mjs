@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -110,12 +110,18 @@ function stableSnapshot(paths, who, options) {
   return snapshot;
 }
 
-function appendAsActor(paths, event, who, expectedLastEventHash = who.expectedLastEventHash) {
+function appendAsActor(
+  paths,
+  event,
+  who,
+  expectedLastEventHash = who.expectedLastEventHash,
+  { requireFactoryRunning = false } = {},
+) {
   return appendFactoryEvent(paths, {
     ...event,
     sessionId: who.sessionId,
     actorTool: who.actorTool,
-  }, { expectedLastEventHash });
+  }, { expectedLastEventHash, requireFactoryRunning });
 }
 
 function decodeBase64Text(flags, name, { maxBytes = 20_000, rejectSecrets = true } = {}) {
@@ -614,12 +620,21 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       allowedStages: new Set(["in-review"]),
     });
     const review = runIndependentReviewEvidence(paths, { job, cwd, env });
-    appendAsActor(paths, {
-      type: "independent-review-attached",
-      jobId,
-      timestamp: now().toISOString(),
-      payload: review,
-    }, who);
+    try {
+      appendAsActor(paths, {
+        type: "independent-review-attached",
+        jobId,
+        timestamp: now().toISOString(),
+        payload: review,
+      }, who, who.expectedLastEventHash, { requireFactoryRunning: true });
+    } catch (error) {
+      try { unlinkSync(path.join(paths.evidenceDir, jobId, review.filename)); } catch (cleanupError) {
+        if (cleanupError?.code !== "ENOENT") {
+          process.stderr.write(`Factory cleanup warning: could not remove unattached independent-review evidence (${cleanupError?.message || cleanupError}).\n`);
+        }
+      }
+      throw error;
+    }
     process.stdout.write(`${JSON.stringify({
       jobId,
       reviewer: review.reviewer,

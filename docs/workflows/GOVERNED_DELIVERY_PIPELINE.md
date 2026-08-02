@@ -182,7 +182,8 @@ fingerprint before the ticket or morning decision is re-presented there.
   idempotent. A crash orphan remains unattached and cannot validate proof; a normal retry records a
   new capture timestamp and creates fresh evidence. The broker rechecks the global pause after the
   harness exits and refuses to attach its receipt if a pause arrived while it ran. Emergency-pause
-  writers and conditional evidence attachment first serialize through a dedicated hold fence. If
+  writers, owner hold/resume transitions, and conditional evidence attachment first serialize
+  through a dedicated hold fence. If
   the ledger lock remains unavailable through its bounded timeout, the fail-safe writes the
   emergency marker while it still owns that fence rather than dropping the pause. The final
   running-state check plus receipt append also remain atomic under the ledger lock, so a pause
@@ -230,7 +231,9 @@ migration, secret, and production red line. The process receives only a small op
 environment allowlist, not inherited API, Supabase, GitHub, or application credentials. It runs
 ephemerally with user plugins/MCP configuration disabled and explicit `gpt-5.6-sol` / high reasoning.
 Its unique
-terminal CLEAN verdict, model, fresh base, and complete repository-content fingerprint are persisted;
+terminal CLEAN verdict, model, fresh base, and complete repository-content fingerprint are persisted
+only after the final atomic running-state gate. A pause arriving during review refuses attachment and
+removes the new unattached artifact;
 raw stdout/stderr are not—the receipt stores a bounded summary, byte counts, and hashes. A later commit
 may change Git's commit/tree identifiers while preserving the exact reviewed file fingerprint; any
 file-byte change still invalidates the review. A passing branch-controlled harness without this

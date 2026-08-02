@@ -1017,20 +1017,25 @@ export function appendFactoryControlEvent(paths, eventInput) {
     throw new Error("Factory control event must be factory-held or factory-resumed.");
   }
   rejectSecretBearingText(canonicalJson(eventInput.payload || {}), "Factory control event");
-  const lockFd = acquireLock(paths);
+  const holdFenceFd = acquireEmergencyHoldFence(paths);
   try {
-    const current = readEventLog(paths);
-    if (current.degraded) {
-      throw new Error("Factory ledger has an incomplete trailing event; repair or archive it before appending.");
+    const lockFd = acquireLock(paths);
+    try {
+      const current = readEventLog(paths);
+      if (current.degraded) {
+        throw new Error("Factory ledger has an incomplete trailing event; repair or archive it before appending.");
+      }
+      const held = factoryHeldFromCurrent(paths, current);
+      const desiredHeld = eventInput.type === "factory-held";
+      if (held === desiredHeld) return { changed: false, held };
+      const event = appendFactoryEventLocked(paths, writer, current, eventInput);
+      if (!desiredHeld) clearEmergencyFactoryHoldUnlocked(paths);
+      return { changed: true, held: desiredHeld, event };
+    } finally {
+      releaseLock(paths, lockFd);
     }
-    const held = factoryHeldFromCurrent(paths, current);
-    const desiredHeld = eventInput.type === "factory-held";
-    if (held === desiredHeld) return { changed: false, held };
-    const event = appendFactoryEventLocked(paths, writer, current, eventInput);
-    if (!desiredHeld) clearEmergencyFactoryHoldUnlocked(paths);
-    return { changed: true, held: desiredHeld, event };
   } finally {
-    releaseLock(paths, lockFd);
+    releaseEmergencyHoldFence(paths, holdFenceFd);
   }
 }
 
@@ -2538,6 +2543,9 @@ export function runIndependentReviewEvidence(paths, {
   if (isolatedTest) {
     result = { status: 0, stdout: `Independent fixture review completed.\n${FACTORY_REVIEW_TOKEN}: CLEAN\n`, stderr: "" };
     model = FACTORY_REVIEW_MODEL;
+    if (env.CRX_FACTORY_TEST_REVIEW_HOLD === "1") {
+      setEmergencyFactoryHold(paths, "Test-only pause created while independent review was running.");
+    }
   } else {
     const reviewer = codexExecutable({ home: homedir() });
     model = FACTORY_REVIEW_MODEL;
