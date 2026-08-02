@@ -5,6 +5,8 @@ const migration = readFileSync(
   'supabase/migrations/20260802162805_bind_idempotency_to_mutation_intent.sql',
   'utf8',
 );
+const invoiceDetail = readFileSync('src/pages/InvoiceDetail.tsx', 'utf8').replace(/\r\n/g, '\n');
+const quickDeliveryModal = readFileSync('src/components/deliveries/QuickDeliveryModal.tsx', 'utf8').replace(/\r\n/g, '\n');
 
 describe('payload-bound idempotency migration', () => {
   it('persists server-derived request fingerprints', () => {
@@ -27,7 +29,12 @@ describe('payload-bound idempotency migration', () => {
   });
 
   it('keeps implementation functions private and public wrappers anonymous-safe', () => {
-    expect(migration).toContain('FROM PUBLIC, anon, authenticated, service_role');
+    for (const impl of ['_save_invoice_intent_impl_20260802', '_create_quick_delivery_intent_impl_20260802']) {
+      expect(migration).toContain(`REVOKE ALL ON FUNCTION public.${impl}(`);
+    }
+    for (const fn of ['save_invoice', 'create_quick_delivery']) {
+      expect(migration).toContain(`GRANT EXECUTE ON FUNCTION public.${fn}(`);
+    }
     expect(migration).toContain('FROM PUBLIC, anon;');
     expect(migration).toContain('TO authenticated, service_role;');
   });
@@ -68,5 +75,17 @@ describe('payload-bound idempotency migration', () => {
     expect(migration).toContain("RAISE EXCEPTION 'CUSTOMER_SCOPE_DENIED'");
     expect(migration).toContain("RAISE EXCEPTION 'DELIVERY_SCOPE_DENIED'");
     expect(migration).toContain("v_actor_role = 'driver' AND v_cached_driver_id IS DISTINCT FROM v_actor");
+  });
+
+  it('validates every new-invoice result before reporting success', () => {
+    expect(invoiceDetail).toContain("if (isNew) {\n          const savedId = assertRpcResult<string>(data, 'save_invoice');");
+    expect(invoiceDetail).not.toContain('if (isNew && data)');
+  });
+
+  it('resets quick-delivery form state on both success and reconciliation', () => {
+    const mismatchStart = quickDeliveryModal.indexOf("getIdempotencyMismatchResult(error, 'create_quick_delivery')");
+    const mismatchEnd = quickDeliveryModal.indexOf('throw error;', mismatchStart);
+    expect(quickDeliveryModal.slice(mismatchStart, mismatchEnd)).toContain('resetForm();');
+    expect((quickDeliveryModal.match(/resetForm\(\);/g) ?? [])).toHaveLength(2);
   });
 });

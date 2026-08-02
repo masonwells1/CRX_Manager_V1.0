@@ -300,6 +300,25 @@ BEGIN
       RAISE EXCEPTION 'IDEMPOTENCY_ACTOR_MISMATCH';
     END IF;
     IF v_existing.request_fingerprint IS DISTINCT FROM v_fingerprint THEN
+      v_cached_delivery_id := NULLIF(v_existing.result->>'delivery_id', '')::uuid;
+      IF v_cached_delivery_id IS NULL THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+      END IF;
+      SELECT customer_id, assigned_driver
+        INTO v_cached_customer_id, v_cached_driver_id
+        FROM public.deliveries
+       WHERE id = v_cached_delivery_id;
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'DELIVERY_NOT_FOUND';
+      END IF;
+      IF (v_actor_role = 'sales_rep' AND NOT EXISTS (
+            SELECT 1 FROM public.customers
+             WHERE id = v_cached_customer_id
+               AND assigned_sales_rep = v_actor
+          ))
+         OR (v_actor_role = 'driver' AND v_cached_driver_id IS DISTINCT FROM v_actor) THEN
+        RAISE EXCEPTION 'DELIVERY_SCOPE_DENIED';
+      END IF;
       RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH'
         USING ERRCODE = '22023',
               DETAIL = jsonb_build_object(

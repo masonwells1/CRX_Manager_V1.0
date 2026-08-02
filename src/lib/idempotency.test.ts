@@ -63,6 +63,13 @@ describe('getIdempotencyMismatchResult', () => {
   });
 
   it('fails closed for malformed details or another operation', () => {
+    expect(getIdempotencyMismatchResult(null, 'save_invoice')).toBeNull();
+    expect(getIdempotencyMismatchResult({
+      message: 'OTHER', details: '{}',
+    }, 'save_invoice')).toBeNull();
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH', details: { result: {} },
+    }, 'save_invoice')).toBeNull();
     expect(getIdempotencyMismatchResult({
       message: 'IDEMPOTENCY_INTENT_MISMATCH',
       details: '{not-json',
@@ -74,6 +81,15 @@ describe('getIdempotencyMismatchResult', () => {
         operation: 'create_quick_delivery',
         result: { delivery_id: 'delivery-1' },
       }),
+    }, 'save_invoice')).toBeNull();
+
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({ operation: 'save_invoice', result: [] }),
+    }, 'save_invoice')).toBeNull();
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({ operation: 'save_invoice' }),
     }, 'save_invoice')).toBeNull();
   });
 });

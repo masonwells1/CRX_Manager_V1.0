@@ -796,7 +796,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         saveIdem.resetKey();
         legacySaveIntentRef.current = null;
 
-        if (isNew && data) {
+        if (isNew) {
           const savedId = assertRpcResult<string>(data, 'save_invoice');
           navigate(`/invoices/${savedId}`, { replace: true });
         } else {

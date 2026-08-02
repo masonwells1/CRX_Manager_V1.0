@@ -33,18 +33,13 @@ repository gates; exact-SHA Sol/high CLEAN; protected PR delivery.
 - Fresh Graphify map at base `ea794571`: 8,975 nodes and 18,785 edges. Query:
   `How do InvoiceDetail save_invoice and QuickDeliveryModal create_quick_delivery generate, reset, and replay idempotency keys across errors, form edits, modal close, and route changes?`
 
-## WRITTEN, NOT PROVEN
+## HISTORICAL BUILD BOUNDARY
 
-- This handoff only. No implementation exists on this clean branch yet.
-
-## NOT STARTED
-
-- Canonical request fingerprint design.
-- Server replay mismatch rejection for `save_invoice` and
-  `create_quick_delivery`.
-- Client unresolved-attempt state and reconciliation UX.
-- Behavioral and SQL proof harnesses.
-- Migration review, exact-SHA review, PR, CI, CodeRabbit, and production proof.
+This document captured the pre-implementation boundary. The implementation now
+lives in PR #299. Canonical fingerprints, server mismatch rejection, client
+reconciliation, focused behavioral tests, SQL structure tests, migration review,
+and exact-SHA review are complete. The migration remains local and unapplied;
+current release state is recorded in `docs/manual/CURRENT_STATE.md`.
 
 ## APPROVAL STATE
 

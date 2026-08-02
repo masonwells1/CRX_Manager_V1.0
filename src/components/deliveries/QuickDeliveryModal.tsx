@@ -318,6 +318,18 @@ export default function QuickDeliveryModal({
   const totalCents = items.reduce((sum, i) => sum + Math.round(i.price_cents * i.quantity), 0);
   const showPricing = role === 'admin' || role === 'sales_rep';
 
+  const resetForm = () => {
+    selectedCustomerRef.current = null;
+    setSelectedCustomer(null);
+    setOpenBookings([]);
+    setCustomerSearch('');
+    setItems([]);
+    setDeliveryNotes('');
+    setSelectedDriver(profile?.role === 'driver' ? profile.id : '');
+    setScheduledDate(localToday());
+    setCreateInvoice(true);
+  };
+
   const handleSubmit = async () => {
     if (!selectedCustomer) {
       toast('error', 'Please select a customer');
@@ -379,6 +391,7 @@ export default function QuickDeliveryModal({
         if (typeof committedDeliveryId === 'string') {
           quickDeliveryIdem.resetKey();
           legacyQuickIntentRef.current = null;
+          resetForm();
           toast('warning', 'The earlier quick delivery already completed. Opening the committed delivery instead of creating a duplicate.');
           onClose();
           onCreated?.();
@@ -411,16 +424,7 @@ export default function QuickDeliveryModal({
         toast('warning', `Heads up: this delivery puts ${selectedCustomer.farm_name} over their credit limit. Admins have been notified.`);
       }
 
-      // Reset form
-      selectedCustomerRef.current = null;
-      setSelectedCustomer(null);
-      setOpenBookings([]);
-      setCustomerSearch('');
-      setItems([]);
-      setDeliveryNotes('');
-      setSelectedDriver(profile?.role === 'driver' ? profile.id : '');
-      setScheduledDate(localToday());
-      setCreateInvoice(true);
+      resetForm();
 
       onClose();
       onCreated?.();
