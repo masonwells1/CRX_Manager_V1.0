@@ -202,8 +202,9 @@ async function main() {
       }
       emit("CRX Factory did not resume because the request contained secret-shaped text that cannot enter the ledger. Re-state the resume request without credentials or secret material.");
     }
-    try {
-      const controlResult = appendFactoryControlEvent(paths, {
+    const controlResult = appendFactoryControlEvent(
+      paths,
+      {
         type: requestedHold === "hold" ? "factory-held" : "factory-resumed",
         jobId: null,
         actorTool,
@@ -212,22 +213,18 @@ async function main() {
           reason: prompt.slice(0, 500),
           ownerReply: prompt.slice(0, 500),
         },
-      });
-      if (!controlResult.changed) {
-        emit(requestedHold === "hold"
-          ? "CRX Factory is already globally paused. The repeated pause request changed no ledger state."
-          : "CRX Factory is already running. The repeated resume request changed no ledger state.");
-      }
-    } catch (error) {
-      if (requestedHold === "hold") {
-        setEmergencyFactoryHold(
-          paths,
-          `Mason requested a factory pause, but the ledger was unavailable. Prompt SHA-256: ${sha256(prompt)}.`,
-          { ledgerUnavailable: true },
-        );
-        emit("CRX Factory entered an emergency global pause because the normal ledger could not record Mason's request. Build writes are blocked until the ledger is recovered through the supported factory recovery command.");
-      }
-      throw error;
+      },
+      {
+        emergencyFallbackReason: `Mason requested a factory pause, but the ledger was unavailable. Prompt SHA-256: ${sha256(prompt)}.`,
+      },
+    );
+    if (controlResult.emergencyFallback) {
+      emit("CRX Factory entered an emergency global pause because the normal ledger could not record Mason's request. Build writes are blocked until the ledger is recovered through the supported factory recovery command.");
+    }
+    if (!controlResult.changed) {
+      emit(requestedHold === "hold"
+        ? "CRX Factory is already globally paused. The repeated pause request changed no ledger state."
+        : "CRX Factory is already running. The repeated resume request changed no ledger state.");
     }
     emit(`CRX Factory ${requestedHold === "hold" ? "is now globally paused" : "has resumed"}. Tell Mason in one plain-English sentence. Existing production and destructive-action gates remain unchanged.`);
   }

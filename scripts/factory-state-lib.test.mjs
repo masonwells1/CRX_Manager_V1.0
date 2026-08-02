@@ -170,6 +170,24 @@ function holdFactoryFence(target, delayMs = 500) {
   return child;
 }
 
+function capturedChild(child) {
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk) => { stdout += chunk; });
+  child.stderr?.on("data", (chunk) => { stderr += chunk; });
+  return new Promise((resolve) => child.once("close", (status) => resolve({ status, stdout, stderr })));
+}
+
+function waitForPath(target, label, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(target) && Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  ok(existsSync(target), label);
+}
+
 function ticket(id = "factory-test-1", overrides = {}) {
   return {
     id,
@@ -760,6 +778,61 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   });
   eq(pausedAgain.changed, true, "a pause serialized after a resume is not lost as a stale no-op");
   eq(loadFactorySnapshot(paths).held, true, "the last serialized owner control determines the final hold state");
+  cleanup();
+}
+
+{
+  const { root, env, paths, cleanup } = fixture();
+  append(paths, "factory-intent", null, { ownerRequest: "prove atomic pause fallback" });
+  const checkpoint = loadFactorySnapshot(paths).lastEventHash;
+  writeFileSync(paths.lockPath, `${JSON.stringify({
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  })}\n`);
+  const moduleUrl = new URL("./factory-state-lib.mjs", import.meta.url).href;
+  const controlScript = path.join(root, "control-fallback.test.mjs");
+  const attachmentScript = path.join(root, "waiting-attachment.test.mjs");
+  const attachmentReady = path.join(root, "attachment-ready.txt");
+  writeFileSync(controlScript, [
+    "const lib = await import(process.argv[2]);",
+    "const paths = lib.resolveFactoryPaths(process.argv[3], process.env);",
+    "const result = lib.appendFactoryControlEvent(paths, {",
+    "  type: 'factory-held', jobId: null, actorTool: 'codex', sessionId: 'session-1',",
+    "  payload: { reason: 'contended pause', ownerReply: 'pause factory' },",
+    "}, { lockTimeoutMs: 1000, emergencyFallbackReason: 'Atomic fallback contention test.' });",
+    "process.stdout.write(JSON.stringify(result));",
+  ].join("\n"));
+  writeFileSync(attachmentScript, [
+    "const fs = await import('node:fs');",
+    "const lib = await import(process.argv[2]);",
+    "const paths = lib.resolveFactoryPaths(process.argv[3], process.env);",
+    "fs.writeFileSync(process.argv[4], 'ready');",
+    "try {",
+    "  lib.appendFactoryEvent(paths, { type: 'factory-intent', jobId: null, actorTool: 'codex', sessionId: 'session-2', payload: { ownerRequest: 'must wait behind pause' } }, { expectedLastEventHash: process.argv[5], requireFactoryRunning: true });",
+    "  process.stdout.write('ATTACHED');",
+    "} catch (error) { process.stdout.write(`REFUSED:${error.message}`); }",
+  ].join("\n"));
+  const childEnv = { ...process.env, ...env };
+  const controlChild = spawn(process.execPath, [controlScript, moduleUrl, root], {
+    env: childEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const controlResultPromise = capturedChild(controlChild);
+  waitForPath(paths.emergencyHoldFencePath, "the contended owner pause acquires the shared hold fence");
+  const attachmentChild = spawn(process.execPath, [attachmentScript, moduleUrl, root, attachmentReady, checkpoint], {
+    env: childEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const attachmentResultPromise = capturedChild(attachmentChild);
+  waitForPath(attachmentReady, "the conditional attachment starts while the owner pause owns the fence");
+  waitForPath(paths.emergencyHoldPath, "the failed ledger pause writes its emergency marker before releasing the fence");
+  rmSync(paths.lockPath);
+  const [controlResult, attachmentResult] = await Promise.all([controlResultPromise, attachmentResultPromise]);
+  eq(controlResult.status, 0, `the contended pause falls back successfully: ${controlResult.stderr}`);
+  eq(JSON.parse(controlResult.stdout).emergencyFallback, true, "the control transition reports its in-fence emergency fallback");
+  eq(attachmentResult.status, 0, `the waiting attachment process exits cleanly: ${attachmentResult.stderr}`);
+  ok(/REFUSED:.*paused before evidence attachment/i.test(attachmentResult.stdout), "a waiting attachment observes the marker and cannot cross the failed pause");
+  eq(loadFactorySnapshot(paths).lastEventHash, checkpoint, "the failed pause and refused attachment append no ledger event");
   cleanup();
 }
 

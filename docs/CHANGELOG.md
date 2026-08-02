@@ -23,7 +23,10 @@ and conditional harness or independent-review attachment share a dedicated hold
 fence. A pause falls back to a direct
 fail-safe marker inside that fence if the ledger lock times out; the final
 running-state check plus receipt append also stay ledger-atomic, closing the
-last check-to-append window. A pause arriving during independent review refuses
+last check-to-append window. The owner control transition performs that fallback
+itself without releasing and reacquiring the fence; a two-process contention
+regression proves an already-waiting attachment observes the marker and is
+refused. A pause arriving during independent review refuses
 attachment and cleans up its new artifact. Evidence metadata is rejected before
 a harness starts, and attached events record the actual append time. A parked
 job may now refresh its owner-facing result

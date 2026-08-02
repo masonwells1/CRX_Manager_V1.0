@@ -1012,7 +1012,10 @@ export function appendFactoryEvent(paths, eventInput, {
   }
 }
 
-export function appendFactoryControlEvent(paths, eventInput) {
+export function appendFactoryControlEvent(paths, eventInput, {
+  lockTimeoutMs = 5_000,
+  emergencyFallbackReason,
+} = {}) {
   const writer = authorizedFactoryWriter(paths);
   if (!writer.ownerDecisionWriter) {
     throw new Error("Factory hold and resume controls may be written only by the canonical owner-input hook.");
@@ -1021,24 +1024,31 @@ export function appendFactoryControlEvent(paths, eventInput) {
     throw new Error("Factory control event must be factory-held or factory-resumed.");
   }
   rejectSecretBearingText(canonicalJson(eventInput.payload || {}), "Factory control event");
+  const desiredHeld = eventInput.type === "factory-held";
   const holdFenceFd = acquireEmergencyHoldFence(paths);
+  let lockFd;
   try {
-    const lockFd = acquireLock(paths);
     try {
+      lockFd = acquireLock(paths, lockTimeoutMs);
       const current = readEventLog(paths);
       if (current.degraded) {
         throw new Error("Factory ledger has an incomplete trailing event; repair or archive it before appending.");
       }
       const held = factoryHeldFromCurrent(paths, current);
-      const desiredHeld = eventInput.type === "factory-held";
       if (held === desiredHeld) return { changed: false, held };
       const event = appendFactoryEventLocked(paths, writer, current, eventInput);
       if (!desiredHeld) clearEmergencyFactoryHoldUnlocked(paths);
       return { changed: true, held: desiredHeld, event };
-    } finally {
-      releaseLock(paths, lockFd);
+    } catch (error) {
+      if (!desiredHeld) throw error;
+      const fallbackReason = emergencyFallbackReason
+        || `Mason requested a factory pause, but the ledger could not record it. Control SHA-256: ${sha256(canonicalJson(eventInput))}.`;
+      setEmergencyFactoryHoldUnlocked(paths, fallbackReason);
+      process.stderr.write(`Factory safety warning: owner pause used the emergency hold because the ledger append failed (${error?.message || error}).\n`);
+      return { changed: true, held: true, emergencyFallback: true };
     }
   } finally {
+    if (lockFd !== undefined) releaseLock(paths, lockFd);
     releaseEmergencyHoldFence(paths, holdFenceFd);
   }
 }
