@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdempotencyKey } from './idempotency';
+import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -46,5 +46,74 @@ describe('generateIdempotencyKey', () => {
     // UUID v4 has specific version/variant bits
     expect(uuid[14]).toBe('4'); // version nibble
     expect(['8', '9', 'a', 'b']).toContain(uuid[19]); // variant nibble
+  });
+});
+
+describe('getIdempotencyMismatchResult', () => {
+  it('returns the committed receipt for the expected operation', () => {
+    const result = getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({
+        operation: 'save_invoice',
+        result: { invoice_id: 'invoice-1' },
+      }),
+    }, 'save_invoice');
+
+    expect(result).toEqual({ invoice_id: 'invoice-1' });
+  });
+
+  it('fails closed for malformed details or another operation', () => {
+    expect(getIdempotencyMismatchResult(null, 'save_invoice')).toBeNull();
+    expect(getIdempotencyMismatchResult({
+      message: 'OTHER', details: '{}',
+    }, 'save_invoice')).toBeNull();
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH', details: { result: {} },
+    }, 'save_invoice')).toBeNull();
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: '{not-json',
+    }, 'save_invoice')).toBeNull();
+
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({
+        operation: 'create_quick_delivery',
+        result: { delivery_id: 'delivery-1' },
+      }),
+    }, 'save_invoice')).toBeNull();
+
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({ operation: 'save_invoice', result: [] }),
+    }, 'save_invoice')).toBeNull();
+    expect(getIdempotencyMismatchResult({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({ operation: 'save_invoice' }),
+    }, 'save_invoice')).toBeNull();
+  });
+});
+
+describe('isMissingIntentBindingColumn', () => {
+  it('accepts only missing-column errors naming the fingerprint column', () => {
+    expect(isMissingIntentBindingColumn({
+      code: 'PGRST204',
+      message: "Could not find the 'request_fingerprint' column",
+    })).toBe(true);
+    expect(isMissingIntentBindingColumn({
+      code: '42703',
+      message: 'column request_fingerprint does not exist',
+    })).toBe(true);
+    expect(isMissingIntentBindingColumn({ code: 'PGRST204', message: 'another column missing' })).toBe(false);
+    expect(isMissingIntentBindingColumn({ code: '42501', message: 'request_fingerprint denied' })).toBe(false);
+  });
+});
+
+describe('legacyIntentChanged', () => {
+  it('reuses an unresolved key only for identical old-schema retries', () => {
+    const first = { key: 'same-key', intent: '{"quantity":1}' };
+    expect(legacyIntentChanged(first, { ...first })).toBe(false);
+    expect(legacyIntentChanged(first, { key: 'same-key', intent: '{"quantity":2}' })).toBe(true);
+    expect(legacyIntentChanged(first, { key: 'new-key', intent: '{"quantity":2}' })).toBe(false);
   });
 });

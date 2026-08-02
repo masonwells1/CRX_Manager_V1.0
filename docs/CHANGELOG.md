@@ -38,6 +38,27 @@ and nonempty blocker only from its original lane session; the refresh remains
 parked and cannot reopen, advance, or transfer the job. The incident and
 acceptance evidence are recorded in `docs/audits/2026-08-02-factory-resume-replay-repair.md`.
 
+## 2026-08-02 — UNRELEASED: Invoice and Quick Delivery retries bound to mutation intent
+
+Migration `20260802162805_bind_idempotency_to_mutation_intent` is local and has
+not been applied to production. Once applied, server-side idempotency receipts for `save_invoice` and
+`create_quick_delivery` now bind the authenticated actor and a SHA-256
+fingerprint of the semantic request. Reusing a key for changed input fails
+closed and returns the previously committed entity for visible reconciliation,
+preventing edited forms from silently replaying an older invoice or delivery.
+
+Pre-migration receipts cannot prove their original actor or request. During
+their remaining expiry window, the wrappers therefore validate the caller's
+access to the committed entity and return the same visible reconciliation
+signal instead of either duplicating the mutation or reporting edited input as
+successfully saved. The invoice and Quick Delivery interfaces preserve an
+unresolved key across ambiguous failures and reload or open the authoritative
+committed record before allowing another attempt. A read-only server capability
+probe keeps frontend-first deployment safe: an unresolved key is reused only
+for an identical retry, while edited input is blocked until the operator reloads
+the authoritative invoice or delivery. The code and database release gates
+therefore remain safe and independent.
+
 ## 2026-08-01 — Monthly integrity snapshot recorded
 
 A read-only production reconciliation checked ten month-end integrity areas and

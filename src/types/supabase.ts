@@ -3543,6 +3543,8 @@ export type Database = {
           id: string
           idempotency_key: string
           operation: string
+          request_actor_id: string | null
+          request_fingerprint: string | null
           result: Json | null
         }
         Insert: {
@@ -3551,6 +3553,8 @@ export type Database = {
           id?: string
           idempotency_key: string
           operation: string
+          request_actor_id?: string | null
+          request_fingerprint?: string | null
           result?: Json | null
         }
         Update: {
@@ -3559,6 +3563,8 @@ export type Database = {
           id?: string
           idempotency_key?: string
           operation?: string
+          request_actor_id?: string | null
+          request_fingerprint?: string | null
           result?: Json | null
         }
         Relationships: []

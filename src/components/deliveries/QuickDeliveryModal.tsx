@@ -13,6 +13,7 @@ import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from '../../lib/idempotency';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { formatCents as fmtCurrency } from '../../lib/money';
@@ -55,6 +56,7 @@ export default function QuickDeliveryModal({
   const { profile, role } = useAuth();
   const { toast } = useToast();
   const quickDeliveryIdem = useIdempotencyKey('create_quick_delivery', profile?.id || '');
+  const legacyQuickIntentRef = useRef<{ key: string; intent: string } | null>(null);
 
   // Customer search
   const [customerSearch, setCustomerSearch] = useState('');
@@ -316,6 +318,18 @@ export default function QuickDeliveryModal({
   const totalCents = items.reduce((sum, i) => sum + Math.round(i.price_cents * i.quantity), 0);
   const showPricing = role === 'admin' || role === 'sales_rep';
 
+  const resetForm = () => {
+    selectedCustomerRef.current = null;
+    setSelectedCustomer(null);
+    setOpenBookings([]);
+    setCustomerSearch('');
+    setItems([]);
+    setDeliveryNotes('');
+    setSelectedDriver(profile?.role === 'driver' ? profile.id : '');
+    setScheduledDate(localToday());
+    setCreateInvoice(true);
+  };
+
   const handleSubmit = async () => {
     if (!selectedCustomer) {
       toast('error', 'Please select a customer');
@@ -334,14 +348,35 @@ export default function QuickDeliveryModal({
     setSubmitting(true);
     try {
       const key = quickDeliveryIdem.getKey();
+      const requestItems = items.map((i) => ({
+        product_id: i.product_id,
+        quantity: i.quantity,
+        unit_size: i.unit_size,
+        price_cents: i.price_cents,
+      }));
+      const intent = JSON.stringify({
+        customer_id: selectedCustomer.id,
+        items: requestItems,
+        driver_id: selectedDriver || null,
+        scheduled_date: scheduledDate,
+        delivery_notes: deliveryNotes || null,
+        skip_invoice: !createInvoice,
+      });
+      const capability = await supabase
+        .from('idempotency_keys')
+        .select('request_fingerprint')
+        .limit(1);
+      if (capability.error) {
+        if (!isMissingIntentBindingColumn(capability.error)) throw capability.error;
+        if (legacyIntentChanged(legacyQuickIntentRef.current, { key, intent })) {
+          toast('warning', 'The previous quick delivery may already have completed. Reopen Deliveries before submitting different changes.');
+          return;
+        }
+        legacyQuickIntentRef.current = { key, intent };
+      }
       const { data, error } = await supabase.rpc('create_quick_delivery', {
         p_customer_id: selectedCustomer.id,
-        p_items: items.map((i) => ({
-          product_id: i.product_id,
-          quantity: i.quantity,
-          unit_size: i.unit_size,
-          price_cents: i.price_cents,
-        })),
+        p_items: requestItems,
         p_driver_id: selectedDriver || undefined,
         p_scheduled_date: scheduledDate,
         p_delivery_notes: deliveryNotes || undefined,
@@ -350,8 +385,23 @@ export default function QuickDeliveryModal({
         p_skip_invoice: !createInvoice,
       });
 
-      if (error) throw error;
+      if (error) {
+        const receipt = getIdempotencyMismatchResult(error, 'create_quick_delivery');
+        const committedDeliveryId = receipt?.delivery_id;
+        if (typeof committedDeliveryId === 'string') {
+          quickDeliveryIdem.resetKey();
+          legacyQuickIntentRef.current = null;
+          resetForm();
+          toast('warning', 'The earlier quick delivery already completed. Opening the committed delivery instead of creating a duplicate.');
+          onClose();
+          onCreated?.();
+          navigate(`/deliveries/${committedDeliveryId}`);
+          return;
+        }
+        throw error;
+      }
       quickDeliveryIdem.resetKey();
+      legacyQuickIntentRef.current = null;
 
       const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null; credit_warning?: boolean; stock_warning?: boolean; short_stock_count?: number }>(data, 'create_quick_delivery');
       const invoiceMsg = result.invoice_number
@@ -374,16 +424,7 @@ export default function QuickDeliveryModal({
         toast('warning', `Heads up: this delivery puts ${selectedCustomer.farm_name} over their credit limit. Admins have been notified.`);
       }
 
-      // Reset form
-      selectedCustomerRef.current = null;
-      setSelectedCustomer(null);
-      setOpenBookings([]);
-      setCustomerSearch('');
-      setItems([]);
-      setDeliveryNotes('');
-      setSelectedDriver(profile?.role === 'driver' ? profile.id : '');
-      setScheduledDate(localToday());
-      setCreateInvoice(true);
+      resetForm();
 
       onClose();
       onCreated?.();
