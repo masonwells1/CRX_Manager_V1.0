@@ -110,8 +110,10 @@ BEGIN
   )
   RETURNING id INTO v_charge_invoice;
 
+  -- 1900-01-02 01:30 UTC is still 1900-01-01 in America/Chicago. A raw
+  -- timestamptz::date cast would wrongly drop this invoice from the cutoff.
   UPDATE public.invoices
-  SET status = 'posted', posted_at = TIMESTAMPTZ '1900-01-01 08:00:00+00'
+  SET status = 'posted', posted_at = TIMESTAMPTZ '1900-01-02 01:30:00+00'
   WHERE id = v_charge_invoice;
 
   INSERT INTO public.finance_charges (
@@ -134,7 +136,7 @@ BEGIN
   )
   VALUES (
     '[SMOKE]-CREDIT-' || v_suffix, v_customer, 'credit_memo', 'posted',
-    DATE '1900-01-01', TIMESTAMPTZ '1900-01-01 08:00:00+00', -10000, 8000, v_admin
+    DATE '1900-01-01', TIMESTAMPTZ '1900-01-02 01:30:00+00', -10000, 8000, v_admin
   )
   RETURNING id INTO v_credit_invoice;
 
@@ -179,7 +181,7 @@ BEGIN
   )
   VALUES
     (v_credit_invoice, v_pre_as_of_target_invoice, 2000, v_admin,
-      TIMESTAMPTZ '1899-12-15 12:00:00+00', TIMESTAMPTZ '1900-02-01 12:00:00+00',
+      TIMESTAMPTZ '1900-01-02 01:30:00+00', TIMESTAMPTZ '1900-02-01 12:00:00+00',
       v_admin, 'smoke post-cutoff reversal'),
     (v_credit_invoice, v_future_target_invoice, 8000, v_admin,
       TIMESTAMPTZ '1900-02-01 12:00:00+00', NULL, NULL, NULL);
@@ -247,7 +249,7 @@ BEGIN
   RETURNING id INTO v_void_invoice;
 
   UPDATE public.invoices
-  SET status = 'posted', posted_at = TIMESTAMPTZ '1900-01-01 08:00:00+00'
+  SET status = 'posted', posted_at = TIMESTAMPTZ '1900-01-02 01:30:00+00'
   WHERE id = v_void_invoice;
 
   PERFORM public.void_invoice(

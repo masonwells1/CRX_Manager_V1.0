@@ -38,8 +38,9 @@ voids destroyed the mutable amounts needed for trustworthy reconstruction. The
 candidate now replays credit applications on both sides, uses lifecycle
 timestamps for as-of eligibility, fails closed on destructive later voids, and
 adds a validated constraint requiring posting timestamps on financial-status
-invoices. The revised SQL still requires replacement review and rollback-only
-execution proof before live apply.
+invoices. All timestamp cutoffs use the America/Chicago business date, including
+activity that crosses UTC midnight. The revised SQL still requires replacement
+review and rollback-only execution proof before live apply.
 
 The production-action guard regression test now clears Git's hook-provided
 repository selectors, including the shared Git directory, before creating

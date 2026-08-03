@@ -102,9 +102,9 @@ BEGIN
     FROM invoices i
     WHERE i.customer_id = p_customer_id
       AND i.posted_at IS NOT NULL
-      AND i.posted_at::date <= p_as_of_date
+      AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
       AND i.invoice_date <= p_as_of_date
-      AND i.voided_at::date > p_as_of_date
+      AND (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
       AND EXISTS (
         SELECT 1
         FROM financial_audit_log fal
@@ -131,15 +131,15 @@ BEGIN
       SELECT COALESCE(SUM(cma.amount_cents), 0)::bigint AS applied_cents
       FROM credit_memo_applications cma
       WHERE cma.target_invoice_id = i.id
-        AND cma.applied_at::date <= p_as_of_date
-        AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
+        AND (cma.applied_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+        AND (cma.reversed_at IS NULL OR (cma.reversed_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
     ) credit_at_cutoff
     WHERE i.customer_id = p_customer_id
       AND i.invoice_type <> 'credit_memo'
       AND i.posted_at IS NOT NULL
-      AND i.posted_at::date <= p_as_of_date
-      AND (i.voided_at IS NULL OR i.voided_at::date > p_as_of_date)
-      AND (i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date)
+      AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+      AND (i.voided_at IS NULL OR (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
+      AND (i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
       AND i.invoice_date <= p_as_of_date
       AND (
         i.balance_cents
@@ -263,15 +263,15 @@ BEGIN
       SELECT COALESCE(SUM(cma.amount_cents), 0)::bigint AS applied_cents
       FROM credit_memo_applications cma
       WHERE cma.target_invoice_id = i.id
-        AND cma.applied_at::date <= p_as_of_date
-        AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
+        AND (cma.applied_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+        AND (cma.reversed_at IS NULL OR (cma.reversed_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
     ) credit_at_cutoff
     WHERE i.customer_id = p_customer_id
       AND i.invoice_type <> 'credit_memo'
       AND i.posted_at IS NOT NULL
-      AND i.posted_at::date <= p_as_of_date
-      AND (i.voided_at IS NULL OR i.voided_at::date > p_as_of_date)
-      AND (i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date)
+      AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+      AND (i.voided_at IS NULL OR (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
+      AND (i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
       AND i.invoice_date <= p_as_of_date
   )
   SELECT jsonb_build_object(
@@ -295,8 +295,8 @@ BEGIN
       SELECT SUM(cma.amount_cents)
       FROM credit_memo_applications cma
       WHERE cma.credit_memo_id = ci.id
-        AND cma.applied_at::date <= p_as_of_date
-        AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
+        AND (cma.applied_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+        AND (cma.reversed_at IS NULL OR (cma.reversed_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
     ), 0)
   ), 0)::bigint
   INTO v_open_credit_cents
@@ -304,9 +304,9 @@ BEGIN
   WHERE ci.customer_id = p_customer_id
     AND ci.invoice_type = 'credit_memo'
     AND ci.posted_at IS NOT NULL
-    AND ci.posted_at::date <= p_as_of_date
-    AND (ci.voided_at IS NULL OR ci.voided_at::date > p_as_of_date)
-    AND (ci.deleted_at IS NULL OR ci.deleted_at::date > p_as_of_date)
+    AND (ci.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+    AND (ci.voided_at IS NULL OR (ci.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
+    AND (ci.deleted_at IS NULL OR (ci.deleted_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
     AND ci.invoice_date <= p_as_of_date;
 
   RETURN jsonb_build_object(
@@ -372,9 +372,9 @@ BEGIN
     JOIN customers c ON c.id = i.customer_id
     WHERE c.is_active = true
       AND i.posted_at IS NOT NULL
-      AND i.posted_at::date <= p_as_of_date
+      AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
       AND i.invoice_date <= p_as_of_date
-      AND i.voided_at::date > p_as_of_date
+      AND (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
       AND EXISTS (
         SELECT 1
         FROM financial_audit_log fal
@@ -397,15 +397,15 @@ BEGIN
           SELECT COALESCE(SUM(cma.amount_cents), 0)::bigint AS applied_cents
           FROM credit_memo_applications cma
           WHERE cma.target_invoice_id = i.id
-            AND cma.applied_at::date <= p_as_of_date
-            AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
+            AND (cma.applied_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+            AND (cma.reversed_at IS NULL OR (cma.reversed_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
         ) credit_at_cutoff
         WHERE i.customer_id = c.id
           AND i.invoice_type <> 'credit_memo'
           AND i.posted_at IS NOT NULL
-          AND i.posted_at::date <= p_as_of_date
-          AND (i.voided_at IS NULL OR i.voided_at::date > p_as_of_date)
-          AND (i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date)
+          AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+          AND (i.voided_at IS NULL OR (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
+          AND (i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
           AND i.invoice_date <= p_as_of_date
           AND (
             i.balance_cents
@@ -451,13 +451,13 @@ DECLARE
       AND conname = 'invoices_financial_status_requires_posted_at'
   );
 BEGIN
-  IF v_batch_def NOT LIKE '%i.posted_at::date <= p_as_of_date%'
-     OR v_batch_def NOT LIKE '%i.voided_at IS NULL OR i.voided_at::date > p_as_of_date%'
-     OR v_batch_def NOT LIKE '%i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date%'
+  IF v_batch_def NOT LIKE '%(i.posted_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+     OR v_batch_def NOT LIKE '%i.voided_at IS NULL OR (i.voided_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
+     OR v_batch_def NOT LIKE '%i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
      OR v_batch_def NOT LIKE '%i.balance_cents%+ i.credit_applied_cents%- credit_at_cutoff.applied_cents%'
      OR v_batch_def NOT LIKE '%cma.target_invoice_id = i.id%'
-     OR v_batch_def NOT LIKE '%cma.applied_at::date <= p_as_of_date%'
-     OR v_batch_def NOT LIKE '%cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date%' THEN
+     OR v_batch_def NOT LIKE '%(cma.applied_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+     OR v_batch_def NOT LIKE '%cma.reversed_at IS NULL OR (cma.reversed_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical-credit-aware batch selector is missing';
   END IF;
   IF v_batch_def NOT LIKE '%p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor%'
@@ -471,28 +471,35 @@ BEGIN
      OR v_batch_def NOT LIKE '%fal.operation_type = ''invoice_voided''%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: batch generic-void fail-closed guard is missing';
   END IF;
+  IF v_batch_def LIKE '%posted_at::date%'
+     OR v_batch_def LIKE '%voided_at::date%'
+     OR v_batch_def LIKE '%deleted_at::date%'
+     OR v_batch_def LIKE '%applied_at::date%'
+     OR v_batch_def LIKE '%reversed_at::date%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: batch contains a session-timezone date cast';
+  END IF;
   IF v_detail_def LIKE '%v_inv.balance_cents + v_finance_cents%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: finance charge is still double-counted';
   END IF;
   IF v_detail_def NOT LIKE '%''net_due_cents'', v_inv.statement_balance_cents%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: net_due_cents is not the as-of invoice balance';
   END IF;
-  IF v_detail_def NOT LIKE '%i.posted_at::date <= p_as_of_date%'
-     OR v_detail_def NOT LIKE '%i.voided_at IS NULL OR i.voided_at::date > p_as_of_date%'
-     OR v_detail_def NOT LIKE '%i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date%'
+  IF v_detail_def NOT LIKE '%(i.posted_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+     OR v_detail_def NOT LIKE '%i.voided_at IS NULL OR (i.voided_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
+     OR v_detail_def NOT LIKE '%i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
      OR v_detail_def NOT LIKE '%i.balance_cents%+ i.credit_applied_cents%- credit_at_cutoff.applied_cents%'
      OR v_detail_def NOT LIKE '%cma.target_invoice_id = i.id%'
-     OR v_detail_def NOT LIKE '%cma.applied_at::date <= p_as_of_date%'
-     OR v_detail_def NOT LIKE '%cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date%' THEN
+     OR v_detail_def NOT LIKE '%(cma.applied_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+     OR v_detail_def NOT LIKE '%cma.reversed_at IS NULL OR (cma.reversed_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical target-invoice credit replay is missing';
   END IF;
   IF v_detail_def NOT LIKE '%-ci.total_amount_cents - COALESCE(%'
-     OR v_detail_def NOT LIKE '%ci.posted_at::date <= p_as_of_date%'
-     OR v_detail_def NOT LIKE '%ci.voided_at IS NULL OR ci.voided_at::date > p_as_of_date%'
-     OR v_detail_def NOT LIKE '%ci.deleted_at IS NULL OR ci.deleted_at::date > p_as_of_date%'
+     OR v_detail_def NOT LIKE '%(ci.posted_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+     OR v_detail_def NOT LIKE '%ci.voided_at IS NULL OR (ci.voided_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
+     OR v_detail_def NOT LIKE '%ci.deleted_at IS NULL OR (ci.deleted_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
      OR v_detail_def NOT LIKE '%cma.credit_memo_id = ci.id%'
-     OR v_detail_def NOT LIKE '%cma.applied_at::date <= p_as_of_date%'
-     OR v_detail_def NOT LIKE '%cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date%' THEN
+     OR v_detail_def NOT LIKE '%(cma.applied_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+     OR v_detail_def NOT LIKE '%cma.reversed_at IS NULL OR (cma.reversed_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical open-credit replay is missing';
   END IF;
   IF v_detail_def NOT LIKE '%''open_credit_cents'', v_open_credit_cents%'
@@ -502,6 +509,13 @@ BEGIN
   IF v_detail_def NOT LIKE '%HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE%'
      OR v_detail_def NOT LIKE '%fal.operation_type = ''invoice_voided''%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: detail generic-void fail-closed guard is missing';
+  END IF;
+  IF v_detail_def LIKE '%posted_at::date%'
+     OR v_detail_def LIKE '%voided_at::date%'
+     OR v_detail_def LIKE '%deleted_at::date%'
+     OR v_detail_def LIKE '%applied_at::date%'
+     OR v_detail_def LIKE '%reversed_at::date%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: detail contains a session-timezone date cast';
   END IF;
   IF v_posted_at_constraint_validated IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: financial-status posted_at constraint is missing or unvalidated';
