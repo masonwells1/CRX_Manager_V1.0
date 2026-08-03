@@ -506,7 +506,14 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     behaviorSummary: "",
     blocker: "Mason requested a changed scope.",
   });
+  append(paths, "job-stage", written.ticket.id, {
+    stage: "parked",
+    behaviorSummary: "A legacy duplicate terminal event must not replace the first parked summary.",
+    blocker: "Legacy duplicate terminal event.",
+  });
   const parkedSnapshot = loadFactorySnapshot(paths);
+  eq(parkedSnapshot.jobs[0].stage, "parked", "a same-lane duplicate terminal parking event replays as a metadata refresh");
+  eq(parkedSnapshot.jobs[0].blocker, "Legacy duplicate terminal event.", "a same-lane terminal metadata refresh preserves the latest blocker");
   eq(
     validateStageChange(parkedSnapshot, written.ticket.id, "parked", {
       sessionId: "session-1",
