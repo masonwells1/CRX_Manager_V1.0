@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-02.** Read-only live ledger verification remains 932 rows at high-water `20260731001654`; the existing AP and Quote/Customer closeout evidence remains unchanged. Local candidate `20260802162805_bind_idempotency_to_mutation_intent` is under review and **not live**. Its tracked risk is payload-blind replay for `save_invoice` and `create_quick_delivery` after an ambiguous network response; the candidate binds receipts to a server-derived request fingerprint and reopens the already-committed entity on mismatch instead of duplicating it.
+**Last verified: 2026-08-03.** Live ledger high-water is `20260803010917`. The prior payload-blind replay risk for `save_invoice` and `create_quick_delivery` is fixed live: receipts bind to a server-derived request fingerprint and authenticated actor, while mismatches reopen the already-committed entity instead of duplicating it. Post-apply grants, auth guards, columns, and receipt binding state were verified.
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
