@@ -463,7 +463,9 @@ export default function ARaging() {
           });
           if (error) {
             Sentry.captureException(error, { tags: { source: 'batch_statement', customer_id: custId } });
-            continue;
+            // A partial PDF batch can look complete to the operator. Abort the
+            // whole download when any selected statement cannot be trusted.
+            throw error;
           }
           const stmtData = assertRpcResult<DetailedStatementData>(data, 'get_detailed_statement_data');
           if (stmtData && stmtData.transactions && stmtData.transactions.length > 0) {
@@ -662,7 +664,11 @@ export default function ARaging() {
         let noEmail = 0;
         let emailFailed = 0;
         let statementsDeduped = 0;
+        const statementQueue: Array<{ custId: string; stmtData: DetailedStatementData }> = [];
 
+        // Resolve every selected statement before sending the first email. If
+        // one historical cutoff is unsafe, fail the action before it can become
+        // an unreported partial send.
         for (const custId of selectedCustomers) {
           const { data, error } = await supabase.rpc('get_detailed_statement_data', {
             p_customer_id: custId,
@@ -671,11 +677,16 @@ export default function ARaging() {
           });
           if (error) {
             Sentry.captureException(error, { tags: { source: 'batch_email_statement', customer_id: custId } });
-            continue;
+            throw error;
           }
 
           const stmtData = assertRpcResult<DetailedStatementData>(data, 'get_detailed_statement_data');
-          if (!stmtData || !stmtData.transactions || stmtData.transactions.length === 0) continue;
+          if (stmtData?.transactions?.length) {
+            statementQueue.push({ custId, stmtData });
+          }
+        }
+
+        for (const { custId, stmtData } of statementQueue) {
 
           const custEmail = stmtData.customer.email;
           if (!custEmail) {
