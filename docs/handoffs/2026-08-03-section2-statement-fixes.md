@@ -36,7 +36,7 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 
 ## WRITTEN, NOT PROVEN
 
-- The latest post-cutoff-unpost candidate still needs replacement migration review, exact-SHA review, and rollback-only live behavior proof; earlier smoke proof applies only to prior SQL revisions.
+- The latest post-cutoff-unpost candidate received CLEAN replacement RLS/security and migration-drift reviews. It still needs exact-SHA review and rollback-only live behavior proof; earlier smoke proof applies only to prior SQL revisions.
 - A post-deploy signed-in statement PDF/email observation cannot occur until the code is published and the migration is applied.
 
 ## REMAINING
