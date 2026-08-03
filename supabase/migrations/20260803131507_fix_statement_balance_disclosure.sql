@@ -91,9 +91,11 @@ BEGIN
         AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
     ) credit_at_cutoff
     WHERE i.customer_id = p_customer_id
-      AND i.status IN ('posted', 'overdue', 'paid')
       AND i.invoice_type <> 'credit_memo'
-      AND i.deleted_at IS NULL
+      AND i.posted_at IS NOT NULL
+      AND i.posted_at::date <= p_as_of_date
+      AND (i.voided_at IS NULL OR i.voided_at::date > p_as_of_date)
+      AND (i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date)
       AND i.invoice_date <= p_as_of_date
       AND (
         i.balance_cents
@@ -221,9 +223,11 @@ BEGIN
         AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
     ) credit_at_cutoff
     WHERE i.customer_id = p_customer_id
-      AND i.status IN ('posted', 'overdue', 'paid')
       AND i.invoice_type <> 'credit_memo'
-      AND i.deleted_at IS NULL
+      AND i.posted_at IS NOT NULL
+      AND i.posted_at::date <= p_as_of_date
+      AND (i.voided_at IS NULL OR i.voided_at::date > p_as_of_date)
+      AND (i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date)
       AND i.invoice_date <= p_as_of_date
   )
   SELECT jsonb_build_object(
@@ -255,8 +259,10 @@ BEGIN
   FROM invoices ci
   WHERE ci.customer_id = p_customer_id
     AND ci.invoice_type = 'credit_memo'
-    AND ci.status = 'posted'
-    AND ci.deleted_at IS NULL
+    AND ci.posted_at IS NOT NULL
+    AND ci.posted_at::date <= p_as_of_date
+    AND (ci.voided_at IS NULL OR ci.voided_at::date > p_as_of_date)
+    AND (ci.deleted_at IS NULL OR ci.deleted_at::date > p_as_of_date)
     AND ci.invoice_date <= p_as_of_date;
 
   RETURN jsonb_build_object(
@@ -329,9 +335,11 @@ BEGIN
             AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
         ) credit_at_cutoff
         WHERE i.customer_id = c.id
-          AND i.status IN ('posted', 'overdue', 'paid')
           AND i.invoice_type <> 'credit_memo'
-          AND i.deleted_at IS NULL
+          AND i.posted_at IS NOT NULL
+          AND i.posted_at::date <= p_as_of_date
+          AND (i.voided_at IS NULL OR i.voided_at::date > p_as_of_date)
+          AND (i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date)
           AND i.invoice_date <= p_as_of_date
           AND (
             i.balance_cents
@@ -371,7 +379,9 @@ DECLARE
     WHERE oid = to_regprocedure('public.get_detailed_statement_data(uuid,date,text)')
   );
 BEGIN
-  IF v_batch_def NOT LIKE '%i.status IN (''posted'', ''overdue'', ''paid'')%'
+  IF v_batch_def NOT LIKE '%i.posted_at::date <= p_as_of_date%'
+     OR v_batch_def NOT LIKE '%i.voided_at IS NULL OR i.voided_at::date > p_as_of_date%'
+     OR v_batch_def NOT LIKE '%i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date%'
      OR v_batch_def NOT LIKE '%i.balance_cents%+ i.credit_applied_cents%- credit_at_cutoff.applied_cents%'
      OR v_batch_def NOT LIKE '%cma.target_invoice_id = i.id%'
      OR v_batch_def NOT LIKE '%cma.applied_at::date <= p_as_of_date%'
@@ -391,7 +401,9 @@ BEGIN
   IF v_detail_def NOT LIKE '%''net_due_cents'', v_inv.statement_balance_cents%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: net_due_cents is not the as-of invoice balance';
   END IF;
-  IF v_detail_def NOT LIKE '%i.status IN (''posted'', ''overdue'', ''paid'')%'
+  IF v_detail_def NOT LIKE '%i.posted_at::date <= p_as_of_date%'
+     OR v_detail_def NOT LIKE '%i.voided_at IS NULL OR i.voided_at::date > p_as_of_date%'
+     OR v_detail_def NOT LIKE '%i.deleted_at IS NULL OR i.deleted_at::date > p_as_of_date%'
      OR v_detail_def NOT LIKE '%i.balance_cents%+ i.credit_applied_cents%- credit_at_cutoff.applied_cents%'
      OR v_detail_def NOT LIKE '%cma.target_invoice_id = i.id%'
      OR v_detail_def NOT LIKE '%cma.applied_at::date <= p_as_of_date%'
@@ -399,6 +411,9 @@ BEGIN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical target-invoice credit replay is missing';
   END IF;
   IF v_detail_def NOT LIKE '%-ci.total_amount_cents - COALESCE(%'
+     OR v_detail_def NOT LIKE '%ci.posted_at::date <= p_as_of_date%'
+     OR v_detail_def NOT LIKE '%ci.voided_at IS NULL OR ci.voided_at::date > p_as_of_date%'
+     OR v_detail_def NOT LIKE '%ci.deleted_at IS NULL OR ci.deleted_at::date > p_as_of_date%'
      OR v_detail_def NOT LIKE '%cma.credit_memo_id = ci.id%'
      OR v_detail_def NOT LIKE '%cma.applied_at::date <= p_as_of_date%'
      OR v_detail_def NOT LIKE '%cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date%' THEN

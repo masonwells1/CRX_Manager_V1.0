@@ -71,7 +71,9 @@ BEGIN
   )
   RETURNING id INTO v_overdue_invoice;
 
-  UPDATE public.invoices SET status = 'posted' WHERE id = v_overdue_invoice;
+  UPDATE public.invoices
+  SET status = 'posted', posted_at = TIMESTAMPTZ '1899-12-01 12:00:00+00'
+  WHERE id = v_overdue_invoice;
   UPDATE public.invoices SET status = 'overdue' WHERE id = v_overdue_invoice;
 
   v_batch := public.generate_batch_statements(
@@ -106,7 +108,9 @@ BEGIN
   )
   RETURNING id INTO v_charge_invoice;
 
-  UPDATE public.invoices SET status = 'posted' WHERE id = v_charge_invoice;
+  UPDATE public.invoices
+  SET status = 'posted', posted_at = TIMESTAMPTZ '1900-01-01 08:00:00+00'
+  WHERE id = v_charge_invoice;
 
   INSERT INTO public.finance_charges (
     customer_id, invoice_id, amount_cents, charge_rate, base_amount_cents,
@@ -132,6 +136,10 @@ BEGIN
   )
   RETURNING id INTO v_credit_invoice;
 
+  UPDATE public.invoices
+  SET posted_at = TIMESTAMPTZ '1900-01-01 08:00:00+00'
+  WHERE id = v_credit_invoice;
+
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, status, invoice_date,
     total_amount_cents, created_by
@@ -152,7 +160,12 @@ BEGIN
   )
   RETURNING id INTO v_future_target_invoice;
 
-  UPDATE public.invoices SET status = 'posted'
+  UPDATE public.invoices
+  SET status = 'posted',
+      posted_at = CASE
+        WHEN id = v_pre_as_of_target_invoice THEN TIMESTAMPTZ '1899-12-01 08:00:00+00'
+        WHEN id = v_future_target_invoice THEN TIMESTAMPTZ '1900-02-01 08:00:00+00'
+      END
   WHERE id IN (v_pre_as_of_target_invoice, v_future_target_invoice);
   UPDATE public.invoices SET credit_applied_cents = CASE
     WHEN id = v_pre_as_of_target_invoice THEN 0
@@ -172,6 +185,15 @@ BEGIN
       v_admin, 'smoke post-cutoff reversal'),
     (v_credit_invoice, v_future_target_invoice, 8000, v_admin,
       TIMESTAMPTZ '1900-02-01 12:00:00+00', NULL, NULL, NULL);
+
+  -- Both records were valid at the cutoff but were voided later. Historical
+  -- statement eligibility must use posted/voided timestamps, not today's status.
+  UPDATE public.invoices
+  SET status = 'voided',
+      voided_at = TIMESTAMPTZ '1900-02-01 12:00:00+00',
+      voided_by = v_admin,
+      void_reason = 'smoke post-cutoff void'
+  WHERE id IN (v_charge_invoice, v_credit_invoice);
 
   v_detail := public.get_detailed_statement_data(
     v_customer, DATE '1900-01-01', 'detailed'
