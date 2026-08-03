@@ -15,7 +15,10 @@ Regenerated historical statements replay credit applications and reversals on
 both the memo and target-invoice sides at the statement cutoff, so later credit
 activity cannot create a false historical payment request. Invoice and credit
 memo eligibility is also reconstructed from posting, void, and soft-delete
-timestamps, so a later void does not erase a record that was valid at cutoff.
+timestamps. A later status-only credit-memo unapply remains reconstructable from
+its preserved face amount and application ledger. A later generic invoice void,
+which deliberately zeroes mutable money columns, makes the statement fail closed
+instead of guessing a pre-void balance from incomplete history.
 PDF/email generation fails closed until both new RPC fields are present, and
 batch admin authorization runs before selecting customers so even an empty
 result cannot disclose receivables state to a non-admin.
@@ -27,15 +30,16 @@ unallowlisted violations, the migration security/drift reviewers were clean,
 and focused unit plus real-jsPDF render coverage is registered in the billing
 and regression prevention suites.
 
-Post-push and exact-commit reviews then found three candidate defects before release: a
+Post-push and exact-commit reviews found further candidate defects before release: a
 backdated statement used a credit memo's current balance instead of its
 historical application-ledger position, the overdue-only batch fixture also
-created a posted charge, and current status hid invoices or credits voided after
-the requested cutoff. The candidate now replays credit applications on both the
-memo and target-invoice sides, uses lifecycle timestamps for as-of eligibility,
-and proves the batch selector with a separate overdue-only customer. The revised
-SQL still requires replacement review and rollback-only execution proof before
-live apply.
+created a posted charge, current status hid later-voided documents, and generic
+voids destroyed the mutable amounts needed for trustworthy reconstruction. The
+candidate now replays credit applications on both sides, uses lifecycle
+timestamps for as-of eligibility, fails closed on destructive later voids, and
+adds a validated constraint requiring posting timestamps on financial-status
+invoices. The revised SQL still requires replacement review and rollback-only
+execution proof before live apply.
 
 The production-action guard regression test now clears Git's hook-provided
 repository selectors, including the shared Git directory, before creating

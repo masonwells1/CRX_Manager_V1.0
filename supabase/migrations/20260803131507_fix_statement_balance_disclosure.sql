@@ -38,8 +38,28 @@ BEGIN
        <> 'fbb023d78bc3ba89732eda9081c0d72f' THEN
     RAISE EXCEPTION 'PREFLIGHT_FAILED: get_detailed_statement_data drifted from reviewed live source';
   END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.invoices
+    WHERE status IN ('posted', 'paid', 'overdue', 'voided')
+      AND posted_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_FAILED: financial-status invoice is missing posted_at';
+  END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public.invoices'::regclass
+      AND conname = 'invoices_financial_status_requires_posted_at'
+  ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_FAILED: invoices_financial_status_requires_posted_at already exists';
+  END IF;
 END;
 $preflight$;
+
+ALTER TABLE public.invoices
+  ADD CONSTRAINT invoices_financial_status_requires_posted_at
+  CHECK (status NOT IN ('posted', 'paid', 'overdue', 'voided') OR posted_at IS NOT NULL);
 
 CREATE OR REPLACE FUNCTION public.get_detailed_statement_data(
   p_customer_id uuid,
@@ -70,6 +90,30 @@ BEGIN
   SELECT * INTO v_customer FROM customers WHERE id = p_customer_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Customer not found: %', p_customer_id;
+  END IF;
+
+  -- Generic void_invoice deliberately zeroes the mutable money columns. Its
+  -- audit snapshot is not a complete event ledger for every possible change
+  -- between the cutoff and the void, so emitting a guessed historical balance
+  -- would be unsafe. Credit-memo unapply is different: it preserves the memo's
+  -- face amount and reverses applications in the immutable application ledger.
+  IF EXISTS (
+    SELECT 1
+    FROM invoices i
+    WHERE i.customer_id = p_customer_id
+      AND i.posted_at IS NOT NULL
+      AND i.posted_at::date <= p_as_of_date
+      AND i.invoice_date <= p_as_of_date
+      AND i.voided_at::date > p_as_of_date
+      AND EXISTS (
+        SELECT 1
+        FROM financial_audit_log fal
+        WHERE fal.entity_type = 'invoice'
+          AND fal.entity_id = i.id
+          AND fal.operation_type = 'invoice_voided'
+      )
+  ) THEN
+    RAISE EXCEPTION 'HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE: a later generic invoice void prevents a trustworthy statement at this cutoff';
   END IF;
 
   -- The generated balance contains today's credit_applied_cents. Replace that
@@ -320,6 +364,28 @@ BEGIN
   -- empty/non-empty response to infer whether qualifying receivables exist.
   PERFORM public.require_admin();
 
+  -- Fail the whole batch instead of silently omitting a customer whose later
+  -- generic void destroyed the mutable amount columns.
+  IF EXISTS (
+    SELECT 1
+    FROM invoices i
+    JOIN customers c ON c.id = i.customer_id
+    WHERE c.is_active = true
+      AND i.posted_at IS NOT NULL
+      AND i.posted_at::date <= p_as_of_date
+      AND i.invoice_date <= p_as_of_date
+      AND i.voided_at::date > p_as_of_date
+      AND EXISTS (
+        SELECT 1
+        FROM financial_audit_log fal
+        WHERE fal.entity_type = 'invoice'
+          AND fal.entity_id = i.id
+          AND fal.operation_type = 'invoice_voided'
+      )
+  ) THEN
+    RAISE EXCEPTION 'HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE: a later generic invoice void prevents a trustworthy statement batch at this cutoff';
+  END IF;
+
   FOR v_cust IN
     SELECT c.id, c.farm_name
     FROM customers c
@@ -378,6 +444,12 @@ DECLARE
     FROM pg_proc
     WHERE oid = to_regprocedure('public.get_detailed_statement_data(uuid,date,text)')
   );
+  v_posted_at_constraint_validated boolean := (
+    SELECT convalidated
+    FROM pg_constraint
+    WHERE conrelid = 'public.invoices'::regclass
+      AND conname = 'invoices_financial_status_requires_posted_at'
+  );
 BEGIN
   IF v_batch_def NOT LIKE '%i.posted_at::date <= p_as_of_date%'
      OR v_batch_def NOT LIKE '%i.voided_at IS NULL OR i.voided_at::date > p_as_of_date%'
@@ -394,6 +466,10 @@ BEGIN
   END IF;
   IF v_batch_def NOT LIKE '%PERFORM public.require_admin();%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: batch admin authorization is missing';
+  END IF;
+  IF v_batch_def NOT LIKE '%HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE%'
+     OR v_batch_def NOT LIKE '%fal.operation_type = ''invoice_voided''%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: batch generic-void fail-closed guard is missing';
   END IF;
   IF v_detail_def LIKE '%v_inv.balance_cents + v_finance_cents%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: finance charge is still double-counted';
@@ -422,6 +498,13 @@ BEGIN
   IF v_detail_def NOT LIKE '%''open_credit_cents'', v_open_credit_cents%'
      OR v_detail_def NOT LIKE '%''net_account_position_cents'', v_balance - v_open_credit_cents%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: account-position disclosure fields are missing';
+  END IF;
+  IF v_detail_def NOT LIKE '%HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE%'
+     OR v_detail_def NOT LIKE '%fal.operation_type = ''invoice_voided''%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: detail generic-void fail-closed guard is missing';
+  END IF;
+  IF v_posted_at_constraint_validated IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: financial-status posted_at constraint is missing or unvalidated';
   END IF;
   IF has_function_privilege('anon', 'public.get_detailed_statement_data(uuid,date,text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.generate_batch_statements(date,uuid,text,text)', 'EXECUTE') THEN

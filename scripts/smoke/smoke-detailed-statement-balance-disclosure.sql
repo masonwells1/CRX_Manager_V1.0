@@ -14,12 +14,14 @@ DECLARE
   v_admin uuid;
   v_non_admin uuid;
   v_customer uuid;
+  v_void_customer uuid;
   v_overdue_customer uuid;
   v_overdue_invoice uuid;
   v_charge_invoice uuid;
   v_credit_invoice uuid;
   v_pre_as_of_target_invoice uuid;
   v_future_target_invoice uuid;
+  v_void_invoice uuid;
   v_suffix text := substr(md5(random()::text), 1, 10);
   v_detail jsonb;
   v_batch jsonb;
@@ -128,17 +130,13 @@ BEGIN
   -- later applications and later reversals.
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, status, invoice_date,
-    total_amount_cents, credit_applied_cents, created_by
+    posted_at, total_amount_cents, credit_applied_cents, created_by
   )
   VALUES (
     '[SMOKE]-CREDIT-' || v_suffix, v_customer, 'credit_memo', 'posted',
-    DATE '1900-01-01', -10000, 8000, v_admin
+    DATE '1900-01-01', TIMESTAMPTZ '1900-01-01 08:00:00+00', -10000, 8000, v_admin
   )
   RETURNING id INTO v_credit_invoice;
-
-  UPDATE public.invoices
-  SET posted_at = TIMESTAMPTZ '1900-01-01 08:00:00+00'
-  WHERE id = v_credit_invoice;
 
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, status, invoice_date,
@@ -186,14 +184,15 @@ BEGIN
     (v_credit_invoice, v_future_target_invoice, 8000, v_admin,
       TIMESTAMPTZ '1900-02-01 12:00:00+00', NULL, NULL, NULL);
 
-  -- Both records were valid at the cutoff but were voided later. Historical
-  -- statement eligibility must use posted/voided timestamps, not today's status.
-  UPDATE public.invoices
-  SET status = 'voided',
-      voided_at = TIMESTAMPTZ '1900-02-01 12:00:00+00',
-      voided_by = v_admin,
-      void_reason = 'smoke post-cutoff void'
-  WHERE id IN (v_charge_invoice, v_credit_invoice);
+  -- Exercise the real status-only credit-memo unapply lifecycle. It preserves
+  -- the face amount, reverses the still-active future application in the
+  -- immutable ledger, and sets void metadata after the statement cutoff.
+  PERFORM public.unapply_credit_memo(
+    v_credit_invoice,
+    'smoke post-cutoff unapply',
+    v_admin,
+    'smoke-statement-unapply-' || v_suffix
+  );
 
   v_detail := public.get_detailed_statement_data(
     v_customer, DATE '1900-01-01', 'detailed'
@@ -229,6 +228,58 @@ BEGIN
       v_charge_txn->>'finance_charge_cents',
       v_charge_txn->>'net_due_cents';
   END IF;
+
+  -- Exercise the real generic void lifecycle, which zeroes the mutable money
+  -- columns. Historical statement generation must fail closed instead of
+  -- guessing the pre-void amount from an incomplete snapshot.
+  INSERT INTO public.customers (farm_name, account_number, is_active)
+  VALUES ('[SMOKE] Generic Void ' || v_suffix, '[SMOKE]-VOID-' || v_suffix, true)
+  RETURNING id INTO v_void_customer;
+
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date,
+    due_date, total_amount_cents, created_by
+  )
+  VALUES (
+    '[SMOKE]-VOID-' || v_suffix, v_void_customer, 'misc_charge', 'draft',
+    DATE '1900-01-01', DATE '1900-01-01', 2500, v_admin
+  )
+  RETURNING id INTO v_void_invoice;
+
+  UPDATE public.invoices
+  SET status = 'posted', posted_at = TIMESTAMPTZ '1900-01-01 08:00:00+00'
+  WHERE id = v_void_invoice;
+
+  PERFORM public.void_invoice(
+    v_void_invoice,
+    'smoke post-cutoff generic void',
+    'smoke-statement-generic-void-' || v_suffix
+  );
+
+  BEGIN
+    PERFORM public.get_detailed_statement_data(
+      v_void_customer, DATE '1900-01-01', 'detailed'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: post-cutoff generic void produced a guessed detail statement';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: post-cutoff generic void detail raised unexpected error: %', SQLERRM;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.generate_batch_statements(
+      DATE '1900-01-01',
+      v_admin,
+      'summary',
+      'smoke-statement-generic-void-batch-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: post-cutoff generic void produced a guessed statement batch';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: post-cutoff generic void batch raised unexpected error: %', SQLERRM;
+    END IF;
+  END;
 
   BEGIN
     PERFORM public.generate_batch_statements(
