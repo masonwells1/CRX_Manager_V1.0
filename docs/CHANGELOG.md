@@ -31,8 +31,10 @@ Supabase applied the reviewed migration live as ledger version
 version while retaining the reviewed migration name. This reconciliation commit
 renames the repository file from its local preparation timestamp
 `20260803131507` to the live ledger version without changing its SQL bytes.
-The live ledger's stored statement is byte-for-byte identical to the renamed
-repository file (37,053 bytes; MD5 `f9666b8ca82dedc37c760f5bf3fcdf4c`).
+Supabase stored the applied statement with CRLF line endings (37,053 bytes; MD5
+`f9666b8ca82dedc37c760f5bf3fcdf4c`). Normalizing only those line endings to LF
+produces 36,800 bytes and MD5 `4d6ad05cad533ee9e1812aa6bc20fcec`, exactly
+matching committed Git blob `de6c6bcedcd78d9acd9758eac0eb103146f045e5`.
 Post-apply catalog checks confirmed the two private fail-closed helpers, their
 fixed search paths and revoked public execution, and the validated
 posting-timestamp constraint. A prior candidate revision's rollback-only
