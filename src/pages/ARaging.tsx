@@ -688,7 +688,10 @@ export default function ARaging() {
           const base64 = pdfToBase64(doc);
 
           const html = buildEmailHtml(
-            buildStatementEmailContent(stmtData, options.as_of_date),
+            buildStatementEmailContent(
+              stmtData,
+              parseLocalDate(options.as_of_date).toLocaleDateString(),
+            ),
           );
 
           try {

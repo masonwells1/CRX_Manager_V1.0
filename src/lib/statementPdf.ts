@@ -26,7 +26,7 @@ import {
   COMPANY_WEBSITE,
 } from './companyInfo';
 import { formatCents as fmt } from './money';
-import { getStatementAccountPosition } from './statementEmail';
+import { getStatementAccountPosition } from './statementBalance';
 
 
 
@@ -62,12 +62,11 @@ export async function generateStatementPdf(
     getStatementAccountPosition(data);
 
   let y = 0;
-  let pageNum = 0;
 
   // ── Page footer callback ───────────────────────────────────────────
   const drawPageFooter = () => {
     try {
-      pageNum++;
+      const pageNum = doc.getCurrentPageInfo().pageNumber;
       const footerY = pageH - 20;
       doc.setDrawColor(200, 200, 200);
       doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
@@ -704,10 +703,10 @@ function drawRemittanceStub(
   doc.line(margin, stubY, pageW - margin, stubY);
   doc.setLineDashPattern([], 0);
 
-  // Scissors icon (text)
-  doc.setFontSize(10);
+  // ASCII cut marker renders reliably in the built-in PDF font.
+  doc.setFontSize(6);
   doc.setTextColor(150, 150, 150);
-  doc.text('\u2702', margin - 2, stubY + 4);
+  doc.text('CUT HERE', margin, stubY - 3);
 
   const sy = stubY + 16;
 
@@ -766,68 +765,74 @@ function drawRemittanceStub(
     doc.text(fmt(item.cents), bx + boxW / 2, sy + 35, { align: 'center' });
   });
 
-  // Right: Account info + Amount Paid line
-  const rxStart = pageW - margin - 140;
+  // Lower rows: account and balance details. Keep these below the aging boxes
+  // (which end at sy + 48) so none of the customer/remittance text overlaps
+  // their borders or amounts.
+  const accountY = sy + 66;
 
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
-  doc.text('Acct Name:', rxStart, sy + 10);
+  doc.text('Acct Name:', margin, accountY);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
-  doc.text(c.farm_name, rxStart + 60, sy + 10);
+  const accountName = doc.splitTextToSize(c.farm_name, 190)[0] || '';
+  doc.text(accountName, margin + 60, accountY);
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
-  doc.text('Acct Nbr:', rxStart, sy + 22);
+  doc.text('Acct Nbr:', margin + 275, accountY);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
-  doc.text(c.account_number || '', rxStart + 60, sy + 22);
+  const accountNumber = doc.splitTextToSize(c.account_number || '', 70)[0] || '';
+  doc.text(accountNumber, margin + 325, accountY);
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
-  doc.text('Gross open:', rxStart, sy + 34);
+  doc.text('Stmt Date:', margin + 405, accountY);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...CHARCOAL);
+  doc.text(fmtDate(asOfDate), margin + 455, accountY);
+
+  const balanceY = accountY + 18;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...GRAY);
+  doc.text('Gross open:', margin, balanceY);
   doc.setFont('helvetica', 'bold');
   const balColor = grossOpenInvoiceCents > 0 ? RED : CRX_GREEN;
   doc.setTextColor(...balColor);
-  doc.text(fmt(grossOpenInvoiceCents), rxStart + 60, sy + 34);
+  doc.text(fmt(grossOpenInvoiceCents), margin + 65, balanceY);
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
-  doc.text('Credits:', rxStart, sy + 46);
+  doc.text('Credits:', margin + 180, balanceY);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
-  doc.text(fmt(openCreditCents), rxStart + 60, sy + 46);
+  doc.text(fmt(openCreditCents), margin + 225, balanceY);
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
-  doc.text('Net position:', rxStart, sy + 58);
+  doc.text('Net position:', margin + 350, balanceY);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
-  doc.text(fmt(netAccountPositionCents), rxStart + 60, sy + 58);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(...GRAY);
-  doc.text('Stmt Date:', rxStart, sy + 70);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(...CHARCOAL);
-  doc.text(fmtDate(asOfDate), rxStart + 60, sy + 70);
+  doc.text(fmt(netAccountPositionCents), margin + 415, balanceY);
 
   // Payment line, or a credit-covered-account instruction that cannot be
   // mistaken for a remittance request.
-  const payY = sy + 94;
+  const payY = sy + 108;
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
   if (netAccountPositionCents > 0) {
-    doc.text('Amount Paid  $', rxStart, payY);
+    doc.text('Amount Paid  $', margin, payY);
     doc.setDrawColor(...CHARCOAL);
-    doc.line(rxStart + 80, payY, pageW - margin, payY);
+    doc.line(margin + 80, payY, pageW - margin, payY);
   } else {
     doc.setFontSize(8);
-    doc.text('Credits cover open invoices.', rxStart, payY);
+    doc.text('Credits cover open invoices.', margin, payY);
     doc.setFont('helvetica', 'normal');
-    doc.text('Call before sending payment.', rxStart, payY + 12);
+    doc.text('Call before sending payment.', margin, payY + 12);
   }
   } catch (e) {
     // eslint-disable-next-line no-console

@@ -1,23 +1,20 @@
 import type { DetailedStatementData } from '../types';
 import { formatCents } from './money';
+import { getStatementAccountPosition } from './statementBalance';
 
-export function getStatementAccountPosition(data: DetailedStatementData) {
-  if (
-    typeof data.open_credit_cents !== 'number' ||
-    typeof data.net_account_position_cents !== 'number'
-  ) {
-    throw new Error(
-      'Statement generation is temporarily unavailable because the database balance disclosure is not ready.',
-    );
-  }
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
 
-  const grossOpenInvoiceCents = data.outstanding_balance_cents;
-  const openCreditCents = data.open_credit_cents;
-  const netAccountPositionCents = data.net_account_position_cents;
-
-  return { grossOpenInvoiceCents, openCreditCents, netAccountPositionCents };
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]);
 }
 
+/** Builds the customer-facing HTML body for an attached statement PDF. */
 export function buildStatementEmailContent(
   data: DetailedStatementData,
   statementDate: string,
@@ -27,11 +24,13 @@ export function buildStatementEmailContent(
   const paymentMessage = netAccountPositionCents > 0
     ? 'Please remit payment at your earliest convenience.'
     : 'Your unapplied credits equal or exceed the gross open invoices shown. Please contact Crop RX before sending payment so we can apply them correctly.';
+  const farmName = escapeHtml(data.customer.farm_name);
+  const displayDate = escapeHtml(statementDate);
 
   return `
     <h2 style="color:#1e293b;margin:0 0 12px;">Monthly Statement</h2>
     <p style="color:#475569;font-size:14px;line-height:1.6;">
-      Dear ${data.customer.farm_name},
+      Dear ${farmName},
     </p>
     <p style="color:#475569;font-size:14px;line-height:1.6;">
       Please find your account statement attached. Gross open invoices are
@@ -42,11 +41,11 @@ export function buildStatementEmailContent(
     <table style="width:100%;border-collapse:collapse;margin:16px 0;">
       <tr>
         <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Account</td>
-        <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${data.customer.farm_name}</td>
+        <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${farmName}</td>
       </tr>
       <tr>
         <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Statement Date</td>
-        <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${statementDate}</td>
+        <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${displayDate}</td>
       </tr>
       <tr>
         <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Open Invoices</td>

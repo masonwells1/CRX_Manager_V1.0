@@ -74,6 +74,7 @@ describe('statement PDF real renderer', () => {
 
     expect(pdfBytes.byteLength).toBeGreaterThan(2_000);
     expect(doc.getNumberOfPages()).toBeGreaterThanOrEqual(1);
+    expect(doc.getNumberOfPages()).toBe(1);
     expect(pageCommands).toContain('GROSS OPEN INVOICES');
     expect(pageCommands).toContain('Unapplied Credits:');
     expect(pageCommands).toContain('Net Account Position:');
@@ -81,6 +82,9 @@ describe('statement PDF real renderer', () => {
     expect(pageCommands).toContain('Amount Paid  $');
     expect(pageCommands).toContain('9100 E 2000th Ave');
     expect(pageCommands).not.toContain('CONTACT CROP RX BEFORE PAYMENT:');
+    expect(pageCommands).toContain('CUT HERE');
+    expect(pageCommands).toContain('Page 1');
+    expect(pageCommands).not.toContain('Page 2');
   });
 
   it('replaces remittance instructions when credits cover the gross invoices', async () => {

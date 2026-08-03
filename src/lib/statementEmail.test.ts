@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DetailedStatementData } from '../types';
-import { buildStatementEmailContent, getStatementAccountPosition } from './statementEmail';
+import { getStatementAccountPosition } from './statementBalance';
+import { buildStatementEmailContent } from './statementEmail';
 
 const statement = {
   customer: {
@@ -75,5 +76,32 @@ describe('statement email account position', () => {
     expect(html).not.toContain('Please remit payment');
     expect(html).toContain('unapplied credits equal or exceed');
     expect(html).toContain('contact Crop RX before sending payment');
+  });
+
+  it('does not request payment when credits exactly cover the gross invoices', () => {
+    const exactCredit = {
+      ...statement,
+      open_credit_cents: 10_000,
+      net_account_position_cents: 0,
+    };
+
+    const html = buildStatementEmailContent(exactCredit, '2026-08-03');
+    expect(html).not.toContain('Please remit payment');
+    expect(html).toContain('contact Crop RX before sending payment');
+  });
+
+  it('escapes customer and date text before inserting it into email HTML', () => {
+    const unsafeText = {
+      ...statement,
+      customer: {
+        ...statement.customer,
+        farm_name: '<script>alert("farm")</script> & Sons',
+      },
+    };
+
+    const html = buildStatementEmailContent(unsafeText, '08/03/2026 & final');
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;script&gt;alert(&quot;farm&quot;)&lt;/script&gt; &amp; Sons');
+    expect(html).toContain('08/03/2026 &amp; final');
   });
 });

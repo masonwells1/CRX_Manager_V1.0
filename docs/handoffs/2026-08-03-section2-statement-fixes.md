@@ -6,7 +6,7 @@
 - Branch: `codex/section2-statement-fixes-20260803`
 - Base: `origin/main` at `1ec69419` (refreshed after PR #304 advanced main during the run)
 - Supabase project: `rhyzpcqhnizqbxphqdkr`
-- Pull request: none
+- Pull request: `#305` (open; review fixes in progress)
 
 ## GOAL
 
@@ -25,7 +25,7 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 - Both governed migration reviewers returned CLEAN under `gpt-5.6-sol` high reasoning; the content-bound query hash is `a341de0145a1b14e72a2b86a350758dd6d20da193a4b1be19beb4462dcbccb55`.
 - Type-contract and PDF-output reviewers returned CLEAN. Compliance review found one MEDIUM payment-demand wording defect for credit-covered accounts; it was fixed with a negative-net fixture and the focused re-review returned CLEAN.
 - All 21 live database invariant predicates returned zero unallowlisted violations.
-- Current-base verification passed: full Vitest suite, billing 471/471, regression 164/164, TypeScript, zero-warning ESLint, production build, agent-workflow tests, migration SQL scan, local drift suite, documentation drift guard, and real jsPDF render assertions for positive, zero, and negative account positions.
+- Current-base verification passed: full Vitest suite, billing 473/473, regression 166/166, TypeScript, zero-warning ESLint, production build, agent-workflow tests, migration SQL scan, local drift suite, documentation drift guard, and real jsPDF render assertions for positive, zero, and negative account positions.
 - Statement PDF/email generation now fails closed when either balance-disclosure field is absent, so a frontend-first deployment cannot turn a legacy RPC payload into a false zero-credit payment request.
 - Batch statement authorization now runs before the customer selector, including the empty-result case, so non-admin callers cannot infer whether qualifying receivables exist.
 - Fresh Supabase `list_migrations` returned 933 live rows at high-water `20260803010917`, strictly below candidate `20260803131507`.
@@ -35,9 +35,9 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 - No application or database behavior in this packet remains locally unproven.
 - A post-deploy signed-in statement PDF/email observation cannot occur until the code is published and the migration is applied.
 
-## NOT STARTED
+## REMAINING
 
-- Commit, exact-SHA adversarial review of the complete code diff, protected-branch PR, and merge.
+- Replacement exact-SHA review and PR checks after the review-fix commit, then merge.
 - Live migration apply, B7 filename reconciliation, and post-apply catalog/behavior checks.
 
 ## APPROVAL STATE
@@ -52,6 +52,6 @@ Mason approved the commit and protected PR pipeline in this task. That authoriza
 
 ## FIRST ACTION
 
-Commit the current-base local slice, obtain the required exact-SHA adversarial review, then use the protected PR pipeline. Apply the live migration only after Mason explicitly authorizes that separate production action.
+Land the review-fix commit, obtain its replacement exact-SHA adversarial proof, and rerun the protected PR checks before merge. Apply the live migration only after Mason explicitly authorizes that separate production action.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

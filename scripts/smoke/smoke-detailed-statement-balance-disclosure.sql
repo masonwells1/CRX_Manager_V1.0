@@ -185,6 +185,10 @@ BEGIN
     IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN
       RAISE;
     END IF;
+    IF SQLERRM IS DISTINCT FROM 'Permission denied: requires admin role' THEN
+      RAISE EXCEPTION
+        'SMOKE_FAIL: non-admin batch raised unexpected error: %', SQLERRM;
+    END IF;
   END;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

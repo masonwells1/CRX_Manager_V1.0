@@ -4,7 +4,7 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-03 — Statement balance consistency fixes prepared — NOT LIVE
 
-The reviewed Section 2 remediation aligns customer statements across the live
+The reviewed Section 2 remediation aligns customer statements across the target
 RPC contract, PDF, and email surfaces. Month-end batches will include customers
 whose only open invoice is overdue; detailed statements will stop adding linked
 finance-charge metadata to the already-inclusive charge-invoice balance; and
@@ -21,6 +21,10 @@ unapplied. Its combined live-schema behavior chain reached
 unallowlisted violations, the migration security/drift reviewers were clean,
 and focused unit plus real-jsPDF render coverage is registered in the billing
 and regression prevention suites.
+
+The production-action guard regression test now clears Git's hook-provided
+repository selectors before creating temporary repositories, preventing false
+pre-commit failures without relaxing the production guard.
 
 ## 2026-08-02 — Factory resume replay and parked-Board repair
 

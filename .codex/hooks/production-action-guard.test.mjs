@@ -9,6 +9,12 @@ import path from "node:path";
 import { evaluateProductionAction, factoryExactProofValid, isClearlyReadOnlySql, pullRequestChecksGreen } from "./production-action-guard.mjs";
 
 const projectRoot = process.cwd();
+// Git exports repository selectors while running hooks. This test creates
+// independent temporary repositories, so inherited selectors would make the
+// production guard inspect the parent checkout instead of each fixture.
+for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) {
+  delete process.env[key];
+}
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
 const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-guard.mjs");
 const prMergeGuardPath = path.join(projectRoot, ".claude", "hooks", "pr-merge-guard.mjs");

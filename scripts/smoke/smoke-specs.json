@@ -4,7 +4,7 @@
     "pass_signal": "Every chain is a single DO block that ALWAYS terminates with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'. That exact error text = PASS (and guarantees rollback). ANY other error = FAIL.",
     "how_to_run": "node scripts/smoke/run-smoke.mjs --list | --spec <rpc> | --all  (see scripts/smoke/README.md)",
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it.",
-    "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
+    "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency, regression). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
     "save_quote_customer_row_version": {
@@ -499,14 +499,15 @@
     },
     "get_detailed_statement_data": {
       "chain": "smoke-detailed-statement-balance-disclosure.sql",
-      "description": "Detailed and batch statement consistency: an overdue-only synthetic customer is included in the month-end batch; a finance-charge invoice exposes linked charge metadata without adding it twice to net_due_cents; gross open invoices, unapplied credit memos, and net account position reconcile exactly. Synthetic fixtures and candidate function replacements roll back.",
+      "description": "Detailed and batch statement consistency: an overdue-only synthetic customer is included in the month-end batch; a finance-charge invoice exposes linked charge metadata without adding it twice to net_due_cents; gross open invoices, unapplied credit memos, and net account position reconcile exactly; forged actors and a non-admin empty-result probe raise their exact authorization errors. Synthetic fixtures and candidate function replacements roll back.",
       "covers": [
         "get_detailed_statement_data",
         "generate_batch_statements"
       ],
       "area": [
         "billing",
-        "regression"
+        "regression",
+        "security"
       ]
     },
     "statement_opening_balance": {
