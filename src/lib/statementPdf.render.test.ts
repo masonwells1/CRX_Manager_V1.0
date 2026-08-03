@@ -109,6 +109,45 @@ describe('statement PDF real renderer', () => {
     expect(secondPageCommands).toContain('Page 2');
   });
 
+  it('moves detailed account-position totals off a crowded transaction page', async () => {
+    const crowdedDetailedStatement: DetailedStatementData = {
+      ...renderedStatement,
+      mode: 'detailed',
+      transactions: [{
+        ...renderedStatement.transactions[0],
+        invoice_type: 'chemical_sale',
+        items: Array.from({ length: 26 }, (_, index) => ({
+          product_name: `Chemical ${index + 1}`,
+          epa_registration: null,
+          rate_per_acre: null,
+          rate_unit: null,
+          total_applied: null,
+          total_applied_unit: null,
+          total_applied_gl_lb: null,
+          gl_lb_unit: null,
+          unit_price_cents: 1_000,
+          total_cost_cents: 1_000,
+          is_application_fee: false,
+          quantity: 1,
+          unit_size: 'gal',
+          product_form: 'liquid',
+        })),
+      }],
+    };
+
+    const doc = await generateStatementPdf(crowdedDetailedStatement);
+    const pages = doc.internal.pages as unknown as string[][];
+    const penultimatePageCommands = pages[pages.length - 2].join('\n');
+    const finalPageCommands = pages[pages.length - 1].join('\n');
+
+    expect(doc.getNumberOfPages()).toBe(2);
+    expect(penultimatePageCommands).not.toContain('Net Account Position:');
+    expect(finalPageCommands).toContain('Gross Open Invoices:');
+    expect(finalPageCommands).toContain('Unapplied Credits:');
+    expect(finalPageCommands).toContain('Net Account Position:');
+    expect(finalPageCommands).toContain('Page 2');
+  });
+
   it('replaces remittance instructions when credits cover the gross invoices', async () => {
     const creditCoveredStatement = {
       ...renderedStatement,

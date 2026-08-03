@@ -39,6 +39,23 @@ const fmtNum = (n: number, decimals = 4) =>
 const fmtDate = (d: string) =>
   new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 
+const ACCOUNT_POSITION_BLOCK_HEIGHT = 64;
+const FOOTER_SAFE_BOTTOM_OFFSET = 32;
+
+function reserveAccountPositionSpace(
+  doc: JsPDFWithAutoTable,
+  currentY: number,
+  margin: number,
+  pageH: number,
+): number {
+  if (currentY + ACCOUNT_POSITION_BLOCK_HEIGHT <= pageH - FOOTER_SAFE_BOTTOM_OFFSET) {
+    return currentY;
+  }
+
+  doc.addPage();
+  return margin;
+}
+
 const COMPANY_NAME = 'CROP RX SOLUTIONS';
 // COMPANY_TAGLINE + COMPANY_REMIT_ADDRESS now come from src/lib/companyInfo.ts (single source).
 
@@ -289,12 +306,7 @@ function drawSummaryTransactions(
   // Keep the complete account-position block above the footer. autoTable can
   // finish close enough to the page bottom that drawing these rows in place
   // would overlap the footer or put the net position off-page.
-  const accountPositionBlockHeight = 64;
-  const footerSafeBottom = pageH - 32;
-  if (y + accountPositionBlockHeight > footerSafeBottom) {
-    doc.addPage();
-    y = margin;
-  }
+  y = reserveAccountPositionSpace(doc, y, margin, pageH);
 
   // Account position summary: gross invoices remain separate from credits.
   const { grossOpenInvoiceCents, openCreditCents, netAccountPositionCents } =
@@ -496,6 +508,7 @@ function drawDetailedTransactions(
   const { grossOpenInvoiceCents, openCreditCents, netAccountPositionCents } =
     getStatementAccountPosition(data);
   y += 10;
+  y = reserveAccountPositionSpace(doc, y, margin, pageH);
   doc.setDrawColor(200, 200, 200);
   doc.line(pageW - margin - 220, y, pageW - margin, y);
   y += 14;
