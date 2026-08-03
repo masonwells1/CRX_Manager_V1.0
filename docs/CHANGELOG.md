@@ -40,10 +40,11 @@ and nonempty blocker only from its original lane session; the refresh remains
 parked and cannot reopen, advance, or transfer the job. The incident and
 acceptance evidence are recorded in `docs/audits/2026-08-02-factory-resume-replay-repair.md`.
 
-## 2026-08-02 — UNRELEASED: Invoice and Quick Delivery retries bound to mutation intent
+## 2026-08-02 — Invoice and Quick Delivery retries bound to mutation intent — LIVE
 
-Migration `20260802162805_bind_idempotency_to_mutation_intent` is local and has
-not been applied to production. Once applied, server-side idempotency receipts for `save_invoice` and
+Migration `20260802162805_bind_idempotency_to_mutation_intent` was applied live
+as Supabase ledger version `20260803010917` and B7-renamed on disk to match.
+Server-side idempotency receipts for `save_invoice` and
 `create_quick_delivery` now bind the authenticated actor and a SHA-256
 fingerprint of the semantic request. Reusing a key for changed input fails
 closed and returns the previously committed entity for visible reconciliation,

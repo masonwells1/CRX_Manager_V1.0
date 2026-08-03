@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync(
-  'supabase/migrations/20260802162805_bind_idempotency_to_mutation_intent.sql',
+  'supabase/migrations/20260803010917_bind_idempotency_to_mutation_intent.sql',
   'utf8',
 );
 const invoiceDetail = readFileSync('src/pages/InvoiceDetail.tsx', 'utf8').replace(/\r\n/g, '\n');

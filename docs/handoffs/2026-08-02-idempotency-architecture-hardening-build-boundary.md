@@ -38,8 +38,9 @@ repository gates; exact-SHA Sol/high CLEAN; protected PR delivery.
 This document captured the pre-implementation boundary. The implementation now
 lives in PR #299. Canonical fingerprints, server mismatch rejection, client
 reconciliation, focused behavioral tests, SQL structure tests, migration review,
-and exact-SHA review are complete. The migration remains local and unapplied;
-current release state is recorded in `docs/manual/CURRENT_STATE.md`.
+and exact-SHA review are complete. The migration was subsequently applied live
+as ledger version `20260803010917`; current release state is recorded in
+`docs/manual/CURRENT_STATE.md`.
 
 ## APPROVAL STATE
 
