@@ -200,13 +200,25 @@ BEGIN
     AND i.deleted_at IS NULL
     AND i.invoice_date <= p_as_of_date;
 
-  SELECT COALESCE(-sum(ci.balance_cents), 0)::bigint
+  -- `balance_cents` is the memo's *current* generated balance.  A statement
+  -- regenerated for an earlier date must instead replay the immutable credit
+  -- application ledger as it stood on that date: applications made later do
+  -- not reduce the historical credit, while an application reversed later was
+  -- still consuming credit at the cutoff.
+  SELECT COALESCE(SUM(
+    -ci.total_amount_cents - COALESCE((
+      SELECT SUM(cma.amount_cents)
+      FROM credit_memo_applications cma
+      WHERE cma.credit_memo_id = ci.id
+        AND cma.applied_at::date <= p_as_of_date
+        AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
+    ), 0)
+  ), 0)::bigint
   INTO v_open_credit_cents
   FROM invoices ci
   WHERE ci.customer_id = p_customer_id
     AND ci.invoice_type = 'credit_memo'
     AND ci.status = 'posted'
-    AND ci.balance_cents < 0
     AND ci.deleted_at IS NULL
     AND ci.invoice_date <= p_as_of_date;
 

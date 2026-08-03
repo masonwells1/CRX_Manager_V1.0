@@ -22,6 +22,14 @@ unallowlisted violations, the migration security/drift reviewers were clean,
 and focused unit plus real-jsPDF render coverage is registered in the billing
 and regression prevention suites.
 
+An exact-SHA Sol review then found two candidate defects before release: a
+backdated statement used a credit memo's current balance instead of its
+historical application-ledger position, and the overdue-only batch fixture also
+created a posted charge. The candidate now reconstructs credit availability at
+the requested statement cutoff and proves the batch selector with a separate
+overdue-only customer. The revised rollback-only chain passes; a replacement
+exact-SHA review remains required before this candidate can land or apply.
+
 The production-action guard regression test now clears Git's hook-provided
 repository selectors, including the shared Git directory, before creating
 temporary repositories. This prevents false pre-commit failures without

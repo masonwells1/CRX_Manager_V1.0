@@ -4,7 +4,7 @@
 
 - Checkout: `C:\Users\mason\.codex\worktrees\section2-statement-fixes-20260803\CRX_Manager`
 - Branch: `codex/section2-statement-fixes-20260803`
-- Base: `origin/main` at `1ec69419` (refreshed after PR #304 advanced main during the run)
+- Base: `origin/main` at `a74cc4b3` (refreshed during the release gate)
 - Supabase project: `rhyzpcqhnizqbxphqdkr`
 - Pull request: `#305` (open; review fixes in progress)
 
@@ -18,11 +18,11 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 - Live catalog evidence on 2026-08-03 confirms one `generate_batch_statements(date,uuid,text,text)` overload with a posted-only selector.
 - Live catalog evidence confirms `get_detailed_statement_data(uuid,date,text)` returns `net_due_cents = invoice balance + linked finance charge`, even though generated invoice balance already includes the charge invoice amount.
 - Live `get_ar_aging(date)` defines open credit as the absolute value of posted negative credit-memo balances; the application deliberately reports gross positive invoices separately.
-- Graphify was rebuilt at `7e036db9`; the scoped query connected `ARaging`, `MonthEndClose`, `DetailedStatementData`, and `statementPdf.ts`, then those edges were verified in source.
+- Graphify was rebuilt at `a8528a00`; the scoped statement/RPC query was used to narrow the ARaging, MonthEndClose, PDF, email, and database proof surfaces before source and live checks.
 - The migration re-emits both statement RPCs, binds the batch actor to `auth.uid()`, restates API grants, and fails closed if the reviewed live body hashes or overload counts drift.
 - A combined candidate-migration + live synthetic behavior chain reached exact `SMOKE_PASS_ROLLBACK` after proving overdue selection, finance-charge single counting, open-credit disclosure, net account position, and forged-actor rejection.
 - Post-smoke live readback confirms both original production function hashes remain unchanged, each function still has one overload, and zero `[SMOKE]` customer/invoice fixtures remain.
-- Both governed migration reviewers returned CLEAN under `gpt-5.6-sol` high reasoning; the content-bound query hash is `a341de0145a1b14e72a2b86a350758dd6d20da193a4b1be19beb4462dcbccb55`.
+- The first exact-SHA `gpt-5.6-sol` high review correctly found two release blockers: historical credit availability was calculated from the current generated balance, and the overdue-only smoke fixture also had a posted charge. The local correction now reconstructs credit from the immutable application ledger at the statement cutoff and isolates the overdue-only batch fixture; it needs a replacement exact-SHA review.
 - Type-contract and PDF-output reviewers returned CLEAN. Compliance review found one MEDIUM payment-demand wording defect for credit-covered accounts; it was fixed with a negative-net fixture and the focused re-review returned CLEAN.
 - All 21 live database invariant predicates returned zero unallowlisted violations.
 - Current-base verification passed: full Vitest suite, billing 473/473, regression 166/166, TypeScript, zero-warning ESLint, production build, agent-workflow tests, migration SQL scan, local drift suite, documentation drift guard, and real jsPDF render assertions for positive, zero, and negative account positions.
@@ -32,17 +32,17 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 
 ## WRITTEN, NOT PROVEN
 
-- No application or database behavior in this packet remains locally unproven.
+- The revised candidate has a rollback-only live behavior proof (`SMOKE_PASS_ROLLBACK`) covering the two Sol findings, but it has not yet received its replacement exact-SHA review.
 - A post-deploy signed-in statement PDF/email observation cannot occur until the code is published and the migration is applied.
 
 ## REMAINING
 
-- Replacement exact-SHA review and PR checks after the review-fix commit, then merge.
+- Commit the Sol-review correction, obtain its replacement exact-SHA adversarial proof, and rerun PR checks before merge.
 - Live migration apply, B7 filename reconciliation, and post-apply catalog/behavior checks.
 
 ## APPROVAL STATE
 
-Mason approved the commit and protected PR pipeline in this task. That authorization does not cover applying the live migration, changing live data, or any separate production permission action. The task remains at the live-migration approval boundary.
+This handoff does not carry approval to push, merge, deploy, or apply a migration. Re-check the current conversation before any outward action.
 
 ## GATES AND BLOCKERS
 
@@ -52,6 +52,6 @@ Mason approved the commit and protected PR pipeline in this task. That authoriza
 
 ## FIRST ACTION
 
-Land the review-fix commit, obtain its replacement exact-SHA adversarial proof, and rerun the protected PR checks before merge. Apply the live migration only after Mason explicitly authorizes that separate production action.
+Commit the Sol-review correction, then obtain its replacement exact-SHA adversarial proof before any release action.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
