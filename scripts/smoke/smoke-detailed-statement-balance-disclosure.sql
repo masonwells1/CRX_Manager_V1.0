@@ -155,10 +155,12 @@ BEGIN
   UPDATE public.invoices SET status = 'posted'
   WHERE id IN (v_pre_as_of_target_invoice, v_future_target_invoice);
   UPDATE public.invoices SET credit_applied_cents = CASE
-    WHEN id = v_pre_as_of_target_invoice THEN 2000
+    WHEN id = v_pre_as_of_target_invoice THEN 0
     WHEN id = v_future_target_invoice THEN 8000
   END
   WHERE id IN (v_pre_as_of_target_invoice, v_future_target_invoice);
+  UPDATE public.invoices SET status = 'paid'
+  WHERE id = v_future_target_invoice;
 
   INSERT INTO public.credit_memo_applications (
     credit_memo_id, target_invoice_id, amount_cents, applied_by, applied_at,

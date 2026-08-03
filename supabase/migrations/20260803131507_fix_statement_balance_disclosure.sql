@@ -72,17 +72,37 @@ BEGIN
     RAISE EXCEPTION 'Customer not found: %', p_customer_id;
   END IF;
 
+  -- The generated balance contains today's credit_applied_cents. Replace that
+  -- one lever with applications active at the cutoff so a later application or
+  -- reversal changes neither side of a regenerated historical statement.
   FOR v_inv IN
-    SELECT i.*
+    SELECT i.*,
+      (
+        i.balance_cents
+        + i.credit_applied_cents
+        - credit_at_cutoff.applied_cents
+      )::bigint AS statement_balance_cents
     FROM invoices i
+    CROSS JOIN LATERAL (
+      SELECT COALESCE(SUM(cma.amount_cents), 0)::bigint AS applied_cents
+      FROM credit_memo_applications cma
+      WHERE cma.target_invoice_id = i.id
+        AND cma.applied_at::date <= p_as_of_date
+        AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
+    ) credit_at_cutoff
     WHERE i.customer_id = p_customer_id
-      AND i.status IN ('posted', 'overdue')
-      AND i.balance_cents > 0
+      AND i.status IN ('posted', 'overdue', 'paid')
+      AND i.invoice_type <> 'credit_memo'
       AND i.deleted_at IS NULL
       AND i.invoice_date <= p_as_of_date
+      AND (
+        i.balance_cents
+        + i.credit_applied_cents
+        - credit_at_cutoff.applied_cents
+      ) > 0
     ORDER BY i.invoice_date, i.invoice_number
   LOOP
-    v_balance := v_balance + v_inv.balance_cents;
+    v_balance := v_balance + v_inv.statement_balance_cents;
     v_days_aged := p_as_of_date - v_inv.invoice_date;
 
     IF v_inv.invoice_type = 'field_application' AND v_inv.crop_type IS NOT NULL THEN
@@ -172,11 +192,11 @@ BEGIN
       'total_amount_cents', v_inv.total_amount_cents,
       'paid_amount_cents', v_inv.paid_amount_cents,
       'prepay_applied_cents', v_inv.prepay_applied_cents,
-      'balance_cents', v_inv.balance_cents,
+      'balance_cents', v_inv.statement_balance_cents,
       'items', v_items,
       'shares', v_shares,
       'finance_charge_cents', v_finance_cents,
-      'net_due_cents', v_inv.balance_cents,
+      'net_due_cents', v_inv.statement_balance_cents,
       'price_per_acre', CASE
         WHEN v_inv.total_acres > 0 THEN
           round(v_inv.total_amount_cents / 100.0 / v_inv.total_acres, 2)
@@ -185,20 +205,37 @@ BEGIN
     );
   END LOOP;
 
+  WITH statement_invoices AS (
+    SELECT i.*,
+      (
+        i.balance_cents
+        + i.credit_applied_cents
+        - credit_at_cutoff.applied_cents
+      )::bigint AS statement_balance_cents
+    FROM invoices i
+    CROSS JOIN LATERAL (
+      SELECT COALESCE(SUM(cma.amount_cents), 0)::bigint AS applied_cents
+      FROM credit_memo_applications cma
+      WHERE cma.target_invoice_id = i.id
+        AND cma.applied_at::date <= p_as_of_date
+        AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
+    ) credit_at_cutoff
+    WHERE i.customer_id = p_customer_id
+      AND i.status IN ('posted', 'overdue', 'paid')
+      AND i.invoice_type <> 'credit_memo'
+      AND i.deleted_at IS NULL
+      AND i.invoice_date <= p_as_of_date
+  )
   SELECT jsonb_build_object(
-    'current_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) <= 30 THEN i.balance_cents ELSE 0 END), 0),
-    'days_30_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) BETWEEN 31 AND 60 THEN i.balance_cents ELSE 0 END), 0),
-    'days_60_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) BETWEEN 61 AND 90 THEN i.balance_cents ELSE 0 END), 0),
-    'days_90_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) BETWEEN 91 AND 120 THEN i.balance_cents ELSE 0 END), 0),
-    'over_120_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) > 120 THEN i.balance_cents ELSE 0 END), 0)
+    'current_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) <= 30 THEN i.statement_balance_cents ELSE 0 END), 0),
+    'days_30_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) BETWEEN 31 AND 60 THEN i.statement_balance_cents ELSE 0 END), 0),
+    'days_60_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) BETWEEN 61 AND 90 THEN i.statement_balance_cents ELSE 0 END), 0),
+    'days_90_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) BETWEEN 91 AND 120 THEN i.statement_balance_cents ELSE 0 END), 0),
+    'over_120_cents', COALESCE(sum(CASE WHEN p_as_of_date - COALESCE(i.due_date, i.invoice_date) > 120 THEN i.statement_balance_cents ELSE 0 END), 0)
   )
   INTO v_aging
-  FROM invoices i
-  WHERE i.customer_id = p_customer_id
-    AND i.status IN ('posted', 'overdue')
-    AND i.balance_cents > 0
-    AND i.deleted_at IS NULL
-    AND i.invoice_date <= p_as_of_date;
+  FROM statement_invoices i
+  WHERE i.statement_balance_cents > 0;
 
   -- `balance_cents` is the memo's *current* generated balance.  A statement
   -- regenerated for an earlier date must instead replay the immutable credit
@@ -278,15 +315,30 @@ BEGIN
   PERFORM public.require_admin();
 
   FOR v_cust IN
-    SELECT DISTINCT c.id, c.farm_name
+    SELECT c.id, c.farm_name
     FROM customers c
-    INNER JOIN invoices i
-      ON i.customer_id = c.id
-      AND i.status IN ('posted', 'overdue')
-      AND i.balance_cents > 0
-      AND i.deleted_at IS NULL
-      AND i.invoice_date <= p_as_of_date
     WHERE c.is_active = true
+      AND EXISTS (
+        SELECT 1
+        FROM invoices i
+        CROSS JOIN LATERAL (
+          SELECT COALESCE(SUM(cma.amount_cents), 0)::bigint AS applied_cents
+          FROM credit_memo_applications cma
+          WHERE cma.target_invoice_id = i.id
+            AND cma.applied_at::date <= p_as_of_date
+            AND (cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date)
+        ) credit_at_cutoff
+        WHERE i.customer_id = c.id
+          AND i.status IN ('posted', 'overdue', 'paid')
+          AND i.invoice_type <> 'credit_memo'
+          AND i.deleted_at IS NULL
+          AND i.invoice_date <= p_as_of_date
+          AND (
+            i.balance_cents
+            + i.credit_applied_cents
+            - credit_at_cutoff.applied_cents
+          ) > 0
+      )
     ORDER BY c.farm_name
   LOOP
     v_stmt := get_detailed_statement_data(v_cust.id, p_as_of_date, p_mode);
@@ -319,8 +371,12 @@ DECLARE
     WHERE oid = to_regprocedure('public.get_detailed_statement_data(uuid,date,text)')
   );
 BEGIN
-  IF v_batch_def NOT LIKE '%i.status IN (''posted'', ''overdue'')%' THEN
-    RAISE EXCEPTION 'POSTFLIGHT_FAILED: overdue batch selector is missing';
+  IF v_batch_def NOT LIKE '%i.status IN (''posted'', ''overdue'', ''paid'')%'
+     OR v_batch_def NOT LIKE '%i.balance_cents%+ i.credit_applied_cents%- credit_at_cutoff.applied_cents%'
+     OR v_batch_def NOT LIKE '%cma.target_invoice_id = i.id%'
+     OR v_batch_def NOT LIKE '%cma.applied_at::date <= p_as_of_date%'
+     OR v_batch_def NOT LIKE '%cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical-credit-aware batch selector is missing';
   END IF;
   IF v_batch_def NOT LIKE '%p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor%'
      OR v_batch_def NOT LIKE '%RAISE EXCEPTION ''ACTOR_MISMATCH''%' THEN
@@ -332,8 +388,21 @@ BEGIN
   IF v_detail_def LIKE '%v_inv.balance_cents + v_finance_cents%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: finance charge is still double-counted';
   END IF;
-  IF v_detail_def NOT LIKE '%''net_due_cents'', v_inv.balance_cents%' THEN
-    RAISE EXCEPTION 'POSTFLIGHT_FAILED: net_due_cents is not invoice balance';
+  IF v_detail_def NOT LIKE '%''net_due_cents'', v_inv.statement_balance_cents%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: net_due_cents is not the as-of invoice balance';
+  END IF;
+  IF v_detail_def NOT LIKE '%i.status IN (''posted'', ''overdue'', ''paid'')%'
+     OR v_detail_def NOT LIKE '%i.balance_cents%+ i.credit_applied_cents%- credit_at_cutoff.applied_cents%'
+     OR v_detail_def NOT LIKE '%cma.target_invoice_id = i.id%'
+     OR v_detail_def NOT LIKE '%cma.applied_at::date <= p_as_of_date%'
+     OR v_detail_def NOT LIKE '%cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical target-invoice credit replay is missing';
+  END IF;
+  IF v_detail_def NOT LIKE '%-ci.total_amount_cents - COALESCE(%'
+     OR v_detail_def NOT LIKE '%cma.credit_memo_id = ci.id%'
+     OR v_detail_def NOT LIKE '%cma.applied_at::date <= p_as_of_date%'
+     OR v_detail_def NOT LIKE '%cma.reversed_at IS NULL OR cma.reversed_at::date > p_as_of_date%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical open-credit replay is missing';
   END IF;
   IF v_detail_def NOT LIKE '%''open_credit_cents'', v_open_credit_cents%'
      OR v_detail_def NOT LIKE '%''net_account_position_cents'', v_balance - v_open_credit_cents%' THEN

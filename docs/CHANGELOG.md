@@ -11,6 +11,9 @@ finance-charge metadata to the already-inclusive charge-invoice balance; and
 statements will show gross open invoices, unapplied credits, and net account
 position as separate figures. Accounts whose available credits cover the gross
 invoices receive a contact-before-payment message instead of a payment demand.
+Regenerated historical statements replay credit applications and reversals on
+both the memo and target-invoice sides at the statement cutoff, so later credit
+activity cannot create a false historical payment request.
 PDF/email generation fails closed until both new RPC fields are present, and
 batch admin authorization runs before selecting customers so even an empty
 result cannot disclose receivables state to a non-admin.
@@ -22,13 +25,13 @@ unallowlisted violations, the migration security/drift reviewers were clean,
 and focused unit plus real-jsPDF render coverage is registered in the billing
 and regression prevention suites.
 
-An exact-SHA Sol review then found two candidate defects before release: a
+Post-push review then found two candidate defects before release: a
 backdated statement used a credit memo's current balance instead of its
 historical application-ledger position, and the overdue-only batch fixture also
-created a posted charge. The candidate now reconstructs credit availability at
-the requested statement cutoff and proves the batch selector with a separate
-overdue-only customer. The revised rollback-only chain passes; a replacement
-exact-SHA review remains required before this candidate can land or apply.
+created a posted charge. The candidate now replays credit applications on both
+the memo and target-invoice sides at the requested cutoff and proves the batch
+selector with a separate overdue-only customer. The revised SQL still requires
+replacement review and rollback-only execution proof before live apply.
 
 The production-action guard regression test now clears Git's hook-provided
 repository selectors, including the shared Git directory, before creating
