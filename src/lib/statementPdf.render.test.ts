@@ -87,6 +87,28 @@ describe('statement PDF real renderer', () => {
     expect(pageCommands).not.toContain('Page 2');
   });
 
+  it('moves the complete account-position block to a new page near the footer boundary', async () => {
+    const crowdedStatement = {
+      ...renderedStatement,
+      transactions: Array.from({ length: 21 }, (_, index) => ({
+        ...renderedStatement.transactions[0],
+        invoice_number: `INV-RENDER-${index + 1}`,
+      })),
+    };
+
+    const doc = await generateStatementPdf(crowdedStatement);
+    const pages = doc.internal.pages as unknown as string[][];
+    const firstPageCommands = pages[1].join('\n');
+    const secondPageCommands = pages[2].join('\n');
+
+    expect(doc.getNumberOfPages()).toBe(2);
+    expect(firstPageCommands).not.toContain('Net Account Position:');
+    expect(secondPageCommands).toContain('Gross Open Invoices:');
+    expect(secondPageCommands).toContain('Unapplied Credits:');
+    expect(secondPageCommands).toContain('Net Account Position:');
+    expect(secondPageCommands).toContain('Page 2');
+  });
+
   it('replaces remittance instructions when credits cover the gross invoices', async () => {
     const creditCoveredStatement = {
       ...renderedStatement,

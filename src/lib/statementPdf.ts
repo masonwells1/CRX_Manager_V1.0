@@ -286,6 +286,16 @@ function drawSummaryTransactions(
 
   y = doc.lastAutoTable.finalY + 10;
 
+  // Keep the complete account-position block above the footer. autoTable can
+  // finish close enough to the page bottom that drawing these rows in place
+  // would overlap the footer or put the net position off-page.
+  const accountPositionBlockHeight = 64;
+  const footerSafeBottom = pageH - 32;
+  if (y + accountPositionBlockHeight > footerSafeBottom) {
+    doc.addPage();
+    y = margin;
+  }
+
   // Account position summary: gross invoices remain separate from credits.
   const { grossOpenInvoiceCents, openCreditCents, netAccountPositionCents } =
     getStatementAccountPosition(data);
