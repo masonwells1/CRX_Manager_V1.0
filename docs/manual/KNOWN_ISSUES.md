@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-03.** Live ledger high-water is `20260803010917`. The prior payload-blind replay risk for `save_invoice` and `create_quick_delivery` is fixed live: receipts bind to a server-derived request fingerprint and authenticated actor, while mismatches reopen the already-committed entity instead of duplicating it. Post-apply grants, auth guards, columns, and receipt binding state were verified.
+**Last verified: 2026-08-03.** Live ledger high-water is `20260803010917`. The prior payload-blind replay risk for `save_invoice` and `create_quick_delivery` is fixed live: receipts bind to a server-derived request fingerprint and authenticated actor, while mismatches reopen the already-committed entity instead of duplicating it. Post-apply grants, auth guards, columns, and receipt binding state were verified. Local candidate `20260803131507_fix_statement_balance_disclosure` addresses the three Section 2 statement findings but is reviewed and **not live**.
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.

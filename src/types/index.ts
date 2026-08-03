@@ -2048,6 +2048,10 @@ export interface DetailedStatementData {
     over_120_cents: number;
   };
   outstanding_balance_cents: number;
+  /** Gross positive invoice balance; open credit memos remain separate by design. */
+  open_credit_cents: number;
+  /** Gross open invoices less unapplied credit memos; may be negative. */
+  net_account_position_cents: number;
   as_of_date: string;
   mode: 'summary' | 'detailed';
 }

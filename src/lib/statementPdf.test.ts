@@ -121,6 +121,8 @@ function makeStatementData(overrides: Partial<DetailedStatementData> = {}): Deta
       over_120_cents: 0,
     },
     outstanding_balance_cents: 50000,
+    open_credit_cents: 0,
+    net_account_position_cents: 50000,
     as_of_date: '2026-03-15',
     mode: 'summary',
     ...overrides,
@@ -170,9 +172,33 @@ describe('generateStatementPdf', () => {
 
   it('handles transactions with finance charges', async () => {
     const doc = await generateStatementPdf(makeStatementData({
-      transactions: [makeTransaction({ finance_charge_cents: 1500 })],
+      mode: 'detailed',
+      transactions: [makeTransaction({
+        balance_cents: 50000,
+        finance_charge_cents: 1500,
+        net_due_cents: 50000,
+      })],
     }));
     expect(doc).toBe(mockDoc);
+    expect(mockDoc.text).toHaveBeenCalledWith('Finance Charges', expect.any(Number), expect.any(Number));
+    expect(mockDoc.text).toHaveBeenCalledWith('$15.00', expect.any(Number), expect.any(Number), { align: 'right' });
+    expect(mockDoc.text).not.toHaveBeenCalledWith('$515.00', expect.any(Number), expect.any(Number), { align: 'right' });
+  });
+
+  it('labels gross invoices, credits, and net account position separately', async () => {
+    await generateStatementPdf(makeStatementData({
+      outstanding_balance_cents: 50000,
+      open_credit_cents: 12500,
+      net_account_position_cents: 37500,
+    }));
+
+    const labels = mockDoc.text.mock.calls.map(([value]) => value);
+    expect(labels).toContain('GROSS OPEN INVOICES');
+    expect(labels).toContain('Gross Open Invoices:');
+    expect(labels).toContain('Unapplied Credits:');
+    expect(labels).toContain('Net Account Position:');
+    expect(labels).not.toContain('BALANCE DUE');
+    expect(labels).not.toContain('Total Outstanding:');
   });
 
   it('handles transactions with shares', async () => {

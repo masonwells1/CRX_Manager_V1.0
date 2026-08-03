@@ -2,6 +2,72 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-03 — Statement balance consistency fixes prepared — NOT LIVE
+
+The reviewed Section 2 remediation aligns customer statements across the target
+RPC contract, PDF, and email surfaces. Month-end batches will include customers
+whose only open invoice is overdue; detailed statements will stop adding linked
+finance-charge metadata to the already-inclusive charge-invoice balance; and
+statements will show gross open invoices, unapplied credits, and net account
+position as separate figures. Accounts whose available credits cover the gross
+invoices receive a contact-before-payment message instead of a payment demand.
+Regenerated historical statements replay credit applications and reversals on
+both the memo and target-invoice sides at the statement cutoff, so later credit
+activity cannot create a false historical payment request. Invoice and credit
+memo eligibility is also reconstructed from posting/unposting audit intervals
+plus void and soft-delete timestamps. A later status-only credit-memo unapply remains reconstructable from
+its preserved face amount and application ledger. A later generic invoice void,
+which deliberately zeroes mutable money columns, makes the statement fail closed
+instead of guessing a pre-void balance from incomplete history.
+Later payment-set updates, prepay activity (including a later deletion), and
+write-offs also now fail closed because their current balance effects cannot be
+replayed reliably from the production history tables.
+PDF/email generation fails closed until both new RPC fields are present, and
+batch admin authorization runs before selecting customers so even an empty
+result cannot disclose receivables state to a non-admin.
+
+Migration `20260803131507_fix_statement_balance_disclosure` remains local and
+unapplied. A prior SQL revision's combined live-schema behavior chain reached
+`SMOKE_PASS_ROLLBACK`; post-smoke readback proved the original live function
+hashes were unchanged and no fixtures remained. All 21 live invariant predicates
+returned zero unallowlisted violations, and focused unit plus real-jsPDF render
+coverage is registered in the billing and regression prevention suites.
+
+Post-push and exact-commit reviews found further candidate defects before release: a
+backdated statement used a credit memo's current balance instead of its
+historical application-ledger position, the overdue-only batch fixture also
+created a posted charge, current status hid later-voided documents, and generic
+voids destroyed the mutable amounts needed for trustworthy reconstruction. The
+candidate now replays credit applications on both sides, uses lifecycle
+timestamps for as-of eligibility, fails closed on destructive later voids, and
+adds a validated constraint requiring posting timestamps on financial-status
+invoices. All timestamp cutoffs use the America/Chicago business date, including
+activity that crosses UTC midnight. The revised SQL still requires replacement
+rollback-only execution proof before live apply. A final PR review also found
+that re-posting overwrites `posted_at`; the candidate now replays every audited
+post/unpost interval with a legacy-row fallback and fails closed on ambiguous
+same-timestamp lifecycle events. A later unpost also now fails closed because
+the invoice becomes editable and its former contents cannot be reconstructed.
+It clamps each credit memo's remaining credit
+at zero and creates the posting-timestamp constraint with `NOT VALID` followed
+by lower-lock validation. Replacement RLS/security and migration-drift reviews
+were clean for the prior SQL revision. The next exact-commit review found that
+today's balance could still hide a later cash reversal offset by a later credit
+application. The candidate now fails detail and batch generation closed when
+post-cutoff cash, prepay, or write-off activity prevents trustworthy replay,
+with a combined payment-void-plus-credit regression. The current candidate's
+full migration plus smoke suite reached `SMOKE_PASS_ROLLBACK` in one forced
+transaction; subsequent live readback proved both new helpers and the new
+constraint were absent and no `[SMOKE]` rows remained. Replacement migration
+and exact-commit reviews are still required for this latest revision before any
+live apply.
+
+The production-action guard regression test now clears Git's hook-provided
+repository selectors, including the shared Git directory, before creating
+temporary repositories. This prevents false pre-commit failures without
+relaxing the production guard. Remittance stubs also expand for wrapped farm
+names so every line remains visible without covering balance or payment rows.
+
 ## 2026-08-02 — Factory resume replay and parked-Board repair
 
 The factory now serializes owner pause/resume evaluation and its conditional
