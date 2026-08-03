@@ -14,7 +14,7 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 
 ## PROVEN
 
-- The branch contains the Section 2 correction commits on top of the recorded base; the latest posting-interval review correction is currently uncommitted in the isolated worktree.
+- The branch contains the Section 2 correction commits on top of the recorded base; the latest post-cutoff-unpost correction is currently uncommitted in the isolated worktree.
 - Live catalog evidence on 2026-08-03 confirms one `generate_batch_statements(date,uuid,text,text)` overload with a posted-only selector.
 - Live catalog evidence confirms `get_detailed_statement_data(uuid,date,text)` returns `net_due_cents = invoice balance + linked finance charge`, even though generated invoice balance already includes the charge invoice amount.
 - Live `get_ar_aging(date)` defines open credit as the absolute value of posted negative credit-memo balances; the application deliberately reports gross positive invoices separately.
@@ -26,6 +26,7 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 - Exact-SHA review of `5d02ff30` then found that current status could hide an invoice or credit memo voided after the statement cutoff. The local correction now derives as-of eligibility from `posted_at`, `voided_at`, and `deleted_at`, and adds a post-cutoff-void regression. It still needs replacement review and execution proof.
 - Exact-SHA review of `037b94dc` correctly found that generic `void_invoice` zeroes the mutable amounts, so timestamps alone cannot reconstruct the pre-void balance; it also found that `posted_at` remained nullable. The local correction now fails detail and batch generation closed when a later generic void makes reconstruction unsafe, exercises the real void RPC, and adds a validated database constraint requiring `posted_at` for posted/paid/overdue/voided rows.
 - Exact-SHA review of `3c16ab4a` correctly found that raw `timestamptz::date` casts used the database timezone instead of CRX's America/Chicago business date. The local correction converts every posting, application, reversal, void, and deletion boundary in both statement RPCs to Central time and adds a UTC-midnight-crossing regression.
+- Exact-SHA review of `d55154ad` found that a later unpost makes an invoice editable, so its current contents cannot prove a historical statement. The local correction fails detail and batch generation closed for that case and adds a regression with a changed post-unpost amount.
 - Type-contract and PDF-output reviewers returned CLEAN. Compliance review found one MEDIUM payment-demand wording defect for credit-covered accounts; it was fixed with a negative-net fixture and the focused re-review returned CLEAN.
 - All 21 live database invariant predicates returned zero unallowlisted violations.
 - Current-base verification passed: full Vitest suite, billing 473/473, regression 166/166, TypeScript, zero-warning ESLint, production build, agent-workflow tests, migration SQL scan, local drift suite, documentation drift guard, and real jsPDF render assertions for positive, zero, and negative account positions.
@@ -35,17 +36,17 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 
 ## WRITTEN, NOT PROVEN
 
-- The latest posting-interval candidate received CLEAN replacement RLS/security and migration-drift reviews. It has not yet received exact-SHA review or rollback-only live behavior proof; earlier smoke proof applies only to prior SQL revisions.
+- The latest post-cutoff-unpost candidate still needs replacement migration review, exact-SHA review, and rollback-only live behavior proof; earlier smoke proof applies only to prior SQL revisions.
 - A post-deploy signed-in statement PDF/email observation cannot occur until the code is published and the migration is applied.
 
 ## REMAINING
 
-- Commit the posting-interval correction, obtain replacement migration and exact-SHA adversarial proof, and rerun PR checks before merge.
+- Commit the post-cutoff-unpost correction, obtain replacement migration and exact-SHA adversarial proof, and rerun PR checks before merge.
 - Live migration apply, B7 filename reconciliation, and post-apply catalog/behavior checks.
 
 ## APPROVAL STATE
 
-Mason approved the protected PR pipeline in the current task. That authorization does not cover applying the live migration or changing live data.
+Mason approved the protected PR pipeline and this live migration in the current task. The migration may apply only after its exact content-bound review, PR, and release gates are green.
 
 ## GATES AND BLOCKERS
 
@@ -55,6 +56,6 @@ Mason approved the protected PR pipeline in the current task. That authorization
 
 ## FIRST ACTION
 
-Validate and commit the posting-interval correction, then obtain replacement migration and exact-SHA proof before merging.
+Validate and commit the post-cutoff-unpost correction, then obtain replacement migration and exact-SHA proof before merging.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

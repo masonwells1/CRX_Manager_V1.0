@@ -43,7 +43,9 @@ activity that crosses UTC midnight. The revised SQL still requires replacement
 rollback-only execution proof before live apply. A final PR review also found
 that re-posting overwrites `posted_at`; the candidate now replays every audited
 post/unpost interval with a legacy-row fallback and fails closed on ambiguous
-same-timestamp lifecycle events. It clamps each credit memo's remaining credit
+same-timestamp lifecycle events. A later unpost also now fails closed because
+the invoice becomes editable and its former contents cannot be reconstructed.
+It clamps each credit memo's remaining credit
 at zero and creates the posting-timestamp constraint with `NOT VALID` followed
 by lower-lock validation. Replacement RLS/security and migration-drift reviews
 are CLEAN; exact-commit review and current-revision rollback behavior proof are

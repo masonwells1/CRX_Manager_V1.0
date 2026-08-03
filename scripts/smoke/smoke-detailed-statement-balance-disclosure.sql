@@ -15,10 +15,11 @@ DECLARE
   v_non_admin uuid;
   v_customer uuid;
   v_void_customer uuid;
+  v_unpost_customer uuid;
   v_overdue_customer uuid;
   v_overdue_invoice uuid;
   v_charge_invoice uuid;
-  v_repost_invoice uuid;
+  v_unpost_invoice uuid;
   v_credit_invoice uuid;
   v_pre_as_of_target_invoice uuid;
   v_future_target_invoice uuid;
@@ -126,50 +127,6 @@ BEGIN
     DATE '1899-12-01', DATE '1900-01-01', v_admin
   );
 
-  -- Re-posting overwrites the invoice header's posted_at. Preserve three
-  -- lifecycle events around the cutoff so both detail and batch generation
-  -- must select the first posting interval rather than today's header value.
-  INSERT INTO public.invoices (
-    invoice_number, customer_id, invoice_type, status, invoice_date,
-    due_date, posted_at, total_amount_cents, created_by
-  )
-  VALUES (
-    '[SMOKE]-REPOST-' || v_suffix, v_customer, 'chemical_sale', 'posted',
-    DATE '1899-12-01', DATE '1900-01-01', TIMESTAMPTZ '1900-02-01 18:00:00+00',
-    3000, v_admin
-  )
-  RETURNING id INTO v_repost_invoice;
-
-  INSERT INTO public.financial_audit_log (
-    operation_type, entity_type, entity_id, actor_user_id, actor_role,
-    old_values, new_values, total_impact_cents, description, created_at
-  )
-  VALUES
-    ('invoice_posted', 'invoice', v_repost_invoice, v_admin, 'admin',
-      jsonb_build_object('status', 'draft'),
-      jsonb_build_object('status', 'posted', 'posted_at', '1900-01-02 01:30:00+00'),
-      3000, '[SMOKE] initial post', TIMESTAMPTZ '1900-01-02 01:30:00+00'),
-    ('invoice_unposted', 'invoice', v_repost_invoice, v_admin, 'admin',
-      jsonb_build_object('status', 'posted', 'posted_at', '1900-01-02 01:30:00+00'),
-      jsonb_build_object('status', 'unposted', 'unposted_at', '1900-01-10 18:00:00+00'),
-      -3000, '[SMOKE] later unpost', TIMESTAMPTZ '1900-01-10 18:00:00+00'),
-    ('invoice_posted', 'invoice', v_repost_invoice, v_admin, 'admin',
-      jsonb_build_object('status', 'unposted'),
-      jsonb_build_object('status', 'posted', 'posted_at', '1900-02-01 18:00:00+00'),
-      3000, '[SMOKE] repost', TIMESTAMPTZ '1900-02-01 18:00:00+00');
-
-  IF NOT public.statement_invoice_was_posted_as_of(
-       v_repost_invoice, TIMESTAMPTZ '1900-02-01 18:00:00+00', DATE '1900-01-01'
-     )
-     OR public.statement_invoice_was_posted_as_of(
-       v_repost_invoice, TIMESTAMPTZ '1900-02-01 18:00:00+00', DATE '1900-01-15'
-     )
-     OR NOT public.statement_invoice_was_posted_as_of(
-       v_repost_invoice, TIMESTAMPTZ '1900-02-01 18:00:00+00', DATE '1900-03-01'
-     ) THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: posting interval replay did not preserve post/unpost/repost boundaries';
-  END IF;
-
   -- Reconstruct credit as of the statement date from the application ledger,
   -- rather than using its current generated balance. At the cutoff, the first
   -- application is still active; the second has not happened yet. Today only
@@ -181,27 +138,9 @@ BEGIN
   )
   VALUES (
     '[SMOKE]-CREDIT-' || v_suffix, v_customer, 'credit_memo', 'posted',
-    DATE '1900-01-01', TIMESTAMPTZ '1900-02-01 18:00:00+00', -10000, 8000, v_admin
+    DATE '1900-01-01', TIMESTAMPTZ '1900-01-02 01:30:00+00', -10000, 8000, v_admin
   )
   RETURNING id INTO v_credit_invoice;
-
-  INSERT INTO public.financial_audit_log (
-    operation_type, entity_type, entity_id, actor_user_id, actor_role,
-    old_values, new_values, total_impact_cents, description, created_at
-  )
-  VALUES
-    ('invoice_posted', 'invoice', v_credit_invoice, v_admin, 'admin',
-      jsonb_build_object('status', 'draft'),
-      jsonb_build_object('status', 'posted', 'posted_at', '1900-01-02 01:30:00+00'),
-      -10000, '[SMOKE] initial credit post', TIMESTAMPTZ '1900-01-02 01:30:00+00'),
-    ('invoice_unposted', 'invoice', v_credit_invoice, v_admin, 'admin',
-      jsonb_build_object('status', 'posted', 'posted_at', '1900-01-02 01:30:00+00'),
-      jsonb_build_object('status', 'unposted', 'unposted_at', '1900-01-10 18:00:00+00'),
-      10000, '[SMOKE] later credit unpost', TIMESTAMPTZ '1900-01-10 18:00:00+00'),
-    ('invoice_posted', 'invoice', v_credit_invoice, v_admin, 'admin',
-      jsonb_build_object('status', 'unposted'),
-      jsonb_build_object('status', 'posted', 'posted_at', '1900-02-01 18:00:00+00'),
-      -10000, '[SMOKE] credit repost', TIMESTAMPTZ '1900-02-01 18:00:00+00');
 
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, status, invoice_date,
@@ -345,6 +284,69 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE 'HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: post-cutoff generic void detail raised unexpected error: %', SQLERRM;
+    END IF;
+  END;
+
+  -- An unpost after the cutoff returns an invoice to an editable state. Even
+  -- though the audit proves it was posted then, the current amount below has
+  -- since changed; historical statements must reject it rather than display
+  -- that mutable value as if it were the original posting.
+  INSERT INTO public.customers (farm_name, account_number, is_active)
+  VALUES ('[SMOKE] Historical Unpost ' || v_suffix, '[SMOKE]-UNPOST-' || v_suffix, true)
+  RETURNING id INTO v_unpost_customer;
+
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date,
+    total_amount_cents, created_by
+  )
+  VALUES (
+    '[SMOKE]-UNPOST-' || v_suffix, v_unpost_customer, 'chemical_sale', 'unposted',
+    DATE '1699-12-01', 9000, v_admin
+  )
+  RETURNING id INTO v_unpost_invoice;
+
+  INSERT INTO public.financial_audit_log (
+    operation_type, entity_type, entity_id, actor_user_id, actor_role,
+    old_values, new_values, total_impact_cents, description, created_at
+  )
+  VALUES
+    ('invoice_posted', 'invoice', v_unpost_invoice, v_admin, 'admin',
+      jsonb_build_object('status', 'draft'),
+      jsonb_build_object('status', 'posted', 'posted_at', '1700-01-02 01:30:00+00', 'total_amount_cents', 2500),
+      2500, '[SMOKE] historical post before later edit', TIMESTAMPTZ '1700-01-02 01:30:00+00'),
+    ('invoice_unposted', 'invoice', v_unpost_invoice, v_admin, 'admin',
+      jsonb_build_object('status', 'posted', 'posted_at', '1700-01-02 01:30:00+00'),
+      jsonb_build_object('status', 'unposted'),
+      -2500, '[SMOKE] later unpost before mutable edit', TIMESTAMPTZ '1700-01-10 18:00:00+00');
+
+  IF NOT public.statement_invoice_was_posted_as_of(
+       v_unpost_invoice, NULL, DATE '1700-01-01'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posting interval evidence was not recognized before the later unpost';
+  END IF;
+
+  BEGIN
+    PERFORM public.get_detailed_statement_data(
+      v_unpost_customer, DATE '1700-01-01', 'detailed'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: post-cutoff unpost produced a statement from mutable invoice data';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'HISTORICAL_UNPOST_RECONSTRUCTION_UNAVAILABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: post-cutoff unpost detail raised unexpected error: %', SQLERRM;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.generate_batch_statements(
+      DATE '1700-01-01',
+      v_admin,
+      'summary',
+      'smoke-statement-historical-unpost-batch-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: post-cutoff unpost produced a batch statement from mutable invoice data';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'HISTORICAL_UNPOST_RECONSTRUCTION_UNAVAILABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: post-cutoff unpost batch raised unexpected error: %', SQLERRM;
     END IF;
   END;
 

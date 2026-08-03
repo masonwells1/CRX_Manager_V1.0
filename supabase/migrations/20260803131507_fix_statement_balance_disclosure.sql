@@ -201,6 +201,27 @@ BEGIN
     RAISE EXCEPTION 'HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE: a later generic invoice void prevents a trustworthy statement at this cutoff';
   END IF;
 
+  -- An invoice unposted after the cutoff becomes editable again.  The audit
+  -- ledger records its posting interval but not every subsequent header or
+  -- line-item edit, so today's mutable row cannot prove its former contents.
+  IF EXISTS (
+    SELECT 1
+    FROM invoices i
+    WHERE i.customer_id = p_customer_id
+      AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
+      AND i.invoice_date <= p_as_of_date
+      AND EXISTS (
+        SELECT 1
+        FROM financial_audit_log fal
+        WHERE fal.entity_type = 'invoice'
+          AND fal.entity_id = i.id
+          AND fal.operation_type = 'invoice_unposted'
+          AND (fal.created_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+      )
+  ) THEN
+    RAISE EXCEPTION 'HISTORICAL_UNPOST_RECONSTRUCTION_UNAVAILABLE: a later invoice unpost prevents a trustworthy statement at this cutoff';
+  END IF;
+
   -- The generated balance contains today's credit_applied_cents. Replace that
   -- one lever with applications active at the cutoff so a later application or
   -- reversal changes neither side of a regenerated historical statement.
@@ -467,6 +488,27 @@ BEGIN
     RAISE EXCEPTION 'HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE: a later generic invoice void prevents a trustworthy statement batch at this cutoff';
   END IF;
 
+  -- Keep batch generation consistent with detail generation: a later unpost
+  -- reopens an invoice for edits that the posting audit cannot reconstruct.
+  IF EXISTS (
+    SELECT 1
+    FROM invoices i
+    JOIN customers c ON c.id = i.customer_id
+    WHERE c.is_active = true
+      AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
+      AND i.invoice_date <= p_as_of_date
+      AND EXISTS (
+        SELECT 1
+        FROM financial_audit_log fal
+        WHERE fal.entity_type = 'invoice'
+          AND fal.entity_id = i.id
+          AND fal.operation_type = 'invoice_unposted'
+          AND (fal.created_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+      )
+  ) THEN
+    RAISE EXCEPTION 'HISTORICAL_UNPOST_RECONSTRUCTION_UNAVAILABLE: a later invoice unpost prevents a trustworthy statement batch at this cutoff';
+  END IF;
+
   FOR v_cust IN
     SELECT c.id, c.farm_name
     FROM customers c
@@ -558,8 +600,10 @@ BEGIN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: batch admin authorization is missing';
   END IF;
   IF v_batch_def NOT LIKE '%HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE%'
-     OR v_batch_def NOT LIKE '%fal.operation_type = ''invoice_voided''%' THEN
-    RAISE EXCEPTION 'POSTFLIGHT_FAILED: batch generic-void fail-closed guard is missing';
+     OR v_batch_def NOT LIKE '%fal.operation_type = ''invoice_voided''%'
+     OR v_batch_def NOT LIKE '%HISTORICAL_UNPOST_RECONSTRUCTION_UNAVAILABLE%'
+     OR v_batch_def NOT LIKE '%fal.operation_type = ''invoice_unposted''%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: batch historical-reconstruction fail-closed guards are missing';
   END IF;
   IF v_batch_def LIKE '%posted_at::date%'
      OR v_batch_def LIKE '%voided_at::date%'
@@ -597,8 +641,10 @@ BEGIN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: account-position disclosure fields are missing';
   END IF;
   IF v_detail_def NOT LIKE '%HISTORICAL_VOID_RECONSTRUCTION_UNAVAILABLE%'
-     OR v_detail_def NOT LIKE '%fal.operation_type = ''invoice_voided''%' THEN
-    RAISE EXCEPTION 'POSTFLIGHT_FAILED: detail generic-void fail-closed guard is missing';
+     OR v_detail_def NOT LIKE '%fal.operation_type = ''invoice_voided''%'
+     OR v_detail_def NOT LIKE '%HISTORICAL_UNPOST_RECONSTRUCTION_UNAVAILABLE%'
+     OR v_detail_def NOT LIKE '%fal.operation_type = ''invoice_unposted''%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: detail historical-reconstruction fail-closed guards are missing';
   END IF;
   IF v_detail_def LIKE '%posted_at::date%'
      OR v_detail_def LIKE '%voided_at::date%'
