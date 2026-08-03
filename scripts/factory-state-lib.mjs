@@ -1678,8 +1678,16 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
           }
           validateHookOriginReceipt(paths, event);
         } else {
+          // A prior factory version could append a second terminal parking event
+          // to refresh its owner-facing summary. Preserve the hash-chained event
+          // history and accept only this same-lane terminal metadata refresh;
+          // every other illegal transition remains fail-closed.
+          const duplicateTerminalPark = job.stage === "parked" && event.payload.stage === "parked"
+              && job.laneSessionId === event.sessionId
+              && job.actorTool === event.actorTool
+              && String(event.payload.blocker || "").trim();
           const allowed = ALLOWED_AGENT_STAGE_CHANGES.get(job.stage);
-          if (!allowed?.has(event.payload.stage)
+          if ((!duplicateTerminalPark && !allowed?.has(event.payload.stage))
               || job.laneSessionId !== event.sessionId
               || job.actorTool !== event.actorTool
               || (event.payload.stage === "awaiting-morning-review" && !String(event.payload.behaviorSummary || "").trim())
