@@ -55,12 +55,14 @@ were clean for the prior SQL revision. The next exact-commit review found that
 today's balance could still hide a later cash reversal offset by a later credit
 application. The candidate now fails detail and batch generation closed when
 post-cutoff cash, prepay, or write-off activity prevents trustworthy replay,
-with a combined payment-void-plus-credit regression. The current candidate's
-full migration plus smoke suite reached `SMOKE_PASS_ROLLBACK` in one forced
-transaction; subsequent live readback proved both new helpers and the new
-constraint were absent and no `[SMOKE]` rows remained. Replacement migration
-and exact-commit reviews are still required for this latest revision before any
-live apply.
+with a combined payment-void-plus-credit regression. Both content-bound
+migration reviewers and the exact-commit adversarial reviewer returned clean on
+that revision. The current migration revision still requires rollback-only
+execution proof before any live apply.
+Batch PDF generation now aborts instead of silently omitting a customer whose
+historical statement is rejected. Batch email resolves every selected
+statement before sending the first message, preventing an apparently successful
+partial send when one customer fails the historical-reconstruction gate.
 
 The production-action guard regression test now clears Git's hook-provided
 repository selectors, including the shared Git directory, before creating
