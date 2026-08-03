@@ -54,12 +54,98 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'PREFLIGHT_FAILED: invoices_financial_status_requires_posted_at already exists';
   END IF;
+  IF to_regprocedure('public.statement_invoice_was_posted_as_of(uuid,timestamp with time zone,date)') IS NOT NULL
+     OR EXISTS (
+       SELECT 1
+       FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public'
+         AND p.proname = 'statement_invoice_was_posted_as_of'
+     ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_FAILED: statement_invoice_was_posted_as_of already exists';
+  END IF;
 END;
 $preflight$;
 
 ALTER TABLE public.invoices
   ADD CONSTRAINT invoices_financial_status_requires_posted_at
-  CHECK (status NOT IN ('posted', 'paid', 'overdue', 'voided') OR posted_at IS NOT NULL);
+  CHECK (status NOT IN ('posted', 'paid', 'overdue', 'voided') OR posted_at IS NOT NULL)
+  NOT VALID;
+
+ALTER TABLE public.invoices
+  VALIDATE CONSTRAINT invoices_financial_status_requires_posted_at;
+
+-- Reconstruct whether an invoice was posted at the end of a CRX business day.
+-- Re-posting overwrites invoices.posted_at, while unposting clears it, so the
+-- current header alone is not historical evidence. The append-only financial
+-- audit ledger supplies each posting interval. A narrow fallback covers legacy
+-- rows whose original post event predates complete audit coverage; a later
+-- unpost preserves that original posted_at in old_values.
+CREATE FUNCTION public.statement_invoice_was_posted_as_of(
+  p_invoice_id uuid,
+  p_current_posted_at timestamptz,
+  p_as_of_date date
+)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_latest_at timestamptz;
+  v_latest_operation text;
+BEGIN
+  SELECT max(fal.created_at)
+  INTO v_latest_at
+  FROM public.financial_audit_log fal
+  WHERE fal.entity_type = 'invoice'
+    AND fal.entity_id = p_invoice_id
+    AND fal.operation_type IN ('invoice_posted', 'invoice_unposted')
+    AND (fal.created_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date;
+
+  IF v_latest_at IS NOT NULL THEN
+    IF (
+      SELECT count(DISTINCT fal.operation_type)
+      FROM public.financial_audit_log fal
+      WHERE fal.entity_type = 'invoice'
+        AND fal.entity_id = p_invoice_id
+        AND fal.operation_type IN ('invoice_posted', 'invoice_unposted')
+        AND fal.created_at = v_latest_at
+    ) > 1 THEN
+      RAISE EXCEPTION 'HISTORICAL_POSTING_RECONSTRUCTION_UNAVAILABLE: posting lifecycle events share the same audit timestamp';
+    END IF;
+
+    SELECT fal.operation_type
+    INTO v_latest_operation
+    FROM public.financial_audit_log fal
+    WHERE fal.entity_type = 'invoice'
+      AND fal.entity_id = p_invoice_id
+      AND fal.operation_type IN ('invoice_posted', 'invoice_unposted')
+      AND fal.created_at = v_latest_at
+    LIMIT 1;
+
+    RETURN v_latest_operation = 'invoice_posted';
+  END IF;
+
+  RETURN COALESCE(
+    (p_current_posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date,
+    false
+  ) OR EXISTS (
+    SELECT 1
+    FROM public.financial_audit_log fal
+    WHERE fal.entity_type = 'invoice'
+      AND fal.entity_id = p_invoice_id
+      AND fal.operation_type = 'invoice_unposted'
+      AND (fal.created_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+      AND fal.old_values->>'posted_at' IS NOT NULL
+      AND (((fal.old_values->>'posted_at')::timestamptz) AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.statement_invoice_was_posted_as_of(uuid, timestamptz, date)
+  FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.get_detailed_statement_data(
   p_customer_id uuid,
@@ -101,8 +187,7 @@ BEGIN
     SELECT 1
     FROM invoices i
     WHERE i.customer_id = p_customer_id
-      AND i.posted_at IS NOT NULL
-      AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+      AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
       AND i.invoice_date <= p_as_of_date
       AND (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
       AND EXISTS (
@@ -136,8 +221,7 @@ BEGIN
     ) credit_at_cutoff
     WHERE i.customer_id = p_customer_id
       AND i.invoice_type <> 'credit_memo'
-      AND i.posted_at IS NOT NULL
-      AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+      AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
       AND (i.voided_at IS NULL OR (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
       AND (i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
       AND i.invoice_date <= p_as_of_date
@@ -268,8 +352,7 @@ BEGIN
     ) credit_at_cutoff
     WHERE i.customer_id = p_customer_id
       AND i.invoice_type <> 'credit_memo'
-      AND i.posted_at IS NOT NULL
-      AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+      AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
       AND (i.voided_at IS NULL OR (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
       AND (i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
       AND i.invoice_date <= p_as_of_date
@@ -291,20 +374,19 @@ BEGIN
   -- not reduce the historical credit, while an application reversed later was
   -- still consuming credit at the cutoff.
   SELECT COALESCE(SUM(
-    -ci.total_amount_cents - COALESCE((
+    GREATEST(-ci.total_amount_cents - COALESCE((
       SELECT SUM(cma.amount_cents)
       FROM credit_memo_applications cma
       WHERE cma.credit_memo_id = ci.id
         AND (cma.applied_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
         AND (cma.reversed_at IS NULL OR (cma.reversed_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
-    ), 0)
+    ), 0), 0::bigint)
   ), 0)::bigint
   INTO v_open_credit_cents
   FROM invoices ci
   WHERE ci.customer_id = p_customer_id
     AND ci.invoice_type = 'credit_memo'
-    AND ci.posted_at IS NOT NULL
-    AND (ci.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+    AND public.statement_invoice_was_posted_as_of(ci.id, ci.posted_at, p_as_of_date)
     AND (ci.voided_at IS NULL OR (ci.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
     AND (ci.deleted_at IS NULL OR (ci.deleted_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
     AND ci.invoice_date <= p_as_of_date;
@@ -371,8 +453,7 @@ BEGIN
     FROM invoices i
     JOIN customers c ON c.id = i.customer_id
     WHERE c.is_active = true
-      AND i.posted_at IS NOT NULL
-      AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+      AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
       AND i.invoice_date <= p_as_of_date
       AND (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
       AND EXISTS (
@@ -402,8 +483,7 @@ BEGIN
         ) credit_at_cutoff
         WHERE i.customer_id = c.id
           AND i.invoice_type <> 'credit_memo'
-          AND i.posted_at IS NOT NULL
-          AND (i.posted_at AT TIME ZONE 'America/Chicago')::date <= p_as_of_date
+          AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
           AND (i.voided_at IS NULL OR (i.voided_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
           AND (i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date)
           AND i.invoice_date <= p_as_of_date
@@ -450,8 +530,18 @@ DECLARE
     WHERE conrelid = 'public.invoices'::regclass
       AND conname = 'invoices_financial_status_requires_posted_at'
   );
+  v_posted_as_of_oid oid := to_regprocedure(
+    'public.statement_invoice_was_posted_as_of(uuid,timestamp with time zone,date)'
+  );
+  v_posted_as_of_def text := (
+    SELECT prosrc
+    FROM pg_proc
+    WHERE oid = to_regprocedure(
+      'public.statement_invoice_was_posted_as_of(uuid,timestamp with time zone,date)'
+    )
+  );
 BEGIN
-  IF v_batch_def NOT LIKE '%(i.posted_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+  IF v_batch_def NOT LIKE '%public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)%'
      OR v_batch_def NOT LIKE '%i.voided_at IS NULL OR (i.voided_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
      OR v_batch_def NOT LIKE '%i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
      OR v_batch_def NOT LIKE '%i.balance_cents%+ i.credit_applied_cents%- credit_at_cutoff.applied_cents%'
@@ -484,7 +574,7 @@ BEGIN
   IF v_detail_def NOT LIKE '%''net_due_cents'', v_inv.statement_balance_cents%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: net_due_cents is not the as-of invoice balance';
   END IF;
-  IF v_detail_def NOT LIKE '%(i.posted_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+  IF v_detail_def NOT LIKE '%public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)%'
      OR v_detail_def NOT LIKE '%i.voided_at IS NULL OR (i.voided_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
      OR v_detail_def NOT LIKE '%i.deleted_at IS NULL OR (i.deleted_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
      OR v_detail_def NOT LIKE '%i.balance_cents%+ i.credit_applied_cents%- credit_at_cutoff.applied_cents%'
@@ -493,8 +583,8 @@ BEGIN
      OR v_detail_def NOT LIKE '%cma.reversed_at IS NULL OR (cma.reversed_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical target-invoice credit replay is missing';
   END IF;
-  IF v_detail_def NOT LIKE '%-ci.total_amount_cents - COALESCE(%'
-     OR v_detail_def NOT LIKE '%(ci.posted_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+  IF v_detail_def NOT LIKE '%GREATEST(-ci.total_amount_cents - COALESCE(%'
+     OR v_detail_def NOT LIKE '%public.statement_invoice_was_posted_as_of(ci.id, ci.posted_at, p_as_of_date)%'
      OR v_detail_def NOT LIKE '%ci.voided_at IS NULL OR (ci.voided_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
      OR v_detail_def NOT LIKE '%ci.deleted_at IS NULL OR (ci.deleted_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
      OR v_detail_def NOT LIKE '%cma.credit_memo_id = ci.id%'
@@ -519,6 +609,20 @@ BEGIN
   END IF;
   IF v_posted_at_constraint_validated IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: financial-status posted_at constraint is missing or unvalidated';
+  END IF;
+  IF v_posted_as_of_oid IS NULL
+     OR v_posted_as_of_def NOT LIKE '%fal.operation_type IN (''invoice_posted'', ''invoice_unposted'')%'
+     OR v_posted_as_of_def NOT LIKE '%(fal.created_at AT TIME ZONE ''America/Chicago'')::date <= p_as_of_date%'
+     OR v_posted_as_of_def NOT LIKE '%fal.old_values->>''posted_at''%'
+     OR v_posted_as_of_def NOT LIKE '%HISTORICAL_POSTING_RECONSTRUCTION_UNAVAILABLE%'
+     OR NOT (SELECT prosecdef FROM pg_proc WHERE oid = v_posted_as_of_oid)
+     OR NOT ('search_path=public, pg_temp' = ANY(
+       COALESCE((SELECT proconfig FROM pg_proc WHERE oid = v_posted_as_of_oid), ARRAY[]::text[])
+     ))
+     OR has_function_privilege('anon', v_posted_as_of_oid, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_posted_as_of_oid, 'EXECUTE')
+     OR has_function_privilege('service_role', v_posted_as_of_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical posting helper is missing or exposed';
   END IF;
   IF has_function_privilege('anon', 'public.get_detailed_statement_data(uuid,date,text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.generate_batch_statements(date,uuid,text,text)', 'EXECUTE') THEN

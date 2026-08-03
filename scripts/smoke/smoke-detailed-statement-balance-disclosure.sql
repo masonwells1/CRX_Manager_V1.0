@@ -18,6 +18,7 @@ DECLARE
   v_overdue_customer uuid;
   v_overdue_invoice uuid;
   v_charge_invoice uuid;
+  v_repost_invoice uuid;
   v_credit_invoice uuid;
   v_pre_as_of_target_invoice uuid;
   v_future_target_invoice uuid;
@@ -125,6 +126,50 @@ BEGIN
     DATE '1899-12-01', DATE '1900-01-01', v_admin
   );
 
+  -- Re-posting overwrites the invoice header's posted_at. Preserve three
+  -- lifecycle events around the cutoff so both detail and batch generation
+  -- must select the first posting interval rather than today's header value.
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date,
+    due_date, posted_at, total_amount_cents, created_by
+  )
+  VALUES (
+    '[SMOKE]-REPOST-' || v_suffix, v_customer, 'chemical_sale', 'posted',
+    DATE '1899-12-01', DATE '1900-01-01', TIMESTAMPTZ '1900-02-01 18:00:00+00',
+    3000, v_admin
+  )
+  RETURNING id INTO v_repost_invoice;
+
+  INSERT INTO public.financial_audit_log (
+    operation_type, entity_type, entity_id, actor_user_id, actor_role,
+    old_values, new_values, total_impact_cents, description, created_at
+  )
+  VALUES
+    ('invoice_posted', 'invoice', v_repost_invoice, v_admin, 'admin',
+      jsonb_build_object('status', 'draft'),
+      jsonb_build_object('status', 'posted', 'posted_at', '1900-01-02 01:30:00+00'),
+      3000, '[SMOKE] initial post', TIMESTAMPTZ '1900-01-02 01:30:00+00'),
+    ('invoice_unposted', 'invoice', v_repost_invoice, v_admin, 'admin',
+      jsonb_build_object('status', 'posted', 'posted_at', '1900-01-02 01:30:00+00'),
+      jsonb_build_object('status', 'unposted', 'unposted_at', '1900-01-10 18:00:00+00'),
+      -3000, '[SMOKE] later unpost', TIMESTAMPTZ '1900-01-10 18:00:00+00'),
+    ('invoice_posted', 'invoice', v_repost_invoice, v_admin, 'admin',
+      jsonb_build_object('status', 'unposted'),
+      jsonb_build_object('status', 'posted', 'posted_at', '1900-02-01 18:00:00+00'),
+      3000, '[SMOKE] repost', TIMESTAMPTZ '1900-02-01 18:00:00+00');
+
+  IF NOT public.statement_invoice_was_posted_as_of(
+       v_repost_invoice, TIMESTAMPTZ '1900-02-01 18:00:00+00', DATE '1900-01-01'
+     )
+     OR public.statement_invoice_was_posted_as_of(
+       v_repost_invoice, TIMESTAMPTZ '1900-02-01 18:00:00+00', DATE '1900-01-15'
+     )
+     OR NOT public.statement_invoice_was_posted_as_of(
+       v_repost_invoice, TIMESTAMPTZ '1900-02-01 18:00:00+00', DATE '1900-03-01'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: posting interval replay did not preserve post/unpost/repost boundaries';
+  END IF;
+
   -- Reconstruct credit as of the statement date from the application ledger,
   -- rather than using its current generated balance. At the cutoff, the first
   -- application is still active; the second has not happened yet. Today only
@@ -136,9 +181,27 @@ BEGIN
   )
   VALUES (
     '[SMOKE]-CREDIT-' || v_suffix, v_customer, 'credit_memo', 'posted',
-    DATE '1900-01-01', TIMESTAMPTZ '1900-01-02 01:30:00+00', -10000, 8000, v_admin
+    DATE '1900-01-01', TIMESTAMPTZ '1900-02-01 18:00:00+00', -10000, 8000, v_admin
   )
   RETURNING id INTO v_credit_invoice;
+
+  INSERT INTO public.financial_audit_log (
+    operation_type, entity_type, entity_id, actor_user_id, actor_role,
+    old_values, new_values, total_impact_cents, description, created_at
+  )
+  VALUES
+    ('invoice_posted', 'invoice', v_credit_invoice, v_admin, 'admin',
+      jsonb_build_object('status', 'draft'),
+      jsonb_build_object('status', 'posted', 'posted_at', '1900-01-02 01:30:00+00'),
+      -10000, '[SMOKE] initial credit post', TIMESTAMPTZ '1900-01-02 01:30:00+00'),
+    ('invoice_unposted', 'invoice', v_credit_invoice, v_admin, 'admin',
+      jsonb_build_object('status', 'posted', 'posted_at', '1900-01-02 01:30:00+00'),
+      jsonb_build_object('status', 'unposted', 'unposted_at', '1900-01-10 18:00:00+00'),
+      10000, '[SMOKE] later credit unpost', TIMESTAMPTZ '1900-01-10 18:00:00+00'),
+    ('invoice_posted', 'invoice', v_credit_invoice, v_admin, 'admin',
+      jsonb_build_object('status', 'unposted'),
+      jsonb_build_object('status', 'posted', 'posted_at', '1900-02-01 18:00:00+00'),
+      -10000, '[SMOKE] credit repost', TIMESTAMPTZ '1900-02-01 18:00:00+00');
 
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, status, invoice_date,
@@ -200,17 +263,33 @@ BEGIN
     v_customer, DATE '1900-01-01', 'detailed'
   );
 
-  IF (v_detail->>'outstanding_balance_cents')::bigint IS DISTINCT FROM 1500 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: gross open invoices = % (expected 1500)',
+  IF (v_detail->>'outstanding_balance_cents')::bigint IS DISTINCT FROM 4500 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: gross open invoices = % (expected 4500)',
       v_detail->>'outstanding_balance_cents';
   END IF;
   IF (v_detail->>'open_credit_cents')::bigint IS DISTINCT FROM 8000 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: open credits = % (expected 8000)',
       v_detail->>'open_credit_cents';
   END IF;
-  IF (v_detail->>'net_account_position_cents')::bigint IS DISTINCT FROM -6500 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: net account position = % (expected -6500)',
+  IF (v_detail->>'net_account_position_cents')::bigint IS DISTINCT FROM -3500 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: net account position = % (expected -3500)',
       v_detail->>'net_account_position_cents';
+  END IF;
+
+  v_batch := public.generate_batch_statements(
+    DATE '1900-01-01',
+    v_admin,
+    'summary',
+    'smoke-statement-repost-batch-' || v_suffix
+  );
+  SELECT count(*)
+  INTO v_batch_matches
+  FROM jsonb_array_elements(v_batch) AS statement
+  WHERE statement->'customer'->>'id' = v_customer::text;
+  IF v_batch_matches IS DISTINCT FROM 1 THEN
+    RAISE EXCEPTION
+      'SMOKE_FAIL: post/unpost/repost customer appears % times in batch (expected 1)',
+      v_batch_matches;
   END IF;
 
   SELECT txn

@@ -14,8 +14,8 @@ invoices receive a contact-before-payment message instead of a payment demand.
 Regenerated historical statements replay credit applications and reversals on
 both the memo and target-invoice sides at the statement cutoff, so later credit
 activity cannot create a false historical payment request. Invoice and credit
-memo eligibility is also reconstructed from posting, void, and soft-delete
-timestamps. A later status-only credit-memo unapply remains reconstructable from
+memo eligibility is also reconstructed from posting/unposting audit intervals
+plus void and soft-delete timestamps. A later status-only credit-memo unapply remains reconstructable from
 its preserved face amount and application ledger. A later generic invoice void,
 which deliberately zeroes mutable money columns, makes the statement fail closed
 instead of guessing a pre-void balance from incomplete history.
@@ -24,11 +24,11 @@ batch admin authorization runs before selecting customers so even an empty
 result cannot disclose receivables state to a non-admin.
 
 Migration `20260803131507_fix_statement_balance_disclosure` remains local and
-unapplied. Its combined live-schema behavior chain reached
-`SMOKE_PASS_ROLLBACK`, all 21 live invariant predicates returned zero
-unallowlisted violations, the migration security/drift reviewers were clean,
-and focused unit plus real-jsPDF render coverage is registered in the billing
-and regression prevention suites.
+unapplied. A prior SQL revision's combined live-schema behavior chain reached
+`SMOKE_PASS_ROLLBACK`; post-smoke readback proved the original live function
+hashes were unchanged and no fixtures remained. All 21 live invariant predicates
+returned zero unallowlisted violations, and focused unit plus real-jsPDF render
+coverage is registered in the billing and regression prevention suites.
 
 Post-push and exact-commit reviews found further candidate defects before release: a
 backdated statement used a credit memo's current balance instead of its
@@ -40,7 +40,14 @@ timestamps for as-of eligibility, fails closed on destructive later voids, and
 adds a validated constraint requiring posting timestamps on financial-status
 invoices. All timestamp cutoffs use the America/Chicago business date, including
 activity that crosses UTC midnight. The revised SQL still requires replacement
-review and rollback-only execution proof before live apply.
+rollback-only execution proof before live apply. A final PR review also found
+that re-posting overwrites `posted_at`; the candidate now replays every audited
+post/unpost interval with a legacy-row fallback and fails closed on ambiguous
+same-timestamp lifecycle events. It clamps each credit memo's remaining credit
+at zero and creates the posting-timestamp constraint with `NOT VALID` followed
+by lower-lock validation. Replacement RLS/security and migration-drift reviews
+are CLEAN; exact-commit review and current-revision rollback behavior proof are
+still required.
 
 The production-action guard regression test now clears Git's hook-provided
 repository selectors, including the shared Git directory, before creating
