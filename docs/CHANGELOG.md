@@ -19,6 +19,9 @@ plus void and soft-delete timestamps. A later status-only credit-memo unapply re
 its preserved face amount and application ledger. A later generic invoice void,
 which deliberately zeroes mutable money columns, makes the statement fail closed
 instead of guessing a pre-void balance from incomplete history.
+Later payment-set updates, prepay activity (including a later deletion), and
+write-offs also now fail closed because their current balance effects cannot be
+replayed reliably from the production history tables.
 PDF/email generation fails closed until both new RPC fields are present, and
 batch admin authorization runs before selecting customers so even an empty
 result cannot disclose receivables state to a non-admin.
@@ -48,8 +51,16 @@ the invoice becomes editable and its former contents cannot be reconstructed.
 It clamps each credit memo's remaining credit
 at zero and creates the posting-timestamp constraint with `NOT VALID` followed
 by lower-lock validation. Replacement RLS/security and migration-drift reviews
-are CLEAN; exact-commit review and current-revision rollback behavior proof are
-still required.
+were clean for the prior SQL revision. The next exact-commit review found that
+today's balance could still hide a later cash reversal offset by a later credit
+application. The candidate now fails detail and batch generation closed when
+post-cutoff cash, prepay, or write-off activity prevents trustworthy replay,
+with a combined payment-void-plus-credit regression. The current candidate's
+full migration plus smoke suite reached `SMOKE_PASS_ROLLBACK` in one forced
+transaction; subsequent live readback proved both new helpers and the new
+constraint were absent and no `[SMOKE]` rows remained. Replacement migration
+and exact-commit reviews are still required for this latest revision before any
+live apply.
 
 The production-action guard regression test now clears Git's hook-provided
 repository selectors, including the shared Git directory, before creating

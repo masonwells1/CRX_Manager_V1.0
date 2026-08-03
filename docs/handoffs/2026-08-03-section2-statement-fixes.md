@@ -14,7 +14,7 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 
 ## PROVEN
 
-- The branch contains the Section 2 correction commits on top of the recorded base; the latest post-cutoff-unpost correction is currently uncommitted in the isolated worktree.
+- The branch contains the Section 2 correction commits on top of the recorded base; the latest later-balance-activity correction is currently uncommitted in the isolated worktree.
 - Live catalog evidence on 2026-08-03 confirms one `generate_batch_statements(date,uuid,text,text)` overload with a posted-only selector.
 - Live catalog evidence confirms `get_detailed_statement_data(uuid,date,text)` returns `net_due_cents = invoice balance + linked finance charge`, even though generated invoice balance already includes the charge invoice amount.
 - Live `get_ar_aging(date)` defines open credit as the absolute value of posted negative credit-memo balances; the application deliberately reports gross positive invoices separately.
@@ -27,6 +27,8 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 - Exact-SHA review of `037b94dc` correctly found that generic `void_invoice` zeroes the mutable amounts, so timestamps alone cannot reconstruct the pre-void balance; it also found that `posted_at` remained nullable. The local correction now fails detail and batch generation closed when a later generic void makes reconstruction unsafe, exercises the real void RPC, and adds a validated database constraint requiring `posted_at` for posted/paid/overdue/voided rows.
 - Exact-SHA review of `3c16ab4a` correctly found that raw `timestamptz::date` casts used the database timezone instead of CRX's America/Chicago business date. The local correction converts every posting, application, reversal, void, and deletion boundary in both statement RPCs to Central time and adds a UTC-midnight-crossing regression.
 - Exact-SHA review of `d55154ad` found that a later unpost makes an invoice editable, so its current contents cannot prove a historical statement. The local correction fails detail and batch generation closed for that case and adds a regression with a changed post-unpost amount.
+- Exact-SHA review of `1920c240` found that a later cash-payment reversal offset by a later credit application could leave today's balance unchanged while overstating the cutoff debt. The local correction now rejects historical detail and batch statements when later cash, prepay, or write-off activity makes the mutable balance unsafe, and adds the exact payment-void-plus-credit regression.
+- The latest candidate migration and complete statement smoke block ran against the connected database inside one forced rollback and reached exact `SMOKE_PASS_ROLLBACK`. Immediate live readback confirmed both candidate helpers, the candidate constraint, and all `[SMOKE]` rows are absent, so the rehearsal left production unchanged.
 - Type-contract and PDF-output reviewers returned CLEAN. Compliance review found one MEDIUM payment-demand wording defect for credit-covered accounts; it was fixed with a negative-net fixture and the focused re-review returned CLEAN.
 - All 21 live database invariant predicates returned zero unallowlisted violations.
 - Current-base verification passed: full Vitest suite, billing 473/473, regression 166/166, TypeScript, zero-warning ESLint, production build, agent-workflow tests, migration SQL scan, local drift suite, documentation drift guard, and real jsPDF render assertions for positive, zero, and negative account positions.
@@ -36,12 +38,12 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 
 ## WRITTEN, NOT PROVEN
 
-- The latest post-cutoff-unpost candidate received CLEAN replacement RLS/security and migration-drift reviews. It still needs exact-SHA review and rollback-only live behavior proof; earlier smoke proof applies only to prior SQL revisions.
+- The latest later-balance-activity candidate still needs replacement RLS/security, migration-drift, and exact-SHA reviews; the current-revision rollback-only behavior proof is complete.
 - A post-deploy signed-in statement PDF/email observation cannot occur until the code is published and the migration is applied.
 
 ## REMAINING
 
-- Commit the post-cutoff-unpost correction, obtain replacement migration and exact-SHA adversarial proof, and rerun PR checks before merge.
+- Commit the later-balance-activity correction, obtain replacement migration and exact-SHA adversarial proof, and rerun PR checks before merge.
 - Live migration apply, B7 filename reconciliation, and post-apply catalog/behavior checks.
 
 ## APPROVAL STATE
@@ -51,11 +53,11 @@ Mason approved the protected PR pipeline and this live migration in the current 
 ## GATES AND BLOCKERS
 
 - Money/database changes require migration review and rollback-only proof before live apply can be considered.
-- Applying the migration live requires a fresh explicit approval in this interactive task.
+- The current approval does not bypass the required exact-review, PR, and release evidence.
 - Pushing/merging follows the protected-branch PR pipeline and exact-SHA adversarial review.
 
 ## FIRST ACTION
 
-Validate and commit the post-cutoff-unpost correction, then obtain replacement migration and exact-SHA proof before merging.
+Validate and commit the later-balance-activity correction, then obtain replacement migration and exact-SHA proof before merging.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

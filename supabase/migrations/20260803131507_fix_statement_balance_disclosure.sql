@@ -64,6 +64,16 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'PREFLIGHT_FAILED: statement_invoice_was_posted_as_of already exists';
   END IF;
+  IF to_regprocedure('public.statement_customer_has_later_balance_activity(uuid,date)') IS NOT NULL
+     OR EXISTS (
+       SELECT 1
+       FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public'
+         AND p.proname = 'statement_customer_has_later_balance_activity'
+     ) THEN
+    RAISE EXCEPTION 'PREFLIGHT_FAILED: statement_customer_has_later_balance_activity already exists';
+  END IF;
 END;
 $preflight$;
 
@@ -147,6 +157,112 @@ $function$;
 REVOKE ALL ON FUNCTION public.statement_invoice_was_posted_as_of(uuid, timestamptz, date)
   FROM PUBLIC, anon, authenticated, service_role;
 
+-- Current invoice balances also contain cash payments, prepay applications,
+-- and write-offs. Unlike credit-memo applications, not every reversal path
+-- retains enough invoice-scoped history to replay those levers at an arbitrary
+-- cutoff. Detect any later activity against an invoice that belonged on the
+-- statement and make callers fail closed instead of reusing today's balance.
+CREATE FUNCTION public.statement_customer_has_later_balance_activity(
+  p_customer_id uuid,
+  p_as_of_date date
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT
+    EXISTS (
+      SELECT 1
+      FROM public.invoices i
+      JOIN public.invoice_line_allocations ila ON ila.invoice_id = i.id
+      JOIN public.allocation_sets aset ON aset.id = ila.allocation_set_id
+      WHERE i.customer_id = p_customer_id
+        AND i.invoice_date <= p_as_of_date
+        AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
+        AND aset.entity_type = 'payment'
+        AND (
+          (aset.created_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+          OR (aset.updated_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+          OR aset.payment_date > p_as_of_date
+          OR EXISTS (
+            SELECT 1
+            FROM public.financial_audit_log fal
+            WHERE fal.operation_type = 'payment_voided'
+              AND fal.entity_type = 'allocation_set'
+              AND fal.entity_id = aset.id
+              AND (fal.created_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+          )
+        )
+    )
+    OR EXISTS (
+      -- prepay_applications are immutable while present, but a payment void
+      -- deletes them. The parent credit's update timestamp is therefore the
+      -- durable customer-level tripwire for both a later application and its
+      -- later removal.
+      SELECT 1
+      FROM public.prepay_credits pc
+      WHERE pc.customer_id = p_customer_id
+        AND (
+          (pc.created_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+          OR (pc.updated_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM public.invoices i
+          WHERE i.customer_id = p_customer_id
+            AND i.invoice_date <= p_as_of_date
+            AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
+        )
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM public.invoices i
+      JOIN public.prepay_applications pa ON pa.invoice_id = i.id
+      WHERE i.customer_id = p_customer_id
+        AND i.invoice_date <= p_as_of_date
+        AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
+        AND (pa.applied_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM public.invoices i
+      JOIN public.write_offs wo ON wo.invoice_id = i.id
+      WHERE i.customer_id = p_customer_id
+        AND i.invoice_date <= p_as_of_date
+        AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
+        AND (
+          (wo.created_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+          OR (wo.reversed_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+        )
+    )
+    OR EXISTS (
+      -- A payment void can reverse cash allocations and can delete affected
+      -- prepay_applications. Its audit row is durable, but it does not retain
+      -- every target invoice id, so a customer-wide rejection is the only
+      -- truthful historical behavior after such a reversal.
+      SELECT 1
+      FROM public.financial_audit_log fal
+      JOIN public.allocation_sets aset ON aset.id = fal.entity_id
+      WHERE fal.operation_type = 'payment_voided'
+        AND fal.entity_type = 'allocation_set'
+        AND aset.entity_type = 'payment'
+        AND aset.customer_id = p_customer_id
+        AND (fal.created_at AT TIME ZONE 'America/Chicago')::date > p_as_of_date
+        AND EXISTS (
+          SELECT 1
+          FROM public.invoices i
+          WHERE i.customer_id = p_customer_id
+            AND i.invoice_date <= p_as_of_date
+            AND public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)
+        )
+    );
+$function$;
+
+REVOKE ALL ON FUNCTION public.statement_customer_has_later_balance_activity(uuid, date)
+  FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public.get_detailed_statement_data(
   p_customer_id uuid,
   p_as_of_date date,
@@ -220,6 +336,10 @@ BEGIN
       )
   ) THEN
     RAISE EXCEPTION 'HISTORICAL_UNPOST_RECONSTRUCTION_UNAVAILABLE: a later invoice unpost prevents a trustworthy statement at this cutoff';
+  END IF;
+
+  IF public.statement_customer_has_later_balance_activity(p_customer_id, p_as_of_date) THEN
+    RAISE EXCEPTION 'HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE: later payment, prepay, or write-off activity prevents a trustworthy statement at this cutoff';
   END IF;
 
   -- The generated balance contains today's credit_applied_cents. Replace that
@@ -509,6 +629,15 @@ BEGIN
     RAISE EXCEPTION 'HISTORICAL_UNPOST_RECONSTRUCTION_UNAVAILABLE: a later invoice unpost prevents a trustworthy statement batch at this cutoff';
   END IF;
 
+  IF EXISTS (
+    SELECT 1
+    FROM customers c
+    WHERE c.is_active = true
+      AND public.statement_customer_has_later_balance_activity(c.id, p_as_of_date)
+  ) THEN
+    RAISE EXCEPTION 'HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE: later payment, prepay, or write-off activity prevents a trustworthy statement batch at this cutoff';
+  END IF;
+
   FOR v_cust IN
     SELECT c.id, c.farm_name
     FROM customers c
@@ -582,6 +711,16 @@ DECLARE
       'public.statement_invoice_was_posted_as_of(uuid,timestamp with time zone,date)'
     )
   );
+  v_balance_activity_oid oid := to_regprocedure(
+    'public.statement_customer_has_later_balance_activity(uuid,date)'
+  );
+  v_balance_activity_def text := (
+    SELECT prosrc
+    FROM pg_proc
+    WHERE oid = to_regprocedure(
+      'public.statement_customer_has_later_balance_activity(uuid,date)'
+    )
+  );
 BEGIN
   IF v_batch_def NOT LIKE '%public.statement_invoice_was_posted_as_of(i.id, i.posted_at, p_as_of_date)%'
      OR v_batch_def NOT LIKE '%i.voided_at IS NULL OR (i.voided_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
@@ -604,6 +743,10 @@ BEGIN
      OR v_batch_def NOT LIKE '%HISTORICAL_UNPOST_RECONSTRUCTION_UNAVAILABLE%'
      OR v_batch_def NOT LIKE '%fal.operation_type = ''invoice_unposted''%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: batch historical-reconstruction fail-closed guards are missing';
+  END IF;
+  IF v_batch_def NOT LIKE '%public.statement_customer_has_later_balance_activity(c.id, p_as_of_date)%'
+     OR v_batch_def NOT LIKE '%HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: batch later-balance-activity fail-closed guard is missing';
   END IF;
   IF v_batch_def LIKE '%posted_at::date%'
      OR v_batch_def LIKE '%voided_at::date%'
@@ -646,6 +789,10 @@ BEGIN
      OR v_detail_def NOT LIKE '%fal.operation_type = ''invoice_unposted''%' THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: detail historical-reconstruction fail-closed guards are missing';
   END IF;
+  IF v_detail_def NOT LIKE '%public.statement_customer_has_later_balance_activity(p_customer_id, p_as_of_date)%'
+     OR v_detail_def NOT LIKE '%HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE%' THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: detail later-balance-activity fail-closed guard is missing';
+  END IF;
   IF v_detail_def LIKE '%posted_at::date%'
      OR v_detail_def LIKE '%voided_at::date%'
      OR v_detail_def LIKE '%deleted_at::date%'
@@ -669,6 +816,22 @@ BEGIN
      OR has_function_privilege('authenticated', v_posted_as_of_oid, 'EXECUTE')
      OR has_function_privilege('service_role', v_posted_as_of_oid, 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: historical posting helper is missing or exposed';
+  END IF;
+  IF v_balance_activity_oid IS NULL
+     OR v_balance_activity_def NOT LIKE '%aset.entity_type = ''payment''%'
+     OR v_balance_activity_def NOT LIKE '%(aset.updated_at AT TIME ZONE ''America/Chicago'')::date > p_as_of_date%'
+     OR v_balance_activity_def NOT LIKE '%fal.operation_type = ''payment_voided''%'
+     OR v_balance_activity_def NOT LIKE '%public.prepay_applications%'
+     OR v_balance_activity_def NOT LIKE '%public.prepay_credits%'
+     OR v_balance_activity_def NOT LIKE '%public.write_offs%'
+     OR NOT (SELECT prosecdef FROM pg_proc WHERE oid = v_balance_activity_oid)
+     OR NOT ('search_path=public, pg_temp' = ANY(
+       COALESCE((SELECT proconfig FROM pg_proc WHERE oid = v_balance_activity_oid), ARRAY[]::text[])
+     ))
+     OR has_function_privilege('anon', v_balance_activity_oid, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_balance_activity_oid, 'EXECUTE')
+     OR has_function_privilege('service_role', v_balance_activity_oid, 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: later-balance-activity helper is missing or exposed';
   END IF;
   IF has_function_privilege('anon', 'public.get_detailed_statement_data(uuid,date,text)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.generate_batch_statements(date,uuid,text,text)', 'EXECUTE') THEN

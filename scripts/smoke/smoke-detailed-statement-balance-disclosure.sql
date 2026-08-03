@@ -16,10 +16,14 @@ DECLARE
   v_customer uuid;
   v_void_customer uuid;
   v_unpost_customer uuid;
+  v_balance_activity_customer uuid;
   v_overdue_customer uuid;
   v_overdue_invoice uuid;
   v_charge_invoice uuid;
   v_unpost_invoice uuid;
+  v_balance_activity_invoice uuid;
+  v_balance_activity_credit uuid;
+  v_balance_activity_allocation_set uuid;
   v_credit_invoice uuid;
   v_pre_as_of_target_invoice uuid;
   v_future_target_invoice uuid;
@@ -202,16 +206,16 @@ BEGIN
     v_customer, DATE '1900-01-01', 'detailed'
   );
 
-  IF (v_detail->>'outstanding_balance_cents')::bigint IS DISTINCT FROM 4500 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: gross open invoices = % (expected 4500)',
+  IF (v_detail->>'outstanding_balance_cents')::bigint IS DISTINCT FROM 1500 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: gross open invoices = % (expected 1500)',
       v_detail->>'outstanding_balance_cents';
   END IF;
   IF (v_detail->>'open_credit_cents')::bigint IS DISTINCT FROM 8000 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: open credits = % (expected 8000)',
       v_detail->>'open_credit_cents';
   END IF;
-  IF (v_detail->>'net_account_position_cents')::bigint IS DISTINCT FROM -3500 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: net account position = % (expected -3500)',
+  IF (v_detail->>'net_account_position_cents')::bigint IS DISTINCT FROM -6500 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: net account position = % (expected -6500)',
       v_detail->>'net_account_position_cents';
   END IF;
 
@@ -248,6 +252,88 @@ BEGIN
       v_charge_txn->>'finance_charge_cents',
       v_charge_txn->>'net_due_cents';
   END IF;
+
+  -- A post-cutoff cash reversal can be exactly offset in today's generated
+  -- balance by a post-cutoff credit application. Reusing that coincidentally
+  -- equal current balance would overstate the historical debt. The durable
+  -- payment-void and credit ledgers must make both statement paths fail closed.
+  INSERT INTO public.customers (farm_name, account_number, is_active)
+  VALUES ('[SMOKE] Later Balance Activity ' || v_suffix, '[SMOKE]-BAL-ACT-' || v_suffix, true)
+  RETURNING id INTO v_balance_activity_customer;
+
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date,
+    total_amount_cents, paid_amount_cents, created_by
+  ) VALUES (
+    '[SMOKE]-BAL-ACT-' || v_suffix, v_balance_activity_customer,
+    'chemical_sale', 'draft', DATE '2000-01-01', 10000, 0, v_admin
+  ) RETURNING id INTO v_balance_activity_invoice;
+
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date,
+    total_amount_cents, credit_applied_cents, created_by
+  ) VALUES (
+    '[SMOKE]-BAL-ACT-CREDIT-' || v_suffix, v_balance_activity_customer,
+    'credit_memo', 'draft', DATE '2000-01-01', -2000, 2000, v_admin
+  ) RETURNING id INTO v_balance_activity_credit;
+
+  UPDATE public.invoices
+  SET status = 'posted', posted_at = TIMESTAMPTZ '2000-01-02 01:30:00+00'
+  WHERE id IN (v_balance_activity_invoice, v_balance_activity_credit);
+
+  INSERT INTO public.allocation_sets (
+    entity_type, entity_id, version, customer_id, total_payment_cents,
+    total_allocated_cents, payment_method, payment_date, is_active,
+    created_by, created_at, updated_at
+  ) VALUES (
+    'payment', v_balance_activity_customer, 1, v_balance_activity_customer,
+    2000, 2000, 'check', DATE '2000-01-01', false,
+    v_admin, TIMESTAMPTZ '2000-01-02 01:30:00+00', TIMESTAMPTZ '2000-01-10 18:00:00+00'
+  ) RETURNING id INTO v_balance_activity_allocation_set;
+
+  INSERT INTO public.credit_memo_applications (
+    credit_memo_id, target_invoice_id, amount_cents, applied_by, applied_at
+  ) VALUES (
+    v_balance_activity_credit, v_balance_activity_invoice, 2000, v_admin,
+    TIMESTAMPTZ '2000-01-10 18:00:00+00'
+  );
+  UPDATE public.invoices
+  SET credit_applied_cents = 2000
+  WHERE id = v_balance_activity_invoice;
+
+  INSERT INTO public.financial_audit_log (
+    operation_type, entity_type, entity_id, actor_user_id, actor_role,
+    old_values, new_values, total_impact_cents, description, created_at
+  ) VALUES (
+    'payment_voided', 'allocation_set', v_balance_activity_allocation_set,
+    v_admin, 'admin',
+    jsonb_build_object('total_allocated_cents', 2000, 'customer_id', v_balance_activity_customer),
+    jsonb_build_object('reason', 'smoke later reversal', 'prepay_applications_reversed_cents', 0),
+    -2000, '[SMOKE] post-cutoff cash reversal', TIMESTAMPTZ '2000-01-10 18:00:00+00'
+  );
+
+  BEGIN
+    PERFORM public.get_detailed_statement_data(
+      v_balance_activity_customer, DATE '2000-01-01', 'detailed'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: later cash reversal plus credit produced a guessed detail statement';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: later balance activity detail raised unexpected error: %', SQLERRM;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.generate_batch_statements(
+      DATE '2000-01-01', v_admin, 'summary',
+      'smoke-statement-later-balance-activity-' || v_suffix
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: later cash reversal plus credit produced a guessed batch statement';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: later balance activity batch raised unexpected error: %', SQLERRM;
+    END IF;
+  END;
 
   -- Exercise the real generic void lifecycle, which zeroes the mutable money
   -- columns. Historical statement generation must fail closed instead of
@@ -300,7 +386,7 @@ BEGIN
     total_amount_cents, created_by
   )
   VALUES (
-    '[SMOKE]-UNPOST-' || v_suffix, v_unpost_customer, 'chemical_sale', 'unposted',
+    '[SMOKE]-UNPOST-' || v_suffix, v_unpost_customer, 'chemical_sale', 'draft',
     DATE '1699-12-01', 9000, v_admin
   )
   RETURNING id INTO v_unpost_invoice;
