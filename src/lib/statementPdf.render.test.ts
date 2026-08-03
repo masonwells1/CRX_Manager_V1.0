@@ -87,6 +87,33 @@ describe('statement PDF real renderer', () => {
     expect(pageCommands).not.toContain('Page 2');
   });
 
+  it('renders every wrapped account-name line without covering remittance totals', async () => {
+    const longFarmName =
+      'Extremely Long Agricultural Partnership Name With Multiple Generations And No Account Number';
+    const longNameStatement = {
+      ...renderedStatement,
+      customer: {
+        ...renderedStatement.customer,
+        farm_name: longFarmName,
+        account_number: null,
+      },
+    };
+
+    const doc = await generateStatementPdf(longNameStatement);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    const expectedNameLines = doc.splitTextToSize(longFarmName, 190) as string[];
+    const pages = doc.internal.pages as unknown as string[][];
+    const finalPageCommands = pages[pages.length - 1]?.join('\n') || '';
+
+    expect(expectedNameLines.length).toBeGreaterThan(1);
+    for (const line of expectedNameLines) expect(finalPageCommands).toContain(line);
+    expect(finalPageCommands).toContain('Gross open:');
+    expect(finalPageCommands).toContain('Credits:');
+    expect(finalPageCommands).toContain('Net position:');
+    expect(finalPageCommands).toContain('Amount Paid  $');
+  });
+
   it('moves the complete account-position block to a new page near the footer boundary', async () => {
     const crowdedStatement = {
       ...renderedStatement,

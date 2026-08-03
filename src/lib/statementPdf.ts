@@ -707,11 +707,15 @@ function drawRemittanceStub(
   const aging = data.aging;
   const { grossOpenInvoiceCents, openCreditCents, netAccountPositionCents } =
     getStatementAccountPosition(data);
-  const stubH = 160;
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  const accountNameLines = doc.splitTextToSize(c.farm_name, 190) as string[];
+  const accountNameExtraHeight = Math.max(0, accountNameLines.length - 1) * 10;
+  const stubH = 160 + accountNameExtraHeight;
   let stubY = pageH - stubH - 15;
 
-  // Check if we need space — the stub needs ~160pt from the bottom. If the
-  // transaction content (currentY) would reach the fixed stub zone, push the
+  // Check if we need space — the stub needs a 160pt base plus any wrapped
+  // account-name height. If the transaction content would reach that zone, push the
   // stub onto a fresh page so the tear-off block never overprints the last
   // rows. stubY recomputes to the same bottom-of-page position on the new
   // (empty) page. (Audit M2 + P2-B/C, 2026-05-30.)
@@ -799,8 +803,8 @@ function drawRemittanceStub(
   doc.text('Acct Name:', margin, accountY);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
-  const accountName = doc.splitTextToSize(c.farm_name, 190)[0] || '';
-  doc.text(accountName, margin + 60, accountY);
+  const accountNameText = accountNameLines.length > 1 ? accountNameLines : accountNameLines[0] || '';
+  doc.text(accountNameText, margin + 60, accountY);
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
@@ -817,7 +821,7 @@ function drawRemittanceStub(
   doc.setTextColor(...CHARCOAL);
   doc.text(fmtDate(asOfDate), margin + 455, accountY);
 
-  const balanceY = accountY + 18;
+  const balanceY = accountY + 18 + accountNameExtraHeight;
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
@@ -843,7 +847,7 @@ function drawRemittanceStub(
 
   // Payment line, or a credit-covered-account instruction that cannot be
   // mistaken for a remittance request.
-  const payY = sy + 108;
+  const payY = sy + 108 + accountNameExtraHeight;
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);

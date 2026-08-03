@@ -23,8 +23,10 @@ and focused unit plus real-jsPDF render coverage is registered in the billing
 and regression prevention suites.
 
 The production-action guard regression test now clears Git's hook-provided
-repository selectors before creating temporary repositories, preventing false
-pre-commit failures without relaxing the production guard.
+repository selectors, including the shared Git directory, before creating
+temporary repositories. This prevents false pre-commit failures without
+relaxing the production guard. Remittance stubs also expand for wrapped farm
+names so every line remains visible without covering balance or payment rows.
 
 ## 2026-08-02 — Factory resume replay and parked-Board repair
 
