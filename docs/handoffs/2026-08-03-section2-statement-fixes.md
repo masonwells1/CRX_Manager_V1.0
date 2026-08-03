@@ -3,18 +3,18 @@
 ## WHERE
 
 - Worktree: `section2-statement-fixes-20260803`
-- Branch: `codex/section2-statement-fixes-20260803`
-- Base: `origin/main` at `a74cc4b3` (refreshed during the release gate)
+- Reconciliation branch: `codex/reconcile-statement-migration-ledger-20260803`
+- Base: `origin/main` at `be4917f6`
 - Supabase project: `rhyzpcqhnizqbxphqdkr`
-- Pull request: `#305` (open; review fixes in progress)
+- Pull requests: `#305` (statement migration) and `#307` (batch fail-closed UI), both merged
 
 ## GOAL
 
-Fix the three proven Section 2 statement defects: include overdue-only customers in month-end batches, stop finance-charge double counting, and disclose unapplied credit memos without changing the settled gross-AR convention. Done means the new migration, PDF/email wording, and regression proof agree and the full local verification gate is green.
+Fix the three proven Section 2 statement defects: include overdue-only customers in month-end batches, stop finance-charge double counting, and disclose unapplied credit memos without changing the settled gross-AR convention. Complete means the migration, PDF/email wording, regression proof, protected PRs, live catalog checks, and B7 ledger reconciliation agree.
 
 ## PROVEN
 
-- The merged Section 2 correction is on `origin/main` at `cd0ff21c`; follow-up commit `2f6e5534` contains the page-level batch fail-closed correction on this isolated branch.
+- The Section 2 correction is on `origin/main` via merge `cd0ff21c`; the page-level batch fail-closed follow-up is on `origin/main` via merge `be4917f6`.
 - Live catalog evidence on 2026-08-03 confirms one `generate_batch_statements(date,uuid,text,text)` overload with a posted-only selector.
 - Live catalog evidence confirms `get_detailed_statement_data(uuid,date,text)` returns `net_due_cents = invoice balance + linked finance charge`, even though generated invoice balance already includes the charge invoice amount.
 - Live `get_ar_aging(date)` defines open credit as the absolute value of posted negative credit-memo balances; the application deliberately reports gross positive invoices separately.
@@ -35,31 +35,31 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 - Current-base verification passed: full Vitest suite, billing 473/473, regression 166/166, TypeScript, zero-warning ESLint, production build, agent-workflow tests, migration SQL scan, local drift suite, documentation drift guard, and real jsPDF render assertions for positive, zero, and negative account positions.
 - Statement PDF/email generation now fails closed when either balance-disclosure field is absent, so a frontend-first deployment cannot turn a legacy RPC payload into a false zero-credit payment request.
 - Batch statement authorization now runs before the customer selector, including the empty-result case, so non-admin callers cannot infer whether qualifying receivables exist.
-- Fresh Supabase `list_migrations` returned 933 live rows at high-water `20260803010917`, strictly below candidate `20260803131507`.
+- Supabase applied the reviewed migration under assigned ledger version `20260803221244`; the ledger retained the submitted name `20260803131507_fix_statement_balance_disclosure`. The repository reconciliation is therefore a filename-only rename to `20260803221244_fix_statement_balance_disclosure.sql`.
+- The live ledger statement and renamed repository file are byte-for-byte identical: 37,053 bytes, MD5 `f9666b8ca82dedc37c760f5bf3fcdf4c`.
+- A prior candidate revision reached `SMOKE_PASS_ROLLBACK`. No separate rollback-only rehearsal of the final applied revision was captured in this task. Read-only post-apply catalog checks confirm the two private helpers, fixed search paths, revoked public execution, validated constraint, expected overload count, and the two public RPC guards.
+- A read-only authenticated-admin execution check exercised both live statement RPCs without changing business data: detail returned `open_credit_cents` and `net_account_position_cents`, while batch generation returned a valid one-customer JSON array.
+- PR #305 merged as `cd0ff21c`; PR #307 merged as `be4917f6`. The final UI fix aborts a PDF batch on any rejected statement and resolves every email before the first send, preventing partial delivery.
+- Both PR pipelines passed, Vercel deployed successfully, CodeRabbit finished with no actionable finding, the final exact-SHA Sol review was clean, and production returned HTTP 200.
 
-## WRITTEN, NOT PROVEN
+## RESIDUAL
 
-- The page-level batch fail-closed correction still needs replacement exact-SHA review and PR checks. The migration SQL is unchanged from its clean content-bound reviews.
-- The current migration revision has not received rollback-only live behavior proof.
-- A post-deploy signed-in statement PDF/email observation cannot occur until the code is published and the migration is applied.
+- The B7 filename reconciliation still requires an exact-commit review and protected PR merge.
+- A signed-in browser observation of the production PDF/email flow was not run in this release session; the prior candidate rollback smoke, build, preview, live catalog, and production HTTP checks passed.
 
-## REMAINING
+## NEXT ACTION
 
-- Obtain replacement exact-SHA adversarial proof, then push the follow-up through protected PR checks and merge.
-- Live migration apply, B7 filename reconciliation, and post-apply catalog/behavior checks.
+- Finish the filename-only reconciliation PR, then observe one authorized PDF/email batch during the next normal production statement run.
 
 ## APPROVAL STATE
 
-Mason approved the protected PR pipeline in the current task. That authorization does not cover applying the live migration or changing live data.
+Mason approved the protected PR pipeline in the current task. The migration is already present in the live Supabase ledger; no further migration or live-data change is authorized or needed for this reconciliation.
 
 ## GATES AND BLOCKERS
 
-- Money/database changes require migration review and rollback-only proof before live apply can be considered.
-- Applying the migration live requires a fresh explicit approval in this interactive task.
-- Pushing/merging follows the protected-branch PR pipeline and exact-SHA adversarial review.
+- The reconciliation changes no SQL bytes but still follows the protected-branch PR pipeline and exact-SHA adversarial review because it touches migration history.
+- No live migration, data mutation, or ledger repair should be attempted; the live ledger is authoritative and already contains the exact reviewed SQL.
 
 ## FIRST ACTION
-
-Obtain replacement exact-SHA proof for the follow-up branch before pushing it.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

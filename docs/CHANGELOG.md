@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-03 — Statement balance consistency fixes prepared — NOT LIVE
+## 2026-08-03 — Statement balance consistency fixes — LIVE
 
 The reviewed Section 2 remediation aligns customer statements across the target
 RPC contract, PDF, and email surfaces. Month-end batches will include customers
@@ -26,12 +26,26 @@ PDF/email generation fails closed until both new RPC fields are present, and
 batch admin authorization runs before selecting customers so even an empty
 result cannot disclose receivables state to a non-admin.
 
-Migration `20260803131507_fix_statement_balance_disclosure` remains local and
-unapplied. A prior SQL revision's combined live-schema behavior chain reached
-`SMOKE_PASS_ROLLBACK`; post-smoke readback proved the original live function
-hashes were unchanged and no fixtures remained. All 21 live invariant predicates
-returned zero unallowlisted violations, and focused unit plus real-jsPDF render
-coverage is registered in the billing and regression prevention suites.
+Supabase applied the reviewed migration live as ledger version
+`20260803221244_fix_statement_balance_disclosure`; the ledger assigned that
+version while retaining the reviewed migration name. This reconciliation commit
+renames the repository file from its local preparation timestamp
+`20260803131507` to the live ledger version without changing its SQL bytes.
+The live ledger's stored statement is byte-for-byte identical to the renamed
+repository file (37,053 bytes; MD5 `f9666b8ca82dedc37c760f5bf3fcdf4c`).
+Post-apply catalog checks confirmed the two private fail-closed helpers, their
+fixed search paths and revoked public execution, and the validated
+posting-timestamp constraint. A prior candidate revision's rollback-only
+behavior chain reached `SMOKE_PASS_ROLLBACK`; the final applied revision is
+backed by clean content-bound and exact-commit reviews plus its migration
+postflight and live catalog readback, but no separate final-revision rollback
+rehearsal was captured. All 21 pre-apply live invariant predicates returned zero
+unallowlisted violations, focused unit plus real-jsPDF render coverage is
+registered in the billing and regression prevention suites, and production
+returned HTTP 200 after release. A read-only authenticated-admin execution check
+also exercised both live statement RPCs: detail returned the two new disclosure
+fields and batch generation returned a valid customer array without changing
+business data.
 
 Post-push and exact-commit reviews found further candidate defects before release: a
 backdated statement used a credit memo's current balance instead of its
@@ -42,8 +56,7 @@ candidate now replays credit applications on both sides, uses lifecycle
 timestamps for as-of eligibility, fails closed on destructive later voids, and
 adds a validated constraint requiring posting timestamps on financial-status
 invoices. All timestamp cutoffs use the America/Chicago business date, including
-activity that crosses UTC midnight. The revised SQL still requires replacement
-rollback-only execution proof before live apply. A final PR review also found
+activity that crosses UTC midnight. A final PR review also found
 that re-posting overwrites `posted_at`; the candidate now replays every audited
 post/unpost interval with a legacy-row fallback and fails closed on ambiguous
 same-timestamp lifecycle events. A later unpost also now fails closed because
@@ -57,8 +70,7 @@ application. The candidate now fails detail and batch generation closed when
 post-cutoff cash, prepay, or write-off activity prevents trustworthy replay,
 with a combined payment-void-plus-credit regression. Both content-bound
 migration reviewers and the exact-commit adversarial reviewer returned clean on
-that revision. The current migration revision still requires rollback-only
-execution proof before any live apply.
+that revision, followed by the live apply and catalog verification.
 Batch PDF generation now aborts instead of silently omitting a customer whose
 historical statement is rejected. Batch email resolves every selected
 statement before sending the first message, preventing an apparently successful
