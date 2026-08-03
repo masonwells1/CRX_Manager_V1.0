@@ -7,15 +7,17 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   APPROVAL_TTL_MS,
+  appendFactoryControlEvent,
   appendFactoryEvent,
   buildFactorySnapshot,
   buildFactoryReviewExecArgs,
@@ -43,6 +45,7 @@ import {
   repositoryContentFingerprint,
   resolveFactoryPaths,
   resolveHookFactoryPaths,
+  runAndAttachHarnessEvidence,
   runHarnessEvidence,
   setEmergencyFactoryHold,
   clearEmergencyFactoryHold,
@@ -52,6 +55,7 @@ import {
   validateCurrentIndependentReview,
   validateLaneStart,
   validateRepositoryScope,
+  validateStageChange,
   writeImmutableTicket,
 } from "./factory-state-lib.mjs";
 
@@ -149,6 +153,39 @@ function fixture() {
   };
   pendingFixtureCleanups.add(cleanup);
   return { root, env, paths, cleanup };
+}
+
+function holdFactoryFence(target, delayMs = 500) {
+  const child = spawn(process.execPath, [
+    "-e",
+    "const fs=require('node:fs');const target=process.argv[1];const delay=Number(process.argv[2]);const fd=fs.openSync(target,'wx');fs.writeSync(fd,JSON.stringify({pid:process.pid,createdAt:new Date().toISOString()})+'\\n');fs.closeSync(fd);setTimeout(()=>fs.unlinkSync(target),delay);",
+    target,
+    String(delayMs),
+  ], { stdio: "ignore" });
+  const deadline = Date.now() + 5_000;
+  while (!existsSync(target) && Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  ok(existsSync(target), "the test helper acquired the emergency-hold fence");
+  return child;
+}
+
+function capturedChild(child) {
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk) => { stdout += chunk; });
+  child.stderr?.on("data", (chunk) => { stderr += chunk; });
+  return new Promise((resolve) => child.once("close", (status) => resolve({ status, stdout, stderr })));
+}
+
+function waitForPath(target, label, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(target) && Date.now() < deadline) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  ok(existsSync(target), label);
 }
 
 function ticket(id = "factory-test-1", overrides = {}) {
@@ -469,6 +506,51 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     behaviorSummary: "",
     blocker: "Mason requested a changed scope.",
   });
+  const parkedSnapshot = loadFactorySnapshot(paths);
+  eq(
+    validateStageChange(parkedSnapshot, written.ticket.id, "parked", {
+      sessionId: "session-1",
+      behaviorSummary: "The completed investigation is preserved for follow-up.",
+      blocker: "The reviewed design needs a new mission ticket before implementation.",
+    }).id,
+    written.ticket.id,
+    "the original lane session may refresh parked Board metadata without reopening the job",
+  );
+  throws(
+    () => validateStageChange(parkedSnapshot, written.ticket.id, "parked", {
+      sessionId: "other-session",
+      behaviorSummary: "Untrusted replacement summary.",
+      blocker: "Untrusted replacement blocker.",
+    }),
+    /another build session/,
+    "another session cannot rewrite parked Board metadata",
+  );
+  throws(
+    () => validateStageChange(parkedSnapshot, written.ticket.id, "parked", {
+      sessionId: "session-1",
+      behaviorSummary: "",
+      blocker: "A blocker without a result summary.",
+    }),
+    /behavior summary is required/i,
+    "parked metadata refresh requires a nonempty behavior result",
+  );
+  append(paths, "job-stage", written.ticket.id, {
+    stage: "parked",
+    behaviorSummary: "The completed investigation is preserved for follow-up.",
+    blocker: "The reviewed design needs a new mission ticket before implementation.",
+  });
+  const refreshedParked = loadFactorySnapshot(paths).jobs[0];
+  eq(refreshedParked.stage, "parked", "parked metadata refresh cannot reopen or advance a job");
+  eq(
+    refreshedParked.behaviorSummary,
+    "The completed investigation is preserved for follow-up.",
+    "parked metadata refresh updates the owner-facing behavior result",
+  );
+  eq(
+    refreshedParked.blocker,
+    "The reviewed design needs a new mission ticket before implementation.",
+    "parked metadata refresh updates the owner-facing blocker",
+  );
   const revisionQuestion = "Approve this exact factory ticket after parking?";
   append(paths, "ticket-presented", written.ticket.id, {
     ticketHash: written.hash,
@@ -571,8 +653,60 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   const sanitizedHold = buildFactorySnapshot(paths);
   ok(!sanitizedHold.holdReason.includes("sk-emergency-reason-must-not-persist"), "emergency hold storage sanitizes secret-bearing reasons");
   ok(/Reason SHA-256: [a-f0-9]{64}/.test(sanitizedHold.holdReason), "sanitized emergency holds retain only a reason hash");
+  throws(
+    () => appendFactoryEvent(paths, {
+      type: "factory-intent",
+      jobId: null,
+      actorTool: "codex",
+      sessionId: "session-1",
+      payload: { ownerRequest: "must not append across the hold" },
+    }, {
+      expectedLastEventHash: sanitizedHold.lastEventHash,
+      requireFactoryRunning: true,
+    }),
+    /paused before evidence attachment/,
+    "the ledger lock makes the final running-state check atomic with its conditional append",
+  );
+  eq(buildFactorySnapshot(paths).lastEventHash, sanitizedHold.lastEventHash, "the atomic held-state refusal appends no event");
   clearEmergencyFactoryHold(paths);
   eq(buildFactorySnapshot(paths).held, false, "canonical recovery can clear the emergency hold");
+
+  holdFactoryFence(paths.emergencyHoldFencePath);
+  const fencedPauseStartedAt = Date.now();
+  setEmergencyFactoryHold(paths, "A pause waits for the in-flight attachment fence.", { ledgerUnavailable: true });
+  ok(Date.now() - fencedPauseStartedAt >= 250, "emergency-pause persistence honors the shared attachment fence");
+  clearEmergencyFactoryHold(paths);
+
+  holdFactoryFence(paths.emergencyHoldFencePath);
+  const fencedAppendStartedAt = Date.now();
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    actorTool: "codex",
+    sessionId: "session-1",
+    payload: { ownerRequest: "prove conditional append fencing" },
+  }, { requireFactoryRunning: true });
+  ok(Date.now() - fencedAppendStartedAt >= 250, "conditional evidence-style append honors the shared emergency-hold fence");
+
+  writeFileSync(paths.emergencyHoldFencePath, `${JSON.stringify({
+    pid: 99999999,
+    createdAt: new Date(Date.now() - 10_000).toISOString(),
+  })}\n`);
+  setEmergencyFactoryHold(paths, "A dead fence owner cannot strand an emergency pause.", { ledgerUnavailable: true });
+  ok(
+    readdirSync(paths.recoveryDir).some((entry) => entry.startsWith("stale-emergency-hold-fence-")),
+    "a stale emergency-hold fence is archived before pause persistence continues",
+  );
+  clearEmergencyFactoryHold(paths);
+
+  writeFileSync(paths.lockPath, `${JSON.stringify({
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  })}\n`);
+  setEmergencyFactoryHold(paths, "A contended ledger must not drop this pause.", { lockTimeoutMs: 25 });
+  eq(buildFactorySnapshot(paths).held, true, "ledger-lock contention falls back to a fail-safe emergency hold");
+  rmSync(paths.lockPath);
+  clearEmergencyFactoryHold(paths);
 
   writeFileSync(paths.lockPath, `${JSON.stringify({
     pid: 99999999,
@@ -608,6 +742,150 @@ function append(paths, type, jobId, payload = {}, options = {}) {
   snapshot = buildFactorySnapshot(paths);
   eq(snapshot.factoryIntentSessions, [], "factory intent can be cleared");
   eq(snapshot.held, false, "global resume clears hold");
+  cleanup();
+}
+
+{
+  const { paths, cleanup } = fixture();
+  append(paths, "factory-held", null, { reason: "initial pause", ownerReply: "pause factory" });
+  const heldHash = loadFactorySnapshot(paths).lastEventHash;
+  holdFactoryFence(paths.emergencyHoldFencePath);
+  const fencedControlStartedAt = Date.now();
+  const repeatedHold = appendFactoryControlEvent(paths, {
+    type: "factory-held",
+    jobId: null,
+    actorTool: "codex",
+    sessionId: "session-1",
+    payload: { reason: "repeat pause", ownerReply: "pause factory" },
+  });
+  ok(Date.now() - fencedControlStartedAt >= 250, "owner hold/resume transitions honor the shared emergency-hold fence");
+  eq(repeatedHold.changed, false, "atomic control transition treats a repeated pause as a no-op");
+  eq(loadFactorySnapshot(paths).lastEventHash, heldHash, "atomic repeated pause leaves the ledger hash unchanged");
+  const resumed = appendFactoryControlEvent(paths, {
+    type: "factory-resumed",
+    jobId: null,
+    actorTool: "codex",
+    sessionId: "session-1",
+    payload: { reason: "resume", ownerReply: "resume factory" },
+  });
+  eq(resumed.changed, true, "atomic control transition records a real resume");
+  const pausedAgain = appendFactoryControlEvent(paths, {
+    type: "factory-held",
+    jobId: null,
+    actorTool: "codex",
+    sessionId: "session-1",
+    payload: { reason: "newer pause", ownerReply: "pause factory" },
+  });
+  eq(pausedAgain.changed, true, "a pause serialized after a resume is not lost as a stale no-op");
+  eq(loadFactorySnapshot(paths).held, true, "the last serialized owner control determines the final hold state");
+  cleanup();
+}
+
+{
+  const { paths, cleanup } = fixture();
+  mkdirSync(path.dirname(paths.emergencyHoldFencePath), { recursive: true });
+  writeFileSync(paths.emergencyHoldFencePath, `${JSON.stringify({
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  })}\n`);
+  const startedAt = Date.now();
+  const paused = appendFactoryControlEvent(paths, {
+    type: "factory-held",
+    jobId: null,
+    actorTool: "codex",
+    sessionId: "session-1",
+    payload: { reason: "stuck fence pause", ownerReply: "pause factory" },
+  }, { lockTimeoutMs: 25, emergencyFallbackReason: "Stuck-fence fallback test." });
+  ok(Date.now() - startedAt < 500, "a live but stuck fence has a bounded wait");
+  eq(paused.emergencyFallback, true, "a timed-out pause uses the fail-closed emergency marker");
+  eq(buildFactorySnapshot(paths).held, true, "the emergency marker keeps the factory paused after fence timeout");
+  throws(
+    () => appendFactoryControlEvent(paths, {
+      type: "factory-resumed",
+      jobId: null,
+      actorTool: "codex",
+      sessionId: "session-1",
+      payload: { reason: "unsafe stuck-fence resume", ownerReply: "resume factory" },
+    }, { lockTimeoutMs: 25 }),
+    /emergency-hold fence timed out/,
+    "a resume cannot clear the fail-closed marker while the coordination fence is stuck",
+  );
+  rmSync(paths.emergencyHoldFencePath);
+  clearEmergencyFactoryHold(paths);
+  cleanup();
+}
+
+{
+  const { root, env, paths, cleanup } = fixture();
+  append(paths, "factory-intent", null, { ownerRequest: "prove atomic pause fallback" });
+  const checkpoint = loadFactorySnapshot(paths).lastEventHash;
+  writeFileSync(paths.lockPath, `${JSON.stringify({
+    pid: process.pid,
+    createdAt: new Date().toISOString(),
+  })}\n`);
+  const moduleUrl = new URL("./factory-state-lib.mjs", import.meta.url).href;
+  const controlScript = path.join(root, "control-fallback.test.mjs");
+  const attachmentScript = path.join(root, "waiting-attachment.test.mjs");
+  const attachmentReady = path.join(root, "attachment-ready.txt");
+  writeFileSync(controlScript, [
+    "const lib = await import(process.argv[2]);",
+    "const paths = lib.resolveFactoryPaths(process.argv[3], process.env);",
+    "const result = lib.appendFactoryControlEvent(paths, {",
+    "  type: 'factory-held', jobId: null, actorTool: 'codex', sessionId: 'session-1',",
+    "  payload: { reason: 'contended pause', ownerReply: 'pause factory' },",
+    "}, { lockTimeoutMs: 1000, emergencyFallbackReason: 'Atomic fallback contention test.' });",
+    "process.stdout.write(JSON.stringify(result));",
+  ].join("\n"));
+  writeFileSync(attachmentScript, [
+    "const fs = await import('node:fs');",
+    "const lib = await import(process.argv[2]);",
+    "const paths = lib.resolveFactoryPaths(process.argv[3], process.env);",
+    "fs.writeFileSync(process.argv[4], 'ready');",
+    "try {",
+    "  lib.appendFactoryEvent(paths, { type: 'factory-intent', jobId: null, actorTool: 'codex', sessionId: 'session-2', payload: { ownerRequest: 'must wait behind pause' } }, { expectedLastEventHash: process.argv[5], requireFactoryRunning: true });",
+    "  process.stdout.write('ATTACHED');",
+    "} catch (error) { process.stdout.write(`REFUSED:${error.message}`); }",
+  ].join("\n"));
+  const childEnv = { ...process.env, ...env };
+  const controlChild = spawn(process.execPath, [controlScript, moduleUrl, root], {
+    env: childEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const controlResultPromise = capturedChild(controlChild);
+  waitForPath(paths.emergencyHoldFencePath, "the contended owner pause acquires the shared hold fence");
+  const attachmentChild = spawn(process.execPath, [attachmentScript, moduleUrl, root, attachmentReady, checkpoint], {
+    env: childEnv,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const attachmentResultPromise = capturedChild(attachmentChild);
+  waitForPath(attachmentReady, "the conditional attachment starts while the owner pause owns the fence");
+  waitForPath(paths.emergencyHoldPath, "the failed ledger pause writes its emergency marker before releasing the fence");
+  rmSync(paths.lockPath);
+  const [controlResult, attachmentResult] = await Promise.all([controlResultPromise, attachmentResultPromise]);
+  eq(controlResult.status, 0, `the contended pause falls back successfully: ${controlResult.stderr}`);
+  eq(JSON.parse(controlResult.stdout).emergencyFallback, true, "the control transition reports its in-fence emergency fallback");
+  eq(attachmentResult.status, 0, `the waiting attachment process exits cleanly: ${attachmentResult.stderr}`);
+  ok(/REFUSED:.*paused before evidence attachment/i.test(attachmentResult.stdout), "a waiting attachment observes the marker and cannot cross the failed pause");
+  eq(loadFactorySnapshot(paths).lastEventHash, checkpoint, "the failed pause and refused attachment append no ledger event");
+  cleanup();
+}
+
+{
+  const { paths, cleanup } = fixture();
+  append(paths, "factory-held", null, { reason: "protect receipt", ownerReply: "pause factory" });
+  const hold = readEventLog(paths).events.at(-1);
+  rmSync(path.join(paths.ownerReceiptsDir, `${hold.payload.ownerReceiptId}.json`));
+  throws(
+    () => appendFactoryControlEvent(paths, {
+      type: "factory-resumed",
+      jobId: null,
+      actorTool: "codex",
+      sessionId: "session-1",
+      payload: { reason: "must fail closed", ownerReply: "resume factory" },
+    }),
+    /ENOENT|receipt/i,
+    "the lock-held control evaluator refuses a hold event whose hook-origin receipt is missing",
+  );
   cleanup();
 }
 
@@ -761,7 +1039,8 @@ function append(paths, type, jobId, payload = {}, options = {}) {
     execFileSync("git", args, { cwd: harnessRepo, stdio: "ignore" });
   }
   mkdirSync(paths.stateDir, { recursive: true });
-  process.env.FACTORY_MUTATE_TARGET = path.join(paths.stateDir, "forged.txt");
+  mkdirSync(paths.permitsDir, { recursive: true });
+  process.env.FACTORY_MUTATE_TARGET = path.join(paths.permitsDir, "forged.txt");
   throws(
     () => runHarnessEvidence(paths, {
       jobId: "state-mutation-proof",
@@ -771,10 +1050,164 @@ function append(paths, type, jobId, payload = {}, options = {}) {
       cwd: harnessRepo,
     }),
     /factory is held for review/,
-    "trusted harness broker detects indirect mutation of factory state",
+    "trusted harness broker detects an unexpected file inside the mutable permits directory",
   );
   ok(existsSync(paths.emergencyHoldPath), "indirect harness mutation creates an emergency hold");
+  clearEmergencyFactoryHold(paths);
+  append(paths, "factory-held", null, { reason: "create the owner receipt key", ownerReply: "pause factory" });
+  process.env.FACTORY_MUTATE_TARGET = paths.ownerReceiptKeyPath;
+  throws(
+    () => runHarnessEvidence(paths, {
+      jobId: "owner-key-mutation-proof",
+      ticketHash: "b".repeat(64),
+      label: "must protect owner key",
+      scriptName: "verify-deps",
+      cwd: harnessRepo,
+    }),
+    /factory is held for review/,
+    "trusted harness broker detects replacement of the owner receipt authentication key",
+  );
+  ok(existsSync(paths.emergencyHoldPath), "owner receipt key mutation creates an emergency hold");
   delete process.env.FACTORY_MUTATE_TARGET;
+  rmSync(harnessRepo, { recursive: true, force: true });
+  cleanup();
+}
+
+{
+  const { paths, cleanup } = fixture();
+  const harnessRepo = mkdtempSync(path.join(tmpdir(), "crx-factory-harness-content-addressed-"));
+  writeFileSync(path.join(harnessRepo, "package.json"), `${JSON.stringify({
+    scripts: {
+      "verify-deps": "node -e \"process.stdout.write('ORPHAN_RECOVERY_PASS')\"",
+    },
+  })}\n`);
+  for (const args of [
+    ["init", "-q", "-b", "main"],
+    ["add", "package.json"],
+    ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"],
+    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+  ]) {
+    execFileSync("git", args, { cwd: harnessRepo, stdio: "ignore" });
+  }
+  const evidenceArgs = {
+    jobId: "orphan-recovery-proof",
+    ticketHash: "b".repeat(64),
+    label: "content-addressed retry",
+    scriptName: "verify-deps",
+    cwd: harnessRepo,
+    capturedAt: "2026-08-02T15:00:00.000Z",
+  };
+  const first = runHarnessEvidence(paths, evidenceArgs);
+  const repeated = runHarnessEvidence(paths, evidenceArgs);
+  eq(first.createdArtifact, true, "the first harness persistence creates its content-addressed artifact");
+  eq(repeated.createdArtifact, false, "an exact byte-identical artifact write is idempotent");
+  eq(repeated.sha256, first.sha256, "content-addressed idempotence requires the same complete byte identity");
+  eq(repeated.filename, first.filename, "byte-identical persistence preserves the deterministic artifact name");
+  writeFileSync(first.fullPath, readFileSync(first.fullPath, "utf8").replace(/\n/g, "\r\n"));
+  throws(
+    () => runHarnessEvidence(paths, evidenceArgs),
+    /does not match its content-derived identity/,
+    "newline-transformed artifact bytes cannot impersonate the content-addressed receipt",
+  );
+  rmSync(harnessRepo, { recursive: true, force: true });
+  cleanup();
+}
+
+{
+  const { root, paths, cleanup } = fixture();
+  const harnessRepo = mkdtempSync(path.join(tmpdir(), "crx-factory-harness-concurrent-hold-"));
+  writeFileSync(path.join(harnessRepo, "package.json"), `${JSON.stringify({
+    scripts: {
+      "verify-deps": "node -e \"require('fs').writeFileSync(process.env.CRX_FACTORY_TEST_STATE_DIR + '/EMERGENCY-HOLD.json', JSON.stringify({reason:'test concurrent hold'}));process.stdout.write('HOLD_CREATED')\"",
+    },
+  })}\n`);
+  for (const args of [
+    ["init", "-q", "-b", "main"],
+    ["add", "package.json"],
+    ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"],
+    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+  ]) {
+    execFileSync("git", args, { cwd: harnessRepo, stdio: "ignore" });
+  }
+  const baseSha = execFileSync("git", ["rev-parse", "origin/main"], { cwd: harnessRepo, encoding: "utf8" }).trim();
+  const written = writeImmutableTicket(paths, ticket("pause-during-harness"));
+  append(paths, "ticket-drafted", written.ticket.id, {
+    ticketFile: written.filename,
+    ticketHash: written.hash,
+    ticketVersion: 1,
+    title: written.ticket.title,
+  });
+  const question = "Approve the concurrent-hold harness test?";
+  append(paths, "ticket-presented", written.ticket.id, {
+    ticketHash: written.hash,
+    questionText: question,
+    questionHash: sha256(question),
+    baseSha,
+  });
+  append(paths, "ticket-approved", written.ticket.id, {
+    ticketHash: written.hash,
+    questionHash: sha256(question),
+    ownerReply: "yes",
+    baseSha,
+    expiresAt: new Date(Date.parse("2026-07-30T12:00:00.000Z") + APPROVAL_TTL_MS).toISOString(),
+  });
+  append(paths, "lane-started", written.ticket.id, {
+    ticketHash: written.hash,
+    baseSha,
+    worktree: harnessRepo,
+  });
+  const beforeRun = loadFactorySnapshot(paths);
+  throws(
+    () => runAndAttachHarnessEvidence(paths, {
+      jobId: written.ticket.id,
+      label: "GITHUB_TOKEN=secret-shaped-value",
+      scriptName: "verify-deps",
+      sessionId: "session-1",
+      actorTool: "codex",
+      expectedLastEventHash: beforeRun.lastEventHash,
+      currentBaseSha: baseSha,
+      cwd: harnessRepo,
+    }),
+    /evidence label appears to contain a credential or secret/i,
+    "a secret-shaped evidence label is refused before the harness executes",
+  );
+  eq(existsSync(paths.emergencyHoldPath), false, "a secret-shaped evidence label cannot trigger harness side effects");
+  throws(
+    () => runAndAttachHarnessEvidence(paths, {
+      jobId: written.ticket.id,
+      label: "",
+      scriptName: "verify-deps",
+      sessionId: "session-1",
+      actorTool: "codex",
+      expectedLastEventHash: beforeRun.lastEventHash,
+      currentBaseSha: baseSha,
+      cwd: harnessRepo,
+    }),
+    /evidence label is required/,
+    "an invalid evidence label is refused before the harness executes",
+  );
+  eq(existsSync(paths.emergencyHoldPath), false, "invalid evidence metadata cannot trigger harness side effects");
+  const preRunEvidenceDir = path.join(paths.evidenceDir, written.ticket.id);
+  eq(existsSync(preRunEvidenceDir) ? readdirSync(preRunEvidenceDir).length : 0, 0, "invalid evidence metadata creates no artifact");
+  throws(
+    () => runAndAttachHarnessEvidence(paths, {
+      jobId: written.ticket.id,
+      label: "must remain unattached",
+      scriptName: "verify-deps",
+      sessionId: "session-1",
+      actorTool: "codex",
+      expectedLastEventHash: beforeRun.lastEventHash,
+      currentBaseSha: baseSha,
+      cwd: harnessRepo,
+    }),
+    /paused while harness verify-deps ran/,
+    "an emergency hold created during a harness prevents evidence attachment",
+  );
+  const afterRun = loadFactorySnapshot(paths);
+  eq(afterRun.held, true, "a concurrent emergency hold remains authoritative");
+  eq(afterRun.jobs[0].evidence.length, 0, "no evidence attaches after the factory is paused");
+  const jobEvidenceDir = path.join(paths.evidenceDir, written.ticket.id);
+  eq(existsSync(jobEvidenceDir) ? readdirSync(jobEvidenceDir).length : 0, 0, "the unattached evidence artifact is cleaned up");
   rmSync(harnessRepo, { recursive: true, force: true });
   cleanup();
 }

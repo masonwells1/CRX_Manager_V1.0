@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -21,7 +21,7 @@ import {
   repositoryCommitFingerprint,
   rejectSecretBearingText,
   resolveFactoryPaths,
-  runHarnessEvidence,
+  runAndAttachHarnessEvidence,
   runIndependentReviewEvidence,
   sha256,
   validateLaneActor,
@@ -110,12 +110,18 @@ function stableSnapshot(paths, who, options) {
   return snapshot;
 }
 
-function appendAsActor(paths, event, who, expectedLastEventHash = who.expectedLastEventHash) {
+function appendAsActor(
+  paths,
+  event,
+  who,
+  expectedLastEventHash = who.expectedLastEventHash,
+  { requireFactoryRunning = false } = {},
+) {
   return appendFactoryEvent(paths, {
     ...event,
     sessionId: who.sessionId,
     actorTool: who.actorTool,
-  }, { expectedLastEventHash });
+  }, { expectedLastEventHash, requireFactoryRunning });
 }
 
 function decodeBase64Text(flags, name, { maxBytes = 20_000, rejectSecrets = true } = {}) {
@@ -613,13 +619,26 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     const job = validateLaneActor(snapshot, jobId, who.sessionId, {
       allowedStages: new Set(["in-review"]),
     });
-    const review = runIndependentReviewEvidence(paths, { job, cwd, env });
-    appendAsActor(paths, {
-      type: "independent-review-attached",
-      jobId,
-      timestamp: now().toISOString(),
-      payload: review,
-    }, who);
+    const reviewArtifact = runIndependentReviewEvidence(paths, { job, cwd, env });
+    const { fullPath, createdArtifact, ...review } = reviewArtifact;
+    if (!createdArtifact) {
+      throw new Error(`Independent-review evidence ${review.filename} already exists; refusing to attach or delete a pre-existing artifact.`);
+    }
+    try {
+      appendAsActor(paths, {
+        type: "independent-review-attached",
+        jobId,
+        timestamp: now().toISOString(),
+        payload: review,
+      }, who, who.expectedLastEventHash, { requireFactoryRunning: true });
+    } catch (error) {
+      try { unlinkSync(fullPath); } catch (cleanupError) {
+        if (cleanupError?.code !== "ENOENT") {
+          process.stderr.write(`Factory cleanup warning: could not remove unattached independent-review evidence (${cleanupError?.message || cleanupError}).\n`);
+        }
+      }
+      throw error;
+    }
     process.stdout.write(`${JSON.stringify({
       jobId,
       reviewer: review.reviewer,
@@ -657,46 +676,18 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
   if (group === "evidence" && action === "run") {
     const who = actor(paths, flags, env, now().getTime());
     const jobId = required(flags, "job");
-    const snapshot = stableSnapshot(paths, who, { nowMs: now().getTime() });
-    const job = validateLaneActor(snapshot, jobId, who.sessionId);
-    if (job.baseSha !== refreshOriginMain(cwd, env)) {
-      throw new Error("origin/main moved after ticket approval; park and re-present the job before minting proof.");
-    }
     const harness = required(flags, "harness");
-    if (!job.ticket?.proofHarnesses?.includes(harness)) {
-      throw new Error(`Harness ${harness} was not approved in mission ticket ${jobId}.`);
-    }
-    const evidence = runHarnessEvidence(paths, {
+    const evidence = runAndAttachHarnessEvidence(paths, {
       jobId,
-      ticketHash: job.ticketHash,
       label: required(flags, "label"),
       scriptName: harness,
+      sessionId: who.sessionId,
+      actorTool: who.actorTool,
+      expectedLastEventHash: who.expectedLastEventHash,
+      currentBaseSha: refreshOriginMain(cwd, env),
       cwd,
+      now,
     });
-    appendAsActor(paths, {
-      type: "evidence-attached",
-      jobId,
-      timestamp: now().toISOString(),
-      payload: {
-        label: evidence.label,
-        kind: evidence.kind,
-        filename: evidence.filename,
-        sha256: evidence.sha256,
-        verified: true,
-        sourceCommand: evidence.sourceCommand,
-        scriptName: evidence.scriptName,
-        scriptBodyHash: evidence.scriptBodyHash,
-        baseScriptBodyHash: evidence.baseScriptBodyHash,
-        baseSha: evidence.baseSha,
-        packageJsonHash: evidence.packageJsonHash,
-        headSha: evidence.headSha,
-        headTreeSha: evidence.headTreeSha,
-        repositoryContentHash: evidence.repositoryContentHash,
-        repositoryFileCount: evidence.repositoryFileCount,
-        ticketHash: evidence.ticketHash,
-        sandbox: evidence.sandbox,
-      },
-    }, who);
     process.stdout.write(`${JSON.stringify({
       jobId,
       label: evidence.label,

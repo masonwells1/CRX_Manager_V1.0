@@ -2,6 +2,44 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-02 — Factory resume replay and parked-Board repair
+
+The factory now serializes owner pause/resume evaluation and its conditional
+append under the ledger lock. A repeated plain-English resume is an idempotent
+no-op, while a newer opposite control cannot be lost behind a stale state check.
+Evidence execution has a per-job single-flight lock:
+one harness may run, while a concurrent transcript replay is refused before it
+executes or attaches a second receipt. Permit consumption, valid owner receipts,
+and append-only coordination events no longer look like harness-authored state
+mutation; the owner-receipt authentication key, tickets, evidence, and
+unexpected state files remain protected.
+
+Content-addressed harness writes are idempotent only when their complete bytes
+match. An interrupted artifact stays unattached and cannot validate proof; a
+normal retry has a new capture timestamp and produces a fresh receipt. Raw byte
+identity is required, and a pause arriving while a harness runs prevents its
+receipt from attaching. Emergency-pause writers, owner hold/resume transitions,
+and conditional harness or independent-review attachment share a dedicated hold
+fence. A pause falls back to a direct
+fail-safe marker inside that fence if the ledger lock times out; the final
+running-state check plus receipt append also stay ledger-atomic, closing the
+last check-to-append window. The owner control transition performs that fallback
+itself without releasing and reacquiring the fence; a two-process contention
+regression proves an already-waiting attachment observes the marker and is
+refused. Windows `EPERM`/`EACCES` create-once results are treated as fence
+contention only when the fence path actually exists, preserving fail-closed
+behavior without flaky concurrent pauses. A live but stuck emergency-hold
+fence now has a bounded wait; pause requests fall back to the fail-closed
+emergency marker, while resume and evidence attachment remain refused. A pause arriving during independent review refuses
+attachment and cleans up only the exact artifact path created by that review.
+A pre-existing content-addressed review artifact is neither attached nor
+deleted. Evidence metadata is rejected before
+a harness starts, and attached events record the actual append time. A parked
+job may now refresh its owner-facing result
+and nonempty blocker only from its original lane session; the refresh remains
+parked and cannot reopen, advance, or transfer the job. The incident and
+acceptance evidence are recorded in `docs/audits/2026-08-02-factory-resume-replay-repair.md`.
+
 ## 2026-08-02 — Invoice and Quick Delivery retries bound to mutation intent — LIVE
 
 Migration `20260802162805_bind_idempotency_to_mutation_intent` was applied live

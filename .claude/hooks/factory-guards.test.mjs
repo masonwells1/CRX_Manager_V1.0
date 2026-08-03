@@ -81,6 +81,10 @@ function bashExecutable() {
     tool_input: { file_path: paths.eventsPath },
   }), /shared factory.*forbidden/i, "direct ledger reads are denied in favor of the validated status projection");
   denied(run(integrityHook, stateDir, {
+    tool_name: "Write",
+    tool_input: { file_path: path.join(paths.harnessRunsDir, "forged.json"), content: "forged" },
+  }), /shared factory.*forbidden/i, "agents cannot forge or remove evidence single-flight locks");
+  denied(run(integrityHook, stateDir, {
     tool_name: "mcp__filesystem__write_file",
     tool_input: { request: { destination: paths.eventsPath, content: "forged" } },
   }), /shared factory.*forbidden/i, "unknown structured MCP writers cannot pre-seed the ledger");

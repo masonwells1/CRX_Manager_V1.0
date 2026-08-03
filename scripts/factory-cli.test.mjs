@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
   canonicalMorningReviewQuestion,
   canonicalTicketApprovalQuestion,
+  clearEmergencyFactoryHold,
   loadFactorySnapshot,
   mintFactoryCliPermit,
   validateApprovedFactoryLanding,
@@ -39,7 +40,7 @@ process.on("exit", () => {
 mkdirSync(fixtureRepo, { recursive: true });
 writeFileSync(path.join(fixtureRepo, "package.json"), `${JSON.stringify({
   scripts: {
-    "verify-deps": "node -e \"process.stdout.write('FACTORY_TEST_HARNESS_PASS')\"",
+    "verify-deps": "node -e \"Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Number(process.env.CRX_FACTORY_TEST_HARNESS_DELAY_MS||500));process.stdout.write('FACTORY_TEST_HARNESS_PASS')\"",
   },
 }, null, 2)}\n`);
 for (const args of [
@@ -149,7 +150,7 @@ function base64(value) {
   }
 }
 
-function run(args, identity = { sessionId, actorTool: "codex" }) {
+function run(args, identity = { sessionId, actorTool: "codex" }, extraEnv = {}) {
   const readOnly = args[0] === "status";
   const permit = readOnly ? null : mintFactoryCliPermit(paths, {
     ...identity,
@@ -159,6 +160,7 @@ function run(args, identity = { sessionId, actorTool: "codex" }) {
     cwd: root,
     env: {
       ...env,
+      ...extraEnv,
       ...(permit ? { CRX_FACTORY_PERMIT: permit.token } : {}),
     },
     encoding: "utf8",
@@ -273,6 +275,65 @@ appendFactoryEvent(paths, {
   },
 });
 pass(run(["lane", "start", "--job", jobId]), "start lane");
+
+const concurrentCheckpoint = loadFactorySnapshot(paths).lastEventHash;
+const firstEvidencePermit = mintFactoryCliPermit(paths, {
+  sessionId,
+  actorTool: "codex",
+  expectedLastEventHash: concurrentCheckpoint,
+});
+const replayedEvidencePermit = mintFactoryCliPermit(paths, {
+  sessionId,
+  actorTool: "codex",
+  expectedLastEventHash: concurrentCheckpoint,
+});
+const firstEvidence = spawn(process.execPath, [
+  script,
+  "evidence", "run",
+  "--job", jobId,
+  "--harness", "verify-deps",
+  "--label", "single-flight primary",
+], {
+  cwd: root,
+  env: { ...env, CRX_FACTORY_PERMIT: firstEvidencePermit.token, CRX_FACTORY_TEST_HARNESS_DELAY_MS: "3000" },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+let firstEvidenceStdout = "";
+let firstEvidenceStderr = "";
+firstEvidence.stdout.setEncoding("utf8");
+firstEvidence.stderr.setEncoding("utf8");
+firstEvidence.stdout.on("data", (chunk) => { firstEvidenceStdout += chunk; });
+firstEvidence.stderr.on("data", (chunk) => { firstEvidenceStderr += chunk; });
+const lockDeadline = Date.now() + 5_000;
+while (readdirSync(paths.harnessRunsDir).length === 0 && Date.now() < lockDeadline) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+}
+assertions++;
+assert.ok(readdirSync(paths.harnessRunsDir).length > 0, "the primary harness acquires its per-job single-flight lock");
+const replayedEvidence = spawnSync(process.execPath, [
+  script,
+  "evidence", "run",
+  "--job", jobId,
+  "--harness", "verify-deps",
+  "--label", "single-flight replay",
+], {
+  cwd: root,
+  env: { ...env, CRX_FACTORY_PERMIT: replayedEvidencePermit.token },
+  encoding: "utf8",
+});
+const firstEvidenceStatus = await new Promise((resolve) => firstEvidence.once("close", resolve));
+assertions++;
+assert.equal(firstEvidenceStatus, 0, `the primary harness completes without a false factory hold: ${firstEvidenceStderr}`);
+assertions++;
+assert.match(firstEvidenceStdout, /single-flight primary/, "the primary harness attaches its evidence receipt");
+assertions++;
+assert.notEqual(replayedEvidence.status, 0, "a replayed same-job harness is refused before it executes");
+assertions++;
+assert.match(replayedEvidence.stderr, /evidence run already in progress.*replayed harness execution was refused/i, "the duplicate refusal explains the single-flight guard");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).jobs[0].evidence.length, 1, "only the primary concurrent harness attaches evidence");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).held, false, "legitimate permit churn does not trigger an emergency factory hold");
 const rewindActiveLane = run(["ticket", "present", "--job", jobId]);
 assertions++;
 assert.notEqual(rewindActiveLane.status, 0, "the owning chat cannot rewind an active lane through ticket presentation");
@@ -328,9 +389,51 @@ pass(run(["evidence", "run", "--job", jobId, "--harness", "verify-deps", "--labe
 const noIndependentReview = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", ...summaryArgs]);
 assertions++;
 assert.notEqual(noIndependentReview.status, 0, "a passing branch harness cannot self-certify morning review");
-pass(run(["review", "run", "--job", jobId]), "run independent Codex review");
+const reviewArtifactsBeforePause = readdirSync(path.join(paths.evidenceDir, jobId))
+  .filter((entry) => entry.endsWith("-independent-codex-review.json")).length;
+const pausedReview = run(
+  ["review", "run", "--job", jobId],
+  { sessionId, actorTool: "codex" },
+  { CRX_FACTORY_TEST_REVIEW_HOLD: "1", CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:00.000Z" },
+);
+assertions++;
+assert.notEqual(pausedReview.status, 0, "a marker-only pause arriving during independent review blocks attachment");
+assertions++;
+assert.match(pausedReview.stderr, /paused before evidence attachment/i, "the paused review fails at the final atomic running-state gate");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).jobs[0].reviews.length, 0, "a paused independent review appends no ledger receipt");
+assertions++;
+assert.equal(
+  readdirSync(path.join(paths.evidenceDir, jobId)).filter((entry) => entry.endsWith("-independent-codex-review.json")).length,
+  reviewArtifactsBeforePause,
+  "a paused independent review cleans up its unattached artifact",
+);
+clearEmergencyFactoryHold(paths);
+pass(
+  run(
+    ["review", "run", "--job", jobId],
+    { sessionId, actorTool: "codex" },
+    { CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:00.000Z" },
+  ),
+  "run independent Codex review",
+);
 const reviewReceipt = loadFactorySnapshot(paths).jobs[0].reviews[0];
 const reviewArtifact = JSON.parse(readFileSync(path.join(paths.evidenceDir, jobId, reviewReceipt.filename), "utf8"));
+const repeatedReview = run(
+  ["review", "run", "--job", jobId],
+  { sessionId, actorTool: "codex" },
+  { CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:00.000Z" },
+);
+assertions++;
+assert.notEqual(repeatedReview.status, 0, "a pre-existing independent-review artifact is never reattached");
+assertions++;
+assert.match(repeatedReview.stderr, /already exists.*refusing to attach or delete/i, "the pre-existing review fails before ledger attachment");
+assertions++;
+assert.equal(existsSync(path.join(paths.evidenceDir, jobId, reviewReceipt.filename)), true, "the pre-existing review artifact is not deleted");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).jobs[0].reviews.length, 1, "the failed replay appends no duplicate review receipt");
+assertions++;
+assert.equal(readFileSync(paths.eventsPath, "utf8").includes("createdArtifact"), false, "writer-only review metadata never enters the shared ledger");
 assertions++;
 assert.equal("stdout" in reviewArtifact || "stderr" in reviewArtifact, false, "review receipt does not persist unrestricted process output");
 assertions++;
@@ -369,9 +472,9 @@ const snapshot = loadFactorySnapshot(paths);
 assertions++;
 assert.equal(snapshot.jobs[0].stage, "awaiting-morning-review");
 assertions++;
-assert.equal(snapshot.jobs[0].evidence.length, 2);
+assert.equal(snapshot.jobs[0].evidence.length, 3);
 assertions++;
-assert.equal(snapshot.jobs[0].evidence.filter((item) => item.verified).length, 2);
+assert.equal(snapshot.jobs[0].evidence.filter((item) => item.verified).length, 3);
 assertions++;
 assert.equal(snapshot.jobs[0].reviews.filter((item) => item.verdict === "clean").length, 1);
 assertions++;
