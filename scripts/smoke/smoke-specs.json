@@ -497,6 +497,18 @@
         "billing"
       ]
     },
+    "get_detailed_statement_data": {
+      "chain": "smoke-detailed-statement-balance-disclosure.sql",
+      "description": "Detailed and batch statement consistency: an overdue-only synthetic customer is included in the month-end batch; a finance-charge invoice exposes linked charge metadata without adding it twice to net_due_cents; gross open invoices, unapplied credit memos, and net account position reconcile exactly. Synthetic fixtures and candidate function replacements roll back.",
+      "covers": [
+        "get_detailed_statement_data",
+        "generate_batch_statements"
+      ],
+      "area": [
+        "billing",
+        "regression"
+      ]
+    },
     "statement_opening_balance": {
       "chain": "smoke-statement-opening-balance.sql",
       "description": "Bounded customer statement regression: pre-period AR is carried as an opening-balance row, same-day invoices have stable UUID ordering with a ROWS running frame, the ending balance equals full as-of AR, and reversed date ranges fail closed.",

@@ -17,6 +17,8 @@
         "src/lib/buildInvoicePdfDataFromRow.test.ts",
         "src/lib/invoicePdf.test.ts",
         "src/lib/statementPdf.test.ts",
+        "src/lib/statementPdf.render.test.ts",
+        "src/lib/statementEmail.test.ts",
         "src/lib/invoiceSendDisposition.test.ts",
         "src/lib/sendEmailEdgeGateContracts.test.ts",
         "src/lib/proofNotification.test.ts",
@@ -147,6 +149,9 @@
         "src/lib/gauntletRemediationGuards.test.ts",
         "src/lib/gauntletSections26Remediation.test.ts",
         "src/lib/moneyInventoryGauntletFixes.test.ts",
+        "src/lib/statementEmail.test.ts",
+        "src/lib/statementPdf.test.ts",
+        "src/lib/statementPdf.render.test.ts",
         "src/lib/sqlRoleGateNullFailOpen.test.ts",
         "src/lib/splitVectorMath.test.ts",
         "src/__tests__/predicate-product-name-vs-return-policy.test.ts"

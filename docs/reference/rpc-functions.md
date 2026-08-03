@@ -204,8 +204,8 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 ## AR & Statements
 - `get_ar_aging()` — AR aging report with current/30/60/90+ day buckets
 - `get_customer_statement()` — customer statement with invoice/payment/write-off history; the live `20260716200659` wrapper requires an active admin or the active sales rep assigned to that customer before delegating to the directly non-executable implementation. Migration `20260720173059_fix_statement_opening_balance` (applied live under server-assigned ledger version `20260720185135`) adds opening-balance carry-forward and deterministic same-day running order without changing the public signature.
-- `get_detailed_statement_data()` — detailed statement data for PDF generation. Includes both 'posted' and 'overdue' invoices. Aging buckets: current(0-30), 31-60, 61-90, 91-120, over-120 (non-overlapping).
-- `generate_batch_statements()` — generate batch PDF statements for multiple customers
+- `get_detailed_statement_data()` — detailed statement data for PDF generation. Includes both 'posted' and 'overdue' invoices. Aging buckets: current(0-30), 31-60, 61-90, 91-120, over-120 (non-overlapping). Pending local migration `20260803131507` keeps linked finance-charge rows informational instead of adding them twice and returns gross open invoices, unapplied credit memos, and net account position as separate cents fields.
+- `generate_batch_statements()` — generate batch PDF statements for multiple customers. Pending local migration `20260803131507` includes customers whose only positive open invoices are overdue.
 - `get_season_comparison()` — compare two seasons side-by-side
 - `get_customer_year_end_summary(p_customer_id, p_season)` → jsonb — one customer's year-end purchase/AR summary for the season.
 - `get_batch_year_end_summaries(p_customer_ids uuid[], p_season)` → jsonb — year-end summaries for many customers at once (batch statement / year-end mailing).

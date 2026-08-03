@@ -25,6 +25,7 @@ import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { formatCents as fmtCents, formatUSD as fmt } from '../lib/money';
 import { downloadStatementPdf, downloadBatchStatements, generateStatementPdf } from '../lib/statementPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
+import { buildStatementEmailContent } from '../lib/statementEmail';
 import { logActivity } from '../lib/activityLogger';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
@@ -686,37 +687,9 @@ export default function ARaging() {
           const doc = await generateStatementPdf(stmtData, options);
           const base64 = pdfToBase64(doc);
 
-          const html = buildEmailHtml(`
-            <h2 style="color:#1e293b;margin:0 0 12px;">Monthly Statement</h2>
-            <p style="color:#475569;font-size:14px;line-height:1.6;">
-              Dear ${stmtData.customer.farm_name},
-            </p>
-            <p style="color:#475569;font-size:14px;line-height:1.6;">
-              Please find your account statement attached. Your current balance is
-              <strong>${fmtCents(stmtData.outstanding_balance_cents)}</strong>.
-            </p>
-            <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-              <tr>
-                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Account</td>
-                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${stmtData.customer.farm_name}</td>
-              </tr>
-              <tr>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Statement Date</td>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${options.as_of_date}</td>
-              </tr>
-              <tr>
-                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Open Invoices</td>
-                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${stmtData.transactions.length}</td>
-              </tr>
-              <tr>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Balance Due</td>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;color:${stmtData.outstanding_balance_cents > 0 ? '#dc2626' : '#16a34a'};">${fmtCents(stmtData.outstanding_balance_cents)}</td>
-              </tr>
-            </table>
-            <p style="color:#475569;font-size:14px;line-height:1.6;">
-              Please remit payment at your earliest convenience. Questions? Contact us at 618-843-0413.
-            </p>
-          `);
+          const html = buildEmailHtml(
+            buildStatementEmailContent(stmtData, options.as_of_date),
+          );
 
           try {
             const emailResult = await sendEmail({

@@ -18,8 +18,15 @@ import type {
 } from '../types';
 import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
-import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE, COMPANY_REMIT_ADDRESS, COMPANY_LEGAL_NAME } from './companyInfo';
+import {
+  COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE,
+  COMPANY_REMIT_ADDRESS,
+  COMPANY_LEGAL_NAME,
+  COMPANY_PHONE,
+  COMPANY_WEBSITE,
+} from './companyInfo';
 import { formatCents as fmt } from './money';
+import { getStatementAccountPosition } from './statementEmail';
 
 
 
@@ -51,6 +58,8 @@ export async function generateStatementPdf(
   const mode = options?.mode ?? data.mode ?? 'summary';
   const showShares = options?.show_shares ?? true;
   const asOfDate = options?.as_of_date ?? data.as_of_date;
+  const { grossOpenInvoiceCents, openCreditCents, netAccountPositionCents } =
+    getStatementAccountPosition(data);
 
   let y = 0;
   let pageNum = 0;
@@ -103,7 +112,7 @@ export async function generateStatementPdf(
 
   // ── Customer Info + Balance Box ────────────────────────────────────
   const c = data.customer;
-  const boxH = 90;
+  const boxH = 112;
   doc.setFillColor(...LIGHT_BG);
   doc.roundedRect(margin, y, pageW - margin * 2, boxH, 4, 4, 'F');
 
@@ -146,20 +155,24 @@ export async function generateStatementPdf(
     doc.text(`TERMS: ${c.payment_terms}`, rightX, y + 28, { align: 'right' });
   }
 
-  // Balance amount
+  // Gross invoices and separate credit position (gross AR stays intact by design).
   doc.setFontSize(8);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...GRAY);
-  doc.text('BALANCE DUE', rightX, y + 46, { align: 'right' });
-  doc.setFontSize(20);
+  doc.text('GROSS OPEN INVOICES', rightX, y + 42, { align: 'right' });
+  doc.setFontSize(18);
   doc.setFont('helvetica', 'bold');
-  const balColor = data.outstanding_balance_cents > 0 ? RED : CRX_GREEN;
+  const balColor = grossOpenInvoiceCents > 0 ? RED : CRX_GREEN;
   doc.setTextColor(...balColor);
-  doc.text(fmt(data.outstanding_balance_cents), rightX, y + 66, { align: 'right' });
+  doc.text(fmt(grossOpenInvoiceCents), rightX, y + 60, { align: 'right' });
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
-  doc.text(`${data.transactions.length} open invoice(s)`, rightX, y + 80, { align: 'right' });
+  doc.text(`${data.transactions.length} open invoice(s)`, rightX, y + 74, { align: 'right' });
+  doc.text(`Unapplied credits: ${fmt(openCreditCents)}`, rightX, y + 89, { align: 'right' });
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...CHARCOAL);
+  doc.text(`Net account position: ${fmt(netAccountPositionCents)}`, rightX, y + 104, { align: 'right' });
 
   y += boxH + 15;
 
@@ -274,15 +287,26 @@ function drawSummaryTransactions(
 
   y = doc.lastAutoTable.finalY + 10;
 
-  // Total line
+  // Account position summary: gross invoices remain separate from credits.
+  const { grossOpenInvoiceCents, openCreditCents, netAccountPositionCents } =
+    getStatementAccountPosition(data);
   doc.setDrawColor(200, 200, 200);
   doc.line(pageW - margin - 200, y, pageW - margin, y);
   y += 14;
-  doc.setFontSize(11);
+  doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
-  doc.text('Total Outstanding:', pageW - margin - 200, y);
-  doc.text(fmt(data.outstanding_balance_cents), pageW - margin, y, { align: 'right' });
+  doc.text('Gross Open Invoices:', pageW - margin - 200, y);
+  doc.text(fmt(grossOpenInvoiceCents), pageW - margin, y, { align: 'right' });
+  y += 14;
+  doc.setFont('helvetica', 'normal');
+  doc.text('Unapplied Credits:', pageW - margin - 200, y);
+  doc.text(fmt(openCreditCents), pageW - margin, y, { align: 'right' });
+  y += 16;
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.text('Net Account Position:', pageW - margin - 200, y);
+  doc.text(fmt(netAccountPositionCents), pageW - margin, y, { align: 'right' });
 
   return y + 20;
 }
@@ -459,18 +483,29 @@ function drawDetailedTransactions(
     }
   }
 
-  // ── Total Outstanding ──────────────────────────────────────────
+  // ── Account Position ───────────────────────────────────────────
+  const { grossOpenInvoiceCents, openCreditCents, netAccountPositionCents } =
+    getStatementAccountPosition(data);
   y += 10;
   doc.setDrawColor(200, 200, 200);
   doc.line(pageW - margin - 220, y, pageW - margin, y);
+  y += 14;
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...CHARCOAL);
+  doc.text('Gross Open Invoices:', pageW - margin - 220, y);
+  doc.text(fmt(grossOpenInvoiceCents), pageW - margin, y, { align: 'right' });
+  y += 14;
+  doc.setFont('helvetica', 'normal');
+  doc.text('Unapplied Credits:', pageW - margin - 220, y);
+  doc.text(fmt(openCreditCents), pageW - margin, y, { align: 'right' });
   y += 16;
   doc.setFontSize(12);
   doc.setFont('helvetica', 'bold');
-  doc.setTextColor(...CHARCOAL);
-  doc.text('Total Outstanding:', pageW - margin - 220, y);
-  const totalColor = data.outstanding_balance_cents > 0 ? RED : CRX_GREEN;
+  doc.text('Net Account Position:', pageW - margin - 220, y);
+  const totalColor = netAccountPositionCents > 0 ? RED : CRX_GREEN;
   doc.setTextColor(...totalColor);
-  doc.text(fmt(data.outstanding_balance_cents), pageW - margin, y, { align: 'right' });
+  doc.text(fmt(netAccountPositionCents), pageW - margin, y, { align: 'right' });
 
   return y + 20;
 }
@@ -648,10 +683,12 @@ function drawRemittanceStub(
   try {
   const c = data.customer;
   const aging = data.aging;
-  const stubH = 140;
+  const { grossOpenInvoiceCents, openCreditCents, netAccountPositionCents } =
+    getStatementAccountPosition(data);
+  const stubH = 160;
   let stubY = pageH - stubH - 15;
 
-  // Check if we need space — the stub needs ~140pt from the bottom. If the
+  // Check if we need space — the stub needs ~160pt from the bottom. If the
   // transaction content (currentY) would reach the fixed stub zone, push the
   // stub onto a fresh page so the tear-off block never overprints the last
   // rows. stubY recomputes to the same bottom-of-page position on the new
@@ -678,12 +715,21 @@ function drawRemittanceStub(
   doc.setFontSize(8);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...GRAY);
-  doc.text('PLEASE MAIL WITH PAYMENT TO:', margin, sy);
+  doc.text(
+    netAccountPositionCents > 0
+      ? 'PLEASE MAIL WITH PAYMENT TO:'
+      : 'CONTACT CROP RX BEFORE PAYMENT:',
+    margin,
+    sy,
+  );
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...CHARCOAL);
-  const remitLines = COMPANY_REMIT_ADDRESS.split('\n');
-  remitLines.forEach((line, i) => {
+  const contactLines =
+    netAccountPositionCents > 0
+      ? COMPANY_REMIT_ADDRESS.split('\n')
+      : [`Phone: ${COMPANY_PHONE}`, `Website: ${COMPANY_WEBSITE}`];
+  contactLines.forEach((line, i) => {
     doc.text(line, margin, sy + 14 + i * 12);
   });
 
@@ -740,27 +786,49 @@ function drawRemittanceStub(
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
-  doc.text('Balance:', rxStart, sy + 34);
+  doc.text('Gross open:', rxStart, sy + 34);
   doc.setFont('helvetica', 'bold');
-  const balColor = data.outstanding_balance_cents > 0 ? RED : CRX_GREEN;
+  const balColor = grossOpenInvoiceCents > 0 ? RED : CRX_GREEN;
   doc.setTextColor(...balColor);
-  doc.text(fmt(data.outstanding_balance_cents), rxStart + 60, sy + 34);
+  doc.text(fmt(grossOpenInvoiceCents), rxStart + 60, sy + 34);
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
-  doc.text('Stmt Date:', rxStart, sy + 46);
+  doc.text('Credits:', rxStart, sy + 46);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
-  doc.text(fmtDate(asOfDate), rxStart + 60, sy + 46);
+  doc.text(fmt(openCreditCents), rxStart + 60, sy + 46);
 
-  // Amount Paid line
-  const payY = sy + 70;
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...GRAY);
+  doc.text('Net position:', rxStart, sy + 58);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...CHARCOAL);
+  doc.text(fmt(netAccountPositionCents), rxStart + 60, sy + 58);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...GRAY);
+  doc.text('Stmt Date:', rxStart, sy + 70);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...CHARCOAL);
+  doc.text(fmtDate(asOfDate), rxStart + 60, sy + 70);
+
+  // Payment line, or a credit-covered-account instruction that cannot be
+  // mistaken for a remittance request.
+  const payY = sy + 94;
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
-  doc.text('Amount Paid  $', rxStart, payY);
-  doc.setDrawColor(...CHARCOAL);
-  doc.line(rxStart + 80, payY, pageW - margin, payY);
+  if (netAccountPositionCents > 0) {
+    doc.text('Amount Paid  $', rxStart, payY);
+    doc.setDrawColor(...CHARCOAL);
+    doc.line(rxStart + 80, payY, pageW - margin, payY);
+  } else {
+    doc.setFontSize(8);
+    doc.text('Credits cover open invoices.', rxStart, payY);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Call before sending payment.', rxStart, payY + 12);
+  }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error('statementPdf: drawRemittanceStub failed', e);

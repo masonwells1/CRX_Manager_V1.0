@@ -2,6 +2,26 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-03 — Statement balance consistency fixes prepared — NOT LIVE
+
+The reviewed Section 2 remediation aligns customer statements across the live
+RPC contract, PDF, and email surfaces. Month-end batches will include customers
+whose only open invoice is overdue; detailed statements will stop adding linked
+finance-charge metadata to the already-inclusive charge-invoice balance; and
+statements will show gross open invoices, unapplied credits, and net account
+position as separate figures. Accounts whose available credits cover the gross
+invoices receive a contact-before-payment message instead of a payment demand.
+PDF/email generation fails closed until both new RPC fields are present, and
+batch admin authorization runs before selecting customers so even an empty
+result cannot disclose receivables state to a non-admin.
+
+Migration `20260803131507_fix_statement_balance_disclosure` remains local and
+unapplied. Its combined live-schema behavior chain reached
+`SMOKE_PASS_ROLLBACK`, all 21 live invariant predicates returned zero
+unallowlisted violations, the migration security/drift reviewers were clean,
+and focused unit plus real-jsPDF render coverage is registered in the billing
+and regression prevention suites.
+
 ## 2026-08-02 — Factory resume replay and parked-Board repair
 
 The factory now serializes owner pause/resume evaluation and its conditional
