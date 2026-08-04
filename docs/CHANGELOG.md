@@ -35,6 +35,11 @@ Supabase stored the applied statement with CRLF line endings (37,053 bytes; MD5
 `f9666b8ca82dedc37c760f5bf3fcdf4c`). Normalizing only those line endings to LF
 produces 36,800 bytes and MD5 `4d6ad05cad533ee9e1812aa6bc20fcec`, exactly
 matching committed Git blob `de6c6bcedcd78d9acd9758eac0eb103146f045e5`.
+The generated schema registry was refreshed from the six-query live
+introspection contract to the same `20260803221244` high-water. Its only
+migration-name addition is `20260803131507_fix_statement_balance_disclosure`,
+and its only structural count change is the new validated invoice lifecycle
+constraint recorded in the explicit skipped-constraint review list.
 Post-apply catalog checks confirmed the two private fail-closed helpers, their
 fixed search paths and revoked public execution, and the validated
 posting-timestamp constraint. A prior candidate revision's rollback-only
