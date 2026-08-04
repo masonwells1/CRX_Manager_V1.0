@@ -38,6 +38,8 @@ import {
   unknownPushOptions,
   unknownGitGlobalOptions,
   environmentCarriesConfigOverride,
+  pushDestinationLookupArgs,
+  divergentPushLookups,
   environmentCarriesTransportOverride,
   environmentSelectsDifferentRepo,
   destinationLooksLikeUrl,
@@ -90,14 +92,111 @@ if (pushContextIsAmbiguous(cmd)) {
 if (pushUsesConfigEnv(cmd)) {
   deny("CODEX GATE: pushes that name the GIT_CONFIG* environment namespace are denied. Those variables rewrite git configuration for that one command only (e.g. GIT_CONFIG_KEY_0=remote.origin.pushurl), so the push can land in a different repository than the one this guard inspected. Use `git -C <repo> push` with the repository's own configuration.");
 }
+// Claude's shell cwd can persist across tool calls. The hook payload's cwd is
+// therefore the authoritative repository context for this specific push; the
+// session-wide CLAUDE_PROJECT_DIR is only a fallback.
+// Hoisted above the inherited-GIT_CONFIG* check below, which needs a repository
+// to read its two answer sets from. Nothing here depends on the checks above.
+const projectDir = path.resolve(
+  payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+);
+function gitIn(args, cwd, { keepConfigOverrides = false } = {}) {
+  const env = { ...process.env };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
+  // Defence in depth for the GIT_CONFIG* bypass denied above: if this hook is
+  // ever invoked with those variables already in its OWN environment, they would
+  // rewrite the answers to the very lookups used to classify the destination.
+  // Strip them so the guard always reads the repository's real configuration.
+  //
+  // `keepConfigOverrides` is the ONE exception, used only to read the second,
+  // comparison-only answer set below. Nothing classifies a push from it — it
+  // exists purely to prove the stripped answers and the push's answers agree.
+  if (!keepConfigOverrides) {
+    for (const key of Object.keys(env)) if (/^GIT_CONFIG(_|$)/i.test(key)) delete env[key];
+  }
+  return execFileSync("git", args, {
+    cwd,
+    env,
+    encoding: "utf8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+}
+const git = (args, cwd) => gitIn(args, cwd);
+
 // The command text is only half the story. A GIT_CONFIG* variable set by an
 // EARLIER command is still live when this push runs, and the push command itself
 // then looks completely ordinary. This hook inherits the same environment the
 // push will inherit, so it checks directly rather than trying to parse history.
 // Codex's sixth 2026-07-30 review asked for this.
+//
+// Until 2026-08-04 the mere PRESENCE of such a variable was denied. That was
+// stricter than the danger: it also denied every environment that legitimately
+// routes git through a credential proxy (Claude Code on the web installs a
+// `url.…insteadOf` rewrite this way), which made pushing from a web or mobile
+// session impossible. Presence is not the hazard — a CHANGED destination is. So
+// read every answer this guard classifies a push from twice, once with the
+// variables stripped and once exactly as the push will see them, and deny only
+// when they disagree. Identical answers prove the variables cannot redirect the
+// push; anything that could move the destination, the remote, the refspec, or
+// the program carrying the objects still fails closed, and so does any lookup
+// that errors on one side only.
 const inheritedOverrides = environmentCarriesConfigOverride(process.env);
 if (inheritedOverrides.length > 0) {
-  deny(`CODEX GATE: this shell already has GIT_CONFIG* variables set (${inheritedOverrides.join(", ")}), so the push would inherit configuration this guard cannot see — its own destination lookups deliberately ignore them. Unset them before pushing.`);
+  // Every repository this command could push from, not just the session's cwd:
+  // `git -C <other> push` must be proven in <other>, and a chained command can
+  // name several. Parsing here is pure text work with no new dependencies.
+  const overrideRepoDirs = [...new Set([
+    projectDir,
+    ...shellSegments(cmd)
+      .map((segment) => segment.trim())
+      .filter((segment) => isGitPush(segment))
+      .map((segment) => gitPushCwd(segment, projectDir)),
+  ])];
+  const answerFor = (args, cwd, keepConfigOverrides) => {
+    // `config --get` exits 1 when a key is unset, which is the ordinary case and
+    // must read as "absent", not "failed" — but it has to be DISTINGUISHABLE from
+    // a real failure, because an error on one side only is itself a divergence.
+    try { return `ok:${gitIn(args, cwd, { keepConfigOverrides })}`; }
+    catch (error) { return `err:${error?.status ?? error?.message ?? "failed"}`; }
+  };
+  for (const repoDir of overrideRepoDirs) {
+    let overrideBranch = "";
+    try {
+      overrideBranch = gitIn(["rev-parse", "--abbrev-ref", "HEAD"], repoDir);
+    } catch (error) {
+      deny(`CODEX GATE: this shell has GIT_CONFIG* variables set (${inheritedOverrides.join(", ")}) and the guard could not read ${repoDir} to prove they do not redirect the push. ${error?.message || error}`);
+    }
+    const scrubbed = {};
+    const ambient = {};
+    for (const [name, args] of pushDestinationLookupArgs(overrideBranch)) {
+      scrubbed[name] = answerFor(args, repoDir, false);
+      ambient[name] = answerFor(args, repoDir, true);
+    }
+    // NOT compared here: the URL-rewrite table and the settings naming a program
+    // to carry the objects. Those two feed classifiers whose only power is to
+    // make the gate APPLY — a rewrite reaching the app repo gates the push, a
+    // named transport program denies it outright. Demanding equality on them
+    // would deny every credential proxy (whose rewrite base is a bare host, which
+    // those classifiers correctly fail closed on) while protecting nothing.
+    // They are handled the safe way instead, at their own use sites below: read
+    // under BOTH environments and unioned, so a rewrite or carrier that exists
+    // only in the inherited configuration still gates. Strictly safer than the
+    // single scrubbed read this guard used before.
+    //
+    // A push naming a URL outright is rewritten at transport time, where
+    // `remote -v` cannot see it — so resolve each literal URL under both.
+    for (const segment of shellSegments(cmd).map((s) => s.trim()).filter((s) => isGitPush(s))) {
+      const token = pushDestinationToken(segment);
+      if (!token || !destinationLooksLikeUrl(token)) continue;
+      scrubbed[`url ${token}`] = answerFor(["ls-remote", "--get-url", token], repoDir, false);
+      ambient[`url ${token}`] = answerFor(["ls-remote", "--get-url", token], repoDir, true);
+    }
+    const divergent = divergentPushLookups(scrubbed, ambient);
+    if (divergent.length > 0) {
+      deny(`CODEX GATE: this shell has GIT_CONFIG* variables set (${inheritedOverrides.join(", ")}) that CHANGE where this push would go — ${divergent.join(", ")} differ with and without them, in ${repoDir}. The guard's own destination lookups strip those variables, so the push and this gate would disagree. Unset them before pushing.`);
+    }
+  }
 }
 // Those name a config file; these name the REPOSITORY. An inherited GIT_DIR or
 // GIT_WORK_TREE sends the push to one repository while every lookup below reads
@@ -161,29 +260,6 @@ if (inheritedTransport.length > 0) {
 const strangeOptions = unknownPushOptions(cmd);
 if (strangeOptions.length > 0) {
   deny(`CODEX GATE: this push uses options this guard does not recognise (${strangeOptions.join(", ")}), so it cannot tell which argument is the destination — and a misread destination is how a production push skips this gate. Use a plain \`git -C <repo> push <remote> <refspec>\`, or add the option to PUSH_OPTS_KNOWN in codex-push-lib.mjs after checking whether it takes a value.`);
-}
-
-// Claude's shell cwd can persist across tool calls. The hook payload's cwd is
-// therefore the authoritative repository context for this specific push; the
-// session-wide CLAUDE_PROJECT_DIR is only a fallback.
-const projectDir = path.resolve(
-  payload?.cwd || payload?.tool_input?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd(),
-);
-function git(args, cwd) {
-  const env = { ...process.env };
-  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete env[key];
-  // Defence in depth for the GIT_CONFIG* bypass denied above: if this hook is
-  // ever invoked with those variables already in its OWN environment, they would
-  // rewrite the answers to the very lookups used to classify the destination.
-  // Strip them so the guard always reads the repository's real configuration.
-  for (const key of Object.keys(env)) if (/^GIT_CONFIG(_|$)/i.test(key)) delete env[key];
-  return execFileSync("git", args, {
-    cwd,
-    env,
-    encoding: "utf8",
-    timeout: 5000,
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
 }
 
 // Inspect every push in a chained/multiline command. A harmless first push must
@@ -349,15 +425,23 @@ for (const pushCmd of pushCommands) {
   // reach production behind an alias that classifies as unguarded on its own.
   // If this checkout has any rewrite whose base is the app repo, the gate
   // applies. An unreadable config gates too.
+  // Read TWICE and unioned (2026-08-04): once with GIT_CONFIG* stripped, once as
+  // the push will see them. An inherited variable can install a rewrite the
+  // stripped read cannot see, and this classifier only ever makes the gate APPLY
+  // — so taking both can gate more, never less. Concatenating the two outputs is
+  // the union: `rewritesReachGuardedApp` is a some() over lines.
   let urlRewrites = "";
-  try {
-    urlRewrites = git(["config", "--get-regexp", "^url\\..*insteadof$"], pushRepoDir);
-  } catch (_error) {
-    // `--get-regexp` exits 1 when nothing matches, which is the common case and
-    // means "no rewrites configured" — NOT a failure. An empty string is
-    // correctly read as "no rewrite reaches the app repo".
-    urlRewrites = "";
-  }
+  const readRewrites = (keepConfigOverrides) => {
+    try {
+      return gitIn(["config", "--get-regexp", "^url\\..*insteadof$"], pushRepoDir, { keepConfigOverrides });
+    } catch (_error) {
+      // `--get-regexp` exits 1 when nothing matches, which is the common case and
+      // means "no rewrites configured" — NOT a failure. An empty string is
+      // correctly read as "no rewrite reaches the app repo".
+      return "";
+    }
+  };
+  urlRewrites = [readRewrites(false), readRewrites(true)].filter(Boolean).join("\n");
   // Checked BEFORE the "unrelated repository, skip the gate" exit below, because
   // these settings are what make "which repository is this?" answerable in the
   // first place. `remote.<name>.receivepack` and `core.sshCommand` name programs
@@ -365,12 +449,15 @@ for (const pushCmd of pushCommands) {
   // repo while all three classifiers below say "unrelated" (Codex's twenty-first
   // 2026-07-30 review). Same fact as round seventeen's command-line flag, stored
   // instead of typed.
+  // Unioned across both environments for the same reason as the rewrite table
+  // above: a carrier program installed by an inherited GIT_CONFIG* variable must
+  // still deny, and this classifier can only ever add denials.
   let transportConfig = "";
-  try {
-    transportConfig = git(["config", "--list"], pushRepoDir);
-  } catch (_error) {
-    transportConfig = ""; // an unreadable config is handled by the checks below
-  }
+  const readTransportConfig = (keepConfigOverrides) => {
+    try { return gitIn(["config", "--list"], pushRepoDir, { keepConfigOverrides }); }
+    catch (_error) { return ""; } // an unreadable config is handled by the checks below
+  };
+  transportConfig = [readTransportConfig(false), readTransportConfig(true)].filter(Boolean).join("\n");
   const namedPrograms = executableTransportSettings(transportConfig);
   if (namedPrograms.length > 0) {
     deny(`CODEX GATE: this checkout configures git settings that name a program to carry the push (${namedPrograms.join(", ")}). That program decides where the objects actually go, so no destination check here can be trusted. Unset them with \`git config --unset <setting>\` and push normally — git's own defaults need none of them.`);

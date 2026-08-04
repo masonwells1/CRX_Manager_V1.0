@@ -835,6 +835,58 @@ export function environmentCarriesConfigOverride(env) {
   return Object.keys(env || {}).filter((key) => /^GIT_CONFIG(_|$)/i.test(key));
 }
 
+// …but "fails closed" was doing more work than the danger warranted, and it made
+// the guard unusable in every environment that routes git through a credential
+// proxy (Claude Code on the web sets `GIT_CONFIG_*` to install a `url.…insteadOf`
+// rewrite, so EVERY push from a web/mobile session was denied — 2026-08-04).
+//
+// The asymmetry note above CONFIG_ROOT_ENV_RE already states the principle: a
+// variable written into the push command is dangerous because the guard never
+// sees it, but an INHERITED one reaches this hook and the push alike. So the
+// honest question is not "is any GIT_CONFIG* set?" — it is "does it CHANGE any
+// answer this guard classifies the push from?". That is decidable: read every
+// such answer twice, once with the variables stripped and once exactly as the
+// push will see them, and compare.
+//
+// These are the answers. Between them they fix the destination repository
+// (`remote -v`, which has rewrites already applied), which remote a bare push
+// picks (`remote.pushDefault`, `branch.<b>.pushRemote`, `branch.<b>.remote`), and
+// which refspec it sends (`push.default`, `branch.<b>.merge`, `remote.<n>.push`).
+//
+// Three more are compared by the caller, because they are answers of CLASSIFIERS
+// rather than of git: `executableTransportSettings` over `config --list` (the
+// program that carries the objects decides where they land whatever the URLs
+// say), `rewritesReachGuardedApp` over the rewrite table (compared through the
+// classifier, not as raw text — inherited variables legitimately ADD rewrite
+// lines, and a rewrite that cannot reach the app repo changes no answer here),
+// and `ls-remote --get-url` per literal URL destination (a push naming a URL
+// outright is rewritten at transport time, where `remote -v` cannot see it).
+export function pushDestinationLookupArgs(branch) {
+  const ref = String(branch || "");
+  return [
+    ["remotes", ["remote", "-v"]],
+    ["remote.pushDefault", ["config", "--get", "remote.pushDefault"]],
+    ["push.default", ["config", "--get", "push.default"]],
+    ["remote.*.push", ["config", "--get-regexp", "^remote\\..*\\.push$"]],
+    ["branch.pushRemote", ["config", "--get", `branch.${ref}.pushRemote`]],
+    ["branch.remote", ["config", "--get", `branch.${ref}.remote`]],
+    ["branch.merge", ["config", "--get", `branch.${ref}.merge`]],
+  ];
+}
+
+// Compare two answer sets. A key whose value differs — including one side
+// erroring while the other does not — means the inherited configuration moves
+// this push somewhere the guard's own lookups would not have seen, so the caller
+// denies. Identical answers (including identically absent, and identically
+// failing) prove the variables cannot redirect this push.
+export function divergentPushLookups(scrubbed, ambient) {
+  const keys = [...new Set([
+    ...Object.keys(scrubbed || {}),
+    ...Object.keys(ambient || {}),
+  ])].sort();
+  return keys.filter((key) => String(scrubbed?.[key]) !== String(ambient?.[key]));
+}
+
 // `GIT_CONFIG*` names a config FILE. These name the DIRECTORY git looks in for
 // the global config, which reaches the same place by a longer road: point HOME
 // at a directory holding a `.gitconfig` with `url.<CRX Manager URL>.pushInsteadOf`
@@ -1021,7 +1073,24 @@ export function pushUsesTransportEnv(cmd) {
 // it. The residual risk is stated rather than hidden: a GIT_EXEC_PATH planted in
 // an earlier segment is indistinguishable from git's own export, so this rule
 // cannot see it.
-const INHERITED_TRANSPORT_ENV_NAME_SET = new Set(TRANSPORT_ENV_NAMES);
+//
+// The credential helpers below are excluded on the same grounds, for a reason
+// specific to what THIS gate decides. An askpass or credential helper answers a
+// prompt on a connection git has ALREADY resolved: it supplies a secret, it does
+// not choose a destination, so it cannot move objects to another repository.
+// (It is an executable git runs — but only a shell that already controls this
+// guard's own process could set it in the inherited environment, so the code
+// execution it grants is not a capability the attacker gained here.) Claude Code
+// on the web exports GIT_ASKPASS for its credential proxy, so treating presence
+// as intent denied every push from a web or mobile session. Written into the
+// command it is still a deliberate act and still denied by
+// `pushUsesTransportEnv`; only the inherited read is relaxed.
+const INHERITED_CREDENTIAL_ENV_NAMES = new Set([
+  "GIT_ASKPASS", "SSH_ASKPASS", "GIT_CREDENTIAL_HELPER",
+]);
+const INHERITED_TRANSPORT_ENV_NAME_SET = new Set(
+  TRANSPORT_ENV_NAMES.filter((name) => !INHERITED_CREDENTIAL_ENV_NAMES.has(name)),
+);
 const normalizedExecutablePath = (value) => path.resolve(String(value || "")).replace(/\\/g, "/").toLowerCase();
 export function environmentCarriesTransportOverride(env, trustedGitExecPath) {
   const checksGitExecPath = arguments.length >= 2;

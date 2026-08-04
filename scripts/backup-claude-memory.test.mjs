@@ -47,6 +47,30 @@ const eq = (actual, expected, message) => { assert.equal(actual, expected, messa
 
 const root = mkdtempSync(path.join(os.tmpdir(), "backup-memory-test-"));
 const fresh = (name) => { const dir = path.join(root, name); mkdirSync(dir, { recursive: true }); return dir; };
+
+// The suite must test the SCRIPT, not the git configuration of whatever machine
+// runs it. `stage()` builds its child environment from `process.env`, so the
+// host's global/system config and any inherited `GIT_CONFIG_*` reach the very
+// lookups under test — and one real setting was enough to invert a result:
+// Claude Code on the web installs `url.http://local_proxy@…/git/.insteadOf
+// https://github.com/` in the global config to route GitHub through its
+// credential proxy, which tripped the URL-rewrite refusal and failed the
+// "staging into the private backup clone is allowed" case on every web and
+// mobile session (2026-08-04). The same suite passed on a laptop, so the
+// difference was the host, not the code.
+//
+// Pin all three configuration sources to an empty file instead. This is the
+// baseline only: the round-26 cases below deliberately install their own
+// rewrites through these same variables and restore whatever they found, so
+// rewrite DETECTION is still exercised — it just starts from a known-clean
+// state. An empty real file rather than /dev/null so Windows behaves too.
+const EMPTY_GITCONFIG = path.join(root, "empty.gitconfig");
+writeFileSync(EMPTY_GITCONFIG, "");
+process.env.GIT_CONFIG_GLOBAL = EMPTY_GITCONFIG;
+process.env.GIT_CONFIG_SYSTEM = EMPTY_GITCONFIG;
+for (const name of Object.keys(process.env)) {
+  if (/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/i.test(name)) delete process.env[name];
+}
 const quiet = (fn) => {
   // These functions report to the console by design; a passing suite should not
   // print their expected failure messages.

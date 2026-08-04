@@ -793,8 +793,22 @@ assert.deepEqual(
   [], "inherited values in the sanctioned shapes are not",
 );
 assert.deepEqual(
-  environmentCarriesTransportOverride({ GIT_ASKPASS: "/tmp/x", GIT_PROXY_COMMAND: "/tmp/y" }).sort(),
-  ["GIT_ASKPASS", "GIT_PROXY_COMMAND"], "every offending name is listed, not just the first",
+  environmentCarriesTransportOverride({ GIT_PROXY_COMMAND: "/tmp/y", GIT_SSH: "/tmp/z" }).sort(),
+  ["GIT_PROXY_COMMAND", "GIT_SSH"], "every offending name is listed, not just the first",
+);
+// An inherited askpass/credential helper supplies a credential to a connection
+// git has already resolved — it cannot move the objects to another repository,
+// which is what this gate is for. Claude Code on the web exports GIT_ASKPASS for
+// its credential proxy, and treating it as an offender denied every push from a
+// web or mobile session. Written into the command it is still denied; see the
+// `export GIT_ASKPASS=…` case in the end-to-end round below.
+assert.deepEqual(
+  environmentCarriesTransportOverride({ GIT_ASKPASS: "/tmp/x", SSH_ASKPASS: "/tmp/y", GIT_CREDENTIAL_HELPER: "/tmp/z" }),
+  [], "an inherited credential helper is not a destination override",
+);
+assert.deepEqual(
+  environmentCarriesTransportOverride({ GIT_ASKPASS: "/tmp/x", GIT_SSH_COMMAND: "sh -c evil" }),
+  ["GIT_SSH_COMMAND"], "the transport itself is still an offender alongside a credential helper",
 );
 // Git exports GIT_EXEC_PATH into every hook it runs, so an inherited one says
 // nothing about intent. Treating it as an offender denied ordinary pushes.
@@ -1138,6 +1152,10 @@ assert.equal(pushDestinationToken("git push"), null);
     git(["remote", "add", "origin", dest], work);
 
     const push = `git -C ${work} push origin main`;
+    // An ordinary non-production push. The main-bound checks exit before the
+    // app-repo gate for this one, which is what makes it the right shape for
+    // asking "does an inherited GIT_CONFIG* variable block a normal push?".
+    const featurePush = `git -C ${work} push origin main:refs/heads/feature`;
     const deniedBecause = (command, pattern, message) => {
       const result = runHook(command);
       assert.equal(result.decision, "deny", `${message} — got ${result.decision}`);
@@ -1170,6 +1188,79 @@ assert.equal(pushDestinationToken("git push"), null);
       const result = runHook(push, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "remote.origin.pushurl", GIT_CONFIG_VALUE_0: CRX_URL });
       assert.equal(result.decision, "deny", "an innocent push command inheriting GIT_CONFIG* is denied");
       assert.match(result.reason, /GIT_CONFIG_COUNT/, "the denial names the variable that is set");
+    }
+
+    // 2026-08-04: presence alone used to be the test, which denied every push
+    // from an environment that routes git through a credential proxy (Claude
+    // Code on the web installs a `url.…insteadOf` rewrite exactly this way) and
+    // made web/mobile sessions unable to push at all. The question is now whether
+    // the variables CHANGE an answer the guard classifies the push from — read
+    // once stripped, once as the push will see them, and compared.
+    {
+      // THE REGRESSION THIS CHANGE EXISTS FOR. A credential proxy installs a URL
+      // rewrite through GIT_CONFIG_*; `remote -v` is unchanged, no refspec or
+      // carrier moves, so an ordinary feature-branch push has nothing to
+      // disagree about and proceeds. Before 2026-08-04 the mere presence of the
+      // variables denied this, which locked every web/mobile session out of
+      // pushing anything at all.
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "url.http://proxy.invalid/.insteadOf",
+        GIT_CONFIG_VALUE_0: "https://unrelated.invalid/",
+      });
+      assert.equal(result.decision, "allow", "an inherited rewrite that moves nothing in this repo is allowed");
+    }
+    {
+      // Same ordinary push, but the variables move the destination to production.
+      // `remote -v` diverges between the stripped and inherited reads, so it dies.
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.pushurl",
+        GIT_CONFIG_VALUE_0: CRX_URL,
+      });
+      assert.equal(result.decision, "deny", "an inherited pushurl redirect is denied on an ordinary push too");
+      assert.match(result.reason, /remotes/, "the denial names the answer that changed");
+    }
+    {
+      // Same mechanism, but the rewrite makes a short alias reach production.
+      // The rewrite table is not compared for equality — it is UNIONED into the
+      // gate's own classifier — so this is caught by the app-repo gate applying
+      // to a main-bound push, which then demands the Sol proof. Denied either
+      // way; what matters is that a rewrite visible ONLY in the inherited
+      // environment still gates, which the pre-2026-08-04 single scrubbed read
+      // would have missed entirely had presence not been blanket-denied.
+      const result = runHook(push, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: `url.${CRX_URL}.insteadOf`,
+        GIT_CONFIG_VALUE_0: "crx:",
+      });
+      assert.equal(result.decision, "deny", "an inherited rewrite that reaches the production app repo still gates");
+      // Getting THIS far is the proof: both messages come from inside the
+      // app-repo gate, i.e. past the "unrelated repository, skip the gate" exit.
+      // (The scratch remote has never been pushed to, so origin/main is the ref
+      // that fails first; on a real checkout it is the Sol proof demand.)
+      assert.match(result.reason, /proof|origin\/main/i, "the app-repo gate applied rather than being skipped");
+    }
+    {
+      // Not the destination but the REFSPEC: a bare push's default can be moved
+      // by config just as invisibly, so those answers are compared too.
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "push.default",
+        GIT_CONFIG_VALUE_0: "matching",
+      });
+      assert.equal(result.decision, "deny", "an inherited refspec-default override is denied");
+      assert.match(result.reason, /push\.default/, "the denial names the answer that changed");
+    }
+    {
+      // And the remote a bare push would pick.
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.pushDefault",
+        GIT_CONFIG_VALUE_0: "elsewhere",
+      });
+      assert.equal(result.decision, "deny", "an inherited pushDefault override is denied");
+      assert.match(result.reason, /remote\.pushDefault/, "the denial names the answer that changed");
     }
     assert.equal(
       runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,

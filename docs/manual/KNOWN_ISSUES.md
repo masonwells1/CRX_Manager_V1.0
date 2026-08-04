@@ -7,6 +7,18 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN — `backup-claude-memory` refuses to run from a web/mobile session
+
+**Found 2026-08-04, not yet fixed. Same root cause as the push-guard regression fixed the same day, in a different script.**
+
+`scripts/backup-claude-memory.mjs` refuses to stage the agent-memory snapshot whenever ANY `url.*.insteadOf` / `url.*.pushInsteadOf` rewrite is configured, on the grounds that a rewrite could silently replace the verified private-backup address before the push. Claude Code on the web configures exactly such a rewrite in the global config to route GitHub through its local credential proxy (`/root/.gitconfig`: `url.http://local_proxy@127.0.0.1:<port>/git/.insteadOf https://github.com/`). The refusal therefore fires on the ordinary case, and the off-site memory backup runbook cannot be run at all from a web or mobile session.
+
+The test suite was ALSO failing for this reason, which blocked every commit from a web session because the pre-commit hook runs it. That part is fixed: the suite now pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to an empty file and strips inherited `GIT_CONFIG_*` at startup, so it tests the script instead of the host's git configuration (all 233 assertions pass either way — the round-26 cases still install their own rewrites and still detect them). **That was a test-isolation fix and changed no production behavior — the refusal below is still live.**
+
+Reproduce the remaining issue directly: with the web session's global rewrite in place, `stage()` into a valid private `CRX_Backups` clone returns 1 with "refusing to stage — Git URL rewrite settings are active (3 settings)". It does not reproduce on Mason's laptop or in any runner without a proxy, which is why it was not caught earlier.
+
+The refusal is a real control protecting real data (memory notes carry customer names and commission amounts, and a wrong destination is not undone by a later delete), so it should **not** be relaxed to a blanket allow. The push-guard fix landed the same day is the template: decide on whether the rewrite CHANGES the resolved destination rather than on whether a rewrite exists — resolve the backup remote under both the ambient and the scrubbed configuration and compare, refusing only on divergence or on a rewrite that redirects the verified private repo. Deliberately left for a separate change because it is a security-relevant relaxation of a distinct guard on a different asset, and it wants Mason's sign-off rather than being folded silently into an unrelated fix.
+
 ## RESOLVED LIVE — Quote and Customer whole-record saves reject stale editors
 
 **Applied live 2026-07-30.** The frontend-first bundle landed through PR #290, then the governed migration was submitted as `20260730201230_quote_customer_row_version_guard` and Supabase assigned ledger/disk version `20260730235031`. Trigger-maintained `row_version` columns now close the known last-write-wins exposure for whole-record `save_quote` and `save_customer` updates. Immediate catalog, trigger, overload, owner, search-path, grant, and child-table ACL checks passed. The primary Quote/Customer rollback chain plus planned-hold, restore/version, and drawn-booking companion chains all reached exact `SMOKE_PASS_ROLLBACK`; zero fixture rows remained. All 21 standing live invariant predicates returned zero unallowlisted findings. The schema registry was refreshed again through the later live high-water `20260731001654` and retains the assigned row-version migration name and both columns. Cached pre-migration bundles fail closed and must refresh; the already-deployed compatible bundle avoids an all-user outage. No rollout toggle is required.

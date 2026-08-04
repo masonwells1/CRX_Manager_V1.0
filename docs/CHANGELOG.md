@@ -2,6 +2,53 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-04 — Push guard no longer denies every web/mobile session — BRANCH
+
+`codex-push-guard` treated the mere PRESENCE of `GIT_CONFIG*` variables, and of
+an inherited `GIT_ASKPASS`, as evidence a push could reach production. Claude
+Code on the web sets both — `GIT_CONFIG_*` installs a `url.…insteadOf` rewrite
+for its credential proxy, and `GIT_ASKPASS` points at that proxy — so **every**
+push from a web or mobile session was denied, ordinary feature branches
+included. The guard was unusable outside a laptop.
+
+Presence was never the hazard; a changed destination is. For `GIT_CONFIG*`, the
+guard now reads every answer it classifies a push from twice — once with the
+variables stripped, once exactly as the push will see them — and denies only
+when the two disagree. `pushDestinationLookupArgs` names those answers (the
+destination remotes, the remote a bare push picks, the refspec it sends) and
+`divergentPushLookups` compares them, counting a one-sided error as a
+divergence. The URL-rewrite table and the settings naming a carrier program are
+deliberately not compared but UNIONED across both reads: those classifiers can
+only ever make the gate APPLY, so reading both can gate more and never less —
+strictly safer than the single scrubbed read used before.
+
+`GIT_ASKPASS`, `SSH_ASKPASS`, and `GIT_CREDENTIAL_HELPER` no longer count as
+inherited destination overrides. They answer a prompt on a connection git has
+already resolved, so they cannot move objects to another repository, and only a
+shell already controlling the guard's own process could set them. Written into
+the command they remain a deliberate act and are still denied by
+`pushUsesTransportEnv`; only the inherited read is relaxed.
+
+Verified in the web session where the regression reproduces: an ordinary
+feature-branch push is allowed, a main-bound push is still gated, and a written
+`GIT_ASKPASS` or `GIT_SSH_COMMAND` is still denied. All 22 `.claude/hooks`
+suites, the Codex production-action-guard suite, and `test:agent-workflows`
+pass. No migrations, no live writes, no schema changes.
+
+The same proxy configuration also broke `scripts/backup-claude-memory.test.mjs`,
+which read the host's global git config instead of pinning its own — and since
+the pre-commit hook runs that suite, it blocked every commit from a web session.
+The suite now pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to an empty file and
+strips inherited `GIT_CONFIG_*` at startup, so it exercises the script rather
+than the machine; its round-26 cases still install their own rewrites and still
+detect them, and all 233 assertions pass. That is a test-isolation fix only. The
+underlying production defect — `backup-claude-memory.mjs` refuses to stage
+whenever any URL rewrite exists, so the off-site memory backup cannot be run
+from a web or mobile session at all — is deliberately NOT fixed here and is
+recorded as OPEN in `docs/manual/KNOWN_ISSUES.md`: relaxing it is a
+security-relevant change to a guard protecting private notes, and it wants
+Mason's sign-off rather than being folded into an unrelated fix.
+
 ## 2026-08-04 — CRM functional audit + two fixes — BRANCH
 
 Full read-only audit of the customer-relationship surface (`/customers`,
