@@ -152,6 +152,17 @@ FROM phase2_live_smoke p
 JOIN phase2_live_smoke c ON c.key = 'context'
 WHERE p.key = 'manual-preview';
 
+INSERT INTO phase2_live_smoke(key, value)
+SELECT 'manual-apply-replay', public.apply_product_cost_basis_change_set(
+  (p.value->>'change_set_id')::uuid,
+  p.value->>'request_fingerprint',
+  (c.value->>'actor_id')::uuid,
+  'smoke-phase2-live-manual-apply-' || txid_current()::text
+)
+FROM phase2_live_smoke p
+JOIN phase2_live_smoke c ON c.key = 'context'
+WHERE p.key = 'manual-preview';
+
 RESET ROLE;
 
 DO $smoke$
@@ -159,11 +170,16 @@ DECLARE
   v_product_id uuid := (SELECT (value->>'product_id')::uuid FROM phase2_live_smoke WHERE key = 'context');
   v_change_set_id uuid := (SELECT (value->>'change_set_id')::uuid FROM phase2_live_smoke WHERE key = 'manual-preview');
   v_apply jsonb := (SELECT value FROM phase2_live_smoke WHERE key = 'manual-apply');
+  v_replay jsonb := (SELECT value FROM phase2_live_smoke WHERE key = 'manual-apply-replay');
 BEGIN
   IF v_apply->>'status' IS DISTINCT FROM 'applied'
      OR (v_apply->>'applied_count')::integer IS DISTINCT FROM 1
      OR jsonb_array_length(v_apply->'cost_basis_rows') IS DISTINCT FROM 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: Product-page apply drifted: %', v_apply;
+  END IF;
+
+  IF v_replay IS DISTINCT FROM v_apply THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: Product-page apply replay changed response: % vs %', v_apply, v_replay;
   END IF;
 
   IF NOT EXISTS (
@@ -260,6 +276,17 @@ FROM phase2_live_smoke p
 JOIN phase2_live_smoke c ON c.key = 'context'
 WHERE p.key = 'workbook-preview';
 
+INSERT INTO phase2_live_smoke(key, value)
+SELECT 'workbook-apply-replay', public.apply_product_cost_basis_change_set(
+  (p.value->>'change_set_id')::uuid,
+  p.value->>'request_fingerprint',
+  (c.value->>'actor_id')::uuid,
+  'smoke-phase2-live-workbook-apply-' || txid_current()::text
+)
+FROM phase2_live_smoke p
+JOIN phase2_live_smoke c ON c.key = 'context'
+WHERE p.key = 'workbook-preview';
+
 RESET ROLE;
 
 DO $smoke$
@@ -268,11 +295,16 @@ DECLARE
   v_change_set_id uuid := (SELECT (value->>'change_set_id')::uuid FROM phase2_live_smoke WHERE key = 'workbook-preview');
   v_export_id uuid := (SELECT (value->>'export_id')::uuid FROM phase2_live_smoke WHERE key = 'workbook-export');
   v_apply jsonb := (SELECT value FROM phase2_live_smoke WHERE key = 'workbook-apply');
+  v_replay jsonb := (SELECT value FROM phase2_live_smoke WHERE key = 'workbook-apply-replay');
 BEGIN
   IF v_apply->>'status' IS DISTINCT FROM 'applied'
      OR (v_apply->>'applied_count')::integer IS DISTINCT FROM 1
      OR jsonb_array_length(v_apply->'cost_basis_rows') IS DISTINCT FROM 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: workbook apply drifted: %', v_apply;
+  END IF;
+
+  IF v_replay IS DISTINCT FROM v_apply THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook apply replay changed response: % vs %', v_apply, v_replay;
   END IF;
 
   IF NOT EXISTS (

@@ -7,7 +7,7 @@
 
 ## Verdict
 
-**READY FOR APPROVAL — the live pricing paths tested correctly; the stale live-proof fixture is repaired, and the Product page now distinguishes a verified current basis from a missing legacy price-change event.**
+**READY FOR APPROVAL — the live pricing paths tested correctly; the stale live-proof fixture is repaired, and the Product page now distinguishes a current governed basis from a missing legacy price-change event.**
 
 There was no reproduced calculation, authorization, mutation, or supplier-evidence integrity defect in the exercised paths. All controlled test writes ran in a single production transaction and rolled back; post-test checks found zero `[AUDIT]` Products, price-history rows, or cost-basis rows.
 
@@ -33,9 +33,9 @@ There was no reproduced calculation, authorization, mutation, or supplier-eviden
 
 ### Resolved — legacy Cost History no longer implies that current pricing provenance is absent
 
-571 active Products have a positive current cost but no row in legacy `cost_history`. The newer `product_cost_basis` baseline covers their current provenance, but it does not reconstruct earlier price-change history. The Product page formerly showed only “No cost changes recorded,” which could misleadingly suggest the current price had no verified provenance.
+571 active Products have a positive current cost but no row in legacy `cost_history`. The newer `product_cost_basis` baseline covers their current provenance, but it does not reconstruct earlier price-change history. The Product page formerly showed only “No cost changes recorded,” which could misleadingly suggest the current price had no governed provenance.
 
-**Repair completed locally 2026-08-04:** when legacy history is empty, the Product page now says “No legacy cost changes recorded” and, where present, shows the current verified basis amount, type, and selection date. It explicitly states that this is current cost provenance, not a backfilled historical price-change event. The regression test covers this state.
+**Repair completed locally 2026-08-04:** when legacy history is empty, the Product page now says “No legacy cost changes recorded” and, where present, shows the current governed basis amount, type, and selection date. A `migration_baseline` is explicitly labeled as a baseline copied from the existing Product cost, not independently verified supplier evidence. It also states that this is current cost provenance, not a backfilled historical price-change event. Load failures render an error state rather than an absence claim; regression tests cover both states.
 
 The missing older source records remain intentionally unreconstructed: creating dated supplier or price events without original source material would falsify history. If a complete pre-governed timeline is required later, it needs a separate approved import from canonical vendor invoices or price sheets.
 
