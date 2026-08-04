@@ -45,12 +45,12 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 
 ## RESIDUAL
 
-- PR #308 carries the B7 filename reconciliation and live-derived schema-registry refresh; it still requires exact-commit review and protected merge.
+- PR #308 completed the B7 filename reconciliation. Follow-up PR #309 carries the live-derived schema-registry refresh and still requires exact-commit review and protected merge.
 - A signed-in browser observation of the production PDF/email flow was not run in this release session; the prior candidate rollback smoke, build, preview, live catalog, and production HTTP checks passed.
 
 ## NEXT ACTION
 
-- Finish the filename-only reconciliation PR, then observe one authorized PDF/email batch during the next normal production statement run.
+- Finish the schema-registry follow-up PR, then observe one authorized PDF/email batch during the next normal production statement run.
 
 ## APPROVAL STATE
 
