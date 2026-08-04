@@ -192,6 +192,8 @@ BEGIN
       AND pricing_version = 2
   ) OR (SELECT count(*) FROM public.cost_history
         WHERE product_id = v_product_id AND change_set_id = v_change_set_id) <> 1
+     OR (SELECT count(*) FROM public.product_cost_basis
+         WHERE product_id = v_product_id AND pricing_change_set_id = v_change_set_id) <> 1
      OR NOT EXISTS (
        SELECT 1 FROM public.product_cost_basis
        WHERE product_id = v_product_id
@@ -317,6 +319,8 @@ BEGIN
       AND pricing_version = 2
   ) OR (SELECT count(*) FROM public.cost_history
         WHERE product_id = v_product_id AND change_set_id = v_change_set_id) <> 1
+     OR (SELECT count(*) FROM public.product_cost_basis
+         WHERE product_id = v_product_id AND pricing_change_set_id = v_change_set_id) <> 1
      OR NOT EXISTS (
        SELECT 1 FROM public.product_cost_basis
        WHERE product_id = v_product_id
