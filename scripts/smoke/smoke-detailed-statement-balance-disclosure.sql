@@ -1,4 +1,4 @@
--- Rolled-back full-chain proof for 20260803131507_fix_statement_balance_disclosure.
+-- Rolled-back full-chain proof for live-ledger migration 20260803221244_fix_statement_balance_disclosure.
 --
 -- PRE-APPLY: execute the candidate migration text followed by this DO block in
 -- one Supabase MCP execute_sql call. The terminal exception rolls back the
