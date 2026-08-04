@@ -1646,7 +1646,24 @@ export default function ProductDetail() {
               <Card>
                 <CardHeader title="Cost" accent="History" />
                 {costHistory.length === 0 ? (
-                  <p className="text-sm text-secondary">No cost changes recorded</p>
+                  <div className="space-y-2 text-sm text-secondary">
+                    <p>No legacy cost changes recorded.</p>
+                    {costBasisWorkspace?.current_basis ? (
+                      <p>
+                        Current verified cost basis:{' '}
+                        <strong className="text-nav-dark">
+                          ${formatCostBasisDollars(costBasisWorkspace.current_basis.cost_cents)}
+                        </strong>{' '}
+                        ({costBasisWorkspace.current_basis.basis_type.replace(/_/g, ' ')}) selected on{' '}
+                        {new Date(costBasisWorkspace.current_basis.selected_at).toLocaleDateString()}. This is
+                        current cost provenance, not a backfilled historical price-change event.
+                      </p>
+                    ) : product.current_cost !== null && !costBasisLoading ? (
+                      <p>
+                        This Product has a current cost, but no verified governed cost-basis baseline is available.
+                      </p>
+                    ) : null}
+                  </div>
                 ) : (
                   <div className="space-y-3">
                     {costHistory.map((ch) => (

@@ -7,7 +7,7 @@
 
 ## Verdict
 
-**PARTIAL — the live pricing paths tested correctly, and the stale live-proof fixture is now repaired in this isolated branch. Historical-price coverage still needs a product decision before this can be called fully audited.**
+**READY FOR APPROVAL — the live pricing paths tested correctly; the stale live-proof fixture is repaired, and the Product page now distinguishes a verified current basis from a missing legacy price-change event.**
 
 There was no reproduced calculation, authorization, mutation, or supplier-evidence integrity defect in the exercised paths. All controlled test writes ran in a single production transaction and rolled back; post-test checks found zero `[AUDIT]` Products, price-history rows, or cost-basis rows.
 
@@ -31,17 +31,19 @@ There was no reproduced calculation, authorization, mutation, or supplier-eviden
 
 ## Findings
 
-### Medium — legacy Cost History is incomplete for most active costed Products
+### Resolved — legacy Cost History no longer implies that current pricing provenance is absent
 
-571 active Products have a positive current cost but no row in legacy `cost_history`. The newer `product_cost_basis` baseline covers current provenance for almost all Products, but it does not reconstruct earlier price-change history. The Product-page legacy Cost History panel can therefore be blank or incomplete even when a Product has a valid current cost.
+571 active Products have a positive current cost but no row in legacy `cost_history`. The newer `product_cost_basis` baseline covers their current provenance, but it does not reconstruct earlier price-change history. The Product page formerly showed only “No cost changes recorded,” which could misleadingly suggest the current price had no verified provenance.
 
-**Recommendation:** decide whether pre-governed costs need an explicitly labeled baseline event in the historical timeline. Do not manufacture dates or supplier provenance.
+**Repair completed locally 2026-08-04:** when legacy history is empty, the Product page now says “No legacy cost changes recorded” and, where present, shows the current verified basis amount, type, and selection date. It explicitly states that this is current cost provenance, not a backfilled historical price-change event. The regression test covers this state.
+
+The missing older source records remain intentionally unreconstructed: creating dated supplier or price events without original source material would falsify history. If a complete pre-governed timeline is required later, it needs a separate approved import from canonical vendor invoices or price sheets.
 
 ### Resolved — the Phase 2 cost-basis live smoke was stale against production
 
 `scripts/smoke/smoke-supplier-cost-basis-phase2.sql` assumes exactly 14 current fixture bases. Production now has 602, so it fails immediately with `SMOKE_FAIL: base and Wells fixture costs were not baselined exactly once`, before testing its intended business assertions. The current workbook wrapper proof also requires a generated `/tmp/phase2-workbook-payload.json`, so it is not a direct live one-command proof.
 
-**Repair completed 2026-08-04 (not yet committed or published):** added `scripts/smoke/smoke-supplier-cost-basis-phase2-live.sql` and registered it as `supplier_cost_basis_phase2_live`. The new chain creates two UUID-backed synthetic Products inside one transaction, uses `create_pricing_workbook_export` to obtain the signed workbook identity row, and validates Product-page plus workbook preview/apply/history/basis/export behavior before the standard `SMOKE_PASS_ROLLBACK` terminal exception. It has no fixture IDs, production row-count assumptions, or `/tmp` payload dependency.
+**Repair completed and committed locally 2026-08-04:** commit `e1613354cef3788a7cd7db6544adec214dbcffa2` added `scripts/smoke/smoke-supplier-cost-basis-phase2-live.sql` and registered it as `supplier_cost_basis_phase2_live`. The new chain creates two UUID-backed synthetic Products inside one transaction, uses `create_pricing_workbook_export` to obtain the signed workbook identity row, and validates Product-page plus workbook preview/apply/history/basis/export behavior before the standard `SMOKE_PASS_ROLLBACK` terminal exception. It has no fixture IDs, production row-count assumptions, or `/tmp` payload dependency.
 
 The new live chain passed against production and follow-up checks found zero synthetic Products, cost-history rows, cost-basis rows, or idempotency records. `npm run check:pricing-phase2-live-smoke`, `npm run test:pricing` (214), typecheck, lint, and the existing disposable `npm run proof:pricing-phase2` all passed.
 
@@ -51,6 +53,7 @@ The new live chain passed against production and follow-up checks found zero syn
 - Focused source tests passed: `npm run test:pricing` (214 tests), plus the direct supplier-pricing/product-pricing/product-cost-basis slice (39 tests).
 - `npm run typecheck`, `npm run lint`, `npm run build`, `npm run test:contracts` (100 tests), `npm run test:drift` (234 passed; 78 intentionally skipped), correction guards, schema baseline, documentation checks, agent-health, agent-workflow checks, dependency-lock verification, and `scripts/validate-frontend.sh` all passed.
 - `npm run test:schema-live` completed with 74 passing and 78 skipped checks. The production-only checks that need a direct database connection were not enabled by that runner.
+- The final production read-only coverage check found 571 active, costed Products without legacy `cost_history`; all 571 have an effective current `product_cost_basis`, and none lack that current governed basis.
 - The strict live invariant-sweep command could not run because this checkout has neither `SUPABASE_DB_URL` nor `psql`. The shell SQL-migration validator also timed out without diagnostic output under Git Bash. These are coverage limitations, not passed gates.
 - Supabase's live security advisor returned 320 existing warnings, including generic SECURITY DEFINER execution notices for the pricing RPCs. This audit exercised their authorization behavior through the approved wrappers; it did not treat generic linter warnings as a reproduced pricing authorization defect.
 - `npm ci` reported 6 high-severity dependency advisories. They are outside this pricing-specific audit and were not changed.
@@ -60,4 +63,4 @@ The new live chain passed against production and follow-up checks found zero syn
 - The global supplier-cost-basis flag stayed off.
 - No Product-family or return-policy classification was performed.
 - No permanent fake Product, customer, vendor, quote, supplier observation, or price change remains in production.
-- No migration, code fix, commit, push, PR, deployment, or live-data cleanup was performed.
+- No migration, push, PR, deployment, or live-data cleanup was performed.

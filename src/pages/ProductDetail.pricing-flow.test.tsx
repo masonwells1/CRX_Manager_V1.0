@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
@@ -275,6 +275,42 @@ describe('ProductDetail governed pricing flow', () => {
       expect.objectContaining({ quoting_notes: 'Updated quote guidance' }),
     ));
     expect(mockProductEq).toHaveBeenCalledWith('pricing_version', product.pricing_version);
+  });
+
+  it('labels a governed basis as current provenance when legacy cost history is empty', async () => {
+    mockGetCostBasisWorkspace.mockResolvedValueOnce({
+      enabled: true,
+      product: {
+        id: product.id,
+        product_name: product.product_name,
+        sku: product.sku,
+        pricing_version: product.pricing_version,
+        current_cost_cents: 5_000n,
+        tier1_margin_percent: '20',
+        tier2_margin_percent: '15',
+        tier3_margin_percent: '10',
+      },
+      current_basis: {
+        id: 'basis-current',
+        basis_type: 'migration_baseline',
+        cost_cents: 5_000n,
+        supplier_price_observation_id: null,
+        purchase_order_item_id: null,
+        selection_source: 'migration_baseline',
+        reason: 'Current cost baseline',
+        selected_at: '2026-08-04T12:00:00Z',
+      },
+      supplier_candidates: [],
+      purchase_candidates: [],
+    });
+
+    render(<ProductDetail />);
+
+    expect(await screen.findByText('No legacy cost changes recorded.')).toBeInTheDocument();
+    expect(screen.getByText(/Current verified cost basis:/)).toBeInTheDocument();
+    const basisCopy = screen.getByText(/Current verified cost basis:/);
+    expect(within(basisCopy).getByText('$50.00')).toBeInTheDocument();
+    expect(screen.getByText(/not a backfilled historical price-change event/i)).toBeInTheDocument();
   });
 
   it('rejects a direct detail save when the loaded pricing version is stale', async () => {
