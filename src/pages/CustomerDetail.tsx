@@ -301,7 +301,33 @@ export default function CustomerDetail() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isNew, fetchCustomerSnapshot]);
 
+  // CustomerDetail is NOT remounted when only :id changes (the route element has
+  // no key), so every per-customer tab cache below must be invalidated by hand.
+  // Same discipline the CRM child components got via `key={id}` (Sol 2.G r2):
+  // an in-flight tab load for customer A must never write into customer B's
+  // view, and B must never render A's leftover rows while its own load runs.
+  const tabRequestSeq = useRef(0);
+
+  useEffect(() => {
+    tabRequestSeq.current += 1;
+    setQuotes([]);
+    setOrders([]);
+    setDeliveries([]);
+    setFields([]);
+    setHistory([]);
+    setCustomerRemainders([]);
+    setTimeline([]);
+    setAging(null);
+    setTransactions([]);
+    setPrepayCredits([]);
+    // Without this reset the financials tab short-circuits on the cached flag and
+    // renders the PREVIOUS customer's AR aging, statement and prepay credits.
+    financialsFetched.current = false;
+  }, [id]);
+
   const fetchTabData = useCallback(async (selectedTab: string) => {
+    const seq = ++tabRequestSeq.current;
+    const isStale = () => seq !== tabRequestSeq.current;
     setTabLoading(true);
     if (selectedTab === 'fields') {
       const { data, error: fieldError } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
@@ -313,6 +339,7 @@ export default function CustomerDetail() {
         ...f,
         customer_name: f.customer_name || '',
       }));
+      if (isStale()) return;
       setFields(rows);
     } else if (selectedTab === 'quotes') {
       const { data } = await supabase
@@ -320,6 +347,7 @@ export default function CustomerDetail() {
         .select('*')
         .eq('customer_id', id!)
         .order('created_at', { ascending: false });
+      if (isStale()) return;
       setQuotes((data || []) as Quote[]);
     } else if (selectedTab === 'orders') {
       const { data } = await supabase
@@ -331,6 +359,7 @@ export default function CustomerDetail() {
       const rows = ((data || []) as Order[]).map((o) => {
         return { ...o, fulfillment_pct: 0 };
       });
+      if (isStale()) return;
       setOrders(rows);
 
       const orderIds = rows.map((o) => o.id);
@@ -345,6 +374,7 @@ export default function CustomerDetail() {
           byOrder[item.order_id].needed += item.total_units_needed || 0;
           byOrder[item.order_id].delivered += item.quantity_delivered || 0;
         });
+        if (isStale()) return;
         setOrders((prev) =>
           prev.map((o) => {
             const stats = byOrder[o.id];
@@ -379,6 +409,7 @@ export default function CustomerDetail() {
         ...d,
         driver_name: d.assigned_driver ? driverMap[d.assigned_driver] || 'Unassigned' : 'Unassigned',
       }));
+      if (isStale()) return;
       setDeliveries(rows);
 
       // Fetch pending remainders for this customer
@@ -393,6 +424,7 @@ export default function CustomerDetail() {
         product_name: r.product?.product_name || 'Unknown',
         original_delivery_number: r.original_delivery?.delivery_number || '-',
       }));
+      if (isStale()) return;
       setCustomerRemainders(remainders as unknown as DeliveryRemainder[]);
     } else if (selectedTab === 'financials') {
       if (financialsFetched.current) { setTabLoading(false); return; }
@@ -411,21 +443,26 @@ export default function CustomerDetail() {
         if (agingError) throw agingError;
         const allAging = assertRpcResult<AgingRow[]>(agingData, 'get_ar_aging');
         const myAging = allAging.find((a) => a.customer_id === id) || null;
+        if (isStale()) return;
         setAging(myAging);
 
         const { data: txnData, error: txnError } = await supabase.rpc('get_customer_statement', { p_customer_id: id!, p_start_date: ninetyDaysAgo, p_end_date: today });
         if (txnError) throw txnError;
-        setTransactions(assertRpcResult<TxnRow[]>(txnData, 'get_customer_statement'));
+        const txnRows = assertRpcResult<TxnRow[]>(txnData, 'get_customer_statement');
+        if (isStale()) return;
+        setTransactions(txnRows);
 
         const { data: prepayData, error: prepayError } = await supabase.from('prepay_credits').select('*').eq('customer_id', id!).gt('balance_cents', 0);
         if (prepayError) throw prepayError;
+        if (isStale()) return;
         setPrepayCredits((prepayData || []) as PrepayRow[]);
         financialsFetched.current = true;
       } catch (err: unknown) {
+        if (isStale()) return;
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'customer_financials_tab' } });
         toast('error', 'Failed to load financials');
       } finally {
-        setFinancialsLoading(false);
+        if (!isStale()) setFinancialsLoading(false);
       }
     } else if (selectedTab === 'timeline') {
       setTimelineLoading(true);
@@ -455,6 +492,7 @@ export default function CustomerDetail() {
             if (p.id) performerMap[p.id] = { id: p.id, full_name: p.full_name ?? '', role: p.role ?? '' };
           });
         }
+        if (isStale()) return;
         setTimeline(
           rows.map((r) => ({
             ...r,
@@ -462,7 +500,7 @@ export default function CustomerDetail() {
           })),
         );
       } finally {
-        setTimelineLoading(false);
+        if (!isStale()) setTimelineLoading(false);
       }
     } else if (selectedTab === 'history') {
       // GAP FIX #15: Fetch purchase history — all products this customer has ordered
@@ -490,11 +528,14 @@ export default function CustomerDetail() {
           productMap[key].total_delivered += Number(item.quantity_delivered) || 0;
           productMap[key].order_count += 1;
         });
+        if (isStale()) return;
         setHistory(Object.values(productMap).sort((a, b) => b.total_spent - a.total_spent));
       } else {
+        if (isStale()) return;
         setHistory([]);
       }
     }
+    if (isStale()) return;
     setTabLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);

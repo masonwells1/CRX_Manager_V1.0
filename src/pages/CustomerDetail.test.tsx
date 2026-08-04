@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 
 const {
   mockFrom,
@@ -26,7 +26,7 @@ type QueryResult = { data: unknown; error: unknown };
 function query(result: QueryResult): Record<string, unknown> {
   const chain: Record<string, unknown> = {};
   const self = (..._args: unknown[]) => chain;
-  for (const name of ['eq', 'neq', 'is', 'in', 'order', 'limit', 'single', 'maybeSingle', 'insert', 'update', 'delete', 'select']) {
+  for (const name of ['eq', 'neq', 'is', 'in', 'gt', 'order', 'limit', 'single', 'maybeSingle', 'insert', 'update', 'delete', 'select']) {
     chain[name] = self;
   }
   const promise = Promise.resolve(result);
@@ -102,6 +102,26 @@ const newer = { ...original, farm_name: 'Newer Farm', contact_name: 'Newer Conta
 
 function renderDetail() {
   return render(<MemoryRouter initialEntries={['/customers/customer-1']}><Routes><Route path="/customers/:id" element={<CustomerDetail />} /></Routes></MemoryRouter>);
+}
+
+/**
+ * Jump to another customer WITHOUT unmounting CustomerDetail — exactly what the
+ * command palette does from an open customer profile. The route element has no
+ * key, so React Router keeps the same instance mounted across the :id change and
+ * every per-customer cache inside it has to invalidate itself.
+ */
+function SwitchCustomerButton() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate('/customers/customer-2')}>Jump to customer 2</button>;
+}
+
+function renderDetailWithCustomerSwitch() {
+  return render(
+    <MemoryRouter initialEntries={['/customers/customer-1']}>
+      <SwitchCustomerButton />
+      <Routes><Route path="/customers/:id" element={<CustomerDetail />} /></Routes>
+    </MemoryRouter>,
+  );
 }
 
 describe('CustomerDetail stale whole-record save', () => {
@@ -291,6 +311,40 @@ describe('CustomerDetail stale whole-record save', () => {
         farm_name: 'Second edit after uncertain save',
       }),
     })));
+  });
+
+  it('reloads the financials tab when the route switches customers without remounting the page', async () => {
+    // The financials tab caches its fetch in a ref. CustomerDetail is not
+    // remounted when only :id changes, so before this guard existed the tab
+    // short-circuited on the cached flag and rendered the PREVIOUS customer's
+    // AR aging, statement and prepay credits under the new customer's name.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') return customerQuery(() => original);
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_ar_aging') {
+        return Promise.resolve({
+          data: [
+            { customer_id: 'customer-1', farm_name: 'Original Farm', current_amount: 1234, days_30: 0, days_60: 0, days_90: 0, over_90: 0, total_outstanding: 1234 },
+            { customer_id: 'customer-2', farm_name: 'Second Farm', current_amount: 5678, days_30: 0, days_60: 0, days_90: 0, over_90: 0, total_outstanding: 5678 },
+          ],
+          error: null,
+        });
+      }
+      if (name === 'get_customer_statement') return Promise.resolve({ data: [], error: null });
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderDetailWithCustomerSwitch();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'financials' }));
+    expect(await screen.findByText('$1,234.00')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+
+    expect(await screen.findByText('$5,678.00')).toBeInTheDocument();
+    expect(screen.queryByText('$1,234.00')).not.toBeInTheDocument();
   });
 
   it('keeps the committed crop but clears a jumped 4-to-6 token and requires recovery before a whole-record save', async () => {

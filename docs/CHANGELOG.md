@@ -2,6 +2,39 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-04 — CRM functional audit + two fixes — BRANCH
+
+Full read-only audit of the customer-relationship surface (`/customers`,
+`/customers/:id`, `/call-lists`, customer applicator licenses, the six CRM
+tables and their RPCs), written up in
+`docs/audits/2026-08-04-crm-functional-and-coverage-audit.md`. RLS is enabled
+with policies on all nine customer-domain tables and the July
+relationship-intelligence build is intact; the material finding is that the CRM
+holds no interactions, facts, documents, or customer applicator licenses, and
+97% of active customers have no assigned sales rep — which is what makes the
+unassigned-accounts call list, the crop filter, credit limits, statement email,
+and RUP compliance status non-functional in practice.
+
+Two code defects were found and fixed:
+
+`CustomerDetail` is not remounted when only the `:id` route param changes, so
+its cached Financials fetch and its unguarded tab loads could render one
+customer's AR aging, statement transactions, prepay credits, quotes, orders,
+deliveries, fields, timeline, or purchase history under a different customer's
+name — reachable by jumping between customer profiles through the command
+palette. Every state write in `fetchTabData` is now sequence-guarded and all
+per-customer caches reset on `id` change. The regression test was verified
+failing without the fix.
+
+The customer list fetched with a silent 500-row cap, had no active/inactive
+filter (so deactivated customers stayed in the working list permanently), and
+had no sales-rep column or filter despite rep assignment being the axis the call
+lists and RLS scoping are built on. It now warns on truncation, defaults to the
+active book, filters by status and by rep (including unassigned), shows email
+and resolved rep name, and surfaces a count of active customers with no rep.
+
+No migrations, no live writes, no schema changes.
+
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 
 The reviewed Section 2 remediation aligns customer statements across the target

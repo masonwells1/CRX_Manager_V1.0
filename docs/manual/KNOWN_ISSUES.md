@@ -790,6 +790,17 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 
 ## 4. Deferred/parked feature work
 
+- **CRM adoption + coverage gaps (2026-08-04 audit)** — the July relationship-intelligence build is intact
+  and RLS-clean, but live data is empty: 0 interactions, 0 grower facts, 0 documents, 0 customer applicator
+  licenses, and 146 of 150 active customers have no assigned sales rep. That data state — not the code — is
+  what makes the unassigned-accounts call list, the crop filter, credit limits, statement email, and RUP
+  compliance status non-functional today. Open coverage gaps in priority order: customer applicator-license
+  visibility on the customer/prep-card/quote surfaces (legal exposure), pre-quote sales pipeline, duplicate-customer
+  detection, bulk-import/bulk-assign of `assigned_sales_rep`, and auto-logging outbound email into
+  `customer_interactions`. Also still open from the July loop: the **add-fact path is retry-unsafe**
+  (direct insert; the interaction path got its idempotent RPC on 2026-07-17, the fact path did not).
+  Full detail and recommendations: `docs/audits/2026-08-04-crm-functional-and-coverage-audit.md`.
+
 - ~~**Per-line-item custom split billing (field-app)**~~ — **no longer deferred. SHIPPED 2026-07-21 (PR #164)
   and live with the flag ON; see §0 for the current status and the one remaining gap (it has never been
   used).**
