@@ -168,9 +168,23 @@ export default function CustomerDetail() {
     return true;
   }, [id, toast]);
 
+  // The tab loader below guards its writes with a sequence number, but the PRIMARY
+  // record needs the same discipline and did not have it. This callback is recreated
+  // per route id, so the `id` it closes over names the customer it was started FOR,
+  // while this ref always holds the one the route is on NOW. Navigating A -> B while
+  // A's reads are in flight would otherwise let A install its customer, addresses and
+  // row version over B — and the next save would then write A's form payload to B's
+  // id under A's row version.
+  const currentIdRef = useRef(id);
+  currentIdRef.current = id;
+
   const fetchCustomerSnapshot = useCallback(async (requireStableRowVersion = false): Promise<boolean> => {
     if (!id) return false;
+    // Silent by design: a superseded load is not a failure the user needs to see,
+    // and it must not clear loading state or toast over the customer now on screen.
+    const isSuperseded = () => currentIdRef.current !== id;
     const customerRes = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
+    if (isSuperseded()) return false;
 
     // Do not install either half until both required reads succeeded. This is
     // especially important after a stale-save conflict: the user must retain
@@ -189,6 +203,7 @@ export default function CustomerDetail() {
       .select('*')
       .eq('customer_id', id)
       .order('created_at');
+    if (isSuperseded()) return false;
     if (addressesRes.error) {
       Sentry.captureException(addressesRes.error, { tags: { source: 'read', action: 'load_customer_addresses_snapshot' } });
       toast('error', 'Could not load the complete customer record. Your current edits were kept; try Reload again or refresh the page.');
@@ -201,6 +216,7 @@ export default function CustomerDetail() {
       .select('*')
       .eq('id', id)
       .maybeSingle();
+    if (isSuperseded()) return false;
     const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
     const stableVersion = initialRowVersion === finalRowVersion
       && (initialRowVersion !== null || !requireStableRowVersion);
@@ -233,6 +249,8 @@ export default function CustomerDetail() {
         .eq('id', loadedCustomer.parent_customer_id)
         .maybeSingle()
         .then(({ data: parent, error: parentError }) => {
+          // Outlives the snapshot it belongs to, so it needs the same guard.
+          if (isSuperseded()) return;
           if (parentError) {
             Sentry.captureException(parentError, { tags: { source: 'read', action: 'load_parent_customer_name' } });
             toast('warning', 'Customer loaded, but the parent customer name could not be refreshed.');
@@ -548,6 +566,16 @@ export default function CustomerDetail() {
 
   const handleSave = async () => {
     if (saving) return;
+    // The save writes the CURRENT route id, so it must never carry a form that
+    // belongs to a previously-viewed customer. `fetchCustomerSnapshot` is guarded
+    // against installing a stale snapshot, which leaves exactly one window: a save
+    // fired after the route changed but before the new snapshot landed. Here the
+    // loaded record and the route disagree, and saving would write the old
+    // customer's fields — under the old row version — onto the new customer's row.
+    if (!isNew && customer.id && customer.id !== id) {
+      toast('error', 'This customer is still loading. Wait for it to finish, then save again.');
+      return;
+    }
     if (!customer.farm_name) {
       toast('error', 'Farm name is required');
       return;

@@ -9,7 +9,7 @@
 
 **The CRM machinery is sound. The CRM is not being used.** Every feature shipped in the July relationship-intelligence loop is live, wired, RLS-protected, and works. But after ~three weeks in production it holds **zero interactions, zero grower facts, zero documents, and zero customer applicator licenses**, and 97% of the customer book has no assigned sales rep. The single biggest thing standing between CRX and a working CRM is not code — it is that the records that feed it are empty.
 
-Two real code defects were found and fixed in this pass. Everything else below is a coverage or adoption gap with a recommendation attached.
+Two real code defects were found and fixed in this pass. One further correctness weakness is documented below and remains open — the add-fact path is still retry-unsafe, so a committed response lost in transit can double-log a fact (section 4); it predates this pass and was not introduced here. Everything else below is a coverage or adoption gap with a recommendation attached.
 
 ---
 
@@ -107,7 +107,7 @@ Identified in the June 2026 idea-mining audit as CRX's loudest CRM gap and still
 
 ### G3 — No duplicate-customer detection (MEDIUM)
 
-Nothing prevents two reps entering the same farm twice, and nothing detects it afterwards. There is no `merge_customer` path either, so a duplicate discovered later has no clean resolution — it splits AR, purchase history, commissions, and every call list. With 153 customers this is manageable by hand; it stops being manageable as the book grows.
+Nothing prevents two reps entering the same farm twice, and nothing detects it afterward. There is no `merge_customer` path either, so a duplicate discovered later has no clean resolution — it splits AR, purchase history, commissions, and every call list. With 153 customers this is manageable by hand; it stops being manageable as the book grows.
 
 **Recommendation:** a soft "did you mean this existing customer?" warning on new-customer save (fuzzy farm name + phone match), non-blocking. Cheap. The merge path is a much larger job and should wait until a duplicate actually appears.
 

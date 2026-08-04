@@ -2,6 +2,41 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-04 — CodeRabbit review round on PR #313 — BRANCH
+
+Five findings, all verified against the code before acting; none dismissed.
+
+**`CustomerDetail` primary-record stale write (the real one).** The earlier fix in
+this branch sequence-guarded the tab loader but left the primary record
+unguarded. `fetchCustomerSnapshot` had no staleness check, so navigating A → B
+while A's reads were in flight let A install its customer, addresses, and row
+version over B — and the next save would then write A's form fields to B's `id`
+under A's row version. `handleSave` had no guard either. Both now do: the
+snapshot bails at every await once the route has moved on (the parent-name
+lookup included, since it outlives the snapshot it belongs to), and a save
+refuses while the loaded record and the route disagree. The new test was
+verified failing without the guard — customer 1's row genuinely overwrote
+customer 2's form.
+
+**`Customers` truncation false positive.** `rows.length >= CUSTOMER_FETCH_LIMIT`
+flagged a book of exactly 1,000 as truncated, warning that customers were hidden
+when every one was shown. It now decides from the server's exact total, falling
+back to the page-length test only when no count is returned — over-warning is
+the safe direction, silently dropping customers is not. Covered both ways.
+
+**`backup-claude-memory.test.mjs` incomplete isolation.** The new environment
+sweep cleared `GIT_CONFIG_COUNT`/`KEY_<n>`/`VALUE_<n>` but not
+`GIT_CONFIG_PARAMETERS`, which is how git propagates `-c` settings to child
+processes, nor plain `GIT_CONFIG`. A suite run under `git -c …` would still have
+tested the caller rather than the script. The sweep is now `GIT_CONFIG*` and runs
+BEFORE the empty-file pins are installed, since a broad sweep afterward would
+delete them.
+
+**Two documentation corrections.** The audit verdict said everything remaining
+was a coverage or adoption gap while the same document records an open
+retry-unsafe fact insert; the verdict now names that weakness explicitly.
+`afterwards` → `afterward`.
+
 ## 2026-08-04 — Push guard no longer denies every web/mobile session — BRANCH
 
 `codex-push-guard` treated the mere PRESENCE of `GIT_CONFIG*` variables, and of

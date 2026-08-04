@@ -347,6 +347,46 @@ describe('CustomerDetail stale whole-record save', () => {
     expect(screen.queryByText('$1,234.00')).not.toBeInTheDocument();
   });
 
+  it('ignores a slow snapshot for the previous customer that lands after the route moved on', async () => {
+    // The tab loader was sequence-guarded, but the PRIMARY record was not. Customer
+    // 1's reads are held open here until customer 2 is already on screen, which is
+    // what a slow connection does on its own. Without the guard, customer 1's
+    // record, addresses and row version install over customer 2 — and the next save
+    // writes customer 1's fields to customer 2's id under customer 1's row version.
+    let releaseFirstCustomer!: () => void;
+    const firstCustomerGate = new Promise<void>((resolve) => { releaseFirstCustomer = resolve; });
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 3, crops: [], default_commission_split: null }
+      : { id: 'customer-1', farm_name: 'Original Farm', row_version: 1, crops: [], default_commission_split: null });
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'customers') return query({ data: [], error: null });
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+      const settle = async (): Promise<QueryResult> => {
+        if (requested === 'customer-1') await firstCustomerGate;
+        return { data: record(requested), error: null };
+      };
+      chain.maybeSingle = () => settle();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => settle().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => settle().catch(reject);
+      chain.finally = (callback: () => void) => settle().finally(callback);
+      return chain;
+    });
+
+    renderDetailWithCustomerSwitch();
+    // Customer 1 is still in flight — jump away before it can land.
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+    expect(await screen.findByDisplayValue('Second Farm')).toBeInTheDocument();
+
+    releaseFirstCustomer();
+    await waitFor(() => expect(screen.getByDisplayValue('Second Farm')).toBeInTheDocument());
+    expect(screen.queryByDisplayValue('Original Farm')).not.toBeInTheDocument();
+  });
+
   it('keeps the committed crop but clears a jumped 4-to-6 token and requires recovery before a whole-record save', async () => {
     let customerReads = 0;
     mockFrom.mockImplementation((table: string) => {

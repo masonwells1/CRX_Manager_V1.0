@@ -7,7 +7,7 @@ const { mockFrom, mockToast } = vi.hoisted(() => ({
   mockToast: vi.fn(),
 }));
 
-type QueryResult = { data: unknown; error: { message: string } | null };
+type QueryResult = { data: unknown; error: { message: string } | null; count?: number | null };
 
 function buildChain(result: QueryResult): Record<string, unknown> {
   const self: Record<string, unknown> = {};
@@ -49,9 +49,13 @@ const book = [
   customer({ id: 'c-3', farm_name: 'Retired Farm', is_active: false, assigned_sales_rep: REP_B }),
 ];
 
-function mockTables(customers: unknown[]) {
+// `count` is the TOTAL matching rows the server reports, which is independent of
+// how many the capped page returned — that difference is the whole point of the
+// truncation warning. Defaults to null, the "server did not report one" case, so
+// every test that predates the count reads through the page-length fallback.
+function mockTables(customers: unknown[], count: number | null = null) {
   mockFrom.mockImplementation((table: string) => {
-    if (table === 'customers') return buildChain({ data: customers, error: null });
+    if (table === 'customers') return buildChain({ data: customers, error: null, count });
     if (table === 'profile_public_view') {
       return buildChain({ data: [{ id: REP_A, full_name: 'Dana Rep' }, { id: REP_B, full_name: 'Sam Rep' }], error: null });
     }
@@ -110,11 +114,22 @@ describe('Customers list filters', () => {
     expect(screen.getByText('Active Unassigned Farm')).toBeInTheDocument();
   });
 
-  it('warns instead of silently truncating when the fetch cap is hit', async () => {
+  it('warns instead of silently truncating when there are more customers than the cap', async () => {
     const capped = Array.from({ length: 1000 }, (_, i) => customer({ id: `c-${i}`, farm_name: `Farm ${i}` }));
-    mockTables(capped);
+    mockTables(capped, 1500);
     renderCustomers();
     expect(await screen.findByText(/this list is truncated/)).toBeInTheDocument();
+  });
+
+  // A full page is not the same fact as a truncated one. A book of exactly the cap
+  // returns every customer there is, so warning would tell Mason rows are hidden
+  // when none are — the page-length test alone could not tell the two apart.
+  it('does not warn when the book is exactly the cap and all of it is shown', async () => {
+    const exact = Array.from({ length: 1000 }, (_, i) => customer({ id: `c-${i}`, farm_name: `Farm ${i}` }));
+    mockTables(exact, 1000);
+    renderCustomers();
+    await screen.findByText('Farm 0');
+    expect(screen.queryByText(/this list is truncated/)).not.toBeInTheDocument();
   });
 
   it('does not warn about truncation below the cap', async () => {

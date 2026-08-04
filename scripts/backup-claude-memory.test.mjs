@@ -66,11 +66,20 @@ const fresh = (name) => { const dir = path.join(root, name); mkdirSync(dir, { re
 // state. An empty real file rather than /dev/null so Windows behaves too.
 const EMPTY_GITCONFIG = path.join(root, "empty.gitconfig");
 writeFileSync(EMPTY_GITCONFIG, "");
+// Clear every inherited channel FIRST, then install the empty files. Order is
+// load-bearing: the sweep is deliberately broad, so running it after the
+// assignments would delete the very pins it exists to protect.
+//
+// Breadth matters too. `GIT_CONFIG_COUNT`/`KEY_<n>`/`VALUE_<n>` is the documented
+// trio, but `GIT_CONFIG_PARAMETERS` is how git propagates `-c` settings to child
+// processes, and plain `GIT_CONFIG` names a config file outright — so a suite run
+// under `git -c …`, or from a hook git invoked, would otherwise leak that
+// configuration straight into these fixtures and test the caller, not the script.
+for (const name of Object.keys(process.env)) {
+  if (/^GIT_CONFIG(_|$)/i.test(name)) delete process.env[name];
+}
 process.env.GIT_CONFIG_GLOBAL = EMPTY_GITCONFIG;
 process.env.GIT_CONFIG_SYSTEM = EMPTY_GITCONFIG;
-for (const name of Object.keys(process.env)) {
-  if (/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/i.test(name)) delete process.env[name];
-}
 const quiet = (fn) => {
   // These functions report to the console by design; a passing suite should not
   // print their expected failure messages.

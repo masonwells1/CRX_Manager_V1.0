@@ -42,9 +42,9 @@ export default function Customers() {
   const [exporting, setExporting] = useState(false);
 
   const fetchCustomers = useCallback(async () => {
-    const { data, error } = await supabase
+    const { data, error, count } = await supabase
       .from('customers')
-      .select('*')
+      .select('*', { count: 'exact' })
       .order('farm_name')
       .limit(CUSTOMER_FETCH_LIMIT);
     if (error) {
@@ -54,8 +54,17 @@ export default function Customers() {
       return;
     }
     const rows = (data || []) as Customer[];
-    // A silent cap reads as "this is everyone" — say so instead of hiding it.
-    setTruncated(rows.length >= CUSTOMER_FETCH_LIMIT);
+    // A silent cap reads as "this is everyone" — say so instead of hiding it. The
+    // total count is what decides that: a full page means only that the page is
+    // full, which is equally true of a book sitting exactly on the limit and
+    // showing every customer. Fall back to the page-length test when the count is
+    // unavailable — over-warning is the safe direction, silently dropping
+    // customers is not.
+    setTruncated(
+      count === null || count === undefined
+        ? rows.length >= CUSTOMER_FETCH_LIMIT
+        : count > CUSTOMER_FETCH_LIMIT,
+    );
     setCustomers(rows);
     setLoading(false);
   }, [toast]);
