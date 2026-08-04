@@ -286,11 +286,14 @@ export default function ProductDetail() {
   const [pricingReloading, setPricingReloading] = useState(false);
   const [costBasisWorkspace, setCostBasisWorkspace] = useState<ProductCostBasisWorkspace | null>(null);
   const [costBasisLoading, setCostBasisLoading] = useState(false);
+  const [costBasisLoadFailed, setCostBasisLoadFailed] = useState(false);
   const [costBasisBusy, setCostBasisBusy] = useState(false);
   const [costBasisReason, setCostBasisReason] = useState('');
   const [manualBasisCost, setManualBasisCost] = useState('');
   const [costBasisPricingBehavior, setCostBasisPricingBehavior] = useState<CostBasisPricingBehavior>('keep_sell_prices');
   const [priceHistoryReloadToken, setPriceHistoryReloadToken] = useState(0);
+  const [costHistoryLoaded, setCostHistoryLoaded] = useState(false);
+  const [costHistoryLoadFailed, setCostHistoryLoadFailed] = useState(false);
   const pricingPreviewIntentRef = useRef<string | null>(null);
   const costBasisWorkspaceRequestRef = useRef(0);
   const pricingPreviewRequestRef = useRef(0);
@@ -347,6 +350,8 @@ export default function ProductDetail() {
     // cost_history is admin-only under RLS; a non-admin fetch would just be a
     // denied round-trip (the history panel below only renders for admins).
     if (!isAdmin) return true;
+    setCostHistoryLoaded(false);
+    setCostHistoryLoadFailed(false);
     const { data, error } = await supabase
       .from('cost_history')
       .select('*')
@@ -355,10 +360,12 @@ export default function ProductDetail() {
       .limit(20);
     if (error) {
       Sentry.captureException(error);
+      setCostHistoryLoadFailed(true);
       if (reportError) toast('error', 'Failed to load pricing history');
       return false;
     }
     setCostHistory((data || []) as CostHistory[]);
+    setCostHistoryLoaded(true);
     return true;
   }, [id, isAdmin, toast]);
 
@@ -366,6 +373,7 @@ export default function ProductDetail() {
     const requestId = ++costBasisWorkspaceRequestRef.current;
     if (!isAdmin || !id || isNew) return true;
     setCostBasisWorkspace(null);
+    setCostBasisLoadFailed(false);
     setCostBasisLoading(true);
     try {
       const workspace = await getProductCostBasisWorkspace(id);
@@ -378,6 +386,7 @@ export default function ProductDetail() {
     } catch (error) {
       if (costBasisWorkspaceRequestRef.current !== requestId) return false;
       setCostBasisWorkspace(null);
+      setCostBasisLoadFailed(true);
       Sentry.captureException(error);
       if (reportError) toast('error', 'Failed to load governed cost-basis options');
       return false;
@@ -1645,9 +1654,11 @@ export default function ProductDetail() {
             {isAdmin && (
               <Card>
                 <CardHeader title="Cost" accent="History" />
-                {costHistory.length === 0 ? (
-                  <p className="text-sm text-secondary">No cost changes recorded</p>
-                ) : (
+                {!costHistoryLoaded && !costHistoryLoadFailed ? (
+                  <p className="text-sm text-secondary">Loading cost history…</p>
+                ) : costHistoryLoadFailed ? (
+                  <p className="text-sm text-secondary">Cost history could not be loaded. Reload to try again.</p>
+                ) : costHistory.length > 0 ? (
                   <div className="space-y-3">
                     {costHistory.map((ch) => (
                       <div key={ch.id} className="border-b border-gray-50 pb-3 last:border-0">
@@ -1659,6 +1670,43 @@ export default function ProductDetail() {
                         <p className="text-xs text-gray-400 mt-1">{new Date(ch.changed_at).toLocaleDateString()}</p>
                       </div>
                     ))}
+                  </div>
+                ) : costBasisLoading ? (
+                  <p className="text-sm text-secondary">Loading governed cost-basis details…</p>
+                ) : (
+                  <div className="space-y-2 text-sm text-secondary">
+                    <p>No legacy cost changes recorded.</p>
+                    {costBasisWorkspace?.current_basis ? (
+                      costBasisWorkspace.current_basis.selection_source === 'migration_baseline' ? (
+                        <p>
+                          Current governed cost baseline:{' '}
+                          <strong className="text-nav-dark">
+                            ${formatCostBasisDollars(costBasisWorkspace.current_basis.cost_cents)}
+                          </strong>{' '}
+                          (migration baseline) recorded on{' '}
+                          {new Date(costBasisWorkspace.current_basis.selected_at).toLocaleDateString()}. This
+                          baseline was captured from the existing Product cost and is not independently verified
+                          against supplier evidence. It is current cost provenance, not a backfilled historical
+                          price-change event.
+                        </p>
+                      ) : (
+                        <p>
+                          Current governed cost-basis record:{' '}
+                          <strong className="text-nav-dark">
+                            ${formatCostBasisDollars(costBasisWorkspace.current_basis.cost_cents)}
+                          </strong>{' '}
+                          ({costBasisWorkspace.current_basis.basis_type.replace(/_/g, ' ')}) selected on{' '}
+                          {new Date(costBasisWorkspace.current_basis.selected_at).toLocaleDateString()}. This is
+                          current cost provenance, not a backfilled historical price-change event.
+                        </p>
+                      )
+                    ) : costBasisLoadFailed ? (
+                      <p>Current governed cost-basis details could not be loaded. Reload to try again.</p>
+                    ) : product.current_cost != null ? (
+                      <p>
+                        This Product has a current cost, but no current governed cost-basis record is available.
+                      </p>
+                    ) : null}
                   </div>
                 )}
               </Card>
