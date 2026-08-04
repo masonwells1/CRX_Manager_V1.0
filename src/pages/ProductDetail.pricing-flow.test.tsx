@@ -336,6 +336,25 @@ describe('ProductDetail governed pricing flow', () => {
     expect(screen.queryByText('No legacy cost changes recorded.')).not.toBeInTheDocument();
   });
 
+  it('renders loaded legacy history while governed cost-basis details are still loading', async () => {
+    costHistoryLoadResult = {
+      data: [{
+        id: 'history-1',
+        old_cost: 49,
+        new_cost: 50,
+        change_note: 'Legacy cost update',
+        changed_at: '2026-08-04T12:00:00Z',
+      }],
+      error: null,
+    };
+    mockGetCostBasisWorkspace.mockReturnValueOnce(new Promise(() => {}));
+
+    render(<ProductDetail />);
+
+    expect(await screen.findByText('Legacy cost update')).toBeInTheDocument();
+    expect(screen.queryByText('Loading cost history…')).not.toBeInTheDocument();
+  });
+
   it('rejects a direct detail save when the loaded pricing version is stale', async () => {
     productMutationResult = { data: [], error: null };
     render(<ProductDetail />);

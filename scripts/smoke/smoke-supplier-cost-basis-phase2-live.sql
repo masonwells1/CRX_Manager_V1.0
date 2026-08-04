@@ -20,14 +20,18 @@ GRANT ALL ON phase2_live_smoke TO authenticated;
 DO $smoke$
 DECLARE
   v_admin_id uuid;
+  v_non_admin_id uuid;
 BEGIN
   IF (SELECT setting_value FROM public.app_settings
       WHERE setting_key = 'supplier_cost_basis_enabled') IS DISTINCT FROM 'false' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: supplier cost-basis global flag is not default-off';
   END IF;
 
-  IF has_table_privilege('authenticated', 'public.product_cost_basis', 'SELECT') THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: authenticated retained direct cost-basis access';
+  IF has_table_privilege('authenticated', 'public.product_cost_basis', 'SELECT')
+     OR has_table_privilege('authenticated', 'public.product_cost_basis', 'INSERT')
+     OR has_table_privilege('authenticated', 'public.product_cost_basis', 'UPDATE')
+     OR has_table_privilege('authenticated', 'public.product_cost_basis', 'DELETE') THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated retained direct cost-basis ledger access';
   END IF;
 
   IF has_function_privilege(
@@ -62,11 +66,17 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_SETUP: no active admin is available for governed pricing proof';
   END IF;
 
+  -- A fresh authenticated subject has no profile and therefore cannot satisfy
+  -- is_admin(). This keeps the wrong-role probe runnable even in deployments
+  -- that currently have active admins only.
+  v_non_admin_id := gen_random_uuid();
+
   INSERT INTO phase2_live_smoke(key, value)
   VALUES (
     'context',
     jsonb_build_object(
       'actor_id', v_admin_id,
+      'non_admin_id', v_non_admin_id,
       'product_id', gen_random_uuid(),
       'workbook_product_id', gen_random_uuid()
     )
@@ -96,12 +106,90 @@ SELECT
 FROM phase2_live_smoke
 WHERE key = 'context';
 
+SET LOCAL ROLE authenticated;
+
+-- Auth probes run before the positive controls so an authorization regression
+-- cannot be mistaken for a successful governed pricing chain.
+DO $smoke$
+DECLARE
+  v_admin_id uuid := (SELECT (value->>'actor_id')::uuid FROM phase2_live_smoke WHERE key = 'context');
+  v_non_admin_id uuid := (SELECT (value->>'non_admin_id')::uuid FROM phase2_live_smoke WHERE key = 'context');
+BEGIN
+  PERFORM set_config('request.jwt.claims', '', true);
+  BEGIN
+    PERFORM public.preview_product_cost_basis_changes('product_page', NULL, '[]'::jsonb, NULL, NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated preview was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'AUTH_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated preview expected AUTH_REQUIRED, got: %', SQLERRM;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.apply_product_cost_basis_change_set(gen_random_uuid(), NULL, NULL, NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated apply was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'AUTH_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: unauthenticated apply expected AUTH_REQUIRED, got: %', SQLERRM;
+    END IF;
+  END;
+
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_non_admin_id, 'role', 'authenticated')::text,
+    true
+  );
+  BEGIN
+    PERFORM public.preview_product_cost_basis_changes('product_page', NULL, '[]'::jsonb, v_non_admin_id, NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: non-admin preview was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'ADMIN_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: non-admin preview expected ADMIN_REQUIRED, got: %', SQLERRM;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.apply_product_cost_basis_change_set(gen_random_uuid(), NULL, v_non_admin_id, NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: non-admin apply was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'ADMIN_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: non-admin apply expected ADMIN_REQUIRED, got: %', SQLERRM;
+    END IF;
+  END;
+
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_admin_id, 'role', 'authenticated')::text,
+    true
+  );
+  BEGIN
+    PERFORM public.preview_product_cost_basis_changes('product_page', NULL, '[]'::jsonb, v_non_admin_id, NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: forged preview actor was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'ACTOR_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: forged preview expected ACTOR_MISMATCH, got: %', SQLERRM;
+    END IF;
+  END;
+  BEGIN
+    PERFORM public.apply_product_cost_basis_change_set(gen_random_uuid(), NULL, v_non_admin_id, NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: forged apply actor was allowed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'ACTOR_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: forged apply expected ACTOR_MISMATCH, got: %', SQLERRM;
+    END IF;
+  END;
+END;
+$smoke$;
+
 SELECT set_config(
   'request.jwt.claim.sub',
   (SELECT value->>'actor_id' FROM phase2_live_smoke WHERE key = 'context'),
   true
 );
-SET LOCAL ROLE authenticated;
 
 -- Product-page route: a new Product has no fabricated basis; the first governed
 -- manual cost edit must atomically write both price history and a cost basis.

@@ -1654,11 +1654,26 @@ export default function ProductDetail() {
             {isAdmin && (
               <Card>
                 <CardHeader title="Cost" accent="History" />
-                {(!costHistoryLoaded && !costHistoryLoadFailed) || costBasisLoading ? (
+                {!costHistoryLoaded && !costHistoryLoadFailed ? (
                   <p className="text-sm text-secondary">Loading cost history…</p>
                 ) : costHistoryLoadFailed ? (
                   <p className="text-sm text-secondary">Cost history could not be loaded. Reload to try again.</p>
-                ) : costHistory.length === 0 ? (
+                ) : costHistory.length > 0 ? (
+                  <div className="space-y-3">
+                    {costHistory.map((ch) => (
+                      <div key={ch.id} className="border-b border-gray-50 pb-3 last:border-0">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-red-500 line-through">${ch.old_cost?.toFixed(2)}</span>
+                          <span className="text-crx-green font-medium">${ch.new_cost?.toFixed(2)}</span>
+                        </div>
+                        {ch.change_note && <p className="text-xs text-secondary mt-1">{ch.change_note}</p>}
+                        <p className="text-xs text-gray-400 mt-1">{new Date(ch.changed_at).toLocaleDateString()}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : costBasisLoading ? (
+                  <p className="text-sm text-secondary">Loading governed cost-basis details…</p>
+                ) : (
                   <div className="space-y-2 text-sm text-secondary">
                     <p>No legacy cost changes recorded.</p>
                     {costBasisWorkspace?.current_basis ? (
@@ -1692,19 +1707,6 @@ export default function ProductDetail() {
                         This Product has a current cost, but no current governed cost-basis record is available.
                       </p>
                     ) : null}
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {costHistory.map((ch) => (
-                      <div key={ch.id} className="border-b border-gray-50 pb-3 last:border-0">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-red-500 line-through">${ch.old_cost?.toFixed(2)}</span>
-                          <span className="text-crx-green font-medium">${ch.new_cost?.toFixed(2)}</span>
-                        </div>
-                        {ch.change_note && <p className="text-xs text-secondary mt-1">{ch.change_note}</p>}
-                        <p className="text-xs text-gray-400 mt-1">{new Date(ch.changed_at).toLocaleDateString()}</p>
-                      </div>
-                    ))}
                   </div>
                 )}
               </Card>

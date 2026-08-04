@@ -47,6 +47,8 @@ The missing older source records remain intentionally unreconstructed: creating 
 
 The new live chain passed against production and follow-up checks found zero synthetic Products, cost-history rows, cost-basis rows, or idempotency records. `npm run check:pricing-phase2-live-smoke`, `npm run test:pricing` (214), typecheck, lint, and the existing disposable `npm run proof:pricing-phase2` all passed.
 
+**Review hardening completed locally 2026-08-04:** the live chain now checks all four direct ledger privileges (SELECT/INSERT/UPDATE/DELETE), rejects unauthenticated, non-admin, and forged-actor calls for both governed preview and apply wrappers, replays each idempotency key, and requires exactly one total cost-basis row per synthetic Product/change set. The Product History panel also renders successfully loaded legacy history independently while governed cost-basis details are still loading. The focused UI suite now has 20 passing tests; the rollback auth/ACL probe passed against production.
+
 ## Verification gates
 
 - Source baseline was fetched from `origin/main`; Graphify was used to map the supplier evidence, Product pricing, cost-basis, and quote-tier paths before source and live verification.
