@@ -37,6 +37,7 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 - Batch statement authorization now runs before the customer selector, including the empty-result case, so non-admin callers cannot infer whether qualifying receivables exist.
 - Supabase applied the reviewed migration under assigned ledger version `20260803221244`; the ledger retained the submitted name `20260803131507_fix_statement_balance_disclosure`. The repository reconciliation is therefore a filename-only rename to `20260803221244_fix_statement_balance_disclosure.sql`.
 - Supabase stored the applied statement with CRLF line endings (37,053 bytes; MD5 `f9666b8ca82dedc37c760f5bf3fcdf4c`). Normalizing only CRLF to LF yields 36,800 bytes and MD5 `4d6ad05cad533ee9e1812aa6bc20fcec`, exactly matching committed Git blob `de6c6bcedcd78d9acd9758eac0eb103146f045e5`.
+- The schema registry was regenerated from all six live introspection queries through high-water `20260803221244`. It adds exactly the statement migration name plus the new validated invoice lifecycle constraint to the explicit skipped-constraint review list; generated-column, status-enum, table, and column counts are unchanged.
 - A prior candidate revision reached `SMOKE_PASS_ROLLBACK`. No separate rollback-only rehearsal of the final applied revision was captured in this task. Read-only post-apply catalog checks confirm the two private helpers, fixed search paths, revoked public execution, validated constraint, expected overload count, and the two public RPC guards.
 - A read-only authenticated-admin execution check exercised both live statement RPCs without changing business data: detail returned `open_credit_cents` and `net_account_position_cents`, while batch generation returned a valid one-customer JSON array.
 - PR #305 merged as `cd0ff21c`; PR #307 merged as `be4917f6`. The final UI fix aborts a PDF batch on any rejected statement and resolves every email before the first send, preventing partial delivery.
@@ -44,12 +45,12 @@ Fix the three proven Section 2 statement defects: include overdue-only customers
 
 ## RESIDUAL
 
-- The B7 filename reconciliation still requires an exact-commit review and protected PR merge.
+- PR #308 completed the B7 filename reconciliation. Follow-up PR #309 carries the live-derived schema-registry refresh and still requires exact-commit review and protected merge.
 - A signed-in browser observation of the production PDF/email flow was not run in this release session; the prior candidate rollback smoke, build, preview, live catalog, and production HTTP checks passed.
 
 ## NEXT ACTION
 
-- Finish the filename-only reconciliation PR, then observe one authorized PDF/email batch during the next normal production statement run.
+- Finish the schema-registry follow-up PR, then observe one authorized PDF/email batch during the next normal production statement run.
 
 ## APPROVAL STATE
 
