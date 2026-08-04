@@ -18,13 +18,19 @@
 //   node scripts/log-session.mjs --summary "Plain-English what shipped + why"
 //   node scripts/log-session.mjs --dry-run          # print the entry, write nothing
 //   node scripts/log-session.mjs --dry-run --summary "..."
+//   node scripts/log-session.mjs --help             # print usage, write nothing
 //
-// Commit sources (first non-empty wins):
-//   1. git log --since=12.hours --oneline --author=Mason   (this session's work)
-//   2. git log -15 --oneline                               (fallback: recent commits)
-// Migration sources (first non-empty wins):
-//   1. git diff --name-only origin/main...HEAD -- supabase/migrations
-//   2. names touched in the last 15 commits under supabase/migrations
+// Commit sources (first non-empty wins). Each source is genuinely scoped to THIS
+// session's work — there is deliberately no "recent commits" fallback, because a
+// window of arbitrary recent history attributes other people's merged work to this
+// session (observed 2026-08-04: 14 unrelated commits and 7 migrations credited to a
+// docs-only session):
+//   1. git log origin/main..HEAD --oneline   (commits on this branch and not on main)
+//   2. git log --since=12.hours --oneline    (only when the branch is level with main)
+// Migrations touched:
+//   git diff --name-only origin/main...HEAD -- supabase/migrations
+// An empty result means NO migrations were touched and is reported as such. It is
+// never backfilled from unrelated history.
 //
 // Exit:   0 = entry written (or printed in --dry-run; or an identical heading
 //             already exists — skipped, nothing to do)
@@ -40,6 +46,32 @@ const root = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
 // ─── Args ──────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
+
+// --help must NEVER write. It previously fell through as an unrecognised flag and
+// inserted a live {SUMMARY} stub into docs/CHANGELOG.md (observed 2026-08-04).
+if (argv.includes("--help") || argv.includes("-h")) {
+  console.log(
+    [
+      "log-session — insert a dated entry at the top of docs/CHANGELOG.md.",
+      "",
+      "Usage:",
+      '  node scripts/log-session.mjs --summary "Plain-English what shipped + why"',
+      "  node scripts/log-session.mjs --dry-run          print the entry, write nothing",
+      "  node scripts/log-session.mjs --help             this message, write nothing",
+      "",
+      "Without --summary the entry carries a literal {SUMMARY} placeholder to fill in.",
+      "The heading is a short title derived from the first sentence of --summary; the",
+      "full text becomes the lead paragraph.",
+      "",
+      "Commits are scoped to origin/main..HEAD (this branch's work). Migrations come",
+      "from the same range; an empty result means none were touched.",
+      "",
+      "ALWAYS read the generated entry before committing it.",
+    ].join("\n"),
+  );
+  process.exit(0);
+}
+
 const dryRun = argv.includes("--dry-run");
 let summary = null;
 const si = argv.indexOf("--summary");
@@ -58,21 +90,25 @@ function runGit(args) {
 }
 
 // ─── This session's commits ───────────────────────────────────────────────
-let commitSource = "git log --since=12.hours --author=Mason";
-let commitsRaw = runGit(["log", "--since=12.hours", "--oneline", "--author=Mason"]);
+// Commits on this branch and not yet on main ARE this session's work. The old
+// --author=Mason filter never matched agent-authored commits, so every agent
+// session fell through to `git log -15` and claimed unrelated merged work.
+let commitSource = "git log origin/main..HEAD";
+let commitsRaw = runGit(["log", "origin/main..HEAD", "--oneline"]);
 if (!commitsRaw) {
-  commitSource = "git log -15 (fallback — no author-matched commits in the last 12h)";
-  commitsRaw = runGit(["log", "-15", "--oneline"]);
+  // Branch is level with main (or origin/main is unavailable). A time window is
+  // the only honest remaining signal — and it is labelled as such, never as
+  // "this session's" with certainty.
+  commitSource = "git log --since=12.hours (branch level with origin/main — may include others' work)";
+  commitsRaw = runGit(["log", "--since=12.hours", "--oneline"]);
 }
 const commits = commitsRaw.split("\n").map(l => l.trim()).filter(Boolean);
 
 // ─── Migrations touched ────────────────────────────────────────────────────
-let migSource = "git diff --name-only origin/main...HEAD";
-let migsRaw = runGit(["diff", "--name-only", "origin/main...HEAD", "--", "supabase/migrations"]);
-if (!migsRaw) {
-  migSource = "last 15 commits (fallback)";
-  migsRaw = runGit(["log", "-15", "--name-only", "--pretty=format:", "--", "supabase/migrations"]);
-}
+// No fallback: an empty diff means this branch touched no migrations. Backfilling
+// from recent history invented migrations that the session never went near.
+const migSource = "git diff --name-only origin/main...HEAD";
+const migsRaw = runGit(["diff", "--name-only", "origin/main...HEAD", "--", "supabase/migrations"]);
 const migrationsTouched = [...new Set(
   migsRaw.split("\n").map(l => l.trim()).filter(l => /supabase\/migrations\/.+\.sql$/.test(l))
 )];
@@ -92,7 +128,19 @@ const migCount = countFiles(path.join("supabase", "migrations"), ".sql");
 const now = new Date();
 const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
-const title = summary || "{SUMMARY}";
+// The heading is a SHORT title. Folding a whole multi-sentence summary into the
+// "## " line produced an unreadable table of contents and duplicated the prose.
+const MAX_TITLE = 72;
+function deriveTitle(text) {
+  // First sentence, stopping at a sentence-ending period/em-dash/newline.
+  const firstSentence = text.split(/(?:\.\s|\n|\s—\s)/)[0].trim().replace(/[.:;,]$/, "");
+  if (firstSentence.length <= MAX_TITLE) return firstSentence;
+  const clipped = firstSentence.slice(0, MAX_TITLE);
+  const lastSpace = clipped.lastIndexOf(" ");
+  return `${(lastSpace > 20 ? clipped.slice(0, lastSpace) : clipped).trim()}…`;
+}
+
+const title = summary ? deriveTitle(summary) : "{SUMMARY}";
 const lead = summary
   ? summary
   : "{SUMMARY — replace with one plain-English paragraph: what shipped, why it matters, and the proof it ran (PROOF — Ran: … · Saw: …).}";
