@@ -71,7 +71,53 @@ count. Saw: the coverage summary above, the 20 stale pinned pairs, and 6
 > unrelated commits plus 7 statement migrations attributed to this session via
 > its `git log -15` fallback). The block above is the hand-corrected version.
 > A `--help` invocation of that script also writes a `{SUMMARY}` template stub
-> into the changelog — check for and delete any stray stub.
+> into the changelog — check for and delete any stray stub. **All four of those
+> defects are fixed in this branch**; see entry 1b.
+
+---
+
+## 1b. `docs/CHANGELOG.md` — second entry, for the fixes
+
+The analysis session was followed by a fix session on the same branch. Merge this
+into the entry above, or keep it as a second dated section — either is fine, as
+long as both are present.
+
+```markdown
+## 2026-08-04 — Coverage ratchet raised and six untested modules covered
+
+Acts on the quick-win recommendations of the same day's coverage analysis. The
+`vite.config.ts` ratchet floor was raised from 36/27/24/34 to 45/36/32/43 — it
+had been set against the 2026-07-13 baseline and drifted ~11 points below actual,
+so coverage could have fallen by a quarter with CI still green. Six new test
+files (102 assertions) cover `money.ts` and five small pure modules that had none.
+`money.test.ts` pins the cents-vs-dollars distinction the module exists to
+prevent, including that passing a cents value to `formatUSD` overstates by
+exactly 100x; every `formatUSD` call site passing a `*_cents` value was checked
+and is correct, so there is no live bug — but nothing enforced the manual `/ 100`
+until now.
+
+`scripts/log-session.mjs` had four defects, all found while it generated this
+session's own changelog entry: `--help` was unhandled and wrote a live {SUMMARY}
+stub into this file; `--author=Mason` never matched agent commits so every agent
+session fell back to the last 15 commits and claimed unrelated merged work (14
+commits and 7 migrations were attributed to a docs-only session); the migrations
+lookup backfilled from recent history when the branch diff was empty; and the
+whole `--summary` string became the `##` heading. All four are fixed and guarded
+by `scripts/log-session.test.mjs` (15 assertions), now wired into
+`test:correction-guards`.
+
+PROOF — Ran: `npx vitest run --coverage` (320 files, 4259 tests, 0 failures;
+47.13 lines / 37.91 branches / 34.11 functions / 44.74 statements);
+`tsc --noEmit`; `eslint .`; `vite build`; `test:correction-guards`;
+`test:agent-workflows`. Saw: all green. Separately proved the new ratchet is
+enforced — a single-file coverage run fails citing all four new thresholds — and
+mutation-tested the `--help` and `git log -15` guards, both of which fail the
+suite when the fix is reverted.
+
+- **Migrations touched**: none.
+- **Delivery note**: pushed through the GitHub MCP API, not git; every file was
+  verified byte-identical to the locally tested version afterwards.
+```
 
 ---
 
@@ -112,14 +158,17 @@ dangerous — the container legitimately requires them.
    `[user]`/`[gpg]`/`[commit]` but drops the `[url …]` block, plus the
    `GIT_CONFIG_*` vars unset for that one command.** All hooks still run and must
    genuinely pass; this is not `--no-verify`.
-3. **`scripts/log-session.mjs` can misattribute a session's work.** When no commit
-   matches its author heuristic in the last 12h it falls back to the last 15
-   commits and labels the result "Commits this session" and "Migrations touched".
-   On 2026-08-04 it attributed 14 unrelated commits and 7 statement migrations to
-   a docs-only session. It also folds the entire `--summary` string into the `##`
-   heading and repeats it as the body, and a `--help` invocation writes a
-   `{SUMMARY}` template stub into `docs/CHANGELOG.md`. **Always read and correct
-   the generated entry before committing it.**
+3. **`scripts/log-session.mjs` misattributed a session's work.** — **FIXED
+   2026-08-04** on branch `claude/test-coverage-analysis-3thnt5`. It used to fall
+   back to the last 15 commits when no commit matched its `--author=Mason`
+   heuristic, labelling the result "Commits this session" and "Migrations
+   touched"; on 2026-08-04 it attributed 14 unrelated commits and 7 statement
+   migrations to a docs-only session. It also folded the entire `--summary`
+   string into the `##` heading, and a `--help` invocation wrote a `{SUMMARY}`
+   template stub into `docs/CHANGELOG.md`. Commits are now scoped to
+   `origin/main..HEAD`, migrations are never backfilled, `--help` exits without
+   writing, and the heading is a short derived title.
+   `scripts/log-session.test.mjs` guards all four.
 
 **Net effect:** an agent in a remote session can analyse, edit, and commit, but
 cannot deliver a branch by git. Work must go through the GitHub MCP tools
@@ -133,8 +182,9 @@ through the tool call, so files in the hundreds of KB (`docs/CHANGELOG.md` is
 guard to accept a known-safe proxy-rewrite shape the way `GIT_SSH_COMMAND` already
 has a sanctioned keepalive shape; or gate both on a detected remote-container
 marker; or leave as-is and treat the GitHub MCP path as the supported remote
-delivery route. See `docs/audits/2026-08-04-test-coverage-analysis.md` for the
-session that surfaced these.
+delivery route. Mason chose **leave as-is** on 2026-08-04. See
+`docs/audits/2026-08-04-test-coverage-analysis.md` for the session that surfaced
+these.
 ```
 
 ---
