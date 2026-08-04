@@ -176,6 +176,9 @@ jobs:
       - name: Phase 3C private-artifact regression tests
         run: npm run test:supplier-pricing-phase3c-packet
 
+      - name: Phase 2 live-smoke static guard
+        run: npm run check:pricing-phase2-live-smoke
+
       - name: Agent workflow truth-state and sync tests
         run: npm run test:agent-workflows
 

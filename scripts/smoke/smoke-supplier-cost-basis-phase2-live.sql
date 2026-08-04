@@ -66,10 +66,15 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_SETUP: no active admin is available for governed pricing proof';
   END IF;
 
-  -- A fresh authenticated subject has no profile and therefore cannot satisfy
-  -- is_admin(). This keeps the wrong-role probe runnable even in deployments
-  -- that currently have active admins only.
-  v_non_admin_id := gen_random_uuid();
+  -- Prefer a real active non-admin, so this proves role separation whenever
+  -- one exists. A profile-less authenticated fallback keeps the smoke runnable
+  -- in admin-only deployments and still rejects an arbitrary signed-in subject.
+  SELECT id INTO v_non_admin_id
+  FROM public.profiles
+  WHERE role <> 'admin' AND is_active IS TRUE
+  ORDER BY id
+  LIMIT 1;
+  v_non_admin_id := COALESCE(v_non_admin_id, gen_random_uuid());
 
   INSERT INTO phase2_live_smoke(key, value)
   VALUES (
@@ -216,6 +221,18 @@ SELECT 'manual-preview', public.preview_product_cost_basis_changes(
 )
 FROM phase2_live_smoke c
 WHERE c.key = 'context';
+
+DO $smoke$
+DECLARE v_export jsonb := (SELECT value FROM phase2_live_smoke WHERE key = 'workbook-export');
+BEGIN
+  IF v_export->>'export_id' IS NULL
+     OR jsonb_typeof(v_export->'rows') IS DISTINCT FROM 'array'
+     OR jsonb_array_length(v_export->'rows') IS DISTINCT FROM 1
+     OR jsonb_typeof(v_export->'rows'->0) IS DISTINCT FROM 'object' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: workbook export payload drifted: %', v_export;
+  END IF;
+END;
+$smoke$;
 
 DO $smoke$
 DECLARE v_preview jsonb := (SELECT value FROM phase2_live_smoke WHERE key = 'manual-preview');

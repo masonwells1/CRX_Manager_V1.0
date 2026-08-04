@@ -1702,7 +1702,7 @@ export default function ProductDetail() {
                       )
                     ) : costBasisLoadFailed ? (
                       <p>Current governed cost-basis details could not be loaded. Reload to try again.</p>
-                    ) : product.current_cost !== null ? (
+                    ) : product.current_cost != null ? (
                       <p>
                         This Product has a current cost, but no current governed cost-basis record is available.
                       </p>
