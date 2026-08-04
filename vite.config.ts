@@ -157,13 +157,19 @@ export default defineConfig({
       // 13.0). The gate catches regressions but never fails on current code.
       // Raise these as coverage improves; NEVER lower them.
       thresholds: {
-        // Phase 1 gauntlet ratchet: keep the floor close to the measured
-        // 2026-07-13 baseline (37.77 / 28.77 / 25.49 / 35.93) so coverage
-        // cannot nearly halve while CI remains green. Raise, never lower.
-        lines: 36,
-        branches: 27,
-        functions: 24,
-        statements: 34,
+        // Ratchet floor — kept ~2 points under the measured baseline so normal
+        // fluctuation cannot fail CI, while a real regression still does.
+        // Raise as coverage improves; NEVER lower.
+        //
+        // 2026-08-04 measured: 47.13 lines / 37.91 branches / 34.11 functions /
+        // 44.74 statements (320 files, 4259 tests). The previous floor was set
+        // against the 2026-07-13 baseline (37.77 / 28.77 / 25.49 / 35.93) and had
+        // drifted ~11 points below actual, so coverage could have fallen by a
+        // quarter with CI still green.
+        lines: 45,
+        branches: 36,
+        functions: 32,
+        statements: 43,
       },
     },
   },
