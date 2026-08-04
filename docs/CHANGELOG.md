@@ -41,13 +41,36 @@ the pre-commit hook runs that suite, it blocked every commit from a web session.
 The suite now pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to an empty file and
 strips inherited `GIT_CONFIG_*` at startup, so it exercises the script rather
 than the machine; its round-26 cases still install their own rewrites and still
-detect them, and all 233 assertions pass. That is a test-isolation fix only. The
-underlying production defect — `backup-claude-memory.mjs` refuses to stage
-whenever any URL rewrite exists, so the off-site memory backup cannot be run
-from a web or mobile session at all — is deliberately NOT fixed here and is
-recorded as OPEN in `docs/manual/KNOWN_ISSUES.md`: relaxing it is a
-security-relevant change to a guard protecting private notes, and it wants
-Mason's sign-off rather than being folded into an unrelated fix.
+detect them.
+
+`backup-claude-memory.mjs` itself had the same defect for the same reason and,
+on Mason's approval, is fixed here too: it refused to stage whenever ANY
+`url.*.insteadOf`/`url.*.pushInsteadOf` rewrite existed, so the off-site memory
+backup could not run from a web or mobile session at all.
+
+Investigating it turned up the fact that decided the fix — **the ban was
+redundant.** `git remote -v` prints its `(push)` line with both rewrite forms
+already applied, byte-identical to `git remote get-url --push` (verified against
+git 2.43). The script derives its push URLs from exactly those lines, so a
+rewrite that redirects the push changes those URLs, and the existing
+repository-identity, credential, and transport checks were already judging the
+real destination and already refusing it. The ban was a cruder second layer over
+a control that was already working, and it was the layer denying every harmless
+rewrite.
+
+So it was removed rather than reworked, and replaced by a check that the
+redundancy holds: the script now asks git for each remote's push URL and
+requires that set to match the URLs it just validated, failing closed on
+divergence, unenumerable remotes, or an unresolvable URL. If a future git ever
+made `remote -v` show something other than the address git contacts, the run
+refuses instead of validating a URL that is never used.
+
+All three round-26 redirect cases still refuse — the local `pushInsteadOf` one
+now via the credential check, one step later and for a more specific reason,
+still without echoing the secret — and a new case covers the relaxation itself.
+234 assertions pass. Verified in the real web session: staging into a private
+`CRX_Backups` clone with the ambient rewrites active now succeeds and reports
+`Destination verified`.
 
 ## 2026-08-04 — CRM functional audit + two fixes — BRANCH
 

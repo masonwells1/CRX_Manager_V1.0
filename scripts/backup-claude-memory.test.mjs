@@ -393,7 +393,16 @@ try {
         );
         const run = captured(() => stage(localDest, notes));
         eq(run.value, 1, "a local pushInsteadOf rewrite is refused");
-        ok(/URL rewrite settings are active/.test(run.said), "and the refusal explains the hidden redirect");
+        // 2026-08-04: this used to assert the blanket "URL rewrite settings are
+        // active" refusal, which fired on the mere EXISTENCE of a rewrite. That
+        // ban was removed because it was redundant AND it denied every harmless
+        // rewrite (see the identity-preserving case below). The redirect is still
+        // caught, one step later and for a more specific reason: `git remote -v`
+        // prints the `(push)` line with `insteadOf`/`pushInsteadOf` ALREADY
+        // applied, so the rewritten address is what the destination checks see.
+        // Here that address carries the marker as URL user information, so the
+        // credential check refuses it — and still never echoes the secret.
+        ok(/embeds a credential in its URL/.test(run.said), "and the refusal explains the hidden redirect");
         ok(!run.said.includes(credentialMarker), "and the refusal never prints URL user information from the setting name");
         ok(!readdirSafe(localDest), "and the local rewrite is refused before anything is written");
       } finally {
@@ -444,6 +453,35 @@ try {
           if (value === undefined) delete process.env[name];
           else process.env[name] = value;
         }
+      }
+    }
+    // The 2026-08-04 relaxation itself. A rewrite that does not touch the backup
+    // URL leaves the resolved push address identical, so the run proceeds — this
+    // is the case the removed blanket ban denied, and denying it made the runbook
+    // impossible to run from Claude Code on the web, which ships exactly these two
+    // SSH-spelling rewrites. A redirect is still refused (the three cases above);
+    // only "a rewrite exists" stopped being a reason on its own.
+    {
+      const harmlessKey = "url.https://github.com/.insteadOf";
+      try {
+        assert.equal(
+          spawnSync(
+            "git",
+            ["-C", backupRepo, "config", "--local", "--add", harmlessKey, "git@github.com:"],
+            { encoding: "utf8", env: cleanEnv },
+          ).status,
+          0,
+          "test fixture: could not set the identity-preserving URL rewrite",
+        );
+        const dest = path.join(backupRepo, "claude-memory-harmless-url-rewrite");
+        eq(
+          quiet(() => stage(dest, notes)), 0,
+          "a rewrite that does not move the backup URL no longer blocks the run",
+        );
+      } finally {
+        spawnSync("git", ["-C", backupRepo, "config", "--local", "--unset-all", harmlessKey], {
+          encoding: "utf8", env: cleanEnv,
+        });
       }
     }
     eq(
