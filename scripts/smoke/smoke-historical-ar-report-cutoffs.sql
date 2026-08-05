@@ -174,6 +174,36 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: later prepay activity did not fail historical reconstruction closed';
   END IF;
 
+  -- Prove both public reports propagate the shared fail-closed contract. A
+  -- future replacement must not bypass or swallow the helper exception.
+  v_failed_closed := false;
+  BEGIN
+    PERFORM 1 FROM public.get_ar_aging(v_cutoff);
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE:%' THEN
+      v_failed_closed := true;
+    ELSE
+      RAISE;
+    END IF;
+  END;
+  IF NOT v_failed_closed THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: AR Aging did not propagate unsupported historical reconstruction';
+  END IF;
+
+  v_failed_closed := false;
+  BEGIN
+    PERFORM 1 FROM public.get_customer_balance_listing(v_cutoff);
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE:%' THEN
+      v_failed_closed := true;
+    ELSE
+      RAISE;
+    END IF;
+  END;
+  IF NOT v_failed_closed THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: Customer Balance Listing did not propagate unsupported historical reconstruction';
+  END IF;
+
   IF has_function_privilege('anon', 'public.get_ar_aging(date)', 'EXECUTE')
      OR has_function_privilege('anon', 'public.get_customer_balance_listing(date)', 'EXECUTE')
      OR has_function_privilege('authenticated', 'public.assert_customer_balance_reconstructable_as_of(uuid,date)', 'EXECUTE') THEN

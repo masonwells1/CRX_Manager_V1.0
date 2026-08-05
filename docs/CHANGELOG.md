@@ -41,8 +41,9 @@ historical customer-balance access admin-only. The customer balance listing now
 also excludes unposted invoices and calculates overdue amounts from the requested
 date.
 
-Supabase applied the migration as live ledger version
-`20260805151605_fix_historical_ar_report_cutoffs`. Post-apply catalog checks
+Supabase applied the submitted migration
+`20260805124533_fix_historical_ar_report_cutoffs` as live ledger version
+`20260805151605`. Post-apply catalog checks
 confirmed fixed search paths, deliberate grants, one live overload per report,
 and a private reconstruction helper. The rollback-only behavior smoke returned
 `SMOKE_PASS_ROLLBACK`; authenticated live execution confirmed current reports

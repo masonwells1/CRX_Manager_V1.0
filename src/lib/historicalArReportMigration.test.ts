@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,6 +17,18 @@ const paidInvoiceFollowup = source(
   'migrations',
   '20260805171334_fix_customer_balance_paid_invoice_totals.sql',
 );
+const latestCustomerBalanceListingMigration = readdirSync(
+  join(root, 'supabase', 'migrations'),
+)
+  .filter((name) => name.endsWith('.sql'))
+  .sort()
+  .reverse()
+  .map((name) => source('supabase', 'migrations', name))
+  .find((sql) =>
+    sql.includes(
+      'CREATE OR REPLACE FUNCTION public.get_customer_balance_listing(',
+    ),
+  );
 
 describe('historical AR report migration', () => {
   it('shares the statement reconstruction boundary instead of trusting current status', () => {
@@ -96,6 +108,12 @@ describe('historical AR report migration', () => {
       'v_listing.invoice_count IS DISTINCT FROM 2::bigint',
     );
     expect(smoke).toContain('HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE');
+    expect(smoke).toContain(
+      'PERFORM 1 FROM public.get_ar_aging(v_cutoff);',
+    );
+    expect(smoke).toContain(
+      'PERFORM 1 FROM public.get_customer_balance_listing(v_cutoff);',
+    );
     expect(smoke).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'");
     expect(registry).toContain('smoke-historical-ar-report-cutoffs.sql');
     expect(areas).toContain('src/lib/historicalArReportMigration.test.ts');
@@ -120,6 +138,22 @@ describe('historical AR report migration', () => {
     );
     expect(paidInvoiceFollowup).toContain(
       'min(ei.invoice_date) FILTER (WHERE ei.statement_balance_cents > 0)',
+    );
+  });
+
+  it('keeps authorization and reconstruction guards in the latest listing replacement', () => {
+    expect(latestCustomerBalanceListingMigration).toBeDefined();
+    expect(latestCustomerBalanceListingMigration).toContain(
+      'Admin access required for historical customer balance report',
+    );
+    expect(latestCustomerBalanceListingMigration).toContain(
+      'public.assert_customer_balance_reconstructable_as_of',
+    );
+    expect(latestCustomerBalanceListingMigration).toContain(
+      'public.statement_invoice_was_posted_as_of',
+    );
+    expect(latestCustomerBalanceListingMigration).toContain(
+      'scoped_customer.assigned_sales_rep = v_actor',
     );
   });
 });
