@@ -292,6 +292,11 @@ function bashExecutable() {
   }), /cannot modify its own governance/i, "governed sessions cannot rewrite factory governance through an MCP edit_block operation");
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
+    tool_name: "mcp__github__create_or_update_file",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", path: "scripts/factory.mjs", content: "forged" },
+  }), /cannot modify its own governance/i, "the integrity guard broadly denies remote MCP governance writers even though the lane guard never treats them as local edits");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
     tool_name: "apply_patch",
     tool_input: { input: "*** Begin Patch\n*** Update File: scripts/factory.mjs\n@@\n-old\n+new\n*** End Patch\n" },
   }), /cannot modify its own governance/i, "governed sessions cannot hide a governance rewrite in an input patch payload");
@@ -483,6 +488,24 @@ function bashExecutable() {
     tool_name: "mcp__filesystem__write_file",
     tool_input: { path: path.join(root, "src", "outside-ticket.ts"), content: "forged" },
   }), /outside the approved ticket paths/i, "active lane MCP writers cannot widen the approved file scope");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__github__create_or_update_file",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", path: "src/example.ts", content: "remote mutation" },
+  }), /direct commands and helper-process execution/i, "active lanes keep remote GitHub file writers opaque and denied even for an approved local-looking path");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__github__delete_file",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", path: "src/example.ts" },
+  }), /direct commands and helper-process execution/i, "active lanes keep remote GitHub file deletion opaque and denied");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__edit_file",
+    tool_input: {
+      path: path.join(root, "src", "example.ts"),
+      edits: [{ oldText: "safe", newText: "OPENAI_API_KEY=sk-structured-edit-must-not-pass" }],
+    },
+  }), /credential or secret material/i, "active lane secret scanning covers filesystem edit_file newText replacements");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Edit",

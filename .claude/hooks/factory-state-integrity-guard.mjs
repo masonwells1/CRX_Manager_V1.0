@@ -11,7 +11,7 @@ import {
   resolveHookFactoryPaths,
   setFactoryManagedSessionMarker,
 } from "../../scripts/factory-state-lib.mjs";
-import { isStructuredFilesystemMutationTool } from "./factory-tool-classification.mjs";
+import { isPotentialStructuredMutationTool } from "./factory-tool-classification.mjs";
 
 function nothing() { process.exit(0); }
 function deny(reason) {
@@ -117,12 +117,12 @@ if (targets.some((target) => target.startsWith(permitsNorm))) {
   deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
 }
 if (!historicalBackfillComplete
-    && isStructuredFilesystemMutationTool(toolName)
+    && isPotentialStructuredMutationTool(toolName)
     && repositoryTargets.some((target) => governanceTarget.test(target))) {
   deny("CRX FACTORY STATE GUARD: protected governance edits stay fail-closed until the historical Factory session backfill is durably complete.");
 }
 if (governedSession
-    && isStructuredFilesystemMutationTool(toolName)
+    && isPotentialStructuredMutationTool(toolName)
     && repositoryTargets.some((target) => governanceTarget.test(target))) {
   deny("CRX FACTORY STATE GUARD: an active factory lane cannot modify its own governance implementation.");
 }

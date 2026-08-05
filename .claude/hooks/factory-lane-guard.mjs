@@ -249,8 +249,16 @@ function structuredMutationContent(toolInput) {
     input.content,
     input.new_string,
     input.newString,
+    input.new_text,
+    input.newText,
     ...(Array.isArray(input.edits)
-      ? input.edits.flatMap((edit) => [edit?.content, edit?.new_string, edit?.newString])
+      ? input.edits.flatMap((edit) => [
+        edit?.content,
+        edit?.new_string,
+        edit?.newString,
+        edit?.new_text,
+        edit?.newText,
+      ])
       : []),
   ].filter((value) => typeof value === "string");
   const patchText = typeof toolInput === "string"
