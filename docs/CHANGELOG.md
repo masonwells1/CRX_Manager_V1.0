@@ -2,6 +2,28 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Factory concurrency and orphan recovery — PREPARED
+
+The governed software factory now admits up to three active lanes instead of
+globally serializing all work behind one job. Only `building`, `verifying`, and
+`in-review` consume capacity, so an expired pending approval or historical
+parked job remains visible without occupying a worker slot. Each lane must start
+in its own clean linked Git worktree; the primary checkout and worktree reuse are
+refused. Cross-chat custody checks cover canonical structured-write targets even
+when the calling chat is in another checkout, while terminal parked jobs retain
+targeted custody without globally blocking unrelated shell work.
+
+Long-running harness and independent-review attachments now compare the target
+job plus the factory pause/resume checkpoint instead of the unrelated global
+ledger tail, allowing independent lanes to record progress concurrently without
+weakening same-job or emergency-hold protection. Owner decisions use the same
+job-scoped concurrency boundary. Failed harness output is secret-scanned before
+being surfaced, and secret-shaped output is suppressed while the factory is
+held for review. The owner-facing CLI and Board report active capacity as
+`N/3`; the governed-delivery policy documents the bounded concurrency and
+worktree recovery behavior. This entry records the reviewed release candidate;
+it does not claim a merge or production deployment.
+
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 
 The reviewed Section 2 remediation aligns customer statements across the target

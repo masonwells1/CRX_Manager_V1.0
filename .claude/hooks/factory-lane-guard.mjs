@@ -6,12 +6,14 @@ import path from "node:path";
 import {
   ACTIVE_STAGES,
   FACTORY_CUSTODY_STAGES,
+  FACTORY_WORKTREE_CUSTODY_STAGES,
   hasFactoryIntentFailureLatch,
   loadFactorySnapshot,
   mintFactoryCliPermit,
   pathAllowedByTicket,
   rejectSecretBearingText,
   resolveHookFactoryPaths,
+  sameCanonicalPath,
   validateApprovedFactoryLanding,
 } from "../../scripts/factory-state-lib.mjs";
 import { isGitPush, pushTargetsCurrentHead } from "./codex-push-lib.mjs";
@@ -188,8 +190,13 @@ function isShellMutation(toolName, toolInput) {
   return true;
 }
 
+function isStructuredMutationTool(toolName) {
+  return /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch|mcp__filesystem__write_file|mcp__desktop_commander__write_file)$/i
+    .test(String(toolName || ""));
+}
+
 function isBuildMutation(toolName, toolInput) {
-  if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(String(toolName || ""))) return true;
+  if (isStructuredMutationTool(toolName)) return true;
   return isBuildActionUnderHold(toolName, toolInput) || isShellMutation(toolName, toolInput);
 }
 
@@ -201,7 +208,7 @@ function isKnownStructuredFilesystemReadTool(toolName) {
 function isOpaqueExecutionTool(toolName) {
   const name = String(toolName || "");
   if (/^(?:Bash|PowerShell|shell_command)$/i.test(name)) return false;
-  if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(name)) return false;
+  if (isStructuredMutationTool(name)) return false;
   if (/^(?:Read|Glob|Grep|LS|WebSearch|WebFetch|TaskOutput|TaskList|TaskGet|TodoWrite|AskUserQuestion|view_image)$/i.test(name)) return false;
   if (/^(?:collaboration[._-])?(?:list_agents|send_message|wait_agent)$/i.test(name)) return false;
   if (isKnownStructuredFilesystemReadTool(name)) return false;
@@ -209,7 +216,7 @@ function isOpaqueExecutionTool(toolName) {
 }
 
 function structuredMutationTargets(toolName, toolInput) {
-  if (!/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(String(toolName || ""))) return [];
+  if (!isStructuredMutationTool(toolName)) return [];
   const input = toolInput && typeof toolInput === "object" ? toolInput : {};
   const targets = [
     input.file_path,
@@ -309,6 +316,18 @@ function nearestExistingPath(candidate) {
 function isInside(root, candidate) {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function targetFallsInsideWorktree(rawTarget, projectDir, worktree) {
+  const absolute = path.resolve(projectDir, String(rawTarget));
+  const worktreeRoot = path.resolve(worktree);
+  try {
+    const realWorktree = realpathSync(worktreeRoot);
+    const existingTarget = nearestExistingPath(absolute);
+    return Boolean(existingTarget) && isInside(realWorktree, realpathSync(existingTarget));
+  } catch {
+    return isInside(worktreeRoot, absolute);
+  }
 }
 
 function readTargetBlockReason(rawTarget, projectDir, { allowGlob = false } = {}) {
@@ -578,13 +597,20 @@ try {
   deny(`CRX FACTORY GATE: shared factory state could not be verified (${error.message}). Factory-managed build writes fail closed.`);
 }
 
-const otherCustody = snapshot.jobs.find((job) =>
-  FACTORY_CUSTODY_STAGES.has(job.stage)
-  && (job.laneSessionId || job.sessionId) !== sessionId,
-);
 const factoryCliJob = factoryCli?.jobId
   ? snapshot.jobs.find((job) => job.id === factoryCli.jobId)
   : null;
+const currentWorktreeCustody = snapshot.jobs.find((job) =>
+  FACTORY_WORKTREE_CUSTODY_STAGES.has(job.stage)
+  && job.worktree
+  && sameCanonicalPath(job.worktree, projectDir),
+);
+const foreignWorktreeCustody = snapshot.jobs.filter((job) =>
+  FACTORY_WORKTREE_CUSTODY_STAGES.has(job.stage)
+  && job.worktree
+  && (job.laneSessionId || job.sessionId) !== sessionId,
+);
+const foreignUntargetedMutationCustody = foreignWorktreeCustody.filter((job) => job.stage !== "parked");
 
 if (factoryCli) {
   if (shellEnvironmentBlock) {
@@ -601,13 +627,15 @@ if (factoryCli) {
   if (snapshot.held && !factoryCli.recovery) {
     deny(`CRX FACTORY GATE: the factory is globally paused${snapshot.holdReason ? ` (${snapshot.holdReason})` : ""}. Only status and canonical recovery remain available.`);
   }
-  if (!factoryCli.recovery && otherCustody) {
-    deny(`CRX FACTORY GATE: pilot job ${otherCustody.id} is under factory custody at ${otherCustody.stage} in another chat. Factory commands cannot seize or rewind another chat's job.`);
-  }
   if (!factoryCli.recovery
       && factoryCliJob
       && (factoryCliJob.laneSessionId || factoryCliJob.sessionId) !== sessionId) {
     deny(`CRX FACTORY GATE: factory job ${factoryCliJob.id} belongs to another chat session.`);
+  }
+  if (!factoryCli.recovery
+      && factoryCliJob?.worktree
+      && !sameCanonicalPath(factoryCliJob.worktree, projectDir)) {
+    deny(`CRX FACTORY GATE: factory job ${factoryCliJob.id} belongs to a different governed worktree.`);
   }
   const permit = mintFactoryCliPermit(paths, {
     sessionId,
@@ -616,17 +644,38 @@ if (factoryCli) {
   });
   allowWithPermit(payload, permit.token, factoryCli.canonicalCommand, projectDir);
 }
-if (buildMutation && otherCustody) {
-  deny(`CRX FACTORY GATE: pilot job ${otherCustody.id} is under factory custody at ${otherCustody.stage} in another chat. The one-lane pilot blocks cross-session repository writes and opaque helper execution from ticket presentation through owner disposition.`);
+const visibleMutationTargets = structuredMutationTargets(payload?.tool_name, payload?.tool_input);
+const targetedForeignWorktree = foreignWorktreeCustody.find((job) =>
+  visibleMutationTargets.some((target) => targetFallsInsideWorktree(target, projectDir, job.worktree)),
+);
+if (buildMutation && targetedForeignWorktree) {
+  deny(`CRX FACTORY GATE: job ${targetedForeignWorktree.id} owns this governed worktree from another chat; the mutation targets it from a different checkout.`);
+}
+if (buildMutation
+    && foreignUntargetedMutationCustody.length > 0
+    && visibleMutationTargets.length === 0
+    && (shellMutation || opaqueExecution || isStructuredMutationTool(payload?.tool_name))) {
+  deny("CRX FACTORY GATE: shell or opaque mutations are disabled while another chat owns a factory worktree because their destinations cannot be custody-checked. Use a structured Write/Edit/apply_patch operation with exact targets.");
+}
+if (buildMutation
+    && currentWorktreeCustody
+    && (currentWorktreeCustody.laneSessionId || currentWorktreeCustody.sessionId) !== sessionId) {
+  deny(`CRX FACTORY GATE: job ${currentWorktreeCustody.id} owns this governed worktree from another chat.`);
 }
 if (!sessionId) nothing();
 
 const sessionJobs = snapshot.jobs.filter((job) => job.sessionId === sessionId);
 const hasIntent = snapshot.factoryIntentSessions.includes(sessionId);
 const governedJob = sessionJobs.find((job) =>
-  FACTORY_CUSTODY_STAGES.has(job.stage) || job.stage === "parked",
-);
+  FACTORY_WORKTREE_CUSTODY_STAGES.has(job.stage)
+  && job.worktree
+  && sameCanonicalPath(job.worktree, projectDir))
+  || sessionJobs.find((job) => ACTIVE_STAGES.has(job.stage))
+  || sessionJobs.find((job) => FACTORY_CUSTODY_STAGES.has(job.stage) || job.stage === "parked");
 if (!hasIntent && !governedJob && !intentRecordFailed) nothing();
+if (governedJob?.worktree && !sameCanonicalPath(governedJob.worktree, projectDir)) {
+  deny(`CRX FACTORY GATE: job ${governedJob.id} is bound to a different governed worktree.`);
+}
 if (shellWorkingDirectoryBlock) {
   deny(`CRX FACTORY GATE: ${shellWorkingDirectoryBlock}. Shell inspection must execute from the governed checkout.`);
 }
@@ -656,7 +705,7 @@ if (governedJob.stage === "queued") {
   deny(`CRX FACTORY GATE: ticket ${governedJob.id} is approved but the deterministic lane-start check has not run. Start it through scripts/factory.mjs lane start.`);
 }
 if (ACTIVE_STAGES.has(governedJob.stage)) {
-  if (/^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(String(payload?.tool_name || ""))) {
+  if (isStructuredMutationTool(payload?.tool_name)) {
     const blockReason = structuredMutationBlockReason(
       payload?.tool_name,
       payload?.tool_input,
@@ -694,6 +743,10 @@ if (governedJob.stage === "approved-to-land") {
     allowWithCommand(payload, proof.canonicalCommand, projectDir);
   }
   nothing();
+}
+
+if (governedJob.stage === "parked") {
+  deny(`CRX FACTORY GATE: job ${governedJob.id} is parked. To release this worktree for revised work, draft a revised mission ticket for this same job through scripts/factory.mjs; the new ticket clears the prior worktree custody and requires Mason's fresh approval.`);
 }
 
 deny(`CRX FACTORY GATE: job ${governedJob.id} is ${governedJob.stage}. Further build writes are parked until Mason disposes the job in chat.`);

@@ -29,13 +29,13 @@ process.on("exit", () => {
   for (const dir of temporaryStateDirs) rmSync(dir, { recursive: true, force: true });
 });
 
-function run(hook, stateDir, payload) {
+function run(hook, stateDir, payload, projectDir = root) {
   return spawnSync(process.execPath, [hook], {
-    cwd: root,
+    cwd: projectDir,
     encoding: "utf8",
     env: {
       ...process.env,
-      CLAUDE_PROJECT_DIR: root,
+      CLAUDE_PROJECT_DIR: projectDir,
       CRX_AGENT_SURFACE: "codex",
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: stateDir,
@@ -382,11 +382,13 @@ function bashExecutable() {
     sessionId,
     payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: sha256("Approve?"), baseSha: "b".repeat(40) },
   });
-  denied(run(laneHook, stateDir, {
+  const pendingParallel = run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
-  }), /under factory custody/i, "fresh chats cannot execute a prebuilt helper while a ticket decision is pending");
+  });
+  assertions++;
+  assert.equal(pendingParallel.stdout, "", "a pending ticket does not globally lock unrelated chats");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
@@ -405,11 +407,13 @@ function bashExecutable() {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     },
   });
-  denied(run(laneHook, stateDir, {
+  const queuedParallel = run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
-  }), /under factory custody/i, "fresh chats cannot execute a prebuilt helper while an approved job is queued");
+  });
+  assertions++;
+  assert.equal(queuedParallel.stdout, "", "a queued ticket does not globally lock unrelated chats");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Edit",
@@ -435,6 +439,11 @@ function bashExecutable() {
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "outside-ticket.ts") },
   }), /outside the approved ticket paths/i, "active lane cannot widen its approved file scope");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__write_file",
+    tool_input: { path: path.join(root, "src", "outside-ticket.ts"), content: "forged" },
+  }), /outside the approved ticket paths/i, "active lane MCP writers cannot widen the approved file scope");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Edit",
@@ -723,21 +732,70 @@ function bashExecutable() {
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/factory.mjs stage --job lane-job`nnode scripts/generated-helper.mjs --stage verifying" },
   }), /direct commands and helper-process execution/i, "factory CLI permit rejects multiline command injection");
+  const parallelTicket = Buffer.from(JSON.stringify({
+    id: "parallel-lane-job",
+    title: "Parallel lane",
+    goal: "Prove the hook admits another governed job.",
+    definitionOfDone: ["Lane starts."],
+    mustNotChange: ["Production."],
+    allowedPaths: ["src/parallel.ts"],
+    proofRequirements: ["Factory tests pass."],
+    proofHarnesses: ["test:factory"],
+    deliveryGate: "Stop before commit.",
+    riskAreas: [],
+  }), "utf8").toString("base64");
+  const parallelDraft = run(laneHook, stateDir, {
+    thread_id: "fresh-parallel-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: `node scripts/factory.mjs ticket draft --ticket-base64 ${parallelTicket}` },
+  });
+  assertions++;
+  assert.equal(
+    hookOutput(parallelDraft).permissionDecision,
+    "allow",
+    "an active lane does not globally block a second chat from drafting its own governed job",
+  );
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "parallel.ts") },
-  }), /under factory custody/i, "fresh chats cannot bypass an active factory lane");
+  }), /owns this governed worktree/i, "fresh chats cannot write into another active lane's worktree");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
     tool_input: { command: "Set-Content src/parallel.ts forged" },
-  }), /under factory custody/i, "fresh chats cannot bypass one-lane enforcement with shell writes");
+  }), /destinations cannot be custody-checked/i, "fresh chats cannot use shell writes while another active lane holds worktree custody");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "mcp__desktop_commander__write_file",
     tool_input: { path: path.join(root, "src", "parallel.ts"), content: "forged" },
-  }), /under factory custody/i, "fresh chats cannot bypass one-lane enforcement with MCP writers");
+  }), /owns this governed worktree/i, "fresh chats cannot use MCP writers in another active lane's worktree");
+  const wrongWorktree = temporaryStateDir("crx-factory-wrong-worktree-");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-cross-checkout-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts"), content: "forged" },
+  }, wrongWorktree), /owns this governed worktree.*mutation targets/i, "a chat in another checkout cannot target an active lane's worktree");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-cross-checkout-thread",
+    tool_name: "mcp__desktop_commander__write_file",
+    tool_input: { path: path.join(root, "src", "example.ts"), content: "forged" },
+  }, wrongWorktree), /owns this governed worktree.*mutation targets/i, "a cross-checkout MCP writer cannot target an active lane's worktree");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-cross-checkout-thread",
+    tool_name: "mcp__filesystem__write_file",
+    tool_input: { request: { destination: path.join(root, "src", "example.ts"), content: "forged" } },
+  }, wrongWorktree), /destinations cannot be custody-checked/i, "an MCP writer with an unrecognized target shape fails closed while another lane has custody");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-cross-checkout-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: `Set-Content -LiteralPath "${path.join(root, "src", "example.ts")}" -Value forged` },
+  }, wrongWorktree), /destinations cannot be custody-checked/i, "cross-checkout shell mutations fail closed while another lane has custody");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(wrongWorktree, "src", "example.ts") },
+  }, wrongWorktree), /bound to a different governed worktree/i, "the owning chat cannot move its active lane into another checkout");
 
   appendFactoryEvent(paths, {
     type: "factory-held",
@@ -822,7 +880,7 @@ function bashExecutable() {
     thread_id: "different-landing-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "landing.ts") },
-  }), /under factory custody/i, "approved-to-land blocks parallel chats until landing completes or the job is parked");
+  }), /owns this governed worktree/i, "approved-to-land preserves its own worktree against parallel writes");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
@@ -863,6 +921,26 @@ function bashExecutable() {
     tool_name: "PowerShell",
     tool_input: { command: "gh pr create --fill" },
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects PR bodies synthesized from unreviewed commit metadata");
+  appendFactoryEvent(paths, {
+    type: "job-stage",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { stage: "parked", behaviorSummary: "Landing paused.", blocker: "Tested terminal custody." },
+  });
+  const unrelatedWorktree = temporaryStateDir("crx-factory-parked-unrelated-");
+  const unrelatedShellWrite = run(laneHook, stateDir, {
+    thread_id: "unrelated-parked-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content unrelated.txt allowed" },
+  }, unrelatedWorktree);
+  assertions++;
+  assert.equal(unrelatedShellWrite.stdout, "", "a terminal parked job does not globally block shell mutations in unrelated worktrees");
+  denied(run(laneHook, stateDir, {
+    thread_id: "unrelated-parked-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "landing.ts"), content: "forged" },
+  }, unrelatedWorktree), /owns this governed worktree.*mutation targets/i, "parked custody still blocks targeted writes into its worktree");
 }
 
 {

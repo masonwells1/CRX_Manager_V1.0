@@ -108,7 +108,7 @@ function makeState(sessionId = "codex-thread-1", explicitJobId = "") {
   return { dir, paths, ...presented, sessionId };
 }
 
-function runHook(state, payload) {
+function runHook(state, payload, extraEnv = {}) {
   const projectRoot = state.root || root;
   return spawnSync(process.execPath, [hook], {
     cwd: projectRoot,
@@ -120,6 +120,7 @@ function runHook(state, payload) {
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: state.dir,
       NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-owner-input-test",
+      ...extraEnv,
     },
     input: JSON.stringify(payload),
   });
@@ -149,7 +150,7 @@ function runShipHook(state, payload) {
     prompt: "yes",
     thread_id: state.sessionId,
     transcript_path: transcript,
-  });
+  }, { CRX_FACTORY_TEST_OWNER_DECISION_RACE: "1" });
   equal(result.status, 0, "Codex-shaped payload exits cleanly");
   ok(
     result.stdout.includes("recorded Mason's exact approval"),
@@ -158,6 +159,10 @@ function runShipHook(state, payload) {
   const snapshot = buildFactorySnapshot(state.paths);
   equal(snapshot.jobs[0].stage, "queued", "approved ticket enters queue");
   equal(snapshot.jobs[0].approvalReply, "yes", "verbatim owner reply is retained");
+  ok(
+    snapshot.factoryIntentSessions.includes("test-unrelated-lane"),
+    "owner approval survives an unrelated lane append after its snapshot was read",
+  );
   const events = readFileSync(state.paths.eventsPath, "utf8");
   ok(events.includes('"actorTool":"codex"'), "Codex surface provenance is retained");
 }

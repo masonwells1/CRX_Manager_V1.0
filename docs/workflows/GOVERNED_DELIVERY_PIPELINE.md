@@ -104,10 +104,14 @@ fingerprint before the ticket or morning decision is re-presented there.
 
 ## Pilot limits
 
-- One factory custody window at a time. From ticket drafting/presentation through queued, build,
-  verification, independent review, and the morning decision, build writes
-  and opaque helper execution from every other chat are denied, including fresh chats with no prior
-  factory intent. Native editing,
+- Up to three factory lanes may be active at once. Only `building`, `verifying`, and `in-review`
+  consume capacity; an expired or orphaned pending ticket, a queued ticket, and a job waiting for
+  owner disposition do not consume a worker slot. Every active or evidence-holding job is bound to
+  its own clean linked Git worktree; lane start rejects the shared primary checkout, and another chat
+  cannot write into or reuse that worktree. Structured mutation targets are checked across checkout
+  boundaries. Shell or opaque mutations from another chat fail closed while a nonterminal factory
+  worktree is in custody because their final destination cannot be proven. A terminal parked job keeps
+  targeted structured-write custody but does not globally block unrelated shell work. Native editing,
   MCP filesystem tools, shell file commands, redirects, Git mutation, and unknown repository scripts
   all count as writes. Inside the active lane, source changes use structured Write/Edit/apply_patch
   calls whose targets are visible to the guards. Every target is canonicalized and must stay inside
@@ -137,6 +141,14 @@ fingerprint before the ticket or morning decision is re-presented there.
 - A lane starts only from a clean checkout whose `HEAD` is the exact approved `origin/main` SHA.
   Before evidence acceptance, owner review, and closeout, the factory recomputes committed,
   working-tree, and untracked paths from that base and rejects any path outside the ticket.
+- Shared-ledger commands still use a global compare-and-swap at authorization time. Long-running
+  harness and independent-review attachments instead bind to the target job's latest event and the
+  factory pause/resume epoch, so unrelated lanes may append safely while a proof runs. Owner ticket,
+  transfer, and morning-review decisions use the same job-scoped binding, so unrelated lane activity
+  cannot discard Mason's response during repository verification. A same-job transition or any
+  pause/resume transition still invalidates the in-flight attachment or decision. Existing
+  tickets and evidence artifacts remain immutable; concurrent additions for another job are allowed,
+  but changing or removing any pre-existing protected artifact holds the factory.
 - Before any real shared-ledger append, the factory fetches canonical GitHub `main` into a new disposable bare repository using an approved absolute system Git executable, a fixed system-only executable path, an empty global configuration, disabled system configuration, and no inherited `GIT_*` variables. It extracts that exact
   reducer and its fail-closed allowlisted relative module dependencies from the trusted repository into a disposable directory, and asks that reducer
   to replay a temporary copy of the complete proposed event chain. If main cannot replay it, the
@@ -266,7 +278,8 @@ fingerprint before the ticket or morning decision is re-presented there.
   cannot land between that check and append.
 - A parked job stays terminal. Its original lane session may refresh only the plain-English behavior
   result and a nonempty blocker while keeping the stage `parked`; another session, an empty result,
-  an empty blocker, or any attempted stage advance fails closed.
+  an empty blocker, or any attempted stage advance fails closed. Drafting a revised mission ticket for
+  that same parked job clears its prior worktree custody and returns it to fresh owner approval.
 - A job becomes `live` only when authenticated Vercel inspection resolves the deployment currently
   attached to the fixed canonical production alias, that deployment is `READY`, its Git source is
   the governed repository's exact `main` commit, and a matching GitHub Production deployment has a
@@ -280,7 +293,8 @@ fingerprint before the ticket or morning decision is re-presented there.
   phrase. Negated, qualified, or ambiguous phrases such as “do not resume,” “under no
   circumstances resume,” or “I have no plans to resume” leave the hold active.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
-- Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
+- Multi-lane execution is bounded at three active lanes and retains per-job single-flight evidence,
+  separate-worktree custody, global pause/resume, and all independent release and production gates.
 
 ## Operator recovery
 

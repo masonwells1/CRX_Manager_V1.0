@@ -123,6 +123,8 @@ function appendAsActor(
     requireFactoryRunning = false,
     compatibilityReplay = null,
     isolatedLedgerAppend = null,
+    expectedJobEventHash = "",
+    expectedFactoryControlHash = "",
   } = {},
 ) {
   return appendFactoryEvent(paths, {
@@ -131,6 +133,8 @@ function appendAsActor(
     actorTool: who.actorTool,
   }, {
     expectedLastEventHash,
+    expectedJobEventHash,
+    expectedFactoryControlHash,
     requireFactoryRunning,
     compatibilityReplay,
     isolatedLedgerAppend,
@@ -437,6 +441,8 @@ function printStatus(snapshot, asJson) {
       holdReason: snapshot.holdReason,
       degraded: snapshot.degraded,
       warning: snapshot.warning,
+      activeLaneCount: snapshot.activeLaneCount,
+      maxActiveLanes: snapshot.maxActiveLanes,
       jobs: snapshot.jobs.map((job) => ({
         id: job.id,
         title: job.title,
@@ -455,7 +461,9 @@ function printStatus(snapshot, asJson) {
     }, null, 2)}\n`);
     return;
   }
-  process.stdout.write(`CRX Factory: ${snapshot.held ? "PAUSED" : "READY"} · ${snapshot.jobs.length} job(s)\n`);
+  process.stdout.write(
+    `CRX Factory: ${snapshot.held ? "PAUSED" : "READY"} · ${snapshot.jobs.length} job(s) · active ${snapshot.activeLaneCount}/${snapshot.maxActiveLanes}\n`,
+  );
   if (snapshot.warning) process.stdout.write(`Warning: ${snapshot.warning}\n`);
   for (const job of snapshot.jobs) {
     process.stdout.write(`- ${job.title} [${job.stage}] · ${job.lastActivity}\n`);
@@ -646,7 +654,11 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
         jobId,
         timestamp: now().toISOString(),
         payload: review,
-      }, who, who.expectedLastEventHash, { requireFactoryRunning: true });
+      }, who, "", {
+        expectedJobEventHash: job.terminalLedgerHash,
+        expectedFactoryControlHash: snapshot.factoryControlHash,
+        requireFactoryRunning: true,
+      });
     } catch (error) {
       try { unlinkSync(fullPath); } catch (cleanupError) {
         if (cleanupError?.code !== "ENOENT") {

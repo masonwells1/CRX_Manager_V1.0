@@ -16,6 +16,7 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -47,12 +48,19 @@ export const FACTORY_AUTHORITY_NOTICE = [
 ].join(" ");
 export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 export const ACTIVE_STAGES = new Set(["building", "verifying", "in-review"]);
+export const FACTORY_MAX_ACTIVE_LANES = 3;
 export const FACTORY_CUSTODY_STAGES = new Set([
   "needs-ticket-ok",
   "queued",
   ...ACTIVE_STAGES,
   "awaiting-morning-review",
   "approved-to-land",
+]);
+export const FACTORY_WORKTREE_CUSTODY_STAGES = new Set([
+  ...ACTIVE_STAGES,
+  "awaiting-morning-review",
+  "approved-to-land",
+  "parked",
 ]);
 export const STALE_LOCK_MS = 5 * 60 * 1000;
 export const FACTORY_CLI_PERMIT_TTL_MS = 30 * 1000;
@@ -66,6 +74,18 @@ export const FACTORY_HARNESS_ALLOWLIST = new Set([
   "verify-deps",
   "check-doc-drift",
 ]);
+
+export function sameCanonicalPath(left, right) {
+  const normalized = (value) => {
+    const resolved = path.resolve(value);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  try {
+    return normalized(realpathSync(path.resolve(left))) === normalized(realpathSync(path.resolve(right)));
+  } catch {
+    return normalized(left) === normalized(right);
+  }
+}
 export const FACTORY_HARNESS_NODE_IMAGE = "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059";
 export const FACTORY_GITHUB_REPOSITORY = "masonwells1/CRX_Manager_V1.0";
 export const FACTORY_PRODUCTION_URL = "https://croprxsolutions.app/";
@@ -147,6 +167,13 @@ function git(args, cwd, env = sanitizedRepositoryGitEnvironment()) {
 
 export function resolveRepoRoot(cwd = process.cwd()) {
   return path.resolve(git(["rev-parse", "--show-toplevel"], cwd));
+}
+
+export function isLinkedGitWorktree(cwd = process.cwd()) {
+  const repoRoot = resolveRepoRoot(cwd);
+  const commonDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--git-common-dir"], repoRoot));
+  const gitDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--absolute-git-dir"], repoRoot));
+  return !sameCanonicalPath(commonDir, gitDir);
 }
 
 export function resolveFactoryPaths(cwd = process.cwd(), env = process.env) {
@@ -2059,6 +2086,8 @@ function appendFactoryEventLocked(paths, writer, current, {
 
 export function appendFactoryEvent(paths, eventInput, {
   expectedLastEventHash = "",
+  expectedJobEventHash = "",
+  expectedFactoryControlHash = "",
   requireFactoryRunning = false,
   compatibilityReplay = null,
   isolatedCommitProbe = null,
@@ -2079,6 +2108,22 @@ export function appendFactoryEvent(paths, eventInput, {
       const previousHash = current.events.at(-1)?.eventHash || "0".repeat(64);
       if (expectedLastEventHash && previousHash !== expectedLastEventHash) {
         throw new Error("Factory state changed after this decision was presented; re-read and re-present it.");
+      }
+      if (expectedJobEventHash) {
+        const currentJobEventHash = [...current.events]
+          .reverse()
+          .find((event) => event.jobId === eventInput.jobId)?.eventHash || "0".repeat(64);
+        if (currentJobEventHash !== expectedJobEventHash) {
+          throw new Error(`Factory job ${eventInput.jobId} changed while this operation ran; re-read its current state.`);
+        }
+      }
+      if (expectedFactoryControlHash) {
+        const currentFactoryControlHash = [...current.events]
+          .reverse()
+          .find((event) => event.type === "factory-held" || event.type === "factory-resumed")?.eventHash || "0".repeat(64);
+        if (currentFactoryControlHash !== expectedFactoryControlHash) {
+          throw new Error("Factory pause/resume state changed while this operation ran; its result was not attached.");
+        }
       }
       if (requireFactoryRunning && factoryHeldFromCurrent(paths, current)) {
         throw new Error("Factory was paused before evidence attachment; the receipt was not attached.");
@@ -2660,7 +2705,7 @@ export function validateRepositoryScope(job, cwd = FACTORY_ROOT, {
   return changed;
 }
 
-function directoryContentFingerprint(root, { ignoreRelative = () => false } = {}) {
+function directoryContentManifest(root, { ignoreRelative = () => false } = {}) {
   const base = path.resolve(root);
   const listed = [];
   function visit(directory) {
@@ -2674,24 +2719,17 @@ function directoryContentFingerprint(root, { ignoreRelative = () => false } = {}
   }
   if (existsSync(base)) visit(base);
   listed.sort((left, right) => left.relative.localeCompare(right.relative));
-  const hash = createHash("sha256");
-  for (const item of listed) {
+  return listed.map((item) => {
     const info = lstatSync(item.fullPath);
-    hash.update(`path:${Buffer.byteLength(item.relative)}:${item.relative}\0`);
     if (info.isSymbolicLink()) {
       const target = readlinkSync(item.fullPath);
-      hash.update(`symlink:${Buffer.byteLength(target)}:${target}\0`);
-    } else {
-      const bytes = readFileSync(item.fullPath);
-      hash.update(`file:${bytes.length}:`);
-      hash.update(bytes);
-      hash.update("\0");
+      return { relative: item.relative, kind: "symlink", sha256: sha256(target) };
     }
-  }
-  return hash.digest("hex");
+    return { relative: item.relative, kind: "file", sha256: sha256(readFileSync(item.fullPath)) };
+  });
 }
 
-function factoryProtectedContentFingerprint(paths) {
+function factoryProtectedContentSnapshot(paths) {
   const coordinationOnly = (relative) => relative === "events.jsonl"
     || relative === "events.lock"
     || relative === "COORDINATION-MUTATION.lock"
@@ -2708,7 +2746,23 @@ function factoryProtectedContentFingerprint(paths) {
     || relative.startsWith("harness-runs/")
     || relative === "recovery"
     || relative.startsWith("recovery/");
-  return directoryContentFingerprint(paths.stateDir, { ignoreRelative: coordinationOnly });
+  return directoryContentManifest(paths.stateDir, { ignoreRelative: coordinationOnly });
+}
+
+function factoryProtectedContentUnchanged(before, after) {
+  const beforeByPath = new Map(before.map((entry) => [entry.relative, entry]));
+  const afterByPath = new Map(after.map((entry) => [entry.relative, entry]));
+  for (const [relative, expected] of beforeByPath) {
+    const actual = afterByPath.get(relative);
+    if (!actual || actual.kind !== expected.kind || actual.sha256 !== expected.sha256) return false;
+  }
+  for (const relative of afterByPath.keys()) {
+    if (beforeByPath.has(relative)) continue;
+    const legitimateConcurrentAppend = /^tickets\/[^/]+\.json$/i.test(relative)
+      || /^evidence\/[^/]+\/[^/]+\.json$/i.test(relative);
+    if (!legitimateConcurrentAppend) return false;
+  }
+  return true;
 }
 
 export function factoryReviewInputBindingRequired(events, eventIndex) {
@@ -2725,6 +2779,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
   const factoryIntents = new Map();
   let held = false;
   let holdReason = "";
+  let factoryControlHash = "0".repeat(64);
 
   for (const [eventIndex, event] of log.events.entries()) {
     if (event.type === "factory-intent") {
@@ -2739,12 +2794,14 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       validateHookOriginReceipt(paths, event);
       held = true;
       holdReason = String(event.payload.reason || "Factory paused by Mason.");
+      factoryControlHash = event.eventHash;
       continue;
     }
     if (event.type === "factory-resumed") {
       validateHookOriginReceipt(paths, event);
       held = false;
       holdReason = "";
+      factoryControlHash = event.eventHash;
       continue;
     }
     if (!event.jobId) continue;
@@ -2758,6 +2815,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       ticket: null,
       sessionId: "",
       laneSessionId: "",
+      worktree: "",
       actorTool: "",
       baseSha: "",
       approvalExpiresAt: "",
@@ -2807,6 +2865,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.evidence = [];
         job.reviews = [];
         job.laneSessionId = "";
+        job.worktree = "";
         job.baseSha = "";
         job.approvalExpiresAt = "";
         job.approvalReply = "";
@@ -2906,6 +2965,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         }
         job.stage = "building";
         job.laneSessionId = event.sessionId;
+        job.worktree = path.resolve(String(event.payload.worktree));
         break;
       case "review-presented":
         if (job.stage !== "awaiting-morning-review"
@@ -3161,6 +3221,9 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
     degraded: log.degraded,
     warning: log.warning,
     lastEventHash: log.events.at(-1)?.eventHash || "0".repeat(64),
+    factoryControlHash,
+    activeLaneCount: [...jobs.values()].filter((job) => ACTIVE_STAGES.has(job.stage)).length,
+    maxActiveLanes: FACTORY_MAX_ACTIVE_LANES,
     factoryIntentSessions: [...factoryIntents.keys()].sort(),
     jobs: [...jobs.values()].sort((a, b) => b.lastActivity.localeCompare(a.lastActivity)),
   };
@@ -3262,10 +3325,31 @@ export function validateLaneStart({
   }
   const loaded = readTicket(resolvePathsFromSnapshot(snapshot), job.ticketFile);
   if (loaded.hash !== job.ticketHash) throw new Error("Ticket bytes changed after approval.");
-  if (cwd) validateRepositoryScope(job, cwd, { requireCleanBase: true });
-  const custody = snapshot.jobs.filter((candidate) =>
-    candidate.id !== jobId && FACTORY_CUSTODY_STAGES.has(candidate.stage));
-  if (custody.length > 0) throw new Error(`Pilot allows one custody window; ${custody[0].id} is still ${custody[0].stage}.`);
+  const active = activeJobs(snapshot).filter((candidate) => candidate.id !== jobId);
+  if (active.length >= FACTORY_MAX_ACTIVE_LANES) {
+    throw new Error(
+      `Factory capacity is full: ${active.length}/${FACTORY_MAX_ACTIVE_LANES} active lanes. `
+      + `Park or finish an active job before starting ${jobId}.`,
+    );
+  }
+  if (cwd) {
+    const collision = snapshot.jobs.find((candidate) =>
+      candidate.id !== jobId
+      && FACTORY_WORKTREE_CUSTODY_STAGES.has(candidate.stage)
+      && candidate.worktree
+      && sameCanonicalPath(candidate.worktree, cwd));
+    if (collision) {
+      throw new Error(
+        `Factory job ${collision.id} already owns this worktree; start ${jobId} in a separate clean worktree.`,
+      );
+    }
+    if (!isLinkedGitWorktree(cwd)) {
+      throw new Error(
+        `Factory lane ${jobId} must start in a dedicated linked Git worktree, not the primary checkout.`,
+      );
+    }
+    validateRepositoryScope(job, cwd, { requireCleanBase: true });
+  }
   return job;
 }
 
@@ -3638,13 +3722,24 @@ export function runHarnessEvidence(paths, {
   }
   const repositoryBefore = repositoryContentFingerprint(cwd);
   const packageJsonBytes = readFileSync(path.join(cwd, "package.json"));
-  const factoryStateBefore = factoryProtectedContentFingerprint(paths);
+  const factoryStateBefore = factoryProtectedContentSnapshot(paths);
   const result = isolatedHarnessTestMode(paths, cwd)
     ? { ...runIsolatedTestHarness(cwd, scriptName), testSandbox: true }
     : runFactoryHarnessSandbox(cwd, scriptName, repositoryBefore);
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`Repository harness npm run ${scriptName} failed with exit ${result.status}.`);
+    const detail = String(result.stderr || result.stdout || "").trim().slice(-2_000);
+    if (detail) {
+      try {
+        rejectSecretBearingText(detail, "Failed harness output");
+      } catch {
+        setEmergencyFactoryHold(paths, `Harness ${scriptName} emitted secret-shaped output while failing.`);
+        throw new Error(
+          `Repository harness npm run ${scriptName} failed with exit ${result.status}; its output was suppressed because it contained credential or secret material. The factory is held for review.`,
+        );
+      }
+    }
+    throw new Error(`Repository harness npm run ${scriptName} failed with exit ${result.status}${detail ? `: ${detail}` : "."}`);
   }
   try {
     rejectSecretBearingText(result.stdout, "Harness stdout");
@@ -3654,9 +3749,9 @@ export function runHarnessEvidence(paths, {
     throw error;
   }
   const repositoryAfter = repositoryContentFingerprint(cwd);
-  const factoryStateAfter = factoryProtectedContentFingerprint(paths);
+  const factoryStateAfter = factoryProtectedContentSnapshot(paths);
   if (repositoryAfter.repositoryContentHash !== repositoryBefore.repositoryContentHash
-      || factoryStateAfter !== factoryStateBefore) {
+      || !factoryProtectedContentUnchanged(factoryStateBefore, factoryStateAfter)) {
     setEmergencyFactoryHold(paths, `Harness ${scriptName} mutated protected repository or factory-state bytes.`);
     throw new Error(`Protected repository or factory-state content changed while npm run ${scriptName} executed; the factory is held for review.`);
   }
@@ -3811,7 +3906,8 @@ export function runAndAttachHarnessEvidence(paths, {
       timestamp: now().toISOString(),
       payload: harnessEvidenceEventPayload(evidence),
     }, {
-      expectedLastEventHash: snapshot.lastEventHash,
+      expectedJobEventHash: job.terminalLedgerHash,
+      expectedFactoryControlHash: snapshot.factoryControlHash,
       requireFactoryRunning: true,
     });
     return evidence;
@@ -4397,7 +4493,7 @@ export function runIndependentReviewEvidence(paths, {
   const repositoryBefore = repositoryContentFingerprint(cwd);
   validateRepositoryScope(job, cwd);
   validateFactoryRiskClassification(job, cwd);
-  const stateBefore = factoryProtectedContentFingerprint(paths);
+  const stateBefore = factoryProtectedContentSnapshot(paths);
   const isolatedTest = env.CRX_FACTORY_TEST_MODE === "1"
     && path.resolve(cwd).toLowerCase().startsWith(`${path.resolve(tmpdir()).toLowerCase()}${path.sep}`);
   let result;
@@ -4478,7 +4574,7 @@ export function runIndependentReviewEvidence(paths, {
     git(["config", "core.autocrlf", "true"], cwd);
   }
   const repositoryAfter = repositoryContentFingerprint(cwd);
-  const stateAfter = factoryProtectedContentFingerprint(paths);
+  const stateAfter = factoryProtectedContentSnapshot(paths);
   const originMainAfter = currentOriginMain(cwd);
   if (repositoryAfter.headSha !== repositoryBefore.headSha
       || repositoryAfter.headTreeSha !== repositoryBefore.headTreeSha
@@ -4486,7 +4582,7 @@ export function runIndependentReviewEvidence(paths, {
       || repositoryAfter.repositoryCommitContentHash !== repositoryBefore.repositoryCommitContentHash
       || repositoryAfter.repositoryFileCount !== repositoryBefore.repositoryFileCount
       || originMainAfter !== baseSha
-      || stateAfter !== stateBefore) {
+      || !factoryProtectedContentUnchanged(stateBefore, stateAfter)) {
     setEmergencyFactoryHold(paths, "Independent review mutated protected repository or factory-state bytes.");
     throw new Error("Protected repository or factory-state content changed during independent review.");
   }
