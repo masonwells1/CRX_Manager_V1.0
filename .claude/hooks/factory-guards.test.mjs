@@ -939,18 +939,87 @@ function bashExecutable() {
     payload: { stage: "parked", behaviorSummary: "Landing paused.", blocker: "Tested terminal custody." },
   });
   const unrelatedWorktree = temporaryStateDir("crx-factory-parked-unrelated-");
-  const unrelatedShellWrite = run(laneHook, stateDir, {
-    thread_id: "unrelated-parked-thread",
-    tool_name: "PowerShell",
-    tool_input: { command: "Set-Content unrelated.txt allowed" },
-  }, unrelatedWorktree);
-  assertions++;
-  assert.equal(unrelatedShellWrite.stdout, "", "a terminal parked job does not globally block shell mutations in unrelated worktrees");
   denied(run(laneHook, stateDir, {
     thread_id: "unrelated-parked-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "landing.ts"), content: "forged" },
   }, unrelatedWorktree), /owns this governed worktree.*mutation targets/i, "parked custody still blocks targeted writes into its worktree");
+}
+
+{
+  const sessionId = "parked-dirty-custody-thread";
+  const stateDir = temporaryStateDir("crx-factory-parked-dirty-state-");
+  const parkedRepo = temporaryStateDir("crx-factory-parked-dirty-repo-");
+  const unrelatedWorktree = temporaryStateDir("crx-factory-parked-dirty-unrelated-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const gitEnv = { ...process.env };
+  for (const name of Object.keys(gitEnv)) {
+    if (/^GIT_/i.test(name)) delete gitEnv[name];
+  }
+  gitEnv.GIT_CONFIG_NOSYSTEM = "1";
+  gitEnv.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  const git = (args) => spawnSync("git", args, { cwd: parkedRepo, encoding: "utf8", env: gitEnv });
+  assert.equal(git(["init", "-q"]).status, 0, "parked custody fixture initializes");
+  writeFileSync(path.join(parkedRepo, "tracked.txt"), "clean\n");
+  assert.equal(git(["add", "tracked.txt"]).status, 0, "parked custody fixture stages its tracked file");
+  assert.equal(git(["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"]).status, 0, "parked custody fixture commits cleanly");
+  const baseSha = git(["rev-parse", "HEAD"]).stdout.trim();
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const ticket = writeImmutableTicket(paths, {
+    id: "parked-dirty-custody-job",
+    title: "Preserve parked local work",
+    goal: "Keep dirty parked bytes under cross-chat shell custody.",
+    definitionOfDone: ["Dirty parked bytes cannot be overwritten from another chat."],
+    mustNotChange: ["Unrelated clean worktrees."],
+    allowedPaths: ["tracked.txt"],
+    proofRequirements: ["Guard regression."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Use existing ship gates.",
+    riskAreas: [],
+  });
+  for (const event of [
+    { type: "ticket-drafted", payload: { ticketFile: ticket.filename, ticketHash: ticket.hash, ticketVersion: 1, title: ticket.ticket.title } },
+    { type: "ticket-presented", payload: { ticketHash: ticket.hash, questionText: "Approve parked custody?", questionHash: sha256("Approve parked custody?"), baseSha } },
+    { type: "ticket-approved", payload: { ticketHash: ticket.hash, questionHash: sha256("Approve parked custody?"), ownerReply: "yes", baseSha, expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "lane-started", payload: { ticketHash: ticket.hash, baseSha, worktree: parkedRepo } },
+    { type: "job-stage", payload: { stage: "parked", behaviorSummary: "Local work is parked.", blocker: "Waiting for revision." } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId: ticket.ticket.id,
+      actorTool: "codex",
+      sessionId,
+    });
+  }
+  const cleanParkedShell = run(laneHook, stateDir, {
+    thread_id: "unrelated-clean-parked-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content unrelated.txt allowed" },
+  }, unrelatedWorktree);
+  assertions++;
+  assert.equal(cleanParkedShell.stdout, "", "a clean terminal parked worktree does not globally block unrelated shell mutations");
+  writeFileSync(path.join(parkedRepo, "tracked.txt"), "dirty local work\n");
+  denied(run(laneHook, stateDir, {
+    thread_id: "unrelated-dirty-parked-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: `Set-Content -LiteralPath "${path.join(parkedRepo, "tracked.txt")}" -Value forged` },
+  }, unrelatedWorktree), /destinations cannot be custody-checked/i, "dirty parked worktrees fail closed against cross-chat shell writes");
+  assert.equal(git(["add", "tracked.txt"]).status, 0, "parked custody fixture stages its local commit");
+  assert.equal(git(["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "unpushed parked work"]).status, 0, "parked custody fixture records an unpushed local commit");
+  denied(run(laneHook, stateDir, {
+    thread_id: "unrelated-unpushed-parked-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: `Set-Content -LiteralPath "${path.join(parkedRepo, "tracked.txt")}" -Value forged` },
+  }, unrelatedWorktree), /destinations cannot be custody-checked/i, "clean parked worktrees with unpushed commits retain cross-chat shell custody");
+  rmSync(parkedRepo, { recursive: true, force: true });
+  const removedParkedShell = run(laneHook, stateDir, {
+    thread_id: "unrelated-removed-parked-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content unrelated.txt allowed" },
+  }, unrelatedWorktree);
+  assertions++;
+  assert.equal(removedParkedShell.stdout, "", "a removed parked worktree cannot recreate the global orphan shell lock");
 }
 
 {

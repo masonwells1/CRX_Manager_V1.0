@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   ACTIVE_STAGES,
+  FACTORY_GIT_EXECUTABLE,
   FACTORY_CUSTODY_STAGES,
   FACTORY_WORKTREE_CUSTODY_STAGES,
   hasFactoryIntentFailureLatch,
@@ -14,6 +15,7 @@ import {
   rejectSecretBearingText,
   resolveHookFactoryPaths,
   sameCanonicalPath,
+  sanitizedRepositoryGitEnvironment,
   validateApprovedFactoryLanding,
 } from "../../scripts/factory-state-lib.mjs";
 import { isGitPush, pushTargetsCurrentHead } from "./codex-push-lib.mjs";
@@ -577,6 +579,31 @@ const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type ||
 const paths = resolveHookFactoryPaths(projectDir);
 const intentRecordFailed = Boolean(sessionId) && hasFactoryIntentFailureLatch(paths, sessionId);
 
+function parkedWorktreeNeedsUntargetedCustody(job) {
+  const worktree = job?.worktree;
+  if (!String(worktree || "").trim() || !existsSync(worktree)) return false;
+  try {
+    const options = {
+      cwd: realpathSync(worktree),
+      env: sanitizedRepositoryGitEnvironment(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 30_000,
+    };
+    const status = execFileSync(FACTORY_GIT_EXECUTABLE, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], options);
+    if (status) return true;
+    if (!/^[a-f0-9]{40}$/i.test(String(job.baseSha || ""))) return true;
+    const unpushedCommitCount = execFileSync(
+      FACTORY_GIT_EXECUTABLE,
+      ["rev-list", "--count", `${job.baseSha}..HEAD`],
+      options,
+    ).trim();
+    return !/^0$/.test(unpushedCommitCount);
+  } catch {
+    return true;
+  }
+}
+
 let snapshot;
 try {
   snapshot = loadFactorySnapshot(paths);
@@ -610,7 +637,6 @@ const foreignWorktreeCustody = snapshot.jobs.filter((job) =>
   && job.worktree
   && (job.laneSessionId || job.sessionId) !== sessionId,
 );
-const foreignUntargetedMutationCustody = foreignWorktreeCustody.filter((job) => job.stage !== "parked");
 
 if (factoryCli) {
   if (shellEnvironmentBlock) {
@@ -652,9 +678,10 @@ if (buildMutation && targetedForeignWorktree) {
   deny(`CRX FACTORY GATE: job ${targetedForeignWorktree.id} owns this governed worktree from another chat; the mutation targets it from a different checkout.`);
 }
 if (buildMutation
-    && foreignUntargetedMutationCustody.length > 0
     && visibleMutationTargets.length === 0
-    && (shellMutation || opaqueExecution || isStructuredMutationTool(payload?.tool_name))) {
+    && (shellMutation || opaqueExecution || isStructuredMutationTool(payload?.tool_name))
+    && foreignWorktreeCustody.some((job) =>
+      job.stage !== "parked" || parkedWorktreeNeedsUntargetedCustody(job))) {
   deny("CRX FACTORY GATE: shell or opaque mutations are disabled while another chat owns a factory worktree because their destinations cannot be custody-checked. Use a structured Write/Edit/apply_patch operation with exact targets.");
 }
 if (buildMutation

@@ -4720,27 +4720,13 @@ export function validateCurrentIndependentReview(job, cwd = FACTORY_ROOT, {
   return accepted;
 }
 
-export function selectApprovedFactoryLandingCandidate(snapshot, repository, { commitish = false } = {}) {
+export function selectSoleApprovedFactoryLanding(snapshot) {
   const approved = snapshot.jobs.filter((job) => job.stage === "approved-to-land");
-  if (approved.length === 0) return { required: false };
-  if (approved.length === 1) return { required: true, job: approved[0] };
-  const matching = approved.filter((job) => {
-    const bytesMatch = commitish
-      ? repository.repositoryCommitContentHash === job.acceptedRepositoryCommitContentHash
-      : repository.repositoryContentHash === job.acceptedRepositoryContentHash
-        && repository.repositoryCommitContentHash === job.acceptedRepositoryCommitContentHash;
-    return bytesMatch && repository.repositoryFileCount === job.acceptedRepositoryFileCount;
-  });
-  if (matching.length === 0) {
-    return {
-      required: false,
-      conflictingApprovedJobIds: approved.map((job) => job.id),
-    };
+  if (approved.length === 0) return null;
+  if (approved.length !== 1) {
+    throw new Error("Factory landing is blocked because more than one job is approved to land. Park all but one before any push or merge.");
   }
-  if (matching.length !== 1) {
-    throw new Error("Factory landing is ambiguous because more than one approved job matches these repository bytes.");
-  }
-  return { required: true, job: matching[0] };
+  return approved[0];
 }
 
 export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
@@ -4749,14 +4735,11 @@ export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
   expectedBaseSha = "",
 } = {}) {
   const snapshot = loadFactorySnapshot(paths);
-  const approved = snapshot.jobs.filter((job) => job.stage === "approved-to-land");
-  if (approved.length === 0) return { required: false };
+  const job = selectSoleApprovedFactoryLanding(snapshot);
+  if (!job) return { required: false };
   const repository = commitish
     ? repositoryCommitFingerprint(cwd, commitish)
     : repositoryContentFingerprint(cwd);
-  const selection = selectApprovedFactoryLandingCandidate(snapshot, repository, { commitish: Boolean(commitish) });
-  if (!selection.required) return selection;
-  const job = selection.job;
   const authoritativeBase = expectedBaseSha || currentOriginMain(cwd);
   if (!/^[a-f0-9]{40}$/i.test(String(authoritativeBase || ""))) {
     throw new Error("The factory landing base is not an exact commit SHA.");

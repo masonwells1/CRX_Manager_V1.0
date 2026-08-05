@@ -22,10 +22,13 @@ being surfaced, and secret-shaped output is suppressed while the factory is
 held for review. The owner-facing CLI and Board report active capacity as
 `N/3`; the governed-delivery policy documents the bounded concurrency and
 worktree recovery behavior. Landing acceptance remains serialized: an atomic
-ledger check refuses a second `approved-to-land` job, while defensive matching
-prevents duplicate historical approvals from capturing unrelated repository
-pushes. This entry records the reviewed release candidate; it does not claim a
-merge or production deployment.
+ledger check refuses a second `approved-to-land` job, while duplicate historical
+approvals fail closed until reconciled. Parked worktrees with local changes also
+retain fail-closed shell custody, as do clean worktrees with unpushed commits;
+clean worktrees at their recorded base and removed parked worktrees do not globally
+block unrelated shell work. Parked jobs never consume one of the three worker slots.
+This entry records the reviewed release candidate; it does not claim a merge or
+production deployment.
 
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 

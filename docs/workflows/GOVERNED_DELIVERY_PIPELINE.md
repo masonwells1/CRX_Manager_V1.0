@@ -111,7 +111,9 @@ fingerprint before the ticket or morning decision is re-presented there.
   cannot write into or reuse that worktree. Structured mutation targets are checked across checkout
   boundaries. Shell or opaque mutations from another chat fail closed while a nonterminal factory
   worktree is in custody because their final destination cannot be proven. A terminal parked job keeps
-  targeted structured-write custody but does not globally block unrelated shell work. Native editing,
+  targeted structured-write custody; it also keeps fail-closed opaque/shell custody while its worktree
+  has local changes, unpushed commits, or cannot be verified. A clean, fully committed-at-base or
+  removed parked worktree does not globally block unrelated shell work. Native editing,
   MCP filesystem tools, shell file commands, redirects, Git mutation, and unknown repository scripts
   all count as writes. Inside the active lane, source changes use structured Write/Edit/apply_patch
   calls whose targets are visible to the guards. Every target is canonicalized and must stay inside
@@ -134,9 +136,8 @@ fingerprint before the ticket or morning decision is re-presented there.
   its preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
 - Build and review work may run in three lanes, but landing acceptance remains single-file: while one
   job is `approved-to-land`, the owner hook and locked ledger append refuse a second acceptance and
-  tell Mason to land or park the first job. If historical state contains multiple approvals, only an
-  exact matching accepted repository fingerprint receives factory landing custody; unrelated bytes
-  remain on the ordinary guarded push and merge path.
+  tell Mason to land or park the first job. Historical duplicate approvals fail closed until all but
+  one are parked; they never fall back to ordinary push or merge gates.
 - During governed operation, any explicit shell `cwd` or `workdir` must resolve to the exact
   governed repository root. Recognized factory commands are rewritten to the canonical absolute
   `scripts/factory.mjs` broker path before a permit or read-only status execution is allowed.
