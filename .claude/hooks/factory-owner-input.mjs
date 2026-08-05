@@ -18,6 +18,7 @@ import {
   resolveHookFactoryPaths,
   setEmergencyFactoryHold,
   sha256,
+  unqualifiedOwnerApproval,
   validateCurrentHarnessEvidence,
   validateCurrentIndependentReview,
 } from "../../scripts/factory-state-lib.mjs";
@@ -71,7 +72,7 @@ export function lastAssistantText(transcriptPath) {
 
 export function classifyOwnerReply(prompt) {
   const text = String(prompt || "").trim();
-  if (/^(?:yes(?:[,\s]+(?:please|ship it|go ahead|do it))?|approved|approve it|go ahead|do it)[.!]?$/i.test(text)) return "approve";
+  if (unqualifiedOwnerApproval(text)) return "approve";
   if (/^(?:no|no thanks|reject|reject it|do not proceed|don't proceed|stop)[.!]?$/i.test(text)) return "reject";
   if (/\b(?:yes|approved|approve|go ahead|do it)\b/i.test(text)
       && /\b(?:but|except|unless|only if|change|instead|without|don'?t)\b/i.test(text)) {
@@ -81,8 +82,10 @@ export function classifyOwnerReply(prompt) {
 }
 
 function looksLikeDecisionReply(prompt) {
-  return /\b(?:yes|no|approve|approved|reject|ship|proceed|okay|ok|looks?\s+good|sounds?\s+(?:good|reasonable))\b/i
-    .test(String(prompt || ""));
+  const text = String(prompt || "").trim();
+  return /\b(?:yes|yep|yeah|no|approve|approved|reject|ship|proceed|okay|ok|looks?\s+good|sounds?\s+(?:good|reasonable|right))\b/i
+    .test(text)
+    || /^sure[.!]?$/i.test(text);
 }
 
 function normalizedFactoryControlText(prompt) {
@@ -226,6 +229,9 @@ async function main() {
         ? "CRX Factory is already globally paused. The repeated pause request changed no ledger state."
         : "CRX Factory is already running. The repeated resume request changed no ledger state.");
     }
+    if (requestedHold === "resume" && controlResult.held) {
+      emit("CRX Factory recorded Mason's resume request, but remains globally paused because a newer emergency hold was detected. Tell Mason plainly that the newer hold was preserved and must be reviewed before work resumes.");
+    }
     emit(`CRX Factory ${requestedHold === "hold" ? "is now globally paused" : "has resumed"}. Tell Mason in one plain-English sentence. Existing production and destructive-action gates remain unchanged.`);
   }
 
@@ -336,6 +342,7 @@ async function main() {
         reviewQuestionHash: decision.questionHash,
         ...(disposition === "approve" ? {
           acceptedRepositoryContentHash: acceptedRepository.repositoryContentHash,
+          acceptedRepositoryCommitContentHash: acceptedRepository.repositoryCommitContentHash,
           acceptedRepositoryFileCount: acceptedRepository.repositoryFileCount,
         } : {}),
       },

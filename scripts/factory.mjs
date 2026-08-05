@@ -7,15 +7,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   APPROVAL_TTL_MS,
+  FACTORY_GIT_EXECUTABLE,
   FACTORY_GITHUB_REPOSITORY,
   FACTORY_PRODUCTION_URL,
   appendFactoryEvent,
+  appendFactoryRecoveryEvent,
   buildFactorySnapshot,
   canonicalMorningReviewQuestion,
   canonicalTicketApprovalQuestion,
   consumeFactoryCliPermit,
   currentOriginMain,
   loadFactorySnapshot,
+  readEventLog,
   recoverFactoryState,
   refreshOriginMain,
   repositoryCommitFingerprint,
@@ -23,6 +26,7 @@ import {
   resolveFactoryPaths,
   runAndAttachHarnessEvidence,
   runIndependentReviewEvidence,
+  sanitizedRepositoryGitEnvironment,
   sha256,
   validateLaneActor,
   validateLaneStart,
@@ -48,7 +52,7 @@ function usage(message = "") {
     "  node scripts/factory.mjs stage --job <id> --stage <stage> [--summary-base64 <base64-text>] [--blocker-base64 <base64-text>]",
     "  node scripts/factory.mjs evidence run --job <id> --harness <npm-script> --label <text>",
     "  node scripts/factory.mjs closeout write --job <id> --landing-commit <sha>",
-    "  node scripts/factory.mjs recover <unlock|torn-tail> --reason-base64 <base64-text>",
+    "  node scripts/factory.mjs recover <unlock|commit-gate|torn-tail> --reason-base64 <base64-text>",
     "  node scripts/factory.mjs status [--json]",
   ].join("\n") + "\n");
   process.exit(2);
@@ -115,13 +119,22 @@ function appendAsActor(
   event,
   who,
   expectedLastEventHash = who.expectedLastEventHash,
-  { requireFactoryRunning = false } = {},
+  {
+    requireFactoryRunning = false,
+    compatibilityReplay = null,
+    isolatedLedgerAppend = null,
+  } = {},
 ) {
   return appendFactoryEvent(paths, {
     ...event,
     sessionId: who.sessionId,
     actorTool: who.actorTool,
-  }, { expectedLastEventHash, requireFactoryRunning });
+  }, {
+    expectedLastEventHash,
+    requireFactoryRunning,
+    compatibilityReplay,
+    isolatedLedgerAppend,
+  });
 }
 
 function decodeBase64Text(flags, name, { maxBytes = 20_000, rejectSecrets = true } = {}) {
@@ -139,12 +152,15 @@ function decodeBase64Text(flags, name, { maxBytes = 20_000, rejectSecrets = true
   return text;
 }
 
-function git(args, cwd) {
-  return execFileSync("git", args, {
+function git(args, cwd, { encoding = "utf8" } = {}) {
+  const output = execFileSync(FACTORY_GIT_EXECUTABLE, args, {
     cwd,
-    encoding: "utf8",
+    env: sanitizedRepositoryGitEnvironment(),
+    encoding: encoding === "buffer" ? null : encoding,
     stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
+    timeout: 30_000,
+  });
+  return Buffer.isBuffer(output) ? output : output.trim();
 }
 
 function closeoutDirectory(cwd, env) {
@@ -620,7 +636,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       allowedStages: new Set(["in-review"]),
     });
     const reviewArtifact = runIndependentReviewEvidence(paths, { job, cwd, env });
-    const { fullPath, createdArtifact, ...review } = reviewArtifact;
+    const { fullPath, createdArtifact, report = "", ...review } = reviewArtifact;
     if (!createdArtifact) {
       throw new Error(`Independent-review evidence ${review.filename} already exists; refusing to attach or delete a pre-existing artifact.`);
     }
@@ -646,6 +662,10 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       reasoningEffort: review.reasoningEffort,
       verdict: review.verdict,
       sha256: review.sha256,
+      ...(review.verdict === "blockers" ? {
+        report,
+        boardEvidencePath: `/evidence/${encodeURIComponent(jobId)}/${encodeURIComponent(review.filename)}`,
+      } : {}),
     })}\n`);
     return 0;
   }
@@ -755,7 +775,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       repositoryFingerprint: landing,
     });
     if (acceptedEvidence.some((item) =>
-      item.repositoryContentHash !== landing.repositoryContentHash
+      item.repositoryCommitContentHash !== landing.repositoryCommitContentHash
       || Number(item.repositoryFileCount) !== landing.repositoryFileCount)) {
       throw new Error("Landing commit does not contain the exact repository content bound to the accepted harness proof.");
     }
@@ -770,11 +790,7 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
       }
       let landedPacket;
       try {
-        landedPacket = execFileSync("git", ["show", `origin/main:${relativePacket}`], {
-          cwd,
-          encoding: "buffer",
-          stdio: ["ignore", "pipe", "ignore"],
-        });
+        landedPacket = git(["show", `origin/main:${relativePacket}`], cwd, { encoding: "buffer" });
       } catch {
         throw new Error("The exact closeout packet must be committed and contained in origin/main before live.");
       }
@@ -902,21 +918,78 @@ export async function runFactoryCli(argv = process.argv.slice(2), {
     return 0;
   }
 
-  if (group === "recover" && ["unlock", "torn-tail"].includes(action)) {
-    const who = actor(paths, flags, env, now().getTime(), { recovery: true });
+  if (group === "recover" && ["unlock", "commit-gate", "torn-tail"].includes(action)) {
+    const commandNow = now();
+    const who = actor(paths, flags, env, commandNow.getTime(), { recovery: true });
     const reason = decodeBase64Text(flags, "reason-base64");
-    const recovered = recoverFactoryState(paths, { mode: action, reason, nowMs: now().getTime() });
-    const recoveredSnapshot = loadFactorySnapshot(paths, { nowMs: now().getTime() });
-    appendAsActor(paths, {
-      type: "factory-recovered",
-      jobId: null,
-      timestamp: now().toISOString(),
-      payload: {
-        mode: recovered.mode,
-        reason,
-        backup: path.basename(recovered.backup),
-      },
-    }, who, recoveredSnapshot.lastEventHash);
+    let recoveryNowMs = commandNow.getTime();
+    if (env.CRX_FACTORY_TEST_RECOVERY_NOW_MS) {
+      const configuredState = env.CRX_FACTORY_TEST_STATE_DIR ? path.resolve(env.CRX_FACTORY_TEST_STATE_DIR) : "";
+      const tempRoot = `${path.resolve(tmpdir()).toLowerCase()}${path.sep}`;
+      const requestedNow = Number(env.CRX_FACTORY_TEST_RECOVERY_NOW_MS);
+      if (env.CRX_FACTORY_TEST_MODE !== "1"
+          || !configuredState.toLowerCase().startsWith(tempRoot)
+          || path.resolve(paths.stateDir) !== configuredState
+          || !Number.isSafeInteger(requestedNow)) {
+        throw new Error("CRX_FACTORY_TEST_RECOVERY_NOW_MS is restricted to an isolated temporary Factory state.");
+      }
+      recoveryNowMs = requestedNow;
+    }
+    const recovered = recoverFactoryState(paths, { mode: action, reason, nowMs: recoveryNowMs });
+    let publication = null;
+    if (!publication) {
+      const publicationFailurePhase = env.CRX_FACTORY_TEST_MODE === "1"
+        ? String(env.CRX_FACTORY_TEST_RECOVERY_PUBLICATION_FAIL_PHASE || "")
+        : "";
+      if (publicationFailurePhase === "snapshot") throw new Error("Test-only recovery snapshot interruption.");
+      const recoveredSnapshot = loadFactorySnapshot(paths, { nowMs: recoveryNowMs });
+      const eventInput = {
+        ...(recovered.recoveryEventId ? { eventId: recovered.recoveryEventId } : {}),
+        type: "factory-recovered",
+        jobId: null,
+        timestamp: new Date(recoveryNowMs).toISOString(),
+        payload: {
+          mode: recovered.mode,
+          reason: recovered.reason,
+          backup: path.basename(recovered.backup),
+          ...(recovered.recoveryId ? { recoveryId: recovered.recoveryId } : {}),
+        },
+      };
+      if (recovered.recoveryEventId) {
+        publication = appendFactoryRecoveryEvent(paths, recovered, {
+          ...eventInput,
+          sessionId: who.sessionId,
+          actorTool: who.actorTool,
+        }, {
+          expectedLastEventHash: recoveredSnapshot.lastEventHash,
+          compatibilityReplay: publicationFailurePhase === "compatibility"
+            ? () => { throw new Error("Test-only recovery compatibility interruption."); }
+            : null,
+          isolatedLedgerAppend: publicationFailurePhase === "append"
+            ? () => { throw new Error("Test-only recovery ledger-append interruption."); }
+            : null,
+          isolatedRecoveryPublicationProbe: publicationFailurePhase === "archive-tamper"
+            ? (candidate) => { writeFileSync(candidate.backup, "test-only tampered recovery archive\n"); }
+            : null,
+        });
+      } else {
+        publication = appendAsActor(paths, {
+          ...eventInput,
+          type: "factory-recovered",
+        }, who, recoveredSnapshot.lastEventHash, {
+          compatibilityReplay: publicationFailurePhase === "compatibility"
+            ? () => { throw new Error("Test-only recovery compatibility interruption."); }
+            : null,
+          isolatedLedgerAppend: publicationFailurePhase === "append"
+            ? () => { throw new Error("Test-only recovery ledger-append interruption."); }
+            : null,
+        });
+      }
+      if (publicationFailurePhase === "after-append") throw new Error("Test-only recovery post-append interruption.");
+    }
+    if (env.CRX_FACTORY_TEST_MODE === "1" && env.CRX_FACTORY_TEST_RECOVERY_PUBLICATION_FAIL_PHASE === "output") {
+      throw new Error("Test-only recovery output interruption.");
+    }
     process.stdout.write(`FACTORY RECOVERED — ${action}; backup ${recovered.backup}\n`);
     return 0;
   }
