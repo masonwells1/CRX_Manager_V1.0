@@ -464,6 +464,39 @@ try {
         }
       }
     }
+    // One remote may carry SEVERAL push URLs. `git remote -v` prints every one,
+    // but `git remote get-url --push` prints only the first, so resolving without
+    // `--all` compared two verified URLs against one resolved URL and refused a
+    // destination that was entirely correct.
+    {
+      const extraPushUrl = 'https://github.com/masonwells1/CRX_Backups.git';
+      try {
+        // TWO entries, not one. The first `--add --push` only converts the
+        // remote's single `url` into one `pushurl`, which `get-url --push`
+        // reports correctly either way — the counts diverge only from the second
+        // entry onward, so a one-entry fixture passes without the fix.
+        for (const attempt of [1, 2]) {
+          assert.equal(
+            spawnSync(
+              "git",
+              ["-C", backupRepo, "remote", "set-url", "--add", "--push", "origin", extraPushUrl],
+              { encoding: "utf8", env: cleanEnv },
+            ).status,
+            0,
+            `test fixture: could not add push URL ${attempt}`,
+          );
+        }
+        eq(
+          quiet(() => stage(path.join(backupRepo, "claude-memory-multi-pushurl"), notes)), 0,
+          "a remote with several approved push URLs is not mistaken for a redirect",
+        );
+      } finally {
+        spawnSync("git", ["-C", backupRepo, "remote", "set-url", "--delete", "--push", "origin", extraPushUrl], {
+          encoding: "utf8", env: cleanEnv,
+        });
+      }
+    }
+
     // The 2026-08-04 relaxation itself. A rewrite that does not touch the backup
     // URL leaves the resolved push address identical, so the run proceeds — this
     // is the case the removed blanket ban denied, and denying it made the runbook

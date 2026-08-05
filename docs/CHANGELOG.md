@@ -2,6 +2,52 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — CodeRabbit second review round on PR #313 — BRANCH
+
+Three findings on the previous round's fixes. Two were defects introduced by
+those fixes.
+
+**`backup-claude-memory.mjs` false refusal on multiple push URLs.** The new
+resolved-vs-verified comparison called `git remote get-url --push <remote>`,
+which prints only the FIRST push URL, while `git remote -v` prints every one. A
+remote carrying two approved `pushurl` entries produced two verified URLs
+against one resolved URL, so the sets disagreed and the backup was refused —
+a false refusal of a correct destination, precisely the failure this check
+exists to avoid creating. Now uses `--push --all`. Reproduced against real git
+first, and the regression test was verified failing without the flag. Note the
+fixture needs TWO added entries: the first `--add --push` only converts the
+remote's single `url` into one `pushurl`, which resolves correctly either way,
+so a one-entry fixture passes without the fix and proves nothing.
+
+**`CustomerDetail` ref mutated during render.** `currentIdRef.current = id` ran
+in the render body. React may replay or discard a render, so a discarded render
+could publish a customer id that was never committed. Moved into a
+`useLayoutEffect`, which commits before the passive data-loading effects, so the
+ref is always the committed route by the time any fetch reads it.
+
+**`CustomerDetail` route session not fully scoped.** Guarding the in-flight
+snapshot stopped the previous customer being installed over the new one, but two
+gaps remained. The previous customer stayed *on screen* — name, fields,
+addresses, row version — until the new snapshot landed, so editing looked like
+editing the new customer while every field belonged to the last. That state is
+now dropped on a committed id change and the loading skeleton shows until the
+real record arrives. Separately, a save issued for customer A and answered after
+navigating to B applied A's post-save handling to B's session: its row version,
+conflict dialog, success toast, and an address reload that pulled A's addresses
+into B. That work is now skipped when the route has moved on, while the
+idempotency key is still released and `saving` still clears — leaving either
+would wedge the next save.
+
+The save test needed strengthening before it proved anything: with the guard
+disabled it still passed, because the cleared row version diverted the stale
+save into the recovery path rather than the success path. It now asserts on what
+actually leaks — customer A's stale-save conflict dialog appearing over customer
+B, demanding a Reload of a record never touched — and was verified failing
+without the guard.
+
+346 tests across 45 page suites, backup suite 235 assertions, all 22 hook
+suites, typecheck and lint clean.
+
 ## 2026-08-04 — CodeRabbit review round on PR #313 — BRANCH
 
 Five findings, all verified against the code before acting; none dismissed.

@@ -500,7 +500,13 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
     }
     const resolvedPushUrls = [];
     for (const remoteName of String(remoteList.stdout || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
-      const resolved = git(["remote", "get-url", "--push", remoteName]);
+      // `--all` matters: without it git prints only the FIRST push URL, while
+      // `remote -v` above prints every one. A remote carrying two approved
+      // `pushurl` entries then produced two verified URLs against one resolved
+      // URL and the set comparison refused a destination that was entirely
+      // correct — a false refusal of the ordinary backup, which is the failure
+      // mode this whole check exists to avoid creating.
+      const resolved = git(["remote", "get-url", "--push", "--all", remoteName]);
       if (resolved.status !== 0) {
         return (
           `FAIL: refusing to ${verb} — git could not resolve the effective push URL for remote\n` +

@@ -387,6 +387,59 @@ describe('CustomerDetail stale whole-record save', () => {
     expect(screen.queryByDisplayValue('Original Farm')).not.toBeInTheDocument();
   });
 
+  it('does not land a save for the previous customer on the one now open', async () => {
+    // Saving customer 1 and navigating to customer 2 before the RPC answers. Every
+    // post-save step belongs to customer 1 — its row version, its success toast,
+    // its address reload — so none of it may apply to customer 2's session.
+    let releaseSave!: (value: { data: unknown; error: unknown }) => void;
+    const savePending = new Promise<{ data: unknown; error: unknown }>((resolve) => { releaseSave = resolve; });
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 3, crops: [], default_commission_split: null }
+      : { ...original, id: 'customer-1' });
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'customers') return query({ data: [], error: null });
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+      const result = () => Promise.resolve({ data: record(requested), error: null });
+      chain.maybeSingle = () => result();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => result().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => result().catch(reject);
+      chain.finally = (callback: () => void) => result().finally(callback);
+      return chain;
+    });
+    mockRpc.mockImplementation(() => savePending);
+
+    renderDetailWithCustomerSwitch();
+    const farmName = await screen.findByDisplayValue('Original Farm');
+    fireEvent.change(farmName, { target: { value: 'Edited While Leaving' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+    expect(await screen.findByDisplayValue('Second Farm')).toBeInTheDocument();
+
+    releaseSave({ data: { customer_id: 'customer-1', row_version: 5 }, error: null });
+
+    await waitFor(() => expect(screen.getByDisplayValue('Second Farm')).toBeInTheDocument());
+    // The strongest signal: customer 1's row version is gone with its session, so
+    // ungated post-save handling resolves the returned token against nothing,
+    // decides it cannot prove ownership, and raises customer 1's stale-save
+    // conflict dialog over customer 2 — demanding a Reload of a record that was
+    // never touched. Neither that dialog nor its warning belongs here.
+    expect(screen.queryByRole('button', { name: 'Reload Customer' })).not.toBeInTheDocument();
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Customer updated');
+    expect(mockToast).not.toHaveBeenCalledWith(
+      'warning',
+      'Customer saved, but its save-protection version could not be confirmed. Reload before editing or saving it again.',
+    );
+    expect(screen.queryByDisplayValue('Edited While Leaving')).not.toBeInTheDocument();
+    // Save must be usable again on customer 2 rather than stuck from customer 1's run.
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled();
+  });
+
   it('keeps the committed crop but clears a jumped 4-to-6 token and requires recovery before a whole-record save', async () => {
     let customerReads = 0;
     mockFrom.mockImplementation((table: string) => {

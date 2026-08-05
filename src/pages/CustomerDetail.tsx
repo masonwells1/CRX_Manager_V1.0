@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList, Zap, SprayCan, PhoneCall } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -175,8 +175,16 @@ export default function CustomerDetail() {
   // A's reads are in flight would otherwise let A install its customer, addresses and
   // row version over B — and the next save would then write A's form payload to B's
   // id under A's row version.
+  // Written in a layout effect, never during render: React may replay or discard
+  // a render, and a discarded render's write would publish a customer id that was
+  // never committed — leaving in-flight reads comparing against a route the user
+  // is not on. A layout effect runs on commit and before the data-loading passive
+  // effects below, so the ref is always the committed route by the time any fetch
+  // that reads it starts.
   const currentIdRef = useRef(id);
-  currentIdRef.current = id;
+  useLayoutEffect(() => {
+    currentIdRef.current = id;
+  }, [id]);
 
   const fetchCustomerSnapshot = useCallback(async (requireStableRowVersion = false): Promise<boolean> => {
     if (!id) return false;
@@ -341,6 +349,26 @@ export default function CustomerDetail() {
     // Without this reset the financials tab short-circuits on the cached flag and
     // renders the PREVIOUS customer's AR aging, statement and prepay credits.
     financialsFetched.current = false;
+
+    // The PRIMARY record needs the same invalidation, not just the tabs. Guarding
+    // the in-flight writes stops the previous customer being installed over this
+    // one, but on its own it still leaves that customer on screen — name, form
+    // fields, addresses, row version — until the new snapshot lands. Editing then
+    // looks like editing this customer while every field belongs to the last one.
+    // Drop it and show the loading skeleton until the real record arrives.
+    // `isNew` is exempt: there is nothing to load and the blank form IS the state.
+    if (isNew) return;
+    setCustomer({});
+    setAddresses([]);
+    setCrops([]);
+    setParentName('');
+    customerRowVersionRef.current = null;
+    loadedDefaultSplitRef.current = null;
+    defaultSplitTouchedRef.current = false;
+    initialLoadDone.current = false;
+    setIsDirty(false);
+    setLoading(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const fetchTabData = useCallback(async (selectedTab: string) => {
@@ -695,6 +723,20 @@ export default function CustomerDetail() {
         p_performed_by: profile?.id as string,
         p_idempotency_key: idemKey,
       });
+
+      // The route can change while this RPC is in flight. Everything below belongs
+      // to the customer that was saved — its row version, dirty flag, conflict
+      // dialog, success toast and the address reload that would pull ITS addresses
+      // into whatever is on screen now. None of it may land on a different
+      // customer's session. Two things still run, because they describe this
+      // component rather than that customer: the idempotency key is released (the
+      // save did commit, and reusing its key would collide on the next one) and
+      // `saving` clears (leaving it set would wedge the Save button for good).
+      if (currentIdRef.current !== id) {
+        if (!error) resetSaveCustomerIdempotencyKey();
+        setSaving(false);
+        return;
+      }
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.CUSTOMER_STALE_WRITE)
