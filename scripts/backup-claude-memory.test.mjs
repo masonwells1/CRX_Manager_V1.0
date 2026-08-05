@@ -486,6 +486,20 @@ try {
             `test fixture: could not add push URL ${attempt}`,
           );
         }
+        // Prove the fixture actually built the multi-destination state this
+        // case claims to test, rather than silently collapsing to one entry.
+        // (CodeRabbit asked for two DISTINCT URLs; distinct spellings would
+        // test URL equivalence, which is a different function's job. What this
+        // case needs is >1 effective push destination, all approved.)
+        const effective = spawnSync(
+          "git", ["-C", backupRepo, "remote", "get-url", "--push", "--all", "origin"],
+          { encoding: "utf8", env: cleanEnv },
+        ).stdout.trim().split("\n").filter(Boolean);
+        eq(effective.length, 2, "test fixture: the remote must report two effective push URLs");
+        assert.ok(
+          effective.every((url) => url === extraPushUrl),
+          "test fixture: every effective push URL must be the approved backup repo",
+        );
         eq(
           quiet(() => stage(path.join(backupRepo, "claude-memory-multi-pushurl"), notes)), 0,
           "a remote with several approved push URLs is not mistaken for a redirect",

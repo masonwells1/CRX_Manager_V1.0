@@ -2,37 +2,77 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-05 — Two holes in the destination-identity comparison — BRANCH
+## 2026-08-05 — Replaced destination identity with a gate-decision comparison — BRANCH
 
-Both reviewers ran against the fix above and each found a real hole in it. Both
-were introduced by that fix: the raw-text comparison it replaced would have
-caught either one.
+Five review rounds found five distinct holes in the same helper, and every fix
+sprang the next leak. The helper answered "are these two URLs the same
+repository?" — a question with no reliable string answer:
 
-**CodeRabbit, P1 — the port was invisible.** `canonicalRepoId` reads
-`URL.hostname`, which drops the port, so
-`https://github.com:8443/owner/repo` canonicalized identically to the real
-repository. A rewrite that moved only the port read as no change while git would
-contact a different endpoint. Reproduced before fixing. A non-default port now
-has no canonical form and falls back to raw text, which differs and denies; an
-explicitly written DEFAULT port (`:443`, `:22`) still compares equal, so ordinary
-pushes are not newly denied. The scp-style spelling cannot carry a port at all —
-`git@host:2222/owner/repo` puts the digits in the path, changing the repository
-id, which was already caught.
+- **Port invisible** (CodeRabbit) — `URL.hostname` drops the port, so
+  `github.com:8443/owner/repo` canonicalized identically to the real repository.
+- **Namespace collision** (Codex) — canonical keys and the raw fallback shared a
+  spelling, so a bare `github.com/owner/repo` token compared equal to the
+  canonical key of `https://github.com/owner/repo`.
+- **Lowercased path** (CodeRabbit) — folding the whole path merged `Team/Repo`
+  with `team/repo`, which are different repositories on a case-sensitive server.
+- **Dropped SSH user** (Codex) — `alice@host:repo` and `bob@host:repo`
+  canonicalized identically, though a relative path resolves under a different
+  account.
+- Plus the original SSH-spelling gap that started the sequence.
 
-**Codex, P2 — the fallback shared a namespace with the keys.** A canonical key is
-spelled exactly like an ordinary raw string (`github.com/owner/repo`). The
-literal-URL comparison returned the canonical key on success and the raw text on
-failure, into the same namespace — so a bare `github.com/owner/repo` token, which
-has no canonical form, compared EQUAL to the canonical key of
-`https://github.com/owner/repo`, and a rewrite between those two read as no
-change. Both outcomes are now tagged (`id `/`raw `), which makes the collision
-unrepresentable rather than merely unlikely — the same discipline
-`canonicalPushDestinations` already used for its own fallback.
+Mason's call: stop patching and change the question. The first attempt went too
+far in that direction — it compared ONLY the boolean "is this destination the
+guarded production repo", on the theory that a port, path case, or SSH user
+could differ freely as long as neither side was production.
 
-Re-verified end to end after both: ordinary pushes still allowed on all three
-remote spellings, and rewrites to a different repository, a different host, plain
-http, a loopback proxy, a non-default port, plus any main-bound push, all still
-deny. All 22 hook suites, the Codex production-action-guard suite, and
+**That version was fail-open, and running the real guard proved it.** Two
+reasons, both invisible to the unit tests:
+
+1. `urlIsGuardedApp` is **path-only by design** — it gates on `owner/repo`
+   whatever host precedes it, so an SSH alias or mirror of the production repo
+   still gates. Correct for gating; wrong for comparison. It returns `true` for
+   `https://evil.example.com/masonwells1/CRX_Manager_V1.0`, so a rewrite moving
+   the push to another HOST folded to `guarded-app` on both sides, the
+   comparison saw no change, and the push was **allowed**. Failing closed in the
+   classifier fails OPEN in a comparison built on it.
+2. A feature-branch push is not gated at all, so this comparison is the only
+   thing between an inherited rewrite and the objects landing elsewhere.
+   "Neither side is production" does not mean nothing was lost.
+
+The shipped design carries **both** halves: the gate classification and a
+spelling key. Spelling collapses in exactly one place — GitHub, whose repository
+paths are genuinely case-insensitive and whose alternate hostnames GitHub itself
+publishes. That covers the case this rework exists for (a credential proxy
+re-spelling `git@github.com:owner/repo` as `https://github.com/owner/repo`).
+Everywhere else the key is the raw URL text, so a changed host, path case, SSH
+login user, or port all differ and deny.
+
+Both reviewers were right and were asking for the same boundary from opposite
+sides — CodeRabbit that a lowercased path merges `Team/Repo` with `team/repo`,
+Codex that a dropped SSH user merges `alice@host:repo` with `bob@host:repo`.
+Neither is possible now, because off GitHub nothing is normalized at all. The
+cost is a false *denial* if a proxy re-spells a non-GitHub remote: the safe
+direction, not applicable to this repo, and the deny message names the lookup
+that disagreed.
+
+Verified by running the real hook against a real repo under real inherited
+`GIT_CONFIG_*`: 8 cases — ordinary branch push clean and under the web-session
+rewrite (both allowed), redirects to another repo and another host, pushes to
+`main` clean and rewritten, a force push, and an inline `-c` push (all denied).
+That harness is what caught the off-host hole; it also caught a bad fixture in
+its own first draft, where an `insteadOf` value carried a `.git` suffix the
+remote URL lacks, so the rewrite never matched and the test proved nothing.
+
+Writing the tests immediately caught a fail-open bug in the new code: splitting
+the line on whitespace put the literal `(push)` marker into the URL slot when a
+URL was missing, classifying a malformed line as `unrelated` — failing open on
+exactly the input that must fail closed. Now parsed by line shape, with an
+explicit test.
+
+Re-verified end to end: ordinary pushes still allowed on all three remote
+spellings, and rewrites to a different repository, a different host, plain http,
+a loopback proxy, a non-default port, plus any main-bound push, all still deny.
+All 22 hook suites, the Codex production-action-guard suite, and
 `test:agent-workflows` pass.
 
 ## 2026-08-05 — Codex review of PR #313: the push-guard fix was half-done — BRANCH

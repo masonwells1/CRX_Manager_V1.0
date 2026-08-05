@@ -252,7 +252,16 @@ export default function CustomerDetail() {
     setAddresses(loadedAddresses);
     setParentName('');
     setLoading(false);
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
+    // Superseded-guarded like every other deferred write in this loader. The
+    // flag is deliberately set a macrotask late, so a route change can land in
+    // the gap: without this check, customer A's timer re-arms the flag after
+    // the route-change effect cleared it, and customer B's freshly loaded
+    // snapshot is then marked dirty — an unsaved-changes prompt on a record
+    // nobody edited. (CodeRabbit, PR #313.)
+    setTimeout(() => {
+      if (isSuperseded()) return;
+      initialLoadDone.current = true;
+    }, 0);
 
     // Parent display text is auxiliary to the editable customer/address
     // snapshot, so a parent lookup failure cannot discard this complete reload.
@@ -327,8 +336,14 @@ export default function CustomerDetail() {
     if (!isNew && id) {
       void fetchCustomerSnapshot();
     } else {
-      // New customer — mark ready immediately
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
+      // New customer — mark ready immediately. Same deferred-flag hazard as the
+      // snapshot loader above: navigating from /customers/new to an existing
+      // customer while this timer is pending would otherwise re-arm the flag
+      // and mark that customer's loaded snapshot dirty.
+      setTimeout(() => {
+        if (currentIdRef.current !== id) return;
+        initialLoadDone.current = true;
+      }, 0);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isNew, fetchCustomerSnapshot]);

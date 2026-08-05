@@ -47,8 +47,7 @@ import {
   environmentCarriesConfigOverride,
   rewritesReachGuardedApp,
   riskyFiles,
-  equivalentDestinationKey,
-  canonicalPushDestinations,
+  pushDestinationDecisions,
   divergentPushLookups,
 } from "./codex-push-lib.mjs";
 
@@ -72,128 +71,111 @@ for (const option of ["--no-optional-locks", "--paginate", "--bare", "--glob-pat
 }
 assert.deepEqual(unknownGitGlobalOptions("git -C /repo push origin main"), [], "supported -C remains inspectable");
 
-// 2026-08-05 (Codex review of the 2026-08-04 change): comparing `remote -v` as raw
-// text left the original bug half-fixed. A credential proxy's rewrite re-spells the
-// SSH form as HTTPS for the SAME repository, so the scrubbed and ambient reads
-// differ as strings and every SSH-remote checkout in a web session was still denied
-// — reproduced before fixing. Destinations therefore compare by repository
-// identity, and only across transports git reaches the same repo with.
+// Reworked 2026-08-05 (Mason's call). Deriving "same repository" from URL text
+// sprang a new leak every review round: an SSH re-spelling gap, a dropped port, a
+// key/raw namespace collision, a lowercased path merging `Team/Repo` with
+// `team/repo`, and an SSH login user that changed which account a relative path
+// resolved under. The gate never needed that question. It needs one boolean — is
+// this destination the guarded production repository. These cases pin the
+// behaviour AND the reason each former leak stopped mattering.
 {
   const APP_HTTPS = "https://github.com/masonwells1/CRX_Manager_V1.0.git";
-  const APP_SSH = "git@github.com:masonwells1/CRX_Manager_V1.0.git";
+  const APP_SCP = "git@github.com:masonwells1/CRX_Manager_V1.0.git";
   const APP_SSH_URL = "ssh://git@github.com/masonwells1/CRX_Manager_V1.0.git";
+  const OTHER = "https://github.com/masonwells1/SomethingElse.git";
+  const line = (url, name = "origin") => `${name}\t${url} (push)\n`;
+
+  // Anchor: the decision is a real value, not vacuously identical everywhere.
+  // Both halves are pinned — the gate classification AND the spelling key —
+  // because an implementation that returned a constant would satisfy every
+  // equal/notEqual assertion below on its own (CodeRabbit, 2026-08-05).
   assert.equal(
-    equivalentDestinationKey(APP_HTTPS), equivalentDestinationKey(APP_SSH),
-    "the https and scp-style spellings of one repository are one destination",
+    pushDestinationDecisions(line(APP_HTTPS)),
+    "origin guarded-app github github.com/masonwells1/crx_manager_v1.0",
   );
   assert.equal(
-    equivalentDestinationKey(APP_SSH_URL), equivalentDestinationKey(APP_HTTPS),
-    "so is the ssh:// spelling",
+    pushDestinationDecisions(line(OTHER)),
+    "origin unrelated github github.com/masonwells1/somethingelse",
   );
-  assert.notEqual(
-    equivalentDestinationKey("https://github.com/masonwells1/Elsewhere.git"),
-    equivalentDestinationKey(APP_HTTPS), "a different repository is a different destination",
-  );
-  assert.notEqual(
-    equivalentDestinationKey("https://evil.invalid/masonwells1/CRX_Manager_V1.0.git"),
-    equivalentDestinationKey(APP_HTTPS), "same path on another host is a different destination",
-  );
-  // Anything outside the sanctioned transports has NO canonical form, so it can
-  // never compare equal to a spelling that does — it falls back to raw text and
-  // denies. A downgrade to plain http and a proxy interception both land here.
-  for (const unsanctioned of [
-    "http://github.com/masonwells1/CRX_Manager_V1.0.git",
-    "http://local_proxy@127.0.0.1:41729/git/masonwells1/CRX_Manager_V1.0.git",
-    "git://github.com/masonwells1/CRX_Manager_V1.0.git",
-    "relay://github.com/masonwells1/CRX_Manager_V1.0.git",
-    "/srv/local/CRX_Manager_V1.0.git",
-    "",
-  ]) {
-    assert.equal(equivalentDestinationKey(unsanctioned), null, `${unsanctioned || "(empty)"} has no canonical destination`);
+
+  // The regression this whole change exists for: a credential proxy re-spelling
+  // the remote must not read as a redirect.
+  for (const [label, spelling] of [["scp-style", APP_SCP], ["ssh://", APP_SSH_URL]]) {
+    assert.equal(
+      pushDestinationDecisions(line(spelling)), pushDestinationDecisions(line(APP_HTTPS)),
+      `the ${label} spelling of the production repo is the same decision`,
+    );
   }
 
-  const verbose = (url) => `origin\t${url} (fetch)\norigin\t${url} (push)\n`;
-  assert.equal(
-    canonicalPushDestinations(verbose(APP_SSH)), canonicalPushDestinations(verbose(APP_HTTPS)),
-    "the re-spelled remote is not a redirect",
-  );
+  // A rewrite that turns an unrelated destination into production flips the
+  // boolean and denies. This is the case the comparison exists to catch.
   assert.deepEqual(
     divergentPushLookups(
-      { remotes: `ok:${canonicalPushDestinations(verbose(APP_SSH))}` },
-      { remotes: `ok:${canonicalPushDestinations(verbose(APP_HTTPS))}` },
-    ), [], "so the ordinary web/mobile push is allowed through",
-  );
-  assert.deepEqual(
-    divergentPushLookups(
-      { remotes: `ok:${canonicalPushDestinations(verbose(APP_SSH))}` },
-      { remotes: `ok:${canonicalPushDestinations(verbose("https://evil.invalid/masonwells1/CRX_Manager_V1.0.git"))}` },
-    ), ["remotes"], "a rewrite that moves the destination still denies",
-  );
-  // Only the PUSH line decides where objects go; a fetch-only difference is not a
-  // redirect, and remote ordering is not one either.
-  assert.equal(
-    canonicalPushDestinations(`origin\t${APP_SSH} (fetch)\norigin\t${APP_HTTPS} (push)\n`),
-    canonicalPushDestinations(verbose(APP_HTTPS)),
-    "the fetch line does not participate",
-  );
-  assert.equal(
-    canonicalPushDestinations(`a\t${APP_HTTPS} (push)\nb\t${APP_SSH} (push)\n`),
-    canonicalPushDestinations(`b\t${APP_SSH} (push)\na\t${APP_HTTPS} (push)\n`),
-    "remote ordering is not a redirect",
-  );
-  // The remote NAME is part of the answer: the same repository reached under a
-  // different remote name is a different push target for a bare `git push`.
-  assert.notEqual(
-    canonicalPushDestinations(`origin\t${APP_HTTPS} (push)\n`),
-    canonicalPushDestinations(`upstream\t${APP_HTTPS} (push)\n`),
-    "a renamed remote is not silently equated",
+      { remotes: `ok:${pushDestinationDecisions(line(OTHER))}` },
+      { remotes: `ok:${pushDestinationDecisions(line(APP_HTTPS))}` },
+    ), ["remotes"], "an unrelated destination becoming production denies",
   );
 
-  // 2026-08-05, CodeRabbit P1 on the commit above. `canonicalRepoId` reads
-  // `URL.hostname`, which drops the port — so a rewrite that moved ONLY the port
-  // canonicalized identically and read as no change, while git would contact a
-  // different endpoint. A non-default port therefore has no canonical form.
-  assert.equal(
-    equivalentDestinationKey("https://github.com:8443/masonwells1/CRX_Manager_V1.0.git"), null,
-    "a non-default https port is a different endpoint, not the same destination",
-  );
-  assert.equal(
-    equivalentDestinationKey("ssh://git@github.com:2222/masonwells1/CRX_Manager_V1.0.git"), null,
-    "a non-default ssh port is a different endpoint too",
-  );
-  // The DEFAULT port written out explicitly is the same endpoint, so it must not
-  // start denying ordinary pushes — the failure mode this whole change exists for.
-  assert.equal(
-    equivalentDestinationKey("https://github.com:443/masonwells1/CRX_Manager_V1.0.git"),
-    equivalentDestinationKey(APP_HTTPS), "an explicit :443 is still plain https",
-  );
-  assert.equal(
-    equivalentDestinationKey("ssh://git@github.com:22/masonwells1/CRX_Manager_V1.0.git"),
-    equivalentDestinationKey(APP_SSH_URL), "an explicit :22 is still plain ssh",
-  );
-  assert.deepEqual(
-    divergentPushLookups(
-      { remotes: `ok:${canonicalPushDestinations(verbose(APP_SSH))}` },
-      { remotes: `ok:${canonicalPushDestinations(verbose("https://github.com:8443/masonwells1/CRX_Manager_V1.0.git"))}` },
-    ), ["remotes"], "a rewrite that only moves the port still denies",
+  // Off GitHub nothing is normalised, so every one of these rewrites DENIES.
+  // An earlier round of this change argued the opposite — that both sides being
+  // unrelated meant no decision changed, so the differing text did not matter.
+  // That was wrong twice over. A feature-branch push is not gated at all, so this
+  // comparison is the ONLY thing standing between an inherited rewrite and the
+  // objects landing somewhere else; and `urlIsGuardedApp` is path-only by design,
+  // so the off-host case did not even reach the "both unrelated" branch — it read
+  // as production on BOTH sides and sailed through. Verified against the real
+  // guard, not just this function.
+  for (const [label, before, after] of [
+    // CodeRabbit, 2026-08-05: git paths are not universally case-insensitive.
+    ["path case on a case-sensitive host", "https://git.example.com/Team/Repo.git", "https://git.example.com/team/repo.git"],
+    // Codex, 2026-08-05: the scp form's user can select a different account/home.
+    ["ssh login user", "alice@git.example.com:repo.git", "bob@git.example.com:repo.git"],
+    ["non-default port", "https://git.example.com:8443/team/repo.git", "https://git.example.com/team/repo.git"],
+    // Found by running the real guard: the path is the production repo's, so
+    // `urlIsGuardedApp` says "production" for BOTH — only the host differs.
+    ["host, with the production path kept", APP_HTTPS, "https://evil.example.com/masonwells1/CRX_Manager_V1.0"],
+    ["a different repo on the same non-GitHub host", "https://git.example.com/team/a.git", "https://git.example.com/team/b.git"],
+  ]) {
+    assert.deepEqual(
+      divergentPushLookups(
+        { remotes: `ok:${pushDestinationDecisions(line(before))}` },
+        { remotes: `ok:${pushDestinationDecisions(line(after))}` },
+      ), ["remotes"], `${label}: an inherited rewrite that changes this must deny`,
+    );
+  }
+  // ...while the same variations ON the guarded repo still classify as
+  // production, so the gate cannot be spelled around.
+  for (const [label, url] of [
+    ["mixed case", "https://GitHub.com/MasonWells1/CRX_Manager_V1.0.git"],
+    ["explicit default port", "https://github.com:443/masonwells1/CRX_Manager_V1.0.git"],
+    ["GitHub's port-443 ssh host", "ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git"],
+    ["no .git suffix", "https://github.com/masonwells1/CRX_Manager_V1.0"],
+  ]) {
+    // The CLASSIFICATION is what these pin; the spelling key rides along and is
+    // asserted exactly by the anchor above.
+    assert.match(pushDestinationDecisions(line(url)), /^origin guarded-app /, `${label} is still production`);
+  }
+
+  // Fails CLOSED: an unreadable or absent destination reads as production.
+  assert.match(pushDestinationDecisions("origin\t (push)\n"), /^origin guarded-app /, "an empty destination gates");
+  assert.match(
+    pushDestinationDecisions(line("ext::ssh git@github.com %S masonwells1/CRX_Manager_V1.0.git")),
+    /^origin guarded-app /, "remote-helper syntax gates rather than reading as unrelated",
   );
 
-  // 2026-08-05, Codex P2. A canonical key is spelled exactly like an ordinary raw
-  // string, so the two must never share a namespace: a bare `github.com/owner/repo`
-  // token has NO canonical form, and untagged it compared equal to the canonical
-  // key of `https://github.com/owner/repo` — a rewrite between them read as no
-  // change. `canonicalPushDestinations` tags its fallback `raw `; the guard tags
-  // the literal-URL answers `id `/`raw ` for the same reason.
-  const bareToken = "github.com/masonwells1/crx_manager_v1.0";
-  assert.equal(equivalentDestinationKey(bareToken), null, "a bare host/path token has no canonical form");
+  // Only push lines participate, and remote ordering is not a change.
   assert.equal(
-    canonicalPushDestinations(`origin\t${bareToken} (push)\n`).startsWith("raw "), true,
-    "so it is tagged raw rather than emitted as a bare key",
+    pushDestinationDecisions(`origin\t${OTHER} (fetch)\n${line(APP_HTTPS)}`),
+    pushDestinationDecisions(line(APP_HTTPS)), "the fetch line does not participate",
   );
+  assert.equal(
+    pushDestinationDecisions(line(APP_HTTPS, "a") + line(OTHER, "b")),
+    pushDestinationDecisions(line(OTHER, "b") + line(APP_HTTPS, "a")), "remote ordering is not a change",
+  );
+  // The remote NAME still matters: a bare push picks its destination by name.
   assert.notEqual(
-    canonicalPushDestinations(`origin\t${bareToken} (push)\n`),
-    canonicalPushDestinations(verbose(APP_HTTPS)),
-    "and it cannot collide with the canonical key that shares its spelling",
+    pushDestinationDecisions(line(APP_HTTPS, "origin")),
+    pushDestinationDecisions(line(APP_HTTPS, "upstream")), "a renamed remote is not silently equated",
   );
 }
 assert.deepEqual(unknownGitGlobalOptions("git --no-pager push origin main"), [], "supported --no-pager remains inspectable");
@@ -1064,6 +1046,25 @@ assert.equal(pushUsesConfigRootEnv(`GIT_OBJECT_DIRECTORY=/tmp/o git push origin 
 assert.equal(pushUsesConfigRootEnv("git -C C:/CRX_Manager push origin feature"), false, "an ordinary push names none of them");
 assert.equal(pushUsesConfigRootEnv("HOME=/tmp/evil git status"), false, "still only applies to push commands");
 assert.equal(pushUsesConfigRootEnv("git push origin chore/HOMEPAGE-copy"), false, "a branch name containing HOMEPAGE is not an override");
+// 2026-08-05: the check denied every Linux `git -C /home/... push`, because the
+// case-insensitive bare-text match hit the `/home/` path segment. That is the
+// form this guard's own denial messages recommend, so on a web/mobile session
+// the guard was telling the user to run a command it then refused.
+assert.equal(
+  pushUsesConfigRootEnv("git -C /home/user/CRX_Manager_V1.0 push -u origin feature/x"), false,
+  "a repo path under /home is not a HOME override",
+);
+assert.equal(
+  pushUsesConfigRootEnv("git -C /home/user/repo push origin HEAD:main"), false,
+  "the /home path segment does not fire even on a main-bound push",
+);
+assert.equal(
+  pushUsesConfigRootEnv("git -C C:\\Users\\mason\\homepath push origin feature"), false,
+  "a Windows path segment is not an override either",
+);
+// ...and the real overrides still fire from every position they can occupy.
+assert.equal(pushUsesConfigRootEnv("env HOME=/home/user/evil git push origin main"), true, "an override whose VALUE is a /home path still fires");
+assert.equal(pushUsesConfigRootEnv("HOME=/tmp/x git -C /home/user/repo push origin main"), true, "a real override alongside a /home repo path still fires");
 
 // The general rule behind both: the guard resolves the destination in ITS
 // environment, so a push carrying ANY variable the guard does not is a push the
