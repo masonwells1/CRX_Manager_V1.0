@@ -2,6 +2,45 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Push guard now denies an inherited `remote.*.mirror` — BRANCH
+
+Codex found on PR #313 that an inherited `GIT_CONFIG*` setting
+`remote.origin.mirror=true` slipped past the destination comparison. `mirror` is
+the config spelling of `--mirror`, and it is the one key here that changes *which
+refs* a bare push sends rather than where they go: with it set, a bare push from a
+feature branch also updates `main`. `mainPushSource()` sees no explicit `main`
+refspec, so the production proof gate was skipped on a push that would in fact
+move `main`. Confirmed against git before fixing — with the override, a dry run
+enumerated `feature -> feature` **and** `main -> main`; without it the same
+command failed with "no upstream branch".
+
+Two mechanisms cover it now, and they fail in opposite directions:
+
+- `configuredMirrorRemotes()` classifies a mirror remote from `config --list`
+  read across both environments. This is the primary deny, and it covers the
+  inherited and local vectors alike.
+- `remote.*.mirror` joins the compared destination lookups. Measured rather than
+  assumed: with that line deleted, every behavioural test still passes, so it is
+  **not** what catches the bug. It stays because the classifier's config read
+  swallows errors and returns `""` — an unreadable config denies nothing —
+  whereas a lookup that succeeds ambiently and fails scrubbed is itself a
+  divergence. It is the fail-closed path for when the classifier goes quiet.
+
+The test asserting that lookup's presence is structural for the same reason, and
+now says so in place: nothing in that file can provoke the case it guards, so
+asserting presence is the only thing stopping a future cleanup from removing it
+as dead weight.
+
+Verified: run against the real inherited `GIT_CONFIG*` in this web session, the
+guard allows an ordinary feature-branch push; a constructed
+`remote.origin.mirror=true` override is denied with the divergence message.
+
+Codex's other two findings on the same PR — that a credential-proxy rewrite makes
+the two reads disagree and denies an ordinary push — are the already-parked issue
+in the entry directly below, not new. The SSH-spelling variant they describe
+(`git@github.com:` → `https://github.com/`) already compares equal through the
+GitHub allow-list; that is this session's own config, and its push is allowed.
+
 ## 2026-08-05 — Push guard still denies proxy-installed web sessions — PARKED
 
 Codex found on PR #313, and reproduction confirmed, that the web/mobile push-guard

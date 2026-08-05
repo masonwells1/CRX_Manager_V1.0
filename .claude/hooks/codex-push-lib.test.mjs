@@ -49,6 +49,8 @@ import {
   riskyFiles,
   pushDestinationDecisions,
   divergentPushLookups,
+  configuredMirrorRemotes,
+  pushDestinationLookupArgs,
 } from "./codex-push-lib.mjs";
 
 const now = Date.parse("2026-07-13T18:00:00.000Z");
@@ -568,6 +570,63 @@ assert.deepEqual(
   "an ordinary configuration names no programs",
 );
 assert.deepEqual(executableTransportSettings(""), [], "and an empty config is empty");
+
+// `remote.<n>.mirror` — `--mirror` stored in config instead of typed. Verified
+// against git before writing these: with it set, `git push origin` from a
+// feature branch enumerated `feature -> feature` AND `main -> main`, and any
+// explicit refspec failed outright with "--mirror can't be combined with
+// refspecs". So a mirror remote has no narrow push form at all.
+{
+  const list = [
+    "remote.origin.mirror=true",
+    "remote.backup.mirror=false",
+    "remote.origin.url=git@github.com:masonwells1/CRX_Manager_V1.0.git",
+    "user.name=Mason",
+  ].join("\n");
+  assert.deepEqual(
+    configuredMirrorRemotes(list), ["origin"],
+    "a true mirror remote is named and a false one is not",
+  );
+}
+for (const truthy of ["true", "yes", "on", "1", "TRUE", "  True  "]) {
+  assert.deepEqual(
+    configuredMirrorRemotes(`remote.origin.mirror=${truthy}`), ["origin"],
+    `git's boolean spelling "${truthy}" reads as mirroring`,
+  );
+}
+for (const falsy of ["false", "no", "off", "0", ""]) {
+  assert.deepEqual(
+    configuredMirrorRemotes(`remote.origin.mirror=${falsy}`), [],
+    `"${falsy}" does not mirror, so it must not deny`,
+  );
+}
+assert.deepEqual(
+  configuredMirrorRemotes("remote.origin.mirror"), [],
+  "a valueless key proves nothing and must not deny",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("REMOTE.ORIGIN.MIRROR=true"), ["origin"],
+  "config keys are case-insensitive, so the check is too",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("remote.origin.mirrored=true\nremote.origin.url=x"), [],
+  "a key that merely starts like mirror is not swept up",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("user.name=Mason\nremote.origin.url=git@github.com:x/y.git"), [],
+  "an ordinary configuration mirrors nothing",
+);
+assert.deepEqual(configuredMirrorRemotes(""), [], "and an empty config is empty");
+// Structural on purpose, and the comment at its definition explains why: the
+// classifier above is what denies a mirror in practice, so deleting this lookup
+// breaks no behavioural test here. It exists as the fail-closed path for when the
+// classifier's error-swallowing config read comes back empty, which no test in
+// this file can provoke. Asserting its presence is the only guard against a
+// future cleanup removing it as dead weight.
+assert.ok(
+  pushDestinationLookupArgs("feature").some(([name]) => name === "remote.*.mirror"),
+  "mirror config stays among the compared answers as the fail-closed backstop",
+);
 assert.ok(
   executableTransportSettings("CORE.SSHCOMMAND=ssh").includes("core.sshcommand"),
   "git config keys are case-insensitive, so the check is too",
@@ -1712,6 +1771,41 @@ assert.equal(pushDestinationToken("git push"), null);
       assert.match(partialRewrite.reason, /CODEX GATE/, "the actual hook explains the production gate");
     } finally {
       git(["config", "--unset-all", "url.git@github.com:masonwells1/CRX_.insteadOf"], work);
+    }
+
+    // A mirror remote configured in the repository's OWN config. This diverges
+    // from nothing, so the scrubbed-vs-ambient comparison cannot catch it — and
+    // `mainPushSource` only ever reads command TEXT, so a bare `git push origin`
+    // classifies as "touches no main" while git pushes every ref including main.
+    // Codex's 2026-08-05 review; reproduced against real git before fixing.
+    try {
+      git(["config", "remote.origin.mirror", "true"], work);
+      const localMirror = runHook(`git -C ${work} push origin`);
+      assert.equal(localMirror.decision, "deny", "a mirror remote in the repo's own config is denied");
+      assert.match(localMirror.reason, /mirror/i, "and the denial names the setting to unset");
+    } finally {
+      git(["config", "--unset-all", "remote.origin.mirror"], work);
+    }
+    // The same setting arriving through an inherited GIT_CONFIG*, which is the
+    // exact vector reported: nothing in the compared lookups read it, so the
+    // override compared equal and the push was allowed.
+    {
+      const inheritedMirror = runHook(`git -C ${work} push origin`, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.mirror",
+        GIT_CONFIG_VALUE_0: "true",
+      });
+      assert.equal(inheritedMirror.decision, "deny", "an inherited mirror override is denied too");
+    }
+    // Control for the pair above: the same key set to false must still push.
+    try {
+      git(["config", "remote.origin.mirror", "false"], work);
+      assert.equal(
+        runHook(push).decision, "allow",
+        "a mirror setting explicitly turned off denies nothing",
+      );
+    } finally {
+      git(["config", "--unset-all", "remote.origin.mirror"], work);
     }
 
     // Controls: the guard must not have become a blanket denier. Both of these

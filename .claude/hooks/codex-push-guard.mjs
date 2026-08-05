@@ -49,6 +49,7 @@ import {
   repoIsGuardedApp,
   rewritesReachGuardedApp,
   executableTransportSettings,
+  configuredMirrorRemotes,
   urlIsGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
@@ -485,6 +486,16 @@ for (const pushCmd of pushCommands) {
   const namedPrograms = executableTransportSettings(transportConfig);
   if (namedPrograms.length > 0) {
     deny(`CODEX GATE: this checkout configures git settings that name a program to carry the push (${namedPrograms.join(", ")}). That program decides where the objects actually go, so no destination check here can be trusted. Unset them with \`git config --unset <setting>\` and push normally — git's own defaults need none of them.`);
+  }
+  // `--mirror` as a command-line flag is already an unconditional deny above.
+  // This is the same instruction stored in config instead of typed, and it is
+  // read from the same both-environment union for the same reason: an inherited
+  // GIT_CONFIG* may be what sets it. Denied at the same breadth as the flag —
+  // before the guarded-repository test below — because a mirror push updates
+  // every ref in whatever repository it reaches.
+  const mirrorRemotes = configuredMirrorRemotes(transportConfig);
+  if (mirrorRemotes.length > 0) {
+    deny(`CODEX GATE: this checkout configures a mirror remote (${mirrorRemotes.map((r) => `remote.${r}.mirror`).join(", ")}), which is \`--mirror\` stored in config. A bare push to a mirror remote updates EVERY ref — main included — without naming one, so the production review gate never sees a main-bound push, and git rejects any explicit refspec that would narrow it. Unset it with \`git config --unset remote.<name>.mirror\` and push one explicit branch.`);
   }
   if (
     !destinationUrls.some((url) => urlIsGuardedApp(url)) &&

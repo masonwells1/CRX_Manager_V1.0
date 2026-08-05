@@ -871,7 +871,53 @@ export function pushDestinationLookupArgs(branch) {
     ["branch.pushRemote", ["config", "--get", `branch.${ref}.pushRemote`]],
     ["branch.remote", ["config", "--get", `branch.${ref}.remote`]],
     ["branch.merge", ["config", "--get", `branch.${ref}.merge`]],
+    // `remote.<n>.mirror` is the config spelling of `--mirror`, and it changes
+    // WHICH REFS a bare push sends, not where they go — so it sits oddly among
+    // keys that all fix a destination. It earns its place by failing closed where
+    // the classifier that actually denies it fails open.
+    //
+    // `configuredMirrorRemotes` is the primary deny and already covers BOTH
+    // vectors, inherited and local, because the guard feeds it `config --list`
+    // unioned over both environments. Measured, not assumed: with this line
+    // deleted, every behavioural test below still passes. What differs is the
+    // failure mode. That union is built by a reader that swallows errors and
+    // returns "" — an unreadable config yields no mirror and no denial. This
+    // lookup goes through `answerFor`, where a read that succeeds ambiently and
+    // fails scrubbed is itself a divergence, so an inherited mirror still denies
+    // when the classifier has gone quiet.
+    //
+    // Codex's 2026-08-05 review of this change reported the inherited vector.
+    ["remote.*.mirror", ["config", "--get-regexp", "^remote\\..*\\.mirror$"]],
   ];
+}
+
+// The same setting, read as a CLASSIFIER rather than as a compared answer. The
+// lookup above catches an inherited mirror; this catches one already sitting in
+// the repository's own config, which diverges from nothing and so would pass
+// that comparison untouched while still dragging main into every bare push.
+//
+// Git makes the remedy unambiguous: under a mirror remote an explicit refspec is
+// a hard error ("--mirror can't be combined with refspecs"), so the ONLY push
+// form that runs is the bare one, and that form always includes main. There is
+// no narrow push to preserve here — which is why the guard denies on this rather
+// than trying to classify a main-bound push it cannot see in the command text.
+// Values follow git's boolean spelling; only a true value mirrors.
+const GIT_TRUE_VALUES = ["true", "yes", "on", "1"];
+export function configuredMirrorRemotes(configOutput) {
+  const found = [];
+  for (const raw of String(configOutput ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const sep = line.search(/[=\s]/);
+    if (sep === -1) continue; // a bare key carries no value; not provably true
+    const key = line.slice(0, sep).toLowerCase();
+    const value = line.slice(sep + 1).trim().toLowerCase();
+    const remote = key.match(/^remote\.(.+)\.mirror$/)?.[1];
+    if (!remote) continue;
+    if (!GIT_TRUE_VALUES.includes(value)) continue;
+    if (!found.includes(remote)) found.push(remote);
+  }
+  return found;
 }
 
 // Comparing `remote -v` as raw text was too literal, and it left the original
