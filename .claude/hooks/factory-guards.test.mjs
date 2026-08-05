@@ -14,6 +14,10 @@ import {
   sha256,
   writeImmutableTicket,
 } from "../../scripts/factory-state-lib.mjs";
+import {
+  isPotentialStructuredMutationTool,
+  isStructuredFilesystemMutationTool,
+} from "./factory-tool-classification.mjs";
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "../..");
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
@@ -21,6 +25,23 @@ const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integri
 const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
 let assertions = 0;
 const temporaryStateDirs = new Set();
+
+for (const [toolName, potentialMutation, localFilesystemMutation] of [
+  ["Write", true, true],
+  ["mcp__filesystem__edit_file", true, true],
+  ["mcp__desktop_commander__edit_block", true, true],
+  ["mcp__filesystem__read_file", false, false],
+  ["mcp__github__get_file_contents", false, false],
+  ["mcp__github__create_or_update_file", true, false],
+  ["mcp__github__delete_file", true, false],
+  ["mcp__github__push_files", true, false],
+  ["mcp__future__future_mutator", true, false],
+]) {
+  assertions++;
+  assert.equal(isPotentialStructuredMutationTool(toolName), potentialMutation, `${toolName} potential-mutation classification`);
+  assertions++;
+  assert.equal(isStructuredFilesystemMutationTool(toolName), localFilesystemMutation, `${toolName} local-filesystem classification`);
+}
 
 function temporaryStateDir(prefix) {
   const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -297,6 +318,11 @@ function bashExecutable() {
   }), /cannot modify its own governance/i, "the integrity guard broadly denies remote MCP governance writers even though the lane guard never treats them as local edits");
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
+    tool_name: "mcp__github__push_files",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", files: [{ path: ".claude/hooks/factory-lane-guard.mjs", content: "forged" }] },
+  }), /cannot modify its own governance/i, "the integrity guard denies remote MCP push operations that target governance");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
     tool_name: "apply_patch",
     tool_input: { input: "*** Begin Patch\n*** Update File: scripts/factory.mjs\n@@\n-old\n+new\n*** End Patch\n" },
   }), /cannot modify its own governance/i, "governed sessions cannot hide a governance rewrite in an input patch payload");
@@ -498,6 +524,11 @@ function bashExecutable() {
     tool_name: "mcp__github__delete_file",
     tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", path: "src/example.ts" },
   }), /direct commands and helper-process execution/i, "active lanes keep remote GitHub file deletion opaque and denied");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__github__push_files",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", files: [{ path: "src/example.ts", content: "remote mutation" }] },
+  }), /direct commands and helper-process execution/i, "active lanes keep remote GitHub push operations opaque and denied");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "mcp__filesystem__edit_file",

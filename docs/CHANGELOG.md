@@ -49,6 +49,9 @@ custody survives unchanged-ticket re-presentation and cross-chat transfer until 
 opens the new authorization boundary. Both installed guards share one MCP writer parser, while only
 the known local filesystem servers enter the lane's structured-edit allow path; remote GitHub/API
 writers remain opaque and denied. Filesystem `newText` replacements are included in secret scanning.
+The shared classifier now recognizes remote `push`, `apply`, `update`, `append`, and `deploy`
+operations explicitly, and unknown non-read MCP operations fail closed. Direct classifier tables
+and installed-hook regressions cover GitHub `push_files` without admitting it as a local edit.
 This entry records the reviewed release candidate; it does not claim a merge or
 production deployment.
 
