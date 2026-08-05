@@ -12,7 +12,11 @@ hooks instead of being blocked by the Factory outage. The same boundary is enfor
 Factory PreToolUse guards, including dynamic shell commands. Regression proof covers both sides of that
 boundary while preserving read-only diagnosis and the canonical recovery route. The integrity guard has
 marker-only write authority so a historical active session is durably classified before its very first
-action, including when its approved ticket names protected governance paths. The existing narrow
+action, including when its approved ticket names protected governance paths. A durable historical-backfill
+boundary records that every session visible in the last healthy ledger replay was marked. If corruption
+precedes that boundary, unrelated structured edits remain available while governance edits and opaque or
+dynamic execution stay globally fail-closed; once the boundary exists, only marked Factory chats fail closed.
+The existing narrow
 same-lane replay rule continues to accept the complete legacy duplicate parked event that previously
 prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage
 changes. Managed-session markers are coordination-only state and are excluded from protected-content

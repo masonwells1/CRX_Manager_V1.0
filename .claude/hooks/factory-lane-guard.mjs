@@ -5,8 +5,10 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   ACTIVE_STAGES,
+  completeFactoryManagedSessionBackfill,
   FACTORY_CUSTODY_STAGES,
   hasFactoryIntentFailureLatch,
+  hasFactoryManagedSessionBackfillComplete,
   hasFactoryManagedSessionMarker,
   loadFactorySnapshot,
   mintFactoryCliPermit,
@@ -562,11 +564,14 @@ const intentRecordFailed = Boolean(sessionId) && hasFactoryIntentFailureLatch(pa
 const factoryManagedSession = Boolean(factoryCli)
   || intentRecordFailed
   || (Boolean(sessionId) && hasFactoryManagedSessionMarker(paths, sessionId));
+let historicalBackfillComplete = hasFactoryManagedSessionBackfillComplete(paths);
 
 let snapshot;
 let snapshotManagedSession = false;
 try {
   snapshot = loadFactorySnapshot(paths);
+  completeFactoryManagedSessionBackfill(paths, { snapshot, actorTool });
+  historicalBackfillComplete = true;
   snapshotManagedSession = Boolean(sessionId) && (
     snapshot.factoryIntentSessions.includes(sessionId)
     || snapshot.jobs.some((job) => [job.sessionId, job.laneSessionId].includes(sessionId))
@@ -588,6 +593,9 @@ try {
       expectedLastEventHash: "0".repeat(64),
     });
     allowWithPermit(payload, permit.token, factoryCli.canonicalCommand, projectDir);
+  }
+  if (!historicalBackfillComplete && (opaqueExecution || shellOutsideInspection)) {
+    deny("CRX FACTORY GATE: opaque or shell execution stays fail-closed until a healthy ledger has durably completed the historical Factory session backfill. Structured unrelated edits remain available.");
   }
   if (!factoryManagedSession && !snapshotManagedSession) nothing();
   deny(`CRX FACTORY GATE: shared factory state could not be verified (${error.message}). Factory-managed build writes fail closed.`);

@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
+  hasFactoryManagedSessionBackfillComplete,
   hasFactoryManagedSessionMarker,
   loadFactorySnapshot,
   resolveFactoryPaths,
@@ -979,6 +980,62 @@ function bashExecutable() {
 }
 
 {
+  const stateDir = temporaryStateDir("crx-factory-pre-backfill-corrupt-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const historicalSessionId = "historical-corrupt-before-first-upgrade-action";
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    sessionId: historicalSessionId,
+    actorTool: "codex",
+    payload: { ownerRequest: "Historical factory request whose ledger corrupts before its first upgraded action." },
+  });
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), false, "pre-upgrade historical session has no independent marker");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths), false, "historical backfill boundary is absent before any healthy upgraded replay");
+  writeFileSync(paths.eventsPath, "{not-valid-json}\n");
+  const installedHookChain = [integrityHook, laneHook];
+  const unrelatedStructuredWrite = runHookChain(installedHookChain, stateDir, {
+    thread_id: "unrelated-pre-backfill-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  });
+  assertions++;
+  assert.equal(unrelatedStructuredWrite.stdout, "", "pre-backfill corruption still permits an unrelated structured non-governance edit");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "MultiEdit",
+    tool_input: {
+      edits: [
+        "package.json",
+        "scripts/factory.mjs",
+        "scripts/write-codex-push-proof.mjs",
+        ".claude/settings.json",
+        ".codex/hooks.json",
+        ".codex/hooks/production-action-guard.mjs",
+        ".claude/hooks/factory-lane-guard.mjs",
+        ".claude/hooks/codex-push-guard.mjs",
+        ".claude/hooks/pr-merge-guard.mjs",
+        ".claude/hooks/review-proof-guard.mjs",
+      ].map((relativePath) => ({ file_path: path.join(root, relativePath), new_string: "forged" })),
+    },
+  }), /backfill is durably complete/i, "pre-backfill corruption cannot fail open on protected governance edits");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: "unrelated-pre-backfill-thread",
+    tool_name: "Bash",
+    tool_input: { command: "node -e \"process.stdout.write('opaque')\"" },
+  }), /backfill is durably complete|historical Factory session backfill/i, "pre-backfill corruption keeps dynamic execution globally fail-closed");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: "unrelated-pre-backfill-thread",
+    tool_name: "mcp__opaque__execute",
+    tool_input: {},
+  }), /historical Factory session backfill/i, "pre-backfill corruption keeps opaque helper execution globally fail-closed");
+}
+
+{
   const stateDir = temporaryStateDir("crx-factory-corrupt-");
   process.env.CRX_FACTORY_TEST_MODE = "1";
   process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
@@ -1011,6 +1068,8 @@ function bashExecutable() {
   assert.equal(historicalRead.stdout, "", "historical managed session remains readable while its healthy ledger marker is backfilled");
   assertions++;
   assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), true, "healthy replay backfills the marker for pre-existing factory sessions");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths), true, "healthy replay records the durable historical backfill boundary");
   writeFileSync(paths.eventsPath, "{not-valid-json}\n");
   const installedHookChain = [integrityHook, laneHook];
   const readResult = runHookChain(installedHookChain, stateDir, {

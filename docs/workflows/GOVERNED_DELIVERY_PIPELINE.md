@@ -432,7 +432,11 @@ Every chat that requests Factory-managed work gets a separate durable managed-se
 the ledger append is attempted. A healthy replay also backfills that marker for pre-existing Factory
 sessions before allowing their next governed action. The earlier integrity guard has authority only to
 write this marker, not to mutate the ledger or other Factory state, so a historical active session stays
-governed even on its first attempted self-governance edit. These markers are coordination-only metadata and
+governed even on its first attempted self-governance edit. A healthy replay marks every historical session
+visible in the snapshot and then writes a durable backfill-complete boundary. Before that boundary exists,
+ledger corruption keeps governance edits and opaque or dynamic execution globally fail-closed while still
+allowing unrelated structured file edits; afterward, only marked Factory chats retain that fail-closed scope.
+These markers and the boundary are coordination-only metadata and
 are excluded from protected-content fingerprints so creating one cannot invalidate an active evidence
 or review run. If factory state cannot be verified, mutations
 fail closed only for those marked chats and explicit Factory CLI actions. Unrelated chats continue

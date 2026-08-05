@@ -3,7 +3,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  completeFactoryManagedSessionBackfill,
   hasFactoryIntentFailureLatch,
+  hasFactoryManagedSessionBackfillComplete,
   hasFactoryManagedSessionMarker,
   loadFactorySnapshot,
   resolveHookFactoryPaths,
@@ -80,9 +82,12 @@ const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type ||
   ? "codex"
   : "claude";
 let governedSession = !sessionId;
+let historicalBackfillComplete = hasFactoryManagedSessionBackfillComplete(factoryPaths);
 if (sessionId) {
   try {
     const snapshot = loadFactorySnapshot(factoryPaths);
+    completeFactoryManagedSessionBackfill(factoryPaths, { snapshot, actorTool });
+    historicalBackfillComplete = true;
     governedSession = snapshot.factoryIntentSessions.includes(sessionId)
       || snapshot.jobs.some((job) =>
         job.sessionId === sessionId
@@ -104,6 +109,11 @@ const governanceTarget = /(?:^|\/)(?:package\.json|scripts\/(?:factory(?:-[^/]*)
 if (targets.some((target) => target.startsWith(permitsNorm))) {
   deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
 }
+if (!historicalBackfillComplete
+    && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(toolName)
+    && targets.some((target) => governanceTarget.test(target))) {
+  deny("CRX FACTORY STATE GUARD: protected governance edits stay fail-closed until the historical Factory session backfill is durably complete.");
+}
 if (governedSession
     && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(toolName)
     && targets.some((target) => governanceTarget.test(target))) {
@@ -112,6 +122,9 @@ if (governedSession
 
 const command = String(input.command || input.code || input.script || input.source || "");
 if (!command) nothing();
+if (!historicalBackfillComplete && /[\r\n]/.test(command)) {
+  deny("CRX FACTORY STATE GUARD: multiline shell execution stays fail-closed until the historical Factory session backfill is durably complete.");
+}
 if (governedSession && /[\r\n]/.test(command)) {
   deny("CRX FACTORY STATE GUARD: multiline shell commands are disabled inside a governed lane.");
 }
@@ -127,6 +140,9 @@ const dynamicExecution = /\bnode(?:\.exe)?\s+(?:-e|--eval|-p|--print)\b|\bpython
 if (factoryInternals && dynamicExecution) {
   deny("CRX FACTORY STATE GUARD: direct invocation of factory state internals is forbidden. Use only the canonical scripts/factory.mjs CLI.");
 }
+if (!historicalBackfillComplete && dynamicExecution) {
+  deny("CRX FACTORY STATE GUARD: dynamic inline execution stays fail-closed until the historical Factory session backfill is durably complete.");
+}
 if (governedSession && dynamicExecution) {
   deny("CRX FACTORY STATE GUARD: dynamic inline code execution is disabled inside a governed lane because it can bypass approval controls.");
 }
@@ -139,6 +155,9 @@ const mutates = /(?:^|[;&|]\s*|\s)(?:remove-item|move-item|copy-item|rename-item
 const opaqueRepoMutation = /\bgit\s+(?:apply\b|checkout\s+--(?:\s|$)|restore\b)/i.test(command);
 const mentionsGovernanceTarget = /(?:^|[\\/\s"'`])(?:package\.json|scripts[\\/](?:factory(?:-[^\\/\s"'`]*)?|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|\.claude[\\/]settings(?:\.local)?\.json|\.codex[\\/]hooks\.json|\.codex[\\/]hooks[\\/](?:codex-hook-adapter|production-action-guard)\.mjs|\.claude[\\/]hooks[\\/](?:factory-[^\\/\s"'`]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib|codex-push-guard|codex-push-lib|pr-merge-guard|review-proof-guard)\.mjs)(?:$|[\s"'`])/i.test(commandNorm);
 
+if (!historicalBackfillComplete && ((mentionsGovernanceTarget && mutates) || opaqueRepoMutation)) {
+  deny("CRX FACTORY STATE GUARD: governance and opaque repository mutations stay fail-closed until the historical Factory session backfill is durably complete.");
+}
 if (governedSession && ((mentionsGovernanceTarget && mutates) || opaqueRepoMutation)) {
   deny("CRX FACTORY STATE GUARD: a governed lane cannot mutate its governance implementation through the shell.");
 }

@@ -180,6 +180,7 @@ export function resolveHookFactoryPaths(cwd = process.cwd(), env = process.env) 
 }
 
 function buildPaths(stateDir) {
+  const managedSessionsDir = path.join(stateDir, "managed-sessions");
   return {
     stateDir,
     ticketsDir: path.join(stateDir, "tickets"),
@@ -188,7 +189,8 @@ function buildPaths(stateDir) {
     ownerReceiptsDir: path.join(stateDir, "permits", "owner-receipts"),
     ownerReceiptKeyPath: path.join(stateDir, "permits", "owner-receipt.key"),
     intentLatchesDir: path.join(stateDir, "intent-latches"),
-    managedSessionsDir: path.join(stateDir, "managed-sessions"),
+    managedSessionsDir,
+    managedSessionsBackfillPath: path.join(managedSessionsDir, "historical-backfill-v1.json"),
     eventsPath: path.join(stateDir, "events.jsonl"),
     lockPath: path.join(stateDir, "events.lock"),
     harnessRunsDir: path.join(stateDir, "harness-runs"),
@@ -226,6 +228,21 @@ export function hasFactoryManagedSessionMarker(paths, sessionId) {
   return existsSync(factoryManagedSessionPath(paths, sessionId));
 }
 
+export function hasFactoryManagedSessionBackfillComplete(paths) {
+  try {
+    const record = JSON.parse(readFileSync(paths.managedSessionsBackfillPath, "utf8"));
+    return record?.schemaVersion === FACTORY_SCHEMA_VERSION
+      && record?.kind === "historical-managed-session-backfill"
+      && Array.isArray(record.sessionHashes)
+      && record.sessionHashes.every((hash) =>
+        /^[a-f0-9]{64}$/.test(hash)
+        && existsSync(path.join(paths.managedSessionsDir, `${hash}.json`)),
+      );
+  } catch {
+    return false;
+  }
+}
+
 export function setFactoryManagedSessionMarker(paths, { sessionId, actorTool }) {
   authorizedFactoryManagedSessionMarkerWriter(paths);
   ensureFactoryDirs(paths);
@@ -240,6 +257,38 @@ export function setFactoryManagedSessionMarker(paths, { sessionId, actorTool }) 
     writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
+  }
+  return target;
+}
+
+export function completeFactoryManagedSessionBackfill(paths, { snapshot, actorTool }) {
+  authorizedFactoryManagedSessionMarkerWriter(paths);
+  if (!snapshot || !Array.isArray(snapshot.factoryIntentSessions) || !Array.isArray(snapshot.jobs)) {
+    throw new Error("A healthy factory snapshot is required to complete the historical managed-session backfill.");
+  }
+  const sessionIds = [...new Set([
+    ...snapshot.factoryIntentSessions,
+    ...snapshot.jobs.flatMap((job) => [job?.sessionId, job?.laneSessionId]),
+  ].filter(Boolean))].sort();
+  for (const sessionId of sessionIds) {
+    setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
+  }
+  const target = paths.managedSessionsBackfillPath;
+  const bytes = `${canonicalJson({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    kind: "historical-managed-session-backfill",
+    actorTool: requiredText(actorTool, "factory managed actorTool", 40),
+    completedAt: new Date().toISOString(),
+    lastEventHash: requiredText(snapshot.lastEventHash, "factory snapshot lastEventHash", 64),
+    sessionHashes: sessionIds.map((sessionId) => sha256(sessionId)),
+  })}\n`;
+  try {
+    writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  if (!hasFactoryManagedSessionBackfillComplete(paths)) {
+    throw new Error("Historical managed-session backfill boundary is incomplete or invalid.");
   }
   return target;
 }
