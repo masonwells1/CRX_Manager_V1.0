@@ -40,7 +40,9 @@ An accepted landing lane now reaches its exact landing-command and byte-validati
 while other lanes remain active; those other chats still cannot target the landing worktree.
 The concurrent protected-state allowance has direct positive and negative regression tests,
 and the shared parked-custody timeout helper is exercised as running code rather than checked
-through source-text matching.
+through source-text matching. The two-lane routing regression derives its command from the
+checkout's current branch and uses the permitted PR-read route on protected or detached checkouts,
+so the same gate remains valid after merge and in detached CI.
 This entry records the reviewed release candidate; it does not claim a merge or
 production deployment.
 

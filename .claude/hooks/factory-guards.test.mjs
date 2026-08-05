@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -19,6 +19,15 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
 const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integrity-guard.mjs");
 const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
+const currentRepositoryBranch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+  cwd: root,
+  encoding: "utf8",
+  stdio: ["ignore", "pipe", "ignore"],
+}).trim();
+const concurrentLandingCommand = currentRepositoryBranch
+    && !new Set(["HEAD", "main", "master", "production"]).has(currentRepositoryBranch.toLowerCase())
+  ? `git push origin HEAD:${currentRepositoryBranch}`
+  : "gh pr view";
 let assertions = 0;
 const temporaryStateDirs = new Set();
 
@@ -924,9 +933,9 @@ function bashExecutable() {
   const concurrentLandingPush = run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
-    tool_input: { command: "git push origin HEAD:codex/factory-concurrency-recovery" },
+    tool_input: { command: concurrentLandingCommand },
   });
-  denied(concurrentLandingPush, /accepted landing bytes are no longer valid/i, "a valid landing command reaches exact-byte landing validation while another lane remains active");
+  denied(concurrentLandingPush, /accepted landing bytes are no longer valid/i, "a checkout-valid landing command reaches exact-byte landing validation while another lane remains active");
   assertions++;
   assert.doesNotMatch(concurrentLandingPush.stdout, /destinations cannot be custody-checked/i, "foreign active custody does not preempt the accepted lane's landing allowlist");
   appendFactoryEvent(paths, {
