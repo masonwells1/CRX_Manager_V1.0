@@ -877,6 +877,108 @@ function bashExecutable() {
 }
 
 {
+  const sessionId = "historical-governance-first-action";
+  const stateDir = temporaryStateDir("crx-factory-historical-governance-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const governancePaths = [
+    "package.json",
+    "scripts/factory.mjs",
+    "scripts/write-codex-push-proof.mjs",
+    "scripts/write-apply-proofs.mjs",
+    "scripts/overnight-codex-gate.mjs",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".codex/hooks.json",
+    ".codex/hooks/codex-hook-adapter.mjs",
+    ".codex/hooks/production-action-guard.mjs",
+    ".claude/hooks/factory-lane-guard.mjs",
+    ".claude/hooks/ship-intent-reminder.mjs",
+    ".claude/hooks/prompt-source-lib.mjs",
+    ".claude/hooks/hold-latch-lib.mjs",
+    ".claude/hooks/codex-push-guard.mjs",
+    ".claude/hooks/codex-push-lib.mjs",
+    ".claude/hooks/pr-merge-guard.mjs",
+    ".claude/hooks/review-proof-guard.mjs",
+  ];
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    actorTool: "codex",
+    sessionId,
+    payload: { ownerRequest: "Historical active Factory session before managed-session markers existed." },
+  });
+  const historicalTicket = writeImmutableTicket(paths, {
+    id: "historical-governance-first-action-job",
+    title: "Historical governance first-action proof",
+    goal: "Prove historical sessions cannot self-modify governance on their first action.",
+    definitionOfDone: ["Every protected governance category remains independently denied."],
+    mustNotChange: ["Factory governance."],
+    allowedPaths: governancePaths,
+    proofRequirements: ["Full installed hook-chain denial."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before commit.",
+    riskAreas: ["security", "permissions"],
+    businessExample: "A historical Factory session must not be able to weaken its own safety hooks before the managed-session marker is backfilled.",
+    forbiddenOutcome: "The first protected governance write must never run before the session is marked and denied.",
+  });
+  appendFactoryEvent(paths, {
+    type: "ticket-drafted",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: {
+      ticketFile: historicalTicket.filename,
+      ticketHash: historicalTicket.hash,
+      ticketVersion: 1,
+      title: historicalTicket.ticket.title,
+    },
+  });
+  const questionText = "Approve the historical governance first-action proof?";
+  const questionHash = sha256(questionText);
+  const baseSha = "c".repeat(40);
+  appendFactoryEvent(paths, {
+    type: "ticket-presented",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { ticketHash: historicalTicket.hash, questionText, questionHash, baseSha },
+  });
+  appendFactoryEvent(paths, {
+    type: "ticket-approved",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: {
+      ticketHash: historicalTicket.hash,
+      questionHash,
+      ownerReply: "yes",
+      baseSha,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+  appendFactoryEvent(paths, {
+    type: "lane-started",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { ticketHash: historicalTicket.hash, baseSha, worktree: root },
+  });
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, sessionId), false, "historical active session starts without a managed-session marker");
+  denied(runHookChain([integrityHook, laneHook], stateDir, {
+    thread_id: sessionId,
+    tool_name: "MultiEdit",
+    tool_input: {
+      edits: governancePaths.map((relativePath) => ({ file_path: path.join(root, relativePath), new_string: "forged" })),
+    },
+  }), /cannot modify its own governance/i, "historical active session's first action cannot target any protected governance category");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, sessionId), true, "integrity guard persists the historical session marker before denying its first governance action");
+}
+
+{
   const stateDir = temporaryStateDir("crx-factory-corrupt-");
   process.env.CRX_FACTORY_TEST_MODE = "1";
   process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;

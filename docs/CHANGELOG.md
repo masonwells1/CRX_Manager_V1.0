@@ -10,7 +10,9 @@ Factory ledger later becomes unreadable, explicit Factory commands and only thos
 chats continue to fail closed; unrelated work remains governed by the repository's ordinary safety
 hooks instead of being blocked by the Factory outage. The same boundary is enforced by both installed
 Factory PreToolUse guards, including dynamic shell commands. Regression proof covers both sides of that
-boundary while preserving read-only diagnosis and the canonical recovery route. The existing narrow
+boundary while preserving read-only diagnosis and the canonical recovery route. The integrity guard has
+marker-only write authority so a historical active session is durably classified before its very first
+action, including when its approved ticket names protected governance paths. The existing narrow
 same-lane replay rule continues to accept the complete legacy duplicate parked event that previously
 prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage
 changes. Managed-session markers are coordination-only state and are excluded from protected-content

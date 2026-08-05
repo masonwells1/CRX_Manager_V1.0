@@ -227,7 +227,7 @@ export function hasFactoryManagedSessionMarker(paths, sessionId) {
 }
 
 export function setFactoryManagedSessionMarker(paths, { sessionId, actorTool }) {
-  authorizedFactoryWriter(paths);
+  authorizedFactoryManagedSessionMarkerWriter(paths);
   ensureFactoryDirs(paths);
   const target = factoryManagedSessionPath(paths, sessionId);
   const bytes = `${canonicalJson({
@@ -904,6 +904,9 @@ const ALLOWED_WRITERS = new Set([
 const OWNER_DECISION_WRITER = path.resolve(
   path.join(FACTORY_ROOT, ".claude", "hooks", "factory-owner-input.mjs"),
 ).toLowerCase();
+const MANAGED_SESSION_MARKER_ONLY_WRITER = path.resolve(
+  path.join(FACTORY_ROOT, ".claude", "hooks", "factory-state-integrity-guard.mjs"),
+).toLowerCase();
 
 function factoryWriterAuthorization(paths) {
   const invoked = process.argv[1] ? path.resolve(process.argv[1]).toLowerCase() : "";
@@ -932,6 +935,21 @@ function factoryWriterAuthorization(paths) {
 
 function authorizedFactoryWriter(paths) {
   return factoryWriterAuthorization(paths);
+}
+
+function authorizedFactoryManagedSessionMarkerWriter(paths) {
+  try {
+    return authorizedFactoryWriter(paths);
+  } catch (error) {
+    const invoked = process.argv[1] ? path.resolve(process.argv[1]).toLowerCase() : "";
+    const stack = String(new Error().stack || "").toLowerCase().replaceAll("/", "\\");
+    if (invoked === MANAGED_SESSION_MARKER_ONLY_WRITER
+        && process.execArgv.length === 0
+        && stack.includes(MANAGED_SESSION_MARKER_ONLY_WRITER.replaceAll("/", "\\"))) {
+      return { invoked, ownerDecisionWriter: false, isolatedTest: false, markerOnlyWriter: true };
+    }
+    throw error;
+  }
 }
 
 function acquireEmergencyHoldCommitGate(paths, timeoutMs = 5_000, isolatedMetadataProbe = null) {
