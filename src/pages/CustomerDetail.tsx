@@ -157,24 +157,14 @@ export default function CustomerDetail() {
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
-  const fetchAddresses = useCallback(async () => {
-    const { data, error } = await supabase.from('customer_addresses').select('*').eq('customer_id', id!).order('created_at');
-    if (error) {
-      Sentry.captureException(error, { tags: { source: 'read', action: 'load_customer_addresses' } });
-      toast('error', 'Failed to load addresses');
-      return false;
-    }
-    setAddresses((data || []) as Partial<CustomerAddress>[]);
-    return true;
-  }, [id, toast]);
-
   // The tab loader below guards its writes with a sequence number, but the PRIMARY
-  // record needs the same discipline and did not have it. This callback is recreated
-  // per route id, so the `id` it closes over names the customer it was started FOR,
-  // while this ref always holds the one the route is on NOW. Navigating A -> B while
-  // A's reads are in flight would otherwise let A install its customer, addresses and
-  // row version over B — and the next save would then write A's form payload to B's
-  // id under A's row version.
+  // record needs the same discipline and did not have it. The per-customer reads
+  // below are recreated per route id, so the `id` each closes over names the
+  // customer it was started FOR, while this ref always holds the one the route is
+  // on NOW. Navigating A -> B while A's reads are in flight would otherwise let A
+  // install its customer, addresses and row version over B — and the next save
+  // would then write A's form payload to B's id under A's row version.
+  //
   // Written in a layout effect, never during render: React may replay or discard
   // a render, and a discarded render's write would publish a customer id that was
   // never committed — leaving in-flight reads comparing against a route the user
@@ -185,6 +175,22 @@ export default function CustomerDetail() {
   useLayoutEffect(() => {
     currentIdRef.current = id;
   }, [id]);
+
+  const fetchAddresses = useCallback(async () => {
+    const { data, error } = await supabase.from('customer_addresses').select('*').eq('customer_id', id!).order('created_at');
+    // Reached from the post-save reload as well as the snapshot, so it outlives
+    // both. A save for customer A that finishes just before the route changes
+    // starts THIS read against A; without the guard its rows land in customer B's
+    // form, and the save guard cannot help — it has already run by then.
+    if (currentIdRef.current !== id) return false;
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'read', action: 'load_customer_addresses' } });
+      toast('error', 'Failed to load addresses');
+      return false;
+    }
+    setAddresses((data || []) as Partial<CustomerAddress>[]);
+    return true;
+  }, [id, toast]);
 
   const fetchCustomerSnapshot = useCallback(async (requireStableRowVersion = false): Promise<boolean> => {
     if (!id) return false;

@@ -2,6 +2,24 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — CodeRabbit third review round on PR #313 — BRANCH
+
+One finding, and a correct one: the last remaining leak of the route-session
+class. `fetchAddresses` applied its result with no route check. The save guard
+added in the previous round only covers the moment the RPC answers — the address
+reload that save *starts* outlives it. So customer A's save completes, its
+address read is still in flight when the route moves to customer B, and A's rows
+land in B's address editor. Guarded after the await, before both the error branch
+and `setAddresses`.
+
+The ref that guard reads had to move above `fetchAddresses` to be in scope, which
+also puts it above every per-customer read that uses it.
+
+Regression test delays customer 1's post-save address read, navigates to customer
+2, then releases it; verified failing without the guard, where customer 1's
+street genuinely appears in customer 2's form. 347 tests across 45 page suites,
+typecheck and lint clean.
+
 ## 2026-08-05 — CodeRabbit second review round on PR #313 — BRANCH
 
 Three findings on the previous round's fixes. Two were defects introduced by

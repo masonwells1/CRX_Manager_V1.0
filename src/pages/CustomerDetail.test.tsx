@@ -440,6 +440,66 @@ describe('CustomerDetail stale whole-record save', () => {
     expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled();
   });
 
+  it('does not install the previous customer\'s addresses after navigating away', async () => {
+    // The save guard runs when the RPC answers, but the post-save address reload
+    // it starts outlives it. Customer 1's save completes, its address read is
+    // still in flight when the route moves to customer 2, and those rows would
+    // land in customer 2's address editor — a leak the save guard cannot catch
+    // because it has already passed by then.
+    let releaseAddresses!: () => void;
+    const addressGate = new Promise<void>((resolve) => { releaseAddresses = resolve; });
+    let customerOneAddressReads = 0;
+    const addressRow = (customerId: string) => ({
+      id: `${customerId}-addr`, customer_id: customerId, label: 'Main',
+      address_line: customerId === 'customer-2' ? 'Second Street' : 'Original Street',
+      city: 'Town', state: 'IA', zip: '50000', delivery_notes: '', is_default: true,
+    });
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 9, crops: [], default_commission_split: { splits: [] } }
+      : original);
+
+    mockFrom.mockImplementation((table: string) => {
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+
+      const settle = async (): Promise<QueryResult> => {
+        if (table === 'customer_addresses') {
+          // Customer 1's FIRST read is its initial snapshot and must land; the
+          // second is the post-save reload, and that is the one held open.
+          if (requested === 'customer-1') {
+            customerOneAddressReads += 1;
+            if (customerOneAddressReads > 1) await addressGate;
+          }
+          return { data: [addressRow(requested)], error: null };
+        }
+        if (table === 'customers') return { data: record(requested), error: null };
+        return { data: [], error: null };
+      };
+      chain.maybeSingle = () => settle();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => settle().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => settle().catch(reject);
+      chain.finally = (callback: () => void) => settle().finally(callback);
+      return chain;
+    });
+    mockRpc.mockResolvedValue({ data: { customer_id: 'customer-1', row_version: 5 }, error: null });
+
+    renderDetailWithCustomerSwitch();
+    expect(await screen.findByDisplayValue('Original Street')).toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue('Original Farm'), { target: { value: 'Edited Farm' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.anything()));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+    expect(await screen.findByDisplayValue('Second Street')).toBeInTheDocument();
+
+    releaseAddresses();
+    await waitFor(() => expect(screen.getByDisplayValue('Second Street')).toBeInTheDocument());
+    expect(screen.queryByDisplayValue('Original Street')).not.toBeInTheDocument();
+  });
+
   it('keeps the committed crop but clears a jumped 4-to-6 token and requires recovery before a whole-record save', async () => {
     let customerReads = 0;
     mockFrom.mockImplementation((table: string) => {
