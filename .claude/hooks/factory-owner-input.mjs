@@ -8,6 +8,7 @@ import {
   APPROVAL_TTL_MS,
   appendFactoryControlEvent,
   appendFactoryEvent,
+  completeFactoryManagedSessionBackfill,
   loadFactorySnapshot,
   normalizeOwnerQuestion,
   pendingTicketForSession,
@@ -16,8 +17,10 @@ import {
   rejectSecretBearingText,
   repositoryContentFingerprint,
   resolveHookFactoryPaths,
+  setFactoryManagedSessionMarker,
   setEmergencyFactoryHold,
   sha256,
+  unqualifiedOwnerApproval,
   validateCurrentHarnessEvidence,
   validateCurrentIndependentReview,
 } from "../../scripts/factory-state-lib.mjs";
@@ -71,7 +74,7 @@ export function lastAssistantText(transcriptPath) {
 
 export function classifyOwnerReply(prompt) {
   const text = String(prompt || "").trim();
-  if (/^(?:yes(?:[,\s]+(?:please|ship it|go ahead|do it))?|approved|approve it|go ahead|do it)[.!]?$/i.test(text)) return "approve";
+  if (unqualifiedOwnerApproval(text)) return "approve";
   if (/^(?:no|no thanks|reject|reject it|do not proceed|don't proceed|stop)[.!]?$/i.test(text)) return "reject";
   if (/\b(?:yes|approved|approve|go ahead|do it)\b/i.test(text)
       && /\b(?:but|except|unless|only if|change|instead|without|don'?t)\b/i.test(text)) {
@@ -81,8 +84,10 @@ export function classifyOwnerReply(prompt) {
 }
 
 function looksLikeDecisionReply(prompt) {
-  return /\b(?:yes|no|approve|approved|reject|ship|proceed|okay|ok|looks?\s+good|sounds?\s+(?:good|reasonable))\b/i
-    .test(String(prompt || ""));
+  const text = String(prompt || "").trim();
+  return /\b(?:yes|yep|yeah|no|approve|approved|reject|ship|proceed|okay|ok|looks?\s+good|sounds?\s+(?:good|reasonable|right))\b/i
+    .test(text)
+    || /^sure[.!]?$/i.test(text);
 }
 
 function normalizedFactoryControlText(prompt) {
@@ -135,6 +140,13 @@ function mentionsExactJobId(prompt, jobId) {
     .test(String(prompt || ""));
 }
 
+function prepareFactoryManagedSession(paths, { snapshot = null, sessionId, actorTool }) {
+  if (snapshot) {
+    completeFactoryManagedSessionBackfill(paths, { snapshot, actorTool });
+  }
+  setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
+}
+
 async function main() {
   let payload;
   try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
@@ -164,6 +176,7 @@ async function main() {
       emit("CRX Factory recorded no custody transfer because the request did not identify exactly one transferable job. Name the job shown on the Factory Board and ask to move it to this chat.");
     }
     const job = candidates[0];
+    prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
     appendFactoryEvent(paths, {
       type: "job-session-transferred",
       jobId: job.id,
@@ -190,6 +203,9 @@ async function main() {
   }
   if (requestedHold) {
     if (!sessionId) emit("CRX Factory could not bind this hold request to a chat session, so it changed nothing. Re-state the request in this chat.");
+    let controlSnapshot = null;
+    try { controlSnapshot = loadFactorySnapshot(paths); } catch { /* The emergency hold path must remain available during ledger failure. */ }
+    prepareFactoryManagedSession(paths, { snapshot: controlSnapshot, sessionId, actorTool });
     try {
       rejectSecretBearingText(prompt, "Factory hold request");
     } catch {
@@ -226,6 +242,9 @@ async function main() {
         ? "CRX Factory is already globally paused. The repeated pause request changed no ledger state."
         : "CRX Factory is already running. The repeated resume request changed no ledger state.");
     }
+    if (requestedHold === "resume" && controlResult.held) {
+      emit("CRX Factory recorded Mason's resume request, but remains globally paused because a newer emergency hold was detected. Tell Mason plainly that the newer hold was preserved and must be reviewed before work resumes.");
+    }
     emit(`CRX Factory ${requestedHold === "hold" ? "is now globally paused" : "has resumed"}. Tell Mason in one plain-English sentence. Existing production and destructive-action gates remain unchanged.`);
   }
 
@@ -239,6 +258,7 @@ async function main() {
     if (hasStartedFactoryJob) {
       emit("CRX Factory did not clear governance because this chat already has a ticket or lane. Reject the pending ticket or park the job in chat instead.");
     }
+    prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
     appendFactoryEvent(paths, {
       type: "factory-intent-cleared",
       jobId: null,
@@ -320,6 +340,7 @@ async function main() {
       }
     }
     const nextStage = disposition === "approve" ? "approved-to-land" : "parked";
+    prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
     appendFactoryEvent(paths, {
       type: "job-stage",
       jobId: job.id,
@@ -336,6 +357,7 @@ async function main() {
         reviewQuestionHash: decision.questionHash,
         ...(disposition === "approve" ? {
           acceptedRepositoryContentHash: acceptedRepository.repositoryContentHash,
+          acceptedRepositoryCommitContentHash: acceptedRepository.repositoryCommitContentHash,
           acceptedRepositoryFileCount: acceptedRepository.repositoryFileCount,
         } : {}),
       },
@@ -353,6 +375,7 @@ async function main() {
     emit("CRX Factory recorded no approval because origin/main moved after the ticket was presented. Re-check the plan against current main and re-present it.");
   }
 
+  prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
   const now = new Date();
   const common = {
     jobId: job.id,

@@ -10,6 +10,8 @@ import {
   buildFactorySnapshot,
   canonicalMorningReviewQuestion,
   hasFactoryIntentFailureLatch,
+  hasFactoryManagedSessionBackfillComplete,
+  hasFactoryManagedSessionMarker,
   resolveFactoryPaths,
   runHarnessEvidence,
   runIndependentReviewEvidence,
@@ -35,6 +37,7 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace
 const hook = path.join(root, ".claude", "hooks", "factory-owner-input.mjs");
 const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
+const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integrity-guard.mjs");
 const baseSha = spawnSync("git", ["rev-parse", "origin/main"], { cwd: root, encoding: "utf8" }).stdout.trim();
 let assertions = 0;
 
@@ -160,6 +163,15 @@ function runShipHook(state, payload) {
   equal(snapshot.jobs[0].approvalReply, "yes", "verbatim owner reply is retained");
   const events = readFileSync(state.paths.eventsPath, "utf8");
   ok(events.includes('"actorTool":"codex"'), "Codex surface provenance is retained");
+  ok(hasFactoryManagedSessionMarker(state.paths, state.sessionId), "owner approval persists its managed-session marker before the ledger event");
+  ok(hasFactoryManagedSessionBackfillComplete(state.paths), "owner approval completes the historical managed-session boundary before the ledger event");
+  writeFileSync(state.paths.eventsPath, "{not-valid-json}\n");
+  const corruptApplicationEdit = runInstalledPreToolHooks(state, {
+    thread_id: state.sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts"), content: "unsafe" },
+  });
+  ok(/factory-managed build writes fail closed/i.test(corruptApplicationEdit.stdout), "owner-approved session remains governed after immediate ledger corruption");
 }
 
 {
@@ -175,17 +187,37 @@ function runShipHook(state, payload) {
   equal(buildFactorySnapshot(state.paths).jobs[0].approvalReply, "yes, ship it", "compound approval remains verbatim");
 }
 
-{
-  const state = makeState("unclear-reply-thread");
-  const transcript = path.join(state.dir, "unclear-reply.jsonl");
+for (const [index, prompt] of ["yep", "yeah", "sure", "sounds right", "sounds reasonable"].entries()) {
+  const state = makeState(`unclear-reply-thread-${index}`);
+  const transcript = path.join(state.dir, `unclear-reply-${index}.jsonl`);
   writeFileSync(transcript, `${JSON.stringify({ type: "assistant", content: state.question })}\n`);
   const result = runHook(state, {
-    prompt: "sounds reasonable",
+    prompt,
     thread_id: state.sessionId,
     transcript_path: transcript,
   });
-  ok(result.stdout.includes("not an unqualified yes or no"), "unclear decision reply explains why it did not bind");
-  equal(buildFactorySnapshot(state.paths).jobs[0].stage, "needs-ticket-ok", "unclear decision reply remains fail-closed");
+  ok(result.stdout.includes("not an unqualified yes or no"), `${prompt} explains why it did not bind`);
+  equal(buildFactorySnapshot(state.paths).jobs[0].stage, "needs-ticket-ok", `${prompt} remains fail-closed`);
+}
+
+for (const [index, testCase] of [
+  { label: "approve", prompt: "yes", stage: "queued", output: /recorded Mason's exact approval/ },
+  { label: "reject", prompt: "no", stage: "rejected", output: /recorded Mason's rejection/ },
+  { label: "revision", prompt: "yes, but don't touch billing", stage: "rejected", output: /recorded a revision request/ },
+  { label: "nudge", prompt: "yep", stage: "needs-ticket-ok", output: /not an unqualified yes or no/ },
+  { label: "incidental sure", prompt: "make sure the tests pass", stage: "needs-ticket-ok", output: /^$/ },
+  { label: "silence", prompt: "what stage is the job in?", stage: "needs-ticket-ok", output: /^$/ },
+].entries()) {
+  const state = makeState(`decision-matrix-thread-${index}`);
+  const transcript = path.join(state.dir, `decision-matrix-${index}.jsonl`);
+  writeFileSync(transcript, `${JSON.stringify({ type: "assistant", content: state.question })}\n`);
+  const result = runHook(state, {
+    prompt: testCase.prompt,
+    thread_id: state.sessionId,
+    transcript_path: transcript,
+  });
+  ok(testCase.output.test(result.stdout.trim()), `${testCase.label} returns the expected owner guidance (stdout=${result.stdout.trim()} stderr=${result.stderr.trim()})`);
+  equal(buildFactorySnapshot(state.paths).jobs[0].stage, testCase.stage, `${testCase.label} records the expected fail-closed stage`);
 }
 
 {
@@ -230,8 +262,36 @@ function runLaneHook(state, payload) {
   });
 }
 
+function runInstalledPreToolHooks(state, payload) {
+  let result;
+  for (const installedHook of [integrityHook, laneHook]) {
+    result = spawnSync(process.execPath, [installedHook], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: root,
+        CRX_AGENT_SURFACE: "codex",
+        CRX_FACTORY_TEST_MODE: "1",
+        CRX_FACTORY_TEST_STATE_DIR: state.dir,
+        NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-owner-input-test",
+      },
+      input: JSON.stringify(payload),
+    });
+    if (result.status !== 0 || result.error || result.stdout) break;
+  }
+  return result;
+}
+
 {
   const state = makeState("original-transfer-thread");
+  const boundaryRead = runInstalledPreToolHooks(state, {
+    thread_id: state.sessionId,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "README.md") },
+  });
+  equal(boundaryRead.stdout, "", "healthy pre-transfer replay creates the historical boundary without blocking reads");
+  ok(hasFactoryManagedSessionBackfillComplete(state.paths), "pre-transfer historical boundary is valid");
   const result = runHook(state, {
     prompt: `take over factory ticket ${state.jobId} in this chat`,
     thread_id: "new-transfer-thread",
@@ -241,6 +301,14 @@ function runLaneHook(state, payload) {
   equal(transferred.sessionId, "new-transfer-thread", "owner-authorized transfer binds the job to the new chat");
   equal(transferred.stage, "needs-ticket-ok", "owner-authorized transfer requires a fresh ticket presentation and approval");
   equal(transferred.questionHash, "", "owner-authorized transfer invalidates the old decision fingerprint");
+  ok(hasFactoryManagedSessionMarker(state.paths, "new-transfer-thread"), "custody transfer persists the destination-session marker before its ledger event");
+  writeFileSync(state.paths.eventsPath, "{not-valid-json}\n");
+  const corruptGovernanceEdit = runInstalledPreToolHooks(state, {
+    thread_id: "new-transfer-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, ".claude", "hooks", "migration-apply-guard.mjs"), content: "forged" },
+  });
+  ok(/cannot modify its own governance|protected governance edits/i.test(corruptGovernanceEdit.stdout), "transferred destination remains governed after immediate ledger corruption");
 }
 
 {
@@ -627,6 +695,7 @@ function runLaneHook(state, payload) {
   const accepted = buildFactorySnapshot(state.paths).jobs[0];
   equal(accepted.stage, "approved-to-land", "morning acceptance does not self-label the job live");
   equal(accepted.acceptedRepositoryContentHash, review.repositoryContentHash, "morning acceptance binds the exact independently reviewed repository hash");
+  equal(accepted.acceptedRepositoryCommitContentHash, review.repositoryCommitContentHash, "morning acceptance separately binds the Git-cleaned landing hash");
   equal(accepted.acceptedRepositoryFileCount, review.repositoryFileCount, "morning acceptance binds the exact reviewed file count");
 }
 
