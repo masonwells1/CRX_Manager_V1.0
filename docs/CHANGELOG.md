@@ -65,6 +65,14 @@ fail-open holes deserves better than that. Full reproduction and the recommended
 approach are in `docs/manual/KNOWN_ISSUES.md`; fix it from a session that has the
 proxy installed, where the real push is the proof.
 
+Codex found a second instance of the same defect on the same PR, after this one
+was parked: `backup-claude-memory` refuses under a proxy rewrite too, because the
+proxy-spelled push URL fails its `BACKUP_REPO_ID` identity check. The
+`backup-claude-memory` RESOLVED note in `KNOWN_ISSUES.md` claimed more than it had
+proved — it was verified against the two SSH-spelling rewrites, not a proxy — and
+has been corrected to say so. Both instances want the same approved-rewrite-target
+notion and should be fixed together.
+
 ## 2026-08-05 — Create-form defaults survive the customer route reset — BRANCH
 
 The stale-customer fix earlier in this branch cleared `CustomerDetail`'s record

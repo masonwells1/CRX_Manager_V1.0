@@ -7,9 +7,9 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN — push guard still denies web/mobile sessions that install a credential-proxy rewrite
+## OPEN — the push guard AND the memory backup still refuse web/mobile sessions that install a credential-proxy rewrite
 
-**Found 2026-08-05 by Codex on PR #313 (P2), reproduced and confirmed the same day. Needs an owner decision; see "the decision this needs" below.**
+**Found 2026-08-05 by Codex on PR #313 (P2), reproduced and confirmed the same day. Needs an owner decision; see "the decision this needs" below. Codex found the second instance (`backup-claude-memory`) on the same PR after the first was parked — see "Second instance" below.**
 
 PR #313 fixed the push guard denying *every* web/mobile session. It does not cover the variant where the session also installs a **credential-proxy rewrite** — the "third" rewrite noted in the RESOLVED entry below. Sessions carrying only the two SSH-spelling normalizations (`git@github.com:` / `ssh://git@github.com/` → `https://github.com/`) push fine; that is the shape the PR was developed and verified in, which is why it went unnoticed.
 
@@ -35,6 +35,20 @@ Reproduce: `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.http://proxy.invalid/git/.i
 
 So it wants an explicit notion of an approved rewrite target rather than another patch to the key function. Deliberately not attempted on PR #313: it is a security-relevant change to a push guard, and **this session cannot verify a fix end-to-end** — it carries the two SSH normalizations and no proxy rewrite, so only unit-level proof is available here. Recommend fixing it from a session that actually has the proxy installed, so the real push path is the proof.
 
+### Second instance — `backup-claude-memory` refuses the same way, for the same reason
+
+**Found 2026-08-05 by Codex on PR #313 (P2), reproduced and confirmed the same day.** The RESOLVED entry below says the memory backup now runs from a web or mobile session. **That claim is narrower than it reads, and the entry has been corrected**: what was verified there is a session carrying the two SSH-spelling normalizations. A session that also installs a credential proxy still refuses.
+
+`git remote -v` reports the proxy URL for the backup remote too, so the resolved push URL is `http://<proxy>/git/masonwells1/CRX_Backups.git`. `destinationIsPublishable()` gates the private-backup branch on `pushUrls.every((url) => canonicalRepoId(url) === BACKUP_REPO_ID)`, and the proxy URL does not canonicalize to that id, so the run falls through to the "not the off-site backup repo" refusal and stages nothing. Confirmed directly against the shipped helper:
+
+```
+ENTERS backup branch  "github.com/masonwells1/crx_backups"        <- https://github.com/masonwells1/CRX_Backups.git
+ENTERS backup branch  "github.com/masonwells1/crx_backups"        <- git@github.com:masonwells1/CRX_Backups.git
+REFUSES               "proxy.invalid/git/masonwells1/crx_backups" <- http://proxy.invalid/git/masonwells1/CRX_Backups.git
+```
+
+Same root cause as the push-guard instance above — no notion of an approved rewrite target — and the same safe failure direction: it refuses rather than writing private notes to an unverified address. Parked for the same reason, with one addition specific to this script: verifying a fix needs both a proxy-carrying session **and** a real private `CRX_Backups` clone to stage into, so the end-to-end proof is not available from an ordinary session at all. Fix both instances together; one approved-rewrite-target notion should serve both call sites.
+
 ## RESOLVED — `backup-claude-memory` could not run from a web/mobile session
 
 **Found and fixed 2026-08-04 (Mason approved the fix the same day). Same "presence treated as intent" shape as the push-guard regression fixed alongside it, in a different script.**
@@ -46,6 +60,8 @@ So it wants an explicit notion of an approved rewrite target rather than another
 So the ban was removed rather than reworked. What replaced it is a check that the redundancy is real: the script now asks git directly for each remote's push URL and requires that set to match the URLs it just validated, failing closed on any divergence, unenumerable remotes, or an unresolvable URL. If a future git version or configuration ever made `remote -v` show something other than the address git will contact, the run refuses instead of silently validating a URL that is never used.
 
 Coverage: the three round-26 redirect cases still refuse (the local `pushInsteadOf` case now via the credential check, one step later and for a more specific reason, still without echoing the secret), and a new case proves the actual relaxation — an identity-preserving rewrite no longer blocks the run. 234 assertions pass. Verified in the real web session: `stage()` into a private `CRX_Backups` clone with the ambient rewrites active now returns 0 and reports `Destination verified`.
+
+**Scope correction (2026-08-05, Codex on PR #313).** "The ambient rewrites" above means the two SSH-spelling normalizations this session carries — that is what was verified, and the resolution is real for that shape. It does **not** extend to a session that also installs a credential proxy: the proxy re-spelling makes the resolved push URL fail the `BACKUP_REPO_ID` identity check, and the run still refuses. Tracked as the second instance under the OPEN entry above. This entry stays RESOLVED for the rewrite shape it actually fixed rather than being reopened, since the blanket-ban removal it describes is sound and unaffected.
 
 Also fixed alongside it: the suite itself read the host's global git config instead of pinning its own, so the ambient rewrites failed it — and since the pre-commit hook runs that suite, it blocked every commit from a web session. It now pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to an empty file and strips inherited `GIT_CONFIG_*` at startup, so it tests the script rather than the machine.
 
