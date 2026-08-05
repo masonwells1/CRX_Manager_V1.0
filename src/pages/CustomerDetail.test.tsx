@@ -81,7 +81,18 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
 vi.mock('../hooks/useUnsavedChanges', () => ({ useUnsavedChanges: (dirty: boolean) => { dirtyStates.push(dirty); return { state: 'unblocked', reset: vi.fn(), proceed: vi.fn() }; } }));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
-vi.mock('../components/ui/CommissionSplitEditor', () => ({ default: () => <div /> }));
+// Controlled, like the real editor: the create form seeds one split row with an
+// empty recipient, and saving is blocked until it is filled. A `<div />` mock
+// hides that, so the create-route tests below need a way to fill it in.
+vi.mock('../components/ui/CommissionSplitEditor', () => ({
+  default: ({ value, onChange }: { value?: { splits?: { recipient: string; percentage: number }[] }; onChange: (v: { splits: { recipient: string; percentage: number }[] }) => void }) => (
+    <input
+      aria-label="commission recipient"
+      value={value?.splits?.[0]?.recipient ?? ''}
+      onChange={(e) => onChange({ splits: [{ recipient: e.target.value, percentage: 100 }] })}
+    />
+  ),
+}));
 vi.mock('../components/field-app/ApplicationServicePicker', () => ({ default: () => <div /> }));
 vi.mock('../components/customers/CustomerSummaryBar', () => ({ default: () => <div /> }));
 vi.mock('../components/customers/CustomerContacts', () => ({ default: () => <div />, CustomerInteractionsHistory: () => <div /> }));
@@ -545,11 +556,48 @@ describe('CustomerDetail stale whole-record save', () => {
     // proof that nothing carried over.
     mockRpc.mockClear();
     fireEvent.change(screen.getByLabelText(/farm name/i), { target: { value: 'Brand New Farm' } });
+    fireEvent.change(screen.getByLabelText('commission recipient'), { target: { value: 'Admin' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create Customer' }));
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.anything()));
     const payload = mockRpc.mock.calls.find(([name]) => name === 'save_customer')?.[1] as Record<string, unknown>;
     expect(payload.p_customer_id).toBeNull();
     expect(JSON.stringify(payload)).not.toContain('Original Farm');
+  });
+
+  it('restores the create-form defaults on that jump, not an empty form', async () => {
+    // The clear above went too far in its first revision: it reset to `{}`, which
+    // drops the defaults `useState` seeds a fresh /customers/new with. The form
+    // LOOKS right — those fields are not typed in — but the create payload then
+    // omits `assigned_sales_rep`, and `save_customer` requires a rep to
+    // self-assign, so creating from the normal route fails for reps and silently
+    // produces unassigned, untiered customers for admins. (Codex, PR #313.)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') return customerQuery(() => original);
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: { customer_id: 'created-1', row_version: 1 }, error: null });
+
+    renderDetailWithNewCustomerJump();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'New customer' }));
+    await screen.findByRole('button', { name: 'Create Customer' });
+
+    mockRpc.mockClear();
+    fireEvent.change(screen.getByLabelText(/farm name/i), { target: { value: 'Brand New Farm' } });
+    // The one create field that IS seeded blank by design; everything asserted
+    // below is a default the reset has to put back on its own.
+    fireEvent.change(screen.getByLabelText('commission recipient'), { target: { value: 'Admin' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Customer' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.anything()));
+
+    const payload = mockRpc.mock.calls.find(([name]) => name === 'save_customer')?.[1] as Record<string, unknown>;
+    expect(payload.p_customer_id).toBeNull();
+    expect(payload.p_customer_payload).toEqual(expect.objectContaining({
+      farm_name: 'Brand New Farm',
+      assigned_sales_rep: 'admin-1',
+      assigned_tier: 1,
+      is_active: true,
+    }));
   });
 
   it('keeps the committed crop but clears a jumped 4-to-6 token and requires recovery before a whole-record save', async () => {

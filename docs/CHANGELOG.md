@@ -2,6 +2,34 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Create-form defaults survive the customer route reset — BRANCH
+
+The stale-customer fix earlier in this branch cleared `CustomerDetail`'s record
+on every `:id` change, which was correct for switching between customers but
+overshot on `/customers/new`. That route reuses the same component, so the reset
+ran there too and replaced the create defaults with `{}` — dropping
+`assigned_sales_rep`, `assigned_tier`, `is_active` and the default commission
+split that `useState` seeds a fresh visit with.
+
+Nothing looked wrong: those fields are not typed in, so the form appeared
+normal. The damage showed up in the payload. `save_customer` requires a sales
+rep to self-assign, so a rep who opened the create form by navigating from an
+existing customer could fill in a farm name, hit Create Customer, and have the
+create rejected — while an admin doing the same silently produced an
+unassigned, untiered customer. (Codex, PR #313.)
+
+The defaults now live in one `makeBlankCustomer()` factory used by both the
+initial mount and the reset, so the two paths cannot drift again. The reset
+reads the current profile id through a ref rather than an effect dependency —
+adding `profile?.id` to the deps would re-run the reset when the profile
+resolves and clobber an already-loaded customer.
+
+Regression test asserts the create payload carries `assigned_sales_rep`,
+`assigned_tier` and `is_active` after a jump from an open customer; it fails
+against the `{}` reset. The mocked `CommissionSplitEditor` became controlled in
+the process — as a bare `<div />` it hid that the seeded split row starts with
+an empty recipient and blocks saving until filled.
+
 ## 2026-08-05 — Replaced destination identity with a gate-decision comparison — BRANCH
 
 Five review rounds found five distinct holes in the same helper, and every fix

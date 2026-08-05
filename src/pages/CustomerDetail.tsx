@@ -68,6 +68,31 @@ interface RemainderRow {
   [key: string]: unknown;
 }
 
+// The create-form defaults, shared by the initial mount and the per-route reset
+// below. They have to be the same object shape in both places: /customers/new
+// reached by navigating FROM an existing customer reuses this component and runs
+// the reset, so resetting to `{}` there would drop `assigned_sales_rep`,
+// `assigned_tier`, `is_active` and the default split that a fresh visit gets —
+// and `save_customer` rejects a rep who has not self-assigned. (Codex, PR #313.)
+const makeBlankCustomer = (salesRepId: string | undefined): Partial<Customer> => ({
+  farm_name: '',
+  contact_name: '',
+  phone: '',
+  email: '',
+  billing_address: '',
+  assigned_tier: 1,
+  assigned_sales_rep: salesRepId,
+  total_acres: undefined,
+  corn_acres: undefined,
+  soybean_acres: undefined,
+  other_acres: undefined,
+  payment_terms: '',
+  notes: '',
+  is_active: true,
+  default_commission_split: { splits: [{ recipient: '', percentage: 100 }] },
+  default_application_service_id: null,
+});
+
 export default function CustomerDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -80,24 +105,11 @@ export default function CustomerDetail() {
   } = useIdempotencyKey('save_customer', profile?.id || '');
   const isNew = id === 'new';
 
-  const [customer, setCustomer] = useState<Partial<Customer>>({
-    farm_name: '',
-    contact_name: '',
-    phone: '',
-    email: '',
-    billing_address: '',
-    assigned_tier: 1,
-    assigned_sales_rep: profile?.id,
-    total_acres: undefined,
-    corn_acres: undefined,
-    soybean_acres: undefined,
-    other_acres: undefined,
-    payment_terms: '',
-    notes: '',
-    is_active: true,
-    default_commission_split: { splits: [{ recipient: '', percentage: 100 }] },
-    default_application_service_id: null,
-  });
+  const [customer, setCustomer] = useState<Partial<Customer>>(() => makeBlankCustomer(profile?.id));
+  // Read by the route-change reset, which must not re-run when the profile
+  // resolves — that would clobber an already-loaded customer.
+  const salesRepIdRef = useRef(profile?.id);
+  salesRepIdRef.current = profile?.id;
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   // Lost-update guard: split as loaded from the DB, and whether the user has
   // changed it this session (see src/lib/commissionSplitConcurrency.ts).
@@ -387,8 +399,10 @@ export default function CustomerDetail() {
     // duplicating the old record as a new customer. (Codex, PR #313.)
     //
     // So the clears always run; only the skeleton is conditional, because a new
-    // customer genuinely has nothing to fetch.
-    setCustomer({});
+    // customer genuinely has nothing to fetch. The reset goes back to the create
+    // defaults rather than `{}` — on /customers/new they ARE the form, and an
+    // existing customer overwrites them wholesale when its snapshot lands.
+    setCustomer(makeBlankCustomer(salesRepIdRef.current));
     setAddresses([]);
     setCrops([]);
     setParentName('');
