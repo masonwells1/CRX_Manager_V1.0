@@ -7,6 +7,34 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN — push guard still denies web/mobile sessions that install a credential-proxy rewrite
+
+**Found 2026-08-05 by Codex on PR #313 (P2), reproduced and confirmed the same day. Needs an owner decision; see "the decision this needs" below.**
+
+PR #313 fixed the push guard denying *every* web/mobile session. It does not cover the variant where the session also installs a **credential-proxy rewrite** — the "third" rewrite noted in the RESOLVED entry below. Sessions carrying only the two SSH-spelling normalizations (`git@github.com:` / `ssh://git@github.com/` → `https://github.com/`) push fine; that is the shape the PR was developed and verified in, which is why it went unnoticed.
+
+With a proxy rewrite of the form `url.http://<proxy>/git/.insteadOf https://github.com/`, `git remote -v` reports the proxy URL, so the guard's two reads disagree:
+
+```
+scrubbed decision: guarded-app github github.com/masonwells1/crx_manager_v1.0
+ambient  decision: guarded-app raw http://proxy.invalid/git/masonwells1/CRX_Manager_V1.0.git
+divergent keys   : ["dest"]
+```
+
+`pushDestinationKey()` only canonicalizes direct GitHub spellings and falls back to `raw <url>` for anything else, so `divergentPushLookups()` reports a divergence and the guard denies — including an ordinary `HEAD:feature` push. That blocks the branch→PR landing path in exactly the environment the guard was meant to unblock.
+
+Reproduce: `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.http://proxy.invalid/git/.insteadOf' GIT_CONFIG_VALUE_0='https://github.com/' git remote -v` in an HTTPS-origin checkout, then compare `pushDestinationDecision()` on the scrubbed and ambient URLs.
+
+**Note both sides already classify the destination `guarded-app`** — `urlIsGuardedApp()` recognizes the proxy URL by path. The divergence is only in the identity half of the key.
+
+**The decision this needs.** A fix means teaching the guard which rewrite targets count as "the same repository," and every obvious shortcut re-opens the fail-open this helper has already sprung five times:
+
+- Comparing only the `guarded-app` boolean is the first draft that was rejected as too weak.
+- Matching on the `owner/repo` path suffix would make any host with a matching path compare equal — a redirect to an attacker-controlled host would pass.
+- Applying the unioned rewrite table to *both* reads makes them agree by construction, which defeats the divergence check entirely.
+
+So it wants an explicit notion of an approved rewrite target rather than another patch to the key function. Deliberately not attempted on PR #313: it is a security-relevant change to a push guard, and **this session cannot verify a fix end-to-end** — it carries the two SSH normalizations and no proxy rewrite, so only unit-level proof is available here. Recommend fixing it from a session that actually has the proxy installed, so the real push path is the proof.
+
 ## RESOLVED — `backup-claude-memory` could not run from a web/mobile session
 
 **Found and fixed 2026-08-04 (Mason approved the fix the same day). Same "presence treated as intent" shape as the push-guard regression fixed alongside it, in a different script.**
