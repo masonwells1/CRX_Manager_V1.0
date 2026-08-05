@@ -2,6 +2,40 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Codex review of PR #313: the push-guard fix was half-done — BRANCH
+
+Marking the PR ready triggered an independent Codex review, and it found that the
+2026-08-04 push-guard fix **did not actually fix the reported problem for every
+checkout.**
+
+Comparing `git remote -v` as raw text was too literal. A credential proxy's
+rewrite exists precisely to re-spell `git@github.com:owner/repo` as
+`https://github.com/owner/repo` — the same repository, reached the same way — so
+the scrubbed and ambient reads differ as strings while nothing about the
+destination has moved. Every SSH-remote checkout in a web or mobile session was
+therefore still denied: the original bug, still live, in the change that was
+supposed to remove it.
+
+It survived the first round's verification because **this checkout happens to use
+an HTTPS remote.** Testing the one configuration to hand, and generalising from
+it, is what let a half-fix read as a whole one. Reproduced before fixing: HTTPS
+remote allowed, `git@github.com:` and `ssh://git@github.com/` both denied.
+
+Destinations now compare by REPOSITORY IDENTITY rather than spelling.
+`equivalentDestinationKey` maps a URL to its canonical repository only when the
+transport is one git reaches that repository with (https, ssh, scp-style);
+`canonicalPushDestinations` applies it to the push lines of `remote -v`. Anything
+without a canonical form — a different repository, another host, a downgrade to
+plain http, a proxy interception, an unrecognised transport — keeps its raw text,
+differs from the other side, and denies. It fails closed by construction rather
+than by an added rule.
+
+Re-verified against the real guard, not just units. Allowed: the benign SSH→HTTPS
+re-spelling, on all three remote spellings. Still denied: a rewrite to a different
+repository, to a different host, to plain http, to a loopback proxy, and any
+main-bound push. All 22 hook suites, the Codex production-action-guard suite, and
+`test:agent-workflows` pass.
+
 ## 2026-08-05 — CodeRabbit third review round on PR #313 — BRANCH
 
 One finding, and a correct one: the last remaining leak of the route-session

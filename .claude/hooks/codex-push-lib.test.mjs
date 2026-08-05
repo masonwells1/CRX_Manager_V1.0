@@ -47,6 +47,9 @@ import {
   environmentCarriesConfigOverride,
   rewritesReachGuardedApp,
   riskyFiles,
+  equivalentDestinationKey,
+  canonicalPushDestinations,
+  divergentPushLookups,
 } from "./codex-push-lib.mjs";
 
 const now = Date.parse("2026-07-13T18:00:00.000Z");
@@ -68,6 +71,84 @@ for (const option of ["--no-optional-locks", "--paginate", "--bare", "--glob-pat
   );
 }
 assert.deepEqual(unknownGitGlobalOptions("git -C /repo push origin main"), [], "supported -C remains inspectable");
+
+// 2026-08-05 (Codex review of the 2026-08-04 change): comparing `remote -v` as raw
+// text left the original bug half-fixed. A credential proxy's rewrite re-spells the
+// SSH form as HTTPS for the SAME repository, so the scrubbed and ambient reads
+// differ as strings and every SSH-remote checkout in a web session was still denied
+// — reproduced before fixing. Destinations therefore compare by repository
+// identity, and only across transports git reaches the same repo with.
+{
+  const APP_HTTPS = "https://github.com/masonwells1/CRX_Manager_V1.0.git";
+  const APP_SSH = "git@github.com:masonwells1/CRX_Manager_V1.0.git";
+  const APP_SSH_URL = "ssh://git@github.com/masonwells1/CRX_Manager_V1.0.git";
+  assert.equal(
+    equivalentDestinationKey(APP_HTTPS), equivalentDestinationKey(APP_SSH),
+    "the https and scp-style spellings of one repository are one destination",
+  );
+  assert.equal(
+    equivalentDestinationKey(APP_SSH_URL), equivalentDestinationKey(APP_HTTPS),
+    "so is the ssh:// spelling",
+  );
+  assert.notEqual(
+    equivalentDestinationKey("https://github.com/masonwells1/Elsewhere.git"),
+    equivalentDestinationKey(APP_HTTPS), "a different repository is a different destination",
+  );
+  assert.notEqual(
+    equivalentDestinationKey("https://evil.invalid/masonwells1/CRX_Manager_V1.0.git"),
+    equivalentDestinationKey(APP_HTTPS), "same path on another host is a different destination",
+  );
+  // Anything outside the sanctioned transports has NO canonical form, so it can
+  // never compare equal to a spelling that does — it falls back to raw text and
+  // denies. A downgrade to plain http and a proxy interception both land here.
+  for (const unsanctioned of [
+    "http://github.com/masonwells1/CRX_Manager_V1.0.git",
+    "http://local_proxy@127.0.0.1:41729/git/masonwells1/CRX_Manager_V1.0.git",
+    "git://github.com/masonwells1/CRX_Manager_V1.0.git",
+    "relay://github.com/masonwells1/CRX_Manager_V1.0.git",
+    "/srv/local/CRX_Manager_V1.0.git",
+    "",
+  ]) {
+    assert.equal(equivalentDestinationKey(unsanctioned), null, `${unsanctioned || "(empty)"} has no canonical destination`);
+  }
+
+  const verbose = (url) => `origin\t${url} (fetch)\norigin\t${url} (push)\n`;
+  assert.equal(
+    canonicalPushDestinations(verbose(APP_SSH)), canonicalPushDestinations(verbose(APP_HTTPS)),
+    "the re-spelled remote is not a redirect",
+  );
+  assert.deepEqual(
+    divergentPushLookups(
+      { remotes: `ok:${canonicalPushDestinations(verbose(APP_SSH))}` },
+      { remotes: `ok:${canonicalPushDestinations(verbose(APP_HTTPS))}` },
+    ), [], "so the ordinary web/mobile push is allowed through",
+  );
+  assert.deepEqual(
+    divergentPushLookups(
+      { remotes: `ok:${canonicalPushDestinations(verbose(APP_SSH))}` },
+      { remotes: `ok:${canonicalPushDestinations(verbose("https://evil.invalid/masonwells1/CRX_Manager_V1.0.git"))}` },
+    ), ["remotes"], "a rewrite that moves the destination still denies",
+  );
+  // Only the PUSH line decides where objects go; a fetch-only difference is not a
+  // redirect, and remote ordering is not one either.
+  assert.equal(
+    canonicalPushDestinations(`origin\t${APP_SSH} (fetch)\norigin\t${APP_HTTPS} (push)\n`),
+    canonicalPushDestinations(verbose(APP_HTTPS)),
+    "the fetch line does not participate",
+  );
+  assert.equal(
+    canonicalPushDestinations(`a\t${APP_HTTPS} (push)\nb\t${APP_SSH} (push)\n`),
+    canonicalPushDestinations(`b\t${APP_SSH} (push)\na\t${APP_HTTPS} (push)\n`),
+    "remote ordering is not a redirect",
+  );
+  // The remote NAME is part of the answer: the same repository reached under a
+  // different remote name is a different push target for a bare `git push`.
+  assert.notEqual(
+    canonicalPushDestinations(`origin\t${APP_HTTPS} (push)\n`),
+    canonicalPushDestinations(`upstream\t${APP_HTTPS} (push)\n`),
+    "a renamed remote is not silently equated",
+  );
+}
 assert.deepEqual(unknownGitGlobalOptions("git --no-pager push origin main"), [], "supported --no-pager remains inspectable");
 assert.deepEqual(unknownGitGlobalOptions("git --no-optional-locks status"), [], "an option before a non-push is outside this gate");
 assert.equal(mainPushSource("git.exe push origin HEAD:main", "feature"), "HEAD");

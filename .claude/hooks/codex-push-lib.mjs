@@ -874,6 +874,54 @@ export function pushDestinationLookupArgs(branch) {
   ];
 }
 
+// Comparing `remote -v` as raw text was too literal, and it left the original
+// bug half-alive (Codex's 2026-08-05 review of this very change). A credential
+// proxy's rewrite re-spells `git@github.com:owner/repo` as
+// `https://github.com/owner/repo` — the SAME repository, reached the same way,
+// which is the entire purpose of that rewrite. The two reads differ as strings,
+// so an ordinary feature-branch push from any SSH-remote checkout in a web
+// session was still denied. Verified by reproduction: an HTTPS-remote checkout
+// (which is what this repo happens to use, and why the first round of testing
+// missed it) was allowed while `git@github.com:` and `ssh://git@github.com/`
+// spellings were both denied.
+//
+// So destinations compare by REPOSITORY IDENTITY, not spelling. Two URLs are the
+// same destination when they name the same repository AND both arrive over a
+// transport from the sanctioned set below. Anything else — a different
+// repository, a proxy host, a downgraded or unrecognised transport — has no
+// canonical form here and falls back to its raw text, which then differs from
+// the other side and denies. Fails CLOSED by construction: `null` from
+// `canonicalRepoId` (unparseable, malformed escape, no repository named) also
+// falls back to raw text rather than comparing equal to anything.
+const EQUIVALENT_DESTINATION_SCHEMES = new Set(["https", "ssh"]);
+export function equivalentDestinationKey(url) {
+  const text = String(url ?? "").trim();
+  const id = canonicalRepoId(text);
+  if (!id) return null;
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(text);
+  // No scheme means the scp-like `[user@]host:path` spelling, which git carries
+  // over ssh. `canonicalRepoId` already rejected anything that is not one of the
+  // two shapes, so reaching here without a scheme means scp-like.
+  const transport = scheme ? scheme[1].toLowerCase() : "ssh";
+  return EQUIVALENT_DESTINATION_SCHEMES.has(transport) ? id : null;
+}
+
+// `git remote -v` prints `<name> <url> (fetch|push)`. Only the push lines decide
+// where objects go. Sorted so remote ordering is not mistaken for a redirect.
+export function canonicalPushDestinations(remoteVerboseOutput) {
+  return String(remoteVerboseOutput ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /\(push\)\s*$/.test(line))
+    .map((line) => {
+      const fields = line.split(/\s+/);
+      const key = equivalentDestinationKey(fields[1] || "");
+      return key ? `${fields[0]} ${key}` : `raw ${line}`;
+    })
+    .sort()
+    .join("\n");
+}
+
 // Compare two answer sets. A key whose value differs — including one side
 // erroring while the other does not — means the inherited configuration moves
 // this push somewhere the guard's own lookups would not have seen, so the caller

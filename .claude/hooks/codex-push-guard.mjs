@@ -40,6 +40,8 @@ import {
   environmentCarriesConfigOverride,
   pushDestinationLookupArgs,
   divergentPushLookups,
+  canonicalPushDestinations,
+  equivalentDestinationKey,
   environmentCarriesTransportOverride,
   environmentSelectsDifferentRepo,
   destinationLooksLikeUrl,
@@ -153,11 +155,27 @@ if (inheritedOverrides.length > 0) {
       .filter((segment) => isGitPush(segment))
       .map((segment) => gitPushCwd(segment, projectDir)),
   ])];
-  const answerFor = (args, cwd, keepConfigOverrides) => {
+  // Destinations compare by repository identity, everything else by exact text.
+  // `remote -v` is the one answer a benign rewrite legitimately re-spells — the
+  // credential proxy's whole job is turning `git@github.com:` into
+  // `https://github.com/` for the SAME repository — so comparing its raw text
+  // denied every SSH-remote checkout in a web session. The other lookups are
+  // config VALUES (a remote name, a refspec), which a rewrite does not re-spell,
+  // so they stay literal. See `canonicalPushDestinations`: anything it cannot
+  // name a repository and a sanctioned transport for keeps its raw text and so
+  // still denies.
+  const normalizeAnswer = (name, text) => {
+    if (name === "remotes") return canonicalPushDestinations(text);
+    // A literal URL destination is resolved to one URL, and the same re-spelling
+    // argument applies to it — `null` falls back to raw text, so it still denies.
+    if (name.startsWith("url ")) return equivalentDestinationKey(String(text).trim()) || text;
+    return text;
+  };
+  const answerFor = (name, args, cwd, keepConfigOverrides) => {
     // `config --get` exits 1 when a key is unset, which is the ordinary case and
     // must read as "absent", not "failed" — but it has to be DISTINGUISHABLE from
     // a real failure, because an error on one side only is itself a divergence.
-    try { return `ok:${gitIn(args, cwd, { keepConfigOverrides })}`; }
+    try { return `ok:${normalizeAnswer(name, gitIn(args, cwd, { keepConfigOverrides }))}`; }
     catch (error) { return `err:${error?.status ?? error?.message ?? "failed"}`; }
   };
   for (const repoDir of overrideRepoDirs) {
@@ -170,8 +188,8 @@ if (inheritedOverrides.length > 0) {
     const scrubbed = {};
     const ambient = {};
     for (const [name, args] of pushDestinationLookupArgs(overrideBranch)) {
-      scrubbed[name] = answerFor(args, repoDir, false);
-      ambient[name] = answerFor(args, repoDir, true);
+      scrubbed[name] = answerFor(name, args, repoDir, false);
+      ambient[name] = answerFor(name, args, repoDir, true);
     }
     // NOT compared here: the URL-rewrite table and the settings naming a program
     // to carry the objects. Those two feed classifiers whose only power is to
@@ -189,8 +207,8 @@ if (inheritedOverrides.length > 0) {
     for (const segment of shellSegments(cmd).map((s) => s.trim()).filter((s) => isGitPush(s))) {
       const token = pushDestinationToken(segment);
       if (!token || !destinationLooksLikeUrl(token)) continue;
-      scrubbed[`url ${token}`] = answerFor(["ls-remote", "--get-url", token], repoDir, false);
-      ambient[`url ${token}`] = answerFor(["ls-remote", "--get-url", token], repoDir, true);
+      scrubbed[`url ${token}`] = answerFor(`url ${token}`, ["ls-remote", "--get-url", token], repoDir, false);
+      ambient[`url ${token}`] = answerFor(`url ${token}`, ["ls-remote", "--get-url", token], repoDir, true);
     }
     const divergent = divergentPushLookups(scrubbed, ambient);
     if (divergent.length > 0) {
