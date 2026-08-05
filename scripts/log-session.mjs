@@ -32,6 +32,10 @@
 // An empty result means NO migrations were touched and is reported as such. It is
 // never backfilled from unrelated history.
 //
+// origin/main MUST resolve locally. Without it these ranges are meaningless, so
+// the script refuses to write and tells you to fetch, rather than guessing. A git
+// command that FAILS is likewise never treated as an empty result.
+//
 // Exit:   0 = entry written (or printed in --dry-run; or an identical heading
 //             already exists — skipped, nothing to do)
 //         1 = docs/CHANGELOG.md missing/unreadable or git unusable
@@ -64,7 +68,8 @@ if (argv.includes("--help") || argv.includes("-h")) {
       "full text becomes the lead paragraph.",
       "",
       "Commits are scoped to origin/main..HEAD (this branch's work). Migrations come",
-      "from the same range; an empty result means none were touched.",
+      "from the same range; an empty result means none were touched. origin/main must",
+      "resolve locally — if it does not, the script refuses rather than guessing.",
       "",
       "ALWAYS read the generated entry before committing it.",
     ].join("\n"),
@@ -79,36 +84,82 @@ if (si !== -1) {
   summary = (argv[si + 1] || "").trim() || null;
 }
 
+// Returns {ok, out}. A git FAILURE and a git success with EMPTY output are
+// different facts: the first means attribution is unknowable, the second means
+// there is genuinely nothing to report. Collapsing both to "" is what let the
+// old code silently fall back to unrelated history.
 function runGit(args) {
   try {
-    return execFileSync("git", args, {
+    const out = execFileSync("git", args, {
       encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"], cwd: root,
     }).trim();
+    return { ok: true, out };
   } catch {
-    return "";
+    return { ok: false, out: "" };
   }
 }
 
-// ─── This session's commits ───────────────────────────────────────────────
+function gitOrDie(args, what) {
+  const res = runGit(args);
+  if (!res.ok) {
+    console.error(
+      `ERROR — git failed while resolving ${what} (\`git ${args.join(" ")}\`).\n` +
+      "Refusing to write docs/CHANGELOG.md: without this the entry could claim\n" +
+      "commits or migrations that are not this session's work.",
+    );
+    process.exit(1);
+  }
+  return res.out;
+}
+
+// ─── This session's commits ────────────────────────────────────────────────
 // Commits on this branch and not yet on main ARE this session's work. The old
 // --author=Mason filter never matched agent-authored commits, so every agent
 // session fell through to `git log -15` and claimed unrelated merged work.
+//
+// origin/main must actually resolve. If it does not, attribution is unknowable
+// and the script fails loudly rather than guessing from a time window.
+//
+// Probed with runGit, NOT gitOrDie: `rev-parse --verify --quiet` exits 1 on a
+// missing ref, so gitOrDie would report it as "git failed" and bury the one
+// thing the reader can act on — a shallow or un-fetched checkout just needs a
+// fetch, which is a different problem from git being broken.
+const baseProbe = runGit(["rev-parse", "--verify", "--quiet", "origin/main^{commit}"]);
+const baseSha = baseProbe.ok ? baseProbe.out : "";
+if (!baseSha) {
+  console.error(
+    "ERROR — origin/main does not resolve in this checkout, so this session's\n" +
+    "commits and migrations cannot be told apart from anyone else's work.\n" +
+    "Run `git fetch origin main`, then re-run. Nothing was written.",
+  );
+  process.exit(1);
+}
+
 let commitSource = "git log origin/main..HEAD";
-let commitsRaw = runGit(["log", "origin/main..HEAD", "--oneline"]);
+let commitsRaw = gitOrDie(["log", "origin/main..HEAD", "--oneline"], "this branch's commits");
 if (!commitsRaw) {
-  // Branch is level with main (or origin/main is unavailable). A time window is
-  // the only honest remaining signal — and it is labelled as such, never as
-  // "this session's" with certainty.
-  commitSource = "git log --since=12.hours (branch level with origin/main — may include others' work)";
-  commitsRaw = runGit(["log", "--since=12.hours", "--oneline"]);
+  // Genuinely no commits ahead of origin/main. The temporal fallback is only
+  // honest when HEAD really IS origin/main — otherwise the branch is behind or
+  // diverged, and a 12-hour window would credit other people's work.
+  const headSha = gitOrDie(["rev-parse", "HEAD"], "HEAD");
+  if (headSha === baseSha) {
+    commitSource = "git log --since=12.hours (HEAD is level with origin/main — may include others' work)";
+    commitsRaw = gitOrDie(["log", "--since=12.hours", "--oneline"], "recent commits");
+  } else {
+    commitSource = "git log origin/main..HEAD (no commits ahead of origin/main)";
+  }
 }
 const commits = commitsRaw.split("\n").map(l => l.trim()).filter(Boolean);
 
 // ─── Migrations touched ────────────────────────────────────────────────────
 // No fallback: an empty diff means this branch touched no migrations. Backfilling
-// from recent history invented migrations that the session never went near.
+// from recent history invented migrations that the session never went near. A
+// FAILED diff is not an empty diff and stops the write path above.
 const migSource = "git diff --name-only origin/main...HEAD";
-const migsRaw = runGit(["diff", "--name-only", "origin/main...HEAD", "--", "supabase/migrations"]);
+const migsRaw = gitOrDie(
+  ["diff", "--name-only", "origin/main...HEAD", "--", "supabase/migrations"],
+  "migrations touched",
+);
 const migrationsTouched = [...new Set(
   migsRaw.split("\n").map(l => l.trim()).filter(l => /supabase\/migrations\/.+\.sql$/.test(l))
 )];
