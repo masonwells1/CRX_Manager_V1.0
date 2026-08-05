@@ -2,6 +2,26 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Third parked guard finding: executable-config classifier gaps — BRANCH
+
+Codex's re-review of `a9c7b7c1` on PR #313 raised a P1 on the executable-config
+classifier. Reproduced, and it is two defects rather than one: `core.hooksPath`
+and shell-form `credential.helper` are missing from `EXECUTABLE_TRANSPORT_KEYS`
+(a), *and* the classifier sits after a main-bound-only early exit at
+`codex-push-guard.mjs:395`, so on a feature push even `core.sshCommand` — which
+is in the list — allows (b). Codex reported (a) and reproduced (b); its suggested
+fix addresses (a) alone and so would leave its own reproduction allowing.
+
+Parked, not patched, on evidence that the literal fix self-DoSes: husky sets
+`core.hooksPath=.husky/_` in this repo, so naming that key would deny **every**
+push from here. The guard needs to distinguish the committed `.husky/_` path from
+an inherited absolute one — the same approved-value notion the two rewrite
+instances need, now wanted in a third place. Detail, reproductions, and the husky
+collision are in `docs/manual/KNOWN_ISSUES.md`.
+
+Unlike the other two parked instances this one fails **open** rather than closed,
+bounded by already needing command execution in the session to set the config.
+
 ## 2026-08-05 — Push guard now denies an inherited `remote.*.mirror` — BRANCH
 
 Codex found on PR #313 that an inherited `GIT_CONFIG*` setting

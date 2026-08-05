@@ -49,6 +49,41 @@ REFUSES               "proxy.invalid/git/masonwells1/crx_backups" <- http://prox
 
 Same root cause as the push-guard instance above — no notion of an approved rewrite target — and the same safe failure direction: it refuses rather than writing private notes to an unverified address. Parked for the same reason, with one addition specific to this script: verifying a fix needs both a proxy-carrying session **and** a real private `CRX_Backups` clone to stage into, so the end-to-end proof is not available from an ordinary session at all. Fix both instances together; one approved-rewrite-target notion should serve both call sites.
 
+### Third instance — the executable-config classifier misses `core.hooksPath`, and is unreachable for non-main pushes
+
+**Found 2026-08-05 by Codex on PR #313 (P1), reproduced the same day. Two separate defects; Codex's report names one and reproduces the other.**
+
+`EXECUTABLE_TRANSPORT_KEYS` in `.claude/hooks/codex-push-lib.mjs` names the settings that select a program to carry a push (`core.sshCommand`, `core.gitProxy`, `remote.*.receivePack`, …). Two omissions matter, because `git push` runs `pre-push` from `core.hooksPath`:
+
+- **(a) The list is incomplete.** `core.hooksPath` and shell-form `credential.helper` are absent. On a **main-bound** push, `core.sshCommand` denies and both of these allow.
+- **(b) The classifier is unreachable for any push that is not main-bound.** The loop exits at the `mainPushSource()` check (`codex-push-guard.mjs:395`) before reaching the classifier at line 481. On a feature-bound push, even `core.sshCommand` — which *is* in the list — allows.
+
+Reproduced against the shipped guard, plus a planted hook to prove execution is real:
+
+```
+--- MAIN-BOUND push (reaches the classifier) ---
+  core.sshCommand:    deny
+  core.hooksPath:     allow
+  credential.helper:  allow
+--- FEATURE-BOUND push (exits at guard line 395) ---
+  core.sshCommand:    allow
+  core.hooksPath:     allow
+
+planted pre-push hook executed by git?  YES
+```
+
+Codex reproduced (b) and proposed a fix for (a) — "deny executable configuration keys". Applied literally, **that fix denies every push from this repository**, because husky legitimately sets `core.hooksPath=.husky/_` here:
+
+```
+Keys in THIS repo the proposed list would flag:
+  core.hookspath=.husky/_
+=> every push from this repo would DENY
+```
+
+That collision is why this is parked rather than patched. The setting cannot be refused by name the way `core.sshCommand` can: the repo's own tooling sets it, so the guard needs to tell the committed `.husky/_` path from an inherited or absolute attacker path — which is the **same approved-value notion** the two rewrite instances above need, in a third place. Fix all three together.
+
+Failure direction differs from the other two and is worth stating plainly: these **allow** rather than refuse, so this instance is a genuine hole rather than an over-refusal. It is bounded by the fact that setting the config at all requires the ability to run commands in the session already.
+
 ## RESOLVED — `backup-claude-memory` could not run from a web/mobile session
 
 **Found and fixed 2026-08-04 (Mason approved the fix the same day). Same "presence treated as intent" shape as the push-guard regression fixed alongside it, in a different script.**
