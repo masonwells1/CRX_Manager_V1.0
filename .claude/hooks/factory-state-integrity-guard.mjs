@@ -111,7 +111,7 @@ if (sessionId) {
 if (targets.some((target) => target.startsWith(stateNorm) || target.includes("/crx-factory/"))) {
   deny("CRX FACTORY STATE GUARD: direct tool access to the shared factory ledger/tickets/evidence is forbidden. Use the validated scripts/factory.mjs entrypoint or the read-only Factory Board.");
 }
-const governanceTarget = /(?:^|\/)(?:(?:AGENTS|CLAUDE)\.md|\.gitignore|package(?:-lock)?\.json|(?:eslint(?:-local-rules)?|postcss|tailwind)\.config\.(?:js|cjs|mjs|ts)|tsconfig(?:\.[^/]+)?\.json|vite\.config\.(?:js|mjs|ts)|vitest\.config\.(?:js|mjs|ts)|vercel\.json|supabase\/config\.toml|(?:scripts|\.claude|\.codex|\.husky)(?:\/.*)?|\.github\/(?:workflows|actions)(?:\/.*)?)$/i;
+const governanceTarget = /(?:^|\/)(?:(?:AGENTS|CLAUDE)\.md|\.gitignore|package(?:-lock)?\.json|eslint-local-rules\.cjs|eslint-local-rules(?:\/.*)?|(?:eslint(?:-local-rules)?|postcss|tailwind)\.config\.(?:js|cjs|mjs|ts)|tsconfig(?:\.[^/]+)?\.json|vite\.config\.(?:js|mjs|ts)|vitest\.config\.(?:js|mjs|ts)|vercel\.json|supabase\/config\.toml|(?:scripts|\.claude|\.codex|\.husky)(?:\/.*)?|\.github\/(?:workflows|actions)(?:\/.*)?)$/i;
 if (targets.some((target) => target.startsWith(permitsNorm))) {
   deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
 }

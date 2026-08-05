@@ -877,6 +877,15 @@ function bashExecutable() {
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects PR bodies synthesized from unreviewed commit metadata");
 }
 
+function repositoryFilesUnder(relativeDirectory) {
+  return readdirSync(path.join(root, relativeDirectory), { withFileTypes: true })
+    .flatMap((entry) => {
+      const relativePath = path.posix.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) return repositoryFilesUnder(relativePath);
+      return entry.isFile() ? [relativePath] : [];
+    });
+}
+
 function deterministicSafetyPaths() {
   const modulePaths = [
     [".claude", "hooks"],
@@ -884,6 +893,7 @@ function deterministicSafetyPaths() {
   ].flatMap((segments) => readdirSync(path.join(root, ...segments), { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
     .map((entry) => [...segments, entry.name].join("/")));
+  const localLintRulePaths = repositoryFilesUnder("eslint-local-rules");
   return [...new Set([
     "AGENTS.md",
     "CLAUDE.md",
@@ -914,6 +924,7 @@ function deterministicSafetyPaths() {
     "scripts/overnight-codex-gate.mjs",
     "scripts/validate-sql.sh",
     "scripts/check-supplier-pricing-phase3-private-artifacts.mjs",
+    ...localLintRulePaths,
     ...modulePaths,
   ])].sort();
 }
@@ -1065,20 +1076,12 @@ function deterministicSafetyPaths() {
   });
   assertions++;
   assert.equal(unrelatedStructuredWrite.stdout, "", "pre-backfill corruption still permits an unrelated structured non-governance edit");
-  denied(runHookChain(installedHookChain, stateDir, {
-    thread_id: historicalSessionId,
-    tool_name: "MultiEdit",
-    tool_input: {
-      edits: deterministicSafetyPaths()
-        .map((relativePath) => ({ file_path: path.join(root, relativePath), new_string: "forged" })),
-    },
-  }), /backfill is durably complete/i, "pre-backfill corruption cannot fail open on protected governance edits");
-  for (const agentContract of ["AGENTS.md", "CLAUDE.md"]) {
+  for (const relativePath of deterministicSafetyPaths()) {
     denied(runHookChain(installedHookChain, stateDir, {
       thread_id: historicalSessionId,
       tool_name: "Write",
-      tool_input: { file_path: path.join(root, agentContract), content: "forged" },
-    }), /backfill is durably complete/i, `pre-backfill corruption protects ${agentContract} after lowercase path normalization`);
+      tool_input: { file_path: path.join(root, relativePath), content: "forged" },
+    }), /backfill is durably complete/i, `pre-backfill corruption independently protects ${relativePath}`);
   }
   denied(runHookChain(installedHookChain, stateDir, {
     thread_id: historicalSessionId,
