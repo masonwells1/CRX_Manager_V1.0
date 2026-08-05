@@ -16,6 +16,7 @@ import {
   rejectSecretBearingText,
   repositoryContentFingerprint,
   resolveHookFactoryPaths,
+  setFactoryManagedSessionMarker,
   setEmergencyFactoryHold,
   sha256,
   unqualifiedOwnerApproval,
@@ -167,6 +168,7 @@ async function main() {
       emit("CRX Factory recorded no custody transfer because the request did not identify exactly one transferable job. Name the job shown on the Factory Board and ask to move it to this chat.");
     }
     const job = candidates[0];
+    setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
     appendFactoryEvent(paths, {
       type: "job-session-transferred",
       jobId: job.id,

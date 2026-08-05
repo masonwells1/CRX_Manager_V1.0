@@ -20,6 +20,8 @@ surface (all Claude/Codex hooks and configuration, Husky gates, CI workflows, sa
 build configuration, and case-normalized root agent contracts), opaque helpers, and dynamic execution stay
 globally fail-closed; once the boundary
 exists, only marked Factory chats fail closed.
+Owner-authorized custody transfer now persists the destination chat's marker before appending
+`job-session-transferred`, so corruption immediately after transfer cannot misclassify the new chat.
 The existing narrow
 same-lane replay rule continues to accept the complete legacy duplicate parked event that previously
 prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage
