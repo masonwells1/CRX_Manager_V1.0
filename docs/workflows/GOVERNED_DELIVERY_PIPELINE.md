@@ -440,8 +440,10 @@ ledger corruption keeps the complete deterministic safety surface globally fail-
 and configuration, Husky gates, CI workflows, safety scripts, dependency/build configuration, and opaque or
 dynamic execution. Unrelated structured application edits remain available; afterward, only marked Factory
 chats retain that fail-closed scope.
-Custody transfer follows the same marker-first rule: the owner-input hook persists the destination session
-marker before appending `job-session-transferred`, closing the corruption window before its first tool action.
+The owner-input hook applies the same marker-first order to ticket and morning decisions, rejection or
+revision, intent clearing, hold/resume, and custody transfer. When its ledger snapshot is healthy it also
+completes the exact historical backfill before appending; the emergency hold path still persists the current
+chat marker when the ledger itself cannot be replayed.
 These markers and the boundary are coordination-only metadata and
 are excluded from protected-content fingerprints so creating one cannot invalidate an active evidence
 or review run. If factory state cannot be verified, mutations

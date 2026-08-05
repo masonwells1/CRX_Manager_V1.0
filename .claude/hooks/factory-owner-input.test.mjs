@@ -163,6 +163,15 @@ function runShipHook(state, payload) {
   equal(snapshot.jobs[0].approvalReply, "yes", "verbatim owner reply is retained");
   const events = readFileSync(state.paths.eventsPath, "utf8");
   ok(events.includes('"actorTool":"codex"'), "Codex surface provenance is retained");
+  ok(hasFactoryManagedSessionMarker(state.paths, state.sessionId), "owner approval persists its managed-session marker before the ledger event");
+  ok(hasFactoryManagedSessionBackfillComplete(state.paths), "owner approval completes the historical managed-session boundary before the ledger event");
+  writeFileSync(state.paths.eventsPath, "{not-valid-json}\n");
+  const corruptApplicationEdit = runInstalledPreToolHooks(state, {
+    thread_id: state.sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts"), content: "unsafe" },
+  });
+  ok(/factory-managed build writes fail closed/i.test(corruptApplicationEdit.stdout), "owner-approved session remains governed after immediate ledger corruption");
 }
 
 {
