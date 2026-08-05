@@ -17,7 +17,8 @@ boundary records the exact ledger hash and session set from the last healthy rep
 case, and is atomically replaced when that snapshot identity changes. If corruption
 precedes that boundary, unrelated application edits remain available while the complete deterministic safety
 surface (all Claude/Codex hooks and configuration, Husky gates, CI workflows, safety scripts, dependency and
-build configuration), opaque helpers, and dynamic execution stay globally fail-closed; once the boundary
+build configuration, and case-normalized root agent contracts), opaque helpers, and dynamic execution stay
+globally fail-closed; once the boundary
 exists, only marked Factory chats fail closed.
 The existing narrow
 same-lane replay rule continues to accept the complete legacy duplicate parked event that previously

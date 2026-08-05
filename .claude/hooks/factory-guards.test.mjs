@@ -1073,6 +1073,13 @@ function deterministicSafetyPaths() {
         .map((relativePath) => ({ file_path: path.join(root, relativePath), new_string: "forged" })),
     },
   }), /backfill is durably complete/i, "pre-backfill corruption cannot fail open on protected governance edits");
+  for (const agentContract of ["AGENTS.md", "CLAUDE.md"]) {
+    denied(runHookChain(installedHookChain, stateDir, {
+      thread_id: historicalSessionId,
+      tool_name: "Write",
+      tool_input: { file_path: path.join(root, agentContract), content: "forged" },
+    }), /backfill is durably complete/i, `pre-backfill corruption protects ${agentContract} after lowercase path normalization`);
+  }
   denied(runHookChain(installedHookChain, stateDir, {
     thread_id: historicalSessionId,
     tool_name: "PowerShell",
