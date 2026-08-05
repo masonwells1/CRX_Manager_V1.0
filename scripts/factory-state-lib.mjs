@@ -2105,6 +2105,13 @@ export function appendFactoryEvent(paths, eventInput, {
       if (current.degraded) {
         throw new Error("Factory ledger has an incomplete trailing event; repair or archive it before appending.");
       }
+      if (eventInput?.type === "job-stage" && eventInput?.payload?.stage === "approved-to-land") {
+        const landingJob = buildFactorySnapshot(paths).jobs.find((job) =>
+          job.id !== eventInput.jobId && job.stage === "approved-to-land");
+        if (landingJob) {
+          throw new Error(`Factory job ${landingJob.id} is already approved to land. Land or park it before accepting another result.`);
+        }
+      }
       const previousHash = current.events.at(-1)?.eventHash || "0".repeat(64);
       if (expectedLastEventHash && previousHash !== expectedLastEventHash) {
         throw new Error("Factory state changed after this decision was presented; re-read and re-present it.");
@@ -4713,6 +4720,29 @@ export function validateCurrentIndependentReview(job, cwd = FACTORY_ROOT, {
   return accepted;
 }
 
+export function selectApprovedFactoryLandingCandidate(snapshot, repository, { commitish = false } = {}) {
+  const approved = snapshot.jobs.filter((job) => job.stage === "approved-to-land");
+  if (approved.length === 0) return { required: false };
+  if (approved.length === 1) return { required: true, job: approved[0] };
+  const matching = approved.filter((job) => {
+    const bytesMatch = commitish
+      ? repository.repositoryCommitContentHash === job.acceptedRepositoryCommitContentHash
+      : repository.repositoryContentHash === job.acceptedRepositoryContentHash
+        && repository.repositoryCommitContentHash === job.acceptedRepositoryCommitContentHash;
+    return bytesMatch && repository.repositoryFileCount === job.acceptedRepositoryFileCount;
+  });
+  if (matching.length === 0) {
+    return {
+      required: false,
+      conflictingApprovedJobIds: approved.map((job) => job.id),
+    };
+  }
+  if (matching.length !== 1) {
+    throw new Error("Factory landing is ambiguous because more than one approved job matches these repository bytes.");
+  }
+  return { required: true, job: matching[0] };
+}
+
 export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
   paths = resolveHookFactoryPaths(cwd),
   commitish = "",
@@ -4721,10 +4751,12 @@ export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
   const snapshot = loadFactorySnapshot(paths);
   const approved = snapshot.jobs.filter((job) => job.stage === "approved-to-land");
   if (approved.length === 0) return { required: false };
-  if (approved.length !== 1) {
-    throw new Error("Factory landing is blocked because more than one job is approved to land.");
-  }
-  const job = approved[0];
+  const repository = commitish
+    ? repositoryCommitFingerprint(cwd, commitish)
+    : repositoryContentFingerprint(cwd);
+  const selection = selectApprovedFactoryLandingCandidate(snapshot, repository, { commitish: Boolean(commitish) });
+  if (!selection.required) return selection;
+  const job = selection.job;
   const authoritativeBase = expectedBaseSha || currentOriginMain(cwd);
   if (!/^[a-f0-9]{40}$/i.test(String(authoritativeBase || ""))) {
     throw new Error("The factory landing base is not an exact commit SHA.");
@@ -4735,9 +4767,6 @@ export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
       || job.acceptedRepositoryFileCount <= 0) {
     throw new Error("Mason's factory acceptance is not bound to an exact repository fingerprint.");
   }
-  const repository = commitish
-    ? repositoryCommitFingerprint(cwd, commitish)
-    : repositoryContentFingerprint(cwd);
   const acceptedBytesMatch = commitish
     ? repository.repositoryCommitContentHash === job.acceptedRepositoryCommitContentHash
     : repository.repositoryContentHash === job.acceptedRepositoryContentHash

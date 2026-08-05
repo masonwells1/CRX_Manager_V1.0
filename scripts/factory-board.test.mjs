@@ -43,6 +43,8 @@ ok(html.includes("&lt;img src=x"), "escaped title remains readable");
 ok(html.includes("Ready for your review"), "friendly stage label is rendered");
 ok(html.includes("Browser proof"), "machine-attached proof is visible");
 ok(html.includes("<strong>0/3</strong>"), "board shows active work against the three-lane ceiling");
+const activeLaneHtml = renderFactoryBoard({ ...snapshot, activeLaneCount: 2 });
+ok(activeLaneHtml.includes("<strong>2/3</strong>"), "board renders the tracked non-zero active-lane count");
 ok(html.includes("Independent codex review: CLEAN"), "independent reviewer receipt is visible");
 const missingVerdictHtml = renderFactoryBoard({
   ...snapshot,

@@ -339,6 +339,11 @@ async function main() {
     }
     let acceptedRepository;
     if (disposition === "approve") {
+      const landingJob = snapshot.jobs.find((candidate) =>
+        candidate.id !== job.id && candidate.stage === "approved-to-land");
+      if (landingJob) {
+        emit(`CRX Factory recorded no morning acceptance because ${landingJob.id} is already approved to land. Land or park that job before accepting another result.`);
+      }
       try {
         acceptedRepository = repositoryContentFingerprint(projectDir);
         validateCurrentHarnessEvidence(job, projectDir, {

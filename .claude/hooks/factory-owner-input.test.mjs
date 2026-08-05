@@ -654,6 +654,14 @@ function runLaneHook(state, payload) {
   equal(accepted.acceptedRepositoryContentHash, review.repositoryContentHash, "morning acceptance binds the exact independently reviewed repository hash");
   equal(accepted.acceptedRepositoryCommitContentHash, review.repositoryCommitContentHash, "morning acceptance separately binds the Git-cleaned landing hash");
   equal(accepted.acceptedRepositoryFileCount, review.repositoryFileCount, "morning acceptance binds the exact reviewed file count");
+  assertions++;
+  assert.throws(() => appendFactoryEvent(state.paths, {
+    type: "job-stage",
+    jobId: "second-approved-job",
+    actorTool: "codex",
+    sessionId: "second-owner-session",
+    payload: { stage: "approved-to-land" },
+  }), /already approved to land.*land or park/i, "the ledger lock atomically refuses a second approved-to-land event");
 }
 
 console.log(`factory-owner-input: ${assertions} assertions passed`);

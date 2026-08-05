@@ -66,6 +66,7 @@ import {
   runAndAttachHarnessEvidence,
   runHarnessEvidence,
   sanitizedRepositoryGitEnvironment,
+  selectApprovedFactoryLandingCandidate,
   setEmergencyFactoryHold,
   clearEmergencyFactoryHold,
   sha256,
@@ -104,6 +105,30 @@ let pass = 0;
 const ok = (value, message) => { assert.ok(value, message); pass++; };
 const eq = (actual, expected, message) => { assert.deepEqual(actual, expected, message); pass++; };
 const throws = (fn, pattern, message) => { assert.throws(fn, pattern, message); pass++; };
+
+const unrelatedLandingSelection = selectApprovedFactoryLandingCandidate({
+  jobs: [
+    {
+      id: "approved-a",
+      stage: "approved-to-land",
+      acceptedRepositoryContentHash: "a".repeat(64),
+      acceptedRepositoryCommitContentHash: "b".repeat(64),
+      acceptedRepositoryFileCount: 10,
+    },
+    {
+      id: "approved-b",
+      stage: "approved-to-land",
+      acceptedRepositoryContentHash: "c".repeat(64),
+      acceptedRepositoryCommitContentHash: "d".repeat(64),
+      acceptedRepositoryFileCount: 11,
+    },
+  ],
+}, {
+  repositoryContentHash: "e".repeat(64),
+  repositoryCommitContentHash: "f".repeat(64),
+  repositoryFileCount: 12,
+});
+eq(unrelatedLandingSelection.required, false, "two historical approvals do not place unrelated repository bytes under factory landing custody");
 
 eq(rejectSecretBearingText("HTTP 200; behavior verified.", "proof"), "HTTP 200; behavior verified.", "ordinary proof text is accepted");
 eq(

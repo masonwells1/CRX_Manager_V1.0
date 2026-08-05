@@ -256,6 +256,16 @@ function bashExecutable() {
   }), /cannot modify its own governance/i, "governed sessions cannot rewrite the factory implementation");
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
+    tool_name: "mcp__filesystem__write_file",
+    tool_input: { path: path.join(root, ".claude", "hooks", "factory-lane-guard.mjs"), content: "forged" },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite factory governance through the filesystem MCP writer");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__desktop_commander__write_file",
+    tool_input: { file_path: path.join(root, "scripts", "factory.mjs"), content: "forged" },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite factory governance through the desktop commander MCP writer");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
     tool_name: "apply_patch",
     tool_input: { input: "*** Begin Patch\n*** Update File: scripts/factory.mjs\n@@\n-old\n+new\n*** End Patch\n" },
   }), /cannot modify its own governance/i, "governed sessions cannot hide a governance rewrite in an input patch payload");

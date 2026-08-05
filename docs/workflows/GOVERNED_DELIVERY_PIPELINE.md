@@ -132,6 +132,11 @@ fingerprint before the ticket or morning decision is re-presented there.
   item/property/ACL writers, and secret-shaped added content fail closed.
   Shell `rg` is not exempt because
   its preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
+- Build and review work may run in three lanes, but landing acceptance remains single-file: while one
+  job is `approved-to-land`, the owner hook and locked ledger append refuse a second acceptance and
+  tell Mason to land or park the first job. If historical state contains multiple approvals, only an
+  exact matching accepted repository fingerprint receives factory landing custody; unrelated bytes
+  remain on the ordinary guarded push and merge path.
 - During governed operation, any explicit shell `cwd` or `workdir` must resolve to the exact
   governed repository root. Recognized factory commands are rewritten to the canonical absolute
   `scripts/factory.mjs` broker path before a permit or read-only status execution is allowed.

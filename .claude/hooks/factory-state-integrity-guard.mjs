@@ -92,7 +92,7 @@ if (targets.some((target) => target.startsWith(permitsNorm))) {
   deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
 }
 if (governedSession
-    && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i.test(toolName)
+    && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch|mcp__filesystem__write_file|mcp__desktop_commander__write_file)$/i.test(toolName)
     && targets.some((target) => governanceTarget.test(target))) {
   deny("CRX FACTORY STATE GUARD: an active factory lane cannot modify its own governance implementation.");
 }
