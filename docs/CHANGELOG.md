@@ -2,6 +2,34 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Factory ledger failure containment
+
+Factory intent now leaves a durable per-chat marker outside the event ledger before attempting the
+intent append, and healthy replay backfills markers for pre-existing Factory chats. If the shared
+Factory ledger later becomes unreadable, explicit Factory commands and only those marked Factory
+chats continue to fail closed; unrelated work remains governed by the repository's ordinary safety
+hooks instead of being blocked by the Factory outage. The same boundary is enforced by both installed
+Factory PreToolUse guards, including dynamic shell commands. Regression proof covers both sides of that
+boundary while preserving read-only diagnosis and the canonical recovery route. The integrity guard has
+marker-only write authority so a historical active session is durably classified before its very first
+action, including when its approved ticket names protected governance paths. A durable historical-backfill
+boundary records the exact ledger hash and session set from the last healthy replay, including the empty-ledger
+case, and is atomically replaced when that snapshot identity changes. If corruption
+precedes that boundary, unrelated application edits remain available while the complete deterministic safety
+surface (all Claude/Codex hooks and configuration, Husky gates, CI workflows, local ESLint safety rules, safety scripts, dependency and
+build configuration, and case-normalized root agent contracts), opaque helpers, and dynamic execution stay
+globally fail-closed; once the boundary
+exists, only marked Factory chats fail closed.
+Every owner-input Factory event now completes the healthy historical marker backfill and persists the
+current chat's marker before its ledger append; hold/resume retains the marker-first emergency path even
+when the ledger is unavailable. Ticket approval, morning acceptance, rejection/revision, intent clearing,
+and custody transfer therefore remain governed if corruption occurs immediately after the owner decision.
+The existing narrow
+same-lane replay rule continues to accept the complete legacy duplicate parked event that previously
+prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage
+changes. Managed-session markers are coordination-only state and are excluded from protected-content
+fingerprints so a concurrent chat cannot falsely invalidate an active evidence or review run.
+
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 
 The reviewed Section 2 remediation aligns customer statements across the target

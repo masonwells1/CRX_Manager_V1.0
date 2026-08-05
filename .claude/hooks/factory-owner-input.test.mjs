@@ -10,6 +10,8 @@ import {
   buildFactorySnapshot,
   canonicalMorningReviewQuestion,
   hasFactoryIntentFailureLatch,
+  hasFactoryManagedSessionBackfillComplete,
+  hasFactoryManagedSessionMarker,
   resolveFactoryPaths,
   runHarnessEvidence,
   runIndependentReviewEvidence,
@@ -35,6 +37,7 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace
 const hook = path.join(root, ".claude", "hooks", "factory-owner-input.mjs");
 const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
+const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integrity-guard.mjs");
 const baseSha = spawnSync("git", ["rev-parse", "origin/main"], { cwd: root, encoding: "utf8" }).stdout.trim();
 let assertions = 0;
 
@@ -160,6 +163,15 @@ function runShipHook(state, payload) {
   equal(snapshot.jobs[0].approvalReply, "yes", "verbatim owner reply is retained");
   const events = readFileSync(state.paths.eventsPath, "utf8");
   ok(events.includes('"actorTool":"codex"'), "Codex surface provenance is retained");
+  ok(hasFactoryManagedSessionMarker(state.paths, state.sessionId), "owner approval persists its managed-session marker before the ledger event");
+  ok(hasFactoryManagedSessionBackfillComplete(state.paths), "owner approval completes the historical managed-session boundary before the ledger event");
+  writeFileSync(state.paths.eventsPath, "{not-valid-json}\n");
+  const corruptApplicationEdit = runInstalledPreToolHooks(state, {
+    thread_id: state.sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts"), content: "unsafe" },
+  });
+  ok(/factory-managed build writes fail closed/i.test(corruptApplicationEdit.stdout), "owner-approved session remains governed after immediate ledger corruption");
 }
 
 {
@@ -250,8 +262,36 @@ function runLaneHook(state, payload) {
   });
 }
 
+function runInstalledPreToolHooks(state, payload) {
+  let result;
+  for (const installedHook of [integrityHook, laneHook]) {
+    result = spawnSync(process.execPath, [installedHook], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: root,
+        CRX_AGENT_SURFACE: "codex",
+        CRX_FACTORY_TEST_MODE: "1",
+        CRX_FACTORY_TEST_STATE_DIR: state.dir,
+        NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-owner-input-test",
+      },
+      input: JSON.stringify(payload),
+    });
+    if (result.status !== 0 || result.error || result.stdout) break;
+  }
+  return result;
+}
+
 {
   const state = makeState("original-transfer-thread");
+  const boundaryRead = runInstalledPreToolHooks(state, {
+    thread_id: state.sessionId,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "README.md") },
+  });
+  equal(boundaryRead.stdout, "", "healthy pre-transfer replay creates the historical boundary without blocking reads");
+  ok(hasFactoryManagedSessionBackfillComplete(state.paths), "pre-transfer historical boundary is valid");
   const result = runHook(state, {
     prompt: `take over factory ticket ${state.jobId} in this chat`,
     thread_id: "new-transfer-thread",
@@ -261,6 +301,14 @@ function runLaneHook(state, payload) {
   equal(transferred.sessionId, "new-transfer-thread", "owner-authorized transfer binds the job to the new chat");
   equal(transferred.stage, "needs-ticket-ok", "owner-authorized transfer requires a fresh ticket presentation and approval");
   equal(transferred.questionHash, "", "owner-authorized transfer invalidates the old decision fingerprint");
+  ok(hasFactoryManagedSessionMarker(state.paths, "new-transfer-thread"), "custody transfer persists the destination-session marker before its ledger event");
+  writeFileSync(state.paths.eventsPath, "{not-valid-json}\n");
+  const corruptGovernanceEdit = runInstalledPreToolHooks(state, {
+    thread_id: "new-transfer-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, ".claude", "hooks", "migration-apply-guard.mjs"), content: "forged" },
+  });
+  ok(/cannot modify its own governance|protected governance edits/i.test(corruptGovernanceEdit.stdout), "transferred destination remains governed after immediate ledger corruption");
 }
 
 {

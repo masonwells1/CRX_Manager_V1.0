@@ -428,10 +428,31 @@ that gate first establishes the order: the pause blocks attachment, or the event
 A resume compares and clears only the exact emergency-marker bytes it observed before work began while
 holding the same gate; a newer fallback pause written while that resume is replaying remains enforced.
 
-If factory state cannot be verified, repository mutations fail closed. Reads remain available for
-diagnosis, and the canonical factory status/recovery CLI remains reachable. A corruption that cannot
-be repaired by the backup-first stale-lock or torn-tail modes remains parked for an owner recovery
-decision; it does not brick unrelated read-only work.
+Every chat that requests Factory-managed work gets a separate durable managed-session marker before
+the ledger append is attempted. A healthy replay also backfills that marker for pre-existing Factory
+sessions before allowing their next governed action. The earlier integrity guard has authority only to
+write this marker, not to mutate the ledger or other Factory state, so a historical active session stays
+governed even on its first attempted self-governance edit. A healthy replay marks every historical session
+visible in the snapshot and then atomically writes a durable backfill-complete boundary bound to that exact
+ledger hash and session set. The zero-session case creates the directory and boundary explicitly, and a later
+healthy snapshot replaces stale metadata before it is accepted. Before that boundary exists,
+ledger corruption keeps the complete deterministic safety surface globally fail-closed: Claude/Codex hooks
+and configuration, Husky gates, CI workflows, local ESLint safety rules, safety scripts, dependency/build configuration, and opaque or
+dynamic execution. Unrelated structured application edits remain available; afterward, only marked Factory
+chats retain that fail-closed scope.
+The owner-input hook applies the same marker-first order to ticket and morning decisions, rejection or
+revision, intent clearing, hold/resume, and custody transfer. When its ledger snapshot is healthy it also
+completes the exact historical backfill before appending; the emergency hold path still persists the current
+chat marker when the ledger itself cannot be replayed.
+These markers and the boundary are coordination-only metadata and
+are excluded from protected-content fingerprints so creating one cannot invalidate an active evidence
+or review run. If factory state cannot be verified, mutations
+fail closed only for those marked chats and explicit Factory CLI actions. Unrelated chats continue
+through both installed Factory PreToolUse guards and remain under the repository's ordinary guards
+instead of inheriting a global Factory outage. Reads remain
+available for diagnosis, and the canonical factory status/recovery CLI remains reachable. A
+corruption that cannot be repaired by the backup-first stale-lock or torn-tail modes remains parked
+for an owner recovery decision.
 An event becomes durable only when its complete canonical JSON and terminating newline are present.
 Even syntactically valid final JSON without that newline is treated as a torn tail, excluded from
 replay, and blocks every append until the validated recovery route archives and removes it.
