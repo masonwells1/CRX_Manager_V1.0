@@ -894,6 +894,7 @@ export function pushDestinationLookupArgs(branch) {
 // `canonicalRepoId` (unparseable, malformed escape, no repository named) also
 // falls back to raw text rather than comparing equal to anything.
 const EQUIVALENT_DESTINATION_SCHEMES = new Set(["https", "ssh"]);
+const DEFAULT_TRANSPORT_PORTS = new Map([["https", "443"], ["ssh", "22"]]);
 export function equivalentDestinationKey(url) {
   const text = String(url ?? "").trim();
   const id = canonicalRepoId(text);
@@ -901,9 +902,24 @@ export function equivalentDestinationKey(url) {
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(text);
   // No scheme means the scp-like `[user@]host:path` spelling, which git carries
   // over ssh. `canonicalRepoId` already rejected anything that is not one of the
-  // two shapes, so reaching here without a scheme means scp-like.
+  // two shapes, so reaching here without a scheme means scp-like. That spelling
+  // cannot carry a port at all — `git@host:2222/owner/repo` puts the digits in
+  // the PATH, which changes the repository id and is caught on its own.
   const transport = scheme ? scheme[1].toLowerCase() : "ssh";
-  return EQUIVALENT_DESTINATION_SCHEMES.has(transport) ? id : null;
+  if (!EQUIVALENT_DESTINATION_SCHEMES.has(transport)) return null;
+  // `canonicalRepoId` reads `URL.hostname`, which DROPS the port. So
+  // `https://github.com:8443/owner/repo` canonicalized identically to the real
+  // one, and a rewrite that moved only the port read as no change at all —
+  // git contacts a different endpoint while the guard sees an unchanged
+  // destination (CodeRabbit's 2026-08-05 P1 on this file, reproduced before
+  // fixing). A non-default port is a different endpoint, so it gets no canonical
+  // form and falls back to raw text, which differs and denies.
+  if (scheme) {
+    let port;
+    try { port = new URL(text).port; } catch { return null; }
+    if (port && port !== DEFAULT_TRANSPORT_PORTS.get(transport)) return null;
+  }
+  return id;
 }
 
 // `git remote -v` prints `<name> <url> (fetch|push)`. Only the push lines decide

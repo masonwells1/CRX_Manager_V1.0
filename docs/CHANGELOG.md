@@ -2,6 +2,39 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Two holes in the destination-identity comparison — BRANCH
+
+Both reviewers ran against the fix above and each found a real hole in it. Both
+were introduced by that fix: the raw-text comparison it replaced would have
+caught either one.
+
+**CodeRabbit, P1 — the port was invisible.** `canonicalRepoId` reads
+`URL.hostname`, which drops the port, so
+`https://github.com:8443/owner/repo` canonicalized identically to the real
+repository. A rewrite that moved only the port read as no change while git would
+contact a different endpoint. Reproduced before fixing. A non-default port now
+has no canonical form and falls back to raw text, which differs and denies; an
+explicitly written DEFAULT port (`:443`, `:22`) still compares equal, so ordinary
+pushes are not newly denied. The scp-style spelling cannot carry a port at all —
+`git@host:2222/owner/repo` puts the digits in the path, changing the repository
+id, which was already caught.
+
+**Codex, P2 — the fallback shared a namespace with the keys.** A canonical key is
+spelled exactly like an ordinary raw string (`github.com/owner/repo`). The
+literal-URL comparison returned the canonical key on success and the raw text on
+failure, into the same namespace — so a bare `github.com/owner/repo` token, which
+has no canonical form, compared EQUAL to the canonical key of
+`https://github.com/owner/repo`, and a rewrite between those two read as no
+change. Both outcomes are now tagged (`id `/`raw `), which makes the collision
+unrepresentable rather than merely unlikely — the same discipline
+`canonicalPushDestinations` already used for its own fallback.
+
+Re-verified end to end after both: ordinary pushes still allowed on all three
+remote spellings, and rewrites to a different repository, a different host, plain
+http, a loopback proxy, a non-default port, plus any main-bound push, all still
+deny. All 22 hook suites, the Codex production-action-guard suite, and
+`test:agent-workflows` pass.
+
 ## 2026-08-05 — Codex review of PR #313: the push-guard fix was half-done — BRANCH
 
 Marking the PR ready triggered an independent Codex review, and it found that the

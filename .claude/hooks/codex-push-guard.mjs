@@ -166,9 +166,18 @@ if (inheritedOverrides.length > 0) {
   // still denies.
   const normalizeAnswer = (name, text) => {
     if (name === "remotes") return canonicalPushDestinations(text);
-    // A literal URL destination is resolved to one URL, and the same re-spelling
-    // argument applies to it — `null` falls back to raw text, so it still denies.
-    if (name.startsWith("url ")) return equivalentDestinationKey(String(text).trim()) || text;
+    // A literal URL destination resolves to one URL, and the same re-spelling
+    // argument applies. The two outcomes MUST live in disjoint namespaces: a
+    // canonical key looks exactly like an ordinary raw string
+    // (`github.com/owner/repo`), so a bare `github.com/owner/repo` token — which
+    // has no canonical form — compared EQUAL to the canonical key of
+    // `https://github.com/owner/repo`, and a rewrite between those two read as
+    // no change (Codex's 2026-08-05 P2). Tagging both sides makes the collision
+    // unrepresentable, the same way `canonicalPushDestinations` already does.
+    if (name.startsWith("url ")) {
+      const key = equivalentDestinationKey(String(text).trim());
+      return key ? `id ${key}` : `raw ${text}`;
+    }
     return text;
   };
   const answerFor = (name, args, cwd, keepConfigOverrides) => {

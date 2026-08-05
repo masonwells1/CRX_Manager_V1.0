@@ -148,6 +148,53 @@ assert.deepEqual(unknownGitGlobalOptions("git -C /repo push origin main"), [], "
     canonicalPushDestinations(`upstream\t${APP_HTTPS} (push)\n`),
     "a renamed remote is not silently equated",
   );
+
+  // 2026-08-05, CodeRabbit P1 on the commit above. `canonicalRepoId` reads
+  // `URL.hostname`, which drops the port — so a rewrite that moved ONLY the port
+  // canonicalized identically and read as no change, while git would contact a
+  // different endpoint. A non-default port therefore has no canonical form.
+  assert.equal(
+    equivalentDestinationKey("https://github.com:8443/masonwells1/CRX_Manager_V1.0.git"), null,
+    "a non-default https port is a different endpoint, not the same destination",
+  );
+  assert.equal(
+    equivalentDestinationKey("ssh://git@github.com:2222/masonwells1/CRX_Manager_V1.0.git"), null,
+    "a non-default ssh port is a different endpoint too",
+  );
+  // The DEFAULT port written out explicitly is the same endpoint, so it must not
+  // start denying ordinary pushes — the failure mode this whole change exists for.
+  assert.equal(
+    equivalentDestinationKey("https://github.com:443/masonwells1/CRX_Manager_V1.0.git"),
+    equivalentDestinationKey(APP_HTTPS), "an explicit :443 is still plain https",
+  );
+  assert.equal(
+    equivalentDestinationKey("ssh://git@github.com:22/masonwells1/CRX_Manager_V1.0.git"),
+    equivalentDestinationKey(APP_SSH_URL), "an explicit :22 is still plain ssh",
+  );
+  assert.deepEqual(
+    divergentPushLookups(
+      { remotes: `ok:${canonicalPushDestinations(verbose(APP_SSH))}` },
+      { remotes: `ok:${canonicalPushDestinations(verbose("https://github.com:8443/masonwells1/CRX_Manager_V1.0.git"))}` },
+    ), ["remotes"], "a rewrite that only moves the port still denies",
+  );
+
+  // 2026-08-05, Codex P2. A canonical key is spelled exactly like an ordinary raw
+  // string, so the two must never share a namespace: a bare `github.com/owner/repo`
+  // token has NO canonical form, and untagged it compared equal to the canonical
+  // key of `https://github.com/owner/repo` — a rewrite between them read as no
+  // change. `canonicalPushDestinations` tags its fallback `raw `; the guard tags
+  // the literal-URL answers `id `/`raw ` for the same reason.
+  const bareToken = "github.com/masonwells1/crx_manager_v1.0";
+  assert.equal(equivalentDestinationKey(bareToken), null, "a bare host/path token has no canonical form");
+  assert.equal(
+    canonicalPushDestinations(`origin\t${bareToken} (push)\n`).startsWith("raw "), true,
+    "so it is tagged raw rather than emitted as a bare key",
+  );
+  assert.notEqual(
+    canonicalPushDestinations(`origin\t${bareToken} (push)\n`),
+    canonicalPushDestinations(verbose(APP_HTTPS)),
+    "and it cannot collide with the canonical key that shares its spelling",
+  );
 }
 assert.deepEqual(unknownGitGlobalOptions("git --no-pager push origin main"), [], "supported --no-pager remains inspectable");
 assert.deepEqual(unknownGitGlobalOptions("git --no-optional-locks status"), [], "an option before a non-push is outside this gate");
