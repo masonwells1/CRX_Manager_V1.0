@@ -20,13 +20,16 @@
 //   node scripts/log-session.mjs --dry-run --summary "..."
 //   node scripts/log-session.mjs --help             # print usage, write nothing
 //
-// Commit sources (first non-empty wins). Each source is genuinely scoped to THIS
-// session's work — there is deliberately no "recent commits" fallback, because a
-// window of arbitrary recent history attributes other people's merged work to this
-// session (observed 2026-08-04: 14 unrelated commits and 7 migrations credited to a
-// docs-only session):
-//   1. git log origin/main..HEAD --oneline   (commits on this branch and not on main)
-//   2. git log --since=12.hours --oneline    (only when the branch is level with main)
+// Commits come from ONE source, genuinely scoped to this session's work:
+//   git log origin/main..HEAD --oneline   (commits on this branch and not on main)
+// There is deliberately NO "recent commits" fallback. A window of arbitrary recent
+// history attributes other people's merged work to this session (observed
+// 2026-08-04: 14 unrelated commits and 7 migrations credited to a docs-only
+// session). An empty result means there are no commits ahead of origin/main — the
+// work is still uncommitted, or the branch is level with main — and is reported as
+// "none". A 12-hour window guarded by `HEAD === origin/main` was tried here and
+// REMOVED (Codex, PR #310): level with main, the last 12 hours of main is still
+// other people's merged work, so the guard narrowed the bug without fixing it.
 // Migrations touched:
 //   git diff --name-only origin/main...HEAD -- supabase/migrations
 // An empty result means NO migrations were touched and is reported as such. It is
@@ -135,21 +138,14 @@ if (!baseSha) {
   process.exit(1);
 }
 
-let commitSource = "git log origin/main..HEAD";
-let commitsRaw = gitOrDie(["log", "origin/main..HEAD", "--oneline"], "this branch's commits");
-if (!commitsRaw) {
-  // Genuinely no commits ahead of origin/main. The temporal fallback is only
-  // honest when HEAD really IS origin/main — otherwise the branch is behind or
-  // diverged, and a 12-hour window would credit other people's work.
-  const headSha = gitOrDie(["rev-parse", "HEAD"], "HEAD");
-  if (headSha === baseSha) {
-    commitSource = "git log --since=12.hours (HEAD is level with origin/main — may include others' work)";
-    commitsRaw = gitOrDie(["log", "--since=12.hours", "--oneline"], "recent commits");
-  } else {
-    commitSource = "git log origin/main..HEAD (no commits ahead of origin/main)";
-  }
-}
+// No fallback of any kind. If this range is empty, this session has no commits
+// yet and the entry says so — borrowing recent history to fill the gap is the
+// exact bug this script was rewritten to end.
+const commitsRaw = gitOrDie(["log", "origin/main..HEAD", "--oneline"], "this branch's commits");
 const commits = commitsRaw.split("\n").map(l => l.trim()).filter(Boolean);
+const commitSource = commits.length
+  ? "git log origin/main..HEAD"
+  : "git log origin/main..HEAD (no commits ahead of origin/main — nothing committed this session yet)";
 
 // ─── Migrations touched ────────────────────────────────────────────────────
 // No fallback: an empty diff means this branch touched no migrations. Backfilling
