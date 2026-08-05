@@ -41,10 +41,40 @@ const ok = (cond, msg) => { assert.ok(cond, msg); pass += 1; };
 const eq = (a, b, msg) => { assert.equal(a, b, msg); pass += 1; };
 
 const digest = () => createHash("sha256").update(readFileSync(changelog)).digest("hex");
-function run(args) {
+function run(args, env) {
   return execFileSync("node", [script, ...args], {
     encoding: "utf8", timeout: 30000, cwd: root, stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ...(env || {}) },
   });
+}
+
+// This suite runs inside `test:correction-guards`, i.e. the pre-commit gate. It
+// must therefore NEVER hard-fail merely because the checkout lacks a local
+// origin/main — shallow clones, fresh worktrees and remote containers routinely
+// do. Raised by Codex on PR #310: an unguarded `git diff origin/main...HEAD`
+// exits 128 there and aborts the whole guard suite, blocking commits.
+function git(args) {
+  try {
+    return {
+      ok: true,
+      out: execFileSync("git", args, {
+        encoding: "utf8", timeout: 15000, cwd: root, stdio: ["ignore", "pipe", "ignore"],
+      }).trim(),
+    };
+  } catch {
+    return { ok: false, out: "" };
+  }
+}
+const originMain = git(["rev-parse", "--verify", "--quiet", "origin/main^{commit}"]);
+const HAS_ORIGIN_MAIN = originMain.ok && Boolean(originMain.out);
+let skipped = 0;
+function needsOriginMain(label, fn) {
+  if (!HAS_ORIGIN_MAIN) {
+    console.log(`  SKIP (no local origin/main): ${label}`);
+    skipped += 1;
+    return;
+  }
+  fn();
 }
 
 // ── 1. --help must print usage and write nothing ───────────────────────────
@@ -61,15 +91,17 @@ function run(args) {
 }
 
 // ── 2. --dry-run must write nothing ─────────────────────────────────────
-{
+// Needs origin/main: the script now refuses to run without it (by design), so
+// a success-path assertion is only meaningful where the ref exists.
+needsOriginMain("--dry-run writes nothing", () => {
   const before = digest();
   const out = run(["--dry-run", "--summary", "Probe entry from the log-session test suite."]);
   eq(digest(), before, "--dry-run must not modify docs/CHANGELOG.md");
   ok(/DRY RUN/.test(out), "--dry-run says so");
-}
+});
 
 // ── 3. The heading is a SHORT title, not the whole summary ─────────────────
-{
+needsOriginMain("heading is a short derived title", () => {
   const long =
     "First sentence that belongs in the heading. Second sentence that must never " +
     "reach the heading because it makes the table of contents unreadable. Third one too.";
@@ -82,6 +114,24 @@ function run(args) {
     "the second sentence must not be folded into the heading",
   );
   ok(out.includes("Second sentence"), "the full summary still appears as the lead paragraph");
+});
+
+// ── 3b. A checkout without origin/main is REFUSED, not guessed at ──────────
+// The mirror of block 6: the script must not fall back to a time window when
+// the base ref is simply missing, and must say what to do about it.
+if (!HAS_ORIGIN_MAIN) {
+  const before = digest();
+  let threw = false;
+  let stderr = "";
+  try {
+    run(["--summary", "No origin/main here; this must be refused."]);
+  } catch (err) {
+    threw = true;
+    stderr = String(err.stderr || "");
+  }
+  ok(threw, "without origin/main the script must exit non-zero");
+  eq(digest(), before, "without origin/main docs/CHANGELOG.md must be untouched");
+  ok(/git fetch origin main/.test(stderr), "the refusal must tell the reader to fetch");
 }
 
 // ── 4. Migrations are never backfilled from unrelated history ──────────────
@@ -113,15 +163,13 @@ function run(args) {
 }
 
 // ── 5. A real run reports migrations honestly for this branch ──────────────
-{
+needsOriginMain("reported migrations equal the branch diff", () => {
   const out = run(["--dry-run", "--summary", "Attribution probe."]);
   const migBlock = out.slice(out.indexOf("**Migrations touched**"));
   const claimed = [...migBlock.matchAll(/supabase\/migrations\/[\w.-]+\.sql/g)].map((m) => m[0]);
-  const actual = execFileSync(
-    "git",
-    ["diff", "--name-only", "origin/main...HEAD", "--", "supabase/migrations"],
-    { encoding: "utf8", cwd: root, timeout: 15000, stdio: ["ignore", "pipe", "ignore"] },
-  )
+  const diff = git(["diff", "--name-only", "origin/main...HEAD", "--", "supabase/migrations"]);
+  ok(diff.ok, "the reference diff itself must succeed when origin/main exists");
+  const actual = diff.out
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => /\.sql$/.test(l));
@@ -131,6 +179,40 @@ function run(args) {
     "reported migrations must equal the branch diff exactly — no invented entries",
   );
   pass += 1;
+});
+
+// ── 6. A git FAILURE must stop the write path, not fall back ───────────────
+// Raised by CodeRabbit on PR #310: runGit() collapsed every git error into "",
+// so an unreachable origin/main looked identical to "no commits ahead" — the
+// script then used the unrelated 12-hour window and reported no migrations,
+// resurrecting the exact false-attribution bug defect (2) was about.
+// GIT_DIR is inherited by the script's git calls, so pointing it at a
+// nonexistent directory makes every git command fail for real.
+{
+  const before = digest();
+  let threw = false;
+  let stderr = "";
+  try {
+    run(["--summary", "This run must be refused, not written."], {
+      GIT_DIR: "/nonexistent-git-dir-for-log-session-test",
+    });
+  } catch (err) {
+    threw = true;
+    stderr = String(err.stderr || "");
+  }
+  ok(threw, "the script must exit non-zero when git cannot resolve origin/main");
+  eq(digest(), before, "a git failure must leave docs/CHANGELOG.md untouched");
+  ok(
+    /ERROR/.test(stderr),
+    `the refusal must be explained on stderr (got: ${stderr.slice(0, 200)})`,
+  );
+  ok(
+    !/--since=12\.hours/.test(stderr),
+    "a git failure must NOT silently fall back to the temporal window",
+  );
 }
 
-console.log(`log-session.test.mjs — ${pass} assertions passed`);
+console.log(
+  `log-session.test.mjs — ${pass} assertions passed` +
+    (skipped ? ` (${skipped} block(s) skipped: no local origin/main)` : ""),
+);
