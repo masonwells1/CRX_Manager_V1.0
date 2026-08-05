@@ -2735,6 +2735,8 @@ function factoryProtectedContentFingerprint(paths) {
     || relative === "permits/owner-receipts"
     || relative === "intent-latches"
     || relative.startsWith("intent-latches/")
+    || relative === "managed-sessions"
+    || relative.startsWith("managed-sessions/")
     || relative === "harness-runs"
     || relative.startsWith("harness-runs/")
     || relative === "recovery"

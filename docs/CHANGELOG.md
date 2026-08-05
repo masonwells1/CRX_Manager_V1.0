@@ -12,7 +12,8 @@ hooks instead of being blocked by the Factory outage. Regression proof covers bo
 boundary while preserving read-only diagnosis and the canonical recovery route. The existing narrow
 same-lane replay rule continues to accept the complete legacy duplicate parked event that previously
 prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage
-changes.
+changes. Managed-session markers are coordination-only state and are excluded from protected-content
+fingerprints so a concurrent chat cannot falsely invalidate an active evidence or review run.
 
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 

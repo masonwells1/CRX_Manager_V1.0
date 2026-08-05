@@ -2558,7 +2558,7 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
   const harnessRepo = mkdtempSync(path.join(tmpdir(), "crx-factory-harness-state-"));
   writeFileSync(path.join(harnessRepo, "package.json"), `${JSON.stringify({
     scripts: {
-      "verify-deps": "node -e \"require('node:fs').writeFileSync(process.env.FACTORY_MUTATE_TARGET,'forged')\"",
+      "verify-deps": "node -e \"const fs=require('node:fs');const path=require('node:path');fs.mkdirSync(path.dirname(process.env.FACTORY_MUTATE_TARGET),{recursive:true});fs.writeFileSync(process.env.FACTORY_MUTATE_TARGET,'forged')\"",
     },
   })}\n`);
   for (const args of [
@@ -2569,6 +2569,17 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
   ]) {
     execFileSync("git", args, { cwd: harnessRepo, stdio: "ignore" });
   }
+  process.env.FACTORY_MUTATE_TARGET = path.join(paths.managedSessionsDir, "concurrent-session.json");
+  const coordinationOnlyEvidence = runHarnessEvidence(paths, {
+    jobId: "managed-session-marker-proof",
+    ticketHash: "9".repeat(64),
+    label: "coordination-only marker",
+    scriptName: "verify-deps",
+    cwd: harnessRepo,
+  });
+  ok(coordinationOnlyEvidence.createdArtifact, "a concurrent managed-session marker does not invalidate harness evidence");
+  ok(existsSync(process.env.FACTORY_MUTATE_TARGET), "the concurrent managed-session marker remains durable");
+  ok(!existsSync(paths.emergencyHoldPath), "coordination-only managed-session metadata does not hold the factory");
   mkdirSync(paths.stateDir, { recursive: true });
   mkdirSync(paths.permitsDir, { recursive: true });
   process.env.FACTORY_MUTATE_TARGET = path.join(paths.permitsDir, "forged.txt");

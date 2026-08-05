@@ -430,7 +430,9 @@ holding the same gate; a newer fallback pause written while that resume is repla
 
 Every chat that requests Factory-managed work gets a separate durable managed-session marker before
 the ledger append is attempted. A healthy replay also backfills that marker for pre-existing Factory
-sessions before allowing their next governed action. If factory state cannot be verified, mutations
+sessions before allowing their next governed action. These markers are coordination-only metadata and
+are excluded from protected-content fingerprints so creating one cannot invalidate an active evidence
+or review run. If factory state cannot be verified, mutations
 fail closed only for those marked chats and explicit Factory CLI actions. Unrelated chats continue
 under the repository's ordinary guards instead of inheriting a global Factory outage. Reads remain
 available for diagnosis, and the canonical factory status/recovery CLI remains reachable. A
