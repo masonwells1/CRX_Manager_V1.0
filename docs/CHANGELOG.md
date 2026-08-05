@@ -2,6 +2,30 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Push guard still denies proxy-installed web sessions — PARKED
+
+Codex found on PR #313, and reproduction confirmed, that the web/mobile push-guard
+fix earlier on this branch does not cover sessions that also install a
+credential-proxy rewrite — the "third" rewrite noted in the resolved
+`backup-claude-memory` entry. Sessions carrying only the two SSH-spelling
+normalizations push fine, which is the shape the fix was developed and verified
+in, so it went unnoticed.
+
+With `url.http://<proxy>/git/.insteadOf https://github.com/`, `remote -v` reports
+the proxy URL, `pushDestinationKey()` falls back to `raw <url>` where the scrubbed
+read produced `github <id>`, and `divergentPushLookups()` denies even an ordinary
+`HEAD:feature` push — in exactly the environment the guard exists to unblock.
+
+Parked rather than patched. A fix needs an explicit notion of an approved rewrite
+target: comparing only the `guarded-app` boolean is the draft already rejected as
+too weak, matching on the `owner/repo` suffix would let any host with a matching
+path compare equal, and applying the unioned rewrite table to both reads makes
+them agree by construction. This session carries no proxy rewrite, so only
+unit-level proof was available — a security guard that has already sprung five
+fail-open holes deserves better than that. Full reproduction and the recommended
+approach are in `docs/manual/KNOWN_ISSUES.md`; fix it from a session that has the
+proxy installed, where the real push is the proof.
+
 ## 2026-08-05 — Create-form defaults survive the customer route reset — BRANCH
 
 The stale-customer fix earlier in this branch cleared `CustomerDetail`'s record
