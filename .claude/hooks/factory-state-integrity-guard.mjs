@@ -2,7 +2,15 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { loadFactorySnapshot, resolveHookFactoryPaths } from "../../scripts/factory-state-lib.mjs";
+import {
+  completeFactoryManagedSessionBackfill,
+  hasFactoryIntentFailureLatch,
+  hasFactoryManagedSessionBackfillComplete,
+  hasFactoryManagedSessionMarker,
+  loadFactorySnapshot,
+  resolveHookFactoryPaths,
+  setFactoryManagedSessionMarker,
+} from "../../scripts/factory-state-lib.mjs";
 
 function nothing() { process.exit(0); }
 function deny(reason) {
@@ -69,36 +77,60 @@ for (const match of patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Mo
 }
 const targets = [...new Set(structuredTargets)];
 const projectDir = path.resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+const projectNorm = norm(projectDir);
+const repositoryTargets = targets.map((target) =>
+  target.startsWith(`${projectNorm}/`)
+    ? target.slice(projectNorm.length + 1)
+    : target,
+);
 const sessionId = String(payload?.session_id || payload?.thread_id || payload?.conversation_id || "").trim();
+const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type || payload?.agent || "").trim().toLowerCase() === "codex"
+  ? "codex"
+  : "claude";
 let governedSession = !sessionId;
+let historicalBackfillComplete = hasFactoryManagedSessionBackfillComplete(factoryPaths);
 if (sessionId) {
   try {
     const snapshot = loadFactorySnapshot(factoryPaths);
+    completeFactoryManagedSessionBackfill(factoryPaths, { snapshot, actorTool });
+    historicalBackfillComplete = true;
     governedSession = snapshot.factoryIntentSessions.includes(sessionId)
       || snapshot.jobs.some((job) =>
         job.sessionId === sessionId
         || job.laneSessionId === sessionId,
       );
+    if (governedSession && !hasFactoryManagedSessionMarker(factoryPaths, sessionId)) {
+      setFactoryManagedSessionMarker(factoryPaths, { sessionId, actorTool });
+    }
   } catch {
-    governedSession = true;
+    governedSession = hasFactoryIntentFailureLatch(factoryPaths, sessionId)
+      || hasFactoryManagedSessionMarker(factoryPaths, sessionId);
   }
 }
 
 if (targets.some((target) => target.startsWith(stateNorm) || target.includes("/crx-factory/"))) {
   deny("CRX FACTORY STATE GUARD: direct tool access to the shared factory ledger/tickets/evidence is forbidden. Use the validated scripts/factory.mjs entrypoint or the read-only Factory Board.");
 }
-const governanceTarget = /(?:^|\/)(?:package\.json|scripts\/(?:factory(?:-[^/]*)?|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|\.claude\/settings(?:\.local)?\.json|\.codex\/hooks\.json|\.codex\/hooks\/(?:codex-hook-adapter|production-action-guard)\.mjs|\.claude\/hooks\/(?:factory-[^/]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib|codex-push-guard|codex-push-lib|pr-merge-guard|review-proof-guard)\.mjs)$/;
+const governanceTarget = /(?:^|\/)(?:(?:AGENTS|CLAUDE)\.md|\.gitignore|package(?:-lock)?\.json|eslint-local-rules\.cjs|eslint-local-rules(?:\/.*)?|(?:eslint(?:-local-rules)?|postcss|tailwind)\.config\.(?:js|cjs|mjs|ts)|tsconfig(?:\.[^/]+)?\.json|vite\.config\.(?:js|mjs|ts)|vitest\.config\.(?:js|mjs|ts)|vercel\.json|supabase\/config\.toml|(?:scripts|\.claude|\.codex|\.husky)(?:\/.*)?|\.github\/(?:workflows|actions)(?:\/.*)?)$/i;
 if (targets.some((target) => target.startsWith(permitsNorm))) {
   deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
 }
+if (!historicalBackfillComplete
+    && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch|mcp__filesystem__write_file|mcp__desktop_commander__write_file)$/i.test(toolName)
+    && repositoryTargets.some((target) => governanceTarget.test(target))) {
+  deny("CRX FACTORY STATE GUARD: protected governance edits stay fail-closed until the historical Factory session backfill is durably complete.");
+}
 if (governedSession
     && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch|mcp__filesystem__write_file|mcp__desktop_commander__write_file)$/i.test(toolName)
-    && targets.some((target) => governanceTarget.test(target))) {
+    && repositoryTargets.some((target) => governanceTarget.test(target))) {
   deny("CRX FACTORY STATE GUARD: an active factory lane cannot modify its own governance implementation.");
 }
 
 const command = String(input.command || input.code || input.script || input.source || "");
 if (!command) nothing();
+if (!historicalBackfillComplete && /[\r\n]/.test(command)) {
+  deny("CRX FACTORY STATE GUARD: multiline shell execution stays fail-closed until the historical Factory session backfill is durably complete.");
+}
 if (governedSession && /[\r\n]/.test(command)) {
   deny("CRX FACTORY STATE GUARD: multiline shell commands are disabled inside a governed lane.");
 }
@@ -114,6 +146,9 @@ const dynamicExecution = /\bnode(?:\.exe)?\s+(?:-e|--eval|-p|--print)\b|\bpython
 if (factoryInternals && dynamicExecution) {
   deny("CRX FACTORY STATE GUARD: direct invocation of factory state internals is forbidden. Use only the canonical scripts/factory.mjs CLI.");
 }
+if (!historicalBackfillComplete && dynamicExecution) {
+  deny("CRX FACTORY STATE GUARD: dynamic inline execution stays fail-closed until the historical Factory session backfill is durably complete.");
+}
 if (governedSession && dynamicExecution) {
   deny("CRX FACTORY STATE GUARD: dynamic inline code execution is disabled inside a governed lane because it can bypass approval controls.");
 }
@@ -124,8 +159,11 @@ const derivesCommonDir = /git\s+rev-parse\s+--git-common-dir/i.test(command);
 const derivesFactoryGitPath = /git(?:\.exe)?\s+rev-parse\b[^\r\n;&|]*--git-path\b[^\r\n;&|]*crx[-_/\\]?factory/i.test(command);
 const mutates = /(?:^|[;&|]\s*|\s)(?:remove-item|move-item|copy-item|rename-item|set-content|add-content|out-file|new-item|set-item|clear-item|clear-content|set-itemproperty|new-itemproperty|remove-itemproperty|rename-itemproperty|clear-itemproperty|set-acl|ac|clc|cli|clp|cpi|mi|ni|ri|ren|rni|sc|si|sp|sac|rm|del|erase|mv|cp|writefile|appendfile|unlink|rename|truncate|tee)\b|(?:>>?|2>)|node\s+(?:-e|--eval)\b|python(?:\.exe)?\s+(?:-c|-)\b|\b(?:sed|perl)(?:\.exe)?\b[^\r\n;&|]*\s-i(?:[^\s]*)?|\bgit(?:\.exe)?\s+(?:diff|show|log)\b[^\r\n;&|]*--output(?:=|\s)/i.test(command);
 const opaqueRepoMutation = /\bgit\s+(?:apply\b|checkout\s+--(?:\s|$)|restore\b)/i.test(command);
-const mentionsGovernanceTarget = /(?:^|[\\/\s"'`])(?:package\.json|scripts[\\/](?:factory(?:-[^\\/\s"'`]*)?|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|\.claude[\\/]settings(?:\.local)?\.json|\.codex[\\/]hooks\.json|\.codex[\\/]hooks[\\/](?:codex-hook-adapter|production-action-guard)\.mjs|\.claude[\\/]hooks[\\/](?:factory-[^\\/\s"'`]+|ship-intent-reminder|prompt-source-lib|hold-latch-lib|codex-push-guard|codex-push-lib|pr-merge-guard|review-proof-guard)\.mjs)(?:$|[\s"'`])/i.test(commandNorm);
+const mentionsGovernanceTarget = /(?:^|[\\/\s"'`])(?:(?:(?:AGENTS|CLAUDE)\.md|\.gitignore|package(?:-lock)?\.json|(?:eslint(?:-local-rules)?|postcss|tailwind)\.config\.(?:js|cjs|mjs|ts)|tsconfig(?:\.[^\\/\s"'`]*)?\.json|vite\.config\.(?:js|mjs|ts)|vitest\.config\.(?:js|mjs|ts)|vercel\.json|supabase[\\/]config\.toml)(?=$|[\s"'`])|(?:scripts|\.claude|\.codex|\.husky)(?:[\\/][^\s"'`]*)?(?=$|[\s"'`])|\.github[\\/](?:workflows|actions)(?:[\\/][^\s"'`]*)?(?=$|[\s"'`]))/i.test(commandNorm);
 
+if (!historicalBackfillComplete && ((mentionsGovernanceTarget && mutates) || opaqueRepoMutation)) {
+  deny("CRX FACTORY STATE GUARD: governance and opaque repository mutations stay fail-closed until the historical Factory session backfill is durably complete.");
+}
 if (governedSession && ((mentionsGovernanceTarget && mutates) || opaqueRepoMutation)) {
   deny("CRX FACTORY STATE GUARD: a governed lane cannot mutate its governance implementation through the shell.");
 }

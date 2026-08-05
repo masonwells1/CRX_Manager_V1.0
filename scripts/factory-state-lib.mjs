@@ -207,6 +207,7 @@ export function resolveHookFactoryPaths(cwd = process.cwd(), env = process.env) 
 }
 
 function buildPaths(stateDir) {
+  const managedSessionsDir = path.join(stateDir, "managed-sessions");
   return {
     stateDir,
     ticketsDir: path.join(stateDir, "tickets"),
@@ -215,6 +216,8 @@ function buildPaths(stateDir) {
     ownerReceiptsDir: path.join(stateDir, "permits", "owner-receipts"),
     ownerReceiptKeyPath: path.join(stateDir, "permits", "owner-receipt.key"),
     intentLatchesDir: path.join(stateDir, "intent-latches"),
+    managedSessionsDir,
+    managedSessionsBackfillPath: path.join(managedSessionsDir, "historical-backfill-v1.json"),
     eventsPath: path.join(stateDir, "events.jsonl"),
     lockPath: path.join(stateDir, "events.lock"),
     harnessRunsDir: path.join(stateDir, "harness-runs"),
@@ -233,12 +236,129 @@ export function ensureFactoryDirs(paths) {
   mkdirSync(paths.permitsDir, { recursive: true });
   mkdirSync(paths.ownerReceiptsDir, { recursive: true });
   mkdirSync(paths.intentLatchesDir, { recursive: true });
+  mkdirSync(paths.managedSessionsDir, { recursive: true });
   mkdirSync(paths.harnessRunsDir, { recursive: true });
 }
 
 function factoryIntentLatchPath(paths, sessionId) {
   const session = requiredText(sessionId, "factory intent sessionId", 200);
   return path.join(paths.intentLatchesDir, `${sha256(session)}.json`);
+}
+
+function factoryManagedSessionPath(paths, sessionId) {
+  const session = requiredText(sessionId, "factory managed sessionId", 200);
+  return path.join(paths.managedSessionsDir, `${sha256(session)}.json`);
+}
+
+export function hasFactoryManagedSessionMarker(paths, sessionId) {
+  if (!sessionId) return false;
+  return existsSync(factoryManagedSessionPath(paths, sessionId));
+}
+
+function factoryManagedSessionBackfillIdentity(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.factoryIntentSessions) || !Array.isArray(snapshot.jobs)) {
+    throw new Error("A healthy factory snapshot is required to identify the historical managed-session backfill.");
+  }
+  const sessionIds = [...new Set([
+    ...snapshot.factoryIntentSessions,
+    ...snapshot.jobs.flatMap((job) => [job?.sessionId, job?.laneSessionId]),
+  ].filter(Boolean))].sort();
+  return {
+    lastEventHash: requiredText(snapshot.lastEventHash, "factory snapshot lastEventHash", 64),
+    sessionIds,
+    sessionHashes: sessionIds.map((sessionId) => sha256(sessionId)),
+  };
+}
+
+export function hasFactoryManagedSessionBackfillComplete(paths, snapshot = null) {
+  try {
+    const record = JSON.parse(readFileSync(paths.managedSessionsBackfillPath, "utf8"));
+    const recordValid = record?.schemaVersion === FACTORY_SCHEMA_VERSION
+      && record?.kind === "historical-managed-session-backfill"
+      && /^[a-f0-9]{64}$/.test(record.lastEventHash)
+      && Array.isArray(record.sessionHashes)
+      && record.sessionHashes.length === new Set(record.sessionHashes).size
+      && record.sessionHashes.every((hash) =>
+        /^[a-f0-9]{64}$/.test(hash)
+        && existsSync(path.join(paths.managedSessionsDir, `${hash}.json`)),
+      );
+    if (!recordValid || !snapshot) return recordValid;
+    const expected = factoryManagedSessionBackfillIdentity(snapshot);
+    return record.lastEventHash === expected.lastEventHash
+      && canonicalJson(record.sessionHashes) === canonicalJson(expected.sessionHashes);
+  } catch {
+    return false;
+  }
+}
+
+export function setFactoryManagedSessionMarker(paths, { sessionId, actorTool }) {
+  authorizedFactoryManagedSessionMarkerWriter(paths);
+  ensureFactoryDirs(paths);
+  const target = factoryManagedSessionPath(paths, sessionId);
+  const bytes = `${canonicalJson({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    sessionId,
+    actorTool: requiredText(actorTool, "factory managed actorTool", 40),
+    createdAt: new Date().toISOString(),
+  })}\n`;
+  try {
+    writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  return target;
+}
+
+export function completeFactoryManagedSessionBackfill(paths, { snapshot, actorTool }) {
+  authorizedFactoryManagedSessionMarkerWriter(paths);
+  ensureFactoryDirs(paths);
+  const identity = factoryManagedSessionBackfillIdentity(snapshot);
+  for (const sessionId of identity.sessionIds) {
+    setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
+  }
+  if (hasFactoryManagedSessionBackfillComplete(paths, snapshot)) return paths.managedSessionsBackfillPath;
+  const target = paths.managedSessionsBackfillPath;
+  const bytes = `${canonicalJson({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    kind: "historical-managed-session-backfill",
+    actorTool: requiredText(actorTool, "factory managed actorTool", 40),
+    completedAt: new Date().toISOString(),
+    lastEventHash: identity.lastEventHash,
+    sessionHashes: identity.sessionHashes,
+  })}\n`;
+  const temporaryPath = path.join(
+    paths.managedSessionsDir,
+    `.historical-backfill-v1-${identity.lastEventHash}-${randomUUID()}.tmp`,
+  );
+  let temporaryFd;
+  try {
+    const buffer = Buffer.from(bytes, "utf8");
+    temporaryFd = openSync(temporaryPath, "wx", 0o600);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const written = writeSync(temporaryFd, buffer, offset, buffer.length - offset, offset);
+      if (written <= 0) throw new Error("Historical managed-session backfill staging made no write progress.");
+      offset += written;
+    }
+    fsyncSync(temporaryFd);
+    const observation = fstatSync(temporaryFd);
+    if (!observation.isFile() || observation.isSymbolicLink() || observation.size !== buffer.length) {
+      throw new Error("Historical managed-session backfill staging did not produce the exact intended file.");
+    }
+    closeSync(temporaryFd);
+    temporaryFd = undefined;
+    renameSync(temporaryPath, target);
+    flushFactoryDirectory(paths.managedSessionsDir);
+  } finally {
+    if (temporaryFd !== undefined) closeSync(temporaryFd);
+    try { unlinkSync(temporaryPath); } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  if (!hasFactoryManagedSessionBackfillComplete(paths, snapshot)) {
+    throw new Error("Historical managed-session backfill boundary is incomplete or invalid.");
+  }
+  return target;
 }
 
 export function hasFactoryIntentFailureLatch(paths, sessionId) {
@@ -267,6 +387,7 @@ export function setFactoryIntentFailureLatch(paths, {
     ownerRequestRejected: ownerRequestRejected === true,
     createdAt: new Date().toISOString(),
   })}\n`;
+  setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
   try {
     writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
   } catch (error) {
@@ -900,6 +1021,9 @@ const ALLOWED_WRITERS = new Set([
 const OWNER_DECISION_WRITER = path.resolve(
   path.join(FACTORY_ROOT, ".claude", "hooks", "factory-owner-input.mjs"),
 ).toLowerCase();
+const MANAGED_SESSION_MARKER_ONLY_WRITER = path.resolve(
+  path.join(FACTORY_ROOT, ".claude", "hooks", "factory-state-integrity-guard.mjs"),
+).toLowerCase();
 
 function factoryWriterAuthorization(paths) {
   const invoked = process.argv[1] ? path.resolve(process.argv[1]).toLowerCase() : "";
@@ -928,6 +1052,21 @@ function factoryWriterAuthorization(paths) {
 
 function authorizedFactoryWriter(paths) {
   return factoryWriterAuthorization(paths);
+}
+
+function authorizedFactoryManagedSessionMarkerWriter(paths) {
+  try {
+    return authorizedFactoryWriter(paths);
+  } catch (error) {
+    const invoked = process.argv[1] ? path.resolve(process.argv[1]).toLowerCase() : "";
+    const stack = String(new Error().stack || "").toLowerCase().replaceAll("/", "\\");
+    if (invoked === MANAGED_SESSION_MARKER_ONLY_WRITER
+        && process.execArgv.length === 0
+        && stack.includes(MANAGED_SESSION_MARKER_ONLY_WRITER.replaceAll("/", "\\"))) {
+      return { invoked, ownerDecisionWriter: false, isolatedTest: false, markerOnlyWriter: true };
+    }
+    throw error;
+  }
 }
 
 function acquireEmergencyHoldCommitGate(paths, timeoutMs = 5_000, isolatedMetadataProbe = null) {
@@ -2749,6 +2888,8 @@ function factoryProtectedContentSnapshot(paths) {
     || relative === "permits/owner-receipts"
     || relative === "intent-latches"
     || relative.startsWith("intent-latches/")
+    || relative === "managed-sessions"
+    || relative.startsWith("managed-sessions/")
     || relative === "harness-runs"
     || relative.startsWith("harness-runs/")
     || relative === "recovery"

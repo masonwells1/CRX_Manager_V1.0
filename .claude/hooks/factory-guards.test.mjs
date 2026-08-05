@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
+  hasFactoryManagedSessionBackfillComplete,
+  hasFactoryManagedSessionMarker,
   loadFactorySnapshot,
   resolveFactoryPaths,
   sha256,
@@ -16,6 +18,7 @@ import {
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "../..");
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
 const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integrity-guard.mjs");
+const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
 let assertions = 0;
 const temporaryStateDirs = new Set();
 
@@ -43,6 +46,15 @@ function run(hook, stateDir, payload, projectDir = root) {
     },
     input: JSON.stringify(payload),
   });
+}
+
+function runHookChain(hooks, stateDir, payload) {
+  let result;
+  for (const hook of hooks) {
+    result = run(hook, stateDir, payload);
+    if (result.status !== 0 || result.error || result.stdout) return result;
+  }
+  return result;
 }
 
 function denied(result, pattern, message) {
@@ -1022,23 +1034,303 @@ function bashExecutable() {
   assert.equal(removedParkedShell.stdout, "", "a removed parked worktree cannot recreate the global orphan shell lock");
 }
 
+function repositoryFilesUnder(relativeDirectory) {
+  return readdirSync(path.join(root, relativeDirectory), { withFileTypes: true })
+    .flatMap((entry) => {
+      const relativePath = path.posix.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) return repositoryFilesUnder(relativePath);
+      return entry.isFile() ? [relativePath] : [];
+    });
+}
+
+function deterministicSafetyPaths() {
+  const modulePaths = [
+    [".claude", "hooks"],
+    [".codex", "hooks"],
+  ].flatMap((segments) => readdirSync(path.join(root, ...segments), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
+    .map((entry) => [...segments, entry.name].join("/")));
+  const localLintRulePaths = repositoryFilesUnder("eslint-local-rules");
+  return [...new Set([
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".gitignore",
+    "package.json",
+    "package-lock.json",
+    "eslint-local-rules.cjs",
+    "eslint.config.js",
+    "postcss.config.js",
+    "tailwind.config.js",
+    "tsconfig.app.json",
+    "tsconfig.json",
+    "tsconfig.node.json",
+    "vite.config.ts",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".codex/sync-from-claude.ps1",
+    ".husky/commit-msg",
+    ".husky/pre-commit",
+    ".husky/pre-push",
+    ".github/workflows/ci.yml",
+    ".github/workflows/phase3-private-artifact-containment.yml",
+    "scripts/factory.mjs",
+    "scripts/write-codex-push-proof.mjs",
+    "scripts/write-apply-proofs.mjs",
+    "scripts/overnight-codex-gate.mjs",
+    "scripts/validate-sql.sh",
+    "scripts/check-supplier-pricing-phase3-private-artifacts.mjs",
+    ...localLintRulePaths,
+    ...modulePaths,
+  ])].sort();
+}
+
+{
+  const sessionId = "historical-governance-first-action";
+  const stateDir = temporaryStateDir("crx-factory-historical-governance-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const governancePaths = deterministicSafetyPaths();
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    actorTool: "codex",
+    sessionId,
+    payload: { ownerRequest: "Historical active Factory session before managed-session markers existed." },
+  });
+  const historicalTicket = writeImmutableTicket(paths, {
+    id: "historical-governance-first-action-job",
+    title: "Historical governance first-action proof",
+    goal: "Prove historical sessions cannot self-modify governance on their first action.",
+    definitionOfDone: ["Every protected governance category remains independently denied."],
+    mustNotChange: ["Factory governance."],
+    allowedPaths: governancePaths,
+    proofRequirements: ["Full installed hook-chain denial."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before commit.",
+    riskAreas: ["security", "permissions"],
+    businessExample: "A historical Factory session must not be able to weaken its own safety hooks before the managed-session marker is backfilled.",
+    forbiddenOutcome: "The first protected governance write must never run before the session is marked and denied.",
+  });
+  appendFactoryEvent(paths, {
+    type: "ticket-drafted",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: {
+      ticketFile: historicalTicket.filename,
+      ticketHash: historicalTicket.hash,
+      ticketVersion: 1,
+      title: historicalTicket.ticket.title,
+    },
+  });
+  const questionText = "Approve the historical governance first-action proof?";
+  const questionHash = sha256(questionText);
+  const baseSha = "c".repeat(40);
+  appendFactoryEvent(paths, {
+    type: "ticket-presented",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { ticketHash: historicalTicket.hash, questionText, questionHash, baseSha },
+  });
+  appendFactoryEvent(paths, {
+    type: "ticket-approved",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: {
+      ticketHash: historicalTicket.hash,
+      questionHash,
+      ownerReply: "yes",
+      baseSha,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+  appendFactoryEvent(paths, {
+    type: "lane-started",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { ticketHash: historicalTicket.hash, baseSha, worktree: root },
+  });
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, sessionId), false, "historical active session starts without a managed-session marker");
+  denied(runHookChain([integrityHook, laneHook], stateDir, {
+    thread_id: sessionId,
+    tool_name: "MultiEdit",
+    tool_input: {
+      edits: governancePaths.map((relativePath) => ({ file_path: path.join(root, relativePath), new_string: "forged" })),
+    },
+  }), /cannot modify its own governance/i, "historical active session's first action cannot target any protected governance category");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, sessionId), true, "integrity guard persists the historical session marker before denying its first governance action");
+}
+
+{
+  const stateDir = temporaryStateDir("crx-factory-empty-backfill-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const emptyRead = run(integrityHook, stateDir, {
+    thread_id: "unrelated-empty-factory-thread",
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "README.md") },
+  });
+  assertions++;
+  assert.equal(emptyRead.stdout, "", "fresh empty ledger permits ordinary reads while creating its zero-session boundary");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths, loadFactorySnapshot(paths)), true, "fresh empty ledger creates a valid zero-session backfill boundary");
+  const laterHistoricalSession = "historical-session-after-stale-boundary";
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    sessionId: laterHistoricalSession,
+    actorTool: "codex",
+    payload: { ownerRequest: "Exercise repair of stale historical backfill metadata." },
+  });
+  const laterSnapshot = loadFactorySnapshot(paths);
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths, laterSnapshot), false, "the prior boundary is stale against a newer healthy snapshot");
+  const laterRead = run(integrityHook, stateDir, {
+    thread_id: laterHistoricalSession,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "README.md") },
+  });
+  assertions++;
+  assert.equal(laterRead.stdout, "", "healthy replay repairs stale backfill metadata without blocking the historical session's read");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, laterHistoricalSession), true, "repair creates the newly discovered historical session marker");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths, laterSnapshot), true, "repair atomically replaces the boundary with the intended snapshot identity");
+}
+
+{
+  const stateDir = temporaryStateDir("crx-factory-pre-backfill-corrupt-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const historicalSessionId = "historical-corrupt-before-first-upgrade-action";
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    sessionId: historicalSessionId,
+    actorTool: "codex",
+    payload: { ownerRequest: "Historical factory request whose ledger corrupts before its first upgraded action." },
+  });
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), false, "pre-upgrade historical session has no independent marker");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths), false, "historical backfill boundary is absent before any healthy upgraded replay");
+  writeFileSync(paths.eventsPath, "{not-valid-json}\n");
+  const installedHookChain = [integrityHook, laneHook];
+  const unrelatedStructuredWrite = runHookChain(installedHookChain, stateDir, {
+    thread_id: "unrelated-pre-backfill-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  });
+  assertions++;
+  assert.equal(unrelatedStructuredWrite.stdout, "", "pre-backfill corruption still permits an unrelated structured non-governance edit");
+  for (const relativePath of deterministicSafetyPaths()) {
+    denied(runHookChain(installedHookChain, stateDir, {
+      thread_id: historicalSessionId,
+      tool_name: "Write",
+      tool_input: { file_path: path.join(root, relativePath), content: "forged" },
+    }), /backfill is durably complete/i, `pre-backfill corruption independently protects ${relativePath}`);
+  }
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content .claude/hooks/migration-apply-guard.mjs -Value forged" },
+  }), /backfill is durably complete/i, "pre-backfill corruption cannot mutate an independent safety guard through the shell");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Remove-Item .claude -Recurse" },
+  }), /backfill is durably complete/i, "pre-backfill corruption cannot remove an entire safety configuration directory");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: "unrelated-pre-backfill-thread",
+    tool_name: "Bash",
+    tool_input: { command: "node -e \"process.stdout.write('opaque')\"" },
+  }), /backfill is durably complete|historical Factory session backfill/i, "pre-backfill corruption keeps dynamic execution globally fail-closed");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: "unrelated-pre-backfill-thread",
+    tool_name: "mcp__opaque__execute",
+    tool_input: {},
+  }), /historical Factory session backfill/i, "pre-backfill corruption keeps opaque helper execution globally fail-closed");
+}
+
 {
   const stateDir = temporaryStateDir("crx-factory-corrupt-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
   const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const managedSessionId = "managed-corrupt-thread";
+  const intentResult = run(shipHook, stateDir, {
+    thread_id: managedSessionId,
+    prompt: "Run the factory overnight.",
+  });
+  assertions++;
+  assert.equal(intentResult.status, 0, "factory intent records its independent managed-session marker before corruption");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, managedSessionId), true, "successful new factory intent retains its managed-session marker");
+  const historicalSessionId = "historical-managed-corrupt-thread";
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    sessionId: historicalSessionId,
+    actorTool: "codex",
+    payload: { ownerRequest: "Historical factory request before managed-session markers existed." },
+  });
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), false, "historical factory intent starts without the new independent marker");
+  const historicalRead = run(laneHook, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "docs", "workflows", "GOVERNED_DELIVERY_PIPELINE.md") },
+  });
+  assertions++;
+  assert.equal(historicalRead.stdout, "", "historical managed session remains readable while its healthy ledger marker is backfilled");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), true, "healthy replay backfills the marker for pre-existing factory sessions");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths), true, "healthy replay records the durable historical backfill boundary");
   writeFileSync(paths.eventsPath, "{not-valid-json}\n");
-  const readResult = run(laneHook, stateDir, {
+  const installedHookChain = [integrityHook, laneHook];
+  const readResult = runHookChain(installedHookChain, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "Read",
     tool_input: { file_path: path.join(root, "docs", "workflows", "GOVERNED_DELIVERY_PIPELINE.md") },
   });
   assertions++;
   assert.equal(readResult.stdout, "", "corrupt factory state leaves read-only diagnosis available");
-  denied(run(laneHook, stateDir, {
+  const unrelatedWrite = runHookChain(installedHookChain, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
-  }), /build writes fail closed/i, "corrupt factory state still denies repository mutation");
-  const recoveryResult = run(laneHook, stateDir, {
+  });
+  assertions++;
+  assert.equal(unrelatedWrite.stdout, "", "corrupt factory state does not block writes in an unrelated non-factory session");
+  const unrelatedDynamicShell = runHookChain(installedHookChain, stateDir, {
+    thread_id: "diagnostic-thread",
+    tool_name: "Bash",
+    tool_input: { command: "node -e \"process.stdout.write('ordinary work')\"" },
+  });
+  assertions++;
+  assert.equal(unrelatedDynamicShell.stdout, "", "the full corrupt-state hook chain leaves unrelated dynamic shell work under ordinary guards");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: managedSessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  }), /factory-managed build writes fail closed/i, "corrupt factory state still denies mutation in the factory-managed session");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: managedSessionId,
+    tool_name: "Bash",
+    tool_input: { command: "node -e \"process.stdout.write('bypass')\"" },
+  }), /dynamic inline code execution is disabled inside a governed lane/i, "the full corrupt-state hook chain keeps marked factory sessions governed");
+  const recoveryResult = runHookChain(installedHookChain, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/factory.mjs recover torn-tail --reason-base64 cmVjb3Zlcnk= --session diagnostic-thread --tool codex" },

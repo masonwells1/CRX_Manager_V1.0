@@ -9,6 +9,7 @@ import {
   APPROVAL_TTL_MS,
   appendFactoryControlEvent,
   appendFactoryEvent,
+  completeFactoryManagedSessionBackfill,
   loadFactorySnapshot,
   normalizeOwnerQuestion,
   pendingTicketForSession,
@@ -17,6 +18,7 @@ import {
   rejectSecretBearingText,
   repositoryContentFingerprint,
   resolveHookFactoryPaths,
+  setFactoryManagedSessionMarker,
   setEmergencyFactoryHold,
   sha256,
   unqualifiedOwnerApproval,
@@ -164,6 +166,13 @@ function injectIsolatedOwnerDecisionRace(paths, snapshot) {
   }, { expectedLastEventHash: snapshot.lastEventHash });
 }
 
+function prepareFactoryManagedSession(paths, { snapshot = null, sessionId, actorTool }) {
+  if (snapshot) {
+    completeFactoryManagedSessionBackfill(paths, { snapshot, actorTool });
+  }
+  setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
+}
+
 async function main() {
   let payload;
   try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
@@ -193,6 +202,7 @@ async function main() {
       emit("CRX Factory recorded no custody transfer because the request did not identify exactly one transferable job. Name the job shown on the Factory Board and ask to move it to this chat.");
     }
     const job = candidates[0];
+    prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
     injectIsolatedOwnerDecisionRace(paths, snapshot);
     appendFactoryEvent(paths, {
       type: "job-session-transferred",
@@ -220,6 +230,9 @@ async function main() {
   }
   if (requestedHold) {
     if (!sessionId) emit("CRX Factory could not bind this hold request to a chat session, so it changed nothing. Re-state the request in this chat.");
+    let controlSnapshot = null;
+    try { controlSnapshot = loadFactorySnapshot(paths); } catch { /* The emergency hold path must remain available during ledger failure. */ }
+    prepareFactoryManagedSession(paths, { snapshot: controlSnapshot, sessionId, actorTool });
     try {
       rejectSecretBearingText(prompt, "Factory hold request");
     } catch {
@@ -272,6 +285,7 @@ async function main() {
     if (hasStartedFactoryJob) {
       emit("CRX Factory did not clear governance because this chat already has a ticket or lane. Reject the pending ticket or park the job in chat instead.");
     }
+    prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
     injectIsolatedOwnerDecisionRace(paths, snapshot);
     appendFactoryEvent(paths, {
       type: "factory-intent-cleared",
@@ -359,6 +373,7 @@ async function main() {
       }
     }
     const nextStage = disposition === "approve" ? "approved-to-land" : "parked";
+    prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
     injectIsolatedOwnerDecisionRace(paths, snapshot);
     appendFactoryEvent(paths, {
       type: "job-stage",
@@ -394,6 +409,7 @@ async function main() {
     emit("CRX Factory recorded no approval because origin/main moved after the ticket was presented. Re-check the plan against current main and re-present it.");
   }
 
+  prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
   const now = new Date();
   const common = {
     jobId: job.id,
