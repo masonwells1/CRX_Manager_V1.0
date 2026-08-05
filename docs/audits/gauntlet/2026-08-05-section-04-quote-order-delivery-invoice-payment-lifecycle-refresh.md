@@ -8,7 +8,7 @@
 
 ## Production risk
 
-**HIGH production risk was confirmed.** Bulk Order Import was a second order-creation path that could create an impossible fulfillment state and skip inventory reservation, commission creation, and the atomic order activity record. The first exact-commit review also proved that PostgreSQL's non-finite `numeric` values (`NaN`, `Infinity`, and `-Infinity`) needed an explicit authoritative rejection guard before the import could safely ship. Both risks are now closed live. The normal quote, order, delivery, invoice, and payment paths reviewed in this section were otherwise aligned with the live lifecycle constraints.
+**HIGH production risk was confirmed.** Bulk Order Import was a second order-creation path that could create an impossible fulfillment state and skip inventory reservation, commission creation, and the atomic order activity record. Exact-commit reviews also proved that PostgreSQL's non-finite `numeric` values (`NaN`, `Infinity`, and `-Infinity`) needed an explicit authoritative rejection guard and that an omitted optional cost could be inferred as zero, overstating profit and commission liability. All three risks are now closed live. The normal quote, order, delivery, invoice, and payment paths reviewed in this section were otherwise aligned with the live lifecycle constraints.
 
 ## Scope and evidence discipline
 
@@ -44,47 +44,49 @@ A CSV or OCR import could label a completely undelivered order as partly fulfill
 
 **Suggested fix**
 
-Keep the RPC signature for deployed caller compatibility, but allow imports to create only `confirmed` orders. Validate active actors/customers/products, explicitly reject non-finite quantities/prices/costs, normalize legacy dollar inputs to cents, recompute totals server-side, seed correct order-line totals and remaining quantities, prebook inventory, write the booked inventory ledger, create commissions from the customer's split, and write the order-created activity inside the same transaction. Reject non-confirmed statuses in the frontend for a clear operator message and again in PostgreSQL as the authoritative guard.
+Keep the RPC signature for deployed caller compatibility, but allow imports to create only `confirmed` orders. Validate active actors/customers/products, explicitly reject non-finite quantities/prices/costs, normalize legacy dollar inputs to cents, snapshot the active Product's current cost when an import omits it, recompute totals server-side, seed correct order-line totals and remaining quantities, prebook inventory, write the booked inventory ledger, create commissions from the customer's split, and write the order-created activity inside the same transaction. Reject non-confirmed statuses in the frontend for a clear operator message and again in PostgreSQL as the authoritative guard.
 
 **Prevention action**
 
-Register a rollback-only `bulk_import_order` business-chain smoke and a migration-body contract test. The smoke must prove terminal-status rejection, all three non-finite values are rejected for quantity/price/cost with zero residue, sub-cent normalization, server-recomputed totals, inventory prebooking, booked ledger, commission, activity, and idempotent replay. The frontend regression must prove every successful import sends `p_status: 'confirmed'` and rejects terminal-status files before calling the RPC.
+Register a rollback-only `bulk_import_order` business-chain smoke and a migration-body contract test. The smoke must prove terminal-status rejection, all three non-finite values are rejected for quantity/price/cost with zero residue, sub-cent normalization, omitted-cost Product snapshot, malformed-cost rejection, server-recomputed totals, inventory prebooking, booked ledger, commission, activity, and idempotent replay. The frontend regression must prove every successful import sends `p_status: 'confirmed'`, rejects terminal-status files before calling the RPC, derives omitted cost from the resolved Product, and preserves an explicit zero.
 
 ## Remediation prepared in this run
 
 - Forward-only migration `supabase/migrations/20260805211951_harden_bulk_order_import_lifecycle.sql` implements the database fix. Supabase assigned ledger version `20260805211951` to the submitted `20260805204716` candidate; the disk file was B7-renamed content-identically. Key guards/effects are at `:49-88`, `:91-130`, `:132-243`, and `:245-294`.
 - The first exact-commit Sol review correctly blocked publication because PostgreSQL accepts non-finite `numeric` values. Forward-only follow-up `supabase/migrations/20260805220757_reject_nonfinite_bulk_import_values.sql:112-137` rejects all non-finite quantity/price/cost values and rounds unit and extended dollar amounts to cents before writes. It leaves the already-applied migration immutable.
-- `src/components/orders/BulkOrderImport.tsx:57-61`, `:164-195`, `:215-253`, `:463-475`, and `:525-529` enforce and explain confirmed-only import behavior.
-- `src/components/orders/BulkOrderImport.test.tsx:171-211` proves successful imports send the canonical status and terminal imports do not reach the RPC.
-- `src/lib/rpcContracts.test.ts:1237-1305` pins the required migration effects and finite/cents guards.
-- `scripts/smoke/smoke-bulk-order-import-lifecycle.sql:1-344` and its `smoke-specs.json` registration provide the full rollback-only business chain, including nine non-finite input cases and residue checks.
+- The second exact-commit Sol review correctly blocked publication because missing optional cost was being inferred as zero. Forward-only live follow-up `supabase/migrations/20260805224819_snapshot_bulk_import_product_cost.sql` snapshots `products.current_cost` when cost is absent, preserves explicit zero, rejects malformed/unavailable cost, and uses one normalized item snapshot for every downstream write.
+- `src/components/orders/BulkOrderImport.tsx:57-61`, `:164-195`, `:235-312`, `:384`, `:446-497`, and `:558-559` enforce confirmed-only imports, validate numeric CSV fields, resolve Product cost without destroying explicit zero, and explain the behavior.
+- `src/components/orders/BulkOrderImport.test.tsx` proves canonical status, terminal-status rejection, Product-cost fallback, malformed-cost rejection, and explicit-zero preservation.
+- `src/lib/rpcContracts.test.ts` pins the lifecycle effects, finite/cents guards, Product fallback, malformed-cost guard, and normalized snapshot.
+- `scripts/smoke/smoke-bulk-order-import-lifecycle.sql` and its `smoke-specs.json` registration provide the full rollback-only business chain, including nine non-finite cases, omitted/malformed cost, commission-basis proof, and residue checks.
 
 ## Proof completed before live apply
 
-- Focused frontend/RPC contracts: 92 passed.
+- Focused frontend/RPC contracts: 95 passed.
 - TypeScript: passed.
 - ESLint: passed with `--quiet`.
-- Changed-migration SQL validator: 2 files, 0 violations, 0 warnings. The full historical mode exceeded the command window; changed-only is the repository's documented per-change zero-baseline gate.
+- Changed-migration SQL validator: 3 files, 0 violations, 0 warnings. The full historical mode exceeded the command window; changed-only is the repository's documented per-change zero-baseline gate.
 - Drift tests: 235 passed, 78 skipped.
-- Full Vitest suite: 4,272 passed, 123 skipped.
+- Full Vitest suite: 4,274 passed, 123 skipped.
 - Production build: passed.
 - Correction/safety guards: passed.
 - All 21 live invariant predicates: zero unallowlisted violations.
 - Pre-apply live rehearsal: candidate migration + `plpgsql_check` + full smoke reached `SMOKE_PASS_ROLLBACK` in one aborted transaction.
 - Rollback verification: live function hash remained `c835fe992c8a2011d46aa7610c7fe06a`; zero smoke orders, customers, products, or idempotency receipts remained.
 - Follow-up pre-apply rehearsal replaced the live function inside an aborted transaction, rejected `NaN`/`Infinity`/`-Infinity` for all three imported numeric fields, normalized sub-cent prices, and reached `SMOKE_PASS_ROLLBACK`. The prior live hash `8432af00f788d364b934782d12a6c640` and zero-residue counts were unchanged afterward.
+- Final pre-apply rehearsal replaced the live function inside an aborted transaction, proved omitted cost snapshots the active Product cost, proved malformed cost fails before every lifecycle write, verified commission basis, and reached `SMOKE_PASS_ROLLBACK`. The prior live hash `4c38bd47d81f7c5dec54533cb7d57bca` and zero-residue counts were unchanged afterward.
 
 ## Live apply and post-apply proof
 
-- Supabase applied lifecycle ledger version `20260805211951` and finite-number follow-up ledger version `20260805220757` successfully.
-- Live catalog: one overload; `SECURITY DEFINER`; `search_path=public, pg_temp`; anon denied; authenticated/service access preserved; final MD5 `4c38bd47d81f7c5dec54533cb7d57bca`.
-- Live body markers confirm confirmed-only status, server totals, inventory prebooking, booked ledger, commissions, activity, and operation-scoped idempotency.
-- Applied business-chain smoke returned `SMOKE_PASS_ROLLBACK`, including all nine non-finite input cases; zero smoke orders, customers, products, idempotency receipts, or inventory transactions remained.
+- Supabase applied lifecycle ledger version `20260805211951`, finite-number follow-up `20260805220757`, and Product-cost snapshot follow-up `20260805224819` successfully.
+- Live catalog: one overload; `SECURITY DEFINER`; `search_path=public, pg_temp`; anon denied; authenticated/service access preserved; final MD5 `4d2846e11bd8b1e0753c667c2d194abf`.
+- Live body markers confirm confirmed-only status, server totals, Product-cost fallback, one normalized item snapshot, malformed-cost rejection, inventory prebooking, booked ledger, commissions, activity, and operation-scoped idempotency.
+- Applied business-chain smoke returned `SMOKE_PASS_ROLLBACK`, including all nine non-finite cases plus omitted/malformed cost; zero smoke orders, customers, idempotency receipts, or inventory transactions remained.
 - Supabase advisors returned the expected generic authenticated-`SECURITY DEFINER` warning for this intentionally exposed, active-role-gated RPC and no target performance finding.
-- The live-introspection schema registry now records high-water `20260805220757` and both applied migration names; generated-column/status/no-`updated_at` counts are unchanged.
-- Both content-bound migration reviewer charters were CLEAN on `gpt-5.6-sol` / high for each migration. The first branch-level exact-commit review returned BLOCKERS on non-finite inputs, and its required fix is now implemented and live; a new exact-SHA branch review remains mandatory before publication.
+- The live-introspection schema registry now records high-water `20260805224819` and all three applied migration names; generated-column/status/no-`updated_at` counts remain 11/38/91.
+- Both content-bound migration reviewer charters were CLEAN on `gpt-5.6-sol` / high for each migration. Branch-level exact-commit reviews found the non-finite-input and missing-cost gaps before publication; both required forward-only fixes are implemented and live.
 
-Protected pull-request publication and production frontend verification remain the closeout steps at this report revision.
+Protected pull-request publication remains governed by the repository's final exact-SHA review, required checks, and CodeRabbit review gates.
 
 ## Next section queued
 

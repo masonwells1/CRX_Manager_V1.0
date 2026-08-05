@@ -66,10 +66,10 @@ describe('BulkOrderImport', () => {
       if (table === 'products') {
         return chainable({
           data: [
-            { id: 'product-a', product_name: 'Same Name', sku: 'SKU-A', is_active: true },
-            { id: 'product-b', product_name: 'Same Name', sku: 'SKU-B', is_active: true },
-            { id: 'product-name-x', product_name: 'Cross Identity', sku: 'NAME-X', is_active: true },
-            { id: 'product-sku-x', product_name: 'Other Product', sku: 'Cross Identity', is_active: true },
+            { id: 'product-a', product_name: 'Same Name', sku: 'SKU-A', is_active: true, current_cost: 6 },
+            { id: 'product-b', product_name: 'Same Name', sku: 'SKU-B', is_active: true, current_cost: 7 },
+            { id: 'product-name-x', product_name: 'Cross Identity', sku: 'NAME-X', is_active: true, current_cost: 8 },
+            { id: 'product-sku-x', product_name: 'Other Product', sku: 'Cross Identity', is_active: true, current_cost: 9 },
           ],
           error: null,
         });
@@ -186,11 +186,73 @@ describe('BulkOrderImport', () => {
 
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
     const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
-      p_items: Array<{ product_id: string }>;
+      p_items: Array<{ product_id: string; unit_cost: number }>;
       p_status: string;
+      p_total_cost: number;
     };
     expect(args.p_items[0].product_id).toBe('product-b');
+    expect(args.p_items[0].unit_cost).toBe(7);
+    expect(args.p_total_cost).toBe(14);
     expect(args.p_status).toBe('confirmed');
+  });
+
+  it('rejects a malformed explicit unit cost before bulk_import_order', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit,unit_cost',
+      'O-BAD-COST,North Farm,SKU-B,2,20,not-a-number',
+    ].join('\n');
+    const file = new File([csv], 'bad-cost.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/bad-cost\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    expect(await screen.findByText(/invalid quantity, price, or unit cost/i)).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+  });
+
+  it('rejects a blank required price instead of coercing it to zero', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit',
+      'O-BLANK-PRICE,North Farm,SKU-B,2,',
+    ].join('\n');
+    const file = new File([csv], 'blank-price.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/blank-price\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    expect(await screen.findByText(/invalid quantity, price, or unit cost/i)).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+  });
+
+  it('preserves an explicit zero cost instead of replacing it with Product cost', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit,unit_cost',
+      'O-ZERO-COST,North Farm,SKU-B,2,20,0',
+    ].join('\n');
+    const file = new File([csv], 'zero-cost.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/zero-cost\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-ZERO-COST/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
+    const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
+      p_items: Array<{ unit_cost: number }>;
+    };
+    expect(args.p_items[0].unit_cost).toBe(0);
   });
 
   it('rejects a terminal imported status before bulk_import_order', async () => {

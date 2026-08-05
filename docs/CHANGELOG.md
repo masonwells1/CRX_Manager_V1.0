@@ -28,7 +28,20 @@ normalizes legacy dollar inputs to cents before any write. The expanded
 rollback smoke exercises all nine field/value combinations, sub-cent
 normalization, and zero residue across orders, inventory, commissions,
 activity, and idempotency. Final live function hash is
-`4c38bd47d81f7c5dec54533cb7d57bca`; schema high-water is `20260805220757`.
+`4d2846e11bd8b1e0753c667c2d194abf`; schema high-water is `20260805224819`.
+
+A second exact-commit adversarial review found that an omitted optional
+`unit_cost` was still being submitted as zero just as imports began creating
+commissions, which could overstate order profit and commission liability.
+Forward-only live migration
+`20260805224819_snapshot_bulk_import_product_cost` now snapshots the active
+Product's `current_cost` when cost is absent, preserves an explicit zero,
+rejects malformed or unavailable cost, and uses one normalized item snapshot
+for order lines, totals, and commissions. The frontend mirrors that fallback
+for operator feedback. The expanded rollback smoke proved omitted-cost success,
+malformed-cost rejection, exact commission basis, and zero residue. Both
+content-bound Sol/high migration reviews, all 21 invariant sweeps, and the live
+catalog/grant checks passed after the apply.
 
 ## 2026-08-05 — Factory ledger failure containment
 
