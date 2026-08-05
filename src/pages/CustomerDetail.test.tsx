@@ -124,6 +124,21 @@ function renderDetailWithCustomerSwitch() {
   );
 }
 
+/** Same reused-instance jump, but to the CREATE route (`:id` === 'new'). */
+function NewCustomerButton() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate('/customers/new')}>New customer</button>;
+}
+
+function renderDetailWithNewCustomerJump() {
+  return render(
+    <MemoryRouter initialEntries={['/customers/customer-1']}>
+      <NewCustomerButton />
+      <Routes><Route path="/customers/:id" element={<CustomerDetail />} /></Routes>
+    </MemoryRouter>,
+  );
+}
+
 describe('CustomerDetail stale whole-record save', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -498,6 +513,43 @@ describe('CustomerDetail stale whole-record save', () => {
     releaseAddresses();
     await waitFor(() => expect(screen.getByDisplayValue('Second Street')).toBeInTheDocument());
     expect(screen.queryByDisplayValue('Original Street')).not.toBeInTheDocument();
+  });
+
+  it('clears the open customer when the route jumps to the create form', async () => {
+    // `/customers/new` reuses this component, so a jump to it from an open
+    // customer does not remount. The route-change effect used to return early
+    // when `isNew` — "a blank form needs no invalidation" — which is only true
+    // when the create form is opened fresh. Coming FROM a customer it left that
+    // customer's name, fields, addresses and row version on screen behind a
+    // "Create Customer" button, and saving sent the stale payload with
+    // `p_customer_id: null`, duplicating the old record. (Codex, PR #313.)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') return customerQuery(() => original);
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: { customer_id: 'created-1', row_version: 1 }, error: null });
+
+    renderDetailWithNewCustomerJump();
+    await screen.findByDisplayValue('Original Farm');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New customer' }));
+
+    // The create form is on screen AND the previous customer is gone from it.
+    expect(await screen.findByRole('button', { name: 'Create Customer' })).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Original Farm')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Original Contact')).not.toBeInTheDocument();
+
+    // And the create it sends carries none of the old record either — the half
+    // that actually wrote a duplicate customer. The farm name has to be typed
+    // in: the cleared form fails the required-field check, which is itself the
+    // proof that nothing carried over.
+    mockRpc.mockClear();
+    fireEvent.change(screen.getByLabelText(/farm name/i), { target: { value: 'Brand New Farm' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Customer' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.anything()));
+    const payload = mockRpc.mock.calls.find(([name]) => name === 'save_customer')?.[1] as Record<string, unknown>;
+    expect(payload.p_customer_id).toBeNull();
+    expect(JSON.stringify(payload)).not.toContain('Original Farm');
   });
 
   it('keeps the committed crop but clears a jumped 4-to-6 token and requires recovery before a whole-record save', async () => {

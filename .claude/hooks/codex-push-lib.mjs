@@ -906,22 +906,27 @@ export function pushDestinationLookupArgs(branch) {
 // the host apply — case, ports, escapes, aliases, IDN, traversal. Get one wrong
 // and two destinations merge.
 //
-// So stop asking that question. The gate does not need to know whether two URLs
-// name the same place; it needs to know whether the inherited configuration
-// changes THE DECISION — is this destination the guarded production repository,
-// or not. That is a single boolean, it is what `urlIsGuardedApp` already answers,
-// and that function has been hardened over many prior rounds for exactly this
-// purpose (remote-helper syntax, scheme aliases, alternate GitHub hostnames,
-// percent-escapes) and fails CLOSED on anything it cannot resolve.
+// So stop trying to prove two URLs are the same place, and prove the opposite
+// instead: that NOTHING about the destination moved. Each push line emits two
+// components — the gate classification (`guarded-app` / `unrelated`, from
+// `urlIsGuardedApp`, which fails CLOSED on anything it cannot resolve) and a
+// spelling key from `pushDestinationKey` — and the comparison denies when either
+// changes.
 //
-// The consequences are deliberate. A rewrite that moves the push between two
-// UNRELATED repositories now compares equal — correctly, because the guard does
-// not gate unrelated destinations under any configuration, so no decision
-// changed. A rewrite that turns an unrelated destination into the production
-// repository flips the boolean and denies. And because `urlIsGuardedApp` fails
-// closed, a rewrite that makes a URL unreadable also reads as production and
-// denies. Case, port, and spelling stop mattering because none of them was ever
-// what the gate turned on.
+// An earlier version of this rework compared the classification ALONE, reasoning
+// that a port or a path case may differ freely as long as neither side is the
+// production repo. That was fail-open twice over and is documented at
+// `pushDestinationKey`: `urlIsGuardedApp` is path-only by design, so an off-HOST
+// rewrite read as production on both sides and compared equal; and a
+// feature-branch push is not gated at all, so this comparison is the only thing
+// protecting it.
+//
+// What that means concretely: two different non-GitHub URLs produce two different
+// raw keys and DENY, even when neither is the production repo — a changed host,
+// path case, SSH login user, port, or scheme all survive into the key. Only the
+// allow-listed GitHub spellings collapse. A destination that is unreadable or
+// fails closed keys off its own raw text, so it stays distinct from every
+// resolvable destination rather than quietly matching one.
 export function pushDestinationDecisions(remoteVerboseOutput) {
   return String(remoteVerboseOutput ?? "")
     .split(/\r?\n/)
@@ -937,8 +942,7 @@ export function pushDestinationDecisions(remoteVerboseOutput) {
       // empty-destination test before it shipped.
       const fields = /^(\S+)\s+(.*)\s+\(push\)\s*$/.exec(line);
       if (!fields) return `${line} guarded-app`;
-      const url = fields[2].trim();
-      return `${fields[1]} ${urlIsGuardedApp(url) ? "guarded-app" : "unrelated"} ${pushDestinationKey(url)}`;
+      return `${fields[1]} ${pushDestinationDecision(fields[2].trim())}`;
     })
     .sort()
     .join("\n");
@@ -971,11 +975,60 @@ export function pushDestinationDecisions(remoteVerboseOutput) {
 // The cost is a false DENIAL if a proxy re-spells a non-GitHub remote. That is the
 // safe direction, it does not affect this repo (whose remote is GitHub), and the
 // deny message says which lookup disagreed.
+// The GitHub carve-out is an ALLOW-LIST of spellings, not "any URL whose path
+// canonicalizes under github.com". Keying on the canonical id alone was still too
+// loose (CodeRabbit, 2026-08-05): `canonicalRepoId` reads `URL.hostname`, which
+// drops the port, and it does not look at the scheme at all — so
+// `https://github.com:8443/…`, `http://github.com/…` and `git://github.com/…` all
+// produced the SAME key as plain HTTPS. An inherited rewrite from HTTPS to any of
+// them changed the endpoint or downgraded the transport while the comparison saw
+// no change. Same failure as the off-host hole one round earlier: a normalizer
+// built for gating, reused for comparison, discards exactly what comparison needs.
+//
+// Only these spellings collapse, because only these are GitHub reached the normal
+// way: HTTPS on the implicit or explicit 443, SSH on the implicit or explicit 22,
+// `ssh.github.com` on an explicit 443 (GitHub's documented endpoint for networks
+// blocking 22), and the scp-style `git@github.com:owner/repo`. The SSH user must
+// be absent or `git`, which is the only one GitHub accepts. Everything else —
+// other scheme, other port, other host, unparseable — returns a raw key.
+const GITHUB_HOSTS = new Set(["github.com", "www.github.com"]);
+function githubSpelling(text) {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text)) {
+    let parsed;
+    try { parsed = new URL(text); } catch { return false; }
+    const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+    const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
+    if (scheme === "https") return GITHUB_HOSTS.has(host) && (parsed.port === "" || parsed.port === "443");
+    if (scheme === "ssh") {
+      if (parsed.username && parsed.username.toLowerCase() !== "git") return false;
+      if (GITHUB_HOSTS.has(host)) return parsed.port === "" || parsed.port === "22";
+      // The alternate host is only GitHub on its documented port.
+      if (host === "ssh.github.com") return parsed.port === "443";
+    }
+    return false;
+  }
+  // scp-style `[user@]host:path` carries no scheme or port of its own.
+  const scp = /^(?:([^@\s/\\]+)@)?([^\s:/\\]{2,}):(?!\/)[\s\S]+$/.exec(text);
+  if (!scp) return false;
+  if (scp[1] && scp[1].toLowerCase() !== "git") return false;
+  return GITHUB_HOSTS.has(scp[2].toLowerCase().replace(/\.$/, ""));
+}
+// Exported because the guard resolves a literal URL destination separately, and
+// that path had the SAME boolean-only fail-open this rework removed from
+// `remote -v` (Codex, 2026-08-05): a `git push <url>` whose inherited rewrite
+// moved it off-host but kept the production path classified as `guarded-app` on
+// both sides and compared equal. One helper, both paths.
+export function pushDestinationDecision(url) {
+  return `${urlIsGuardedApp(url) ? "guarded-app" : "unrelated"} ${pushDestinationKey(url)}`;
+}
 function pushDestinationKey(url) {
-  const id = canonicalRepoId(url);
+  const text = String(url ?? "").trim();
   // Namespaced, so a raw URL can never collide with a canonical id.
-  if (id && (id === "github.com" || id.startsWith("github.com/"))) return `github ${id}`;
-  return `raw ${String(url ?? "").trim()}`;
+  if (githubSpelling(text)) {
+    const id = canonicalRepoId(text);
+    if (id) return `github ${id}`;
+  }
+  return `raw ${text}`;
 }
 
 
@@ -1020,7 +1073,7 @@ export function divergentPushLookups(scrubbed, ambient) {
 // weakening any real case: the inline, quoted, and PowerShell forms below are
 // preceded by start-of-string, whitespace, a quote, or `:`.
 const CONFIG_ROOT_ENV_RE =
-  /(?<![A-Za-z0-9_/\\])(?:HOME|HOMEDRIVE|HOMEPATH|USERPROFILE|XDG_CONFIG_HOME|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM)(?![A-Za-z0-9])/i;
+  /(?<![A-Za-z0-9_/\\])(?:HOME|HOMEDRIVE|HOMEPATH|USERPROFILE|XDG_CONFIG_HOME|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM)(?![A-Za-z0-9_])/i;
 export function pushUsesConfigRootEnv(cmd) {
   const text = String(cmd || "");
   if (!isGitPush(text)) return false;

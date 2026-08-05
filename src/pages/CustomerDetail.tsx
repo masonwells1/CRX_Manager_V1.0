@@ -377,8 +377,17 @@ export default function CustomerDetail() {
     // fields, addresses, row version — until the new snapshot lands. Editing then
     // looks like editing this customer while every field belongs to the last one.
     // Drop it and show the loading skeleton until the real record arrives.
-    // `isNew` is exempt: there is nothing to load and the blank form IS the state.
-    if (isNew) return;
+    //
+    // `isNew` is NOT exempt, though an earlier version of this returned early on
+    // the reasoning that a blank form needs no invalidation. That only holds when
+    // /customers/new is opened fresh. Navigating to it FROM an existing customer
+    // reuses this component, so the early return left that customer's name, form
+    // fields, addresses and row version on screen behind a "Create Customer"
+    // button — and saving sent the stale payload with `p_customer_id: null`,
+    // duplicating the old record as a new customer. (Codex, PR #313.)
+    //
+    // So the clears always run; only the skeleton is conditional, because a new
+    // customer genuinely has nothing to fetch.
     setCustomer({});
     setAddresses([]);
     setCrops([]);
@@ -388,9 +397,8 @@ export default function CustomerDetail() {
     defaultSplitTouchedRef.current = false;
     initialLoadDone.current = false;
     setIsDirty(false);
-    setLoading(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+    setLoading(!isNew);
+  }, [id, isNew]);
 
   const fetchTabData = useCallback(async (selectedTab: string) => {
     const seq = ++tabRequestSeq.current;

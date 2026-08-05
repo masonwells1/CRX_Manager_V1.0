@@ -41,6 +41,7 @@ import {
   pushDestinationLookupArgs,
   divergentPushLookups,
   pushDestinationDecisions,
+  pushDestinationDecision,
   environmentCarriesTransportOverride,
   environmentSelectsDifferentRepo,
   destinationLooksLikeUrl,
@@ -154,23 +155,25 @@ if (inheritedOverrides.length > 0) {
       .filter((segment) => isGitPush(segment))
       .map((segment) => gitPushCwd(segment, projectDir)),
   ])];
-  // Destinations compare by the DECISION they lead to; everything else by exact
+  // Destinations compare by a normalised DECISION; everything else by exact
   // text. A credential proxy's whole job is re-spelling `git@github.com:` as
   // `https://github.com/` for the same repository, so comparing destination text
-  // denied every SSH-remote checkout in a web session — and every attempt to
-  // decide "same repository" from the text itself sprang a new leak (see
-  // `pushDestinationDecisions`). What the gate turns on is one boolean: is this
-  // the guarded production repository. The other lookups are config VALUES (a
+  // denied every SSH-remote checkout in a web session. The decision is a pair —
+  // the production-gate classification AND a spelling key — and only an
+  // allow-list of GitHub spellings collapses; see `pushDestinationDecisions`
+  // for why neither half alone is safe. The other lookups are config VALUES (a
   // remote name, a refspec), which a rewrite does not re-spell, so they stay
   // literal.
   const normalizeAnswer = (name, text) => {
     if (name === "remotes") return pushDestinationDecisions(text);
-    // A literal URL destination resolves to one URL, and the same reasoning
-    // applies to it. `urlIsGuardedApp` fails CLOSED, so an empty or unreadable
-    // resolution reads as production and denies rather than comparing equal to
-    // an unrelated one.
+    // A literal URL destination resolves to one URL and gets the same pair. It
+    // used to get the classification ALONE, which was the identical fail-open
+    // one path over: `urlIsGuardedApp` is path-only, so it reads `guarded-app`
+    // for `https://evil.example.com/masonwells1/CRX_Manager_V1.0` — the
+    // production path on someone else's host — and a rewrite that moved a
+    // literal-URL push off-host compared equal on both sides and was allowed.
     if (name.startsWith("url ")) {
-      return urlIsGuardedApp(String(text).trim()) ? "guarded-app" : "unrelated";
+      return pushDestinationDecision(String(text).trim());
     }
     return text;
   };

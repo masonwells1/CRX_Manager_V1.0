@@ -135,6 +135,19 @@ assert.deepEqual(unknownGitGlobalOptions("git -C /repo push origin main"), [], "
     // `urlIsGuardedApp` says "production" for BOTH — only the host differs.
     ["host, with the production path kept", APP_HTTPS, "https://evil.example.com/masonwells1/CRX_Manager_V1.0"],
     ["a different repo on the same non-GitHub host", "https://git.example.com/team/a.git", "https://git.example.com/team/b.git"],
+    // The GitHub carve-out is an allow-list of SPELLINGS, not "any URL whose path
+    // canonicalises under github.com". Keying on the canonical id alone let these
+    // through: `canonicalRepoId` reads `URL.hostname` (no port) and ignores the
+    // scheme entirely, so an endpoint change or a transport downgrade ON GitHub
+    // compared equal. The non-GitHub port case above does not cover this path.
+    // (CodeRabbit, 2026-08-05.)
+    ["a non-default port on GitHub", APP_HTTPS, "https://github.com:8443/masonwells1/CRX_Manager_V1.0.git"],
+    ["a downgrade to http on GitHub", APP_HTTPS, "http://github.com/masonwells1/CRX_Manager_V1.0.git"],
+    ["a downgrade to the anonymous git protocol", APP_HTTPS, "git://github.com/masonwells1/CRX_Manager_V1.0.git"],
+    // ssh.github.com is GitHub only on its documented port-443 endpoint.
+    ["ssh.github.com on a port GitHub does not serve", "ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git", "ssh://git@ssh.github.com:22/masonwells1/CRX_Manager_V1.0.git"],
+    // GitHub accepts only the `git` SSH user; anything else is someone else's host.
+    ["a non-git SSH user on GitHub", APP_SCP, "mallory@github.com:masonwells1/CRX_Manager_V1.0.git"],
   ]) {
     assert.deepEqual(
       divergentPushLookups(
@@ -1046,6 +1059,17 @@ assert.equal(pushUsesConfigRootEnv(`GIT_OBJECT_DIRECTORY=/tmp/o git push origin 
 assert.equal(pushUsesConfigRootEnv("git -C C:/CRX_Manager push origin feature"), false, "an ordinary push names none of them");
 assert.equal(pushUsesConfigRootEnv("HOME=/tmp/evil git status"), false, "still only applies to push commands");
 assert.equal(pushUsesConfigRootEnv("git push origin chore/HOMEPAGE-copy"), false, "a branch name containing HOMEPAGE is not an override");
+// `_` is a word character in a variable NAME, so BOTH boundaries have to exclude
+// it. The lookbehind already did; the lookahead did not, so any longer name
+// beginning with one of these and continuing past an underscore matched its own
+// prefix, and an ordinary push carrying an unrelated variable denied.
+// (CodeRabbit, 2026-08-05 — its `GIT_DIRTY` example never actually matched,
+// since `T` was already excluded; the gap was the underscore specifically.)
+assert.equal(pushUsesConfigRootEnv("HOME_DIR=/tmp/x git push origin main"), false, "HOME_DIR is not HOME");
+assert.equal(pushUsesConfigRootEnv("GIT_DIR_BACKUP=/tmp/x git push origin main"), false, "GIT_DIR_BACKUP is not GIT_DIR");
+assert.equal(pushUsesConfigRootEnv("GIT_DIRTY=1 git push origin main"), false, "GIT_DIRTY is not GIT_DIR");
+assert.equal(pushUsesConfigRootEnv("MY_HOME=/tmp/x git push origin main"), false, "a variable ENDING in HOME is not HOME");
+assert.equal(pushUsesConfigRootEnv("GIT_DIR=/tmp/evil git push origin main"), true, "...but the real GIT_DIR still fires");
 // 2026-08-05: the check denied every Linux `git -C /home/... push`, because the
 // case-insensitive bare-text match hit the `/home/` path segment. That is the
 // form this guard's own denial messages recommend, so on a web/mobile session

@@ -75,6 +75,56 @@ a loopback proxy, a non-default port, plus any main-bound push, all still deny.
 All 22 hook suites, the Codex production-action-guard suite, and
 `test:agent-workflows` pass.
 
+### Round six — the same mistake one layer in
+
+Both reviewers landed on the same remaining hole, from opposite directions: the
+GitHub carve-out was keyed on `canonicalRepoId` starting with `github.com/`, and
+that is a *gating* normalizer, not a comparison one. It reads `URL.hostname`
+(no port) and ignores the scheme entirely, so `https://github.com:8443/…`,
+`http://github.com/…` and `git://github.com/…` all produced the same key as
+plain HTTPS. An inherited rewrite from HTTPS to any of them changed the endpoint
+or downgraded the transport while the comparison saw nothing move.
+
+Exactly the failure the off-host hole was one round earlier — a normalizer built
+for gating, reused for comparison, discards precisely what comparison needs.
+
+The carve-out is now an allow-list of **spellings**, parsed on its own terms:
+HTTPS on implicit-or-explicit 443, SSH on implicit-or-explicit 22,
+`ssh.github.com` only on its documented explicit 443, and scp-style
+`git@github.com:owner/repo`, with the SSH user absent or `git` (the only one
+GitHub accepts). Every other scheme, port, host, user or unparseable form gets a
+raw key and denies.
+
+Also fixed: `CONFIG_ROOT_ENV_RE`'s lookahead excluded `[A-Za-z0-9]` but not `_`,
+so `HOME_DIR=…` and `GIT_DIR_BACKUP=…` matched their own prefixes and denied an
+ordinary push. (CodeRabbit's example, `GIT_DIRTY`, never actually matched — `T`
+was already excluded — but the underscore gap it pointed at was real.)
+
+Verified by re-running the real hook against a real repo under real inherited
+`GIT_CONFIG_*`: 11 cases, all passing. Allowed — an ordinary feature push, and
+the web-session rewrite re-spelling the same repo as both `git@github.com:` and
+`ssh://git@github.com/`. Denied — rewrites to a different repo, a different
+host, a non-default GitHub port, `http://`, `git://`, a non-`git` SSH user, plus
+main-bound and force pushes. The three GitHub-endpoint cases are the ones this
+round closed, and the unit tests alone did not catch them.
+
+### Round six, CRM side
+
+Two findings on `CustomerDetail`, both from the reused-component shape:
+
+- **`/customers/new` kept the previous customer** (Codex). The route-change
+  effect returned early on `isNew`, reasoning a blank form needs no
+  invalidation — true only when the create form is opened fresh. Jumping to it
+  FROM a customer left that customer's fields, addresses and row version behind
+  a "Create Customer" button, and saving sent the stale payload with
+  `p_customer_id: null`, duplicating the old record. The clears now always run;
+  only the loading skeleton is conditional. Covered by a new test.
+- **Deferred `initialLoadDone` flag** (CodeRabbit). The flag is set a macrotask
+  late, so a route change can land in the gap and the previous customer's timer
+  re-arms it after the route-change effect cleared it — marking the next
+  customer's freshly loaded record dirty. Now `isSuperseded()`-guarded like
+  every other deferred write in that loader.
+
 ## 2026-08-05 — Codex review of PR #313: the push-guard fix was half-done — BRANCH
 
 Marking the PR ready triggered an independent Codex review, and it found that the
