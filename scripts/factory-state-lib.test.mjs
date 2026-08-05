@@ -24,6 +24,7 @@ import {
   appendFactoryControlEvent,
   appendFactoryEvent,
   appendFactoryRecoveryEvent,
+  boundedFactoryProbeTimeout,
   buildFactorySnapshot,
   buildFactoryReviewExecArgs,
   canonicalMorningReviewQuestion,
@@ -38,6 +39,7 @@ import {
   FACTORY_ORIGIN_MAIN_REPLAY_MODULES,
   FACTORY_REVIEW_TOKEN,
   factoryProcessLivenessState,
+  factoryProtectedContentUnchanged,
   factoryReviewInputBindingRequired,
   factoryChangeRequiresHighRiskControls,
   factoryCanonicalReplayEnvironment,
@@ -105,6 +107,29 @@ let pass = 0;
 const ok = (value, message) => { assert.ok(value, message); pass++; };
 const eq = (actual, expected, message) => { assert.deepEqual(actual, expected, message); pass++; };
 const throws = (fn, pattern, message) => { assert.throws(fn, pattern, message); pass++; };
+
+eq(boundedFactoryProbeTimeout(10_000, 8_000), 1_500, "parked custody caps each real Git subprocess below the hook deadline");
+eq(boundedFactoryProbeTimeout(10_000, 9_750), 250, "parked custody uses only the remaining shared hook budget");
+throws(
+  () => boundedFactoryProbeTimeout(10_000, 9_950),
+  /exceeded its hook budget/i,
+  "parked custody fails closed before the hook itself can expire",
+);
+const protectedBefore = [
+  { relative: "tickets/existing.json", kind: "file", sha256: "a".repeat(64) },
+];
+eq(factoryProtectedContentUnchanged(protectedBefore, [
+  ...protectedBefore,
+  { relative: "tickets/concurrent.json", kind: "file", sha256: "b".repeat(64) },
+  { relative: "evidence/other-job/concurrent.json", kind: "file", sha256: "c".repeat(64) },
+]), true, "concurrent immutable ticket and evidence additions do not invalidate another lane's proof");
+eq(factoryProtectedContentUnchanged(protectedBefore, [
+  ...protectedBefore,
+  { relative: "permits/planted.json", kind: "file", sha256: "d".repeat(64) },
+]), false, "an added protected-state file outside the exact ticket and evidence patterns invalidates proof");
+eq(factoryProtectedContentUnchanged(protectedBefore, [
+  { relative: "tickets/existing.json", kind: "file", sha256: "e".repeat(64) },
+]), false, "overwriting an existing protected artifact still invalidates proof");
 
 throws(
   () => selectSoleApprovedFactoryLanding({

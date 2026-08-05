@@ -2897,7 +2897,7 @@ function factoryProtectedContentSnapshot(paths) {
   return directoryContentManifest(paths.stateDir, { ignoreRelative: coordinationOnly });
 }
 
-function factoryProtectedContentUnchanged(before, after) {
+export function factoryProtectedContentUnchanged(before, after) {
   const beforeByPath = new Map(before.map((entry) => [entry.relative, entry]));
   const afterByPath = new Map(after.map((entry) => [entry.relative, entry]));
   for (const [relative, expected] of beforeByPath) {
@@ -2911,6 +2911,14 @@ function factoryProtectedContentUnchanged(before, after) {
     if (!legitimateConcurrentAppend) return false;
   }
   return true;
+}
+
+export function boundedFactoryProbeTimeout(deadlineMs, nowMs = Date.now()) {
+  const remaining = Number(deadlineMs) - Number(nowMs);
+  if (!Number.isFinite(remaining) || remaining < 100) {
+    throw new Error("Parked worktree custody inspection exceeded its hook budget.");
+  }
+  return Math.min(1_500, remaining);
 }
 
 export function factoryReviewInputBindingRequired(events, eventIndex) {

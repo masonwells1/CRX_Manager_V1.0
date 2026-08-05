@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
   ACTIVE_STAGES,
+  boundedFactoryProbeTimeout,
   FACTORY_GIT_EXECUTABLE,
   completeFactoryManagedSessionBackfill,
   FACTORY_CUSTODY_STAGES,
@@ -592,11 +593,7 @@ function parkedWorktreeNeedsUntargetedCustody(job) {
   const worktree = job?.worktree;
   if (!String(worktree || "").trim() || !existsSync(worktree)) return false;
   try {
-    const remainingTimeout = () => {
-      const remaining = parkedCustodyDeadlineMs - Date.now();
-      if (remaining < 100) throw new Error("Parked worktree custody inspection exceeded its hook budget.");
-      return Math.min(1_500, remaining);
-    };
+    const remainingTimeout = () => boundedFactoryProbeTimeout(parkedCustodyDeadlineMs);
     const options = {
       cwd: realpathSync(worktree),
       env: sanitizedRepositoryGitEnvironment(),
@@ -667,6 +664,10 @@ const foreignWorktreeCustody = snapshot.jobs.filter((job) =>
   && job.worktree
   && (job.laneSessionId || job.sessionId) !== sessionId,
 );
+const currentLandingAction = currentWorktreeCustody?.stage === "approved-to-land"
+  && (currentWorktreeCustody.laneSessionId || currentWorktreeCustody.sessionId) === sessionId
+  ? approvedLandingShellAction(payload?.tool_name, payload?.tool_input, projectDir)
+  : "";
 
 if (factoryCli) {
   if (shellEnvironmentBlock) {
@@ -710,6 +711,7 @@ if (buildMutation && targetedForeignWorktree) {
 if (buildMutation
     && visibleMutationTargets.length === 0
     && (shellMutation || opaqueExecution || isStructuredMutationTool(payload?.tool_name))
+    && !currentLandingAction
     && foreignWorktreeCustody.some((job) =>
       job.stage !== "parked" || parkedWorktreeNeedsUntargetedCustody(job))) {
   deny("CRX FACTORY GATE: shell or opaque mutations are disabled while another chat owns a factory worktree because their destinations cannot be custody-checked. Use a structured Write/Edit/apply_patch operation with exact targets.");

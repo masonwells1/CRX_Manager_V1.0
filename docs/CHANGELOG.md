@@ -36,6 +36,11 @@ Parked-worktree Git probes now finish inside an eight-second total budget with b
 subprocess timeouts, so the installed 15-second hook cannot silently expire open.
 The live local ledger was checked before this compatibility change: all three existing
 `lane-started` events already contain worktree bindings.
+An accepted landing lane now reaches its exact landing-command and byte-validation gates
+while other lanes remain active; those other chats still cannot target the landing worktree.
+The concurrent protected-state allowance has direct positive and negative regression tests,
+and the shared parked-custody timeout helper is exercised as running code rather than checked
+through source-text matching.
 This entry records the reviewed release candidate; it does not claim a merge or
 production deployment.
 

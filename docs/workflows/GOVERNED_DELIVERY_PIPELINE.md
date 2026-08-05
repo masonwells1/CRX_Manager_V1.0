@@ -306,12 +306,19 @@ fingerprint before the ticket or morning decision is re-presented there.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution is bounded at three active lanes and retains per-job single-flight evidence,
   separate-worktree custody, global pause/resume, and all independent release and production gates.
+- The one `approved-to-land` lane may execute only the existing exact landing-command allowlist while
+  other lanes remain active. Foreign structured writes into its worktree are still denied, and other
+  shell or opaque commands do not gain this exception. Exact accepted-byte, proof, push, PR, merge,
+  and production gates continue to validate the landing command after custody routing.
 - Ledger replay accepts a pre-worktree-binding `lane-started` event only when later verified history
   safely parked that lane or replaced it with a fresh ticket. It never invents a custody path, and a
   legacy lane that is still active without a recorded worktree remains fail-closed.
 - Parked-worktree Git custody probes share an eight-second total hook budget and a 1.5-second cap per
   subprocess, both below the installed 15-second PreToolUse deadline. Timeout or Git failure denies
   the opaque or shell mutation instead of allowing the hook process to expire without a decision.
+- Concurrent additions are tolerated only at new immutable `tickets/*.json` and
+  `evidence/<job>/*.json` paths. Runtime tests cover both permitted additions and denial of a planted
+  protected-state file or overwrite of an existing artifact.
 
 ## Operator recovery
 

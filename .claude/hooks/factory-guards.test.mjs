@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -21,14 +21,6 @@ const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integri
 const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
 let assertions = 0;
 const temporaryStateDirs = new Set();
-
-{
-  const source = readFileSync(laneHook, "utf8");
-  assertions++;
-  assert.match(source, /parkedCustodyDeadlineMs\s*=\s*Date\.now\(\)\s*\+\s*8_000/, "parked custody has a total budget below the 15-second hook timeout");
-  assertions++;
-  assert.match(source, /return Math\.min\(1_500, remaining\)/, "each parked-worktree Git probe has a bounded sub-timeout");
-}
 
 function temporaryStateDir(prefix) {
   const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -903,6 +895,48 @@ function bashExecutable() {
       sessionId,
     });
   }
+  const parallelWorktree = temporaryStateDir("crx-factory-parallel-landing-lane-");
+  const parallelTicket = writeImmutableTicket(paths, {
+    id: "parallel-building-job",
+    title: "Keep building beside landing",
+    goal: "Prove landing and build custody can coexist.",
+    definitionOfDone: ["The accepted lane can reach landing validation."],
+    mustNotChange: ["The landing worktree."],
+    allowedPaths: ["src/parallel.ts"],
+    proofRequirements: ["Factory guard result."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before landing.",
+    riskAreas: [],
+  });
+  for (const event of [
+    { type: "ticket-drafted", payload: { ticketFile: parallelTicket.filename, ticketHash: parallelTicket.hash, ticketVersion: 1, title: parallelTicket.ticket.title } },
+    { type: "ticket-presented", payload: { ticketHash: parallelTicket.hash, questionText: "Approve parallel lane?", questionHash: sha256("Approve parallel lane?"), baseSha: "b".repeat(40) } },
+    { type: "ticket-approved", payload: { ticketHash: parallelTicket.hash, questionHash: sha256("Approve parallel lane?"), ownerReply: "yes", baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "lane-started", payload: { ticketHash: parallelTicket.hash, baseSha: "b".repeat(40), worktree: parallelWorktree } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId: parallelTicket.ticket.id,
+      actorTool: "codex",
+      sessionId: "parallel-building-thread",
+    });
+  }
+  const concurrentLandingPush = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "git push origin HEAD:codex/factory-concurrency-recovery" },
+  });
+  denied(concurrentLandingPush, /accepted landing bytes are no longer valid/i, "a valid landing command reaches exact-byte landing validation while another lane remains active");
+  assertions++;
+  assert.doesNotMatch(concurrentLandingPush.stdout, /destinations cannot be custody-checked/i, "foreign active custody does not preempt the accepted lane's landing allowlist");
+  appendFactoryEvent(paths, {
+    type: "job-stage",
+    jobId: parallelTicket.ticket.id,
+    actorTool: "codex",
+    sessionId: "parallel-building-thread",
+    payload: { stage: "parked", behaviorSummary: "Concurrency route proven.", blocker: "Fixture complete." },
+  });
+  rmSync(parallelWorktree, { recursive: true, force: true });
   const landingWrite = run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Write",
@@ -913,7 +947,7 @@ function bashExecutable() {
     thread_id: "different-landing-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "landing.ts") },
-  }), /owns this governed worktree/i, "approved-to-land preserves its own worktree against parallel writes");
+  }), /owns this governed worktree/i, "a foreign building lane still cannot write into the approved landing worktree");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "PowerShell",
