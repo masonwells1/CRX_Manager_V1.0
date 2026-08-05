@@ -1,11 +1,30 @@
 # Decision Log
 
-Last verified: 2026-08-01
+Last verified: 2026-08-05
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-05 — Factory execution is bounded at three concurrent active lanes
+
+**Decision (Mason, in chat — requested full-speed recovery and more than one job at a time):**
+lift the one-lane pilot limit to at most three concurrent active Factory lanes. Only `building`,
+`verifying`, and `in-review` consume a slot. Queued, expired-pending, parked, owner-review, and
+terminal jobs stay visible without consuming capacity.
+
+**Why:** an orphaned or parked job must not globally freeze unrelated work, while unlimited
+parallelism would make repository custody, evidence attachment, and landing races harder to prove.
+Three lanes provide bounded throughput with tested third-lane admission and fourth-lane refusal.
+
+**Operative rule:** every active lane uses a separate clean linked worktree and keeps job-scoped
+compare-and-swap protection for long-running evidence and owner decisions. Global pause/resume still
+halts all lanes. Landing remains serialized to exactly one `approved-to-land` job, and every existing
+push, merge, production, migration, live-data, secret, permission, and destructive-action gate remains
+independently authoritative. No dangerous bypass may weaken those gates.
 
 ---
 

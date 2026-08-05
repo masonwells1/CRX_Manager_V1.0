@@ -586,21 +586,28 @@ const factoryManagedSession = Boolean(factoryCli)
   || intentRecordFailed
   || (Boolean(sessionId) && hasFactoryManagedSessionMarker(paths, sessionId));
 let historicalBackfillComplete = hasFactoryManagedSessionBackfillComplete(paths);
+const parkedCustodyDeadlineMs = Date.now() + 8_000;
 
 function parkedWorktreeNeedsUntargetedCustody(job) {
   const worktree = job?.worktree;
   if (!String(worktree || "").trim() || !existsSync(worktree)) return false;
   try {
+    const remainingTimeout = () => {
+      const remaining = parkedCustodyDeadlineMs - Date.now();
+      if (remaining < 100) throw new Error("Parked worktree custody inspection exceeded its hook budget.");
+      return Math.min(1_500, remaining);
+    };
     const options = {
       cwd: realpathSync(worktree),
       env: sanitizedRepositoryGitEnvironment(),
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-      timeout: 30_000,
+      timeout: remainingTimeout(),
     };
     const status = execFileSync(FACTORY_GIT_EXECUTABLE, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], options);
     if (status) return true;
     if (!/^[a-f0-9]{40}$/i.test(String(job.baseSha || ""))) return true;
+    options.timeout = remainingTimeout();
     const unpushedCommitCount = execFileSync(
       FACTORY_GIT_EXECUTABLE,
       ["rev-list", "--count", `${job.baseSha}..HEAD`],
@@ -752,7 +759,7 @@ if (governedJob.stage === "needs-ticket-ok") {
   deny(`CRX FACTORY GATE: ticket ${governedJob.id} is waiting for Mason's exact chat approval. Ask only its recorded yes/no question.`);
 }
 if (governedJob.stage === "queued") {
-  deny(`CRX FACTORY GATE: ticket ${governedJob.id} is approved but the deterministic lane-start check has not run. Start it through scripts/factory.mjs lane start.`);
+  deny(`CRX FACTORY GATE: ticket ${governedJob.id} is approved but the deterministic lane-start check has not run. Start it through scripts/factory.mjs lane start from a dedicated clean linked worktree. If approval occurred in the primary checkout, open a new chat in the worktree and ask Mason to take over factory job ${governedJob.id} here; re-present the ticket after that transfer revokes the old approval.`);
 }
 if (ACTIVE_STAGES.has(governedJob.stage)) {
   if (isStructuredMutationTool(payload?.tool_name)) {

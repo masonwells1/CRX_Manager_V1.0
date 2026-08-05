@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +21,14 @@ const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integri
 const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
 let assertions = 0;
 const temporaryStateDirs = new Set();
+
+{
+  const source = readFileSync(laneHook, "utf8");
+  assertions++;
+  assert.match(source, /parkedCustodyDeadlineMs\s*=\s*Date\.now\(\)\s*\+\s*8_000/, "parked custody has a total budget below the 15-second hook timeout");
+  assertions++;
+  assert.match(source, /return Math\.min\(1_500, remaining\)/, "each parked-worktree Git probe has a bounded sub-timeout");
+}
 
 function temporaryStateDir(prefix) {
   const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -436,11 +444,14 @@ function bashExecutable() {
   });
   assertions++;
   assert.equal(queuedParallel.stdout, "", "a queued ticket does not globally lock unrelated chats");
-  denied(run(laneHook, stateDir, {
+  const queuedDenial = run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Edit",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
-  }), /lane-start check has not run/i, "approved ticket still requires deterministic lane start");
+  });
+  denied(queuedDenial, /lane-start check has not run/i, "approved ticket still requires deterministic lane start");
+  assertions++;
+  assert.match(queuedDenial.stdout, /take over factory job lane-job here/i, "wrong-checkout approval denial gives the exact custody-transfer recovery path");
 
   appendFactoryEvent(paths, {
     type: "lane-started",

@@ -9,7 +9,10 @@ globally serializing all work behind one job. Only `building`, `verifying`, and
 `in-review` consume capacity, so an expired pending approval or historical
 parked job remains visible without occupying a worker slot. Each lane must start
 in its own clean linked Git worktree; the primary checkout and worktree reuse are
-refused. Cross-chat custody checks cover canonical structured-write targets even
+refused. A wrong-checkout approval now reports the exact safe recovery route:
+open the job's clean worktree in a new chat, transfer the named job through Mason's
+ordinary chat request, and re-present the ticket after the old approval is revoked.
+Cross-chat custody checks cover canonical structured-write targets even
 when the calling chat is in another checkout, while terminal parked jobs retain
 targeted custody without globally blocking unrelated shell work.
 
@@ -27,6 +30,12 @@ approvals fail closed until reconciled. Parked worktrees with local changes also
 retain fail-closed shell custody, as do clean worktrees with unpushed commits;
 clean worktrees at their recorded base and removed parked worktrees do not globally
 block unrelated shell work. Parked jobs never consume one of the three worker slots.
+Verified legacy ledgers remain readable when an old lane without a worktree field was
+later safely parked or re-ticketed; an unbound lane that is still active fails closed.
+Parked-worktree Git probes now finish inside an eight-second total budget with bounded
+subprocess timeouts, so the installed 15-second hook cannot silently expire open.
+The live local ledger was checked before this compatibility change: all three existing
+`lane-started` events already contain worktree bindings.
 This entry records the reviewed release candidate; it does not claim a merge or
 production deployment.
 

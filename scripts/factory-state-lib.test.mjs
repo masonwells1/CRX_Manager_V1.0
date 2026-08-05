@@ -1047,6 +1047,62 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
 
 {
   const { root, paths, cleanup } = fixture();
+  const written = writeImmutableTicket(paths, ticket("legacy-worktree-binding"));
+  const question = "Approve the legacy worktree compatibility ticket?";
+  append(paths, "ticket-drafted", written.ticket.id, {
+    ticketFile: written.filename,
+    ticketHash: written.hash,
+    ticketVersion: 1,
+    title: written.ticket.title,
+  });
+  append(paths, "ticket-presented", written.ticket.id, {
+    ticketHash: written.hash,
+    questionText: question,
+    questionHash: sha256(question),
+    baseSha: "a".repeat(40),
+  });
+  append(paths, "ticket-approved", written.ticket.id, {
+    ticketHash: written.hash,
+    questionHash: sha256(question),
+    ownerReply: "yes",
+    baseSha: "a".repeat(40),
+    expiresAt: new Date(Date.parse("2026-07-30T12:00:00.000Z") + APPROVAL_TTL_MS).toISOString(),
+  });
+  append(paths, "lane-started", written.ticket.id, {
+    ticketHash: written.hash,
+    baseSha: "a".repeat(40),
+    worktree: root,
+  });
+  append(paths, "job-stage", written.ticket.id, {
+    stage: "parked",
+    behaviorSummary: "Historical lane was preserved.",
+    blocker: "Historical lane ended before worktree binding became mandatory.",
+  });
+  const legacyEvents = readEventLog(paths).events.map((event) => JSON.parse(JSON.stringify(event)));
+  let previousHash = "0".repeat(64);
+  for (const event of legacyEvents) {
+    delete event.eventHash;
+    event.previousHash = previousHash;
+    if (event.type === "lane-started") delete event.payload.worktree;
+    event.eventHash = sha256(canonicalJson(event));
+    previousHash = event.eventHash;
+  }
+  writeFileSync(paths.eventsPath, `${legacyEvents.map((event) => canonicalJson(event)).join("\n")}\n`);
+  const compatible = loadFactorySnapshot(paths);
+  eq(compatible.jobs[0].stage, "parked", "a safely parked pre-worktree lane remains readable after the binding upgrade");
+  eq(compatible.jobs[0].worktree, "", "legacy replay never invents a worktree custody path");
+  eq(compatible.jobs[0].legacyWorktreeMissing, true, "the snapshot identifies the narrowly accepted legacy shape");
+  writeFileSync(paths.eventsPath, `${legacyEvents.slice(0, -1).map((event) => canonicalJson(event)).join("\n")}\n`);
+  throws(
+    () => loadFactorySnapshot(paths),
+    /Lane start.*approved chat session/i,
+    "an active lane without a recorded worktree remains fail-closed",
+  );
+  cleanup();
+}
+
+{
+  const { root, paths, cleanup } = fixture();
   const written = writeImmutableTicket(paths, ticket("custody-replay"));
   append(paths, "ticket-drafted", written.ticket.id, {
     ticketFile: written.filename,

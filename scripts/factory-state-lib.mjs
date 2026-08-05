@@ -2923,6 +2923,19 @@ export function factoryReviewInputBindingRequired(events, eventIndex) {
 
 export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
   const log = readEventLog(paths);
+  // Worktree binding was added after the first factory ledgers existed. Accept
+  // the old shape only when later verified history has already removed its
+  // active custody: a parked transition or a fresh ticket boundary. A legacy
+  // lane that is still active remains fail-closed instead of being assigned to
+  // an inferred checkout.
+  const safelyClosedLegacyLaneStarts = new Set(log.events.flatMap((event, eventIndex) => {
+    if (event.type !== "lane-started" || String(event.payload.worktree || "").trim()) return [];
+    const laterSafeBoundary = log.events.slice(eventIndex + 1).some((candidate) =>
+      candidate.jobId === event.jobId
+      && (candidate.type === "ticket-drafted"
+        || (candidate.type === "job-stage" && candidate.payload.stage === "parked")));
+    return laterSafeBoundary ? [event.eventId] : [];
+  }));
   const jobs = new Map();
   const factoryIntents = new Map();
   let held = false;
@@ -2964,6 +2977,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       sessionId: "",
       laneSessionId: "",
       worktree: "",
+      legacyWorktreeMissing: false,
       actorTool: "",
       baseSha: "",
       approvalExpiresAt: "",
@@ -3014,6 +3028,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.reviews = [];
         job.laneSessionId = "";
         job.worktree = "";
+        job.legacyWorktreeMissing = false;
         job.baseSha = "";
         job.approvalExpiresAt = "";
         job.approvalReply = "";
@@ -3101,20 +3116,26 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         break;
       }
       case "lane-started":
+        {
+        const recordedWorktree = String(event.payload.worktree || "").trim();
+        const safelyClosedLegacyLane = !recordedWorktree
+          && safelyClosedLegacyLaneStarts.has(event.eventId);
         if (job.stage !== "queued"
             || job.sessionId !== event.sessionId
             || job.actorTool !== event.actorTool
             || String(event.payload.ticketHash || "") !== job.ticketHash
             || String(event.payload.baseSha || "") !== job.baseSha
-            || !String(event.payload.worktree || "").trim()
+            || (!recordedWorktree && !safelyClosedLegacyLane)
             || !job.approvalExpiresAt
             || Date.parse(job.approvalExpiresAt) <= Date.parse(event.timestamp)) {
           throw new Error(`Lane start for ${job.id} is not bound to its approved chat session.`);
         }
         job.stage = "building";
         job.laneSessionId = event.sessionId;
-        job.worktree = path.resolve(String(event.payload.worktree));
+        job.worktree = recordedWorktree ? path.resolve(recordedWorktree) : "";
+        job.legacyWorktreeMissing = safelyClosedLegacyLane;
         break;
+        }
       case "review-presented":
         if (job.stage !== "awaiting-morning-review"
             || job.sessionId !== event.sessionId
@@ -3493,7 +3514,9 @@ export function validateLaneStart({
     }
     if (!isLinkedGitWorktree(cwd)) {
       throw new Error(
-        `Factory lane ${jobId} must start in a dedicated linked Git worktree, not the primary checkout.`,
+        `Factory lane ${jobId} must start in a dedicated linked Git worktree, not the primary checkout. `
+        + `If this ticket was approved in the wrong checkout, open a new chat in a clean worktree at current origin/main `
+        + `and ask Mason to take over factory job ${jobId} here; the transfer revokes this approval so the ticket can be re-presented safely.`,
       );
     }
     validateRepositoryScope(job, cwd, { requireCleanBase: true });

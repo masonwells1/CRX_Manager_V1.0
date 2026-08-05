@@ -108,7 +108,12 @@ fingerprint before the ticket or morning decision is re-presented there.
   consume capacity; an expired or orphaned pending ticket, a queued ticket, and a job waiting for
   owner disposition do not consume a worker slot. Every active or evidence-holding job is bound to
   its own clean linked Git worktree; lane start rejects the shared primary checkout, and another chat
-  cannot write into or reuse that worktree. Structured mutation targets are checked across checkout
+  cannot write into or reuse that worktree. Create or select that clean worktree at current
+  `origin/main` and open the Factory chat there before drafting or presenting the ticket. If a ticket
+  was accidentally approved from the primary checkout, do not bypass lane start: open a new chat in
+  the correct worktree and ask Mason to “take over factory job `<job-id>` here.” The owner-input hook
+  transfers that one queued job, revokes the old approval, and requires the canonical ticket question
+  to be re-presented in the new chat. No ticket rewrite or manual ledger edit is required. Structured mutation targets are checked across checkout
   boundaries. Shell or opaque mutations from another chat fail closed while a nonterminal factory
   worktree is in custody because their final destination cannot be proven. A terminal parked job keeps
   targeted structured-write custody; it also keeps fail-closed opaque/shell custody while its worktree
@@ -301,6 +306,12 @@ fingerprint before the ticket or morning decision is re-presented there.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
 - Multi-lane execution is bounded at three active lanes and retains per-job single-flight evidence,
   separate-worktree custody, global pause/resume, and all independent release and production gates.
+- Ledger replay accepts a pre-worktree-binding `lane-started` event only when later verified history
+  safely parked that lane or replaced it with a fresh ticket. It never invents a custody path, and a
+  legacy lane that is still active without a recorded worktree remains fail-closed.
+- Parked-worktree Git custody probes share an eight-second total hook budget and a 1.5-second cap per
+  subprocess, both below the installed 15-second PreToolUse deadline. Timeout or Git failure denies
+  the opaque or shell mutation instead of allowing the hook process to expire without a decision.
 
 ## Operator recovery
 
