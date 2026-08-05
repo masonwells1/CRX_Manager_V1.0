@@ -54,6 +54,11 @@ interface OrderImportFailure {
   details: string[];
 }
 
+const normalizeImportStatus = (status?: string): 'confirmed' | null => {
+  const normalized = status?.trim().toLowerCase() || 'confirmed';
+  return normalized === 'confirmed' ? 'confirmed' : null;
+};
+
 const ORDER_FIELD_MAPPINGS: Record<string, string[]> = {
   order_number: ['order_number', 'order_no', 'order#', 'invoice_number', 'invoice_no', 'invoice#'],
   customer_name: ['customer_name', 'customer', 'farm_name', 'farm', 'buyer'],
@@ -161,11 +166,23 @@ export default function BulkOrderImport({
     }
 
     const orderNumber = data.order_number || 'OCR-IMPORT';
+    const importStatus = normalizeImportStatus(data.status);
+    if (!importStatus) {
+      return {
+        valid: [],
+        invalid: [{
+          row: 1,
+          error: 'Only confirmed orders can be imported. Complete or cancel them through the normal delivery workflow.',
+          data: { order_number: orderNumber, status: data.status },
+        }],
+      };
+    }
+
     const parsedOrder: ParsedOrder = {
       order_number: orderNumber,
       customer_name: data.customer_name || 'Unknown Customer',
       order_date: data.order_date || localToday(),
-      status: data.status || 'confirmed',
+      status: importStatus,
       notes: data.notes || '',
       items: data.items.map((item) => ({
         product_name: item.product_name,
@@ -212,6 +229,27 @@ export default function BulkOrderImport({
       return { valid: [], invalid: [] };
     }
 
+    if (orderFieldMap.status !== undefined) {
+      const invalidStatuses = rows.flatMap((row, idx) => {
+        const status = row[orderFieldMap.status];
+        if (normalizeImportStatus(status)) return [];
+
+        const data: Record<string, string> = {};
+        headers.forEach((header, columnIndex) => {
+          data[header] = row[columnIndex];
+        });
+        return [{
+          row: idx + 2,
+          error: 'Only confirmed orders can be imported. Complete or cancel them through the normal delivery workflow.',
+          data,
+        }];
+      });
+
+      if (invalidStatuses.length > 0) {
+        return { valid: [], invalid: invalidStatuses };
+      }
+    }
+
     const ordersMap = new Map<string, ParsedOrder>();
     const invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
 
@@ -244,7 +282,7 @@ export default function BulkOrderImport({
             order_date: orderFieldMap.order_date !== undefined
               ? row[orderFieldMap.order_date]
               : localToday(),
-            status: orderFieldMap.status !== undefined ? row[orderFieldMap.status] : 'confirmed',
+            status: 'confirmed',
             notes: orderFieldMap.notes !== undefined ? row[orderFieldMap.notes] : undefined,
             items: [],
             idempotency_key: generateIdempotencyKey(`bulk_import_order:${orderNumber}`, profile?.id || 'anon'),
@@ -425,7 +463,7 @@ export default function BulkOrderImport({
         const { data: rpcResult, error: rpcError } = await supabase.rpc('bulk_import_order', {
           p_order_number: order.order_number,
           p_customer_id: customer.id,
-          p_status: order.status || 'confirmed',
+          p_status: 'confirmed',
           p_total_price: totalPrice,
           p_total_cost: totalCost,
           p_total_profit: totalProfit,
@@ -486,7 +524,8 @@ export default function BulkOrderImport({
                   <p className="font-medium text-xs">CSV Files:</p>
                   <ul className="list-disc list-inside space-y-1 text-xs ml-2">
                     <li>Required: order_number, customer_name, product_name, quantity, price_per_unit</li>
-                    <li>Optional: order_date, status, unit_cost, unit_size, notes</li>
+                    <li>Optional: order_date, unit_cost, unit_size, notes</li>
+                    <li>Imports always create confirmed orders; fulfillment and cancellation use the normal workflow</li>
                   </ul>
                 </div>
                 <div>
