@@ -187,8 +187,28 @@ describe('BulkOrderImport', () => {
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
     const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
       p_items: Array<{ product_id: string }>;
+      p_status: string;
     };
     expect(args.p_items[0].product_id).toBe('product-b');
+    expect(args.p_status).toBe('confirmed');
+  });
+
+  it('rejects a terminal imported status before bulk_import_order', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,status,product_name,quantity,price_per_unit',
+      'O-FULFILLED,North Farm,fulfilled,SKU-B,2,20',
+    ].join('\n');
+    const file = new File([csv], 'fulfilled.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/fulfilled\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+
+    expect(await screen.findByText(/only confirmed orders can be imported/i)).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
   });
 
   it('keeps mixed-result failure details open while refreshing successful orders', async () => {

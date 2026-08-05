@@ -1150,7 +1150,7 @@ interface BulkImportOrderParams {
   p_total_margin_pct: number;
   p_order_date: string;  // ISO date
   p_items: Array<{
-    product_id: string | null;
+    product_id: string;
     product_name: string;
     price_per_unit: number;
     unit_cost: number;
@@ -1263,7 +1263,7 @@ describe('RPC contract: bulk_import_order', () => {
     expect(params.p_items[0].product_id).toBeTruthy();
   });
 
-  it('accepts items with null product_id (unknown product fallback)', () => {
+  it('requires the resolved product UUID used for inventory booking', () => {
     const params = assertShape<BulkImportOrderParams>({
       p_order_number: 'IMP-002',
       p_customer_id: 'cust-uuid',
@@ -1275,8 +1275,8 @@ describe('RPC contract: bulk_import_order', () => {
       p_order_date: '2026-05-15',
       p_items: [
         {
-          product_id: null,
-          product_name: 'Unknown product',
+          product_id: 'prod-uuid',
+          product_name: 'Resolved product',
           price_per_unit: 0,
           unit_cost: 0,
           total_units_needed: 1,
@@ -1284,7 +1284,18 @@ describe('RPC contract: bulk_import_order', () => {
         },
       ],
     });
-    expect(params.p_items[0].product_id).toBeNull();
+    expect(params.p_items[0].product_id).toBe('prod-uuid');
+  });
+
+  it('enforces canonical lifecycle side effects in the latest migration body', () => {
+    const body = latestFunctionBody('bulk_import_order');
+    expect(body).not.toBeNull();
+    expect(body).toContain("INVALID_IMPORT_STATUS: only confirmed orders can be imported");
+    expect(body).toMatch(/'confirmed',\s+v_total_price/);
+    expect(body).toContain('quantity_prebooked = public.inventory.quantity_prebooked + EXCLUDED.quantity_prebooked');
+    expect(body).toContain("'booked',");
+    expect(body).toContain('public._insert_commissions_for_order(');
+    expect(body).toContain('INSERT INTO public.activity_feed');
   });
 });
 
@@ -2105,7 +2116,9 @@ function registryMigrationHighWater(): string {
 // under server-assigned ledger version 20260729222311; it is not pending.
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+  '20260805204716',
+]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even

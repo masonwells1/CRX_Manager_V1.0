@@ -568,6 +568,17 @@
         "lifecycle"
       ]
     },
+    "bulk_import_order": {
+      "chain": "smoke-bulk-order-import-lifecycle.sql",
+      "description": "Section 4 lifecycle parity: rejects partial/terminal imported statuses; creates only confirmed orders; recomputes order and line totals server-side; atomically prebooks inventory, writes the booked ledger, creates commissions and activity; and proves idempotent replay without duplicate side effects. Synthetic fixtures always terminate with SMOKE_PASS_ROLLBACK.",
+      "covers": [
+        "bulk_import_order"
+      ],
+      "area": [
+        "inventory",
+        "lifecycle"
+      ]
+    },
     "create_direct_order": {
       "chain": "smoke-create-direct-order-po.sql",
       "description": "Customer-PO param (migration 20260614130000): a REAL active sales_rep creates a direct order WITH p_customer_po_number and the PO persists on orders (the bug: the old frontend post-create orders.update() hit the admin-only orders_update RLS and failed for sales_rep). Asserts order/order_items/inventory-prebook created, status confirmed; whitespace PO normalizes to NULL; idempotency replay returns the same order with no duplicate; plus the auth probes (no-auth -> Authentication required, driver -> INSUFFICIENT_ROLE, forged actor -> Actor mismatch).",
