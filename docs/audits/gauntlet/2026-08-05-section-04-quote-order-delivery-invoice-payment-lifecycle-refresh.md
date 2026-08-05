@@ -52,7 +52,7 @@ Register a rollback-only `bulk_import_order` business-chain smoke and a migratio
 
 ## Remediation prepared in this run
 
-- Forward-only migration `supabase/migrations/20260805204716_harden_bulk_order_import_lifecycle.sql` implements the database fix. Key guards/effects are at `:49-88`, `:91-130`, `:132-243`, and `:245-294`.
+- Forward-only migration `supabase/migrations/20260805211951_harden_bulk_order_import_lifecycle.sql` implements the database fix. Supabase assigned ledger version `20260805211951` to the submitted `20260805204716` candidate; the disk file was B7-renamed content-identically. Key guards/effects are at `:49-88`, `:91-130`, `:132-243`, and `:245-294`.
 - `src/components/orders/BulkOrderImport.tsx:57-61`, `:164-195`, `:215-253`, `:463-475`, and `:525-529` enforce and explain confirmed-only import behavior.
 - `src/components/orders/BulkOrderImport.test.tsx:171-211` proves successful imports send the canonical status and terminal imports do not reach the RPC.
 - `src/lib/rpcContracts.test.ts:1237-1299` pins the required migration effects.
@@ -72,9 +72,17 @@ Register a rollback-only `bulk_import_order` business-chain smoke and a migratio
 - Pre-apply live rehearsal: candidate migration + `plpgsql_check` + full smoke reached `SMOKE_PASS_ROLLBACK` in one aborted transaction.
 - Rollback verification: live function hash remained `c835fe992c8a2011d46aa7610c7fe06a`; zero smoke orders, customers, products, or idempotency receipts remained.
 
-## Apply/publication state
+## Live apply and post-apply proof
 
-The migration is **not yet applied at this report revision**. Live apply, post-apply catalog/smoke evidence, schema-registry refresh, exact-SHA review, protected pull request, and production verification remain governed closeout steps.
+- Supabase applied ledger version `20260805211951` successfully.
+- Live catalog: one overload; `SECURITY DEFINER`; `search_path=public, pg_temp`; anon denied; authenticated/service access preserved; MD5 `8432af00f788d364b934782d12a6c640`.
+- Live body markers confirm confirmed-only status, server totals, inventory prebooking, booked ledger, commissions, activity, and operation-scoped idempotency.
+- Applied business-chain smoke returned `SMOKE_PASS_ROLLBACK`; zero smoke orders, customers, products, idempotency receipts, or inventory transactions remained.
+- Supabase advisors returned the expected generic authenticated-`SECURITY DEFINER` warning for this intentionally exposed, active-role-gated RPC and no target performance finding.
+- The live-introspection schema registry now records high-water `20260805211951` and the applied migration name; generated-column/status/no-`updated_at` counts are unchanged.
+- Both content-bound migration reviewer charters were CLEAN on `gpt-5.6-sol` / high.
+
+Protected pull-request publication and production frontend verification remain the closeout steps at this report revision.
 
 ## Next section queued
 

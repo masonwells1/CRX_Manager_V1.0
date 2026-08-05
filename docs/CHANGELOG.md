@@ -56,6 +56,23 @@ secret-scanning regressions cover both direct and nested snake_case `new_text` p
 This entry records the reviewed release candidate; it does not claim a merge or
 production deployment.
 
+## 2026-08-05 — Bulk order import lifecycle parity — LIVE
+
+The Section 4 live-foundation refresh found that Bulk Order Import could label a
+completely undelivered order as partially fulfilled, fulfilled, or cancelled. It
+also bypassed the normal inventory reservation, booked inventory ledger,
+commission creation, and atomic order activity performed by canonical order
+creation.
+
+Live migration `20260805211951_harden_bulk_order_import_lifecycle` now creates
+confirmed imports only, validates active actors/customers/products, recomputes
+totals in PostgreSQL, and performs every required lifecycle side effect in the
+same transaction. The import UI rejects terminal statuses before calling the
+RPC, while PostgreSQL remains the authoritative backstop. Both content-bound
+Sol/high migration reviews, the full test/build suite, 21 live invariant sweeps,
+and pre/post-apply rollback smokes passed. No smoke fixtures remained, and the
+schema registry was refreshed to the new live high-water.
+
 ## 2026-08-05 — Factory ledger failure containment
 
 Factory intent now leaves a durable per-chat marker outside the event ledger before attempting the
