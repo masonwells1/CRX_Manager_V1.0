@@ -2,6 +2,18 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Factory ledger failure containment
+
+Factory intent now leaves a durable per-chat marker outside the event ledger before attempting the
+intent append, and healthy replay backfills markers for pre-existing Factory chats. If the shared
+Factory ledger later becomes unreadable, explicit Factory commands and only those marked Factory
+chats continue to fail closed; unrelated work remains governed by the repository's ordinary safety
+hooks instead of being blocked by the Factory outage. Regression proof covers both sides of that
+boundary while preserving read-only diagnosis and the canonical recovery route. The existing narrow
+same-lane replay rule continues to accept the complete legacy duplicate parked event that previously
+prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage
+changes.
+
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 
 The reviewed Section 2 remediation aligns customer statements across the target

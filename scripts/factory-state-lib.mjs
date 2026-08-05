@@ -188,6 +188,7 @@ function buildPaths(stateDir) {
     ownerReceiptsDir: path.join(stateDir, "permits", "owner-receipts"),
     ownerReceiptKeyPath: path.join(stateDir, "permits", "owner-receipt.key"),
     intentLatchesDir: path.join(stateDir, "intent-latches"),
+    managedSessionsDir: path.join(stateDir, "managed-sessions"),
     eventsPath: path.join(stateDir, "events.jsonl"),
     lockPath: path.join(stateDir, "events.lock"),
     harnessRunsDir: path.join(stateDir, "harness-runs"),
@@ -206,12 +207,41 @@ export function ensureFactoryDirs(paths) {
   mkdirSync(paths.permitsDir, { recursive: true });
   mkdirSync(paths.ownerReceiptsDir, { recursive: true });
   mkdirSync(paths.intentLatchesDir, { recursive: true });
+  mkdirSync(paths.managedSessionsDir, { recursive: true });
   mkdirSync(paths.harnessRunsDir, { recursive: true });
 }
 
 function factoryIntentLatchPath(paths, sessionId) {
   const session = requiredText(sessionId, "factory intent sessionId", 200);
   return path.join(paths.intentLatchesDir, `${sha256(session)}.json`);
+}
+
+function factoryManagedSessionPath(paths, sessionId) {
+  const session = requiredText(sessionId, "factory managed sessionId", 200);
+  return path.join(paths.managedSessionsDir, `${sha256(session)}.json`);
+}
+
+export function hasFactoryManagedSessionMarker(paths, sessionId) {
+  if (!sessionId) return false;
+  return existsSync(factoryManagedSessionPath(paths, sessionId));
+}
+
+export function setFactoryManagedSessionMarker(paths, { sessionId, actorTool }) {
+  authorizedFactoryWriter(paths);
+  ensureFactoryDirs(paths);
+  const target = factoryManagedSessionPath(paths, sessionId);
+  const bytes = `${canonicalJson({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    sessionId,
+    actorTool: requiredText(actorTool, "factory managed actorTool", 40),
+    createdAt: new Date().toISOString(),
+  })}\n`;
+  try {
+    writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  return target;
 }
 
 export function hasFactoryIntentFailureLatch(paths, sessionId) {
@@ -240,6 +270,7 @@ export function setFactoryIntentFailureLatch(paths, {
     ownerRequestRejected: ownerRequestRejected === true,
     createdAt: new Date().toISOString(),
   })}\n`;
+  setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
   try {
     writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
   } catch (error) {

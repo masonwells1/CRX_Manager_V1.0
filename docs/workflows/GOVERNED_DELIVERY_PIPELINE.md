@@ -428,10 +428,14 @@ that gate first establishes the order: the pause blocks attachment, or the event
 A resume compares and clears only the exact emergency-marker bytes it observed before work began while
 holding the same gate; a newer fallback pause written while that resume is replaying remains enforced.
 
-If factory state cannot be verified, repository mutations fail closed. Reads remain available for
-diagnosis, and the canonical factory status/recovery CLI remains reachable. A corruption that cannot
-be repaired by the backup-first stale-lock or torn-tail modes remains parked for an owner recovery
-decision; it does not brick unrelated read-only work.
+Every chat that requests Factory-managed work gets a separate durable managed-session marker before
+the ledger append is attempted. A healthy replay also backfills that marker for pre-existing Factory
+sessions before allowing their next governed action. If factory state cannot be verified, mutations
+fail closed only for those marked chats and explicit Factory CLI actions. Unrelated chats continue
+under the repository's ordinary guards instead of inheriting a global Factory outage. Reads remain
+available for diagnosis, and the canonical factory status/recovery CLI remains reachable. A
+corruption that cannot be repaired by the backup-first stale-lock or torn-tail modes remains parked
+for an owner recovery decision.
 An event becomes durable only when its complete canonical JSON and terminating newline are present.
 Even syntactically valid final JSON without that newline is treated as a torn tail, excluded from
 replay, and blocks every append until the validated recovery route archives and removes it.

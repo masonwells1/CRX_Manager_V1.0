@@ -7,11 +7,13 @@ import {
   ACTIVE_STAGES,
   FACTORY_CUSTODY_STAGES,
   hasFactoryIntentFailureLatch,
+  hasFactoryManagedSessionMarker,
   loadFactorySnapshot,
   mintFactoryCliPermit,
   pathAllowedByTicket,
   rejectSecretBearingText,
   resolveHookFactoryPaths,
+  setFactoryManagedSessionMarker,
   validateApprovedFactoryLanding,
 } from "../../scripts/factory-state-lib.mjs";
 import { isGitPush, pushTargetsCurrentHead } from "./codex-push-lib.mjs";
@@ -557,10 +559,22 @@ const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type ||
   : "claude";
 const paths = resolveHookFactoryPaths(projectDir);
 const intentRecordFailed = Boolean(sessionId) && hasFactoryIntentFailureLatch(paths, sessionId);
+const factoryManagedSession = Boolean(factoryCli)
+  || intentRecordFailed
+  || (Boolean(sessionId) && hasFactoryManagedSessionMarker(paths, sessionId));
 
 let snapshot;
+let snapshotManagedSession = false;
 try {
   snapshot = loadFactorySnapshot(paths);
+  snapshotManagedSession = Boolean(sessionId) && (
+    snapshot.factoryIntentSessions.includes(sessionId)
+    || snapshot.jobs.some((job) => [job.sessionId, job.laneSessionId].includes(sessionId))
+    || (Boolean(factoryCli) && !factoryCli.status)
+  );
+  if (snapshotManagedSession && !hasFactoryManagedSessionMarker(paths, sessionId)) {
+    setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
+  }
 } catch (error) {
   if (factoryCli?.status || !buildMutation) nothing();
   if (factoryCli?.recovery) {
@@ -575,6 +589,7 @@ try {
     });
     allowWithPermit(payload, permit.token, factoryCli.canonicalCommand, projectDir);
   }
+  if (!factoryManagedSession && !snapshotManagedSession) nothing();
   deny(`CRX FACTORY GATE: shared factory state could not be verified (${error.message}). Factory-managed build writes fail closed.`);
 }
 

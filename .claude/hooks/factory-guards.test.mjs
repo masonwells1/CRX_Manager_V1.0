@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
+  hasFactoryManagedSessionMarker,
   loadFactorySnapshot,
   resolveFactoryPaths,
   sha256,
@@ -16,6 +17,7 @@ import {
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "../..");
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
 const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integrity-guard.mjs");
+const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
 let assertions = 0;
 const temporaryStateDirs = new Set();
 
@@ -867,7 +869,37 @@ function bashExecutable() {
 
 {
   const stateDir = temporaryStateDir("crx-factory-corrupt-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
   const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const managedSessionId = "managed-corrupt-thread";
+  const intentResult = run(shipHook, stateDir, {
+    thread_id: managedSessionId,
+    prompt: "Run the factory overnight.",
+  });
+  assertions++;
+  assert.equal(intentResult.status, 0, "factory intent records its independent managed-session marker before corruption");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, managedSessionId), true, "successful new factory intent retains its managed-session marker");
+  const historicalSessionId = "historical-managed-corrupt-thread";
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    sessionId: historicalSessionId,
+    actorTool: "codex",
+    payload: { ownerRequest: "Historical factory request before managed-session markers existed." },
+  });
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), false, "historical factory intent starts without the new independent marker");
+  const historicalRead = run(laneHook, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "docs", "workflows", "GOVERNED_DELIVERY_PIPELINE.md") },
+  });
+  assertions++;
+  assert.equal(historicalRead.stdout, "", "historical managed session remains readable while its healthy ledger marker is backfilled");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), true, "healthy replay backfills the marker for pre-existing factory sessions");
   writeFileSync(paths.eventsPath, "{not-valid-json}\n");
   const readResult = run(laneHook, stateDir, {
     thread_id: "diagnostic-thread",
@@ -876,11 +908,18 @@ function bashExecutable() {
   });
   assertions++;
   assert.equal(readResult.stdout, "", "corrupt factory state leaves read-only diagnosis available");
-  denied(run(laneHook, stateDir, {
+  const unrelatedWrite = run(laneHook, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
-  }), /build writes fail closed/i, "corrupt factory state still denies repository mutation");
+  });
+  assertions++;
+  assert.equal(unrelatedWrite.stdout, "", "corrupt factory state does not block writes in an unrelated non-factory session");
+  denied(run(laneHook, stateDir, {
+    thread_id: managedSessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  }), /factory-managed build writes fail closed/i, "corrupt factory state still denies mutation in the factory-managed session");
   const recoveryResult = run(laneHook, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "PowerShell",
