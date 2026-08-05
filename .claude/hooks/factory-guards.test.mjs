@@ -980,6 +980,44 @@ function bashExecutable() {
 }
 
 {
+  const stateDir = temporaryStateDir("crx-factory-empty-backfill-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const emptyRead = run(integrityHook, stateDir, {
+    thread_id: "unrelated-empty-factory-thread",
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "README.md") },
+  });
+  assertions++;
+  assert.equal(emptyRead.stdout, "", "fresh empty ledger permits ordinary reads while creating its zero-session boundary");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths, loadFactorySnapshot(paths)), true, "fresh empty ledger creates a valid zero-session backfill boundary");
+  const laterHistoricalSession = "historical-session-after-stale-boundary";
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    sessionId: laterHistoricalSession,
+    actorTool: "codex",
+    payload: { ownerRequest: "Exercise repair of stale historical backfill metadata." },
+  });
+  const laterSnapshot = loadFactorySnapshot(paths);
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths, laterSnapshot), false, "the prior boundary is stale against a newer healthy snapshot");
+  const laterRead = run(integrityHook, stateDir, {
+    thread_id: laterHistoricalSession,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "README.md") },
+  });
+  assertions++;
+  assert.equal(laterRead.stdout, "", "healthy replay repairs stale backfill metadata without blocking the historical session's read");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, laterHistoricalSession), true, "repair creates the newly discovered historical session marker");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths, laterSnapshot), true, "repair atomically replaces the boundary with the intended snapshot identity");
+}
+
+{
   const stateDir = temporaryStateDir("crx-factory-pre-backfill-corrupt-");
   process.env.CRX_FACTORY_TEST_MODE = "1";
   process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;

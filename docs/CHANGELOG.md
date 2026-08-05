@@ -13,7 +13,8 @@ Factory PreToolUse guards, including dynamic shell commands. Regression proof co
 boundary while preserving read-only diagnosis and the canonical recovery route. The integrity guard has
 marker-only write authority so a historical active session is durably classified before its very first
 action, including when its approved ticket names protected governance paths. A durable historical-backfill
-boundary records that every session visible in the last healthy ledger replay was marked. If corruption
+boundary records the exact ledger hash and session set from the last healthy replay, including the empty-ledger
+case, and is atomically replaced when that snapshot identity changes. If corruption
 precedes that boundary, unrelated structured edits remain available while governance edits and opaque or
 dynamic execution stay globally fail-closed; once the boundary exists, only marked Factory chats fail closed.
 The existing narrow

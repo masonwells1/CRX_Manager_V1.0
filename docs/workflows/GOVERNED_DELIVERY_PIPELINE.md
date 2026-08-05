@@ -433,7 +433,9 @@ the ledger append is attempted. A healthy replay also backfills that marker for 
 sessions before allowing their next governed action. The earlier integrity guard has authority only to
 write this marker, not to mutate the ledger or other Factory state, so a historical active session stays
 governed even on its first attempted self-governance edit. A healthy replay marks every historical session
-visible in the snapshot and then writes a durable backfill-complete boundary. Before that boundary exists,
+visible in the snapshot and then atomically writes a durable backfill-complete boundary bound to that exact
+ledger hash and session set. The zero-session case creates the directory and boundary explicitly, and a later
+healthy snapshot replaces stale metadata before it is accepted. Before that boundary exists,
 ledger corruption keeps governance edits and opaque or dynamic execution globally fail-closed while still
 allowing unrelated structured file edits; afterward, only marked Factory chats retain that fail-closed scope.
 These markers and the boundary are coordination-only metadata and
