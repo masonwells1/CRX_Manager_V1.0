@@ -4016,6 +4016,8 @@ function factoryReviewContainsConcealedHtml(value) {
         if (character === quote) quote = "";
       } else if (character === '"' || character === "'") {
         quote = character;
+      } else if (character === "<") {
+        return true;
       } else if (character === ">") {
         end = cursor;
         break;
@@ -4103,18 +4105,52 @@ function decodeFactoryReviewRepresentations(value) {
   throw new Error("Factory review output exceeds the safe representation-decoding depth and could hide a credential or secret.");
 }
 
+function stripFactoryReviewMarkupForSecretScan(value) {
+  const text = String(value);
+  const result = [];
+  let depth = 0;
+  let quote = "";
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (depth === 0) {
+      if (character === "<" && /[A-Za-z!/?]/.test(text[index + 1] || "")) {
+        depth = 1;
+      } else {
+        result.push(character);
+      }
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = "";
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "<") {
+      depth++;
+    } else if (character === ">") {
+      depth--;
+    }
+  }
+  if (depth !== 0 || quote) {
+    throw new Error("Factory review output contains unterminated markup that could hide a credential or secret.");
+  }
+  return result.join("");
+}
+
 function markdownNeutralSecretScanText(value, { preserveHiddenContent = false } = {}) {
   let text = decodeFactoryReviewRepresentations(value)
     .replace(/\p{Default_Ignorable_Code_Point}/gu, "");
-  text = preserveHiddenContent
-    ? text
+  if (preserveHiddenContent) {
+    text = text
       .replace(/!?\[([^\]]*)]\(([^)]*)\)/g, "$1 $2")
       .replace(/!?\[([^\]]*)]\[([^\]]*)]/g, "$1 $2")
       .replace(/[<>]/g, " ")
-    : text
+  } else {
+    text = stripFactoryReviewMarkupForSecretScan(text
       .replace(/!?\[([^\]]*)]\([^)]*\)/g, "$1")
-      .replace(/!?\[([^\]]*)]\[[^\]]*]/g, "$1")
-      .replace(/<[^>]*>/g, "");
+      .replace(/!?\[([^\]]*)]\[[^\]]*]/g, "$1"));
+  }
   return text
     .replace(/\\(["'])/g, "$1")
     .replace(/\\([:=|`*~_[\](){}<>])/g, "$1")

@@ -247,6 +247,7 @@ for (const [label, output] of [
   ["empty Markdown-image identifier split", "Finding exposed pass![](https://example.invalid)word = credential-value."],
   ["nested empty Markdown-link target", "Finding exposed pass[]((https://example.invalid))word = credential-value."],
   ["HTML-split password", "Finding exposed pass<wbr>word = credential-value."],
+  ["nested HTML-tag password split", "Finding exposed pass<scr<script>ipt>word = credential-value."],
   ["HTML-comment-split password", "Finding exposed pass<!--x>y-->word = credential-value."],
   ["default-hidden dialog split", "Finding exposed pass<dialog>x</dialog>word = credential-value."],
   ["conditional noscript split", "Finding exposed pass<noscript>x</noscript>word = credential-value."],
@@ -290,6 +291,15 @@ for (const [label, output] of [
     `Markdown formatting cannot hide a generic ${label} assignment from review evidence scanning`,
   );
 }
+eq(
+  validateFactoryReviewOutput({
+    status: 0,
+    stdout: `Verified that 1 < 2 without emitting markup.\n${FACTORY_REVIEW_TOKEN}: CLEAN\n`,
+    stderr: "",
+  }).verdict,
+  "clean",
+  "ordinary less-than comparisons remain valid review prose",
+);
 
 const boundedFinalReview = finalFactoryReviewResult({
   status: 0,
