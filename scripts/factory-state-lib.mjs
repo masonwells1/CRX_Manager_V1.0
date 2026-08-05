@@ -57,6 +57,8 @@ export const FACTORY_CUSTODY_STAGES = new Set([
   "approved-to-land",
 ]);
 export const FACTORY_WORKTREE_CUSTODY_STAGES = new Set([
+  "needs-ticket-ok",
+  "queued",
   ...ACTIVE_STAGES,
   "awaiting-morning-review",
   "approved-to-land",
@@ -4917,18 +4919,18 @@ export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
   const snapshot = loadFactorySnapshot(paths);
   const job = selectSoleApprovedFactoryLanding(snapshot);
   if (!job) return { required: false };
+  if (!/^[a-f0-9]{64}$/i.test(String(job.acceptedRepositoryContentHash || ""))
+      || !/^[a-f0-9]{64}$/i.test(String(job.acceptedRepositoryCommitContentHash || ""))
+      || !Number.isInteger(job.acceptedRepositoryFileCount)
+      || job.acceptedRepositoryFileCount <= 0) {
+    throw new Error("Mason's factory acceptance is not bound to an exact repository fingerprint.");
+  }
   const repository = commitish
     ? repositoryCommitFingerprint(cwd, commitish)
     : repositoryContentFingerprint(cwd);
   const authoritativeBase = expectedBaseSha || currentOriginMain(cwd);
   if (!/^[a-f0-9]{40}$/i.test(String(authoritativeBase || ""))) {
     throw new Error("The factory landing base is not an exact commit SHA.");
-  }
-  if (!/^[a-f0-9]{64}$/i.test(String(job.acceptedRepositoryContentHash || ""))
-      || !/^[a-f0-9]{64}$/i.test(String(job.acceptedRepositoryCommitContentHash || ""))
-      || !Number.isInteger(job.acceptedRepositoryFileCount)
-      || job.acceptedRepositoryFileCount <= 0) {
-    throw new Error("Mason's factory acceptance is not bound to an exact repository fingerprint.");
   }
   const acceptedBytesMatch = commitish
     ? repository.repositoryCommitContentHash === job.acceptedRepositoryCommitContentHash

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMachineGenerated } from "./prompt-source-lib.mjs";
@@ -148,24 +147,6 @@ function ownerDecisionCheckpoint(snapshot, job = null) {
   };
 }
 
-function injectIsolatedOwnerDecisionRace(paths, snapshot) {
-  if (process.env.CRX_FACTORY_TEST_OWNER_DECISION_RACE !== "1") return;
-  const stateDir = path.resolve(paths.stateDir);
-  const temporaryRoot = `${path.resolve(tmpdir()).toLowerCase()}${path.sep}`;
-  if (process.env.CRX_FACTORY_TEST_MODE !== "1"
-      || !stateDir.toLowerCase().startsWith(temporaryRoot)) {
-    throw new Error("Owner-decision race injection is restricted to isolated temporary Factory state.");
-  }
-  appendFactoryEvent(paths, {
-    type: "factory-intent",
-    jobId: null,
-    actorTool: "codex",
-    sessionId: "test-unrelated-lane",
-    timestamp: new Date().toISOString(),
-    payload: { ownerRequest: "test-only unrelated lane append" },
-  }, { expectedLastEventHash: snapshot.lastEventHash });
-}
-
 function prepareFactoryManagedSession(paths, { snapshot = null, sessionId, actorTool }) {
   if (snapshot) {
     completeFactoryManagedSessionBackfill(paths, { snapshot, actorTool });
@@ -203,7 +184,6 @@ async function main() {
     }
     const job = candidates[0];
     prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
-    injectIsolatedOwnerDecisionRace(paths, snapshot);
     appendFactoryEvent(paths, {
       type: "job-session-transferred",
       jobId: job.id,
@@ -286,7 +266,6 @@ async function main() {
       emit("CRX Factory did not clear governance because this chat already has a ticket or lane. Reject the pending ticket or park the job in chat instead.");
     }
     prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
-    injectIsolatedOwnerDecisionRace(paths, snapshot);
     appendFactoryEvent(paths, {
       type: "factory-intent-cleared",
       jobId: null,
@@ -374,7 +353,6 @@ async function main() {
     }
     const nextStage = disposition === "approve" ? "approved-to-land" : "parked";
     prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
-    injectIsolatedOwnerDecisionRace(paths, snapshot);
     appendFactoryEvent(paths, {
       type: "job-stage",
       jobId: job.id,
@@ -418,7 +396,6 @@ async function main() {
     timestamp: now.toISOString(),
   };
   if (disposition === "approve") {
-    injectIsolatedOwnerDecisionRace(paths, snapshot);
     appendFactoryEvent(paths, {
       type: "ticket-approved",
       ...common,
@@ -433,7 +410,6 @@ async function main() {
     emit(`CRX Factory recorded Mason's exact approval for ticket ${job.id}, bound to this chat, ticket hash, and origin/main. Start the lane only through: node scripts/factory.mjs lane start --job ${job.id} --session ${sessionId} --tool ${actorTool}`);
   }
 
-  injectIsolatedOwnerDecisionRace(paths, snapshot);
   appendFactoryEvent(paths, {
     type: disposition === "reject" ? "ticket-rejected" : "ticket-revision-requested",
     ...common,

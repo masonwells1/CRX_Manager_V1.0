@@ -11,6 +11,7 @@ import {
   resolveHookFactoryPaths,
   setFactoryManagedSessionMarker,
 } from "../../scripts/factory-state-lib.mjs";
+import { isStructuredFilesystemMutationTool } from "./factory-tool-classification.mjs";
 
 function nothing() { process.exit(0); }
 function deny(reason) {
@@ -26,16 +27,6 @@ function deny(reason) {
 
 function norm(value) {
   return String(value || "").replace(/\\/g, "/").toLowerCase();
-}
-
-const LOCAL_STRUCTURED_WRITE_TOOL = /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i;
-const MCP_WRITE_OPERATION = /(?:^|_)(?:write|edit|patch|replace|create|delete|remove|move|rename|copy|upload)(?:_|$)/i;
-
-function isGovernanceStructuredWriteTool(toolName) {
-  const name = String(toolName || "");
-  if (LOCAL_STRUCTURED_WRITE_TOOL.test(name)) return true;
-  const mcpTool = name.match(/^mcp__[a-z0-9_]+__(.+)$/i);
-  return Boolean(mcpTool && MCP_WRITE_OPERATION.test(mcpTool[1]));
 }
 
 function collectPathLikeTargets(value, key = "", output = []) {
@@ -126,12 +117,12 @@ if (targets.some((target) => target.startsWith(permitsNorm))) {
   deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
 }
 if (!historicalBackfillComplete
-    && isGovernanceStructuredWriteTool(toolName)
+    && isStructuredFilesystemMutationTool(toolName)
     && repositoryTargets.some((target) => governanceTarget.test(target))) {
   deny("CRX FACTORY STATE GUARD: protected governance edits stay fail-closed until the historical Factory session backfill is durably complete.");
 }
 if (governedSession
-    && isGovernanceStructuredWriteTool(toolName)
+    && isStructuredFilesystemMutationTool(toolName)
     && repositoryTargets.some((target) => governanceTarget.test(target))) {
   deny("CRX FACTORY STATE GUARD: an active factory lane cannot modify its own governance implementation.");
 }

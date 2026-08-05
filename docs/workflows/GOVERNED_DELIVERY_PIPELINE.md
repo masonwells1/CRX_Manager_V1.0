@@ -113,7 +113,9 @@ fingerprint before the ticket or morning decision is re-presented there.
   was accidentally approved from the primary checkout, do not bypass lane start: open a new chat in
   the correct worktree and ask Mason to “take over factory job `<job-id>` here.” The owner-input hook
   transfers that one queued job, revokes the old approval, and requires the canonical ticket question
-  to be re-presented in the new chat. No ticket rewrite or manual ledger edit is required. Structured mutation targets are checked across checkout
+  to be re-presented in the new chat. If a parked job already records a worktree, re-presentation or
+  transfer retains that worktree custody until a revised `ticket-drafted` event explicitly clears it.
+  No manual ledger edit is required. Structured mutation targets are checked across checkout
   boundaries. Shell or opaque mutations from another chat fail closed while a nonterminal factory
   worktree is in custody because their final destination cannot be proven. A terminal parked job keeps
   targeted structured-write custody; it also keeps fail-closed opaque/shell custody while its worktree

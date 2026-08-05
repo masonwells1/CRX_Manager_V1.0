@@ -44,7 +44,9 @@ through source-text matching. The two-lane routing regression exercises both the
 push and PR-read routes from a fixed fixture, independent of the ambient checkout. Governance
 self-edit protection classifies MCP write operations by capability, including `edit_file` and
 `edit_block`, so newly configured writers fail closed. Failed harnesses scan both output streams
-for secrets, and atomic backfill cleanup preserves the original operation failure.
+for secrets, and atomic backfill cleanup preserves the original operation failure. Parked worktree
+custody survives unchanged-ticket re-presentation and cross-chat transfer until a revised ticket
+opens the new authorization boundary, and both installed guards share one MCP writer classifier.
 This entry records the reviewed release candidate; it does not claim a merge or
 production deployment.
 

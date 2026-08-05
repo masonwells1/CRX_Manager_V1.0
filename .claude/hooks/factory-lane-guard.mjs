@@ -24,6 +24,7 @@ import {
   validateApprovedFactoryLanding,
 } from "../../scripts/factory-state-lib.mjs";
 import { isGitPush, pushTargetsCurrentHead } from "./codex-push-lib.mjs";
+import { isStructuredFilesystemMutationTool } from "./factory-tool-classification.mjs";
 import { isBuildActionUnderHold } from "./hold-latch-lib.mjs";
 
 function nothing() { process.exit(0); }
@@ -198,8 +199,7 @@ function isShellMutation(toolName, toolInput) {
 }
 
 function isStructuredMutationTool(toolName) {
-  return /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch|mcp__filesystem__write_file|mcp__desktop_commander__write_file)$/i
-    .test(String(toolName || ""));
+  return isStructuredFilesystemMutationTool(toolName);
 }
 
 function isBuildMutation(toolName, toolInput) {

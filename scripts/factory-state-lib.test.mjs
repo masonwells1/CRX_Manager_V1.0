@@ -1067,6 +1067,34 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
     /job parallel-cas-first changed while this operation ran/,
     "a job-scoped append still refuses same-job drift",
   );
+  const beforeOwnerDecision = loadFactorySnapshot(paths);
+  const ownerDecisionJob = beforeOwnerDecision.jobs.find((job) => job.id === first.ticket.id);
+  append(paths, "factory-intent", null, {
+    ownerRequest: "advance an unrelated lane before the owner decision commits",
+  }, { sessionId: "unrelated-owner-decision-lane" });
+  const ownerDecisionTimestamp = new Date().toISOString();
+  appendFactoryEvent(paths, {
+    type: "ticket-approved",
+    jobId: first.ticket.id,
+    actorTool: "codex",
+    sessionId: "session-1",
+    timestamp: ownerDecisionTimestamp,
+    payload: {
+      ticketHash: first.hash,
+      questionHash: sha256("Approve first?"),
+      ownerReply: "yes",
+      baseSha: "a".repeat(40),
+      expiresAt: new Date(Date.parse(ownerDecisionTimestamp) + APPROVAL_TTL_MS).toISOString(),
+    },
+  }, {
+    expectedJobEventHash: ownerDecisionJob.terminalLedgerHash,
+    expectedFactoryControlHash: beforeOwnerDecision.factoryControlHash,
+  });
+  eq(
+    loadFactorySnapshot(paths).jobs.find((job) => job.id === first.ticket.id).stage,
+    "queued",
+    "an owner decision survives an unrelated lane append without a test-only seam in the production hook",
+  );
   cleanup();
 }
 
