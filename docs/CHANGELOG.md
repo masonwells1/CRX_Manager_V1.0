@@ -15,8 +15,10 @@ marker-only write authority so a historical active session is durably classified
 action, including when its approved ticket names protected governance paths. A durable historical-backfill
 boundary records the exact ledger hash and session set from the last healthy replay, including the empty-ledger
 case, and is atomically replaced when that snapshot identity changes. If corruption
-precedes that boundary, unrelated structured edits remain available while governance edits and opaque or
-dynamic execution stay globally fail-closed; once the boundary exists, only marked Factory chats fail closed.
+precedes that boundary, unrelated application edits remain available while the complete deterministic safety
+surface (all Claude/Codex hooks and configuration, Husky gates, CI workflows, safety scripts, dependency and
+build configuration), opaque helpers, and dynamic execution stay globally fail-closed; once the boundary
+exists, only marked Factory chats fail closed.
 The existing narrow
 same-lane replay rule continues to accept the complete legacy duplicate parked event that previously
 prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage

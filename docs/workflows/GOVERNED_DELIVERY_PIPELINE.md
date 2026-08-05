@@ -436,8 +436,10 @@ governed even on its first attempted self-governance edit. A healthy replay mark
 visible in the snapshot and then atomically writes a durable backfill-complete boundary bound to that exact
 ledger hash and session set. The zero-session case creates the directory and boundary explicitly, and a later
 healthy snapshot replaces stale metadata before it is accepted. Before that boundary exists,
-ledger corruption keeps governance edits and opaque or dynamic execution globally fail-closed while still
-allowing unrelated structured file edits; afterward, only marked Factory chats retain that fail-closed scope.
+ledger corruption keeps the complete deterministic safety surface globally fail-closed: Claude/Codex hooks
+and configuration, Husky gates, CI workflows, safety scripts, dependency/build configuration, and opaque or
+dynamic execution. Unrelated structured application edits remain available; afterward, only marked Factory
+chats retain that fail-closed scope.
 These markers and the boundary are coordination-only metadata and
 are excluded from protected-content fingerprints so creating one cannot invalidate an active evidence
 or review run. If factory state cannot be verified, mutations

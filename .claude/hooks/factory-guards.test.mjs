@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -877,32 +877,54 @@ function bashExecutable() {
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects PR bodies synthesized from unreviewed commit metadata");
 }
 
+function deterministicSafetyPaths() {
+  const modulePaths = [
+    [".claude", "hooks"],
+    [".codex", "hooks"],
+  ].flatMap((segments) => readdirSync(path.join(root, ...segments), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
+    .map((entry) => [...segments, entry.name].join("/")));
+  return [...new Set([
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".gitignore",
+    "package.json",
+    "package-lock.json",
+    "eslint-local-rules.cjs",
+    "eslint.config.js",
+    "postcss.config.js",
+    "tailwind.config.js",
+    "tsconfig.app.json",
+    "tsconfig.json",
+    "tsconfig.node.json",
+    "vite.config.ts",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".codex/sync-from-claude.ps1",
+    ".husky/commit-msg",
+    ".husky/pre-commit",
+    ".husky/pre-push",
+    ".github/workflows/ci.yml",
+    ".github/workflows/phase3-private-artifact-containment.yml",
+    "scripts/factory.mjs",
+    "scripts/write-codex-push-proof.mjs",
+    "scripts/write-apply-proofs.mjs",
+    "scripts/overnight-codex-gate.mjs",
+    "scripts/validate-sql.sh",
+    "scripts/check-supplier-pricing-phase3-private-artifacts.mjs",
+    ...modulePaths,
+  ])].sort();
+}
+
 {
   const sessionId = "historical-governance-first-action";
   const stateDir = temporaryStateDir("crx-factory-historical-governance-");
   process.env.CRX_FACTORY_TEST_MODE = "1";
   process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
   const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
-  const governancePaths = [
-    "package.json",
-    "scripts/factory.mjs",
-    "scripts/write-codex-push-proof.mjs",
-    "scripts/write-apply-proofs.mjs",
-    "scripts/overnight-codex-gate.mjs",
-    ".claude/settings.json",
-    ".claude/settings.local.json",
-    ".codex/hooks.json",
-    ".codex/hooks/codex-hook-adapter.mjs",
-    ".codex/hooks/production-action-guard.mjs",
-    ".claude/hooks/factory-lane-guard.mjs",
-    ".claude/hooks/ship-intent-reminder.mjs",
-    ".claude/hooks/prompt-source-lib.mjs",
-    ".claude/hooks/hold-latch-lib.mjs",
-    ".claude/hooks/codex-push-guard.mjs",
-    ".claude/hooks/codex-push-lib.mjs",
-    ".claude/hooks/pr-merge-guard.mjs",
-    ".claude/hooks/review-proof-guard.mjs",
-  ];
+  const governancePaths = deterministicSafetyPaths();
   appendFactoryEvent(paths, {
     type: "factory-intent",
     jobId: null,
@@ -1047,20 +1069,20 @@ function bashExecutable() {
     thread_id: historicalSessionId,
     tool_name: "MultiEdit",
     tool_input: {
-      edits: [
-        "package.json",
-        "scripts/factory.mjs",
-        "scripts/write-codex-push-proof.mjs",
-        ".claude/settings.json",
-        ".codex/hooks.json",
-        ".codex/hooks/production-action-guard.mjs",
-        ".claude/hooks/factory-lane-guard.mjs",
-        ".claude/hooks/codex-push-guard.mjs",
-        ".claude/hooks/pr-merge-guard.mjs",
-        ".claude/hooks/review-proof-guard.mjs",
-      ].map((relativePath) => ({ file_path: path.join(root, relativePath), new_string: "forged" })),
+      edits: deterministicSafetyPaths()
+        .map((relativePath) => ({ file_path: path.join(root, relativePath), new_string: "forged" })),
     },
   }), /backfill is durably complete/i, "pre-backfill corruption cannot fail open on protected governance edits");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content .claude/hooks/migration-apply-guard.mjs -Value forged" },
+  }), /backfill is durably complete/i, "pre-backfill corruption cannot mutate an independent safety guard through the shell");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Remove-Item .claude -Recurse" },
+  }), /backfill is durably complete/i, "pre-backfill corruption cannot remove an entire safety configuration directory");
   denied(runHookChain(installedHookChain, stateDir, {
     thread_id: "unrelated-pre-backfill-thread",
     tool_name: "Bash",
