@@ -484,8 +484,9 @@ completes the exact historical backfill before appending; the emergency hold pat
 chat marker when the ledger itself cannot be replayed.
 These markers and the boundary are coordination-only metadata and
 are excluded from protected-content fingerprints so creating one cannot invalidate an active evidence
-or review run. If factory state cannot be verified, mutations
-fail closed only for those marked chats and explicit Factory CLI actions. Unrelated chats continue
+or review run. Before the durable backfill-complete boundary exists, unverifiable Factory state keeps the
+deterministic safety surface globally fail-closed. After that boundary exists, unverifiable Factory state
+makes mutations fail closed only for marked Factory chats and explicit Factory CLI actions. Unrelated chats then continue
 through both installed Factory PreToolUse guards and remain under the repository's ordinary guards
 instead of inheriting a global Factory outage. Reads remain
 available for diagnosis, and the canonical factory status/recovery CLI remains reachable. A

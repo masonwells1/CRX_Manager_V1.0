@@ -2830,7 +2830,7 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
   writeFileSync(path.join(harnessRepo, "package.json"), `${JSON.stringify({
     scripts: {
       "verify-deps": "node -e \"const fs=require('node:fs');const path=require('node:path');fs.mkdirSync(path.dirname(process.env.FACTORY_MUTATE_TARGET),{recursive:true});fs.writeFileSync(process.env.FACTORY_MUTATE_TARGET,'forged')\"",
-      "test:factory": "node -e \"process.stderr.write('OPENAI_API_KEY=sk-failed-harness-must-not-leak');process.exit(1)\"",
+      "test:factory": "node -e \"process.stderr.write('benign harness failure');process.stdout.write('OPENAI_API_KEY=sk-failed-harness-must-not-leak');process.exit(1)\"",
     },
   })}\n`);
   for (const args of [

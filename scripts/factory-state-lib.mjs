@@ -331,6 +331,7 @@ export function completeFactoryManagedSessionBackfill(paths, { snapshot, actorTo
     `.historical-backfill-v1-${identity.lastEventHash}-${randomUUID()}.tmp`,
   );
   let temporaryFd;
+  let primaryError;
   try {
     const buffer = Buffer.from(bytes, "utf8");
     temporaryFd = openSync(temporaryPath, "wx", 0o600);
@@ -349,12 +350,18 @@ export function completeFactoryManagedSessionBackfill(paths, { snapshot, actorTo
     temporaryFd = undefined;
     renameSync(temporaryPath, target);
     flushFactoryDirectory(paths.managedSessionsDir);
-  } finally {
-    if (temporaryFd !== undefined) closeSync(temporaryFd);
-    try { unlinkSync(temporaryPath); } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
+  } catch (error) {
+    primaryError = error;
+  }
+  if (temporaryFd !== undefined) {
+    try { closeSync(temporaryFd); } catch (error) {
+      if (!primaryError) primaryError = error;
     }
   }
+  try { unlinkSync(temporaryPath); } catch (error) {
+    if (error?.code !== "ENOENT" && !primaryError) primaryError = error;
+  }
+  if (primaryError) throw primaryError;
   if (!hasFactoryManagedSessionBackfillComplete(paths, snapshot)) {
     throw new Error("Historical managed-session backfill boundary is incomplete or invalid.");
   }
@@ -3907,17 +3914,18 @@ export function runHarnessEvidence(paths, {
     : runFactoryHarnessSandbox(cwd, scriptName, repositoryBefore);
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    const detail = String(result.stderr || result.stdout || "").trim().slice(-2_000);
-    if (detail) {
-      try {
-        rejectSecretBearingText(detail, "Failed harness output");
-      } catch {
-        setEmergencyFactoryHold(paths, `Harness ${scriptName} emitted secret-shaped output while failing.`);
-        throw new Error(
-          `Repository harness npm run ${scriptName} failed with exit ${result.status}; its output was suppressed because it contained credential or secret material. The factory is held for review.`,
-        );
-      }
+    const stdout = String(result.stdout || "");
+    const stderr = String(result.stderr || "");
+    try {
+      rejectSecretBearingText(stdout, "Failed harness stdout");
+      rejectSecretBearingText(stderr, "Failed harness stderr");
+    } catch {
+      setEmergencyFactoryHold(paths, `Harness ${scriptName} emitted secret-shaped output while failing.`);
+      throw new Error(
+        `Repository harness npm run ${scriptName} failed with exit ${result.status}; its output was suppressed because it contained credential or secret material. The factory is held for review.`,
+      );
     }
+    const detail = [stderr, stdout].filter(Boolean).join("\n").trim().slice(-2_000);
     throw new Error(`Repository harness npm run ${scriptName} failed with exit ${result.status}${detail ? `: ${detail}` : "."}`);
   }
   try {

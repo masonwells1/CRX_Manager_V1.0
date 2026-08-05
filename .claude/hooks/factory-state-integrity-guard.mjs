@@ -28,6 +28,16 @@ function norm(value) {
   return String(value || "").replace(/\\/g, "/").toLowerCase();
 }
 
+const LOCAL_STRUCTURED_WRITE_TOOL = /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch)$/i;
+const MCP_WRITE_OPERATION = /(?:^|_)(?:write|edit|patch|replace|create|delete|remove|move|rename|copy|upload)(?:_|$)/i;
+
+function isGovernanceStructuredWriteTool(toolName) {
+  const name = String(toolName || "");
+  if (LOCAL_STRUCTURED_WRITE_TOOL.test(name)) return true;
+  const mcpTool = name.match(/^mcp__[a-z0-9_]+__(.+)$/i);
+  return Boolean(mcpTool && MCP_WRITE_OPERATION.test(mcpTool[1]));
+}
+
 function collectPathLikeTargets(value, key = "", output = []) {
   if (Array.isArray(value)) {
     for (const item of value) collectPathLikeTargets(item, key, output);
@@ -116,12 +126,12 @@ if (targets.some((target) => target.startsWith(permitsNorm))) {
   deny("CRX FACTORY STATE GUARD: one-time factory CLI permits are private to the trusted PreToolUse hook and canonical CLI.");
 }
 if (!historicalBackfillComplete
-    && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch|mcp__filesystem__write_file|mcp__desktop_commander__write_file)$/i.test(toolName)
+    && isGovernanceStructuredWriteTool(toolName)
     && repositoryTargets.some((target) => governanceTarget.test(target))) {
   deny("CRX FACTORY STATE GUARD: protected governance edits stay fail-closed until the historical Factory session backfill is durably complete.");
 }
 if (governedSession
-    && /^(?:Write|Edit|NotebookEdit|MultiEdit|apply_patch|mcp__filesystem__write_file|mcp__desktop_commander__write_file)$/i.test(toolName)
+    && isGovernanceStructuredWriteTool(toolName)
     && repositoryTargets.some((target) => governanceTarget.test(target))) {
   deny("CRX FACTORY STATE GUARD: an active factory lane cannot modify its own governance implementation.");
 }
