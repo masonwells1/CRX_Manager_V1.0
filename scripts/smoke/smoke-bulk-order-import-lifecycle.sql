@@ -1,13 +1,15 @@
 -- ============================================================================
 -- smoke-bulk-order-import-lifecycle.sql
 -- Chain for 20260805211951_harden_bulk_order_import_lifecycle.sql and
--- 20260805220757_reject_nonfinite_bulk_import_values.sql.
+-- 20260805220757_reject_nonfinite_bulk_import_values.sql and
+-- 20260805224819_snapshot_bulk_import_product_cost.sql.
 --
 -- Proves that a bulk import cannot forge a partial/terminal lifecycle state and
 -- that a confirmed import atomically creates its order lines, inventory booking,
 -- booked ledger row, commission, activity event, and idempotency receipt. It
 -- also proves NaN/+Infinity/-Infinity are rejected for every imported numeric
--- field without residue and sub-cent prices are normalized at the SQL boundary.
+-- field without residue, sub-cent prices are normalized, omitted cost snapshots
+-- the Product cost, and malformed cost fails without residue.
 -- The terminal SMOKE_PASS_ROLLBACK exception aborts every synthetic write.
 -- ============================================================================
 DO $$
@@ -17,6 +19,9 @@ DECLARE
   v_actor_name text;
   v_customer_id uuid;
   v_product_id uuid;
+  v_product_name text;
+  v_product_unit_size text;
+  v_product_cost numeric;
   v_order_id uuid;
   v_replay_order_id uuid;
   v_result jsonb;
@@ -35,6 +40,7 @@ DECLARE
   v_item_profit numeric;
   v_item_margin numeric;
   v_prebooked numeric;
+  v_prebooked_baseline numeric;
   v_count integer;
   v_invalid text;
   v_field text;
@@ -75,14 +81,19 @@ BEGIN
   )
   RETURNING id INTO v_customer_id;
 
-  INSERT INTO public.products (
-    product_name,
-    unit_size
-  ) VALUES (
-    '[SMOKE] Canonical Product ' || v_sfx,
-    '2.5 gal'
-  )
-  RETURNING id INTO v_product_id;
+  SELECT id, product_name, unit_size, current_cost
+    INTO v_product_id, v_product_name, v_product_unit_size, v_product_cost
+  FROM public.products
+  WHERE is_active = true
+    AND current_cost IS NOT NULL
+    AND current_cost::text NOT IN ('NaN', 'Infinity', '-Infinity')
+    AND current_cost > 0
+  ORDER BY id
+  LIMIT 1;
+
+  IF v_product_id IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: no active Product with a finite positive current_cost';
+  END IF;
 
   INSERT INTO public.inventory (
     product_id,
@@ -97,16 +108,22 @@ BEGIN
     100,
     0,
     0,
-    '2.5 gal'
-  );
+    v_product_unit_size
+  ) ON CONFLICT (product_id, location) DO NOTHING;
+
+  SELECT quantity_prebooked
+    INTO v_prebooked_baseline
+  FROM public.inventory
+  WHERE product_id = v_product_id
+    AND location = 'Main Warehouse';
 
   v_items := jsonb_build_array(jsonb_build_object(
     'product_id', v_product_id,
-    'product_name', '[SMOKE] Caller-Supplied Name',
+    'product_name', v_product_name,
     'price_per_unit', 10.004,
     'unit_cost', 6.004,
     'total_units_needed', 5,
-    'unit_size', '2.5 gal',
+    'unit_size', v_product_unit_size,
     'sort_order', 1
   ));
 
@@ -206,7 +223,7 @@ BEGIN
       FROM public.inventory
       WHERE product_id = v_product_id
         AND location = 'Main Warehouse';
-      IF v_prebooked <> 0 THEN
+      IF v_prebooked IS DISTINCT FROM v_prebooked_baseline THEN
         RAISE EXCEPTION 'SMOKE_FAIL: rejected numeric import changed inventory';
       END IF;
 
@@ -240,6 +257,126 @@ BEGIN
       END IF;
     END LOOP;
   END LOOP;
+
+  -- An omitted cost snapshots Product current_cost rather than silently using
+  -- zero. The sentinel exception rolls the successful proof call back locally
+  -- so the main lifecycle assertions below retain a clean baseline.
+  BEGIN
+    SELECT public.bulk_import_order(
+      p_order_number := v_order_number || '-OMITTED-COST',
+      p_customer_id := v_customer_id,
+      p_status := 'confirmed',
+      p_total_price := 9999,
+      p_total_cost := 0,
+      p_total_profit := 9999,
+      p_total_margin_pct := 100,
+      p_order_date := CURRENT_DATE,
+      p_items := v_items #- ARRAY['0', 'unit_cost'],
+      p_idempotency_key := v_key || '-omitted-cost'
+    ) INTO v_result;
+
+    v_order_id := (v_result->>'order_id')::uuid;
+    SELECT total_cost, total_profit
+      INTO v_total_cost, v_total_profit
+    FROM public.orders
+    WHERE id = v_order_id;
+    IF v_total_cost <> round(5 * round(v_product_cost, 2), 2)
+       OR v_total_profit <> 50 - round(5 * round(v_product_cost, 2), 2) THEN
+      RAISE EXCEPTION
+        'SMOKE_FAIL: omitted cost did not snapshot Product cost; cost=% profit=%',
+        v_total_cost, v_total_profit;
+    END IF;
+
+    SELECT count(*) INTO v_count
+    FROM public.commissions
+    WHERE order_id = v_order_id
+      AND order_profit = 50 - round(5 * round(v_product_cost, 2), 2);
+    IF v_count <> 1 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: omitted-cost commission used wrong profit';
+    END IF;
+
+    RAISE EXCEPTION 'SMOKE_OMITTED_COST_ROLLBACK';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM <> 'SMOKE_OMITTED_COST_ROLLBACK' THEN
+      RAISE;
+    END IF;
+  END;
+
+  SELECT quantity_prebooked INTO v_prebooked
+  FROM public.inventory
+  WHERE product_id = v_product_id
+    AND location = 'Main Warehouse';
+  IF v_prebooked IS DISTINCT FROM v_prebooked_baseline THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: omitted-cost proof left inventory residue';
+  END IF;
+
+  -- Malformed explicit cost must fail before every lifecycle side effect.
+  v_bad_order_number := v_order_number || '-MALFORMED-COST';
+  v_bad_key := v_key || '-malformed-cost';
+  v_bad_items := jsonb_set(v_items, ARRAY['0', 'unit_cost'], '"not-a-number"'::jsonb, false);
+  BEGIN
+    PERFORM public.bulk_import_order(
+      p_order_number := v_bad_order_number,
+      p_customer_id := v_customer_id,
+      p_status := 'confirmed',
+      p_total_price := 50,
+      p_total_cost := 30,
+      p_total_profit := 20,
+      p_total_margin_pct := 40,
+      p_order_date := CURRENT_DATE,
+      p_items := v_bad_items,
+      p_idempotency_key := v_bad_key
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: malformed unit_cost was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'ITEM_INVALID:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected ITEM_INVALID for malformed cost, got %', SQLERRM;
+    END IF;
+  END;
+
+  SELECT count(*) INTO v_count
+  FROM public.orders
+  WHERE order_number = v_bad_order_number;
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: malformed-cost import wrote an order';
+  END IF;
+
+  SELECT quantity_prebooked INTO v_prebooked
+  FROM public.inventory
+  WHERE product_id = v_product_id
+    AND location = 'Main Warehouse';
+  IF v_prebooked IS DISTINCT FROM v_prebooked_baseline THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: malformed-cost import changed inventory';
+  END IF;
+
+  SELECT count(*) INTO v_count
+  FROM public.inventory_transactions
+  WHERE product_id = v_product_id;
+  IF v_count <> v_inventory_tx_baseline THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: malformed-cost import wrote inventory ledger';
+  END IF;
+
+  SELECT count(*) INTO v_count
+  FROM public.commissions
+  WHERE customer_id = v_customer_id;
+  IF v_count <> v_commission_baseline THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: malformed-cost import wrote commission';
+  END IF;
+
+  SELECT count(*) INTO v_count
+  FROM public.activity_feed
+  WHERE customer_id = v_customer_id;
+  IF v_count <> v_activity_baseline THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: malformed-cost import wrote activity';
+  END IF;
+
+  SELECT count(*) INTO v_count
+  FROM public.idempotency_keys
+  WHERE operation = 'bulk_import_order'
+    AND idempotency_key = v_bad_key;
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: malformed-cost import wrote idempotency receipt';
+  END IF;
 
   -- Deliberately pass false totals and sub-cent item prices. The RPC must
   -- normalize unit values to 10.00/6.00 and recompute 50/30/20/40.
@@ -298,8 +435,10 @@ BEGIN
   FROM public.inventory
   WHERE product_id = v_product_id
     AND location = 'Main Warehouse';
-  IF v_prebooked <> 5 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: inventory prebooked %, expected 5', v_prebooked;
+  IF v_prebooked <> v_prebooked_baseline + 5 THEN
+    RAISE EXCEPTION
+      'SMOKE_FAIL: inventory prebooked %, expected %',
+      v_prebooked, v_prebooked_baseline + 5;
   END IF;
 
   SELECT count(*) INTO v_count

@@ -188,7 +188,9 @@ export default function BulkOrderImport({
         product_name: item.product_name,
         quantity: item.quantity,
         price_per_unit: item.price_per_unit,
-        unit_cost: item.price_per_unit,
+        // OCR does not provide a trusted cost. Leave it absent so both the
+        // client payload and authoritative RPC snapshot products.current_cost.
+        unit_cost: undefined,
         unit_size: item.unit_size || undefined,
         notes: item.notes || undefined,
       })),
@@ -263,13 +265,30 @@ export default function BulkOrderImport({
         const orderNumber = row[orderFieldMap.order_number];
         const customerName = row[orderFieldMap.customer_name];
         const productName = row[itemFieldMap.product_name];
-        const quantity = parseFloat(row[itemFieldMap.quantity]);
-        const pricePerUnit = parseFloat(row[itemFieldMap.price_per_unit]);
+        const rawQuantity = row[itemFieldMap.quantity]?.trim();
+        const rawPricePerUnit = row[itemFieldMap.price_per_unit]?.trim();
+        const quantity = Number(rawQuantity);
+        const pricePerUnit = Number(rawPricePerUnit);
+        const rawUnitCost = itemFieldMap.unit_cost !== undefined
+          ? row[itemFieldMap.unit_cost]?.trim()
+          : '';
+        const unitCost = rawUnitCost ? Number(rawUnitCost) : undefined;
 
-        if (!orderNumber || !customerName || !productName || isNaN(quantity) || isNaN(pricePerUnit)) {
+        if (
+          !orderNumber
+          || !customerName
+          || !productName
+          || !rawQuantity
+          || !rawPricePerUnit
+          || !Number.isFinite(quantity)
+          || quantity <= 0
+          || !Number.isFinite(pricePerUnit)
+          || pricePerUnit < 0
+          || (unitCost !== undefined && (!Number.isFinite(unitCost) || unitCost < 0))
+        ) {
           invalid.push({
             row: idx + 2,
-            error: 'Missing or invalid required fields',
+            error: 'Missing or invalid quantity, price, or unit cost',
             data: rowData,
           });
           return;
@@ -294,9 +313,7 @@ export default function BulkOrderImport({
           product_name: productName,
           quantity,
           price_per_unit: pricePerUnit,
-          unit_cost: itemFieldMap.unit_cost !== undefined
-            ? parseFloat(row[itemFieldMap.unit_cost]) || 0
-            : 0,
+          unit_cost: unitCost,
           unit_size: itemFieldMap.unit_size !== undefined ? row[itemFieldMap.unit_size] : undefined,
           notes: itemFieldMap.item_notes !== undefined ? row[itemFieldMap.item_notes] : undefined,
         });
@@ -368,7 +385,7 @@ export default function BulkOrderImport({
     const failures: OrderImportFailure[] = [];
     const productResult = await supabase
       .from('products')
-      .select('id, product_name, sku, is_active')
+      .select('id, product_name, sku, is_active, current_cost')
       .eq('is_active', true);
     if (productResult.error) {
       Sentry.captureException(productResult.error, { extra: { context: 'Failed to load Product identities for order import' } });
@@ -405,17 +422,6 @@ export default function BulkOrderImport({
           continue;
         }
 
-        const totalPrice = order.items.reduce(
-          (sum, item) => sum + item.quantity * item.price_per_unit,
-          0
-        );
-        const totalCost = order.items.reduce(
-          (sum, item) => sum + item.quantity * (item.unit_cost || 0),
-          0
-        );
-        const totalProfit = totalPrice - totalCost;
-        const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
-
         const resolvedItems = order.items.map((item) => ({
           item,
           resolution: resolveExactProductIdentity(item.product_name, productCatalog),
@@ -439,21 +445,50 @@ export default function BulkOrderImport({
           continue;
         }
 
+        const unresolvedCosts = resolvedItems.filter(({ item, resolution }) => {
+          if (resolution.status !== 'unique') return false;
+          const cost = item.unit_cost ?? resolution.product.current_cost;
+          return cost == null || !Number.isFinite(cost) || cost < 0;
+        });
+        if (unresolvedCosts.length > 0) {
+          failedCount++;
+          failures.push({
+            orderNumber: order.order_number,
+            details: unresolvedCosts.map(({ item }) => (
+              `"${item.product_name}" has no valid unit cost; add unit_cost to the import or update the Product cost and retry.`
+            )),
+          });
+          continue;
+        }
+
         // The entire order is rejected above unless every Product resolves to
-        // one active immutable UUID. Never send null or a sibling guess.
+        // one active immutable UUID and a finite cost snapshot. Never send
+        // null, a sibling guess, or a silent zero for missing cost.
         const itemsPayload = resolvedItems.map(({ item, resolution }, idx) => {
           const product = resolution.status === 'unique' ? resolution.product : null;
+          const unitCost = item.unit_cost ?? product!.current_cost!;
           return {
               product_id: product!.id,
               product_name: item.product_name,
               price_per_unit: item.price_per_unit,
-              unit_cost: item.unit_cost || 0,
+              unit_cost: unitCost,
               total_units_needed: item.quantity,
               unit_size: item.unit_size,
               notes: item.notes,
               sort_order: idx + 1,
             };
         });
+
+        const totalPrice = itemsPayload.reduce(
+          (sum, item) => sum + item.total_units_needed * item.price_per_unit,
+          0
+        );
+        const totalCost = itemsPayload.reduce(
+          (sum, item) => sum + item.total_units_needed * item.unit_cost,
+          0
+        );
+        const totalProfit = totalPrice - totalCost;
+        const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
 
         // Audit #31: atomic per-order create — order + items rolled together.
         // The idempotency key is generated once at parse time and stored on
@@ -524,7 +559,7 @@ export default function BulkOrderImport({
                   <p className="font-medium text-xs">CSV Files:</p>
                   <ul className="list-disc list-inside space-y-1 text-xs ml-2">
                     <li>Required: order_number, customer_name, product_name, quantity, price_per_unit</li>
-                    <li>Optional: order_date, unit_cost, unit_size, notes</li>
+                    <li>Optional: order_date, unit_cost, unit_size, notes (missing cost uses the Product's current cost)</li>
                     <li>Imports always create confirmed orders; fulfillment and cancellation use the normal workflow</li>
                   </ul>
                 </div>
