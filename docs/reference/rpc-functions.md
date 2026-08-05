@@ -193,7 +193,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 
 ## Reporting (13 RPCs)
 - `get_logbook_by_customer()`, `get_logbook_by_applicator()`, `get_logbook_by_field()`, `get_logbook_faa()`
-- `get_bottom_line_pnl()`, `get_gross_sales_report()`, `get_customer_balance_listing()`
+- `get_bottom_line_pnl()`, `get_gross_sales_report()`, `get_customer_balance_listing(p_as_of_date)` — cutoff-aware customer balance listing; current-date admin/sales-rep access, historical cutoffs admin-only; deliberately fails closed when later mutable balance activity prevents reconstruction. Cumulative invoice totals include fully paid invoices; only Outstanding Balance and Oldest Unpaid are open-only.
 - `get_chemical_history()`, `get_commission_balance_report()`, `get_inventory_cost_report()`
 
 ## Sales Reports (3 RPCs)
@@ -202,7 +202,9 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `get_customer_farm_group(p_customer_id)` — recursive CTE that walks up parent_customer_id chain to find root parent, then returns parent + all direct children. Powers multi-customer farm group reporting
 
 ## AR & Statements
-- `get_ar_aging()` — AR aging report with current/30/60/90+ day buckets
+- `get_ar_aging(p_as_of_date DEFAULT CURRENT_DATE)` — admin-only gross AR aging with current/30/60/90/120+ day buckets. Live migration `20260805151605` uses posted-as-of eligibility and ledger-backed credit reconstruction, and fails closed when later mutable balance activity makes a prior cutoff unknowable.
+- `assert_customer_balance_reconstructable_as_of(p_customer_id, p_as_of_date)` — private owner-only helper used by historical AR reports to reject cutoffs made unknowable by later payment, prepay, write-off, generic void, or unpost activity.
+- `get_customer_balance_listing(p_as_of_date)` — active admin/sales-rep customer-balance report; prior dates are admin-only because historical reconstruction reads financial ledgers. Live migrations `20260805151605` and `20260805171334` use posted-as-of eligibility, exclude unposted/future work, include overdue, preserve fully paid invoices in cumulative invoiced/paid/prepay/count fields, and restrict Outstanding Balance plus Oldest Unpaid to positive-balance invoices.
 - `get_customer_statement()` — customer statement with invoice/payment/write-off history; the live `20260716200659` wrapper requires an active admin or the active sales rep assigned to that customer before delegating to the directly non-executable implementation. Migration `20260720173059_fix_statement_opening_balance` (applied live under server-assigned ledger version `20260720185135`) adds opening-balance carry-forward and deterministic same-day running order without changing the public signature.
 - `get_detailed_statement_data()` — detailed statement data for PDF generation. Includes both 'posted' and 'overdue' invoices. Aging buckets: current(0-30), 31-60, 61-90, 91-120, over-120 (non-overlapping). Live migration `20260803221244` keeps linked finance-charge rows informational instead of adding them twice and returns gross open invoices, unapplied credit memos, and net account position as separate cents fields.
 - `generate_batch_statements()` — generate batch PDF statements for multiple customers. Live migration `20260803221244` includes customers whose only positive open invoices are overdue, rejects forged actors, and authorizes the authenticated admin before selecting customers (including an empty result).
