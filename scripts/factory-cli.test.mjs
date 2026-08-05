@@ -1,23 +1,26 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
+  canonicalJson,
   canonicalMorningReviewQuestion,
   canonicalTicketApprovalQuestion,
   clearEmergencyFactoryHold,
   loadFactorySnapshot,
   mintFactoryCliPermit,
+  readEventLog,
   validateApprovedFactoryLanding,
   resolveFactoryPaths,
 } from "./factory-state-lib.mjs";
 import {
   productionComparisonAccepts,
   resolveRecordedCloseoutPacket,
+  runFactoryCli,
   selectCurrentProductionDeployment,
   selectCurrentVercelAliasDeployment,
 } from "./factory.mjs";
@@ -45,6 +48,7 @@ writeFileSync(path.join(fixtureRepo, "package.json"), `${JSON.stringify({
 }, null, 2)}\n`);
 for (const args of [
   ["init", "-q", "-b", "main"],
+  ["config", "core.autocrlf", "false"],
   ["add", "package.json"],
   ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"],
   ["update-ref", "refs/remotes/origin/main", "HEAD"],
@@ -378,7 +382,7 @@ assertions++;
 assert.notEqual(underclassifiedReview.status, 0, "content-level permission work cannot reach independent review under a low-risk ticket");
 assertions++;
 assert.match(underclassifiedReview.stderr, /automatically high-risk.*underclassified/i, "underclassified work is sent back for ticket revision and owner approval");
-writeFileSync(path.join(fixtureRepo, "feature.txt"), "real governed implementation change\n");
+  writeFileSync(path.join(fixtureRepo, "feature.txt"), "real governed implementation change\r\n");
 const arbitrarySummary = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", "--summary-file", path.join(fixtureDir, "summary.txt")]);
 assertions++;
 assert.notEqual(arbitrarySummary.status, 0, "factory CLI exposes no caller-selected summary file read");
@@ -409,20 +413,81 @@ assert.equal(
   "a paused independent review cleans up its unattached artifact",
 );
 clearEmergencyFactoryHold(paths);
+const commitViewRaceReview = run(
+  ["review", "run", "--job", jobId],
+  { sessionId, actorTool: "codex" },
+  { CRX_FACTORY_TEST_REVIEW_MUTATE_CORE_AUTOCRLF: "1" },
+);
+assertions++;
+assert.notEqual(commitViewRaceReview.status, 0, "a Git commit-view configuration mutation during review invalidates the receipt");
+assertions++;
+assert.match(commitViewRaceReview.stderr, /protected repository or factory-state content changed/i, "review identity drift fails closed before artifact persistence");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).jobs[0].reviews.length, 0, "commit-view drift appends no independent-review receipt");
+let gitConfigResult = spawnSync("git", ["config", "core.autocrlf", "false"], { cwd: fixtureRepo, encoding: "utf8" });
+assert.equal(gitConfigResult.status, 0, gitConfigResult.stderr);
+clearEmergencyFactoryHold(paths);
+const secretBlockersReview = run(
+  ["review", "run", "--job", jobId],
+  { sessionId, actorTool: "codex" },
+  {
+    CRX_FACTORY_TEST_REVIEW_VERDICT: "blockers",
+    CRX_FACTORY_TEST_REVIEW_REPORT: "GITHUB_TOKEN=secret-shaped-value",
+  },
+);
+assertions++;
+assert.notEqual(secretBlockersReview.status, 0, "secret-shaped BLOCKERS output is refused before persistence");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).jobs[0].reviews.length, 0, "refused secret output appends no review receipt");
+const blockersReview = run(
+  ["review", "run", "--job", jobId],
+  { sessionId, actorTool: "codex" },
+  {
+    CRX_FACTORY_TEST_REVIEW_VERDICT: "blockers",
+    CRX_FACTORY_TEST_REVIEW_REPORT: "Finding: duplicate mutation may commit twice.",
+    CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:01.000Z",
+  },
+);
+pass(blockersReview, "attach safe independent BLOCKERS review");
+const blockersOutput = JSON.parse(blockersReview.stdout);
+assertions++;
+assert.equal(blockersOutput.verdict, "blockers", "CLI reports the true BLOCKERS disposition");
+assertions++;
+assert.match(blockersOutput.report, /duplicate mutation may commit twice/i, "broker output returns the safe bounded findings to the repair lane");
+assertions++;
+assert.equal(
+  blockersOutput.boardEvidencePath,
+  `/evidence/${jobId}/${blockersOutput.sha256.slice(0, 12)}-independent-codex-review.json`,
+  "broker output points at the same read-only Board evidence artifact",
+);
+const blockedJob = loadFactorySnapshot(paths).jobs[0];
+const blockersReceipt = blockedJob.reviews.find((item) => item.verdict === "blockers");
+const blockersArtifact = JSON.parse(readFileSync(path.join(paths.evidenceDir, jobId, blockersReceipt.filename), "utf8"));
+assertions++;
+assert.match(blockersArtifact.report, /duplicate mutation may commit twice/i, "safe blocker findings remain available for repair");
+assertions++;
+assert.match(blockersArtifact.reportSummary, /BLOCKERS/, "blocker artifact states the true terminal verdict");
+assertions++;
+assert.equal("stdout" in blockersArtifact || "stderr" in blockersArtifact, false, "blocker artifact never persists unrestricted process fields");
+assertions++;
+assert.equal(blockedJob.stage, "in-review", "BLOCKERS keeps the lane in review for repair");
+const blockedMorning = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", ...summaryArgs]);
+assertions++;
+assert.notEqual(blockedMorning.status, 0, "BLOCKERS cannot satisfy the CLEAN morning-review gate");
 pass(
   run(
     ["review", "run", "--job", jobId],
     { sessionId, actorTool: "codex" },
-    { CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:00.000Z" },
+    { CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:02.000Z" },
   ),
   "run independent Codex review",
 );
-const reviewReceipt = loadFactorySnapshot(paths).jobs[0].reviews[0];
+const reviewReceipt = loadFactorySnapshot(paths).jobs[0].reviews.find((item) => item.verdict === "clean");
 const reviewArtifact = JSON.parse(readFileSync(path.join(paths.evidenceDir, jobId, reviewReceipt.filename), "utf8"));
 const repeatedReview = run(
   ["review", "run", "--job", jobId],
   { sessionId, actorTool: "codex" },
-  { CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:00.000Z" },
+  { CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:02.000Z" },
 );
 assertions++;
 assert.notEqual(repeatedReview.status, 0, "a pre-existing independent-review artifact is never reattached");
@@ -431,13 +496,38 @@ assert.match(repeatedReview.stderr, /already exists.*refusing to attach or delet
 assertions++;
 assert.equal(existsSync(path.join(paths.evidenceDir, jobId, reviewReceipt.filename)), true, "the pre-existing review artifact is not deleted");
 assertions++;
-assert.equal(loadFactorySnapshot(paths).jobs[0].reviews.length, 1, "the failed replay appends no duplicate review receipt");
+assert.equal(loadFactorySnapshot(paths).jobs[0].reviews.length, 2, "the failed replay appends no duplicate review receipt");
 assertions++;
 assert.equal(readFileSync(paths.eventsPath, "utf8").includes("createdArtifact"), false, "writer-only review metadata never enters the shared ledger");
 assertions++;
 assert.equal("stdout" in reviewArtifact || "stderr" in reviewArtifact, false, "review receipt does not persist unrestricted process output");
 assertions++;
+assert.equal("report" in reviewArtifact, false, "CLEAN review receipts retain only the bounded verdict summary");
+assertions++;
 assert.match(reviewArtifact.reportSummary, /CLEAN/, "review receipt persists only a bounded verdict summary");
+pass(
+  run(
+    ["review", "run", "--job", jobId],
+    { sessionId, actorTool: "codex" },
+    {
+      CRX_FACTORY_TEST_REVIEW_VERDICT: "blockers",
+      CRX_FACTORY_TEST_REVIEW_REPORT: "Finding: later review found an unresolved blocker.",
+      CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:03.000Z",
+    },
+  ),
+  "attach later BLOCKERS review",
+);
+const revokedCleanMorning = run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", ...summaryArgs]);
+assertions++;
+assert.notEqual(revokedCleanMorning.status, 0, "a later BLOCKERS receipt revokes an earlier CLEAN receipt for identical bytes");
+pass(
+  run(
+    ["review", "run", "--job", jobId],
+    { sessionId, actorTool: "codex" },
+    { CRX_FACTORY_TEST_REVIEW_CAPTURED_AT: "2026-08-02T12:00:04.000Z" },
+  ),
+  "attach final CLEAN review after blockers are resolved",
+);
 pass(run(["stage", "--job", jobId, "--stage", "awaiting-morning-review", ...summaryArgs]), "advance to morning review");
 
 const reviewQuestion = path.join(fixtureDir, "review-question.txt");
@@ -476,7 +566,7 @@ assert.equal(snapshot.jobs[0].evidence.length, 3);
 assertions++;
 assert.equal(snapshot.jobs[0].evidence.filter((item) => item.verified).length, 3);
 assertions++;
-assert.equal(snapshot.jobs[0].reviews.filter((item) => item.verdict === "clean").length, 1);
+assert.equal(snapshot.jobs[0].reviews.filter((item) => item.verdict === "clean").length, 2);
 assertions++;
 assert.equal(snapshot.jobs[0].evidence.find((item) => item.verified).scriptBodyHash.length, 64);
 assertions++;
@@ -513,6 +603,7 @@ appendFactoryEvent(paths, {
     ticketHash: reviewed.jobs[0].ticketHash,
     reviewQuestionHash: reviewed.jobs[0].reviewQuestionHash,
     acceptedRepositoryContentHash: acceptedReview.repositoryContentHash,
+    acceptedRepositoryCommitContentHash: acceptedReview.repositoryCommitContentHash,
     acceptedRepositoryFileCount: acceptedReview.repositoryFileCount,
   },
 });
@@ -526,7 +617,7 @@ assert.throws(
   /bytes changed after Mason accepted/i,
   "post-acceptance working-tree drift blocks landing",
 );
-writeFileSync(path.join(fixtureRepo, "feature.txt"), "real governed implementation change\n");
+writeFileSync(path.join(fixtureRepo, "feature.txt"), "real governed implementation change\r\n");
 let gitResult = spawnSync("git", ["add", "feature.txt"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
 gitResult = spawnSync("git", [
@@ -537,7 +628,7 @@ gitResult = spawnSync("git", [
 assert.equal(gitResult.status, 0, gitResult.stderr);
 const committedLanding = validateApprovedFactoryLanding(fixtureRepo, { paths, commitish: "HEAD" });
 assertions++;
-assert.equal(committedLanding.repository.repositoryContentHash, acceptedReview.repositoryContentHash, "commit retains the exact owner-accepted repository bytes");
+assert.equal(committedLanding.repository.repositoryCommitContentHash, acceptedReview.repositoryCommitContentHash, "commit retains the Git-cleaned identity derived from the exact owner-accepted repository bytes");
 const pushProofHook = spawnSync(process.execPath, [laneHook], {
   cwd: fixtureRepo,
   encoding: "utf8",
@@ -665,8 +756,17 @@ assertions++;
 assert.equal(packetCommitLanding.mode, "closeout-packet", "push/merge validation accepts the exact committed closeout packet and no broader drift");
 gitResult = spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: fixtureRepo, encoding: "utf8" });
 assert.equal(gitResult.status, 0, gitResult.stderr);
-const closed = run(closeoutArgs);
+const hostileCloseoutPath = path.join(fixtureDir, "hostile-closeout-path");
+mkdirSync(hostileCloseoutPath);
+writeFileSync(path.join(hostileCloseoutPath, "git.cmd"), "@exit /b 99\r\n");
+const closed = run(
+  closeoutArgs,
+  { sessionId, actorTool: "codex" },
+  { PATH: hostileCloseoutPath },
+);
 pass(closed, "finalize landed closeout packet");
+assertions++;
+assert.equal(closed.stderr.includes("git.cmd"), false, "closeout ignores an attacker-selected git shim and hostile PATH");
 const live = loadFactorySnapshot(paths);
 assertions++;
 assert.equal(live.jobs[0].stage, "live", "successful closeout is the only path to live");
@@ -705,5 +805,187 @@ assert.deepEqual(loadFactorySnapshot(paths).factoryIntentSessions, [sessionId], 
 const agentResume = run(["hold", "--off"]);
 assertions++;
 assert.notEqual(agentResume.status, 0, "factory CLI exposes no agent-runnable resume command");
+
+const recoveryGateCreatedAt = Date.now();
+const recoveryNow = new Date(recoveryGateCreatedAt + 10 * 60 * 1000);
+const recoveryGateBytes = `${canonicalJson({
+  schemaVersion: 1,
+  gateId: "88888888-8888-4888-8888-888888888888",
+  pid: 99999999,
+  processIdentity: "test:dead-cli-recovery-owner",
+  createdAt: new Date(recoveryGateCreatedAt).toISOString(),
+})}\n`;
+writeFileSync(paths.emergencyHoldCommitPath, recoveryGateBytes);
+const recoveryReason = "Quarantine the dead commit gate and publish one resumable recovery event.";
+const recoveryArgs = ["recover", "commit-gate", "--reason-base64", base64(recoveryReason)];
+function recoveryCliEnv(extra = {}) {
+  const permit = mintFactoryCliPermit(paths, {
+    sessionId,
+    actorTool: "codex",
+    expectedLastEventHash: loadFactorySnapshot(paths).lastEventHash,
+    nowMs: recoveryNow.getTime(),
+  });
+  return { ...env, ...extra, CRX_FACTORY_PERMIT: permit.token };
+}
+assertions++;
+await assert.rejects(
+  () => runFactoryCli(recoveryArgs, {
+    cwd: fixtureRepo,
+    env: recoveryCliEnv({ CRX_FACTORY_TEST_RECOVERY_PUBLICATION_FAIL_PHASE: "snapshot" }),
+    now: () => recoveryNow,
+  }),
+  /test-only recovery snapshot interruption/i,
+  "a simulated post-quarantine snapshot failure is reported",
+);
+assertions++;
+assert.equal(existsSync(paths.emergencyHoldCommitPath), false, "interrupted recovery keeps the validated gate quarantined");
+const recoveryRecords = readdirSync(paths.recoveryDir).filter((name) => name.startsWith("commit-gate-recovery-"));
+assertions++;
+assert.equal(recoveryRecords.length, 1, "interrupted recovery retains one immutable write-ahead publication record");
+assertions++;
+assert.equal(readEventLog(paths).events.some((event) => event.type === "factory-recovered"), false, "simulated interruption occurs before ledger publication");
+assertions++;
+await assert.rejects(
+  () => runFactoryCli(recoveryArgs, {
+    cwd: fixtureRepo,
+    env: recoveryCliEnv({ CRX_FACTORY_TEST_RECOVERY_PUBLICATION_FAIL_PHASE: "archive-tamper" }),
+    now: () => recoveryNow,
+  }),
+  /archive no longer matches/i,
+  "archive tampering after recovery selection is rechecked at the guarded ledger commit point",
+);
+assertions++;
+assert.equal(readEventLog(paths).events.filter((event) => event.type === "factory-recovered").length, 0, "prepublication archive tampering appends no recovery event");
+assertions++;
+assert.equal(loadFactorySnapshot(paths).held, true, "prepublication archive tampering retains the emergency hold");
+const recoveryRecord = JSON.parse(readFileSync(path.join(paths.recoveryDir, recoveryRecords[0]), "utf8"));
+writeFileSync(path.join(paths.recoveryDir, recoveryRecord.backup), recoveryGateBytes);
+for (const [phase, expected] of [
+  ["compatibility", /compatibility interruption/i],
+  ["append", /ledger-append interruption/i],
+]) {
+  assertions++;
+  await assert.rejects(
+    () => runFactoryCli(recoveryArgs, {
+      cwd: fixtureRepo,
+      env: recoveryCliEnv({ CRX_FACTORY_TEST_RECOVERY_PUBLICATION_FAIL_PHASE: phase }),
+      now: () => recoveryNow,
+    }),
+    expected,
+    `${phase} publication failure remains resumable from the same write-ahead record`,
+  );
+  assertions++;
+  assert.equal(readEventLog(paths).events.filter((event) => event.type === "factory-recovered").length, 0, `${phase} failure publishes no partial event`);
+}
+assertions++;
+await assert.rejects(
+  () => runFactoryCli(recoveryArgs, {
+    cwd: fixtureRepo,
+    env: recoveryCliEnv({ CRX_FACTORY_TEST_RECOVERY_PUBLICATION_FAIL_PHASE: "after-append" }),
+    now: () => recoveryNow,
+  }),
+  /post-append interruption/i,
+  "a process interruption after the durable append is visible to the caller",
+);
+assertions++;
+assert.equal(readEventLog(paths).events.filter((event) => event.type === "factory-recovered").length, 1, "post-append interruption leaves one durable recovery event");
+assertions++;
+await assert.rejects(
+  () => runFactoryCli(recoveryArgs, {
+    cwd: fixtureRepo,
+    env: recoveryCliEnv({ CRX_FACTORY_TEST_RECOVERY_PUBLICATION_FAIL_PHASE: "output" }),
+    now: () => recoveryNow,
+  }),
+  /output interruption/i,
+  "output failure after publication remains retryable without another ledger event",
+);
+await runFactoryCli(recoveryArgs, {
+  cwd: fixtureRepo,
+  env: recoveryCliEnv(),
+  now: () => recoveryNow,
+});
+const recoveryEvents = readEventLog(paths).events.filter((event) => event.type === "factory-recovered");
+assertions++;
+assert.equal(recoveryEvents.length, 1, "recovery retry reconciles the quarantine to exactly one ledger event");
+assertions++;
+assert.match(recoveryEvents[0].payload.recoveryId, /^[0-9a-f-]{36}$/i, "recovery event binds the durable write-ahead identity");
+await runFactoryCli(recoveryArgs, {
+  cwd: fixtureRepo,
+  env: recoveryCliEnv(),
+  now: () => recoveryNow,
+});
+assertions++;
+assert.equal(readEventLog(paths).events.filter((event) => event.type === "factory-recovered").length, 1, "published recovery retry is idempotent");
+
+const guardedGateCreatedAt = recoveryGateCreatedAt + 1;
+const guardedRecoveryNow = new Date(guardedGateCreatedAt + 10 * 60 * 1000);
+writeFileSync(paths.emergencyHoldCommitPath, `${canonicalJson({
+  schemaVersion: 1,
+  gateId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  pid: 99999999,
+  processIdentity: "test:dead-guarded-recovery-owner",
+  createdAt: new Date(guardedGateCreatedAt).toISOString(),
+})}\n`);
+const guardedReason = "Reach commit-gate quarantine through the canonical lane guard while ledger replay is degraded.";
+const guardedArgs = ["recover", "commit-gate", "--reason-base64", base64(guardedReason)];
+function guardedRecoveryPermit() {
+  const hook = spawnSync(process.execPath, [laneHook], {
+    cwd: fixtureRepo,
+    env: {
+      ...env,
+      CLAUDE_PROJECT_DIR: fixtureRepo,
+      CRX_AGENT_SURFACE: "codex",
+      NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-hook-test",
+    },
+    input: JSON.stringify({
+      thread_id: sessionId,
+      tool_name: "PowerShell",
+      tool_input: {
+        command: `node scripts/factory.mjs ${guardedArgs.join(" ")}`,
+        cwd: fixtureRepo,
+      },
+    }),
+    encoding: "utf8",
+  });
+  assert.equal(hook.status, 0, hook.stderr);
+  const output = JSON.parse(hook.stdout);
+  assert.equal(output.hookSpecificOutput.permissionDecision, "allow", "canonical lane guard allows commit-gate recovery while ledger replay is degraded");
+  const rewritten = output.hookSpecificOutput.updatedInput.command;
+  assert.match(rewritten, /recover commit-gate/i, "guard preserves the exact commit-gate recovery action");
+  const token = rewritten.match(/CRX_FACTORY_PERMIT='([a-f0-9-]{36})'/i)?.[1];
+  assert.match(token || "", /^[a-f0-9-]{36}$/i, "guarded recovery receives a trusted one-time permit");
+  assertions += 3;
+  return token;
+}
+const verifiedLedgerBytes = readFileSync(paths.eventsPath);
+appendFileSync(paths.eventsPath, "{\"incomplete\":");
+const guardedToken = guardedRecoveryPermit();
+assertions++;
+await assert.rejects(
+  () => runFactoryCli(guardedArgs, {
+    cwd: fixtureRepo,
+    env: {
+      ...env,
+      CRX_FACTORY_PERMIT: guardedToken,
+      CRX_FACTORY_TEST_RECOVERY_NOW_MS: String(guardedRecoveryNow.getTime()),
+    },
+  }),
+  /incomplete trailing event|publication remains pending/i,
+  "guarded commit-gate recovery quarantines safely and leaves publication pending when ledger replay is degraded",
+);
+assertions++;
+assert.equal(existsSync(paths.emergencyHoldCommitPath), false, "guarded degraded-ledger recovery quarantines the stale commit gate");
+writeFileSync(paths.eventsPath, verifiedLedgerBytes);
+const retryToken = guardedRecoveryPermit();
+await runFactoryCli(guardedArgs, {
+  cwd: fixtureRepo,
+  env: {
+    ...env,
+    CRX_FACTORY_PERMIT: retryToken,
+    CRX_FACTORY_TEST_RECOVERY_NOW_MS: String(guardedRecoveryNow.getTime()),
+  },
+});
+assertions++;
+assert.equal(readEventLog(paths).events.filter((event) => event.type === "factory-recovered").length, 2, "guarded retry publishes the pending recovery exactly once after ledger repair");
 
 console.log(`factory-cli: ${assertions} assertions passed`);

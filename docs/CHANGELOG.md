@@ -88,7 +88,387 @@ repository selectors, including the shared Git directory, before creating
 temporary repositories. This prevents false pre-commit failures without
 relaxing the production guard. Remittance stubs also expand for wrapped farm
 names so every line remains visible without covering balance or payment rows.
+## 2026-08-03 — Factory blocked-review evidence and owner-reply clarity
 
+Independent Sol/high review now distinguishes an explicit `BLOCKERS` verdict
+from malformed reviewer output. Safe blocker reports are size-bounded,
+secret-scanned, content-addressed, and attached to the in-review job so agents
+can repair the real findings without rerunning the model just to rediscover
+them. A blocker receipt remains ineligible for morning review; only a current
+exact-byte CLEAN receipt can advance.
+
+Review-specific secret scanning permits identifier-only security findings such
+as `GITHUB_TOKEN` or `SUPABASE_SERVICE_ROLE_KEY`, while still refusing assigned
+values and credential-shaped material. This keeps actionable security blockers
+available to repair lanes without weakening the strict scanner used by tickets,
+ledger payloads, or evidence labels. Markdown backticks, emphasis, and strikeout
+markers are neutralized before the assignment check, so formatted identifier/value
+pairs cannot bypass evidence refusal.
+
+Factory review capture now uses Codex's dedicated final-message output inside
+the sanitized packet. Verbose CLI progress and tool traces are never treated as
+the review report, preventing legitimate high-effort reviews from exceeding the
+bounded evidence limit before their final verdict can be evaluated. Successful
+transport stdout/stderr are discarded rather than entering evidence hashes;
+non-zero reviewer processes still fail closed.
+
+The owner-input hook now shares the ledger's one canonical approval predicate.
+Informal replies such as “yep,” “yeah,” “sure,” and “sounds right” still record
+no approval, but they trigger the existing plain-English request for a clear
+yes, no, or revision instead of disappearing silently. The strict approval
+phrases, ticket binding, two-touchpoint interface, custody, Git/read guards,
+and outward-action gates are unchanged.
+
+The owner-hook regression matrix now exercises approve, exact reject, revision,
+informal nudge, and unrelated-silence outcomes end to end. Repository evidence
+now carries two explicit identities: raw working-tree bytes for review and
+mutation integrity, plus a Git-cleaned identity used only to prove what a normal
+commit will land across Windows CRLF normalization. Symlink target bytes remain
+raw in both identities. For the same current bytes, the latest attached review
+is authoritative, so a newer `BLOCKERS` verdict revokes an older `CLEAN`.
+
+The isolated evidence image now bakes in an empty system Git configuration
+instead of exporting `GIT_CONFIG_*` variables into repository tests. That keeps
+the sandbox from falsely tripping its own push-guard regression while retaining
+an isolated home directory, no network, and sanitized Git metadata.
+
+Shared-ledger appends now have a bootstrap compatibility gate. Before changing
+the real ledger, branch code fetches canonical GitHub `main` into a disposable
+bare repository with system/global Git configuration and inherited `GIT_*`
+overrides removed, using only an approved absolute system Git executable. The
+canonical fetch also replaces inherited `PATH` with the pinned Git installation
+and Windows system directory, so a caller-supplied `git` or remote-helper shim
+cannot influence replay provenance. The fetched reducer subprocess inherits this
+same trusted environment, covering legacy plain `git` calls inside the exact main
+reader. It asks that exact reducer to replay a
+disposable copy of the proposed complete event chain. An
+incompatible event is refused with the ledger byte-for-byte unchanged, and an
+unused owner receipt is removed. Once any ledger-write attempt begins, its receipt
+is retained conservatively because a close failure may follow a complete write;
+later emergency-marker cleanup also cannot orphan a durable event. This prevents a pre-merge event expansion from
+bricking the clean main checkout required to start the recovery lane—the exact
+deadlock encountered while adding safe `BLOCKERS` receipts.
+
+The replay bootstrap now extracts a deterministic, fail-closed module allowlist
+instead of regex-scanning JavaScript source, so import-shaped text inside the
+generated probe cannot invent a nonexistent `scripts/scripts` dependency.
+
+Harness receipts now bind both raw checkout `package.json` bytes and the exact
+Git-cleaned package blob, so Windows CRLF proof validates against the identical
+landed LF blob without weakening pre-commit raw-byte checks.
+Repository proof refuses applicable host-executable clean filters and
+working-tree encodings plus `ident` expansion before hashing. It preserves only the validated effective
+`core.autocrlf` enum needed to model the normal commit, while other transform
+configuration stays disabled. Indexed symlink mode remains `120000`
+when Windows exposes its target text as a regular file, keeping accepted and
+landed identities equal.
+
+Canonical `origin/main` refresh no longer trusts the checkout's `origin` URL or
+Git configuration. It fetches the fixed GitHub repository into a new bare repo
+under the same scrubbed environment as compatibility replay, imports the exact
+object pack without URL transport, and compare-and-swaps the local tracking ref.
+The closeout broker also uses only the approved absolute Git executable and a
+scrubbed Git environment, closing the remaining hostile-`PATH` packet/commit
+verification path. All trusted Git environments force
+`GIT_NO_REPLACE_OBJECTS=1`; local `refs/replace` can no longer make validation
+observe benign commit objects while push and deployment receive different bytes.
+The independent-review packet builder now runs as a scrubbed child process under
+that same fixed Git provenance policy and a temporary clean shadow Git directory,
+so source-repository configuration, executable fsmonitor hooks, inherited Git
+overrides, and replacement refs cannot counterfeit its base snapshot or generated
+diff. Trusted source-repository Git calls also install fixed command-scope overrides
+for executable local settings. The Docker harness bootstrap imports exact base
+objects into a clean temporary bare repository and neutralizes `export-ignore`
+and `export-subst` there before archiving; source `.git/config` and
+`.git/info/attributes` no longer govern the base snapshot.
+
+Ledger replay now treats the terminating newline as part of an event's commit
+record. A crash after complete JSON but before that newline leaves a degraded
+torn tail: the syntactically valid object is excluded from state, and later
+appends remain blocked until validated recovery removes the incomplete record.
+
+Candidate review manifests now record index-aware Git mode, raw blob identity,
+and the complete raw repository fingerprint. This exposes mode-only changes and
+Windows-emulated indexed symlinks to Sol. Review refuses any packet whose copied
+bytes, paths, modes, or file count differ from the fingerprint the evidence
+receipt will bind, closing a live-tree A-to-B-to-A swap.
+
+Harness bootstrap likewise consumes a content-verified immutable candidate
+packet rather than copying the live checkout after its initial fingerprint. It
+reconstructs verified symlinks inside the disposable volume before running the
+repository script. Source-tree status, diff, attribute, index, and content-hash
+Git calls now use a temporary clean shadow Git directory exposing only the real
+worktree, index, and content-addressed object store. Local/included config and
+`info/attributes` cannot activate an executable clean filter in those trust
+paths; focused regressions use real sentinel-writing fsmonitor and filter drivers.
+
+Bound review packets now independently compare approved base bytes/manifests to
+the clean Git tree and bind that result in parent memory. Candidate manifest
+identity must reproduce both the pre-review raw and Git-cleaned repository hashes
+before selection. After
+a size preflight, the broker serializes complete base/candidate bytes for every
+changed path plus bounded direct dependency/trust-chain context into a
+content-addressed stdin transcript. The filesystem packet is deleted before Sol
+starts, and Sol runs from a pinned non-user-writable OS runtime directory; no
+same-user Windows ACL or writable instruction-discovery root is treated as a
+security boundary. Reviewer `CODEX_HOME`, `HOME`, and `USERPROFILE` are fresh
+disposable directories containing only a bounded byte-verified `auth.json`;
+the source is verified through one held file descriptor, any pathname/inode change
+is refused, and the destination is created exclusively, closing the bootstrap
+replacement race. The post-review stability check now compares HEAD, tree, raw
+identity, Git-cleaned identity, file count, `origin/main`, and protected Factory
+state, then builds the receipt from the identity Sol actually received rather than
+a later observation.
+global AGENTS overrides, config, rules, plugins, skills, memories, and sessions
+are not copied and the runtime home is deleted after exit. Transcript hash,
+byte count, and changed-path digest are now
+mandatory in the artifact, ledger projection, and later acceptance validation.
+The final Sol message is parsed from the child process's JSONL stdout pipe rather
+than a replaceable packet file. The original output plus entity-decoded
+content-preserving and formatting-neutral representations are all scanned.
+Unicode, zero-width characters, Markdown links/destinations, escapes, tables and
+emphasis, HTML tags/attributes/entities, and JSON quoting therefore cannot hide
+a named/generic assignment or raw token before persisted BLOCKERS. Quoted values
+with leading whitespace or a line break after the assignment operator are also
+rejected.
+Docker independently recomputes the candidate volume's path set,
+modes, raw blobs, file count, and repository hash before npm executes, so a
+post-binding host packet swap cannot mint evidence for different bytes.
+
+Stale emergency commit gates now have an owner-authorized recovery route. New
+gates bind canonical metadata to both PID and operating-system process-creation
+identity, preventing PID reuse from impersonating a crashed owner. Recovery
+uses tri-state process probing: only `ESRCH` proves death, while `EPERM`, `EACCES`,
+invalid identity, and unknown errors remain non-recoverable. The same fail-closed
+rule now governs ledger-lock, coordination-fence, and harness-lock stale cleanup.
+Recovery
+uses OS creation/change observation rather than mutable `mtime`, and treats a
+timestamp far from that observation or implausibly in the future as malformed,
+so clock correction cannot brick bootstrap or backdating bypass the wait. It
+requires a five-minute age and both broader coordination locks, installs an
+emergency hold first, and writes an immutable gate-hash/archive/recovery-event
+record before atomically quarantining and byte-verifying the observed pathname.
+If ledger publication fails after quarantine, retry resumes that exact record;
+if publication already landed, retry verifies the deterministic event and does
+not append a duplicate. The canonical lane guard now recognizes `commit-gate` as
+a recovery action alongside unlock and torn-tail, keeping this route reachable when
+ordinary ledger replay is degraded. Regression coverage exercises guard-minted permits,
+snapshot/compatibility/append/post-append/output interruption, record and archive
+tampering, deleted sole/ambiguous archives, and ambiguous pending records. Reconciliation
+opens and re-verifies every bounded archive before selecting any record, so deletion cannot
+silently hide one candidate. Old malformed/torn gates are recoverable instead of permanently
+bricking bootstrap; young gates and the exact live owner remain refused, while
+  identity uncertainty or any pathname replacement fails closed with the hold
+  retained. Recovery never silently resumes the Factory.
+
+  All coordination-file release and quarantine paths now use a shared, initialized
+  mutation claim. New ledger locks, emergency fences, short commit gates, and
+  harness locks check that claim on both sides of publication; release and stale
+  recovery retain it from the final inode/byte check through removal and directory
+  flush. This removes the check-to-rename/unlink window in which a second governed
+  contender could publish a live replacement. The claim itself is not auto-stolen,
+  so a crash in that tiny critical section remains a visible break-glass stop rather
+  than recursively applying the unsafe recovery rule. Commit-gate quarantine also
+  rechecks the exact descriptor-bound pathname after the testable race point and
+  flushes both the source and recovery directories before reporting success.
+
+  Commit-gate recovery now serializes write-ahead publication across successive
+  stale gates as well as across processes. When one complete quarantine record is
+  still unpublished, a later recovery returns that earlier identity for ledger
+  publication and preserves any newer stale gate at its original pathname. Only
+  after the first event is published can the newer gate receive its own record and
+  archive. Regression coverage executes the two-gate crash sequence end to end and
+  retains fail-closed rejection of a pre-existing ambiguous multi-record inventory.
+
+  Shared-ledger replay now bootstraps the two historical August 3 review events
+  without editing the append-only ledger. Compatibility is activated only when the
+  exact pre-upgrade terminal event hash is present in the already verified event
+  chain; only earlier reviews with all three new input-binding fields absent are
+  accepted. A missing or altered checkpoint, a partial historical shape, and every
+  later review remain strict. Read-only execution against the real shared state now
+  completes with the ledger unheld and non-degraded. The transient coordination
+  mutation claim is also excluded from protected-content comparison so its normal
+  short lifetime cannot produce a false Factory-state mutation alarm.
+
+The final acceptance repair closes two additional representation and publication
+gaps. Review evidence now recursively decodes generic Unicode/code-point,
+hexadecimal, JSON whitespace, numeric-entity, and recognized named-entity forms;
+unknown named character entities fail closed as unscannable. Commit-gate recovery
+publication now owns the coordination fence and ledger lock as one operation and
+revalidates the unique write-ahead record plus bounded archive at the final commit
+point after compatibility replay. A test-only archive mutation in that former
+window is refused before any `factory-recovered` event is appended, with the hold
+retained.
+
+Further adversarial coverage removes the remaining recursive and record-identity
+edges. Escape normalization now runs to convergence, consumes arbitrarily repeated
+escape prefixes conservatively, and removes the complete Unicode
+`Default_Ignorable_Code_Point` class. Recovery records now use the same
+descriptor-bound before/after pathname and file-identity checks as archives.
+Reconciliation also requires a previously published recovery event's payload to
+equal the canonical record payload exactly, so extra fields cannot be accepted.
+Regressions cover deep escape nesting, U+2062 and soft-hyphen separators, record
+pathname ABA replacement, and an existing event with an additional payload key.
+
+The decoder's convergence work is now capped at 32 passes and fails closed if a
+representation still changes, while complete repeated escape prefixes collapse
+in one bounded pass. Empty inline/reference Markdown links and images are also
+removed in the rendered-neutral scan, closing identifier-splitting forms such as
+`pass[](target)word`. Recovery reconciliation now inventories write-ahead records
+and `stale-commit-gate-*.gate` archives as an exact one-to-one set. An orphan
+archive blocks both retry publication and quarantine of a later stale gate;
+regressions prove the later pathname remains byte-for-byte intact and no recovery
+event is appended.
+
+The same concealment boundary now rejects structurally empty Markdown links or
+images before parsing their targets, including nested-parenthesis targets, and
+rejects HTML elements, attributes, or inline styles that can hide intervening
+identifier text (`template`, `details`, `hidden`, `aria-hidden`, `display:none`,
+`visibility:hidden`, or zero opacity).
+
+NFKC normalization now occurs inside every bounded representation-decoding pass,
+and concealment checks run against both original and fully decoded text. This
+closes fullwidth-backslash escapes and Unicode-escaped hidden HTML. Recovery
+inventory also reserves both commit-gate filename prefixes: any entry beginning
+`commit-gate-recovery-` or `stale-commit-gate-` that does not match the complete
+canonical record/archive grammar blocks reconciliation and later quarantine.
+Tests cover a spaced orphan archive name and a canonical record renamed with a
+tampered suffix.
+
+Default-ignorable Unicode removal now runs at decoder entry and before/after every
+bounded pass. If removing an invisible character creates a new `\uXXXX` escape,
+the next pass decodes it before any review output can be persisted. Regressions
+cover invisible characters between the backslash and `u`, including the combined
+fullwidth-backslash form.
+
+Commit-gate write-ahead records now stage exact canonical bytes in a private
+exclusive file, flush and validate that file, atomically rename it into the
+reserved record namespace, and reopen it before quarantine. An interruption
+during preparation can therefore leave only an ignored staging file while the
+original gate remains intact; retry can publish a complete record instead of
+being permanently blocked by a truncated canonical-looking pathname.
+
+Emergency-hold resume now recognizes the crash-safe generation-only state: it
+clears that hold only when the marker is still absent and the complete observed
+generation set is unchanged. Control results and the owner hook report the real
+post-transition hold state, so a newer preserved pause cannot be acknowledged as
+resumed. Review scanning also decodes valid decimal and hexadecimal numeric HTML
+entities without semicolons and rejects any undecodable numeric entity, closing
+assignment-separator concealment such as `password&#58hunter2-value`.
+
+Review scanning now normalizes Unicode typographic quote families to visible
+ASCII scanning delimiters and implements HTML's C1 numeric-reference replacement
+table before that normalization. Curly-quoted assignments and numeric C1 quote
+entities can no longer evade the quoted-secret detector; NULL, surrogate, and
+out-of-range numeric references remain undecoded and are rejected fail-closed.
+
+Quote normalization now uses Unicode's complete `Quotation_Mark` property,
+including CJK delimiters. Numeric references to unmapped C0/C1 controls remain
+encoded and fail the unresolved-entity check, while literal concealment controls
+also fail closed. This closes identifier splits using `&#1;`, `&#129;`, raw C1
+controls, or quotation families beyond the earlier Western list.
+
+Generic `\u{...}` and four-digit `\uXXXX` decoding now accepts only valid
+Unicode scalar values. Lone surrogates, out-of-range code points, malformed
+braced forms, and every other unresolved Unicode escape fail closed before
+review text can persist. Regressions cover braced and four-digit surrogate
+identifier splits plus an out-of-range braced escape.
+
+Review evidence now rejects HTML form controls and credential-labeled metadata
+before tag stripping. Password inputs and metadata such as `name="api_key"`
+cannot separate a credential identifier from its value across attributes and
+then disappear from the formatting-neutral scan.
+
+HTML concealment inspection now extracts start tags with a bounded quote-aware
+scanner before applying element, credential-attribute, and hidden-style rules.
+A `>` inside a quoted attribute can no longer truncate inspection before a later
+`name="api_key"` or similar credential label.
+
+HTML structural scanning now preserves HTML's actual ASCII quote delimiters
+instead of normalizing typographic data before locating tag boundaries. The
+form-control denylist includes buttons, and every inline `style` attribute fails
+closed, removing bypasses based on alternate valid CSS such as `opacity:.0`.
+
+Review scanning now rejects the complete standards-defined legacy named-entity
+set when its semicolon is omitted, including recursively encoded forms. A browser
+can decode `pass&shyword` to an identifier split by a removable soft hyphen; that
+representation now fails closed before review evidence can persist.
+
+HTML comments now fail closed before the bounded tag scan. A comment containing
+an internal `>` can no longer terminate scanning early and split a credential
+identifier while disappearing when rendered.
+
+Pre-commit harness and CLEAN-review validation now rechecks the exact stored
+`HEAD` commit and tree identities in addition to both repository content hashes.
+A descendant commit made after review cannot inherit approval merely because its
+working bytes are identical. The intentional post-acceptance transition to an
+exact Git-cleaned landing commit remains separately content-bound.
+
+Default-hidden and conditional HTML containers such as `dialog` and `noscript`
+now fail closed, and recursively encoded valid UTF-8 `%HH` sequences are decoded
+before Markdown link destinations are scanned. Hidden element content and
+percent-encoded credential assignments can no longer evade review evidence
+refusal.
+
+Ordinary stale-ledger-lock recovery now runs under the shared coordination fence,
+binds the inspected pathname and exact bytes through the liveness decision, and
+atomically renames only that unchanged stale lock into a unique recovery archive.
+A second recovery attempt cannot act on an old ESRCH result after a replacement
+writer acquires the lock.
+
+Torn-tail recovery now owns both the coordination fence and ledger lock, writes
+and flushes content-addressed backup plus repair staging files, and atomically
+replaces `events.jsonl` with the verified complete prefix. A crash before the
+rename leaves the original degraded ledger intact; a crash after it leaves the
+complete repaired prefix, never an in-place truncated ledger.
+
+Coordination files now prepare and flush complete owner metadata in a private
+same-directory file, descriptor-reread it, and publish the initialized inode with
+an atomic create-if-absent hard link. A process kill before publication can leave
+only an ignored staging name; every public lock/fence pathname is either absent
+or fully initialized. Ledger, emergency-fence, and harness-lock release also
+checks the held descriptor identity before unlinking a pathname.
+
+Automatic stale emergency-fence and harness-run-lock recovery now reopens and
+rechecks the exact pathname identity and bytes after the ESRCH decision and
+before quarantine. A replacement owned by a live process is preserved rather
+than removed by an older contender. SVG/Math roots and ruby fallback markup also
+fail closed before review evidence scanning.
+
+Owner pauses become enforceable before that compatibility gate starts its
+network fetch: a provisional fail-closed marker is installed under the shared
+coordination fence and clears only after the durable pause event is recorded.
+Running-only evidence appends recheck the marker after compatibility replay, so
+an emergency pause that arrives during a slow fetch prevents the pending ledger
+write rather than attaching evidence after Mason's stop request. The recheck and
+append share a short emergency-commit gate with fallback marker writers, removing
+the final check-to-append window. A resume compares and removes only the exact
+marker it observed while holding that same gate, so a newer fallback pause cannot
+be erased between comparison and cleanup. Bootstrap preserves any pre-existing
+incident marker byte-for-byte, starts guaranteed fence cleanup immediately after
+acquisition, and installs a fail-closed marker while retaining the fence if the
+short commit gate itself is unavailable. Marker creation stages complete bytes
+and atomically links them into place without replacement; coordination-file
+initialization closes and removes a newly created lock if metadata writing fails.
+Windows create/delete overlap can briefly return `EPERM` after a lock path disappears; fence and
+commit-gate acquisition now retry that absent-path race only within their existing bounded timeout.
+The short commit gate now has a unique owner token, and release preserves any
+replacement it does not own. A dead owner's stale pathname is never renamed by
+an ordinary contender, eliminating the ABA window where two callbacks could run;
+guarded work instead fails closed and owner pause retains an emergency marker
+until explicit break-glass recovery, even when the broader coordination fence
+is unavailable at the same time.
+Pause attempts also mint immutable generation tokens without replacing the first
+incident reason. Resume cleanup compares both the original marker bytes and token
+set, so a newer fallback pause cannot be erased by an older in-flight resume.
+Ambiguous `sure` routing now recognizes only a standalone reply, so an ordinary
+request such as “make sure the tests pass” remains normal work instead of being
+mistaken for a ticket decision.
+
+The safe bounded `BLOCKERS` report is returned directly by the review broker
+with its read-only Board evidence path after attachment. Repair lanes therefore
+receive the actionable findings without direct factory-state access or another
+model run; the content-addressed evidence artifact remains the durable source.
 ## 2026-08-02 — Factory resume replay and parked-Board repair
 
 The factory now serializes owner pause/resume evaluation and its conditional
