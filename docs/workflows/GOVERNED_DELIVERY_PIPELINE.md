@@ -434,7 +434,8 @@ sessions before allowing their next governed action. These markers are coordinat
 are excluded from protected-content fingerprints so creating one cannot invalidate an active evidence
 or review run. If factory state cannot be verified, mutations
 fail closed only for those marked chats and explicit Factory CLI actions. Unrelated chats continue
-under the repository's ordinary guards instead of inheriting a global Factory outage. Reads remain
+through both installed Factory PreToolUse guards and remain under the repository's ordinary guards
+instead of inheriting a global Factory outage. Reads remain
 available for diagnosis, and the canonical factory status/recovery CLI remains reachable. A
 corruption that cannot be repaired by the backup-first stale-lock or torn-tail modes remains parked
 for an owner recovery decision.

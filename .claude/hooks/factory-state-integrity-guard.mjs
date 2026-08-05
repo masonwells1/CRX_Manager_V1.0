@@ -2,7 +2,13 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { loadFactorySnapshot, resolveHookFactoryPaths } from "../../scripts/factory-state-lib.mjs";
+import {
+  hasFactoryIntentFailureLatch,
+  hasFactoryManagedSessionMarker,
+  loadFactorySnapshot,
+  resolveHookFactoryPaths,
+  setFactoryManagedSessionMarker,
+} from "../../scripts/factory-state-lib.mjs";
 
 function nothing() { process.exit(0); }
 function deny(reason) {
@@ -70,6 +76,9 @@ for (const match of patchText.matchAll(/^\*\*\* (?:(?:Add|Update|Delete) File|Mo
 const targets = [...new Set(structuredTargets)];
 const projectDir = path.resolve(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 const sessionId = String(payload?.session_id || payload?.thread_id || payload?.conversation_id || "").trim();
+const actorTool = String(process.env.CRX_AGENT_SURFACE || payload?.agent_type || payload?.agent || "").trim().toLowerCase() === "codex"
+  ? "codex"
+  : "claude";
 let governedSession = !sessionId;
 if (sessionId) {
   try {
@@ -79,8 +88,12 @@ if (sessionId) {
         job.sessionId === sessionId
         || job.laneSessionId === sessionId,
       );
+    if (governedSession && !hasFactoryManagedSessionMarker(factoryPaths, sessionId)) {
+      setFactoryManagedSessionMarker(factoryPaths, { sessionId, actorTool });
+    }
   } catch {
-    governedSession = true;
+    governedSession = hasFactoryIntentFailureLatch(factoryPaths, sessionId)
+      || hasFactoryManagedSessionMarker(factoryPaths, sessionId);
   }
 }
 

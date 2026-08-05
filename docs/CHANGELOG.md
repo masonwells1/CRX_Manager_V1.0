@@ -8,7 +8,8 @@ Factory intent now leaves a durable per-chat marker outside the event ledger bef
 intent append, and healthy replay backfills markers for pre-existing Factory chats. If the shared
 Factory ledger later becomes unreadable, explicit Factory commands and only those marked Factory
 chats continue to fail closed; unrelated work remains governed by the repository's ordinary safety
-hooks instead of being blocked by the Factory outage. Regression proof covers both sides of that
+hooks instead of being blocked by the Factory outage. The same boundary is enforced by both installed
+Factory PreToolUse guards, including dynamic shell commands. Regression proof covers both sides of that
 boundary while preserving read-only diagnosis and the canonical recovery route. The existing narrow
 same-lane replay rule continues to accept the complete legacy duplicate parked event that previously
 prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage

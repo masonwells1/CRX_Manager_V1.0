@@ -47,6 +47,15 @@ function run(hook, stateDir, payload) {
   });
 }
 
+function runHookChain(hooks, stateDir, payload) {
+  let result;
+  for (const hook of hooks) {
+    result = run(hook, stateDir, payload);
+    if (result.status !== 0 || result.error || result.stdout) return result;
+  }
+  return result;
+}
+
 function denied(result, pattern, message) {
   assertions++;
   assert.match(
@@ -901,26 +910,39 @@ function bashExecutable() {
   assertions++;
   assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), true, "healthy replay backfills the marker for pre-existing factory sessions");
   writeFileSync(paths.eventsPath, "{not-valid-json}\n");
-  const readResult = run(laneHook, stateDir, {
+  const installedHookChain = [integrityHook, laneHook];
+  const readResult = runHookChain(installedHookChain, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "Read",
     tool_input: { file_path: path.join(root, "docs", "workflows", "GOVERNED_DELIVERY_PIPELINE.md") },
   });
   assertions++;
   assert.equal(readResult.stdout, "", "corrupt factory state leaves read-only diagnosis available");
-  const unrelatedWrite = run(laneHook, stateDir, {
+  const unrelatedWrite = runHookChain(installedHookChain, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
   });
   assertions++;
   assert.equal(unrelatedWrite.stdout, "", "corrupt factory state does not block writes in an unrelated non-factory session");
-  denied(run(laneHook, stateDir, {
+  const unrelatedDynamicShell = runHookChain(installedHookChain, stateDir, {
+    thread_id: "diagnostic-thread",
+    tool_name: "Bash",
+    tool_input: { command: "node -e \"process.stdout.write('ordinary work')\"" },
+  });
+  assertions++;
+  assert.equal(unrelatedDynamicShell.stdout, "", "the full corrupt-state hook chain leaves unrelated dynamic shell work under ordinary guards");
+  denied(runHookChain(installedHookChain, stateDir, {
     thread_id: managedSessionId,
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
   }), /factory-managed build writes fail closed/i, "corrupt factory state still denies mutation in the factory-managed session");
-  const recoveryResult = run(laneHook, stateDir, {
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: managedSessionId,
+    tool_name: "Bash",
+    tool_input: { command: "node -e \"process.stdout.write('bypass')\"" },
+  }), /dynamic inline code execution is disabled inside a governed lane/i, "the full corrupt-state hook chain keeps marked factory sessions governed");
+  const recoveryResult = runHookChain(installedHookChain, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/factory.mjs recover torn-tail --reason-base64 cmVjb3Zlcnk= --session diagnostic-thread --tool codex" },
