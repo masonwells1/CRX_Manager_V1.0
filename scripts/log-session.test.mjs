@@ -157,6 +157,12 @@ if (!HAS_ORIGIN_MAIN) {
     "commits must be scoped to this branch (origin/main..HEAD)",
   );
   ok(
+    !/--since=/.test(src),
+    "the 12-hour window must stay removed — when HEAD is level with origin/main it " +
+      "lists everyone's recent merges to main under 'Commits this session', which is " +
+      "the same false attribution as the `git log -15` fallback (Codex, PR #310)",
+  );
+  ok(
     /origin\/main\.\.\.HEAD/.test(src) && /supabase\/migrations/.test(src),
     "migrations must come from the branch diff",
   );
