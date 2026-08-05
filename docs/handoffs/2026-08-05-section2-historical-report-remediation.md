@@ -22,16 +22,18 @@ Make AR Aging and Customer Balance Listing truthful for their selected cutoff da
 ## APPLIED AND PROVEN LIVE
 
 - `supabase/migrations/20260805151605_fix_historical_ar_report_cutoffs.sql` re-emits both reports with posted-as-of eligibility, invoice/credit cutoffs, credit-application replay, fixed search paths, deliberate grants, and a private fail-closed reconstruction helper.
+- Exact-commit review found that its Customer Balance Listing cumulative fields omitted fully paid invoices. Follow-up `supabase/migrations/20260805171334_fix_customer_balance_paid_invoice_totals.sql` is live and restores all cutoff-eligible invoices to Invoiced, Paid, Prepay Applied, and count while keeping balance/oldest-unpaid open-only.
 - `scripts/smoke/smoke-historical-ar-report-cutoffs.sql` proves overdue inclusion, future-invoice exclusion, cutoff credit reconstruction, and rejection of unknowable later prepay history. It is registered in the smoke and billing-area registries.
 - The exact migration plus smoke ran against live Supabase in one deliberately aborted transaction and returned `SMOKE_PASS_ROLLBACK`. Postchecks proved the original report functions remained byte-identical at the body level, no helper or fixture remained, and no ledger row was written.
 - Exact changed-file SQL validation: 0 violations / 0 warnings. The all-history scan exceeded its 15-minute bound without a verdict and is not represented as passing.
-- Typecheck, lint, production build, docs drift, focused static tests (5), drift tests (234 passed / 78 skipped), and full Vitest (4,268 passed / 123 skipped) passed.
+- Typecheck, lint, production build, docs drift, final focused static tests (6), drift tests (234 passed / 78 skipped), and full Vitest (4,268 passed / 123 skipped) passed.
 - Pre-apply ledger proof: 934 migrations at high-water `20260803221244`; exact SHA-256 `57326b0ac606abe0dd872412f57617364bbc043bcaec2e3fbd5edc9f1aca0509`. Post-apply: 935 migrations at assigned version `20260805151605`, submitted name `20260805124533_fix_historical_ar_report_cutoffs`.
 - Both content-bound `gpt-5.6-sol` high-effort reviewer charters returned CLEAN. Proof query hash: `57326b0ac606abe0dd872412f57617364bbc043bcaec2e3fbd5edc9f1aca0509`.
 - Post-apply catalog proof: exactly one overload each; fixed search paths; anon revoked; the helper is postgres-only; expected cutoff and role checks are present.
 - Read-only role proof: admin current AR/listing and sales-rep current listing execute; sales-rep historical listing raises the expected admin-only error.
 - Applied-function smoke returned `SMOKE_PASS_ROLLBACK` with zero customer-fixture residue. Supabase advisors show no target performance finding; their two target security warnings are expected for the deliberately exposed, internally role-gated `SECURITY DEFINER` report RPCs.
-- `.claude/schema-registry.json` was regenerated from all six live introspection queries to high-water `20260805151605`; enums, generated columns, and table shapes are unchanged.
+- The follow-up was submitted as `20260805170848_fix_customer_balance_paid_invoice_totals`, applied as ledger version `20260805171334`, and B7-renamed content-identically (SHA-256 `a187a68da5ca0f94781211d8ed1cfe40d313f85b6eb30d411ba66936f53258ab`). Both content-bound Sol/high charters were CLEAN; post-apply owner/search-path/ACL/body-marker checks passed.
+- `.claude/schema-registry.json` was regenerated from all six live introspection queries to high-water `20260805171334`; enums, generated columns, and table shapes are unchanged.
 - All 21 standing live database-invariant predicates passed read-only with zero unallowlisted violations; all financial identity predicates returned zero rows. The complete agent-workflow regression suite passed after reconciliation.
 
 ## NOT DONE
@@ -40,7 +42,7 @@ Make AR Aging and Customer Balance Listing truthful for their selected cutoff da
 
 ## APPROVAL STATE
 
-Mason explicitly approved the live migration apply on 2026-08-05; that authorization was used for ledger version `20260805151605`. Mason subsequently authorized the complete protected-PR release path in the same conversation. Persistent business-data changes, unrelated permission changes, and deletion remain out of scope.
+Mason explicitly approved the live migration applies on 2026-08-05; that authorization was used for ledger versions `20260805151605` and corrective follow-up `20260805171334`. Mason subsequently authorized the complete protected-PR release path in the same conversation. Persistent business-data changes, unrelated permission changes, and deletion remain out of scope.
 
 ## GATES AND BLOCKERS
 

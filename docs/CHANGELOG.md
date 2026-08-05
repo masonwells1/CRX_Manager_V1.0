@@ -51,6 +51,18 @@ The schema registry and migration/RPC references were refreshed from the live
 catalog, and focused regression coverage is registered in the billing and
 regression-prevention suites.
 
+The first exact-commit review caught that the new Customer Balance Listing
+limited its cumulative Invoiced, Paid, Prepay Applied, and invoice-count fields
+to invoices that still had a positive balance. That would omit fully paid
+invoices whenever the customer also had an open invoice. Follow-up migration
+`20260805171334_fix_customer_balance_paid_invoice_totals` is live: cumulative
+fields now include every cutoff-eligible non-credit invoice, while only
+Outstanding Balance and Oldest Unpaid remain open-invoice measures. The
+expanded rollback smoke proves a $50 fully paid invoice plus a $100 open invoice
+returns $150 invoiced, $50 paid, two invoices, and $100 outstanding. The
+follow-up passed content-bound security/drift reviews, post-apply catalog and
+grant checks, and left no fixture or business-data residue.
+
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 
 The reviewed Section 2 remediation aligns customer statements across the target

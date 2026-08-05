@@ -9,7 +9,7 @@ Checkout: `codex/section2-historical-reports-20260805` at `6a49add2d8b972b082375
 
 0 BLOCKER / 2 HIGH / 0 MED / 0 LOW.
 
-At audit time, the two historical report controls were not safe to rely on for a past date: both reused mutable current balances, and Customer Balance Listing excluded live `overdue` rows while including `unposted`. Both HIGH findings were fixed live later the same day by ledger version `20260805151605`; the proof is recorded below.
+At audit time, the two historical report controls were not safe to rely on for a past date: both reused mutable current balances, and Customer Balance Listing excluded live `overdue` rows while including `unposted`. Both HIGH findings were fixed live later the same day by ledger version `20260805151605`; exact-commit review then caught and live follow-up `20260805171334` closed a paid-invoice aggregate regression before publication. The proof is recorded below.
 
 ## Reproducible Checkout Evidence
 
@@ -86,15 +86,16 @@ The canonical same-model gauntlet workflow runner is not callable from this Code
 
 ## Remediation and Live Proof
 
-Both findings are fixed live by `supabase/migrations/20260805151605_fix_historical_ar_report_cutoffs.sql`, applied as ledger version `20260805151605` after Mason's explicit approval.
+Both findings are fixed live by `supabase/migrations/20260805151605_fix_historical_ar_report_cutoffs.sql`, with paid-invoice aggregate follow-up `supabase/migrations/20260805171334_fix_customer_balance_paid_invoice_totals.sql`, after Mason's explicit approval.
 
 - Before apply, the migration followed by `scripts/smoke/smoke-historical-ar-report-cutoffs.sql` executed against the current live catalog in one deliberately aborted transaction and terminated with `SMOKE_PASS_ROLLBACK`. A read-only postcheck confirmed the original function-body hashes were restored, the new helper count was zero, no smoke customers remained, and the candidate was absent from the live migration ledger at that pre-apply point.
 - The smoke proves overdue inclusion, future-invoice exclusion, credit-application cutoff reconstruction, and fail-closed handling for unreconstructable later prepay activity. It is registered in `scripts/smoke/smoke-specs.json` and the billing test area.
 - Exact changed-file SQL validation passed with 0 violations and 0 warnings. The full historical SQL scan exceeded its 15-minute bound without a verdict; it is not counted as green.
-- Typecheck, lint, production build, documentation drift, the focused static guard (5 tests), drift slice (234 passed / 78 skipped), and the full Vitest suite (4,268 passed / 123 skipped) passed.
+- Typecheck, lint, production build, documentation drift, the final focused static guard (6 tests), drift slice (234 passed / 78 skipped), and the full Vitest suite (4,268 passed / 123 skipped) passed.
 - Fresh pre-apply Supabase `list_migrations` returned 934 rows with high-water `20260803221244`; the exact migration SHA-256 was `57326b0ac606abe0dd872412f57617364bbc043bcaec2e3fbd5edc9f1aca0509`. Both refreshed content-bound `gpt-5.6-sol` high-effort migration charters returned CLEAN immediately before apply.
 - Post-apply, the ledger holds 935 rows at `20260805151605`; all three functions have one overload and fixed search paths, anon is revoked, the private helper is owner-only, and the expected cutoff/role markers are present. Admin current reports and sales-rep current listing executed read-only; sales-rep historical listing raised the expected admin-only error.
-- The registered smoke re-ran against the applied functions and returned `SMOKE_PASS_ROLLBACK`; zero fixture customers remained. The live schema registry was regenerated from all six introspection queries to high-water `20260805151605`.
+- The first exact-commit reviewer found that cumulative Invoiced, Paid, Prepay Applied, and invoice count were restricted to positive-balance invoices. Follow-up `20260805171334` restores fully paid invoices to those cumulative fields while keeping Outstanding Balance and Oldest Unpaid open-only.
+- The expanded paid-plus-open smoke re-ran against the final applied function and returned `SMOKE_PASS_ROLLBACK`; zero fixture customers remained. The live schema registry was regenerated from all six introspection queries to high-water `20260805171334`.
 - All 21 standing live database-invariant predicates were executed read-only after apply. Every financial identity predicate returned zero rows, and the remaining catalog hits exactly matched documented allowlist entries, for zero unallowlisted violations.
 - The repository's complete agent-workflow regression suite also passed after the live reconciliation and documentation updates.
 - Supabase advisors returned no target-related performance finding. Their two target security warnings are the expected generic authenticated-`SECURITY DEFINER` warnings for these deliberately exposed, internally role-gated reports.

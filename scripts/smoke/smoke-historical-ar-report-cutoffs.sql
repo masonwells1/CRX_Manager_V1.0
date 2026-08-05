@@ -1,4 +1,5 @@
--- Rollback-only proof for 20260805151605_fix_historical_ar_report_cutoffs.
+-- Rollback-only proof for 20260805151605_fix_historical_ar_report_cutoffs and
+-- 20260805171334_fix_customer_balance_paid_invoice_totals.
 -- Run after the candidate migration in the same transaction pre-apply, or
 -- directly through run-smoke.mjs after apply. The terminal exception proves
 -- every fixture and mutation rolled back.
@@ -9,6 +10,7 @@ DECLARE
   v_customer uuid;
   v_unsafe_customer uuid;
   v_invoice uuid;
+  v_paid_invoice uuid;
   v_future_invoice uuid;
   v_credit_memo uuid;
   v_unsafe_invoice uuid;
@@ -48,6 +50,14 @@ BEGIN
 
   INSERT INTO public.invoices (
     invoice_number, customer_id, invoice_type, status, invoice_date, due_date,
+    total_amount_cents, paid_amount_cents, created_by, salesman_id
+  ) VALUES (
+    '[SMOKE]-AR-PAID-' || v_suffix, v_customer, 'chemical_sale', 'draft',
+    v_cutoff - 20, v_cutoff - 5, 5000, 5000, v_admin, v_admin
+  ) RETURNING id INTO v_paid_invoice;
+
+  INSERT INTO public.invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date, due_date,
     total_amount_cents, created_by, salesman_id
   ) VALUES (
     '[SMOKE]-AR-FUTURE-' || v_suffix, v_customer, 'chemical_sale', 'draft',
@@ -67,6 +77,12 @@ BEGIN
          posted_at = (v_cutoff - 60)::timestamp AT TIME ZONE 'America/Chicago'
    WHERE id = v_invoice;
   UPDATE public.invoices SET status = 'overdue' WHERE id = v_invoice;
+
+  UPDATE public.invoices
+     SET status = 'posted',
+         posted_at = (v_cutoff - 20)::timestamp AT TIME ZONE 'America/Chicago'
+   WHERE id = v_paid_invoice;
+  UPDATE public.invoices SET status = 'paid' WHERE id = v_paid_invoice;
 
   UPDATE public.invoices
      SET status = 'posted',
@@ -103,13 +119,18 @@ BEGIN
    WHERE b.customer_id = v_customer;
 
   IF v_listing.customer_id IS DISTINCT FROM v_customer
+     OR v_listing.total_invoiced IS DISTINCT FROM 150.00::numeric
+     OR v_listing.total_paid IS DISTINCT FROM 50.00::numeric
+     OR v_listing.prepay_applied IS DISTINCT FROM 0.00::numeric
      OR v_listing.outstanding_balance IS DISTINCT FROM 100.00::numeric
      OR v_listing.open_credit IS DISTINCT FROM 30.00::numeric
-     OR v_listing.invoice_count IS DISTINCT FROM 1::bigint
+     OR v_listing.invoice_count IS DISTINCT FROM 2::bigint
      OR v_listing.oldest_unpaid_date IS DISTINCT FROM (v_cutoff - 60) THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: listing cutoff expected balance=100.00 credit=30.00 count=1 oldest=%, got balance=% credit=% count=% oldest=%',
-      v_cutoff - 60, v_listing.outstanding_balance, v_listing.open_credit,
-      v_listing.invoice_count, v_listing.oldest_unpaid_date;
+    RAISE EXCEPTION 'SMOKE_FAIL: listing cutoff expected invoiced=150.00 paid=50.00 prepay=0.00 balance=100.00 credit=30.00 count=2 oldest=%, got invoiced=% paid=% prepay=% balance=% credit=% count=% oldest=%',
+      v_cutoff - 60, v_listing.total_invoiced, v_listing.total_paid,
+      v_listing.prepay_applied, v_listing.outstanding_balance,
+      v_listing.open_credit, v_listing.invoice_count,
+      v_listing.oldest_unpaid_date;
   END IF;
 
   -- Prove the shared guard rejects mutable history rather than reusing today's

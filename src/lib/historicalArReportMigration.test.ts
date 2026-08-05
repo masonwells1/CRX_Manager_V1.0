@@ -12,6 +12,11 @@ const migration = source(
   'migrations',
   '20260805151605_fix_historical_ar_report_cutoffs.sql',
 );
+const paidInvoiceFollowup = source(
+  'supabase',
+  'migrations',
+  '20260805171334_fix_customer_balance_paid_invoice_totals.sql',
+);
 
 describe('historical AR report migration', () => {
   it('shares the statement reconstruction boundary instead of trusting current status', () => {
@@ -80,9 +85,41 @@ describe('historical AR report migration', () => {
 
     expect(smoke).toContain('public.get_ar_aging(v_cutoff)');
     expect(smoke).toContain('public.get_customer_balance_listing(v_cutoff)');
+    expect(smoke).toContain("'[SMOKE]-AR-PAID-'");
+    expect(smoke).toContain(
+      'v_listing.total_invoiced IS DISTINCT FROM 150.00::numeric',
+    );
+    expect(smoke).toContain(
+      'v_listing.total_paid IS DISTINCT FROM 50.00::numeric',
+    );
+    expect(smoke).toContain(
+      'v_listing.invoice_count IS DISTINCT FROM 2::bigint',
+    );
     expect(smoke).toContain('HISTORICAL_BALANCE_RECONSTRUCTION_UNAVAILABLE');
     expect(smoke).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'");
     expect(registry).toContain('smoke-historical-ar-report-cutoffs.sql');
     expect(areas).toContain('src/lib/historicalArReportMigration.test.ts');
+  });
+
+  it('keeps paid invoices in cumulative listing totals while filtering only open fields', () => {
+    expect(paidInvoiceFollowup).toContain('sum(ei.total_amount_cents)');
+    expect(paidInvoiceFollowup).toContain('sum(ei.paid_amount_cents)');
+    expect(paidInvoiceFollowup).toContain('sum(ei.prepay_applied_cents)');
+    expect(paidInvoiceFollowup).toContain('count(ei.id)');
+    expect(paidInvoiceFollowup).not.toContain(
+      'round(COALESCE(sum(ei.total_amount_cents) FILTER',
+    );
+    expect(paidInvoiceFollowup).not.toContain(
+      'round(COALESCE(sum(ei.paid_amount_cents) FILTER',
+    );
+    expect(paidInvoiceFollowup).not.toContain(
+      'round(COALESCE(sum(ei.prepay_applied_cents) FILTER',
+    );
+    expect(paidInvoiceFollowup).not.toContain(
+      'count(ei.id) FILTER (WHERE ei.statement_balance_cents > 0)',
+    );
+    expect(paidInvoiceFollowup).toContain(
+      'min(ei.invoice_date) FILTER (WHERE ei.statement_balance_cents > 0)',
+    );
   });
 });
