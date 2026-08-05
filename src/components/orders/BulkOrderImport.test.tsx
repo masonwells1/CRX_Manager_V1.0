@@ -186,12 +186,12 @@ describe('BulkOrderImport', () => {
 
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
     const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
-      p_items: Array<{ product_id: string; unit_cost: number }>;
+      p_items: Array<{ product_id: string; unit_cost?: number }>;
       p_status: string;
       p_total_cost: number;
     };
     expect(args.p_items[0].product_id).toBe('product-b');
-    expect(args.p_items[0].unit_cost).toBe(7);
+    expect(args.p_items[0]).not.toHaveProperty('unit_cost');
     expect(args.p_total_cost).toBe(14);
     expect(args.p_status).toBe('confirmed');
   });

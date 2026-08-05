@@ -48,7 +48,7 @@ Keep the RPC signature for deployed caller compatibility, but allow imports to c
 
 **Prevention action**
 
-Register a rollback-only `bulk_import_order` business-chain smoke and a migration-body contract test. The smoke must prove terminal-status rejection, all three non-finite values are rejected for quantity/price/cost with zero residue, sub-cent normalization, omitted-cost Product snapshot, malformed-cost rejection, server-recomputed totals, inventory prebooking, booked ledger, commission, activity, and idempotent replay. The frontend regression must prove every successful import sends `p_status: 'confirmed'`, rejects terminal-status files before calling the RPC, derives omitted cost from the resolved Product, and preserves an explicit zero.
+Register a rollback-only `bulk_import_order` business-chain smoke and a migration-body contract test. The smoke must prove terminal-status rejection, all three non-finite values are rejected for quantity/price/cost with zero residue, sub-cent normalization, omitted-cost Product snapshot, malformed-cost rejection, server-recomputed totals, inventory prebooking, booked ledger, commission, activity, and idempotent replay. The frontend regression must prove every successful import sends `p_status: 'confirmed'`, rejects terminal-status files before calling the RPC, leaves omitted cost absent so PostgreSQL snapshots it transactionally, and preserves an explicit zero.
 
 ## Remediation prepared in this run
 
@@ -56,7 +56,7 @@ Register a rollback-only `bulk_import_order` business-chain smoke and a migratio
 - The first exact-commit Sol review correctly blocked publication because PostgreSQL accepts non-finite `numeric` values. Forward-only follow-up `supabase/migrations/20260805220757_reject_nonfinite_bulk_import_values.sql:112-137` rejects all non-finite quantity/price/cost values and rounds unit and extended dollar amounts to cents before writes. It leaves the already-applied migration immutable.
 - The second exact-commit Sol review correctly blocked publication because missing optional cost was being inferred as zero. Forward-only live follow-up `supabase/migrations/20260805224819_snapshot_bulk_import_product_cost.sql` snapshots `products.current_cost` when cost is absent, preserves explicit zero, rejects malformed/unavailable cost, and uses one normalized item snapshot for every downstream write.
 - `src/components/orders/BulkOrderImport.tsx:57-61`, `:164-195`, `:235-312`, `:384`, `:446-497`, and `:558-559` enforce confirmed-only imports, validate numeric CSV fields, resolve Product cost without destroying explicit zero, and explain the behavior.
-- `src/components/orders/BulkOrderImport.test.tsx` proves canonical status, terminal-status rejection, Product-cost fallback, malformed-cost rejection, and explicit-zero preservation.
+- `src/components/orders/BulkOrderImport.test.tsx` proves canonical status, terminal-status rejection, omitted cost remains absent for the transactional PostgreSQL snapshot, malformed-cost rejection, and explicit-zero preservation.
 - `src/lib/rpcContracts.test.ts` pins the lifecycle effects, finite/cents guards, Product fallback, malformed-cost guard, and normalized snapshot.
 - `scripts/smoke/smoke-bulk-order-import-lifecycle.sql` and its `smoke-specs.json` registration provide the full rollback-only business chain, including nine non-finite cases, omitted/malformed cost, commission-basis proof, and residue checks.
 
@@ -67,7 +67,7 @@ Register a rollback-only `bulk_import_order` business-chain smoke and a migratio
 - ESLint: passed with `--quiet`.
 - Changed-migration SQL validator: 3 files, 0 violations, 0 warnings. The full historical mode exceeded the command window; changed-only is the repository's documented per-change zero-baseline gate.
 - Drift tests: 235 passed, 78 skipped.
-- Full Vitest suite: 4,274 passed, 123 skipped.
+- Full Vitest suite: 4,275 passed, 123 skipped.
 - Production build: passed.
 - Correction/safety guards: passed.
 - All 21 live invariant predicates: zero unallowlisted violations.

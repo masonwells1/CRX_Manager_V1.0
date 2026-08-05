@@ -466,12 +466,14 @@ export default function BulkOrderImport({
         // null, a sibling guess, or a silent zero for missing cost.
         const itemsPayload = resolvedItems.map(({ item, resolution }, idx) => {
           const product = resolution.status === 'unique' ? resolution.product : null;
-          const unitCost = item.unit_cost ?? product!.current_cost!;
           return {
               product_id: product!.id,
               product_name: item.product_name,
               price_per_unit: item.price_per_unit,
-              unit_cost: unitCost,
+              // Preserve absence so PostgreSQL snapshots current_cost inside
+              // the authoritative import transaction. Explicit zero remains
+              // an intentional caller override.
+              ...(item.unit_cost !== undefined ? { unit_cost: item.unit_cost } : {}),
               total_units_needed: item.quantity,
               unit_size: item.unit_size,
               notes: item.notes,
@@ -483,10 +485,10 @@ export default function BulkOrderImport({
           (sum, item) => sum + item.total_units_needed * item.price_per_unit,
           0
         );
-        const totalCost = itemsPayload.reduce(
-          (sum, item) => sum + item.total_units_needed * item.unit_cost,
-          0
-        );
+        const totalCost = resolvedItems.reduce((sum, { item, resolution }) => {
+          if (resolution.status !== 'unique') return sum; // Rejected above.
+          return sum + item.quantity * (item.unit_cost ?? resolution.product.current_cost!);
+        }, 0);
         const totalProfit = totalPrice - totalCost;
         const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
 

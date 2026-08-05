@@ -91,8 +91,9 @@ Forward-only live migration
 `20260805224819_snapshot_bulk_import_product_cost` now snapshots the active
 Product's `current_cost` when cost is absent, preserves an explicit zero,
 rejects malformed or unavailable cost, and uses one normalized item snapshot
-for order lines, totals, and commissions. The frontend mirrors that fallback
-for operator feedback. The expanded rollback smoke proved omitted-cost success,
+for order lines, totals, and commissions. The frontend validates the catalog
+cost for operator feedback but leaves omitted cost absent in the RPC payload so
+PostgreSQL takes the authoritative transactional snapshot. The expanded rollback smoke proved omitted-cost success,
 malformed-cost rejection, exact commission basis, and zero residue. Both
 content-bound Sol/high migration reviews, all 21 invariant sweeps, and the live
 catalog/grant checks passed after the apply.
