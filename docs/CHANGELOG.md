@@ -215,13 +215,13 @@ security boundary. Reviewer `CODEX_HOME`, `HOME`, and `USERPROFILE` are fresh
 disposable directories containing only a bounded byte-verified `auth.json`;
 the source is verified through one held file descriptor, any pathname/inode change
 is refused, and the destination is created exclusively, closing the bootstrap
-replacement race. The post-review stability check now compares HEAD, tree, raw
+replacement race. User-global AGENTS overrides, config, rules, plugins, skills,
+memories, and sessions are not copied, and the runtime home is deleted after exit.
+The post-review stability check now compares HEAD, tree, raw
 identity, Git-cleaned identity, file count, `origin/main`, and protected Factory
 state, then builds the receipt from the identity Sol actually received rather than
 a later observation.
-global AGENTS overrides, config, rules, plugins, skills, memories, and sessions
-are not copied and the runtime home is deleted after exit. Transcript hash,
-byte count, and changed-path digest are now
+Transcript hash, byte count, and changed-path digest are now
 mandatory in the artifact, ledger projection, and later acceptance validation.
 The final Sol message is parsed from the child process's JSONL stdout pipe rather
 than a replaceable packet file. The original output plus entity-decoded

@@ -120,6 +120,15 @@ eq(
     { eventHash: "1".repeat(64) },
     { eventHash: FACTORY_REVIEW_INPUT_BINDING_CUTOVER_EVENT_HASH },
     { eventHash: "2".repeat(64) },
+  ], 1),
+  false,
+  "the exact bootstrap checkpoint itself may retain the historical absent-input shape",
+);
+eq(
+  factoryReviewInputBindingRequired([
+    { eventHash: "1".repeat(64) },
+    { eventHash: FACTORY_REVIEW_INPUT_BINDING_CUTOVER_EVENT_HASH },
+    { eventHash: "2".repeat(64) },
   ], 2),
   true,
   "every review after the exact bootstrap checkpoint requires review-input binding",

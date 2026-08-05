@@ -272,6 +272,17 @@ export function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function gitBlobObjectId(value, objectFormat) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  if (!new Set(["sha1", "sha256"]).has(objectFormat)) {
+    throw new Error(`Factory proof refuses unsupported Git object format ${objectFormat}.`);
+  }
+  return createHash(objectFormat)
+    .update(Buffer.from(`blob ${bytes.length}\0`, "utf8"))
+    .update(bytes)
+    .digest("hex");
+}
+
 export function normalizeOwnerQuestion(value) {
   return String(value || "").replace(/\r\n/g, "\n").trim();
 }
@@ -1231,7 +1242,7 @@ function bindFactoryCandidateSnapshotIdentity(workspace, sourceRoot, gitEnv) {
   const enriched = [...manifest.entries]
     .sort((left, right) => Buffer.compare(Buffer.from(left.path), Buffer.from(right.path)))
     .map((entry) => {
-      const target = path.join(workspace.root, "CANDIDATE_SNAPSHOT", entry.path);
+      const target = safeReviewSnapshotTarget(path.join(workspace.root, "CANDIDATE_SNAPSHOT"), entry.path);
       const snapshotBytes = readFileSync(target);
       const marker = Buffer.from("SANITIZED_SYMLINK_TARGET:", "utf8");
       const markerSymlink = snapshotBytes.subarray(0, marker.length).equals(marker)
@@ -2262,10 +2273,26 @@ export function refreshOriginMain(cwd = process.cwd(), env = process.env) {
         timeout: 120_000,
         maxBuffer: 16 * 1024 * 1024,
       });
-      const priorMain = currentOriginMain(resolved);
+      const originMainRef = "refs/remotes/origin/main";
+      const priorMainProbe = spawnSync(FACTORY_GIT_EXECUTABLE, [
+        "show-ref", "--verify", "--quiet", originMainRef,
+      ], {
+        cwd: resolved,
+        env: sanitizedRepositoryGitEnvironment(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 30_000,
+      });
+      if (priorMainProbe.error) throw priorMainProbe.error;
+      if (![0, 1].includes(priorMainProbe.status)) {
+        throw new Error(`Factory could not inspect origin/main before refresh: ${String(priorMainProbe.stderr || "").trim() || `Git exited ${priorMainProbe.status}`}.`);
+      }
+      const priorMain = priorMainProbe.status === 0
+        ? currentOriginMain(resolved)
+        : "0".repeat(canonicalMain.length);
       execFileSync(FACTORY_GIT_EXECUTABLE, [
         "update-ref",
-        "refs/remotes/origin/main",
+        originMainRef,
         canonicalMain,
         priorMain,
       ], {
@@ -2337,6 +2364,7 @@ export function repositoryContentFingerprint(cwd = process.cwd()) {
     }));
   rejectUnsafeGitTransformAttributes(repoRoot, listed, gitEnv);
   const coreAutocrlf = repositoryCoreAutocrlf(repoRoot);
+  const objectFormat = git(["rev-parse", "--show-object-format"], repoRoot, gitEnv);
   const objectIds = listed.map((relative) => {
     const source = path.join(repoRoot, relative);
     const stat = lstatSync(source);
@@ -2345,14 +2373,7 @@ export function repositoryContentFingerprint(cwd = process.cwd()) {
     const input = stat.isSymbolicLink()
       ? Buffer.from(readlinkSync(source), "utf8")
       : readFileSync(source);
-    const rawObjectId = execFileSync(FACTORY_GIT_EXECUTABLE, ["hash-object", "--stdin", "--no-filters"], {
-      cwd: repoRoot,
-      env: gitEnv,
-      input,
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "ignore"],
-      maxBuffer: 256 * 1024 * 1024,
-    }).trim();
+    const rawObjectId = gitBlobObjectId(input, objectFormat);
     if (gitSymlink) return { rawObjectId, commitObjectId: rawObjectId, gitSymlink };
     const commitObjectId = execFileSync(FACTORY_GIT_EXECUTABLE, [
       "-c", `core.autocrlf=${coreAutocrlf}`,
@@ -5716,7 +5737,9 @@ export function recoverFactoryState(paths, {
         } finally {
           if (backupStage) {
             try { unlinkSync(backupStage); } catch (error) {
-              if (error?.code !== "ENOENT") throw error;
+              if (error?.code !== "ENOENT") {
+                process.stderr.write(`Factory cleanup warning: could not remove a torn-ledger backup staging file (${error?.message || error}).\n`);
+              }
             }
           }
         }
@@ -5741,7 +5764,9 @@ export function recoverFactoryState(paths, {
         } finally {
           if (repairStage) {
             try { unlinkSync(repairStage); } catch (error) {
-              if (error?.code !== "ENOENT") throw error;
+              if (error?.code !== "ENOENT") {
+                process.stderr.write(`Factory cleanup warning: could not remove a torn-ledger repair staging file (${error?.message || error}).\n`);
+              }
             }
           }
         }

@@ -158,6 +158,7 @@ function git(args, cwd, { encoding = "utf8" } = {}) {
     env: sanitizedRepositoryGitEnvironment(),
     encoding: encoding === "buffer" ? null : encoding,
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: 30_000,
   });
   return Buffer.isBuffer(output) ? output : output.trim();
 }
