@@ -1,8 +1,8 @@
 # Section 2 Refresh: Money, Invoices, Payments, AR, Statements, Credits, Write-offs, Finance Charges
 
-Date: 2026-08-05  
-Mode: Clean current-repo code plus live Supabase catalog structure only  
-Project: `rhyzpcqhnizqbxphqdkr`  
+Date: 2026-08-05
+Mode: Clean current-repo code plus live Supabase catalog structure only
+Project: `rhyzpcqhnizqbxphqdkr`
 Checkout: `codex/section2-historical-reports-20260805` at `6a49add2d8b972b082375162bff97176ca883f73`
 
 ## Verdict
