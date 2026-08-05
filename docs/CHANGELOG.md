@@ -74,6 +74,40 @@ prevented `factory.mjs status` from loading while rejecting other illegal or cro
 changes. Managed-session markers are coordination-only state and are excluded from protected-content
 fingerprints so a concurrent chat cannot falsely invalidate an active evidence or review run.
 
+## 2026-08-05 — Historical AR report cutoff fixes — LIVE
+
+The Section 2 live-foundation refresh found that the date selectors on the AR
+aging and customer balance listing reports did not reconstruct balances at the
+requested business-date cutoff. A reviewed migration now makes both reports
+exclude documents and balance activity after the cutoff, reject unreconstructable
+historical state instead of returning a plausible but wrong total, and keep
+historical customer-balance access admin-only. The customer balance listing now
+also excludes unposted invoices and calculates overdue amounts from the requested
+date.
+
+Supabase applied the submitted migration
+`20260805124533_fix_historical_ar_report_cutoffs` as live ledger version
+`20260805151605`. Post-apply catalog checks
+confirmed fixed search paths, deliberate grants, one live overload per report,
+and a private reconstruction helper. The rollback-only behavior smoke returned
+`SMOKE_PASS_ROLLBACK`; authenticated live execution confirmed current reports
+remain callable while a sales-representative historical request is rejected.
+The schema registry and migration/RPC references were refreshed from the live
+catalog, and focused regression coverage is registered in the billing and
+regression-prevention suites.
+
+The first exact-commit review caught that the new Customer Balance Listing
+limited its cumulative Invoiced, Paid, Prepay Applied, and invoice-count fields
+to invoices that still had a positive balance. That would omit fully paid
+invoices whenever the customer also had an open invoice. Follow-up migration
+`20260805171334_fix_customer_balance_paid_invoice_totals` is live: cumulative
+fields now include every cutoff-eligible non-credit invoice, while only
+Outstanding Balance and Oldest Unpaid remain open-invoice measures. The
+expanded rollback smoke proves a $50 fully paid invoice plus a $100 open invoice
+returns $150 invoiced, $50 paid, two invoices, and $100 outstanding. The
+follow-up passed content-bound security/drift reviews, post-apply catalog and
+grant checks, and left no fixture or business-data residue.
+
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 
 The reviewed Section 2 remediation aligns customer statements across the target
