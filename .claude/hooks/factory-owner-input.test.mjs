@@ -175,17 +175,37 @@ function runShipHook(state, payload) {
   equal(buildFactorySnapshot(state.paths).jobs[0].approvalReply, "yes, ship it", "compound approval remains verbatim");
 }
 
-{
-  const state = makeState("unclear-reply-thread");
-  const transcript = path.join(state.dir, "unclear-reply.jsonl");
+for (const [index, prompt] of ["yep", "yeah", "sure", "sounds right", "sounds reasonable"].entries()) {
+  const state = makeState(`unclear-reply-thread-${index}`);
+  const transcript = path.join(state.dir, `unclear-reply-${index}.jsonl`);
   writeFileSync(transcript, `${JSON.stringify({ type: "assistant", content: state.question })}\n`);
   const result = runHook(state, {
-    prompt: "sounds reasonable",
+    prompt,
     thread_id: state.sessionId,
     transcript_path: transcript,
   });
-  ok(result.stdout.includes("not an unqualified yes or no"), "unclear decision reply explains why it did not bind");
-  equal(buildFactorySnapshot(state.paths).jobs[0].stage, "needs-ticket-ok", "unclear decision reply remains fail-closed");
+  ok(result.stdout.includes("not an unqualified yes or no"), `${prompt} explains why it did not bind`);
+  equal(buildFactorySnapshot(state.paths).jobs[0].stage, "needs-ticket-ok", `${prompt} remains fail-closed`);
+}
+
+for (const [index, testCase] of [
+  { label: "approve", prompt: "yes", stage: "queued", output: /recorded Mason's exact approval/ },
+  { label: "reject", prompt: "no", stage: "rejected", output: /recorded Mason's rejection/ },
+  { label: "revision", prompt: "yes, but don't touch billing", stage: "rejected", output: /recorded a revision request/ },
+  { label: "nudge", prompt: "yep", stage: "needs-ticket-ok", output: /not an unqualified yes or no/ },
+  { label: "incidental sure", prompt: "make sure the tests pass", stage: "needs-ticket-ok", output: /^$/ },
+  { label: "silence", prompt: "what stage is the job in?", stage: "needs-ticket-ok", output: /^$/ },
+].entries()) {
+  const state = makeState(`decision-matrix-thread-${index}`);
+  const transcript = path.join(state.dir, `decision-matrix-${index}.jsonl`);
+  writeFileSync(transcript, `${JSON.stringify({ type: "assistant", content: state.question })}\n`);
+  const result = runHook(state, {
+    prompt: testCase.prompt,
+    thread_id: state.sessionId,
+    transcript_path: transcript,
+  });
+  ok(testCase.output.test(result.stdout.trim()), `${testCase.label} returns the expected owner guidance (stdout=${result.stdout.trim()} stderr=${result.stderr.trim()})`);
+  equal(buildFactorySnapshot(state.paths).jobs[0].stage, testCase.stage, `${testCase.label} records the expected fail-closed stage`);
 }
 
 {
@@ -627,6 +647,7 @@ function runLaneHook(state, payload) {
   const accepted = buildFactorySnapshot(state.paths).jobs[0];
   equal(accepted.stage, "approved-to-land", "morning acceptance does not self-label the job live");
   equal(accepted.acceptedRepositoryContentHash, review.repositoryContentHash, "morning acceptance binds the exact independently reviewed repository hash");
+  equal(accepted.acceptedRepositoryCommitContentHash, review.repositoryCommitContentHash, "morning acceptance separately binds the Git-cleaned landing hash");
   equal(accepted.acceptedRepositoryFileCount, review.repositoryFileCount, "morning acceptance binds the exact reviewed file count");
 }
 

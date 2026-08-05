@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
@@ -64,6 +64,7 @@ const product = {
 let routeProductId = product.id;
 
 let productLoadResults: Array<{ data: typeof product | null; error: unknown }> = [];
+let costHistoryLoadResult: { data: unknown[] | null; error: unknown } = { data: [], error: null };
 let productMutationResult: { data: Array<typeof product>; error: unknown } = {
   data: [product],
   error: null,
@@ -104,6 +105,8 @@ vi.mock('../lib/db', () => {
     from: vi.fn((table: string) => chainable(
       table === 'products'
         ? { data: [product], error: null }
+        : table === 'cost_history'
+          ? costHistoryLoadResult
         : { data: [], error: null },
     )),
     rpc: vi.fn(() => chainable({ data: {}, error: null })),
@@ -185,6 +188,7 @@ describe('ProductDetail governed pricing flow', () => {
     vi.clearAllMocks();
     routeProductId = product.id;
     productLoadResults = [];
+    costHistoryLoadResult = { data: [], error: null };
     productMutationResult = { data: [product], error: null };
     mockPreviewPricing.mockResolvedValue({
       change_set_id: '22222222-2222-4222-8222-222222222222',
@@ -275,6 +279,80 @@ describe('ProductDetail governed pricing flow', () => {
       expect.objectContaining({ quoting_notes: 'Updated quote guidance' }),
     ));
     expect(mockProductEq).toHaveBeenCalledWith('pricing_version', product.pricing_version);
+  });
+
+  it('labels a migration baseline as unverified current provenance when legacy cost history is empty', async () => {
+    mockGetCostBasisWorkspace.mockResolvedValueOnce({
+      enabled: true,
+      product: {
+        id: product.id,
+        product_name: product.product_name,
+        sku: product.sku,
+        pricing_version: product.pricing_version,
+        current_cost_cents: 5_000n,
+        tier1_margin_percent: '20',
+        tier2_margin_percent: '15',
+        tier3_margin_percent: '10',
+      },
+      current_basis: {
+        id: 'basis-current',
+        basis_type: 'migration_baseline',
+        cost_cents: 5_000n,
+        supplier_price_observation_id: null,
+        purchase_order_item_id: null,
+        selection_source: 'migration_baseline',
+        reason: 'Current cost baseline',
+        selected_at: '2026-08-04T12:00:00Z',
+      },
+      supplier_candidates: [],
+      purchase_candidates: [],
+    });
+
+    render(<ProductDetail />);
+
+    expect(await screen.findByText('No legacy cost changes recorded.')).toBeInTheDocument();
+    expect(screen.getByText(/Current governed cost baseline:/)).toBeInTheDocument();
+    const basisCopy = screen.getByText(/Current governed cost baseline:/);
+    expect(within(basisCopy).getByText('$50.00')).toBeInTheDocument();
+    expect(screen.getByText(/not independently verified against supplier evidence/i)).toBeInTheDocument();
+    expect(screen.getByText(/not a backfilled historical price-change event/i)).toBeInTheDocument();
+  });
+
+  it('does not present missing history or basis details as facts after a governed-basis load failure', async () => {
+    mockGetCostBasisWorkspace.mockRejectedValueOnce(new Error('workspace unavailable'));
+
+    render(<ProductDetail />);
+
+    expect(await screen.findByText(/Current governed cost-basis details could not be loaded/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no current governed cost-basis record is available/i)).not.toBeInTheDocument();
+  });
+
+  it('does not claim cost history is empty when the legacy-history load fails', async () => {
+    costHistoryLoadResult = { data: null, error: new Error('history unavailable') };
+
+    render(<ProductDetail />);
+
+    expect(await screen.findByText(/Cost history could not be loaded/i)).toBeInTheDocument();
+    expect(screen.queryByText('No legacy cost changes recorded.')).not.toBeInTheDocument();
+  });
+
+  it('renders loaded legacy history while governed cost-basis details are still loading', async () => {
+    costHistoryLoadResult = {
+      data: [{
+        id: 'history-1',
+        old_cost: 49,
+        new_cost: 50,
+        change_note: 'Legacy cost update',
+        changed_at: '2026-08-04T12:00:00Z',
+      }],
+      error: null,
+    };
+    mockGetCostBasisWorkspace.mockReturnValueOnce(new Promise(() => {}));
+
+    render(<ProductDetail />);
+
+    expect(await screen.findByText('Legacy cost update')).toBeInTheDocument();
+    expect(screen.queryByText('Loading cost history…')).not.toBeInTheDocument();
   });
 
   it('rejects a direct detail save when the loaded pricing version is stale', async () => {

@@ -69,7 +69,7 @@ function factoryCliInvocation(toolName, toolInput, projectDir) {
   return {
     action,
     status: /^status(?:\s|$)/i.test(action),
-    recovery: /^recover\s+(?:unlock|torn-tail)(?:\s|$)/i.test(action),
+    recovery: /^recover\s+(?:unlock|commit-gate|torn-tail)(?:\s|$)/i.test(action),
     jobId: action.match(/(?:^|\s)--job\s+([A-Za-z0-9._:@+=,-]+)/i)?.[1] || "",
     canonicalCommand: `node ${JSON.stringify(absolute)} ${action}`,
   };
