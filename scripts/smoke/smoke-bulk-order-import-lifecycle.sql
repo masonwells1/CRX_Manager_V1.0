@@ -1,10 +1,13 @@
 -- ============================================================================
 -- smoke-bulk-order-import-lifecycle.sql
--- Chain for 20260805204716_harden_bulk_order_import_lifecycle.sql.
+-- Chain for 20260805211951_harden_bulk_order_import_lifecycle.sql and
+-- 20260805220757_reject_nonfinite_bulk_import_values.sql.
 --
 -- Proves that a bulk import cannot forge a partial/terminal lifecycle state and
 -- that a confirmed import atomically creates its order lines, inventory booking,
--- booked ledger row, commission, activity event, and idempotency receipt.
+-- booked ledger row, commission, activity event, and idempotency receipt. It
+-- also proves NaN/+Infinity/-Infinity are rejected for every imported numeric
+-- field without residue and sub-cent prices are normalized at the SQL boundary.
 -- The terminal SMOKE_PASS_ROLLBACK exception aborts every synthetic write.
 -- ============================================================================
 DO $$
@@ -33,6 +36,16 @@ DECLARE
   v_item_margin numeric;
   v_prebooked numeric;
   v_count integer;
+  v_invalid text;
+  v_field text;
+  v_bad_token text;
+  v_bad_order_number text;
+  v_bad_key text;
+  v_bad_items jsonb;
+  v_inventory_tx_baseline integer;
+  v_commission_baseline integer;
+  v_activity_baseline integer;
+  v_receipt_baseline integer;
 BEGIN
   SELECT id, full_name
     INTO v_actor, v_actor_name
@@ -90,8 +103,8 @@ BEGIN
   v_items := jsonb_build_array(jsonb_build_object(
     'product_id', v_product_id,
     'product_name', '[SMOKE] Caller-Supplied Name',
-    'price_per_unit', 10,
-    'unit_cost', 6,
+    'price_per_unit', 10.004,
+    'unit_cost', 6.004,
     'total_units_needed', 5,
     'unit_size', '2.5 gal',
     'sort_order', 1
@@ -132,7 +145,104 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: rejected terminal import wrote an order';
   END IF;
 
-  -- Deliberately pass false totals. The RPC must recompute 50/30/20/40.
+  SELECT count(*) INTO v_inventory_tx_baseline
+  FROM public.inventory_transactions
+  WHERE product_id = v_product_id;
+
+  SELECT count(*) INTO v_commission_baseline
+  FROM public.commissions
+  WHERE customer_id = v_customer_id;
+
+  SELECT count(*) INTO v_activity_baseline
+  FROM public.activity_feed
+  WHERE customer_id = v_customer_id;
+
+  SELECT count(*) INTO v_receipt_baseline
+  FROM public.idempotency_keys
+  WHERE operation = 'bulk_import_order'
+    AND idempotency_key LIKE v_key || '-numeric-%';
+
+  -- PostgreSQL numeric accepts NaN and +/-Infinity. Every caller-controlled
+  -- numeric field must reject all three before any lifecycle write.
+  FOREACH v_field IN ARRAY ARRAY['total_units_needed', 'price_per_unit', 'unit_cost']
+  LOOP
+    FOREACH v_invalid IN ARRAY ARRAY['NaN', 'Infinity', '-Infinity']
+    LOOP
+      v_bad_token := lower(replace(v_invalid, '-', 'neg'));
+      v_bad_order_number := v_order_number || '-NUMERIC-' || v_field || '-' || v_bad_token;
+      v_bad_key := v_key || '-numeric-' || v_field || '-' || v_bad_token;
+      v_bad_items := jsonb_set(v_items, ARRAY['0', v_field], to_jsonb(v_invalid), false);
+
+      BEGIN
+        PERFORM public.bulk_import_order(
+          p_order_number := v_bad_order_number,
+          p_customer_id := v_customer_id,
+          p_status := 'confirmed',
+          p_total_price := 50,
+          p_total_cost := 30,
+          p_total_profit := 20,
+          p_total_margin_pct := 40,
+          p_order_date := CURRENT_DATE,
+          p_items := v_bad_items,
+          p_idempotency_key := v_bad_key
+        );
+        RAISE EXCEPTION 'SMOKE_FAIL: % accepted for %', v_invalid, v_field;
+      EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM NOT LIKE 'ITEM_INVALID:%' THEN
+          RAISE EXCEPTION
+            'SMOKE_FAIL: expected ITEM_INVALID for % %, got %',
+            v_field, v_invalid, SQLERRM;
+        END IF;
+      END;
+
+      SELECT count(*) INTO v_count
+      FROM public.orders
+      WHERE order_number = v_bad_order_number;
+      IF v_count <> 0 THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: rejected numeric import wrote an order';
+      END IF;
+
+      SELECT quantity_prebooked INTO v_prebooked
+      FROM public.inventory
+      WHERE product_id = v_product_id
+        AND location = 'Main Warehouse';
+      IF v_prebooked <> 0 THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: rejected numeric import changed inventory';
+      END IF;
+
+      SELECT count(*) INTO v_count
+      FROM public.inventory_transactions
+      WHERE product_id = v_product_id;
+      IF v_count <> v_inventory_tx_baseline THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: rejected numeric import wrote inventory ledger';
+      END IF;
+
+      SELECT count(*) INTO v_count
+      FROM public.commissions
+      WHERE customer_id = v_customer_id;
+      IF v_count <> v_commission_baseline THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: rejected numeric import wrote commission';
+      END IF;
+
+      SELECT count(*) INTO v_count
+      FROM public.activity_feed
+      WHERE customer_id = v_customer_id;
+      IF v_count <> v_activity_baseline THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: rejected numeric import wrote activity';
+      END IF;
+
+      SELECT count(*) INTO v_count
+      FROM public.idempotency_keys
+      WHERE operation = 'bulk_import_order'
+        AND idempotency_key = v_bad_key;
+      IF v_count <> v_receipt_baseline THEN
+        RAISE EXCEPTION 'SMOKE_FAIL: rejected numeric import wrote idempotency receipt';
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  -- Deliberately pass false totals and sub-cent item prices. The RPC must
+  -- normalize unit values to 10.00/6.00 and recompute 50/30/20/40.
   SELECT public.bulk_import_order(
     p_order_number := v_order_number,
     p_customer_id := v_customer_id,

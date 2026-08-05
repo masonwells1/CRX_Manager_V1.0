@@ -73,6 +73,17 @@ Sol/high migration reviews, the full test/build suite, 21 live invariant sweeps,
 and pre/post-apply rollback smokes passed. No smoke fixtures remained, and the
 schema registry was refreshed to the new live high-water.
 
+The first exact-commit adversarial review then caught PostgreSQL's special
+`numeric` values: ordinary range checks do not reject `NaN` or positive
+`Infinity`. Follow-up live migration
+`20260805220757_reject_nonfinite_bulk_import_values` now rejects
+`NaN`/`Infinity`/`-Infinity` for imported quantities, prices, and costs and
+normalizes legacy dollar inputs to cents before any write. The expanded
+rollback smoke exercises all nine field/value combinations, sub-cent
+normalization, and zero residue across orders, inventory, commissions,
+activity, and idempotency. Final live function hash is
+`4c38bd47d81f7c5dec54533cb7d57bca`; schema high-water is `20260805220757`.
+
 ## 2026-08-05 — Factory ledger failure containment
 
 Factory intent now leaves a durable per-chat marker outside the event ledger before attempting the
