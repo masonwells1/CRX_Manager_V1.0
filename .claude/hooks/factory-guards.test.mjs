@@ -539,6 +539,22 @@ function bashExecutable() {
   }), /credential or secret material/i, "active lane secret scanning covers filesystem edit_file newText replacements");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
+    tool_name: "mcp__filesystem__edit_file",
+    tool_input: {
+      path: path.join(root, "src", "example.ts"),
+      new_text: "OPENAI_API_KEY=sk-direct-snake-case-edit-must-not-pass",
+    },
+  }), /credential or secret material/i, "active lane secret scanning covers direct new_text replacements");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__edit_file",
+    tool_input: {
+      path: path.join(root, "src", "example.ts"),
+      edits: [{ old_text: "safe", new_text: "OPENAI_API_KEY=sk-nested-snake-case-edit-must-not-pass" }],
+    },
+  }), /credential or secret material/i, "active lane secret scanning covers edits[].new_text replacements");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
     tool_name: "Edit",
     tool_input: { file_path: path.join(root, ".git", "config") },
   }), /Git internals are not mutable/i, "active lane cannot edit Git configuration");

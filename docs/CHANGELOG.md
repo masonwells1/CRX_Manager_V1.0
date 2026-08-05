@@ -51,7 +51,8 @@ the known local filesystem servers enter the lane's structured-edit allow path; 
 writers remain opaque and denied. Filesystem `newText` replacements are included in secret scanning.
 The shared classifier now recognizes remote `push`, `apply`, `update`, `append`, and `deploy`
 operations explicitly, and unknown non-read MCP operations fail closed. Direct classifier tables
-and installed-hook regressions cover GitHub `push_files` without admitting it as a local edit.
+and installed-hook regressions cover GitHub `push_files` without admitting it as a local edit;
+secret-scanning regressions cover both direct and nested snake_case `new_text` payloads.
 This entry records the reviewed release candidate; it does not claim a merge or
 production deployment.
 
