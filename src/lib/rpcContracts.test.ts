@@ -1296,6 +1296,12 @@ describe('RPC contract: bulk_import_order', () => {
     expect(body).toContain("'booked',");
     expect(body).toContain('public._insert_commissions_for_order(');
     expect(body).toContain('INSERT INTO public.activity_feed');
+    expect(body).toContain("v_qty::text IN ('NaN', 'Infinity', '-Infinity')");
+    expect(body).toContain("v_price_per_unit::text IN ('NaN', 'Infinity', '-Infinity')");
+    expect(body).toContain("v_cost_per_unit::text IN ('NaN', 'Infinity', '-Infinity')");
+    expect(body).toContain('v_price_per_unit := round(v_price_per_unit, 2)');
+    expect(body).toContain('v_cost_per_unit := round(v_cost_per_unit, 2)');
+    expect(body).toContain('round(v_qty * v_price_per_unit, 2)');
   });
 });
 
