@@ -244,7 +244,11 @@ export function stageFactoryBackup(destination, source = null, { now = () => new
     if (!result.ok) throw new Error(result.problems.join("; "));
     return manifest;
   } catch (error) {
-    removeCreatedSnapshotTree(target);
+    try {
+      removeCreatedSnapshotTree(target);
+    } catch (cleanupError) {
+      process.stderr.write(`FACTORY BACKUP CLEANUP FAILED: ${cleanupError?.message || cleanupError}\n`);
+    }
     throw error;
   }
 }
@@ -267,11 +271,19 @@ function manifestProblem(manifest) {
       return `Manifest metadata is invalid for ${safe}.`;
     }
   }
-  if (!seen.has("events.jsonl")) return "Manifest does not include events.jsonl.";
-  if (manifest.total_bytes !== manifest.files.reduce((sum, entry) => sum + entry.bytes, 0)) return "Manifest byte total is inconsistent.";
   const ledger = manifest.files.find((entry) => entry.path === "events.jsonl");
+  if (!ledger) return "Manifest does not include events.jsonl.";
+  if (manifest.total_bytes !== manifest.files.reduce((sum, entry) => sum + entry.bytes, 0)) return "Manifest byte total is inconsistent.";
   if (manifest.ledger_sha256 !== ledger.sha256) return "Manifest ledger hash is inconsistent.";
   return null;
+}
+
+function snapshotRootInventoryMatches(root) {
+  const entries = readdirSync(root, { withFileTypes: true })
+    .map((entry) => `${entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"}:${entry.name}`)
+    .sort();
+  return JSON.stringify(entries)
+    === JSON.stringify([`dir:${STATE_DIR}`, `file:${FACTORY_BACKUP_MANIFEST}`].sort());
 }
 
 export function verifyFactoryBackup(destination) {
@@ -292,10 +304,7 @@ export function verifyFactoryBackup(destination) {
   if (badManifest) return { ok: false, problems: [badManifest] };
   const stateRoot = path.join(root, STATE_DIR);
   try {
-    const rootEntries = readdirSync(root, { withFileTypes: true })
-      .map((entry) => `${entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"}:${entry.name}`)
-      .sort();
-    if (JSON.stringify(rootEntries) !== JSON.stringify([`dir:${STATE_DIR}`, `file:${FACTORY_BACKUP_MANIFEST}`].sort())) {
+    if (!snapshotRootInventoryMatches(root)) {
       problems.push("Snapshot root must contain exactly manifest.json and state/.");
     }
   } catch (error) {
@@ -358,10 +367,7 @@ export function cleanupFactoryStagedSnapshot(destination) {
   if (manifest?.kind !== FACTORY_BACKUP_KIND || manifest?.version !== FACTORY_BACKUP_VERSION) {
     throw new Error("Snapshot cleanup requires a supported factory backup manifest.");
   }
-  const entries = readdirSync(target, { withFileTypes: true })
-    .map((entry) => `${entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"}:${entry.name}`)
-    .sort();
-  if (JSON.stringify(entries) !== JSON.stringify([`dir:${STATE_DIR}`, `file:${FACTORY_BACKUP_MANIFEST}`].sort())) {
+  if (!snapshotRootInventoryMatches(target)) {
     throw new Error("Snapshot cleanup refused unexpected root entries.");
   }
   removeCreatedSnapshotTree(target);

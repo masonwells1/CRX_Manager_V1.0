@@ -1,6 +1,6 @@
 # Owner Playbook — how to run CRX Manager through Claude and Codex
 
-**Last verified:** 2026-07-16
+**Last verified:** 2026-08-06
 **Update triggers:** when commands/skills/policies change (the agent that changes them updates this file).
 
 This is your manual, Mason. You never have to remember a slash command (a typed

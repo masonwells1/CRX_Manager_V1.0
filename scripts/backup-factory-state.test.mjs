@@ -73,6 +73,40 @@ const unexpectedRoot = verifyFactoryBackup(rootInventoryDestination);
 assert.equal(unexpectedRoot.ok, false); assertions++;
 assert.match(unexpectedRoot.problems.join(" "), /root must contain exactly/i); assertions++;
 
+function verifyTamperedManifest(name, mutate) {
+  const target = path.join(root, name);
+  stageFactoryBackup(target, source);
+  const manifestPath = path.join(target, "manifest.json");
+  const value = JSON.parse(readFileSync(manifestPath, "utf8"));
+  mutate(value);
+  writeFileSync(manifestPath, `${JSON.stringify(value, null, 2)}\n`);
+  return verifyFactoryBackup(target);
+}
+
+const unsafeManifest = verifyTamperedManifest("unsafe-manifest-snapshot", (value) => {
+  value.files[0].path = "../escape.txt";
+});
+assert.equal(unsafeManifest.ok, false); assertions++;
+assert.match(unsafeManifest.problems.join(" "), /unsafe path/i); assertions++;
+
+const caseVariantManifest = verifyTamperedManifest("case-variant-manifest-snapshot", (value) => {
+  value.files.find((entry) => entry.path === "events.jsonl").path = "Events.jsonl";
+});
+assert.equal(caseVariantManifest.ok, false); assertions++;
+assert.match(caseVariantManifest.problems.join(" "), /does not include events\.jsonl/i); assertions++;
+
+const ledgerHashManifest = verifyTamperedManifest("ledger-hash-manifest-snapshot", (value) => {
+  value.ledger_sha256 = "0".repeat(64);
+});
+assert.equal(ledgerHashManifest.ok, false); assertions++;
+assert.match(ledgerHashManifest.problems.join(" "), /ledger hash is inconsistent/i); assertions++;
+
+const byteTotalManifest = verifyTamperedManifest("byte-total-manifest-snapshot", (value) => {
+  value.total_bytes += 1;
+});
+assert.equal(byteTotalManifest.ok, false); assertions++;
+assert.match(byteTotalManifest.problems.join(" "), /byte total is inconsistent/i); assertions++;
+
 const unsafeSource = path.join(root, "unsafe-source");
 mkdirSync(unsafeSource, { recursive: true });
 writeFileSync(path.join(unsafeSource, "events.jsonl"), "");
@@ -131,7 +165,7 @@ if (process.platform === "win32") {
     "-Destination", runnerDestination,
     "-Source", source,
     "-ParentCleanupGuaranteed",
-  ], { cwd: process.cwd(), encoding: "utf8" });
+  ], { cwd: process.cwd(), encoding: "utf8", timeout: 120_000 });
   assert.equal(result.status, 0, `tracked Personal DR runner stages through the real helper: ${result.stderr}`); assertions++;
   assert.equal(verifyFactoryBackup(runnerDestination).ok, true); assertions++;
   cleanupFactoryStagedSnapshot(runnerDestination);
@@ -142,7 +176,7 @@ if (process.platform === "win32") {
     "-Destination", selfTestDestination,
     "-Source", source,
     "-SelfTest",
-  ], { cwd: process.cwd(), encoding: "utf8" });
+  ], { cwd: process.cwd(), encoding: "utf8", timeout: 120_000 });
   assert.equal(selfTest.status, 0, `tracked runner self-test succeeds: ${selfTest.stderr}`); assertions++;
   assert.equal(existsSync(selfTestDestination), false, "tracked runner self-test removes plaintext staging"); assertions++;
 
@@ -152,7 +186,7 @@ if (process.platform === "win32") {
     "-Destination", degradedSelfTestDestination,
     "-Source", tornSource,
     "-SelfTest",
-  ], { cwd: process.cwd(), encoding: "utf8" });
+  ], { cwd: process.cwd(), encoding: "utf8", timeout: 120_000 });
   assert.equal(degradedSelfTest.status, 4, `tracked runner preserves and reports degraded state: ${degradedSelfTest.stderr}`); assertions++;
   assert.equal(existsSync(degradedSelfTestDestination), false, "degraded runner self-test removes plaintext staging"); assertions++;
 }
