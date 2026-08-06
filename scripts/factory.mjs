@@ -447,6 +447,7 @@ function printStatus(snapshot, asJson) {
         id: job.id,
         title: job.title,
         stage: job.stage,
+        worktree: job.worktree,
         behaviorSummary: job.behaviorSummary,
         blocker: job.blocker,
         lastActivity: job.lastActivity,
@@ -467,6 +468,7 @@ function printStatus(snapshot, asJson) {
   if (snapshot.warning) process.stdout.write(`Warning: ${snapshot.warning}\n`);
   for (const job of snapshot.jobs) {
     process.stdout.write(`- ${job.title} [${job.stage}] · ${job.lastActivity}\n`);
+    process.stdout.write(`  Working in: ${job.worktree || "Not assigned yet"}\n`);
     if (job.blocker) process.stdout.write(`  Needs attention: ${job.blocker}\n`);
   }
 }

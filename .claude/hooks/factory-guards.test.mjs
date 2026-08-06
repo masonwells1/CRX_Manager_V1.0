@@ -95,6 +95,24 @@ function hookOutput(result) {
   return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput : null;
 }
 
+function recoveryRouted(result, expectedWorktree, message, { transferable = false } = {}) {
+  const reason = hookOutput(result)?.permissionDecisionReason || "";
+  assertions++;
+  assert.ok(reason.includes(`Working folder: ${expectedWorktree}.`), `${message}: names the exact governed worktree`);
+  assertions++;
+  assert.match(
+    reason,
+    transferable ? /open a new chat in that folder/i : /return to the existing Factory chat/i,
+    `${message}: gives a stage-valid recovery route`,
+  );
+  assertions++;
+  if (transferable) {
+    assert.match(reason, /ask Mason there to take over factory job/i, `${message}: names the governed takeover route`);
+  } else {
+    assert.doesNotMatch(reason, /ask Mason there to take over factory job/i, `${message}: does not promise an illegal active-stage takeover`);
+  }
+}
+
 function bashExecutable() {
   if (process.platform !== "win32") return "bash";
   const candidates = [
@@ -864,11 +882,13 @@ function bashExecutable() {
     "allow",
     "an active lane does not globally block a second chat from drafting its own governed job",
   );
-  denied(run(laneHook, stateDir, {
+  const foreignTargetDeny = run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "parallel.ts") },
-  }), /owns this governed worktree/i, "fresh chats cannot write into another active lane's worktree");
+  });
+  denied(foreignTargetDeny, /owns this governed worktree/i, "fresh chats cannot write into another active lane's worktree");
+  recoveryRouted(foreignTargetDeny, root, "foreign structured-write denial");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
@@ -880,11 +900,13 @@ function bashExecutable() {
     tool_input: { path: path.join(root, "src", "parallel.ts"), content: "forged" },
   }), /owns this governed worktree/i, "fresh chats cannot use MCP writers in another active lane's worktree");
   const wrongWorktree = temporaryStateDir("crx-factory-wrong-worktree-");
-  denied(run(laneHook, stateDir, {
+  const crossCheckoutDeny = run(laneHook, stateDir, {
     thread_id: "fresh-cross-checkout-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "example.ts"), content: "forged" },
-  }, wrongWorktree), /owns this governed worktree.*mutation targets/i, "a chat in another checkout cannot target an active lane's worktree");
+  }, wrongWorktree);
+  denied(crossCheckoutDeny, /owns this governed worktree.*mutation targets/i, "a chat in another checkout cannot target an active lane's worktree");
+  recoveryRouted(crossCheckoutDeny, root, "cross-checkout target denial");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-cross-checkout-thread",
     tool_name: "mcp__desktop_commander__write_file",
@@ -900,11 +922,20 @@ function bashExecutable() {
     tool_name: "PowerShell",
     tool_input: { command: `Set-Content -LiteralPath "${path.join(root, "src", "example.ts")}" -Value forged` },
   }, wrongWorktree), /destinations cannot be custody-checked/i, "cross-checkout shell mutations fail closed while another lane has custody");
-  denied(run(laneHook, stateDir, {
+  const owningChatWrongCheckout = run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Write",
     tool_input: { file_path: path.join(wrongWorktree, "src", "example.ts") },
-  }, wrongWorktree), /bound to a different governed worktree/i, "the owning chat cannot move its active lane into another checkout");
+  }, wrongWorktree);
+  denied(owningChatWrongCheckout, /bound to a different governed worktree/i, "the owning chat cannot move its active lane into another checkout");
+  recoveryRouted(owningChatWrongCheckout, root, "owning-chat wrong-checkout denial");
+  const cliWrongCheckout = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: `node scripts/factory.mjs stage --job ${ticket.ticket.id} --stage verifying` },
+  }, wrongWorktree);
+  denied(cliWrongCheckout, /belongs to a different governed worktree/i, "factory CLI commands cannot run from the wrong checkout");
+  recoveryRouted(cliWrongCheckout, root, "factory CLI wrong-checkout denial");
 
   appendFactoryEvent(paths, {
     type: "factory-held",
@@ -1102,11 +1133,13 @@ function bashExecutable() {
     payload: { stage: "parked", behaviorSummary: "Landing paused.", blocker: "Tested terminal custody." },
   });
   const unrelatedWorktree = temporaryStateDir("crx-factory-parked-unrelated-");
-  denied(run(laneHook, stateDir, {
+  const parkedTargetDeny = run(laneHook, stateDir, {
     thread_id: "unrelated-parked-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(landingRepo, "src", "landing.ts"), content: "forged" },
-  }, unrelatedWorktree), /owns this governed worktree.*mutation targets/i, "parked custody still blocks targeted writes into its worktree");
+  }, unrelatedWorktree);
+  denied(parkedTargetDeny, /owns this governed worktree.*mutation targets/i, "parked custody still blocks targeted writes into its worktree");
+  recoveryRouted(parkedTargetDeny, landingRepo, "parked-worktree denial", { transferable: true });
 }
 
 {

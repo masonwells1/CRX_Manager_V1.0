@@ -30,6 +30,7 @@ const snapshot = {
     id: "job-1",
     title: `<img src=x onerror="alert(1)">`,
     stage: "awaiting-morning-review",
+    worktree: `C:\\Users\\mason\\.codex\\worktrees\\lane-1&review\\CRX_Manager`,
     behaviorSummary: "A $500 split shows $250 and $250.",
     blocker: "",
     evidence: [{ label: "Browser proof", kind: "screenshot", filename: "abc-proof.png" }],
@@ -42,6 +43,8 @@ ok(!html.includes("<img src=x"), "ticket title cannot inject HTML");
 ok(html.includes("&lt;img src=x"), "escaped title remains readable");
 ok(html.includes("Ready for your review"), "friendly stage label is rendered");
 ok(html.includes("Browser proof"), "machine-attached proof is visible");
+ok(html.includes("Working in:"), "job card labels its governed working folder");
+ok(html.includes("C:\\Users\\mason\\.codex\\worktrees\\lane-1&amp;review\\CRX_Manager"), "job card exposes and escapes the complete governed worktree path");
 ok(html.includes("<strong>0/3</strong>"), "board shows active work against the three-lane ceiling");
 const activeLaneHtml = renderFactoryBoard({ ...snapshot, activeLaneCount: 2 });
 ok(activeLaneHtml.includes("<strong>2/3</strong>"), "board renders the tracked non-zero active-lane count");
@@ -51,6 +54,11 @@ const missingVerdictHtml = renderFactoryBoard({
   jobs: [{ ...snapshot.jobs[0], reviews: [{ reviewer: "codex", filename: "review.json" }] }],
 });
 ok(missingVerdictHtml.includes("Independent codex review: UNKNOWN"), "incomplete review metadata degrades visibly instead of crashing the Board");
+const missingWorktreeHtml = renderFactoryBoard({
+  ...snapshot,
+  jobs: [{ ...snapshot.jobs[0], worktree: "" }],
+});
+ok(missingWorktreeHtml.includes("Not assigned yet"), "job without a governed worktree explains that none is assigned");
 ok(html.includes("does not authenticate the Windows user or grant new authority"), "board states its coordination-only authority boundary");
 ok(/read-only coordination record/i.test(html), "board footer describes the ledger as coordination rather than authorization");
 ok(html.includes("@media (max-width:640px)"), "board has a narrow viewport layout");
@@ -79,6 +87,7 @@ ok(!projectedJson.includes("private-owner-session"), "board API projection omits
 ok(!projectedJson.includes("private-lane-session"), "board API projection omits lane session identifiers");
 ok(!projectedJson.includes('"baseSha"'), "board API projection omits internal proof base metadata");
 ok(projectedJson.includes('"reviewer":"codex"'), "board API includes the independent reviewer identity");
+eq(projected.jobs[0].worktree, snapshot.jobs[0].worktree, "board API includes the complete governed worktree path");
 
 const empty = renderFactoryBoard({ held: false, holdReason: "", warning: "", activeLaneCount: 0, maxActiveLanes: 3, jobs: [] });
 ok(empty.includes("No factory jobs yet"), "empty state tells Mason what happens next");
