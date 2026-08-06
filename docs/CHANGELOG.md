@@ -82,7 +82,7 @@ normalizes legacy dollar inputs to cents before any write. The expanded
 rollback smoke exercises all nine field/value combinations, sub-cent
 normalization, and zero residue across orders, inventory, commissions,
 activity, and idempotency. Final live function hash is
-`6002800ed43b5f574a2e162f974014ea`; schema high-water is `20260806000752`.
+`5144733e3a8c7fe4d6d1e9f51e5fc3a2`; schema high-water is `20260806004644`.
 
 A second exact-commit adversarial review found that an omitted optional
 `unit_cost` was still being submitted as zero just as imports began creating
@@ -106,6 +106,18 @@ syntax but always snapshots the active Product's `current_cost` for order-line,
 profit, and commission math. The browser sends no caller cost and previews the
 same Product value. A rollback-only active-sales-rep attack passes an explicit
 zero and proves Product cost, profit, and commission basis win with zero residue.
+
+The final exact-SHA review then found two additional money-safety gaps: fractional
+multi-line imports could create commission liability from a stale per-line-rounded
+profit accumulator, and same-key retries were not bound to the original actor and
+payload. Forward-only live migration
+`20260806004644_bind_bulk_import_intent_and_profit` rereads the trigger-canonical
+order totals before commission creation, reconciles line-profit totals to the
+stored header, and stores a server-derived actor/payload fingerprint under an
+idempotency advisory lock. The strengthened rollback smoke proves a deliberately
+rounding-sensitive ten-line import, exact commission/header/line agreement,
+same-intent replay, changed-intent rejection, and zero residue. Both migration
+review charters and all 21 live invariant predicates passed.
 
 ## 2026-08-05 — Factory ledger failure containment
 

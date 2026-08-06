@@ -44,11 +44,11 @@ A CSV or OCR import could label a completely undelivered order as partly fulfill
 
 **Suggested fix**
 
-Keep the RPC signature for deployed caller compatibility, but allow imports to create only `confirmed` orders. Validate active actors/customers/products, explicitly reject non-finite values, normalize legacy dollars to cents, always snapshot active Product cost regardless of caller input, recompute totals server-side, seed correct line quantities, prebook inventory, write the booked ledger, create commissions from the Product-authoritative profit, and write activity inside one transaction. Reject non-confirmed statuses in the frontend and never send caller cost.
+Keep the RPC signature for deployed caller compatibility, but allow imports to create only `confirmed` orders. Validate active actors/customers/products, explicitly reject non-finite values, normalize legacy dollars to cents, always snapshot active Product cost regardless of caller input, reread trigger-canonical stored totals before creating commissions, bind idempotency receipts to the actor and payload, seed correct line quantities, prebook inventory, write the booked ledger, and write activity inside one transaction. Reject non-confirmed statuses in the frontend and never send caller cost.
 
 **Prevention action**
 
-Register a rollback-only `bulk_import_order` business-chain smoke and a migration-body contract test. The smoke must prove terminal-status rejection, all special numeric values fail with zero residue, sub-cent normalization, omitted/malformed cost behavior, and an active sales rep's explicit zero/lower cost cannot change Product-authoritative order profit or commission basis. It must also prove inventory, ledger, activity, and idempotent replay. Frontend regression must prove confirmed-only calls and that neither omitted nor explicit caller cost reaches the RPC.
+Register a rollback-only `bulk_import_order` business-chain smoke and a migration-body contract test. The smoke must prove terminal-status rejection, all special numeric values fail with zero residue, sub-cent normalization, omitted/malformed cost behavior, and an active sales rep's explicit zero/lower cost cannot change Product-authoritative order profit or commission basis. It must also prove fractional multi-line canonical-profit agreement, actor/payload-bound changed-intent rejection, inventory, ledger, activity, and same-intent replay. Frontend regression must prove confirmed-only calls and that neither omitted nor explicit caller cost reaches the RPC.
 
 ## Remediation prepared in this run
 
@@ -56,6 +56,7 @@ Register a rollback-only `bulk_import_order` business-chain smoke and a migratio
 - The first exact-commit Sol review correctly blocked publication because PostgreSQL accepts non-finite `numeric` values. Forward-only follow-up `supabase/migrations/20260805220757_reject_nonfinite_bulk_import_values.sql:112-137` rejects all non-finite quantity/price/cost values and rounds unit and extended dollar amounts to cents before writes. It leaves the already-applied migration immutable.
 - The second exact-commit Sol review correctly blocked publication because missing optional cost was being inferred as zero. Forward-only live follow-up `supabase/migrations/20260805224819_snapshot_bulk_import_product_cost.sql` snapshots `products.current_cost` when cost is absent, preserves explicit zero, rejects malformed/unavailable cost, and uses one normalized item snapshot for every downstream write.
 - The next exact-SHA Sol review correctly blocked publication because explicit caller cost still controlled commission profit. Forward-only live follow-up `supabase/migrations/20260806000752_authorize_bulk_import_product_cost.sql` validates supplied legacy cost but always uses Product `current_cost`; the browser sends no cost override.
+- The final exact-SHA Sol review correctly blocked publication because fractional multi-line imports could create commissions from a stale per-line-rounded profit accumulator and idempotent replay was not actor/payload bound. Forward-only live follow-up `supabase/migrations/20260806004644_bind_bulk_import_intent_and_profit.sql` rereads trigger-canonical order totals, reconciles line-profit sum, and fingerprints the actor plus payload under a per-key advisory lock.
 - `src/components/orders/BulkOrderImport.tsx:57-61`, `:164-195`, `:235-312`, `:384`, `:446-497`, and `:558-559` enforce confirmed-only imports, validate numeric CSV fields, resolve Product cost without destroying explicit zero, and explain the behavior.
 - `src/components/orders/BulkOrderImport.test.tsx` proves canonical status, terminal-status rejection, malformed-cost rejection, and that omitted or explicit-zero caller cost is absent from the RPC while Product cost drives preview totals.
 - `src/lib/rpcContracts.test.ts` pins the lifecycle effects, finite/cents guards, Product fallback, malformed-cost guard, and normalized snapshot.
@@ -66,7 +67,7 @@ Register a rollback-only `bulk_import_order` business-chain smoke and a migratio
 - Focused frontend/RPC contracts: 95 passed.
 - TypeScript: passed.
 - ESLint: passed with `--quiet`.
-- Changed-migration SQL validator: 4 files, 0 violations, 0 warnings. The full historical mode exceeded the command window; changed-only is the repository's documented per-change zero-baseline gate.
+- Changed-migration SQL validator: all Section 4 migration files, 0 violations. The full historical mode exceeded the command window; changed-only is the repository's documented per-change zero-baseline gate.
 - Drift tests: 235 passed, 78 skipped.
 - Full Vitest suite: 4,275 passed, 123 skipped.
 - Production build: passed.
@@ -77,16 +78,17 @@ Register a rollback-only `bulk_import_order` business-chain smoke and a migratio
 - Follow-up pre-apply rehearsal replaced the live function inside an aborted transaction, rejected `NaN`/`Infinity`/`-Infinity` for all three imported numeric fields, normalized sub-cent prices, and reached `SMOKE_PASS_ROLLBACK`. The prior live hash `8432af00f788d364b934782d12a6c640` and zero-residue counts were unchanged afterward.
 - Final pre-apply rehearsal replaced the live function inside an aborted transaction, proved omitted cost snapshots the active Product cost, proved malformed cost fails before every lifecycle write, verified commission basis, and reached `SMOKE_PASS_ROLLBACK`. The prior live hash `4c38bd47d81f7c5dec54533cb7d57bca` and zero-residue counts were unchanged afterward.
 - Authoritative-cost rehearsal impersonated an active sales rep, supplied zero cost, proved Product cost controlled order profit and commission basis, and reached `SMOKE_PASS_ROLLBACK`. The prior live hash `4d2846e11bd8b1e0753c667c2d194abf` and zero-residue counts remained unchanged afterward.
+- Canonical-profit/intent rehearsal used a dynamically rounding-sensitive ten-line import, required order/line/commission profit agreement, proved same-intent replay and changed-intent rejection, and reached `SMOKE_PASS_ROLLBACK` with zero residue.
 
 ## Live apply and post-apply proof
 
-- Supabase applied lifecycle ledger `20260805211951` and follow-ups `20260805220757`, `20260805224819`, and `20260806000752` successfully.
-- Live catalog: one overload; `SECURITY DEFINER`; `search_path=public, pg_temp`; anon denied; authenticated/service access preserved; final MD5 `6002800ed43b5f574a2e162f974014ea`.
-- Live body markers confirm confirmed-only status, Product-authoritative cost, supplied-cost validation without caller-cost coalescing, one normalized snapshot, inventory booking, ledger, commissions, activity, and operation-scoped idempotency.
-- Applied business-chain smoke returned `SMOKE_PASS_ROLLBACK`, including all nine non-finite cases, omitted/malformed cost, and active-sales-rep explicit-zero attack; zero smoke orders, customers, receipts, or inventory transactions remained.
+- Supabase applied lifecycle ledger `20260805211951` and follow-ups `20260805220757`, `20260805224819`, `20260806000752`, and `20260806004644` successfully.
+- Live catalog: one overload; `SECURITY DEFINER`; `search_path=public, pg_temp`; anon denied; authenticated/service access preserved; final MD5 `5144733e3a8c7fe4d6d1e9f51e5fc3a2`.
+- Live body markers confirm confirmed-only status, Product-authoritative cost, supplied-cost validation without caller-cost coalescing, canonical stored-profit reread/reconciliation, inventory booking, ledger, commissions, activity, and actor/payload-bound idempotency.
+- Applied business-chain smoke returned `SMOKE_PASS_ROLLBACK`, including all nine non-finite cases, omitted/malformed cost, active-sales-rep explicit-zero attack, fractional multi-line profit agreement, and changed-intent rejection; zero smoke orders, customers, receipts, or inventory transactions remained.
 - Supabase advisors returned the expected generic authenticated-`SECURITY DEFINER` warning for this intentionally exposed, active-role-gated RPC and no target performance finding.
-- The live-introspection schema registry now records high-water `20260806000752` and all four applied migration names; generated-column/status/no-`updated_at` counts remain 11/38/91.
-- Both content-bound migration reviewer charters were CLEAN on `gpt-5.6-sol` / high for every migration. Exact-commit reviews found non-finite input, missing-cost inference, and caller-controlled commission cost basis before publication; all required forward-only fixes are implemented and live.
+- The live-introspection schema registry now records high-water `20260806004644` and all five applied migration names; generated-column/status/no-`updated_at` counts remain 11/38/91.
+- Both content-bound migration reviewer charters were CLEAN on `gpt-5.6-sol` / high for every migration. Exact-commit reviews found non-finite input, missing-cost inference, caller-controlled commission cost basis, fractional canonical-profit drift, and unbound replay intent before publication; all required forward-only fixes are implemented and live.
 
 Protected pull-request publication remains governed by the repository's final exact-SHA review, required checks, and CodeRabbit review gates.
 

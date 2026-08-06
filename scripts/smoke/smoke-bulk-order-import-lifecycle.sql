@@ -3,7 +3,8 @@
 -- Chain for 20260805211951_harden_bulk_order_import_lifecycle.sql and
 -- 20260805220757_reject_nonfinite_bulk_import_values.sql and
 -- 20260805224819_snapshot_bulk_import_product_cost.sql and
--- 20260806000752_authorize_bulk_import_product_cost.sql.
+-- 20260806000752_authorize_bulk_import_product_cost.sql and
+-- 20260806004644_bind_bulk_import_intent_and_profit.sql.
 --
 -- Proves that a bulk import cannot forge a partial/terminal lifecycle state and
 -- that a confirmed import atomically creates its order lines, inventory booking,
@@ -12,6 +13,8 @@
 -- field without residue, sub-cent prices are normalized, omitted cost snapshots
 -- the Product cost, malformed cost fails without residue, and an active sales
 -- rep cannot inflate commission profit with an explicit zero/lower cost.
+-- It also proves retries are actor/payload bound and fractional multi-line
+-- imports use the trigger-canonical order profit for lines and commissions.
 -- The terminal SMOKE_PASS_ROLLBACK exception aborts every synthetic write.
 -- ============================================================================
 DO $$
@@ -57,6 +60,11 @@ DECLARE
   v_commission_baseline integer;
   v_activity_baseline integer;
   v_receipt_baseline integer;
+  v_fractional_items jsonb;
+  v_fractional_order_id uuid;
+  v_line_profit_sum numeric;
+  v_fractional_qty numeric;
+  v_fractional_expected_profit numeric;
 BEGIN
   SELECT id, full_name
     INTO v_actor, v_actor_name
@@ -99,6 +107,8 @@ BEGIN
   IF v_product_id IS NULL THEN
     RAISE EXCEPTION 'SMOKE_SETUP: no active Product with a finite positive current_cost';
   END IF;
+
+  v_product_cost := round(v_product_cost, 2);
 
   INSERT INTO public.inventory (
     product_id,
@@ -461,6 +471,86 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one booked inventory transaction, got %', v_count;
   END IF;
 
+  -- Find a fractional quantity that distinguishes the old per-line accumulator
+  -- from the order trigger's canonical aggregate for this live Product cost.
+  SELECT g::numeric / 10000
+    INTO v_fractional_qty
+    FROM generate_series(1, 9999) AS g
+   WHERE 10 * (
+           round((g::numeric / 10000) * 20, 2)
+           - round((g::numeric / 10000) * v_product_cost, 2)
+         )
+         <> round(
+           10 * round((g::numeric / 10000) * 20, 2)
+           - 10 * (g::numeric / 10000) * v_product_cost,
+           2
+         )
+   ORDER BY g
+   LIMIT 1;
+  IF v_fractional_qty IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: could not find a fractional rounding discriminator';
+  END IF;
+
+  v_fractional_expected_profit := round(
+    10 * round(v_fractional_qty * 20, 2)
+    - 10 * v_fractional_qty * v_product_cost,
+    2
+  );
+
+  -- Ten fractional lines now prove commission and line-profit totals use that
+  -- trigger-canonical stored profit, not the old per-line rounded accumulator.
+  SELECT jsonb_agg(jsonb_build_object(
+           'product_id', v_product_id,
+           'product_name', v_product_name,
+           'price_per_unit', 20,
+           'unit_cost', 0,
+           'total_units_needed', v_fractional_qty,
+           'unit_size', v_product_unit_size,
+           'sort_order', g
+         ) ORDER BY g)
+    INTO v_fractional_items
+    FROM generate_series(1, 10) AS g;
+
+  BEGIN
+    SELECT public.bulk_import_order(
+      p_order_number := v_order_number || '-FRACTIONAL',
+      p_customer_id := v_customer_id,
+      p_status := 'confirmed',
+      p_total_price := 0,
+      p_total_cost := 0,
+      p_total_profit := 0,
+      p_total_margin_pct := 0,
+      p_order_date := CURRENT_DATE,
+      p_items := v_fractional_items,
+      p_notes := '[SMOKE] fractional canonical profit',
+      p_idempotency_key := v_key || '-fractional'
+    ) INTO v_result;
+
+    v_fractional_order_id := (v_result->>'order_id')::uuid;
+    SELECT total_profit INTO v_total_profit
+      FROM public.orders WHERE id = v_fractional_order_id;
+    SELECT sum(profit) INTO v_line_profit_sum
+      FROM public.order_items WHERE order_id = v_fractional_order_id;
+    SELECT count(*) INTO v_count
+      FROM public.commissions
+     WHERE order_id = v_fractional_order_id
+       AND order_profit = v_total_profit;
+
+    IF v_total_profit <> v_fractional_expected_profit
+       OR v_line_profit_sum <> v_total_profit
+       OR v_count <> 1 THEN
+      RAISE EXCEPTION
+        'SMOKE_FAIL: fractional canonical profit mismatch order=% lines=% commissions=%',
+        v_total_profit, v_line_profit_sum, v_count;
+    END IF;
+
+    RAISE EXCEPTION 'SMOKE_FRACTIONAL_ROLLBACK';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM <> 'SMOKE_FRACTIONAL_ROLLBACK' THEN
+      RAISE;
+    END IF;
+  END;
+
   SELECT count(*) INTO v_count
   FROM public.commissions
   WHERE order_id = v_order_id
@@ -488,6 +578,7 @@ BEGIN
     p_total_margin_pct := v_expected_margin,
     p_order_date := CURRENT_DATE,
     p_items := v_items,
+    p_notes := '[SMOKE] lifecycle parity',
     p_idempotency_key := v_key
   ) INTO v_result;
 
@@ -495,6 +586,37 @@ BEGIN
   IF v_replay_order_id IS DISTINCT FROM v_order_id THEN
     RAISE EXCEPTION 'SMOKE_FAIL: idempotency replay returned a different order';
   END IF;
+
+  SELECT count(*) INTO v_count
+    FROM public.idempotency_keys
+   WHERE idempotency_key = v_key
+     AND operation = 'bulk_import_order'
+     AND request_actor_id = v_actor
+     AND request_fingerprint IS NOT NULL;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: receipt is not actor/payload bound';
+  END IF;
+
+  BEGIN
+    PERFORM public.bulk_import_order(
+      p_order_number := v_order_number || '-CHANGED',
+      p_customer_id := v_customer_id,
+      p_status := 'confirmed',
+      p_total_price := 50,
+      p_total_cost := v_expected_cost,
+      p_total_profit := v_expected_profit,
+      p_total_margin_pct := v_expected_margin,
+      p_order_date := CURRENT_DATE,
+      p_items := v_items,
+      p_notes := '[SMOKE] lifecycle parity',
+      p_idempotency_key := v_key
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed payload replay was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM <> 'IDEMPOTENCY_INTENT_MISMATCH' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected IDEMPOTENCY_INTENT_MISMATCH, got %', SQLERRM;
+    END IF;
+  END;
 
   SELECT count(*) INTO v_count
   FROM public.orders

@@ -1311,6 +1311,13 @@ describe('RPC contract: bulk_import_order', () => {
     expect(body).toContain("RAISE EXCEPTION 'ITEM_INVALID: quantity, price, cost, and sort order must be valid numbers'");
     expect(body).toContain('v_normalized_items := v_normalized_items || jsonb_build_array');
     expect(body).toContain('jsonb_array_elements(v_normalized_items)');
+    expect(body).toContain("hashtextextended('crx:idempotency:' || p_idempotency_key, 0)");
+    expect(body).toContain('request_actor_id IS DISTINCT FROM v_actor');
+    expect(body).toContain('request_fingerprint IS DISTINCT FROM v_request_fingerprint');
+    expect(body).toContain("RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH'");
+    expect(body).toMatch(/SELECT total_price, total_cost, total_profit, total_margin_pct[\s\S]*FROM public\.orders/);
+    expect(body).toContain('SET profit = profit + (v_total_profit - v_line_profit_sum)');
+    expect(body).toMatch(/public\._insert_commissions_for_order\([\s\S]*v_total_profit/);
   });
 });
 
