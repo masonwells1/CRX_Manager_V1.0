@@ -549,8 +549,46 @@ Torn-tail recovery refuses a locked ledger, archives the original bytes, and rem
 incomplete final line before recording a recovery event.
 
 Closed-job audit packets must be committed under `docs/audits/factory/jobs/` before a job can be
-described as durably closed. Add the shared active-state directory to the off-site backup inventory
-before enabling multiple lanes.
+described as durably closed. The shared active-state directory is included in the workstation's
+nightly Personal DR backup. `scripts/backup-factory-state.mjs` captures two matching reads of the
+durable ledger, tickets, evidence, owner receipts, emergency-hold history, and recovery records;
+short-lived CLI permits, session latches, harness locks, and coordination locks are deliberately
+excluded so a restored machine cannot revive dead-process authority. The helper stages only under the
+operating-system temporary directory and writes a SHA-256 manifest. A clean replay exits `0`. Stable
+damaged or torn bytes are still preserved with `replay_ok: false` and exit `4`, then uploaded with a
+high-priority alert and a failed task result; that snapshot is evidence for recovery and is never
+reported as a clean backup. A clean ledger at or above 75% of the bounded per-file limit exits `5`;
+the task preserves and verifies that backup off-site, then alerts and fails so reviewed archival can
+happen before the hard limit. The tracked `scripts/windows/stage-factory-state-for-personal-dr.ps1` runner is installed in
+the workstation's existing Personal DR task. That task expands the actual archive and reruns restore
+verification before uploading through the client-side encrypted, Object-Locked Backblaze remote;
+it downloads the remote object through the encryption layer and requires an exact SHA-256 match
+before reporting success. A `finally` cleanup removes plaintext staging and restore copies on success
+or failure. The same encrypted archive is also copied to the local backup drive when it is connected.
+The non-secret schedule and first real-path proof are recorded in
+`docs/audits/2026-08-06-factory-state-offsite-backup-proof.md`.
+
+### Factory state restore
+
+Restore is deliberately not an automated overwrite. Replacing an existing ledger changes the
+Factory's coordination history, so it requires Mason's explicit approval in the current conversation.
+An agent restores it as follows:
+
+1. Download and decrypt the selected Personal DR archive, then locate its
+   `crx-factory-state/` snapshot directory.
+2. Run `node scripts/backup-factory-state.mjs --verify <snapshot-directory>`. Exit `0` means the
+   manifest and Factory replay are clean. Exit `4` means the exact damaged bytes were preserved;
+   keep that snapshot for governed repair or forensics, but do not install it as clean state.
+3. Resolve the destination with `git rev-parse --path-format=absolute --git-common-dir`; the shared
+   state belongs in `<git-common-dir>/crx-factory/`. Stop all Factory sessions first. If that target
+   already exists, archive it before replacement and obtain Mason's current explicit approval.
+4. On a new machine or when the approved target is absent, copy the snapshot's `state/` contents into
+   the target. Transient permits, intent latches, harness-run locks, and coordination locks are
+   intentionally absent. Do not recreate them from an old machine; supported Factory commands create
+   safe empty transient directories as needed.
+5. Run `node scripts/factory.mjs status --json` from the repository. Require `degraded: false`, inspect
+   the jobs and worktree paths, and only then resume Factory work.
 
 The Board's `/api/state` response is also an owner projection: it omits chat/lane session identifiers,
-approval internals, ticket contents, and proof base hashes.
+approval internals, ticket contents, and proof base hashes. It includes the governed worktree path so
+Mason and agents can route a stuck job without reading the protected ledger directly.

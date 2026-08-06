@@ -143,6 +143,32 @@ function addParkedJob(paths, sessionId, jobId, worktree = root) {
   return written;
 }
 
+function addBuildingJob(paths, sessionId, jobId, worktree = root) {
+  const written = writeImmutableTicket(paths, {
+    id: jobId,
+    version: 1,
+    title: "Active factory job",
+    goal: "Keep active custody bound to its existing chat.",
+    definitionOfDone: ["A new chat cannot take over active work."],
+    mustNotChange: ["Active lane custody."],
+    allowedPaths: ["src/"],
+    proofRequirements: ["Owner-input regression."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before landing.",
+    riskAreas: [],
+  });
+  const question = `Approve active ticket ${jobId}?`;
+  for (const event of [
+    { type: "ticket-drafted", payload: { ticketFile: written.filename, ticketHash: written.hash, ticketVersion: 1, title: written.ticket.title } },
+    { type: "ticket-presented", payload: { ticketHash: written.hash, questionText: question, questionHash: sha256(question), baseSha } },
+    { type: "ticket-approved", payload: { ticketHash: written.hash, questionHash: sha256(question), ownerReply: "yes", baseSha, expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "lane-started", payload: { ticketHash: written.hash, baseSha, worktree } },
+  ]) {
+    appendFactoryEvent(paths, { ...event, jobId, actorTool: "codex", sessionId });
+  }
+  return written;
+}
+
 function runHook(state, payload, extraEnv = {}) {
   const projectRoot = state.root || root;
   return spawnSync(process.execPath, [hook], {
@@ -414,6 +440,47 @@ function runInstalledPreToolHooks(state, payload) {
     payload: { ticketFile: revised.filename, ticketHash: revised.hash, ticketVersion: 2, title: revised.ticket.title },
   });
   equal(buildFactorySnapshot(state.paths).jobs[0].worktree, "", "a revised transferred ticket releases the old worktree custody");
+}
+
+{
+  const state = makeEmptyState("active-transfer-source-thread");
+  addBuildingJob(state.paths, state.sessionId, "supplier-pricing-3c");
+  addParkedJob(state.paths, "unrelated-parked-source", "unrelated-parked-job", path.join(root, "unrelated-parked-worktree"));
+  const transfer = runHook(state, {
+    prompt: "take over factory job supplier-pricing-3c here",
+    thread_id: "active-transfer-destination-thread",
+  });
+  ok(/recorded no custody transfer/i.test(transfer.stdout), "an explicit active-stage job ID never falls back to a different transferable job");
+  const snapshot = buildFactorySnapshot(state.paths);
+  equal(snapshot.jobs.find((job) => job.id === "supplier-pricing-3c").sessionId, state.sessionId, "active custody stays with its existing chat");
+  equal(snapshot.jobs.find((job) => job.id === "unrelated-parked-job").sessionId, "unrelated-parked-source", "the unrelated transferable job is not moved by fallback");
+}
+
+{
+  const state = makeEmptyState("generic-transfer-source-thread");
+  addParkedJob(state.paths, state.sessionId, "only-transferable-job");
+  const transfer = runHook(state, {
+    prompt: "move that ticket here",
+    thread_id: "generic-transfer-destination-thread",
+  });
+  ok(/moved.*revoked/i.test(transfer.stdout), "generic transfer wording still uses the safe single-candidate fallback");
+  equal(buildFactorySnapshot(state.paths).jobs[0].sessionId, "generic-transfer-destination-thread", "generic single-candidate transfer binds the intended job");
+}
+
+for (const explicitUnknownPrompt of [
+  "move job-10 here",
+  "transfer ticket-7 to this chat",
+  "take over job #12 here",
+  "move ticket: missing-job here",
+]) {
+  const state = makeEmptyState(`unknown-token-source-${explicitUnknownPrompt.replace(/\W+/g, "-")}`);
+  addParkedJob(state.paths, state.sessionId, "only-transferable-job");
+  const transfer = runHook(state, {
+    prompt: explicitUnknownPrompt,
+    thread_id: "unknown-token-destination-thread",
+  });
+  ok(/recorded no custody transfer/i.test(transfer.stdout), `unknown explicit reference is refused: ${explicitUnknownPrompt}`);
+  equal(buildFactorySnapshot(state.paths).jobs[0].sessionId, state.sessionId, `unknown reference never falls back to the lone job: ${explicitUnknownPrompt}`);
 }
 
 {

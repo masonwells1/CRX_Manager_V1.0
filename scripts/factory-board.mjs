@@ -61,6 +61,9 @@ function jobCard(job) {
   const blocker = job.blocker
     ? `<div class="needs"><strong>Needs attention:</strong> ${escapeHtml(job.blocker)}</div>`
     : "";
+  const worktree = job.worktree
+    ? `<p class="timestamp"><strong>Working in:</strong> <code>${escapeHtml(job.worktree)}</code></p>`
+    : `<p class="timestamp"><strong>Working in:</strong> Not assigned yet.</p>`;
   return `
     <article class="job" data-stage="${escapeHtml(job.stage)}">
       <div class="job-main">
@@ -75,6 +78,7 @@ function jobCard(job) {
       <details>
         <summary>Proof and timing</summary>
         ${evidence}
+        ${worktree}
         <p class="timestamp">Last activity: ${escapeHtml(job.lastActivity)}</p>
       </details>
     </article>`;
@@ -188,6 +192,7 @@ export function projectFactoryBoardState(snapshot) {
       id: job.id,
       title: job.title,
       stage: job.stage,
+      worktree: job.worktree,
       behaviorSummary: job.behaviorSummary,
       blocker: job.blocker,
       evidence: job.evidence.map((item) => ({

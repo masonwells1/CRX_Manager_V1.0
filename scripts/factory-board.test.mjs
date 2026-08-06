@@ -30,6 +30,7 @@ const snapshot = {
     id: "job-1",
     title: `<img src=x onerror="alert(1)">`,
     stage: "awaiting-morning-review",
+    worktree: `C:\\Users\\mason\\.codex\\worktrees\\lane-1\\CRX_Manager`,
     behaviorSummary: "A $500 split shows $250 and $250.",
     blocker: "",
     evidence: [{ label: "Browser proof", kind: "screenshot", filename: "abc-proof.png" }],
@@ -42,6 +43,8 @@ ok(!html.includes("<img src=x"), "ticket title cannot inject HTML");
 ok(html.includes("&lt;img src=x"), "escaped title remains readable");
 ok(html.includes("Ready for your review"), "friendly stage label is rendered");
 ok(html.includes("Browser proof"), "machine-attached proof is visible");
+ok(html.includes("Working in:"), "job card labels its governed working folder");
+ok(html.includes("lane-1"), "job card exposes the governed worktree path");
 ok(html.includes("<strong>0/3</strong>"), "board shows active work against the three-lane ceiling");
 const activeLaneHtml = renderFactoryBoard({ ...snapshot, activeLaneCount: 2 });
 ok(activeLaneHtml.includes("<strong>2/3</strong>"), "board renders the tracked non-zero active-lane count");
@@ -79,6 +82,7 @@ ok(!projectedJson.includes("private-owner-session"), "board API projection omits
 ok(!projectedJson.includes("private-lane-session"), "board API projection omits lane session identifiers");
 ok(!projectedJson.includes('"baseSha"'), "board API projection omits internal proof base metadata");
 ok(projectedJson.includes('"reviewer":"codex"'), "board API includes the independent reviewer identity");
+ok(projectedJson.includes('"worktree":"C:\\\\Users'), "board API includes the governed worktree path");
 
 const empty = renderFactoryBoard({ held: false, holdReason: "", warning: "", activeLaneCount: 0, maxActiveLanes: 3, jobs: [] });
 ok(empty.includes("No factory jobs yet"), "empty state tells Mason what happens next");

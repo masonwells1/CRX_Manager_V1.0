@@ -10,6 +10,7 @@ import {
   completeFactoryManagedSessionBackfill,
   FACTORY_CUSTODY_STAGES,
   FACTORY_WORKTREE_CUSTODY_STAGES,
+  factoryWorktreeRecoveryRoute,
   hasFactoryIntentFailureLatch,
   hasFactoryManagedSessionBackfillComplete,
   hasFactoryManagedSessionMarker,
@@ -695,12 +696,12 @@ if (factoryCli) {
   if (!factoryCli.recovery
       && factoryCliJob
       && (factoryCliJob.laneSessionId || factoryCliJob.sessionId) !== sessionId) {
-    deny(`CRX FACTORY GATE: factory job ${factoryCliJob.id} belongs to another chat session.`);
+    deny(`CRX FACTORY GATE: factory job ${factoryCliJob.id} belongs to another chat session.${factoryWorktreeRecoveryRoute(factoryCliJob)}`);
   }
   if (!factoryCli.recovery
       && factoryCliJob?.worktree
       && !sameCanonicalPath(factoryCliJob.worktree, projectDir)) {
-    deny(`CRX FACTORY GATE: factory job ${factoryCliJob.id} belongs to a different governed worktree.`);
+    deny(`CRX FACTORY GATE: factory job ${factoryCliJob.id} belongs to a different governed worktree.${factoryWorktreeRecoveryRoute(factoryCliJob)}`);
   }
   const permit = mintFactoryCliPermit(paths, {
     sessionId,
@@ -714,7 +715,7 @@ const targetedForeignWorktree = foreignWorktreeCustody.find((job) =>
   visibleMutationTargets.some((target) => targetFallsInsideWorktree(target, projectDir, job.worktree)),
 );
 if (buildMutation && targetedForeignWorktree) {
-  deny(`CRX FACTORY GATE: job ${targetedForeignWorktree.id} owns this governed worktree from another chat; the mutation targets it from a different checkout.`);
+  deny(`CRX FACTORY GATE: job ${targetedForeignWorktree.id} owns this governed worktree from another chat; the mutation targets it from a different checkout.${factoryWorktreeRecoveryRoute(targetedForeignWorktree)}`);
 }
 if (buildMutation
     && visibleMutationTargets.length === 0
@@ -727,7 +728,7 @@ if (buildMutation
 if (buildMutation
     && currentWorktreeCustody
     && (currentWorktreeCustody.laneSessionId || currentWorktreeCustody.sessionId) !== sessionId) {
-  deny(`CRX FACTORY GATE: job ${currentWorktreeCustody.id} owns this governed worktree from another chat.`);
+  deny(`CRX FACTORY GATE: job ${currentWorktreeCustody.id} owns this governed worktree from another chat.${factoryWorktreeRecoveryRoute(currentWorktreeCustody)}`);
 }
 if (!sessionId) nothing();
 
@@ -741,7 +742,7 @@ const governedJob = sessionJobs.find((job) =>
   || sessionJobs.find((job) => FACTORY_CUSTODY_STAGES.has(job.stage) || job.stage === "parked");
 if (!hasIntent && !governedJob && !intentRecordFailed) nothing();
 if (governedJob?.worktree && !sameCanonicalPath(governedJob.worktree, projectDir)) {
-  deny(`CRX FACTORY GATE: job ${governedJob.id} is bound to a different governed worktree.`);
+  deny(`CRX FACTORY GATE: job ${governedJob.id} is bound to a different governed worktree.${factoryWorktreeRecoveryRoute(governedJob)}`);
 }
 if (shellWorkingDirectoryBlock) {
   deny(`CRX FACTORY GATE: ${shellWorkingDirectoryBlock}. Shell inspection must execute from the governed checkout.`);

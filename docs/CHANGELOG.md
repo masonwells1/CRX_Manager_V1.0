@@ -2,7 +2,35 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-05 — Factory concurrency and orphan recovery — PREPARED
+## 2026-08-06 — Factory durability and recovery routing — PREPARED
+
+The factory durability follow-up adds a stable, SHA-256-manifested snapshot of
+the shared ledger, tickets, evidence, owner receipts, emergency-hold history,
+and recovery records to the workstation's nightly Personal DR flow. Short-lived
+CLI permits, session latches, harness locks, and coordination locks are excluded,
+so a restored machine cannot revive authority held by a dead process. The tracked
+runner stages only under the operating-system temporary directory; the installed
+task replays the restored ledger, uploads the archive through the client-side
+encrypted Backblaze remote, downloads it through that same encryption layer,
+compares SHA-256 values, and clears plaintext staging on success or failure.
+Stable damaged or torn ledger bytes are preserved off-site with a distinct
+`replay_ok: false` manifest and failing task result instead of being discarded or
+misreported as clean. The governed restore runbook verifies the decrypted archive,
+keeps transient dead-process authority out of the restore, and requires Mason's
+current approval before replacing any existing shared Factory state.
+The append-only ledger's 75% size warning is now a distinct scheduled-task
+failure after a verified upload, preventing a quiet transition from warning to
+the bounded backup limit.
+
+Factory status and Board projections now show each job's governed working folder.
+Wrong-worktree denials give a stage-valid route: transferable waiting/parked jobs
+name the exact chat takeover flow, while active build/review/landing jobs route
+back to their existing Factory chat and never promise an illegal transfer.
+
+This entry describes the reviewed follow-up branch; it does not claim merge or
+production deployment.
+
+## 2026-08-05 — Factory concurrency and orphan recovery — LIVE
 
 The governed software factory now admits up to three active lanes instead of
 globally serializing all work behind one job. Only `building`, `verifying`, and
@@ -53,8 +81,9 @@ The shared classifier now recognizes remote `push`, `apply`, `update`, `append`,
 operations explicitly, and unknown non-read MCP operations fail closed. Direct classifier tables
 and installed-hook regressions cover GitHub `push_files` without admitting it as a local edit;
 secret-scanning regressions cover both direct and nested snake_case `new_text` payloads.
-This entry records the reviewed release candidate; it does not claim a merge or
-production deployment.
+Merged through PR #319 at `1cdeb2a41c13a080944c153ec1fbbbf4aae5e76e`.
+Production verification observed the alias-bound Vercel deployment `READY`, the
+canonical site returning HTTP 200, and the post-merge CI and CodeQL runs green.
 
 ## 2026-08-05 — Bulk order import lifecycle parity — LIVE
 

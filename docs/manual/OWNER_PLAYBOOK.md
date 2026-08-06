@@ -87,6 +87,8 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 - **A deploy made the site look/act wrong:** say **"is prod okay?"** to confirm, then **"roll back the site."** The fix is a one-click "Promote to Production" on the previous good build in the Vercel dashboard (Deployments tab → find the last good build → "..." → Promote to Production) — fully reversible, nothing is deleted.
 - **A database change broke something:** say **"walk me through rollback."** The agent never edits or deletes the migration that already ran — it writes a brand-new migration that corrects it, runs it through the same review gates as any other database change, and waits for your yes before applying it live.
 - **The app seems down or an error is showing:** check Sentry (error tracking) and say **"is prod okay?"** — it pulls the live picture in one shot.
+- **The Factory says it is in the wrong folder or a job looks stuck:** say **"show me the Factory Board and route the stuck job."** The Board now shows each job's **Working in** folder. A waiting or parked job can be taken over in a new chat opened in that folder; a job already building or being reviewed must return to its existing Factory chat so two sessions cannot write the same work.
+- **The computer was lost or Factory memory must be restored:** say **"restore Factory state from my Personal DR backup."** The agent verifies the encrypted archive and replays the Factory ledger before using it. If Factory state already exists on the computer, the agent archives it and asks for your current explicit approval before replacement. You do not need to copy or edit any Factory files yourself.
 - **An agent seems stuck, confused, or is going in circles:** say **"/clear"** to wipe its short-term memory and restate what you want, or just start a fresh session. A stale, cluttered conversation causes more mistakes than starting over costs you.
 
 ---
@@ -103,7 +105,7 @@ Some actions are irreversible enough, or risky enough, that no amount of automat
 ## Monthly health habits
 
 - **Run an agent-health check** ("is the Claude/Codex setup healthy?") — confirms the hooks, reviewers, and handoff wiring between the two AI tools are actually working, not just present. (`agent-health`)
-- **Check both backup systems actually ran:** the weekly file-based backup (ask "is my data backed up?") and the automated in-database snapshot that runs on a schedule inside Supabase itself. Two independent copies are the point — one system quietly failing shouldn't be a surprise months later.
+- **Check all backup paths actually ran:** the weekly file-based database backup (ask "is my data backed up?"), the automated in-database snapshot inside Supabase, and the nightly Personal DR backup that now includes Factory state. Independent copies are the point — one system quietly failing should not be a surprise months later.
 - **Skim `docs/manual/KNOWN_ISSUES.md` with your agent** — the one consolidated list of everything known-open: dormant bugs, parked database changes, and decisions waiting on you. A five-minute skim once a month keeps small things from being forgotten.
 
 ---
