@@ -1287,8 +1287,10 @@ describe('RPC contract: bulk_import_order', () => {
     expect(params.p_items[0].product_id).toBe('prod-uuid');
   });
 
-  it('enforces canonical lifecycle side effects in the latest migration body', () => {
-    const body = latestFunctionBody('bulk_import_order');
+  it('enforces canonical lifecycle side effects in the final Section 4 migration body', () => {
+    const body = getMigrationFiles().find(
+      ({ name }) => name === '20260806023048_surface_bulk_import_inventory_warnings.sql',
+    )?.content ?? null;
     expect(body).not.toBeNull();
     expect(body).toContain("INVALID_IMPORT_STATUS: only confirmed orders can be imported");
     expect(body).toMatch(/'confirmed',\s+v_total_price/);
@@ -1323,6 +1325,8 @@ describe('RPC contract: bulk_import_order', () => {
     expect(body).toContain("'cost_at_time_cents', v_cost_cents");
     expect(body).toMatch(/cost_per_unit,\s+cost_at_time_cents,\s+total_units_needed/);
     expect(body).toContain('round(v_qty * v_price_per_unit, 2) - round(v_qty * v_cost_per_unit, 2)');
+    expect(body).toContain('jsonb_to_recordset(v_normalized_items)');
+    expect(body).toContain("'warnings', to_jsonb(v_warnings)");
   });
 });
 

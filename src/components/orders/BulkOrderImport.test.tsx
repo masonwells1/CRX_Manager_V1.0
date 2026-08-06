@@ -196,6 +196,44 @@ describe('BulkOrderImport', () => {
     expect(args.p_status).toBe('confirmed');
   });
 
+  it('submits cent-normalized totals and surfaces returned inventory warnings', async () => {
+    mocks.rpc.mockResolvedValue({
+      data: {
+        order_id: 'order-warning',
+        warnings: ['Same Name: need 3, net position is 0'],
+      },
+      error: null,
+    });
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit',
+      'O-CENTS,North Farm,SKU-B,3,0.105',
+    ].join('\n');
+    const file = new File([csv], 'cents.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/cents\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-CENTS/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
+    const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
+      p_total_price: number;
+      p_total_cost: number;
+      p_total_profit: number;
+    };
+    expect(args.p_total_price).toBe(0.33);
+    expect(args.p_total_cost).toBe(21);
+    expect(args.p_total_profit).toBe(-20.67);
+    expect(mocks.toast).toHaveBeenCalledWith(
+      'warning',
+      'Inventory for imported order O-CENTS: Same Name: need 3, net position is 0',
+    );
+  });
+
   it('rejects a malformed explicit unit cost before bulk_import_order', async () => {
     const { container } = render(<BulkOrderImport {...defaultProps} />);
     const csv = [

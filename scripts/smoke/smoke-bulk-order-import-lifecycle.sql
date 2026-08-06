@@ -63,6 +63,7 @@ DECLARE
   v_receipt_baseline integer;
   v_fractional_items jsonb;
   v_fractional_order_id uuid;
+  v_warning_qty numeric;
   v_line_profit_sum numeric;
   v_fractional_qty numeric;
   v_fractional_expected_profit numeric;
@@ -274,7 +275,7 @@ BEGIN
       FROM public.idempotency_keys
       WHERE operation = 'bulk_import_order'
         AND idempotency_key = v_bad_key;
-      IF v_count <> v_receipt_baseline THEN
+      IF v_count <> 0 THEN
         RAISE EXCEPTION 'SMOKE_FAIL: rejected numeric import wrote idempotency receipt';
       END IF;
     END LOOP;
@@ -399,6 +400,51 @@ BEGIN
   IF v_count <> 0 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: malformed-cost import wrote idempotency receipt';
   END IF;
+
+  -- Warn-not-block parity: an amount one unit above canonical Net Position must
+  -- be returned to the caller as a warning, while the subtransaction rolls
+  -- back every synthetic lifecycle write.
+  SELECT GREATEST(
+           COALESCE(quantity_available, 0)
+           - COALESCE(quantity_prebooked, 0)
+           + COALESCE(quantity_on_order, 0),
+           0
+         ) + 1
+    INTO v_warning_qty
+  FROM public.inventory
+  WHERE product_id = v_product_id
+    AND location = 'Main Warehouse';
+
+  BEGIN
+    SELECT public.bulk_import_order(
+      p_order_number := v_order_number || '-warning',
+      p_customer_id := v_customer_id,
+      p_status := 'confirmed',
+      p_total_price := 0,
+      p_total_cost := 0,
+      p_total_profit := 0,
+      p_total_margin_pct := 0,
+      p_order_date := CURRENT_DATE,
+      p_items := jsonb_build_array(jsonb_build_object(
+        'product_id', v_product_id,
+        'product_name', v_product_name,
+        'price_per_unit', 10,
+        'total_units_needed', v_warning_qty,
+        'sort_order', 1
+      )),
+      p_idempotency_key := v_key || '-warning'
+    ) INTO v_result;
+
+    IF jsonb_array_length(COALESCE(v_result->'warnings', '[]'::jsonb)) = 0 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: shortage import returned no inventory warning';
+    END IF;
+    RAISE EXCEPTION 'SMOKE_WARNING_ROLLBACK';
+  EXCEPTION
+    WHEN raise_exception THEN
+      IF SQLERRM <> 'SMOKE_WARNING_ROLLBACK' THEN
+        RAISE;
+      END IF;
+  END;
 
   -- Deliberately pass false totals, a sub-cent item price, and caller cost 0.
   -- The RPC must normalize price, ignore caller cost, and derive Product cost.

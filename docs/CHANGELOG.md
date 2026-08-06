@@ -81,8 +81,8 @@ The first exact-commit adversarial review then caught PostgreSQL's special
 normalizes legacy dollar inputs to cents before any write. The expanded
 rollback smoke exercises all nine field/value combinations, sub-cent
 normalization, and zero residue across orders, inventory, commissions,
-activity, and idempotency. Final live function hash is
-`473152377f9e8f67db8cb0470a43a01f`; schema high-water is `20260806012423`.
+activity, and idempotency. That migration's live function hash is
+`4c38bd47d81f7c5dec54533cb7d57bca`.
 
 A second exact-commit adversarial review found that an omitted optional
 `unit_cost` was still being submitted as zero just as imports began creating
@@ -127,7 +127,23 @@ stable UUID order, derives one bigint-cent cost snapshot, explicitly writes the
 same `cost_at_time_cents`, and keeps every line profit whole-cent before assigning
 the aggregate remainder deterministically. Candidate and installed rollback
 smokes proved line-level cents, immutable snapshot equality, and zero residue;
-both migration reviewers returned CLEAN.
+both migration reviewers returned CLEAN. The post-`20260806012423` end-state
+live function hash is `473152377f9e8f67db8cb0470a43a01f`; schema high-water is
+`20260806012423`.
+
+CodeRabbit's publication review then found that bulk imports reserved inventory
+under the approved warn-not-block policy but returned no Net Position warning,
+and that the browser's compatibility totals still used floating-point dollars.
+Forward-only live migration
+`20260806023048_surface_bulk_import_inventory_warnings` aggregates repeated
+Product lines, locks existing Main Warehouse inventory rows in stable order,
+returns canonical pre-reservation shortage warnings, and records them in order
+activity and idempotent results. The import UI displays the warnings and computes
+all compatibility totals in integer cents. Candidate and installed rollback
+smokes, both migration reviewers, focused 96-test coverage, all 21 invariant
+predicates, catalog/grant checks, and the genuine live registry refresh passed.
+The final live function hash is `b878d0927ad5b6fea5732cb317bce187`;
+schema high-water is `20260806023048`.
 
 ## 2026-08-05 — Factory ledger failure containment
 

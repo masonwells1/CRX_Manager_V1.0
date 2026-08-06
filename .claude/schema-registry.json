@@ -6,7 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260806012423",
+    "migrations_high_water": "20260806023048",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -898,6 +898,7 @@
       "strict_actor_six_admin_rpcs",
       "supplier_pricing_phase3c_return_policy_classification",
       "supplier_pricing_workbook_v2_product_info",
+      "surface_bulk_import_inventory_warnings",
       "team_board_phase2_and_delivery_rpc_fixes",
       "team_board_v2",
       "team_note_tags_rls",

@@ -455,7 +455,7 @@ export default function BulkOrderImport({
           failures.push({
             orderNumber: order.order_number,
             details: unresolvedCosts.map(({ item }) => (
-              `"${item.product_name}" has no valid unit cost; add unit_cost to the import or update the Product cost and retry.`
+              `"${item.product_name}" has no valid Product cost; update the Product current cost and retry.`
             )),
           });
           continue;
@@ -477,16 +477,19 @@ export default function BulkOrderImport({
             };
         });
 
-        const totalPrice = itemsPayload.reduce(
-          (sum, item) => sum + item.total_units_needed * item.price_per_unit,
-          0
-        );
-        const totalCost = resolvedItems.reduce((sum, { item, resolution }) => {
-          if (resolution.status !== 'unique') return sum; // Rejected above.
-          return sum + item.quantity * resolution.product.current_cost!;
+        const totalPriceCents = itemsPayload.reduce((sum, item) => {
+          const unitPriceCents = Math.round(item.price_per_unit * 100);
+          return sum + Math.round(item.total_units_needed * unitPriceCents);
         }, 0);
-        const totalProfit = totalPrice - totalCost;
-        const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
+        const totalCostCents = resolvedItems.reduce((sum, { item, resolution }) => {
+          if (resolution.status !== 'unique') return sum; // Rejected above.
+          const unitCostCents = Math.round(resolution.product.current_cost! * 100);
+          return sum + Math.round(item.quantity * unitCostCents);
+        }, 0);
+        const totalProfitCents = totalPriceCents - totalCostCents;
+        const totalMarginPct = totalPriceCents > 0
+          ? (totalProfitCents / totalPriceCents) * 100
+          : 0;
 
         // Audit #31: atomic per-order create — order + items rolled together.
         // The idempotency key is generated once at parse time and stored on
@@ -497,9 +500,9 @@ export default function BulkOrderImport({
           p_order_number: order.order_number,
           p_customer_id: customer.id,
           p_status: 'confirmed',
-          p_total_price: totalPrice,
-          p_total_cost: totalCost,
-          p_total_profit: totalProfit,
+          p_total_price: totalPriceCents / 100,
+          p_total_cost: totalCostCents / 100,
+          p_total_profit: totalProfitCents / 100,
           p_total_margin_pct: totalMarginPct,
           p_order_date: order.order_date,
           p_items: itemsPayload,
@@ -508,7 +511,10 @@ export default function BulkOrderImport({
         });
 
         if (rpcError) throw rpcError;
-        assertRpcResult<{ order_id: string }>(rpcResult, 'bulk_import_order');
+        const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(rpcResult, 'bulk_import_order');
+        for (const warning of result.warnings ?? []) {
+          toast('warning', `Inventory for imported order ${order.order_number}: ${warning}`);
+        }
 
         successCount++;
       } catch (error) {
@@ -557,7 +563,7 @@ export default function BulkOrderImport({
                   <p className="font-medium text-xs">CSV Files:</p>
                   <ul className="list-disc list-inside space-y-1 text-xs ml-2">
                     <li>Required: order_number, customer_name, product_name, quantity, price_per_unit</li>
-                    <li>Optional: order_date, unit_cost, unit_size, notes (Product current cost is always authoritative)</li>
+                    <li>Optional: order_date, unit_size, notes (Product current cost is always used)</li>
                     <li>Imports always create confirmed orders; fulfillment and cancellation use the normal workflow</li>
                   </ul>
                 </div>
