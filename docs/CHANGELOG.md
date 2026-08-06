@@ -2,6 +2,28 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — Push guard resolves real remotes before guessing at URLs — BRANCH
+
+Codex finding on `662836b2` (PR #313), reproduced against the shipped guard
+before fixing. **The scoping fix in the entry below opened its own fail-open
+hole.** Scoping the per-remote checks to the targeted remote meant deciding
+whether the push destination was a configured remote or a raw URL, and that
+decision was made from the token's *shape*. Git accepts a remote name containing
+`/` — `team/origin` is a name it resolves — so the URL heuristic read a real
+remote as a URL. "Raw URL" means no `remote.<name>.*` applies, so
+`remote.team/origin.mirror=true` skipped every per-remote check and the guard
+**allowed** a push that git's own dry run showed carrying `main`. `receivepack`
+and the other per-remote carriers were skipped the same way.
+
+The guard now asks git which remotes exist and lets an existing remote win; the
+shape heuristic only decides tokens that are not remotes at all. Remotes are read
+across both the scrubbed and inherited config environments for the same reason
+the config reads below it are — an inherited `GIT_CONFIG*` can define a remote
+the scrubbed read cannot see, and recognising *more* remotes can only make more
+checks apply. An unreadable remote list still falls back to full breadth.
+`guards.test.mjs` pins the case: a mirrored slash-named remote denies, and the
+six earlier scoping cases still hold.
+
 ## 2026-08-06 — Mirror deny scoped to the targeted remote; inactive reps named — BRANCH
 
 Two Codex findings on `48149870` (PR #313), both reproduced before fixing.

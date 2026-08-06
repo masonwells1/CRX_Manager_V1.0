@@ -297,6 +297,24 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   git("config", "--unset", "remote.pushDefault");
   git("config", "--unset", "remote.archive.mirror");
 
+  // A configured remote name may legally contain `/`, and git resolves
+  // `push team/origin` as that remote. Scoping by the token's SHAPE read it as a
+  // raw URL — which means "no remote.<name>.* applies" — so a mirrored
+  // `team/origin` skipped every per-remote check and the push was ALLOWED.
+  // Fail-open hole introduced by the scoping fix itself; found by Codex on
+  // 2026-08-06 and reproduced against the shipped guard before fixing. An
+  // existing remote now wins over the URL heuristic.
+  git("config", "remote.team/origin.url", "https://github.com/masonwells1/CRX_Manager_V1.0.git");
+  git("config", "remote.team/origin.mirror", "true");
+  const slashed = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} team/origin` },
+  });
+  ok(/mirror/.test(slashed.stdout), "a mirrored remote whose NAME contains `/` still denies");
+  git("config", "--unset", "remote.team/origin.mirror");
+  git("config", "--unset", "remote.team/origin.url");
+
   // Control, same harness: without the mirror flag the identical push is allowed.
   // The check above widened a deny to every push form, so this pins that it did
   // not become a blanket refusal.

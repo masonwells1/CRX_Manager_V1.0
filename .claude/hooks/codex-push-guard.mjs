@@ -438,7 +438,25 @@ for (const pushCmd of pushCommands) {
   let targetIsRawUrl = false;
   try {
     const destinationToken = pushDestinationToken(pushCmd);
-    if (destinationToken && destinationLooksLikeUrl(destinationToken)) {
+    // Ask git which remotes EXIST rather than inferring from the token's shape.
+    // A configured remote name may legally contain `/` — `team/origin` is a name
+    // git accepts and resolves — and the URL heuristic reads that as a raw URL.
+    // That mattered because "raw URL" means "no `remote.<name>.*` applies", so
+    // `remote.team/origin.mirror=true` skipped every per-remote check and the
+    // guard ALLOWED a mirror push carrying main (Codex, 2026-08-06, reproduced
+    // before fixing). An existing remote therefore wins over the shape test; the
+    // heuristic only decides tokens that are not remotes at all.
+    //
+    // Read across both environments for the same reason as the config above: an
+    // inherited GIT_CONFIG* can define a remote the scrubbed read cannot see, and
+    // recognising more remotes here can only make the checks below apply.
+    const configuredRemotes = [
+      gitIn(["remote"], pushRepoDir, { keepConfigOverrides: false }),
+      gitIn(["remote"], pushRepoDir, { keepConfigOverrides: true }),
+    ].join("\n").split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+    if (destinationToken && configuredRemotes.includes(destinationToken)) {
+      targetRemote = destinationToken;
+    } else if (destinationToken && destinationLooksLikeUrl(destinationToken)) {
       // A raw URL is not a configured remote, so no `remote.<name>.*` applies to
       // it. It is judged by the destination checks below, not by these.
       targetIsRawUrl = true;
