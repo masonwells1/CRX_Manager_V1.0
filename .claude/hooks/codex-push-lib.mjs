@@ -754,6 +754,50 @@ export function pushDestinationToken(cmd) {
   return repoOpt;
 }
 
+// Does this push name its refspecs outright? `git push [<repository> [<refspec>…]]`
+// — when refspecs are on the command line git does not consult the DEFAULT refspec
+// configuration (`remote.<n>.push`, `push.default`, `branch.<b>.merge`) at all, so
+// an inherited override of those cannot move where such a push lands. Verified
+// against git rather than assumed — Codex reported it on 2026-08-06 and a scratch
+// repo on git 2.43.0 reproduced it before this fix landed: with
+// `remote.origin.push=HEAD:refs/heads/unrelated` live, `push --dry-run origin
+// main:refs/heads/feature` reports `main -> feature` and nothing else, while
+// `push --dry-run origin` under the very same config reports `HEAD -> unrelated`.
+//
+// A second positional is the first refspec. `--repo=<url>` is deliberately NOT
+// counted: git documents the positional as taking precedence, so the lone
+// positional in `push --repo=<url> HEAD:main` is the REPOSITORY, not a refspec —
+// counting it would skip the default-refspec proof on a push that still needs it.
+// Everything uncertain therefore lands on `false`, which keeps the lookups.
+export function pushNamesRefspec(cmd) {
+  // An option this walk does not understand makes the count untrustworthy in the
+  // dangerous direction: an unknown VALUE-taking option leaves its value looking
+  // like a second positional, i.e. like a refspec, which would skip the lookups on
+  // a push that is really bare. The guard denies unknown options anyway, but it
+  // does so AFTER this comparison, so this cannot rely on that ordering.
+  if (unknownPushOptions(cmd).length > 0) return false;
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const tokens = splitShellArgs(args);
+  let positionals = 0;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    // After `--` every remaining token is positional, options included.
+    if (token === "--") { positionals += tokens.length - (i + 1); break; }
+    if (!token.startsWith("-")) { positionals += 1; continue; }
+    const eq = token.indexOf("=");
+    const bare = eq === -1 ? token : token.slice(0, eq);
+    if (bare === "--repo") { if (eq === -1) i += 1; continue; }
+    if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(bare)) i += 1;
+    else if (eq === -1 && !bare.startsWith("--") && bare.includes("o")) i += 1;
+  }
+  return positionals >= 2;
+}
+
+// The default-refspec lookups `pushNamesRefspec` makes irrelevant. The remote
+// SELECTION keys are not here: they answer which remote a push uses, which an
+// explicit refspec says nothing about.
+export const REFSPEC_DEFAULT_LOOKUPS = new Set(["push.default", "remote.*.push", "branch.merge"]);
+
 // Git treats a destination as a URL/path unless it is a bare remote name, and a
 // remote name can contain neither `:` nor a path separator.
 export function destinationLooksLikeUrl(token) {
@@ -1139,8 +1183,18 @@ export function divergentPushLookups(scrubbed, ambient) {
 // one there, so excluding that position drops the false positive without
 // weakening any real case: the inline, quoted, and PowerShell forms below are
 // preceded by start-of-string, whitespace, a quote, or `:`.
+//
+// `-` joined it on 2026-08-06, for the same reason one round later. That fix
+// covered `/home/…` but not a path SEGMENT spelled with hyphens, and this
+// environment's scratch directories are named exactly that way
+// (`/tmp/claude-0/-home-user-CRX-Manager-V1-0/…`), so `git -C <scratch path>
+// push` — again the form the denials recommend — was refused; it is what blocked
+// the scratch-repo reproduction of the refspec fix in this same change. A shell
+// assignment name cannot contain `-` at all, and no override spelling below puts
+// one on either side of the name, so a hyphen adjacent to the match means the
+// text is part of a path or a branch name rather than a variable.
 const CONFIG_ROOT_ENV_RE =
-  /(?<![A-Za-z0-9_/\\])(?:HOME|HOMEDRIVE|HOMEPATH|USERPROFILE|XDG_CONFIG_HOME|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM)(?![A-Za-z0-9_])/i;
+  /(?<![A-Za-z0-9_/\\-])(?:HOME|HOMEDRIVE|HOMEPATH|USERPROFILE|XDG_CONFIG_HOME|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM)(?![A-Za-z0-9_-])/i;
 export function pushUsesConfigRootEnv(cmd) {
   const text = String(cmd || "");
   if (!isGitPush(text)) return false;

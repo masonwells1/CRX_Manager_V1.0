@@ -2,6 +2,44 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — Default-refspec proof skipped for pushes that name their refspec — BRANCH
+
+Codex finding on `1dea595d` (PR #313) — the **fifth** over-refusal of this shape
+on this branch, and the one the remote-scoping fix below could not reach, because
+the offending key was on the remote the push actually selects.
+
+Git's usage is `git push [<repository> [<refspec>…]]`: when refspecs are on the
+command line git does not read the **default**-refspec configuration at all. So
+comparing `push.default`, `remote.*.push`, and `branch.<b>.merge` across the
+scrubbed and inherited environments could only over-refuse — it denied the exact
+feature-branch push that a protected `main` requires, over an inherited value git
+was never going to consult. Reproduced on git 2.43.0 in a scratch repo before
+fixing: under `remote.origin.push=HEAD:refs/heads/unrelated`, an explicit
+`push --dry-run origin main:refs/heads/feature` reports `main -> feature` and
+nothing else, while a bare `push --dry-run origin` under that same config reports
+`HEAD -> unrelated`.
+
+`pushNamesRefspec` decides it, and everything uncertain answers `false` so the
+lookups are kept: an unknown option (whose value could pass for a refspec), a
+`--repo` value (git documents the positional as taking precedence, so the lone
+positional there is the repository), an unresolved remote that ended the segment
+scan early, and any chained command in which even one push is still bare — the
+lookups are repository-wide, so a single bare push keeps them compared.
+
+Pinned end-to-end against the hook, in both directions: the same inherited
+`remote.origin.push` now allows the explicit push and still denies the bare one,
+an unreadable push does not get the skip, and the remote-selection keys are
+untouched — an explicit refspec says nothing about which remote a push picks.
+
+Along the way this fixed the 2026-08-05 config-root false positive one round
+further out. That fix excluded a preceding `/`, which covered `/home/user/repo`
+but not a hyphenated path **segment** — and this environment names its scratch
+directories exactly that way (`/tmp/claude-0/-home-user-…/`), so `git -C <scratch
+path> push`, again the form the guard's own denials recommend, was refused as a
+`HOME` override. It is what blocked the scratch-repo reproduction above until it
+was fixed. A shell assignment name cannot contain `-`, so a hyphen on either side
+of the match means path or branch text, never a variable.
+
 ## 2026-08-06 — Inherited push refspecs scoped to the remote each push selects — BRANCH
 
 Codex finding on `db6b683d` (PR #313), reproduced against the shipped guard

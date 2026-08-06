@@ -39,6 +39,8 @@ import {
   unknownGitGlobalOptions,
   environmentCarriesConfigOverride,
   pushDestinationLookupArgs,
+  pushNamesRefspec,
+  REFSPEC_DEFAULT_LOOKUPS,
   divergentPushLookups,
   pushDestinationDecisions,
   pushDestinationDecision,
@@ -293,15 +295,30 @@ if (inheritedOverrides.length > 0) {
     // everything); a raw-URL destination contributes no remote, because git reads
     // no `remote.<name>.*` for it.
     let remoteScope = new Set();
+    // …and whether EVERY push here names its refspecs. Git reads the default-refspec
+    // configuration only for a push that does not, so for an all-explicit command an
+    // inherited override of those keys cannot move anything — comparing them denied
+    // `push origin HEAD:feature` over a `remote.origin.push` git never consults
+    // (Codex, 2026-08-06, reproduced against git's own dry run before fixing).
+    //
+    // ALL, not any: one bare push in a chained command still consults them, and the
+    // lookups are repository-wide, so a single bare push keeps them compared. An
+    // empty segment list leaves this `false` and changes nothing.
+    let everyPushNamesRefspec = null;
     for (const segment of shellSegments(cmd).map((s) => s.trim()).filter((s) => isGitPush(s))) {
       if (gitPushCwd(segment, projectDir) !== repoDir) continue;
+      everyPushNamesRefspec = (everyPushNamesRefspec ?? true) && pushNamesRefspec(segment);
       const resolved = resolvePushRemote(segment, repoDir, overrideBranch);
-      if (resolved.remote === null && !resolved.rawUrl) { remoteScope = null; break; }
+      // Leaving the loop early means the remaining segments were never examined, so
+      // the refspec verdict is only partial — a later BARE push would go unseen.
+      // Fail it closed rather than skipping a lookup on unread evidence.
+      if (resolved.remote === null && !resolved.rawUrl) { remoteScope = null; everyPushNamesRefspec = false; break; }
       if (resolved.remote !== null) remoteScope.add(resolved.remote.toLowerCase());
     }
     const scrubbed = {};
     const ambient = {};
     for (const [name, args] of pushDestinationLookupArgs(overrideBranch)) {
+      if (everyPushNamesRefspec === true && REFSPEC_DEFAULT_LOOKUPS.has(name)) continue;
       scrubbed[name] = answerFor(name, args, repoDir, false, remoteScope);
       ambient[name] = answerFor(name, args, repoDir, true, remoteScope);
     }

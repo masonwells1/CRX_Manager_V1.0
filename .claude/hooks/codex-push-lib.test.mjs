@@ -36,6 +36,7 @@ import {
   pushUsesTransportEnv,
   environmentCarriesTransportOverride,
   pushDestinationToken,
+  pushNamesRefspec,
   destinationLooksLikeUrl,
   pushUsesInlineConfig,
   pushUsesConfigEnv,
@@ -1166,9 +1167,30 @@ assert.equal(
   pushUsesConfigRootEnv("git -C C:\\Users\\mason\\homepath push origin feature"), false,
   "a Windows path segment is not an override either",
 );
+// 2026-08-06, the same over-refusal one round later: the fix above covered the
+// `/home/` separator but not a path SEGMENT spelled with hyphens, and this
+// environment names its scratch directories exactly that way — so `git -C
+// /tmp/claude-0/-home-user-.../work push` was refused, which is what blocked the
+// scratch-repo reproduction of the refspec fix in this same change.
+assert.equal(
+  pushUsesConfigRootEnv("git -C /tmp/claude-0/-home-user-CRX-Manager-V1-0/abc/scratchpad/work push origin main:refs/heads/feature"), false,
+  "a hyphen-delimited -home-user- path segment is not a HOME override",
+);
+assert.equal(
+  pushUsesConfigRootEnv("git push origin chore/HOME-copy"), false,
+  "a branch name ending in a hyphen after HOME is not an override",
+);
 // ...and the real overrides still fire from every position they can occupy.
 assert.equal(pushUsesConfigRootEnv("env HOME=/home/user/evil git push origin main"), true, "an override whose VALUE is a /home path still fires");
 assert.equal(pushUsesConfigRootEnv("HOME=/tmp/x git -C /home/user/repo push origin main"), true, "a real override alongside a /home repo path still fires");
+assert.equal(
+  pushUsesConfigRootEnv("HOME=/tmp/evil git -C /tmp/claude-0/-home-user-CRX/work push origin main"), true,
+  "a real override alongside a hyphenated scratch path still fires",
+);
+assert.equal(
+  pushUsesConfigRootEnv("$env:HOME = \"/tmp/evil\"; git -C /tmp/claude-0/-home-user-CRX/work push origin main"), true,
+  "the PowerShell form still fires alongside a hyphenated scratch path",
+);
 
 // The general rule behind both: the guard resolves the destination in ITS
 // environment, so a push carrying ANY variable the guard does not is a push the
@@ -1344,6 +1366,31 @@ assert.equal(pushDestinationToken(`git push --repo=${CRX_URL} -- origin main`), 
 assert.equal(pushDestinationToken("git push origin main"), "origin");
 assert.equal(pushDestinationToken("git push"), null);
 
+// ── pushNamesRefspec: does git consult the DEFAULT refspec configuration? ────
+// `git push [<repository> [<refspec>…]]` — with refspecs on the command line git
+// never reads `remote.<n>.push` / `push.default` / `branch.<b>.merge`, so an
+// inherited override of those cannot move such a push and comparing them only
+// produces over-refusals (Codex, 2026-08-06). Everything uncertain answers
+// `false`, which KEEPS the comparison; only a plainly-explicit push skips it.
+assert.equal(pushNamesRefspec("git push origin main:refs/heads/feature"), true, "remote plus refspec");
+assert.equal(pushNamesRefspec("git push origin main"), true, "a plain branch name is still a refspec");
+assert.equal(pushNamesRefspec("git push -u origin HEAD:main"), true, "a valueless option does not consume the refspec");
+assert.equal(pushNamesRefspec("git push --force-with-lease=main origin main"), true, "an `=`-form option consumes no positional");
+assert.equal(pushNamesRefspec("git push -o ci.skip origin main"), true, "a short value-taking option consumes its own value only");
+assert.equal(pushNamesRefspec("git push origin -- main"), true, "positionals after `--` still count");
+assert.equal(pushNamesRefspec("git push origin"), false, "a remote alone is bare — git falls back to the default refspec");
+assert.equal(pushNamesRefspec("git push"), false, "no arguments at all is bare");
+assert.equal(pushNamesRefspec("git push --force"), false, "an option is not a refspec");
+assert.equal(pushNamesRefspec("git push --receive-pack=git-receive-pack origin"), false, "still bare once the `=`-form option is discounted");
+// `--repo=<url>` names the REPOSITORY, and git documents the positional as
+// taking precedence — so the lone positional here is the destination, not a
+// refspec, and skipping the lookups on it would fail open.
+assert.equal(pushNamesRefspec(`git push --repo=${CRX_URL} origin`), false, "--repo does not turn the lone positional into a refspec");
+assert.equal(pushNamesRefspec(`git push --repo ${CRX_URL} origin main`), true, "…but its value is consumed, so `origin main` is still repository plus refspec");
+// An option this walk cannot account for could leave its VALUE looking like a
+// refspec, so an unreadable push keeps the lookups rather than skipping them.
+assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/feature"), false, "an unknown option makes the count untrustworthy");
+
 // ── full-hook end-to-end: the guard itself, driven over stdin ────────────────
 // Codex round-4 (2026-07-30) asked for these specifically, and it was right to:
 // the helper assertions above were all green while an earlier version of this
@@ -1389,6 +1436,12 @@ assert.equal(pushDestinationToken("git push"), null);
     // app-repo gate for this one, which is what makes it the right shape for
     // asking "does an inherited GIT_CONFIG* variable block a normal push?".
     const featurePush = `git -C ${work} push origin main:refs/heads/feature`;
+    // A push that names NO refspec, so git falls back to the default-refspec
+    // configuration (`push.default`, `remote.<n>.push`, `branch.<b>.merge`). The
+    // two forms are not interchangeable for those keys: git reads them for this
+    // one and not for `featurePush`, so each default-refspec case below is
+    // asserted on whichever form actually consults it (2026-08-06).
+    const barePush = `git -C ${work} push origin`;
     const deniedBecause = (command, pattern, message) => {
       const result = runHook(command);
       assert.equal(result.decision, "deny", `${message} — got ${result.decision}`);
@@ -1477,7 +1530,7 @@ assert.equal(pushDestinationToken("git push"), null);
     {
       // Not the destination but the REFSPEC: a bare push's default can be moved
       // by config just as invisibly, so those answers are compared too.
-      const result = runHook(featurePush, {
+      const result = runHook(barePush, {
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: "push.default",
         GIT_CONFIG_VALUE_0: "matching",
@@ -1504,7 +1557,7 @@ assert.equal(pushDestinationToken("git push"), null);
       // ambient side was scoped down to nothing, one side read `err:1` and the
       // other an empty match, which is absence on both sides, not a difference.
       git(["remote", "add", "archive", path.join(tmp, "archive.git")], work);
-      const result = runHook(featurePush, {
+      const result = runHook(barePush, {
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: "remote.archive.push",
         GIT_CONFIG_VALUE_0: "HEAD:refs/heads/archive",
@@ -1515,13 +1568,40 @@ assert.equal(pushDestinationToken("git push"), null);
       // The other side of that scoping: the SAME override on the remote the push
       // actually selects moves where this push lands, and must still die. This is
       // what keeps the fix above from being widened into a fail-open.
-      const result = runHook(featurePush, {
+      const result = runHook(barePush, {
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: "remote.origin.push",
         GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
       });
       assert.equal(result.decision, "deny", "an inherited refspec on the targeted remote is still denied");
       assert.match(result.reason, /remote\.\*\.push/, "the denial names the answer that changed");
+    }
+    {
+      // 2026-08-06, the fifth over-refusal of this shape, and the one Codex
+      // reproduced against git itself: the override above is fatal to a BARE push
+      // and inert against this one. `git push [<repository> [<refspec>…]]` — with
+      // refspecs on the command line git never reads the default-refspec keys, so
+      // comparing them denied the exact feature-branch push this repo's protected
+      // `main` requires. `--dry-run` under that inherited value updates only
+      // `feature`; the same value on `barePush` moves it.
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+      });
+      assert.equal(result.decision, "allow", "a default refspec git never consults does not block an explicit push");
+    }
+    {
+      // The fix keys off the refspec being NAMED, not off the command being long:
+      // an option the argv walk cannot account for could leave its own value
+      // looking like a refspec, so an unreadable push keeps the lookups (and dies
+      // on the unknown option, which is the same answer for a different reason).
+      const result = runHook(`git -C ${work} push --future-option origin main:refs/heads/feature`, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+      });
+      assert.equal(result.decision, "deny", "an unreadable push does not get the explicit-refspec skip");
     }
     assert.equal(
       runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,
