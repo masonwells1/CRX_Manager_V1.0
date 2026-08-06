@@ -1442,6 +1442,15 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
     // one and not for `featurePush`, so each default-refspec case below is
     // asserted on whichever form actually consults it (2026-08-06).
     const barePush = `git -C ${work} push origin`;
+    // A push that names NO destination either, so git additionally falls back to
+    // the remote-SELECTION configuration (`branch.<b>.pushRemote`,
+    // `remote.pushDefault`, `branch.<b>.remote`). `barePush` does not reach those:
+    // naming `origin` already answers which remote, which is why the two are
+    // separate fixtures. Reproduced on git 2.43.0 for all three keys, each set to
+    // a second remote: `push --dry-run --porcelain` lands on the OTHER remote for
+    // this form, and on `origin` for `push origin …`, `push origin`, and
+    // `push --repo=origin` alike (2026-08-06).
+    const remotelessPush = `git -C ${work} push`;
     const deniedBecause = (command, pattern, message) => {
       const result = runHook(command);
       assert.equal(result.decision, "deny", `${message} — got ${result.decision}`);
@@ -1539,14 +1548,29 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       assert.match(result.reason, /push\.default/, "the denial names the answer that changed");
     }
     {
-      // And the remote a bare push would pick.
-      const result = runHook(featurePush, {
-        GIT_CONFIG_COUNT: "1",
-        GIT_CONFIG_KEY_0: "remote.pushDefault",
-        GIT_CONFIG_VALUE_0: "elsewhere",
-      });
-      assert.equal(result.decision, "deny", "an inherited pushDefault override is denied");
-      assert.match(result.reason, /remote\.pushDefault/, "the denial names the answer that changed");
+      // And the remote a bare push would pick — asserted on the form that actually
+      // consults it. This case used to ride on `featurePush`, which was the fifth
+      // over-refusal of this shape (Codex, 2026-08-06): git never reads the
+      // remote-selection keys once the command names its destination, so comparing
+      // them denied the required feature-branch landing path over a key the push
+      // could not have used. Both directions are pinned below.
+      for (const key of ["remote.pushDefault", "branch.pushRemote", "branch.remote"]) {
+        const env = {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: key === "remote.pushDefault" ? key : `branch.main.${key.slice("branch.".length)}`,
+          GIT_CONFIG_VALUE_0: "elsewhere",
+        };
+        const denied = runHook(remotelessPush, env);
+        assert.equal(denied.decision, "deny", `an inherited ${key} override is denied on a push that names no remote`);
+        assert.match(denied.reason, new RegExp(key.replace(".", "\\.")), "the denial names the answer that changed");
+
+        const allowed = runHook(featurePush, env);
+        assert.notEqual(
+          allowed.decision,
+          "deny",
+          `${key} must not deny a push that names its destination — git never consults it there`,
+        );
+      }
     }
     {
       // 2026-08-06, the fourth over-refusal of this shape. `remote.*.push` is read

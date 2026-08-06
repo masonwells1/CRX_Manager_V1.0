@@ -795,8 +795,44 @@ export function pushNamesRefspec(cmd) {
 
 // The default-refspec lookups `pushNamesRefspec` makes irrelevant. The remote
 // SELECTION keys are not here: they answer which remote a push uses, which an
-// explicit refspec says nothing about.
+// explicit refspec says nothing about — that is `pushNamesDestination`'s question,
+// and it is a genuinely separate one. Conflating the two is what left the second
+// half of this over-refusal live after the first was fixed (Codex, 2026-08-06).
 export const REFSPEC_DEFAULT_LOOKUPS = new Set(["push.default", "remote.*.push", "branch.merge"]);
+
+// Does this push name the repository it pushes to? Git resolves a bare push's
+// remote through `branch.<b>.pushRemote` → `remote.pushDefault` →
+// `branch.<b>.remote` → `origin`, and consults NONE of them once the command
+// names a destination — so an inherited override of those cannot move such a
+// push. Reproduced on git 2.43.0 before this fix, for all three keys: with each
+// set to a second remote, `push --dry-run --porcelain origin main:refs/heads/feature`
+// reports `To <origin.git>` every time, while the bare push under the very same
+// config reports `To <unrelated.git>` every time.
+//
+// `--repo=<dest>` DOES count here, unlike in `pushNamesRefspec`. The asymmetry is
+// git's, not an inconsistency: `--repo` names a repository, so it answers this
+// question and not the refspec one. Confirmed rather than reasoned — `push
+// --repo=origin` under each of the three keys also reports `To <origin.git>`.
+// `pushDestinationToken` already prefers a positional over `--repo`, matching
+// git's documented precedence.
+export function pushNamesDestination(cmd) {
+  // Same fail-closed reason as `pushNamesRefspec`: an unknown value-taking option
+  // leaves its value looking like the positional destination, which would skip
+  // these lookups on a push that really is bare.
+  if (unknownPushOptions(cmd).length > 0) return false;
+  return pushDestinationToken(cmd) !== null;
+}
+
+// The remote-selection lookups `pushNamesDestination` makes irrelevant. The
+// per-remote keys (`remotes`, `remote.*.push`, `remote.*.mirror`) are NOT here:
+// they say where a named remote points and what it sends, which naming that
+// remote does not answer — an inherited `remote.origin.pushurl` still redirects
+// `push origin HEAD:feature`, and the scoped comparison must keep catching it.
+export const REMOTE_SELECTION_LOOKUPS = new Set([
+  "remote.pushDefault",
+  "branch.pushRemote",
+  "branch.remote",
+]);
 
 // Git treats a destination as a URL/path unless it is a bare remote name, and a
 // remote name can contain neither `:` nor a path separator.

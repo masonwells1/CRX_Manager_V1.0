@@ -2,6 +2,43 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — Remote-selection proof skipped for pushes that name their destination — BRANCH
+
+Codex finding on `51f3cc2c` (PR #313) — the **sixth** over-refusal of this shape,
+and the mirror of the fix directly below rather than a repeat of it. That round
+answered "does this push name its refspec?", correctly kept the remote-*selection*
+keys compared, and stopped there. It never asked the second question: does this
+push name its **destination**? Those are different facts about a push, and each
+silences only its own lookups — treating one question as covering both is exactly
+what left this half live.
+
+Git resolves a bare push's remote through `branch.<b>.pushRemote` →
+`remote.pushDefault` → `branch.<b>.remote` → `origin`, and consults **none** of
+them once the command names a destination. Comparing all three regardless meant an
+inherited `GIT_CONFIG*` value for a key the push could not have used denied
+`push origin HEAD:feature` — once again the exact feature-branch landing path a
+protected `main` requires. Reproduced on git 2.43.0 before fixing, for each of the
+three keys pointed at a second remote: `push --dry-run --porcelain origin
+main:refs/heads/feature` reports `To <origin.git>` every time, while the bare
+`push` under that same config reports `To <unrelated.git>` every time.
+
+`pushNamesDestination` decides it, and everything uncertain answers `false` so the
+lookups are kept: an unknown value-taking option (whose value would otherwise look
+like the positional destination), an unresolved remote that ended the segment scan
+early, and any chained command in which even one push is still bare. `--repo=<dest>`
+**does** count here, unlike for refspecs — the asymmetry is git's, since `--repo`
+names a repository and so answers this question and not the other. Confirmed
+against the dry run rather than reasoned.
+
+The per-remote keys (`remotes`, `remote.*.push`, `remote.*.mirror`) stay compared:
+they say where a named remote points and what it sends, which naming that remote
+does not answer. An inherited `remote.origin.pushurl` still redirects a push that
+names `origin`, and the scoped comparison must keep catching it.
+
+Pinned end-to-end against the hook in both directions, for all three keys: the
+same inherited override now allows the push that names its destination and still
+denies one that names no remote.
+
 ## 2026-08-06 — Default-refspec proof skipped for pushes that name their refspec — BRANCH
 
 Codex finding on `1dea595d` (PR #313) — the **fifth** over-refusal of this shape

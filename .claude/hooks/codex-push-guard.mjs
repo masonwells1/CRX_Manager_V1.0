@@ -41,6 +41,8 @@ import {
   pushDestinationLookupArgs,
   pushNamesRefspec,
   REFSPEC_DEFAULT_LOOKUPS,
+  pushNamesDestination,
+  REMOTE_SELECTION_LOOKUPS,
   divergentPushLookups,
   pushDestinationDecisions,
   pushDestinationDecision,
@@ -305,20 +307,37 @@ if (inheritedOverrides.length > 0) {
     // lookups are repository-wide, so a single bare push keeps them compared. An
     // empty segment list leaves this `false` and changes nothing.
     let everyPushNamesRefspec = null;
+    // …and, separately, whether every push here names its DESTINATION. Git resolves
+    // a bare push's remote through `branch.<b>.pushRemote` → `remote.pushDefault` →
+    // `branch.<b>.remote`, and consults none of them once the command names one, so
+    // comparing those keys denied `push origin HEAD:feature` over a `branch.remote`
+    // git never reads (Codex, 2026-08-06, the mirror of the refspec finding above —
+    // and missed on that round precisely because the reply then treated one
+    // question as covering both. Explicit refspec and explicit destination are
+    // different facts about a push, and each silences its own set of keys).
+    // Reproduced against git's own dry run for all three keys before fixing.
+    let everyPushNamesDestination = null;
     for (const segment of shellSegments(cmd).map((s) => s.trim()).filter((s) => isGitPush(s))) {
       if (gitPushCwd(segment, projectDir) !== repoDir) continue;
       everyPushNamesRefspec = (everyPushNamesRefspec ?? true) && pushNamesRefspec(segment);
+      everyPushNamesDestination = (everyPushNamesDestination ?? true) && pushNamesDestination(segment);
       const resolved = resolvePushRemote(segment, repoDir, overrideBranch);
       // Leaving the loop early means the remaining segments were never examined, so
-      // the refspec verdict is only partial — a later BARE push would go unseen.
-      // Fail it closed rather than skipping a lookup on unread evidence.
-      if (resolved.remote === null && !resolved.rawUrl) { remoteScope = null; everyPushNamesRefspec = false; break; }
+      // both verdicts are only partial — a later BARE push would go unseen.
+      // Fail them closed rather than skipping a lookup on unread evidence.
+      if (resolved.remote === null && !resolved.rawUrl) {
+        remoteScope = null;
+        everyPushNamesRefspec = false;
+        everyPushNamesDestination = false;
+        break;
+      }
       if (resolved.remote !== null) remoteScope.add(resolved.remote.toLowerCase());
     }
     const scrubbed = {};
     const ambient = {};
     for (const [name, args] of pushDestinationLookupArgs(overrideBranch)) {
       if (everyPushNamesRefspec === true && REFSPEC_DEFAULT_LOOKUPS.has(name)) continue;
+      if (everyPushNamesDestination === true && REMOTE_SELECTION_LOOKUPS.has(name)) continue;
       scrubbed[name] = answerFor(name, args, repoDir, false, remoteScope);
       ambient[name] = answerFor(name, args, repoDir, true, remoteScope);
     }
