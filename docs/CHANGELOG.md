@@ -2,6 +2,47 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — remote-answer scoping keys off git's own remote names — BRANCH
+
+Codex finding on `53475b15` (PR #313), and the first of this run that is a
+**fail-OPEN, not an over-refusal**. The eight preceding fixes all narrowed what
+the inherited-`GIT_CONFIG*` proof compares; this is the bill for narrowing with
+a parser that cannot actually identify a remote. Both scopers filtered the
+**selected** remote's own lines out of *both* comparison sets, so a real
+redirect compared equal and the guard emitted an allow.
+
+Two independent parse bugs, same shape:
+
+- **`git remote -v`, split on `\S+`.** A remote name is not a whitespace-delimited
+  token. `git remote add` rejects a name containing a space, but writing
+  `remote.<name>.url` into the config directly creates one git then honours —
+  verified here that `git remote` lists `my remote`, `remote -v` prints it
+  TAB-separated, and `get-url --push 'my remote'` resolves it. `\S+` captured
+  `my`. Codex reproduced the end-to-end allow with `branch.feature.remote='my
+  remote'` and an inherited `remote.my remote.pushurl` aimed at production.
+- **`git config --get-regexp`, matched greedily.** The name sits between two dots,
+  so `^remote\.(.*)\.(?:push|mirror)\b` backtracked to the LAST match in the
+  line — including one inside the **value**. Refspecs may contain dots:
+  `remote.origin.push HEAD:refs/heads/evil.push` keyed as `origin.push
+  HEAD:refs/heads/evil`. Found while fixing the first and confirmed against real
+  `git config` output.
+
+Both now resolve the name against the list `git remote` actually returns (read
+under both environments, longest name first so a prefix name cannot shadow a
+longer one). A line matching no configured name is **kept** in the comparison
+rather than dropped — the fail-closed direction. That is safe to rely on because
+`git remote` lists a remote having any `remote.<name>.*` key, so an unknown key
+is genuinely anomalous and belongs in the diff.
+
+Fail-open check: the allow direction is pinned too — a whitespace-named remote
+the push never selects still narrows away, so the fix does not simply revive the
+over-refusal. Revert-check: with each parser reverted independently, the new
+cases fail on exactly their own assertions and pass with them restored;
+`codex-push-lib.test.mjs`, `guards.test.mjs` (161 assertions),
+`test:agent-workflows`, and manifest parity green.
+
+Files: `.claude/hooks/codex-push-guard.mjs`, `.claude/hooks/codex-push-lib.test.mjs`.
+
 ## 2026-08-06 — `remote.*.push` proof scoped to the BARE push's own remote — BRANCH
 
 Codex finding on `b0404398` (PR #313) — the **ninth** over-refusal of this shape,

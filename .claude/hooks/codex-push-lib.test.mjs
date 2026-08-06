@@ -1748,6 +1748,72 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       assert.equal(denied.decision, "deny", "the same override on the selected remote is still denied");
       assert.match(denied.reason, /remotes/, "the denial names the answer that changed");
     }
+    {
+      // 2026-08-06, Codex's PR #313 review — the round where the accumulated
+      // over-refusal fixes turn fail-OPEN one layer down. A remote name is NOT a
+      // whitespace-delimited token: `git remote add` rejects a space, but writing
+      // `remote.<name>.url` straight into the config creates one git then honours
+      // — verified here that `git remote` lists `my remote`, `remote -v` prints it
+      // TAB-separated, and `get-url --push 'my remote'` resolves it.
+      //
+      // Both scope parsers read that name as `my`, which matches no scope entry,
+      // so the SELECTED remote's own lines were filtered out of BOTH comparison
+      // sets and an inherited pushurl aimed at production compared equal. Codex's
+      // repro, replayed: resolve the remote through `branch.<b>.remote` so the
+      // name must survive scoping, then redirect it at the app repo.
+      git(["config", "remote.my remote.url", path.join(tmp, "spaced.git")], work);
+      git(["config", "branch.main.remote", "my remote"], work);
+      try {
+        assert.ok(
+          git(["remote"], work).stdout.split("\n").includes("my remote"),
+          "premise: git itself lists the whitespace-named remote",
+        );
+        assert.equal(
+          runHook(remotelessPush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "remote.my remote.pushurl",
+            GIT_CONFIG_VALUE_0: CRX_URL,
+          }).decision,
+          "deny",
+          "a redirect on the whitespace-named remote this push selects is not filtered away",
+        );
+        // The allow direction still holds for the same name shape: a whitespace-named
+        // remote this push does NOT select must stay narrowable, or the fix above
+        // would just be the over-refusal coming back.
+        assert.equal(
+          runHook(featurePush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "remote.my remote.push",
+            GIT_CONFIG_VALUE_0: "HEAD:refs/heads/elsewhere",
+          }).decision,
+          "allow",
+          "a whitespace-named remote this push never selects is still narrowed away",
+        );
+      } finally {
+        git(["config", "--unset", "branch.main.remote"], work);
+        git(["config", "--remove-section", "remote.my remote"], work);
+      }
+    }
+    {
+      // The same lookup-by-known-name question one key over, and the reason the
+      // config-key parser cannot use a delimiter guess either: the remote name
+      // sits between two dots, so a greedy `^remote\.(.*)\.(?:push|mirror)\b`
+      // backtracks to the LAST match in the whole line — including one inside the
+      // VALUE. A refspec may legally contain dots, verified here: git prints
+      // `remote.origin.push HEAD:refs/heads/evil.push`, which keyed as
+      // `origin.push HEAD:refs/heads/evil` and so belonged to no scope, dropping
+      // the redirecting line from both sets. Same fail-open shape as above.
+      const denied = runHook(barePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/evil.push",
+      });
+      assert.equal(
+        denied.decision, "deny",
+        "a default refspec whose VALUE ends in .push still keys to the remote it belongs to",
+      );
+      assert.match(denied.reason, /remote\.\*\.push/, "the denial names the answer that changed");
+    }
     assert.equal(
       runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,
       "allow",

@@ -132,6 +132,69 @@ function gitIn(args, cwd, { keepConfigOverrides = false } = {}) {
 }
 const git = (args, cwd) => gitIn(args, cwd);
 
+// The remote names this repository actually has, read under BOTH environments —
+// an inherited GIT_CONFIG* can define a remote the scrubbed read cannot see, and
+// recognising more remotes can only make more checks apply.
+//
+// This is the authoritative name list, and it exists as a shared helper because
+// a remote name is NOT a whitespace-delimited token. `git remote add` rejects a
+// name containing a space, but writing `remote.<name>.url` into the config
+// directly creates one git then honours: `git remote` lists `my remote`,
+// `git remote -v` prints it TAB-separated from the URL, and `git remote get-url
+// --push 'my remote'` resolves it. Parsing such a line with `\S+` captures only
+// `my`, so scoping by that truncated name filtered the REAL remote's `(push)`
+// line out of BOTH comparison sets and the guard allowed a bare push whose
+// inherited `remote.my remote.pushurl` pointed at production — a fail-OPEN, not
+// an over-refusal (Codex, 2026-08-06, reproduced against the hook before fixing).
+function configuredRemoteNames(repoDir) {
+  const read = (keepConfigOverrides) => {
+    try { return gitIn(["remote"], repoDir, { keepConfigOverrides }); }
+    catch { return ""; }
+  };
+  return [...new Set(
+    [read(false), read(true)]
+      .join("\n")
+      .split(/\r?\n/)
+      .map((name) => name.replace(/\r/g, ""))
+      .filter(Boolean),
+  )];
+}
+
+// Split one `git remote -v` line into its remote name and the rest, using the
+// KNOWN names rather than a delimiter guess. Longest first, so a name that is a
+// prefix of another (`my` alongside `my remote`) cannot shadow the longer one.
+// Returns null when no configured name matches, which every caller treats as
+// fail-closed rather than as "no remote".
+function remoteNameOnLine(line, knownRemotes) {
+  const candidates = [...knownRemotes].sort((a, b) => b.length - a.length);
+  return candidates.find((name) =>
+    line.startsWith(name) && /^\s/.test(line.slice(name.length))) ?? null;
+}
+
+// The same question for a `git config --get-regexp` line, which prints
+// `remote.<name>.<key> <value>`. Also answered from the known names, and for a
+// second reason beyond whitespace: the name sits between two dots, so the old
+// greedy `^remote\.(.*)\.(?:push|mirror)\b` backtracked to the LAST match in the
+// whole line — including one inside the value. `remote.origin.push
+// HEAD:refs/heads/evil.push` (a legal ref; dots are allowed) keyed as
+// `origin.push HEAD:refs/heads/evil`, which no scope contains, so the redirecting
+// line was dropped from both sets and compared equal. Same fail-open shape as the
+// `remote -v` finding, one lookup over; found while fixing that one and confirmed
+// against `git config --get-regexp` output.
+//
+// Returning null when no configured name matches keeps the line in the comparison
+// rather than dropping it. That is safe to rely on because `git remote` lists a
+// remote that has ANY `remote.<name>.*` key — verified here for a `push`-only and
+// a `mirror`-only remote, and for one defined solely by inherited config — so a
+// key whose remote is unknown is genuinely anomalous and belongs in the diff.
+function remoteNameInConfigKey(line, knownRemotes) {
+  if (!/^remote\./.test(line)) return null; // not a per-remote key at all
+  const candidates = [...knownRemotes].sort((a, b) => b.length - a.length);
+  return candidates.find((name) =>
+    line.startsWith(`remote.${name}.`)
+    && /^(?:push|mirror)(?:\s|$)/.test(line.slice(`remote.${name}.`.length))) ?? null;
+}
+
 // Which remote will a given push actually use? Git's own resolution order, in one
 // place because two separate checks need it: the inherited-override proof below
 // (to compare only the per-remote settings this push consults) and the per-remote
@@ -157,10 +220,7 @@ function resolvePushRemote(pushCmd, repoDir, branch) {
     // Read across both environments for the same reason as the config reads: an
     // inherited GIT_CONFIG* can define a remote the scrubbed read cannot see, and
     // recognising more remotes here can only make more checks apply.
-    const configuredRemotes = [
-      gitIn(["remote"], repoDir, { keepConfigOverrides: false }),
-      gitIn(["remote"], repoDir, { keepConfigOverrides: true }),
-    ].join("\n").split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+    const configuredRemotes = configuredRemoteNames(repoDir);
     if (destinationToken && configuredRemotes.includes(destinationToken)) {
       return { remote: destinationToken, rawUrl: false };
     }
@@ -244,12 +304,14 @@ if (inheritedOverrides.length > 0) {
   // unchanged and handles a command that pushes to several remotes. `null` in the
   // scope set means a push whose remote could not be resolved, and that keeps the
   // full text — an unresolved remote must not narrow what is compared.
-  const scopeRemoteAnswer = (text, scope) => {
+  const scopeRemoteAnswer = (text, scope, knownRemotes) => {
     if (scope === null) return text;
     return String(text).split(/\r?\n/).filter((line) => {
-      const key = /^remote\.(.*)\.(?:push|mirror)\b/.exec(line.trim());
-      if (!key) return true; // not a per-remote line — never filtered away
-      return scope.has(key[1].toLowerCase());
+      const name = remoteNameInConfigKey(line.trim(), knownRemotes);
+      // Either not a per-remote line, or one naming a remote git does not list.
+      // Both keep the line — only a positively identified remote can be filtered.
+      if (name === null) return true;
+      return scope.has(name.toLowerCase());
     }).join("\n");
   };
   // `git remote -v` lists EVERY remote, but a push consults only the one it
@@ -264,19 +326,19 @@ if (inheritedOverrides.length > 0) {
   // here resolved to a named remote, so there is no positive evidence to narrow
   // by, and narrowing to nothing would compare nothing. Only a scope naming at
   // least one remote filters. `null` keeps the full text for the same reason.
-  const scopeRemotesAnswer = (text, scope) => {
+  const scopeRemotesAnswer = (text, scope, knownRemotes) => {
     if (scope === null || scope.size === 0) return text;
     return String(text).split(/\r?\n/).filter((line) => {
-      const named = /^(\S+)\s+\S/.exec(line.trim());
-      if (!named) return true; // unparseable — never filtered away, stays fail-closed
-      return scope.has(named[1].toLowerCase());
+      const named = remoteNameOnLine(line.trim(), knownRemotes);
+      if (named === null) return true; // unrecognised — never filtered away, stays fail-closed
+      return scope.has(named.toLowerCase());
     }).join("\n");
   };
-  const normalizeAnswer = (name, text, scope) => {
+  const normalizeAnswer = (name, text, scope, knownRemotes) => {
     if (name === "remote.*.push" || name === "remote.*.mirror") {
-      return scopeRemoteAnswer(text, scope);
+      return scopeRemoteAnswer(text, scope, knownRemotes);
     }
-    if (name === "remotes") return pushDestinationDecisions(scopeRemotesAnswer(text, scope));
+    if (name === "remotes") return pushDestinationDecisions(scopeRemotesAnswer(text, scope, knownRemotes));
     // A literal URL destination resolves to one URL and gets the same pair. It
     // used to get the classification ALONE, which was the identical fail-open
     // one path over: `urlIsGuardedApp` is path-only, so it reads `guarded-app`
@@ -288,11 +350,11 @@ if (inheritedOverrides.length > 0) {
     }
     return text;
   };
-  const answerFor = (name, args, cwd, keepConfigOverrides, scope) => {
+  const answerFor = (name, args, cwd, keepConfigOverrides, scope, knownRemotes = []) => {
     // `config --get` exits 1 when a key is unset, which is the ordinary case and
     // must read as "absent", not "failed" — but it has to be DISTINGUISHABLE from
     // a real failure, because an error on one side only is itself a divergence.
-    try { return `ok:${normalizeAnswer(name, gitIn(args, cwd, { keepConfigOverrides }), scope)}`; }
+    try { return `ok:${normalizeAnswer(name, gitIn(args, cwd, { keepConfigOverrides }), scope, knownRemotes)}`; }
     catch (error) {
       // `--get-regexp` exits 1 for "no keys matched", which is absence, not
       // failure — and once the per-remote answers are scoped (above), a side that
@@ -301,7 +363,7 @@ if (inheritedOverrides.length > 0) {
       // and denied on a difference that isn't one. Map it into the same space as
       // an empty match; any other status stays a real, still-fail-closed error.
       if (error?.status === 1 && args.includes("--get-regexp")) {
-        return `ok:${normalizeAnswer(name, "", scope)}`;
+        return `ok:${normalizeAnswer(name, "", scope, knownRemotes)}`;
       }
       return `err:${error?.status ?? error?.message ?? "failed"}`;
     }
@@ -313,6 +375,10 @@ if (inheritedOverrides.length > 0) {
     } catch (error) {
       deny(`CODEX GATE: this shell has GIT_CONFIG* variables set (${inheritedOverrides.join(", ")}) and the guard could not read ${repoDir} to prove they do not redirect the push. ${error?.message || error}`);
     }
+    // Every remote name git lists for this repository, computed once and handed to
+    // the answer scopers below. They need the NAMES, not a delimiter guess, because
+    // a remote name may contain whitespace (see `configuredRemoteNames`).
+    const knownRemotes = configuredRemoteNames(repoDir);
     // The remotes the pushes running in THIS repository actually consult. A push
     // whose remote cannot be resolved collapses the whole set to `null` (compare
     // everything); a raw-URL destination contributes no remote, because git reads
@@ -404,8 +470,8 @@ if (inheritedOverrides.length > 0) {
       // `remote.*.push` is read only for a bare push's own remote; every other
       // per-remote answer is read for whichever remote its push selects.
       const scope = name === "remote.*.push" ? refspecDefaultScope : remoteScope;
-      scrubbed[name] = answerFor(name, args, repoDir, false, scope);
-      ambient[name] = answerFor(name, args, repoDir, true, scope);
+      scrubbed[name] = answerFor(name, args, repoDir, false, scope, knownRemotes);
+      ambient[name] = answerFor(name, args, repoDir, true, scope, knownRemotes);
     }
     // NOT compared here: the URL-rewrite table and the settings naming a program
     // to carry the objects. Those two feed classifiers whose only power is to
