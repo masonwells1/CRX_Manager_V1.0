@@ -4,7 +4,8 @@
 -- 20260805220757_reject_nonfinite_bulk_import_values.sql and
 -- 20260805224819_snapshot_bulk_import_product_cost.sql and
 -- 20260806000752_authorize_bulk_import_product_cost.sql and
--- 20260806004644_bind_bulk_import_intent_and_profit.sql.
+-- 20260806004644_bind_bulk_import_intent_and_profit.sql and
+-- 20260806012423_lock_bulk_import_cost_snapshot.sql.
 --
 -- Proves that a bulk import cannot forge a partial/terminal lifecycle state and
 -- that a confirmed import atomically creates its order lines, inventory booking,
@@ -65,6 +66,7 @@ DECLARE
   v_line_profit_sum numeric;
   v_fractional_qty numeric;
   v_fractional_expected_profit numeric;
+  v_item_cost_snapshot bigint;
 BEGIN
   SELECT id, full_name
     INTO v_actor, v_actor_name
@@ -435,9 +437,9 @@ BEGIN
   END IF;
 
   SELECT count(*), min(quantity_delivered), min(quantity_remaining),
-         min(total_price), min(profit), min(net_margin)
+         min(total_price), min(profit), min(net_margin), min(cost_at_time_cents)
     INTO v_item_count, v_quantity_delivered, v_quantity_remaining,
-         v_item_total, v_item_profit, v_item_margin
+         v_item_total, v_item_profit, v_item_margin, v_item_cost_snapshot
   FROM public.order_items
   WHERE order_id = v_order_id;
 
@@ -446,6 +448,7 @@ BEGIN
      OR v_quantity_remaining <> 5
      OR v_item_total <> 50
      OR v_item_profit <> v_expected_profit
+     OR v_item_cost_snapshot <> round(v_product_cost * 100)::bigint
      OR v_item_margin <> ((10 - round(v_product_cost, 2)) / 10) * 100 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: imported line bookkeeping mismatch';
   END IF;
@@ -542,6 +545,18 @@ BEGIN
       RAISE EXCEPTION
         'SMOKE_FAIL: fractional canonical profit mismatch order=% lines=% commissions=%',
         v_total_profit, v_line_profit_sum, v_count;
+    END IF;
+
+    SELECT count(*) INTO v_count
+      FROM public.order_items
+     WHERE order_id = v_fractional_order_id
+       AND (
+         profit IS DISTINCT FROM round(profit, 2)
+         OR cost_per_unit IS DISTINCT FROM v_product_cost
+         OR cost_at_time_cents IS DISTINCT FROM round(v_product_cost * 100)::bigint
+       );
+    IF v_count <> 0 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: fractional line cents/cost snapshots drifted on % row(s)', v_count;
     END IF;
 
     RAISE EXCEPTION 'SMOKE_FRACTIONAL_ROLLBACK';

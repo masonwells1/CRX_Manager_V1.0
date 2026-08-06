@@ -1305,7 +1305,7 @@ describe('RPC contract: bulk_import_order', () => {
     expect(body).toContain("NULLIF(btrim(v_item->>'unit_cost'), '')::numeric");
     expect(body).toContain('v_product.current_cost');
     expect(body).toContain('v_supplied_cost :=');
-    expect(body).toContain('v_cost_per_unit := v_product.current_cost');
+    expect(body).toContain('v_cost_per_unit := v_cost_cents::numeric / 100');
     expect(body).not.toContain('v_cost_per_unit := COALESCE');
     expect(body).toContain("ITEM_INVALID: supplied unit_cost must be finite and >= 0");
     expect(body).toContain("RAISE EXCEPTION 'ITEM_INVALID: quantity, price, cost, and sort order must be valid numbers'");
@@ -1318,6 +1318,11 @@ describe('RPC contract: bulk_import_order', () => {
     expect(body).toMatch(/SELECT total_price, total_cost, total_profit, total_margin_pct[\s\S]*FROM public\.orders/);
     expect(body).toContain('SET profit = profit + (v_total_profit - v_line_profit_sum)');
     expect(body).toMatch(/public\._insert_commissions_for_order\([\s\S]*v_total_profit/);
+    expect(body).toContain('FOR SHARE OF p');
+    expect(body).toContain('v_cost_cents := round(v_product.current_cost * 100)::bigint');
+    expect(body).toContain("'cost_at_time_cents', v_cost_cents");
+    expect(body).toMatch(/cost_per_unit,\s+cost_at_time_cents,\s+total_units_needed/);
+    expect(body).toContain('round(v_qty * v_price_per_unit, 2) - round(v_qty * v_cost_per_unit, 2)');
   });
 });
 

@@ -82,7 +82,7 @@ normalizes legacy dollar inputs to cents before any write. The expanded
 rollback smoke exercises all nine field/value combinations, sub-cent
 normalization, and zero residue across orders, inventory, commissions,
 activity, and idempotency. Final live function hash is
-`5144733e3a8c7fe4d6d1e9f51e5fc3a2`; schema high-water is `20260806004644`.
+`473152377f9e8f67db8cb0470a43a01f`; schema high-water is `20260806012423`.
 
 A second exact-commit adversarial review found that an omitted optional
 `unit_cost` was still being submitted as zero just as imports began creating
@@ -118,6 +118,16 @@ idempotency advisory lock. The strengthened rollback smoke proves a deliberately
 rounding-sensitive ten-line import, exact commission/header/line agreement,
 same-intent replay, changed-intent rejection, and zero residue. Both migration
 review charters and all 21 live invariant predicates passed.
+
+A later exact-SHA pass found that individual fractional lines could retain
+sub-cent profit and that the immutable-cost trigger could reread Product cost
+after a concurrent governed update. Forward-only live migration
+`20260806012423_lock_bulk_import_cost_snapshot` locks all requested Products in
+stable UUID order, derives one bigint-cent cost snapshot, explicitly writes the
+same `cost_at_time_cents`, and keeps every line profit whole-cent before assigning
+the aggregate remainder deterministically. Candidate and installed rollback
+smokes proved line-level cents, immutable snapshot equality, and zero residue;
+both migration reviewers returned CLEAN.
 
 ## 2026-08-05 — Factory ledger failure containment
 
