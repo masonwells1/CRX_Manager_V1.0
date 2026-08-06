@@ -421,13 +421,61 @@ for (const pushCmd of pushCommands) {
     catch (_error) { return ""; } // an unreadable config is handled by the checks below
   };
   transportConfig = [readTransportConfig(false), readTransportConfig(true)].filter(Boolean).join("\n");
-  const namedPrograms = executableTransportSettings(transportConfig);
+
+  // Which remote will THIS push actually use? Both checks below read config keyed
+  // by remote name, and running them at full breadth (above) without this made
+  // them refuse on a remote the push never touches: with an unrelated mirrored
+  // backup remote configured, `push origin HEAD:feature` was denied because
+  // `archive` was mirrored (Codex's 2026-08-05 re-review of the hoist, reproduced
+  // before fixing). `mirror`, `receivepack`, `uploadpack`, and `vcs` are all
+  // per-remote settings — git applies them only to the remote it resolves — so
+  // scoping to that remote removes the over-refusal without giving anything up.
+  //
+  // Resolution order is git's own, and matches the destination lookup further
+  // down. `null` means "could not resolve", and every check below then falls back
+  // to full breadth rather than trusting a name it failed to compute.
+  let targetRemote = null;
+  let targetIsRawUrl = false;
+  try {
+    const destinationToken = pushDestinationToken(pushCmd);
+    if (destinationToken && destinationLooksLikeUrl(destinationToken)) {
+      // A raw URL is not a configured remote, so no `remote.<name>.*` applies to
+      // it. It is judged by the destination checks below, not by these.
+      targetIsRawUrl = true;
+    } else {
+      const config = (key) => { try { return git(["config", "--get", key], pushRepoDir); } catch { return ""; } };
+      targetRemote = destinationToken
+        || config(`branch.${branch}.pushRemote`)
+        || config("remote.pushDefault")
+        || config(`branch.${branch}.remote`)
+        || "origin";
+    }
+  } catch (_error) {
+    targetRemote = null; // fail CLOSED — unresolved means every remote stays in scope
+  }
+  // Compared case-INsensitively even though a subsection name is case-sensitive
+  // to git. The mismatch can only make this deny more (a remote differing from
+  // the configured one by case alone is treated as in scope), which is the safe
+  // direction; Codex's case is two different names and is unaffected.
+  const remoteInScope = (name) => {
+    if (targetIsRawUrl) return false;
+    if (targetRemote === null) return true;
+    return String(name).toLowerCase() === targetRemote.toLowerCase();
+  };
+
+  const namedPrograms = executableTransportSettings(transportConfig).filter((key) => {
+    // `core.sshCommand`, `core.gitProxy`, `protocol.*.command`, and `ssh.variant`
+    // are global: they carry the objects whichever remote is picked, so they are
+    // never scoped away. Only the `remote.<name>.*` forms are.
+    const perRemote = key.match(/^remote\.(.+)\.(?:receivepack|uploadpack|vcs)$/);
+    return perRemote ? remoteInScope(perRemote[1]) : true;
+  });
   if (namedPrograms.length > 0) {
     deny(`CODEX GATE: this checkout configures git settings that name a program to carry the push (${namedPrograms.join(", ")}). That program decides where the objects actually go, so no destination check here can be trusted. Unset them with \`git config --unset <setting>\` and push normally — git's own defaults need none of them.`);
   }
-  const mirrorRemotes = configuredMirrorRemotes(transportConfig);
+  const mirrorRemotes = configuredMirrorRemotes(transportConfig).filter(remoteInScope);
   if (mirrorRemotes.length > 0) {
-    deny(`CODEX GATE: this checkout configures a mirror remote (${mirrorRemotes.map((r) => `remote.${r}.mirror`).join(", ")}), which is \`--mirror\` stored in config. A bare push to a mirror remote updates EVERY ref — main included — without naming one, so the production review gate never sees a main-bound push, and git rejects any explicit refspec that would narrow it. Unset it with \`git config --unset remote.<name>.mirror\` and push one explicit branch.`);
+    deny(`CODEX GATE: this push's remote is configured as a mirror (${mirrorRemotes.map((r) => `remote.${r}.mirror`).join(", ")}), which is \`--mirror\` stored in config. A bare push to a mirror remote updates EVERY ref — main included — without naming one, so the production review gate never sees a main-bound push, and git rejects any explicit refspec that would narrow it. Unset it with \`git config --unset remote.<name>.mirror\` and push one explicit branch.`);
   }
 
   const srcRef = mainPushSource(pushCmd, branch);

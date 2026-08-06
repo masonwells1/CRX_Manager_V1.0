@@ -2,6 +2,39 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — Mirror deny scoped to the targeted remote; inactive reps named — BRANCH
+
+Two Codex findings on `48149870` (PR #313), both reproduced before fixing.
+
+**The mirror deny was over-refusing, and the hoist is what caused it.** Widening
+the check to every push form (previous entry) also widened *which remotes it
+answered for*: it denied whenever **any** configured remote was mirrored, so a
+checkout carrying an unrelated mirrored backup remote could not push at all.
+Reproduced — with `remote.archive.mirror=true`, `push origin HEAD:feature` was
+denied because `archive` was mirrored, a remote that push never touches. While
+the check only ran on main-bound pushes the blast radius was small; at full
+breadth it blocks ordinary branch→PR work, which is the flow the guard exists to
+protect.
+
+`mirror`, `receivepack`, `uploadpack`, and `vcs` are all per-remote settings, so
+the deny now resolves the remote git will actually use — the command's token,
+else `branch.<b>.pushRemote`, `remote.pushDefault`, `branch.<b>.remote`, else
+`origin` — and scopes to it. Global carriers (`core.sshCommand`, `core.gitProxy`,
+`protocol.*.command`, `ssh.variant`) are never scoped away, since they carry the
+objects whichever remote is picked. Unresolvable remote → full breadth, and a
+raw-URL destination consults no `remote.*` config at all. Both directions are
+pinned in `guards.test.mjs`: an untargeted mirror allows, while pushing to the
+mirrored remote — including a bare push that resolves there via `pushDefault` —
+still denies.
+
+**Customers list showed every former rep as "Unknown rep".** The rep-name lookup
+filtered `is_active = true`, but a customer keeps its `assigned_sales_rep` when
+that rep is deactivated, so all former reps collapsed to one indistinguishable
+label in both the column and the filter dropdown — precisely the population an
+admin needs to separate in order to reassign the accounts. Name resolution now
+covers all profiles and marks inactive ones `(inactive)`. The map is display-only,
+so this does not widen who can be assigned work.
+
 ## 2026-08-05 — Mirror-remote guard: parse fixed, and the check made reachable — BRANCH
 
 Codex's review of `a7c55978` on PR #313 reported that `configuredMirrorRemotes()`

@@ -261,10 +261,45 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
     ok(/mirror remote/.test(reason), `mirror remote denies \`${pushVerb} ${form || "(bare)"}\``);
   }
 
+  // A mirror on a remote this push does NOT target must not deny. Widening the
+  // check to every push form (above) made it refuse on an unrelated mirrored
+  // backup remote — `push origin HEAD:feature` denied because `archive` was
+  // mirrored. Codex caught this on the hoist, 2026-08-05, reproduced before
+  // fixing. `mirror` is per-remote, so the deny is scoped to the remote git
+  // actually resolves for this push.
+  git("config", "--unset", "remote.origin.mirror");
+  git("config", "remote.archive.url", "https://example.com/backup.git");
+  git("config", "remote.archive.mirror", "true");
+  const unrelated = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin HEAD:feature` },
+  });
+  eq(unrelated.stdout.trim(), "", "a mirror on an untargeted remote does not deny");
+
+  // ...but pushing TO that remote still does, and so does a bare push whose
+  // resolved remote is the mirrored one — the scoping must follow git's own
+  // resolution order, not just the token typed in the command.
+  const atMirror = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} archive` },
+  });
+  ok(/mirror/.test(atMirror.stdout), "pushing to the mirrored remote itself still denies");
+
+  git("config", "remote.pushDefault", "archive");
+  const viaDefault = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb}` },
+  });
+  ok(/mirror/.test(viaDefault.stdout), "bare push resolving to the mirrored remote via pushDefault denies");
+  git("config", "--unset", "remote.pushDefault");
+  git("config", "--unset", "remote.archive.mirror");
+
   // Control, same harness: without the mirror flag the identical push is allowed.
   // The check above widened a deny to every push form, so this pins that it did
   // not become a blanket refusal.
-  git("config", "--unset", "remote.origin.mirror");
   const clean = runHook("codex-push-guard.mjs", {
     cwd: mirrorRepo,
     tool_name: "Bash",

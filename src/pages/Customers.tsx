@@ -75,17 +75,28 @@ export default function Customers() {
 
   // Assigned-rep names for the column + filter. A failure here only costs the
   // rep label (the id-based filter still works), so it never blocks the list.
+  //
+  // Deliberately NOT filtered to active profiles. A customer keeps its
+  // assigned_sales_rep when that rep is deactivated, so filtering here resolved
+  // every former rep to the same "Unknown rep" label — in the column and in the
+  // filter dropdown alike — which is exactly the population an admin needs to
+  // pick apart to reassign the accounts (Codex, 2026-08-05). Inactive reps are
+  // labelled rather than hidden; this map is display-only, so it never widens
+  // who can be *assigned* work.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const { data, error } = await supabase
         .from('profile_public_view')
-        .select('id, full_name')
-        .eq('is_active', true)
+        .select('id, full_name, is_active')
         .order('full_name');
       if (cancelled || error || !data) return;
       setRepNames(Object.fromEntries(
-        data.flatMap((p: { id: string | null; full_name: string | null }) => (p.id ? [[p.id, p.full_name || 'Unnamed user']] : [])),
+        data.flatMap((p: { id: string | null; full_name: string | null; is_active: boolean | null }) => {
+          if (!p.id) return [];
+          const name = p.full_name || 'Unnamed user';
+          return [[p.id, p.is_active === false ? `${name} (inactive)` : name]];
+        }),
       ));
     })();
     return () => { cancelled = true; };
