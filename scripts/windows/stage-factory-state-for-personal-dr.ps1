@@ -7,6 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $backupTool = Join-Path $repoRoot 'scripts\backup-factory-state.mjs'
 

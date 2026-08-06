@@ -189,6 +189,22 @@ if (process.platform === "win32") {
   ], { cwd: process.cwd(), encoding: "utf8", timeout: 120_000 });
   assert.equal(degradedSelfTest.status, 4, `tracked runner preserves and reports degraded state: ${degradedSelfTest.stderr}`); assertions++;
   assert.equal(existsSync(degradedSelfTestDestination), false, "degraded runner self-test removes plaintext staging"); assertions++;
+
+  const pwshProbe = spawnSync("pwsh.exe", ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.Major"], {
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  if (!pwshProbe.error && pwshProbe.status === 0) {
+    const pwshDegradedDestination = path.join(root, "runner-pwsh-degraded-self-test-snapshot");
+    const pwshDegraded = spawnSync("pwsh.exe", [
+      "-NoProfile", "-File", runner,
+      "-Destination", pwshDegradedDestination,
+      "-Source", tornSource,
+      "-SelfTest",
+    ], { cwd: process.cwd(), encoding: "utf8", timeout: 120_000 });
+    assert.equal(pwshDegraded.status, 4, `PowerShell 7 preserves the degraded-state exit contract: ${pwshDegraded.stderr}`); assertions++;
+    assert.equal(existsSync(pwshDegradedDestination), false, "PowerShell 7 degraded self-test removes plaintext staging"); assertions++;
+  }
 }
 
 rmSync(root, { recursive: true, force: true });

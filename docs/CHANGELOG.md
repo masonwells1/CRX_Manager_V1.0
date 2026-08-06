@@ -30,6 +30,13 @@ Factory status and Board projections now show each job's governed working folder
 Wrong-worktree denials give a stage-valid route: transferable waiting/parked jobs
 name the exact chat takeover flow, while active build/review/landing jobs route
 back to their existing Factory chat and never promise an illegal transfer.
+Review remediation makes takeover requests fail closed for unknown alphabetic,
+prefix-position, and quoted ticket IDs instead of falling back to an unrelated
+lone job. Backup verification now returns a normal invalid-manifest result for
+case-variant ledger entries, preserves the primary capture error if cleanup also
+fails, and covers manifest tampering directly. The tracked runner also disables
+PowerShell 7's native-command exception conversion so intentional degraded and
+capacity exit codes remain available to the encrypted off-site upload workflow.
 
 This entry describes the reviewed follow-up branch; it does not claim merge or
 production deployment.
