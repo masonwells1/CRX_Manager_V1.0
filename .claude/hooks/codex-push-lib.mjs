@@ -903,18 +903,39 @@ export function pushDestinationLookupArgs(branch) {
 // than trying to classify a main-bound push it cannot see in the command text.
 // Values follow git's boolean spelling; only a true value mirrors.
 const GIT_TRUE_VALUES = ["true", "yes", "on", "1"];
+// Splitting the line on its first `=`-or-space was wrong in two separate ways,
+// both confirmed by reproduction against real `git config` output rather than
+// reasoned from the docs (Codex's 2026-08-05 review of this PR reported the
+// first). Git's own parser is the specification here:
+//
+//   remote.origin.mirror          valueless boolean -> TRUE  (`--bool` agrees)
+//   remote.origin.mirror=         empty string      -> false (git's own false)
+//   remote.my remote.mirror=true  spaces are legal in a subsection name -> TRUE
+//
+// The old split skipped the first outright ("a bare key carries no value") and
+// mis-keyed the third as `remote.my`, so both spellings sailed past the deny and
+// reached a bare push that carries main. Anchoring on the KEY SHAPE instead of
+// hunting a separator parses all three the same way, and handles both output
+// formats this is fed: `key=value` from `--list`, `key value` from
+// `--get-regexp`. The name capture is greedy so a remote actually named
+// `a.mirror` keeps its full name instead of being truncated at the first match.
+const MIRROR_LINE = /^remote\.(.+)\.mirror(?:=(.*)|[ \t]+(.*))?$/i;
 export function configuredMirrorRemotes(configOutput) {
   const found = [];
   for (const raw of String(configOutput ?? "").split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
-    const sep = line.search(/[=\s]/);
-    if (sep === -1) continue; // a bare key carries no value; not provably true
-    const key = line.slice(0, sep).toLowerCase();
-    const value = line.slice(sep + 1).trim().toLowerCase();
-    const remote = key.match(/^remote\.(.+)\.mirror$/)?.[1];
-    if (!remote) continue;
-    if (!GIT_TRUE_VALUES.includes(value)) continue;
+    const match = line.match(MIRROR_LINE);
+    if (!match) continue;
+    // Section and variable names are case-insensitive to git, but a SUBSECTION —
+    // the remote name — is case-sensitive, so it is captured verbatim. The deny
+    // message hands Mason `git config --unset remote.<name>.mirror`, and that
+    // command silently does nothing if the name is not spelled exactly as stored.
+    const remote = match[1];
+    const value = match[2] ?? match[3];
+    // An absent value is the valueless boolean, which git reads as true. An
+    // explicit value still has to spell true — `mirror=` is false.
+    if (value !== undefined && !GIT_TRUE_VALUES.includes(value.trim().toLowerCase())) continue;
     if (!found.includes(remote)) found.push(remote);
   }
   return found;

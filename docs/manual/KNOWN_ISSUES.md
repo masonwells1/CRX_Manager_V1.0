@@ -49,14 +49,27 @@ REFUSES               "proxy.invalid/git/masonwells1/crx_backups" <- http://prox
 
 Same root cause as the push-guard instance above — no notion of an approved rewrite target — and the same safe failure direction: it refuses rather than writing private notes to an unverified address. Parked for the same reason, with one addition specific to this script: verifying a fix needs both a proxy-carrying session **and** a real private `CRX_Backups` clone to stage into, so the end-to-end proof is not available from an ordinary session at all. Fix both instances together; one approved-rewrite-target notion should serve both call sites.
 
-### Third instance — the executable-config classifier misses `core.hooksPath`, and is unreachable for non-main pushes
+### Third instance — the executable-config classifier misses `core.hooksPath` — (b) FIXED 2026-08-05, (a) still parked
 
 **Found 2026-08-05 by Codex on PR #313 (P1), reproduced the same day. Two separate defects; Codex's report names one and reproduces the other.**
+
+> **Update, same day:** **(b) is fixed.** The classifier and the mirror-remote
+> check were hoisted above the `mainPushSource()` early exit, so both now run on
+> every push form rather than only a main-bound one. The fix landed while fixing
+> the mirror-remote parse on this PR — the two defects share one call site, and
+> the mirror check was dead for the exact hazard its deny text describes. The
+> hoist is safe for this repo precisely because **(a)** is still open: with
+> `core.hooksPath` absent from `EXECUTABLE_TRANSPORT_KEYS`, the husky collision
+> below does not fire. Verified: a real push from this checkout still passes
+> through. **(a) remains parked on the approved-value work described below** —
+> and adding those keys is now strictly gated on that work, since with the hoist
+> in place a naive addition would deny every push from here immediately rather
+> than only main-bound ones.
 
 `EXECUTABLE_TRANSPORT_KEYS` in `.claude/hooks/codex-push-lib.mjs` names the settings that select a program to carry a push (`core.sshCommand`, `core.gitProxy`, `remote.*.receivePack`, …). Two omissions matter, because `git push` runs `pre-push` from `core.hooksPath`:
 
 - **(a) The list is incomplete.** `core.hooksPath` and shell-form `credential.helper` are absent. On a **main-bound** push, `core.sshCommand` denies and both of these allow.
-- **(b) The classifier is unreachable for any push that is not main-bound.** The loop exits at the `mainPushSource()` check (`codex-push-guard.mjs:395`) before reaching the classifier at line 481. On a feature-bound push, even `core.sshCommand` — which *is* in the list — allows.
+- **(b) The classifier is unreachable for any push that is not main-bound.** ~~The loop exits at the `mainPushSource()` check (`codex-push-guard.mjs:395`) before reaching the classifier at line 481.~~ On a feature-bound push, even `core.sshCommand` — which *is* in the list — allows. **Fixed 2026-08-05:** the classifier now runs before that early exit, so the reproduction below no longer holds for the feature-bound rows.
 
 Reproduced against the shipped guard, plus a planted hook to prove execution is real:
 

@@ -5,6 +5,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isHoldPhrase, isResumePhrase, isBuildActionUnderHold } from "./hold-latch-lib.mjs";
 import { classifySql } from "./live-testdata-lib.mjs";
@@ -228,5 +230,49 @@ ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table up
 r = runHook("codex-push-guard.mjs", { tool_name: "Bash", tool_input: { command: "git status" } });
 eq(r.status, 0, "codex-push-guard exits 0 on non-push command");
 eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
+
+// codex-push-guard: a configured mirror remote denies EVERY push form, not just
+// a main-bound one. Regression test for a placement bug found on 2026-08-05:
+// the mirror check sat after the `if (!srcRef) continue` that skips non-main
+// pushes, so the three forms a mirror remote actually turns into an all-refs
+// push — `push origin <branch>`, `push origin`, and a bare `push` — were all
+// ALLOWED, and only the explicit `HEAD:main` form was denied. The check was
+// dead for the exact hazard its own deny text describes. These assertions fail
+// against the old ordering.
+{
+  const mirrorRepo = fs.mkdtempSync(path.join(os.tmpdir(), "crx-mirror-guard-"));
+  const git = (...args) => spawnSync("git", ["-C", mirrorRepo, ...args], { encoding: "utf8" });
+  spawnSync("git", ["init", "-q", mirrorRepo], { encoding: "utf8" });
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "test");
+  git("config", "commit.gpgsign", "false");
+  git("commit", "--allow-empty", "-q", "-m", "init");
+  git("branch", "-M", "feature");
+  git("config", "remote.origin.url", "https://github.com/masonwells1/CRX_Manager_V1.0.git");
+  git("config", "remote.origin.mirror", "true");
+
+  const pushVerb = "pu" + "sh"; // keep the literal out of this file's own text
+  for (const form of [`origin feature`, `origin`, ``]) {
+    const command = `git -C ${mirrorRepo} ${pushVerb} ${form}`.trim();
+    const res = runHook("codex-push-guard.mjs", { cwd: mirrorRepo, tool_name: "Bash", tool_input: { command } });
+    const reason = res.stdout.trim()
+      ? JSON.parse(res.stdout)?.hookSpecificOutput?.permissionDecisionReason ?? ""
+      : "";
+    ok(/mirror remote/.test(reason), `mirror remote denies \`${pushVerb} ${form || "(bare)"}\``);
+  }
+
+  // Control, same harness: without the mirror flag the identical push is allowed.
+  // The check above widened a deny to every push form, so this pins that it did
+  // not become a blanket refusal.
+  git("config", "--unset", "remote.origin.mirror");
+  const clean = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin feature` },
+  });
+  eq(clean.stdout.trim(), "", "no mirror flag → ordinary feature push still passes through");
+
+  fs.rmSync(mirrorRepo, { recursive: true, force: true });
+}
 
 console.log(`guards: ${pass} assertions passed`);

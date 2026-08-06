@@ -600,13 +600,34 @@ for (const falsy of ["false", "no", "off", "0", ""]) {
     `"${falsy}" does not mirror, so it must not deny`,
   );
 }
+// This assertion used to read the other way — "a valueless key proves nothing
+// and must not deny" — which encoded the bug as if it were the rule. Git says
+// otherwise, and `git config --bool --get remote.origin.mirror` prints `true`
+// against a config carrying the bare key. Reported by Codex on 2026-08-05 and
+// reproduced before the fix, so the inverted expectation is measured, not argued.
 assert.deepEqual(
-  configuredMirrorRemotes("remote.origin.mirror"), [],
-  "a valueless key proves nothing and must not deny",
+  configuredMirrorRemotes("remote.origin.mirror"), ["origin"],
+  "a valueless boolean is git's spelling of true and must deny",
 );
 assert.deepEqual(
-  configuredMirrorRemotes("REMOTE.ORIGIN.MIRROR=true"), ["origin"],
-  "config keys are case-insensitive, so the check is too",
+  configuredMirrorRemotes("remote.origin.mirror="), [],
+  "but an empty value is git's false, and must not deny",
+);
+// Found while reproducing the above, in the same parse: `--list` prints a remote
+// named `my remote` as `remote.my remote.mirror=true`, and splitting on the first
+// space keyed that as `remote.my`, which matches nothing and denies nothing.
+assert.deepEqual(
+  configuredMirrorRemotes("remote.my remote.mirror=true"), ["my remote"],
+  "a remote name containing a space still parses as a mirror",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("remote.origin.mirror true"), ["origin"],
+  "`--get-regexp` separates key from value with a space, not an `=`",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("REMOTE.ORIGIN.MIRROR=true"), ["ORIGIN"],
+  "key matching is case-insensitive, but the remote NAME is a case-sensitive "
+  + "subsection and is reported verbatim so `--unset` can address it",
 );
 assert.deepEqual(
   configuredMirrorRemotes("remote.origin.mirrored=true\nremote.origin.url=x"), [],

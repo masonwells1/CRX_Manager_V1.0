@@ -391,6 +391,45 @@ for (const pushCmd of pushCommands) {
     }
   }
 
+  // Both checks below are deliberately ABOVE the `if (!srcRef) continue` that
+  // follows, and moving them here is a bug fix, not a tidy-up (2026-08-05).
+  // They used to sit ~90 lines further down, after that `continue`, which meant
+  // they only ever ran for a push ALREADY classified as main-bound. For the
+  // mirror check that is precisely backwards: the hazard it names in its own
+  // deny text is that `git push` with no refspec updates every ref INCLUDING
+  // main, so `mainPushSource` returns nothing and the loop `continue`d straight
+  // past the check that existed to catch it. Probed against a real repo carrying
+  // `remote.origin.mirror`: `push origin feature`, `push origin`, and a bare
+  // `push` were all ALLOWED, and only the explicit `push origin HEAD:main` — the
+  // one form a mirror remote makes unnecessary — was denied. The `--mirror`
+  // command-line flag is denied unconditionally above; this is the same
+  // instruction stored in config, and it now denies at the same breadth.
+  //
+  // The same reasoning applies to the transport-program check: `remote.<name>.
+  // receivepack` and `core.sshCommand` name the program that carries the
+  // objects, so it decides where they land regardless of what this command's
+  // refspec says (Codex's twenty-first 2026-07-30 review asked for it at full
+  // breadth for exactly that reason).
+  //
+  // Read TWICE and unioned, as with the rewrite table above: an inherited
+  // GIT_CONFIG* variable can install a carrier program or a mirror flag that the
+  // stripped read cannot see, and these classifiers only ever ADD denials, so
+  // taking both can gate more, never less.
+  let transportConfig = "";
+  const readTransportConfig = (keepConfigOverrides) => {
+    try { return gitIn(["config", "--list"], pushRepoDir, { keepConfigOverrides }); }
+    catch (_error) { return ""; } // an unreadable config is handled by the checks below
+  };
+  transportConfig = [readTransportConfig(false), readTransportConfig(true)].filter(Boolean).join("\n");
+  const namedPrograms = executableTransportSettings(transportConfig);
+  if (namedPrograms.length > 0) {
+    deny(`CODEX GATE: this checkout configures git settings that name a program to carry the push (${namedPrograms.join(", ")}). That program decides where the objects actually go, so no destination check here can be trusted. Unset them with \`git config --unset <setting>\` and push normally — git's own defaults need none of them.`);
+  }
+  const mirrorRemotes = configuredMirrorRemotes(transportConfig);
+  if (mirrorRemotes.length > 0) {
+    deny(`CODEX GATE: this checkout configures a mirror remote (${mirrorRemotes.map((r) => `remote.${r}.mirror`).join(", ")}), which is \`--mirror\` stored in config. A bare push to a mirror remote updates EVERY ref — main included — without naming one, so the production review gate never sees a main-bound push, and git rejects any explicit refspec that would narrow it. Unset it with \`git config --unset remote.<name>.mirror\` and push one explicit branch.`);
+  }
+
   const srcRef = mainPushSource(pushCmd, branch);
   if (!srcRef) continue;
   if (srcRef === "DELETE") {
@@ -467,36 +506,8 @@ for (const pushCmd of pushCommands) {
     }
   };
   urlRewrites = [readRewrites(false), readRewrites(true)].filter(Boolean).join("\n");
-  // Checked BEFORE the "unrelated repository, skip the gate" exit below, because
-  // these settings are what make "which repository is this?" answerable in the
-  // first place. `remote.<name>.receivepack` and `core.sshCommand` name programs
-  // that carry the objects, so a nominal backup remote can deliver to the app
-  // repo while all three classifiers below say "unrelated" (Codex's twenty-first
-  // 2026-07-30 review). Same fact as round seventeen's command-line flag, stored
-  // instead of typed.
-  // Unioned across both environments for the same reason as the rewrite table
-  // above: a carrier program installed by an inherited GIT_CONFIG* variable must
-  // still deny, and this classifier can only ever add denials.
-  let transportConfig = "";
-  const readTransportConfig = (keepConfigOverrides) => {
-    try { return gitIn(["config", "--list"], pushRepoDir, { keepConfigOverrides }); }
-    catch (_error) { return ""; } // an unreadable config is handled by the checks below
-  };
-  transportConfig = [readTransportConfig(false), readTransportConfig(true)].filter(Boolean).join("\n");
-  const namedPrograms = executableTransportSettings(transportConfig);
-  if (namedPrograms.length > 0) {
-    deny(`CODEX GATE: this checkout configures git settings that name a program to carry the push (${namedPrograms.join(", ")}). That program decides where the objects actually go, so no destination check here can be trusted. Unset them with \`git config --unset <setting>\` and push normally — git's own defaults need none of them.`);
-  }
-  // `--mirror` as a command-line flag is already an unconditional deny above.
-  // This is the same instruction stored in config instead of typed, and it is
-  // read from the same both-environment union for the same reason: an inherited
-  // GIT_CONFIG* may be what sets it. Denied at the same breadth as the flag —
-  // before the guarded-repository test below — because a mirror push updates
-  // every ref in whatever repository it reaches.
-  const mirrorRemotes = configuredMirrorRemotes(transportConfig);
-  if (mirrorRemotes.length > 0) {
-    deny(`CODEX GATE: this checkout configures a mirror remote (${mirrorRemotes.map((r) => `remote.${r}.mirror`).join(", ")}), which is \`--mirror\` stored in config. A bare push to a mirror remote updates EVERY ref — main included — without naming one, so the production review gate never sees a main-bound push, and git rejects any explicit refspec that would narrow it. Unset it with \`git config --unset remote.<name>.mirror\` and push one explicit branch.`);
-  }
+  // The transport-program and mirror-remote checks that used to sit here now run
+  // above, before the `if (!srcRef) continue` — see the note at that call site.
   if (
     !destinationUrls.some((url) => urlIsGuardedApp(url)) &&
     !repoIsGuardedApp(remoteList) &&

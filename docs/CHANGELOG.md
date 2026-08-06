@@ -2,6 +2,48 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Mirror-remote guard: parse fixed, and the check made reachable — BRANCH
+
+Codex's review of `a7c55978` on PR #313 reported that `configuredMirrorRemotes()`
+split each config line on its first `=`-or-space and skipped a bare
+`remote.origin.mirror` as "carries no value". Git reads a valueless boolean as
+**true** — `git config --bool --get` agrees — so that spelling walked past the
+deny. Reproduced against real `git config` output before fixing, and the same
+reproduction turned up two more parse defects and one placement defect:
+
+- `remote.my remote.mirror=true` — subsection names may contain spaces, and the
+  first-space split mis-keyed it as `remote.my`, matching nothing.
+- `mirror=` (empty value) is git's **false** and must not deny. The old code got
+  this right by accident; the new key-shape match gets it right on purpose.
+- The remote name is a case-sensitive subsection and is now reported verbatim.
+  The deny text hands Mason `git config --unset remote.<name>.mirror`, which
+  silently does nothing when the name is not spelled exactly as stored. The old
+  code lower-cased it, so the remedy it printed could not work.
+
+**The placement defect is the more serious of the two, and it is (b) from the
+parked entry below.** The mirror and executable-config checks sat *after* the
+`if (!srcRef) continue` that skips non-main pushes, so they only ever ran on a
+push already classified as main-bound. For the mirror check that is exactly
+backwards: the hazard named in its own deny text is that a bare push updates
+every ref *including main* without naming one, which is precisely the case
+`mainPushSource()` returns nothing for. Measured against the shipped guard on a
+repo carrying `remote.origin.mirror`:
+
+```
+push origin feature   ALLOW      push origin        ALLOW
+push (bare)           ALLOW      push origin HEAD:main   DENY
+```
+
+Only the one form a mirror remote makes unnecessary was caught. Both checks now
+run at full breadth, as their own comments had claimed all along. Fixing the
+parse without this would have shipped a correct parser into a dead call site.
+
+Verified end-to-end against the real hook rather than the parser alone: all four
+forms deny, a control repo without the flag still passes through, and a real push
+from this checkout is unaffected — the hoist is safe here only because (a) below
+is still open, so the husky `core.hooksPath` collision does not fire.
+`guards.test.mjs` pins both directions; those assertions fail on the old ordering.
+
 ## 2026-08-05 — Third parked guard finding: executable-config classifier gaps — BRANCH
 
 Codex's re-review of `a9c7b7c1` on PR #313 raised a P1 on the executable-config
