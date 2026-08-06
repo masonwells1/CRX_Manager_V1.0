@@ -2,6 +2,60 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-05 — Factory concurrency and orphan recovery — PREPARED
+
+The governed software factory now admits up to three active lanes instead of
+globally serializing all work behind one job. Only `building`, `verifying`, and
+`in-review` consume capacity, so an expired pending approval or historical
+parked job remains visible without occupying a worker slot. Each lane must start
+in its own clean linked Git worktree; the primary checkout and worktree reuse are
+refused. A wrong-checkout approval now reports the exact safe recovery route:
+open the job's clean worktree in a new chat, transfer the named job through Mason's
+ordinary chat request, and re-present the ticket after the old approval is revoked.
+Cross-chat custody checks cover canonical structured-write targets even
+when the calling chat is in another checkout, while terminal parked jobs retain
+targeted custody without globally blocking unrelated shell work.
+
+Long-running harness and independent-review attachments now compare the target
+job plus the factory pause/resume checkpoint instead of the unrelated global
+ledger tail, allowing independent lanes to record progress concurrently without
+weakening same-job or emergency-hold protection. Owner decisions use the same
+job-scoped concurrency boundary. Failed harness output is secret-scanned before
+being surfaced, and secret-shaped output is suppressed while the factory is
+held for review. The owner-facing CLI and Board report active capacity as
+`N/3`; the governed-delivery policy documents the bounded concurrency and
+worktree recovery behavior. Landing acceptance remains serialized: an atomic
+ledger check refuses a second `approved-to-land` job, while duplicate historical
+approvals fail closed until reconciled. Parked worktrees with local changes also
+retain fail-closed shell custody, as do clean worktrees with unpushed commits;
+clean worktrees at their recorded base and removed parked worktrees do not globally
+block unrelated shell work. Parked jobs never consume one of the three worker slots.
+Verified legacy ledgers remain readable when an old lane without a worktree field was
+later safely parked or re-ticketed; an unbound lane that is still active fails closed.
+Parked-worktree Git probes now finish inside an eight-second total budget with bounded
+subprocess timeouts, so the installed 15-second hook cannot silently expire open.
+The live local ledger was checked before this compatibility change: all three existing
+`lane-started` events already contain worktree bindings.
+An accepted landing lane now reaches its exact landing-command and byte-validation gates
+while other lanes remain active; those other chats still cannot target the landing worktree.
+The concurrent protected-state allowance has direct positive and negative regression tests,
+and the shared parked-custody timeout helper is exercised as running code rather than checked
+through source-text matching. The two-lane routing regression exercises both the feature-branch
+push and PR-read routes from a fixed fixture, independent of the ambient checkout. Governance
+self-edit protection classifies MCP write operations by capability, including `edit_file` and
+`edit_block`, so newly configured writers fail closed. Failed harnesses scan both output streams
+for secrets, and atomic backfill cleanup preserves the original operation failure. Parked worktree
+custody survives unchanged-ticket re-presentation and cross-chat transfer until a revised ticket
+opens the new authorization boundary. Both installed guards share one MCP writer parser, while only
+the known local filesystem servers enter the lane's structured-edit allow path; remote GitHub/API
+writers remain opaque and denied. Filesystem `newText` replacements are included in secret scanning.
+The shared classifier now recognizes remote `push`, `apply`, `update`, `append`, and `deploy`
+operations explicitly, and unknown non-read MCP operations fail closed. Direct classifier tables
+and installed-hook regressions cover GitHub `push_files` without admitting it as a local edit;
+secret-scanning regressions cover both direct and nested snake_case `new_text` payloads.
+This entry records the reviewed release candidate; it does not claim a merge or
+production deployment.
+
 ## 2026-08-05 — Factory ledger failure containment
 
 Factory intent now leaves a durable per-chat marker outside the event ledger before attempting the
