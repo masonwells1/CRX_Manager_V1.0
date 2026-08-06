@@ -116,8 +116,12 @@ fingerprint before the ticket or morning decision is re-presented there.
   to be re-presented in the new chat. If a parked job already records a worktree, re-presentation or
   transfer retains that worktree custody until a revised `ticket-drafted` event explicitly clears it.
   No manual ledger edit is required. Structured mutation targets are checked across checkout
-  boundaries. Shell or opaque mutations from another chat fail closed while a nonterminal factory
-  worktree is in custody because their final destination cannot be proven. A terminal parked job keeps
+  boundaries. Shell or opaque mutations from another chat fail closed while an active, queued,
+  review, landing, or otherwise nonterminal factory worktree is in custody because their final
+  destination cannot be proven. `needs-ticket-ok` is deliberately narrower: it still blocks every
+  write in its own worktree, every explicit cross-worktree target, and arbitrary opaque shell writers,
+  but it does not freeze structured non-factory work or fixed safe verification commands in a different
+  checkout while Mason decides. A terminal parked job keeps
   targeted structured-write custody; it also keeps fail-closed opaque/shell custody while its worktree
   has local changes, unpushed commits, or cannot be verified. A clean, fully committed-at-base or
   removed parked worktree does not globally block unrelated shell work. Native editing,

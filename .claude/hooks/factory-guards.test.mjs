@@ -474,6 +474,33 @@ function bashExecutable() {
   });
   assertions++;
   assert.equal(pendingParallel.stdout, "", "a pending ticket does not globally lock unrelated chats");
+  writeFileSync(paths.lockPath, `${JSON.stringify({
+    pid: 99999999,
+    createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+  })}\n`);
+  const pendingStatusWithStaleLock = run(laneHook, stateDir, {
+    thread_id: "fresh-status-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/factory.mjs status --json" },
+  });
+  assertions++;
+  assert.equal(
+    hookOutput(pendingStatusWithStaleLock).permissionDecision,
+    "allow",
+    "a stale coordination lock does not block canonical read-only factory status",
+  );
+  const pendingUnrelatedWithStaleLock = run(laneHook, stateDir, {
+    thread_id: "fresh-unrelated-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
+  });
+  assertions++;
+  assert.equal(
+    pendingUnrelatedWithStaleLock.stdout,
+    "",
+    "a stale coordination lock on a pending ticket does not freeze unrelated non-factory work",
+  );
+  rmSync(paths.lockPath);
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
@@ -1208,14 +1235,32 @@ function bashExecutable() {
     tool_name: "PowerShell",
     tool_input: { command: `Set-Content -LiteralPath "${path.join(parkedRepo, "tracked.txt")}" -Value forged` },
   }, unrelatedWorktree), /destinations cannot be custody-checked/i, "clean parked worktrees with unpushed commits retain cross-chat shell custody");
+  appendFactoryEvent(paths, {
+    type: "job-session-transferred",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId: "pending-ticket-owner-thread",
+    payload: { ownerReply: "Move this ticket here.", priorStage: "parked" },
+  });
+  const pendingSafeShell = run(laneHook, stateDir, {
+    thread_id: "unrelated-pending-shell-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "npm run typecheck" },
+  }, unrelatedWorktree);
+  assertions++;
+  assert.equal(pendingSafeShell.stdout, "", "a fixed safe shell verification remains available outside a retained pending-ticket worktree");
+  denied(run(laneHook, stateDir, {
+    thread_id: "unrelated-pending-opaque-thread",
+    tool_name: "mcp__desktop_commander__start_process",
+    tool_input: { command: "npm run typecheck", timeout_ms: 10_000 },
+  }, unrelatedWorktree), /destinations cannot be custody-checked/i, "a safe-looking command never exempts an opaque tool from retained pending-ticket custody");
   rmSync(parkedRepo, { recursive: true, force: true });
   const removedParkedShell = run(laneHook, stateDir, {
     thread_id: "unrelated-removed-parked-thread",
     tool_name: "PowerShell",
     tool_input: { command: "Set-Content unrelated.txt allowed" },
   }, unrelatedWorktree);
-  assertions++;
-  assert.equal(removedParkedShell.stdout, "", "a removed parked worktree cannot recreate the global orphan shell lock");
+  denied(removedParkedShell, /destinations cannot be custody-checked/i, "a transferred pending ticket still denies arbitrary shell writers after its retained worktree disappears");
 }
 
 function repositoryFilesUnder(relativeDirectory) {
