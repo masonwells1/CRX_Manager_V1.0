@@ -5,12 +5,13 @@ All significant development milestones, in reverse chronological order.
 ## 2026-08-06 — Pending-ticket custody blast-radius repair — PREPARED
 
 A Factory ticket waiting for Mason's approval no longer globally blocks structured
-non-factory work or fixed safe verification commands in a different checkout.
+non-factory work or fixed direct Node inspection commands in a different checkout.
 Its own governed worktree, explicit cross-worktree mutation targets, and arbitrary
 opaque shell writers remain protected. Read-only canonical Factory status remains
 available even when a stale ledger lock is present.
 The safe-command exception is limited to recognized shell tools rooted in the
-unrelated checkout; opaque process tools cannot borrow it with a command-shaped field.
+unrelated checkout and an explicit direct Node inspection allowlist; package scripts
+and opaque process tools cannot borrow it with a command-shaped field.
 Custody-transfer replay is also idempotent after its authenticated owner receipt
 and prior-stage binding are verified, so a lost presenting chat cannot strand a
 ticket during the current-main compatibility check.

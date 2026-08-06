@@ -120,7 +120,7 @@ fingerprint before the ticket or morning decision is re-presented there.
   review, landing, or otherwise nonterminal factory worktree is in custody because their final
   destination cannot be proven. `needs-ticket-ok` is deliberately narrower: it still blocks every
   write in its own worktree, every explicit cross-worktree target, and arbitrary opaque shell writers,
-  but it does not freeze structured non-factory work or fixed safe verification commands in a different
+  but it does not freeze structured non-factory work or fixed direct Node inspection commands in a different
   checkout while Mason decides. A terminal parked job keeps
   targeted structured-write custody; it also keeps fail-closed opaque/shell custody while its worktree
   has local changes, unpushed commits, or cannot be verified. A clean, fully committed-at-base or

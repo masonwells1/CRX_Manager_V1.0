@@ -495,6 +495,10 @@ function bashExecutable() {
     tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
   });
   assertions++;
+  assert.equal(pendingUnrelatedWithStaleLock.status, 0, "unrelated non-factory work exits successfully while a stale pending-ticket lock exists");
+  assertions++;
+  assert.equal(pendingUnrelatedWithStaleLock.stderr, "", "unrelated non-factory work emits no hidden error while a stale pending-ticket lock exists");
+  assertions++;
   assert.equal(
     pendingUnrelatedWithStaleLock.stdout,
     "",
@@ -1242,17 +1246,56 @@ function bashExecutable() {
     sessionId: "pending-ticket-owner-thread",
     payload: { ownerReply: "Move this ticket here.", priorStage: "parked" },
   });
+  const beforeSameSessionReplay = loadFactorySnapshot(paths).jobs.find((job) => job.id === ticket.ticket.id);
+  appendFactoryEvent(paths, {
+    type: "job-session-transferred",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId: "pending-ticket-owner-thread",
+    payload: { ownerReply: "Move this ticket here.", priorStage: "needs-ticket-ok" },
+  });
+  const afterSameSessionReplay = loadFactorySnapshot(paths).jobs.find((job) => job.id === ticket.ticket.id);
+  assertions++;
+  assert.deepEqual(
+    {
+      stage: afterSameSessionReplay.stage,
+      approvalExpiresAt: afterSameSessionReplay.approvalExpiresAt,
+      approvalReply: afterSameSessionReplay.approvalReply,
+      questionHash: afterSameSessionReplay.questionHash,
+      questionText: afterSameSessionReplay.questionText,
+      reviewQuestionHash: afterSameSessionReplay.reviewQuestionHash,
+      reviewQuestionText: afterSameSessionReplay.reviewQuestionText,
+      laneSessionId: afterSameSessionReplay.laneSessionId,
+      worktree: afterSameSessionReplay.worktree,
+    },
+    {
+      stage: beforeSameSessionReplay.stage,
+      approvalExpiresAt: beforeSameSessionReplay.approvalExpiresAt,
+      approvalReply: beforeSameSessionReplay.approvalReply,
+      questionHash: beforeSameSessionReplay.questionHash,
+      questionText: beforeSameSessionReplay.questionText,
+      reviewQuestionHash: beforeSameSessionReplay.reviewQuestionHash,
+      reviewQuestionText: beforeSameSessionReplay.reviewQuestionText,
+      laneSessionId: beforeSameSessionReplay.laneSessionId,
+      worktree: beforeSameSessionReplay.worktree,
+    },
+    "same-session transfer replay leaves approval, review, lane, and worktree custody unchanged",
+  );
   const pendingSafeShell = run(laneHook, stateDir, {
     thread_id: "unrelated-pending-shell-thread",
     tool_name: "PowerShell",
-    tool_input: { command: "npm run typecheck" },
+    tool_input: { command: "node scripts/check-doc-drift.mjs" },
   }, unrelatedWorktree);
+  assertions++;
+  assert.equal(pendingSafeShell.status, 0, "a fixed direct Node inspection exits successfully outside a retained pending-ticket worktree");
+  assertions++;
+  assert.equal(pendingSafeShell.stderr, "", "a fixed direct Node inspection emits no hidden error outside a retained pending-ticket worktree");
   assertions++;
   assert.equal(pendingSafeShell.stdout, "", "a fixed safe shell verification remains available outside a retained pending-ticket worktree");
   denied(run(laneHook, stateDir, {
     thread_id: "unrelated-pending-opaque-thread",
     tool_name: "mcp__desktop_commander__start_process",
-    tool_input: { command: "npm run typecheck", timeout_ms: 10_000 },
+    tool_input: { command: "node scripts/check-doc-drift.mjs", timeout_ms: 10_000 },
   }, unrelatedWorktree), /destinations cannot be custody-checked/i, "a safe-looking command never exempts an opaque tool from retained pending-ticket custody");
   rmSync(parkedRepo, { recursive: true, force: true });
   const removedParkedShell = run(laneHook, stateDir, {

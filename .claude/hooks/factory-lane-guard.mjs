@@ -719,7 +719,7 @@ const recognizedShellTool = /^(?:Bash|PowerShell|shell_command)$/i.test(String(p
 const safeUnrelatedPendingTicketCommand = recognizedShellTool
   && foreignWorktreeCustody.length > 0
   && foreignWorktreeCustody.every((job) => job.stage === "needs-ticket-ok")
-  && (SAFE_NPM_RUN_RE.test(shellCommand) || SAFE_NODE_RE.test(shellCommand));
+  && SAFE_NODE_RE.test(shellCommand);
 if (buildMutation && targetedForeignWorktree) {
   deny(`CRX FACTORY GATE: job ${targetedForeignWorktree.id} owns this governed worktree from another chat; the mutation targets it from a different checkout.${factoryWorktreeRecoveryRoute(targetedForeignWorktree)}`);
 }
