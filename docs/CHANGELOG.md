@@ -522,6 +522,60 @@ and resolved rep name, and surfaces a count of active customers with no rep.
 
 No migrations, no live writes, no schema changes.
 
+## 2026-08-05 — Factory concurrency and orphan recovery — PREPARED
+
+The governed software factory now admits up to three active lanes instead of
+globally serializing all work behind one job. Only `building`, `verifying`, and
+`in-review` consume capacity, so an expired pending approval or historical
+parked job remains visible without occupying a worker slot. Each lane must start
+in its own clean linked Git worktree; the primary checkout and worktree reuse are
+refused. A wrong-checkout approval now reports the exact safe recovery route:
+open the job's clean worktree in a new chat, transfer the named job through Mason's
+ordinary chat request, and re-present the ticket after the old approval is revoked.
+Cross-chat custody checks cover canonical structured-write targets even
+when the calling chat is in another checkout, while terminal parked jobs retain
+targeted custody without globally blocking unrelated shell work.
+
+Long-running harness and independent-review attachments now compare the target
+job plus the factory pause/resume checkpoint instead of the unrelated global
+ledger tail, allowing independent lanes to record progress concurrently without
+weakening same-job or emergency-hold protection. Owner decisions use the same
+job-scoped concurrency boundary. Failed harness output is secret-scanned before
+being surfaced, and secret-shaped output is suppressed while the factory is
+held for review. The owner-facing CLI and Board report active capacity as
+`N/3`; the governed-delivery policy documents the bounded concurrency and
+worktree recovery behavior. Landing acceptance remains serialized: an atomic
+ledger check refuses a second `approved-to-land` job, while duplicate historical
+approvals fail closed until reconciled. Parked worktrees with local changes also
+retain fail-closed shell custody, as do clean worktrees with unpushed commits;
+clean worktrees at their recorded base and removed parked worktrees do not globally
+block unrelated shell work. Parked jobs never consume one of the three worker slots.
+Verified legacy ledgers remain readable when an old lane without a worktree field was
+later safely parked or re-ticketed; an unbound lane that is still active fails closed.
+Parked-worktree Git probes now finish inside an eight-second total budget with bounded
+subprocess timeouts, so the installed 15-second hook cannot silently expire open.
+The live local ledger was checked before this compatibility change: all three existing
+`lane-started` events already contain worktree bindings.
+An accepted landing lane now reaches its exact landing-command and byte-validation gates
+while other lanes remain active; those other chats still cannot target the landing worktree.
+The concurrent protected-state allowance has direct positive and negative regression tests,
+and the shared parked-custody timeout helper is exercised as running code rather than checked
+through source-text matching. The two-lane routing regression exercises both the feature-branch
+push and PR-read routes from a fixed fixture, independent of the ambient checkout. Governance
+self-edit protection classifies MCP write operations by capability, including `edit_file` and
+`edit_block`, so newly configured writers fail closed. Failed harnesses scan both output streams
+for secrets, and atomic backfill cleanup preserves the original operation failure. Parked worktree
+custody survives unchanged-ticket re-presentation and cross-chat transfer until a revised ticket
+opens the new authorization boundary. Both installed guards share one MCP writer parser, while only
+the known local filesystem servers enter the lane's structured-edit allow path; remote GitHub/API
+writers remain opaque and denied. Filesystem `newText` replacements are included in secret scanning.
+The shared classifier now recognizes remote `push`, `apply`, `update`, `append`, and `deploy`
+operations explicitly, and unknown non-read MCP operations fail closed. Direct classifier tables
+and installed-hook regressions cover GitHub `push_files` without admitting it as a local edit;
+secret-scanning regressions cover both direct and nested snake_case `new_text` payloads.
+This entry records the reviewed release candidate; it does not claim a merge or
+production deployment.
+
 ## 2026-08-05 — Factory ledger failure containment
 
 Factory intent now leaves a durable per-chat marker outside the event ledger before attempting the
@@ -549,6 +603,40 @@ same-lane replay rule continues to accept the complete legacy duplicate parked e
 prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage
 changes. Managed-session markers are coordination-only state and are excluded from protected-content
 fingerprints so a concurrent chat cannot falsely invalidate an active evidence or review run.
+
+## 2026-08-05 — Historical AR report cutoff fixes — LIVE
+
+The Section 2 live-foundation refresh found that the date selectors on the AR
+aging and customer balance listing reports did not reconstruct balances at the
+requested business-date cutoff. A reviewed migration now makes both reports
+exclude documents and balance activity after the cutoff, reject unreconstructable
+historical state instead of returning a plausible but wrong total, and keep
+historical customer-balance access admin-only. The customer balance listing now
+also excludes unposted invoices and calculates overdue amounts from the requested
+date.
+
+Supabase applied the submitted migration
+`20260805124533_fix_historical_ar_report_cutoffs` as live ledger version
+`20260805151605`. Post-apply catalog checks
+confirmed fixed search paths, deliberate grants, one live overload per report,
+and a private reconstruction helper. The rollback-only behavior smoke returned
+`SMOKE_PASS_ROLLBACK`; authenticated live execution confirmed current reports
+remain callable while a sales-representative historical request is rejected.
+The schema registry and migration/RPC references were refreshed from the live
+catalog, and focused regression coverage is registered in the billing and
+regression-prevention suites.
+
+The first exact-commit review caught that the new Customer Balance Listing
+limited its cumulative Invoiced, Paid, Prepay Applied, and invoice-count fields
+to invoices that still had a positive balance. That would omit fully paid
+invoices whenever the customer also had an open invoice. Follow-up migration
+`20260805171334_fix_customer_balance_paid_invoice_totals` is live: cumulative
+fields now include every cutoff-eligible non-credit invoice, while only
+Outstanding Balance and Oldest Unpaid remain open-invoice measures. The
+expanded rollback smoke proves a $50 fully paid invoice plus a $100 open invoice
+returns $150 invoiced, $50 paid, two invoices, and $100 outstanding. The
+follow-up passed content-bound security/drift reviews, post-apply catalog and
+grant checks, and left no fixture or business-data residue.
 
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 

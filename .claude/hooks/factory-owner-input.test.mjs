@@ -111,7 +111,39 @@ function makeState(sessionId = "codex-thread-1", explicitJobId = "") {
   return { dir, paths, ...presented, sessionId };
 }
 
-function runHook(state, payload) {
+function addParkedJob(paths, sessionId, jobId, worktree = root) {
+  const written = writeImmutableTicket(paths, {
+    id: jobId,
+    version: 1,
+    title: "Preserve parked worktree custody",
+    goal: "Keep parked work protected until a revised ticket explicitly releases it.",
+    definitionOfDone: ["Re-presentation and transfer preserve the recorded worktree."],
+    mustNotChange: ["Files in the parked worktree."],
+    allowedPaths: ["src/"],
+    proofRequirements: ["Guard regression."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before landing.",
+    riskAreas: [],
+  });
+  const question = `Approve parked ticket ${jobId}?`;
+  for (const event of [
+    { type: "ticket-drafted", payload: { ticketFile: written.filename, ticketHash: written.hash, ticketVersion: 1, title: written.ticket.title } },
+    { type: "ticket-presented", payload: { ticketHash: written.hash, questionText: question, questionHash: sha256(question), baseSha } },
+    { type: "ticket-approved", payload: { ticketHash: written.hash, questionHash: sha256(question), ownerReply: "yes", baseSha, expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "lane-started", payload: { ticketHash: written.hash, baseSha, worktree } },
+    { type: "job-stage", payload: { stage: "parked", behaviorSummary: "Local work retained.", blocker: "Waiting for revised scope." } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId,
+      actorTool: "codex",
+      sessionId,
+    });
+  }
+  return written;
+}
+
+function runHook(state, payload, extraEnv = {}) {
   const projectRoot = state.root || root;
   return spawnSync(process.execPath, [hook], {
     cwd: projectRoot,
@@ -123,6 +155,7 @@ function runHook(state, payload) {
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: state.dir,
       NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-owner-input-test",
+      ...extraEnv,
     },
     input: JSON.stringify(payload),
   });
@@ -309,6 +342,78 @@ function runInstalledPreToolHooks(state, payload) {
     tool_input: { file_path: path.join(root, ".claude", "hooks", "migration-apply-guard.mjs"), content: "forged" },
   });
   ok(/cannot modify its own governance|protected governance edits/i.test(corruptGovernanceEdit.stdout), "transferred destination remains governed after immediate ledger corruption");
+}
+
+{
+  const state = makeEmptyState("parked-representation-thread");
+  const written = addParkedJob(state.paths, state.sessionId, "parked-representation-job");
+  const question = "Approve the unchanged parked ticket again?";
+  appendFactoryEvent(state.paths, {
+    type: "ticket-presented",
+    jobId: written.ticket.id,
+    actorTool: "codex",
+    sessionId: state.sessionId,
+    payload: {
+      ticketHash: written.hash,
+      questionText: question,
+      questionHash: sha256(question),
+      baseSha,
+    },
+  });
+  const represented = buildFactorySnapshot(state.paths).jobs[0];
+  equal(represented.stage, "needs-ticket-ok", "re-presenting an unchanged parked ticket revokes approval");
+  equal(represented.worktree, root, "re-presenting an unchanged parked ticket retains worktree custody");
+  const blocked = runLaneHook(state, {
+    thread_id: "unrelated-representation-thread",
+    tool_name: "mcp__filesystem__edit_file",
+    tool_input: { path: path.join(root, "src", "example.ts"), edits: [] },
+  });
+  ok(/owns this governed worktree/i.test(blocked.stdout), "re-presented parked work remains protected from a newer MCP editor");
+  const revised = writeImmutableTicket(state.paths, {
+    ...written.ticket,
+    version: 2,
+    goal: "Start a new authorization boundary that releases the prior parked worktree.",
+  });
+  appendFactoryEvent(state.paths, {
+    type: "ticket-drafted",
+    jobId: revised.ticket.id,
+    actorTool: "codex",
+    sessionId: state.sessionId,
+    payload: { ticketFile: revised.filename, ticketHash: revised.hash, ticketVersion: 2, title: revised.ticket.title },
+  });
+  equal(buildFactorySnapshot(state.paths).jobs[0].worktree, "", "a revised ticket explicitly releases the prior worktree custody");
+}
+
+{
+  const state = makeEmptyState("parked-transfer-source-thread");
+  const written = addParkedJob(state.paths, state.sessionId, "parked-transfer-job");
+  const transfer = runHook(state, {
+    prompt: `take over factory job ${written.ticket.id} here`,
+    thread_id: "parked-transfer-destination-thread",
+  });
+  ok(transfer.stdout.includes("moved") && transfer.stdout.includes("revoked"), "explicit transfer moves the parked job and revokes approval");
+  const transferred = buildFactorySnapshot(state.paths).jobs[0];
+  equal(transferred.stage, "needs-ticket-ok", "transferred parked work requires fresh approval");
+  equal(transferred.worktree, root, "transferred parked work retains worktree custody until revision");
+  const blocked = runLaneHook(state, {
+    thread_id: "unrelated-transfer-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts"), content: "forged" },
+  });
+  ok(/owns this governed worktree/i.test(blocked.stdout), "transferred parked work remains protected from another chat");
+  const revised = writeImmutableTicket(state.paths, {
+    ...written.ticket,
+    version: 2,
+    goal: "Revise transferred scope and explicitly release the old worktree.",
+  });
+  appendFactoryEvent(state.paths, {
+    type: "ticket-drafted",
+    jobId: revised.ticket.id,
+    actorTool: "codex",
+    sessionId: "parked-transfer-destination-thread",
+    payload: { ticketFile: revised.filename, ticketHash: revised.hash, ticketVersion: 2, title: revised.ticket.title },
+  });
+  equal(buildFactorySnapshot(state.paths).jobs[0].worktree, "", "a revised transferred ticket releases the old worktree custody");
 }
 
 {
@@ -697,6 +802,14 @@ function runInstalledPreToolHooks(state, payload) {
   equal(accepted.acceptedRepositoryContentHash, review.repositoryContentHash, "morning acceptance binds the exact independently reviewed repository hash");
   equal(accepted.acceptedRepositoryCommitContentHash, review.repositoryCommitContentHash, "morning acceptance separately binds the Git-cleaned landing hash");
   equal(accepted.acceptedRepositoryFileCount, review.repositoryFileCount, "morning acceptance binds the exact reviewed file count");
+  assertions++;
+  assert.throws(() => appendFactoryEvent(state.paths, {
+    type: "job-stage",
+    jobId: "second-approved-job",
+    actorTool: "codex",
+    sessionId: "second-owner-session",
+    payload: { stage: "approved-to-land" },
+  }), /already approved to land.*land or park/i, "the ledger lock atomically refuses a second approved-to-land event");
 }
 
 console.log(`factory-owner-input: ${assertions} assertions passed`);

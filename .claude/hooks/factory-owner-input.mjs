@@ -140,6 +140,13 @@ function mentionsExactJobId(prompt, jobId) {
     .test(String(prompt || ""));
 }
 
+function ownerDecisionCheckpoint(snapshot, job = null) {
+  return {
+    ...(job ? { expectedJobEventHash: job.terminalLedgerHash } : {}),
+    expectedFactoryControlHash: snapshot.factoryControlHash,
+  };
+}
+
 function prepareFactoryManagedSession(paths, { snapshot = null, sessionId, actorTool }) {
   if (snapshot) {
     completeFactoryManagedSessionBackfill(paths, { snapshot, actorTool });
@@ -187,7 +194,7 @@ async function main() {
         ownerReply: prompt.slice(0, 500),
         priorStage: job.stage,
       },
-    }, { expectedLastEventHash: snapshot.lastEventHash });
+    }, ownerDecisionCheckpoint(snapshot, job));
     emit(job.stage === "awaiting-morning-review"
       ? `CRX Factory moved ${job.id}'s pending morning decision to this chat at Mason's explicit request. Revalidate proof and present the canonical morning question here; no build custody transferred.`
       : `CRX Factory moved ${job.id} to this chat at Mason's explicit request and revoked any prior ticket approval. Re-present the canonical ticket question here before work starts.`);
@@ -269,7 +276,7 @@ async function main() {
         reason: prompt.slice(0, 500),
         ownerReply: prompt.slice(0, 500),
       },
-    }, { expectedLastEventHash: snapshot.lastEventHash });
+    }, ownerDecisionCheckpoint(snapshot));
     emit("CRX Factory recorded Mason's request to use the normal guarded workflow in this chat. No factory ticket or lane was started.");
   }
 
@@ -325,6 +332,11 @@ async function main() {
     }
     let acceptedRepository;
     if (disposition === "approve") {
+      const landingJob = snapshot.jobs.find((candidate) =>
+        candidate.id !== job.id && candidate.stage === "approved-to-land");
+      if (landingJob) {
+        emit(`CRX Factory recorded no morning acceptance because ${landingJob.id} is already approved to land. Land or park that job before accepting another result.`);
+      }
       try {
         acceptedRepository = repositoryContentFingerprint(projectDir);
         validateCurrentHarnessEvidence(job, projectDir, {
@@ -361,7 +373,7 @@ async function main() {
           acceptedRepositoryFileCount: acceptedRepository.repositoryFileCount,
         } : {}),
       },
-    }, { expectedLastEventHash: snapshot.lastEventHash });
+    }, ownerDecisionCheckpoint(snapshot, job));
     emit(disposition === "approve"
       ? `CRX Factory recorded Mason's morning acceptance for ${job.id}. The job is approved to enter the existing /ship landing gates; it is not yet live.`
       : `CRX Factory parked ${job.id} from Mason's morning response. Do not land it; revise only after a new approved ticket.`);
@@ -394,7 +406,7 @@ async function main() {
         baseSha,
         expiresAt: new Date(now.getTime() + APPROVAL_TTL_MS).toISOString(),
       },
-    }, { expectedLastEventHash: snapshot.lastEventHash });
+    }, ownerDecisionCheckpoint(snapshot, job));
     emit(`CRX Factory recorded Mason's exact approval for ticket ${job.id}, bound to this chat, ticket hash, and origin/main. Start the lane only through: node scripts/factory.mjs lane start --job ${job.id} --session ${sessionId} --tool ${actorTool}`);
   }
 
@@ -407,7 +419,7 @@ async function main() {
       ownerReply: prompt,
       baseSha,
     },
-  }, { expectedLastEventHash: snapshot.lastEventHash });
+  }, ownerDecisionCheckpoint(snapshot, job));
   emit(disposition === "reject"
     ? `CRX Factory recorded Mason's rejection for ticket ${job.id}. Do not start the lane.`
     : `CRX Factory recorded a revision request for ticket ${job.id}. Update the ticket, create a new hash, and re-present it before any build work.`);
