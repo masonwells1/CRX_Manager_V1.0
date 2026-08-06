@@ -41,6 +41,7 @@ import {
   pushDestinationLookupArgs,
   pushNamesRefspec,
   REFSPEC_DEFAULT_LOOKUPS,
+  pushDefaultConsultsBranchMerge,
   pushNamesDestination,
   REMOTE_SELECTION_LOOKUPS,
   divergentPushLookups,
@@ -251,11 +252,31 @@ if (inheritedOverrides.length > 0) {
       return scope.has(key[1].toLowerCase());
     }).join("\n");
   };
+  // `git remote -v` lists EVERY remote, but a push consults only the one it
+  // resolves to — the same over-refusal `scopeRemoteAnswer` fixes above, missed
+  // here because this lookup normalises through a different path and so did not
+  // inherit it. An inherited `remote.archive.url` adds an `archive … (push)` line
+  // and denied `push origin HEAD:feature`, whose destination git's own dry run
+  // reports as origin's URL with and without the variable (Codex, 2026-08-06,
+  // reproduced against the hook before fixing).
+  //
+  // An EMPTY scope is deliberately NOT narrowed, unlike above: it means no push
+  // here resolved to a named remote, so there is no positive evidence to narrow
+  // by, and narrowing to nothing would compare nothing. Only a scope naming at
+  // least one remote filters. `null` keeps the full text for the same reason.
+  const scopeRemotesAnswer = (text, scope) => {
+    if (scope === null || scope.size === 0) return text;
+    return String(text).split(/\r?\n/).filter((line) => {
+      const named = /^(\S+)\s+\S/.exec(line.trim());
+      if (!named) return true; // unparseable — never filtered away, stays fail-closed
+      return scope.has(named[1].toLowerCase());
+    }).join("\n");
+  };
   const normalizeAnswer = (name, text, scope) => {
     if (name === "remote.*.push" || name === "remote.*.mirror") {
       return scopeRemoteAnswer(text, scope);
     }
-    if (name === "remotes") return pushDestinationDecisions(text);
+    if (name === "remotes") return pushDestinationDecisions(scopeRemotesAnswer(text, scope));
     // A literal URL destination resolves to one URL and gets the same pair. It
     // used to get the classification ALONE, which was the identical fail-open
     // one path over: `urlIsGuardedApp` is path-only, so it reads `guarded-app`
@@ -333,10 +354,37 @@ if (inheritedOverrides.length > 0) {
       }
       if (resolved.remote !== null) remoteScope.add(resolved.remote.toLowerCase());
     }
+    // …and, one level down from the refspec verdict, whether a BARE push here
+    // reads `branch.<b>.merge` at all. `pushNamesRefspec` correctly reports that
+    // such a push has no refspec of its own, but only some `push.default` modes
+    // then derive one from that key — under `current` git names the destination
+    // from the branch and never reads it, so comparing it denied the ordinary
+    // feature-branch push over an inherited value git would not consult (Codex,
+    // 2026-08-06, PR #313 review; reproduced on git 2.43.0 both ways before
+    // fixing — `current` reports `feature:feature` with the key set and unset,
+    // `upstream` reports `feature:main` only with it).
+    //
+    // Read under BOTH environments and skipped only when the two AGREE the mode
+    // ignores the key: an inherited override that flips `current` to `upstream`
+    // must keep `branch.merge` compared. It also diverges on `push.default`
+    // itself, which is compared whenever a bare push is present — so that vector
+    // denies twice over. An unreadable mode compares, fail-closed.
+    const branchMergeIsConsulted = (() => {
+      const readMode = (keepConfigOverrides) => {
+        try { return gitIn(["config", "--get", "push.default"], repoDir, { keepConfigOverrides }); }
+        catch (error) { return error?.status === 1 ? "" : null; } // 1 = unset, not a failure
+      };
+      const scrubbedMode = readMode(false);
+      const ambientMode = readMode(true);
+      if (scrubbedMode === null || ambientMode === null) return true;
+      return pushDefaultConsultsBranchMerge(scrubbedMode)
+        || pushDefaultConsultsBranchMerge(ambientMode);
+    })();
     const scrubbed = {};
     const ambient = {};
     for (const [name, args] of pushDestinationLookupArgs(overrideBranch)) {
       if (everyPushNamesRefspec === true && REFSPEC_DEFAULT_LOOKUPS.has(name)) continue;
+      if (name === "branch.merge" && !branchMergeIsConsulted) continue;
       if (everyPushNamesDestination === true && REMOTE_SELECTION_LOOKUPS.has(name)) continue;
       scrubbed[name] = answerFor(name, args, repoDir, false, remoteScope);
       ambient[name] = answerFor(name, args, repoDir, true, remoteScope);

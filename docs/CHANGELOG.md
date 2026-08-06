@@ -2,6 +2,57 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — `remotes` proof scoped to the remote the push selects — BRANCH
+
+Codex finding on `a2fcd36c` (PR #313) — the **eighth** over-refusal of this shape,
+and a straggler of the scoping fix further below rather than a new class. That
+round taught `remote.*.push` and `remote.*.mirror` to compare only the remote a
+push resolves to. `remotes` needed the identical narrowing and did not get it,
+because it normalises through `pushDestinationDecisions` instead of the shared
+per-remote path, so the fix had nowhere to attach.
+
+`git remote -v` lists **every** remote. An inherited `remote.<other>.url` adds a
+`(push)` line on the ambient side alone, the two decision sets differ, and
+`push origin HEAD:feature` is denied over a remote it could not have touched —
+again the feature-branch landing path a protected `main` requires. Reproduced
+against the hook before fixing with `remote.mirrorbox.url`: git's own dry run
+updates `origin` either way, while the guard reported `remotes` differing.
+
+An **empty** scope is deliberately not narrowed, unlike the value-key path: an
+empty scope means no push here resolved to a named remote, so there is no
+positive evidence to narrow by and narrowing to nothing would compare nothing.
+`null` keeps the full text for the same reason. An unparseable line is never
+filtered away, so it stays fail-closed.
+
+The control holds: the same override aimed at `origin`, the remote this push does
+select, is still denied and still names `remotes` as the answer that changed.
+
+## 2026-08-06 — `branch.merge` compared only under the `push.default` modes that read it — BRANCH
+
+Codex finding on `a2fcd36c` (PR #313) — the **seventh** over-refusal of this
+shape, sitting one level *below* the refspec verdict two entries down.
+`pushNamesRefspec` is correct that a bare push has no refspec of its own, so the
+default-refspec lookups are kept. But only some `push.default` modes then derive
+that refspec from `branch.<b>.merge`; under `current` git names the destination
+from the branch and never opens the key, so comparing it denied a bare push over
+a value git would not have consulted.
+
+Reproduced on git 2.43.0 before fixing, with `branch.feature.merge=refs/heads/main`
+set and unset: under `current` the dry run reports
+`refs/heads/feature:refs/heads/feature` **both** times, while the same pair under
+`upstream` reports `refs/heads/feature:refs/heads/main` only when the key is set.
+The modes genuinely differ, and only the first is safe to skip.
+
+`pushDefaultConsultsBranchMerge` decides it and answers "compare" for everything
+it does not recognise. Unset reads as compare, since git's own default is `simple`,
+which consults the key. Only `current`, `matching`, and `nothing` skip it.
+
+The mode is read under **both** environments and the key skipped only when the two
+agree it is ignored, so an inherited override that flips `current` to `upstream`
+keeps `branch.merge` compared. That vector denies twice over in any case, since
+`push.default` is itself compared whenever a bare push is present. An unreadable
+mode compares, fail-closed.
+
 ## 2026-08-06 — Remote-selection proof skipped for pushes that name their destination — BRANCH
 
 Codex finding on `51f3cc2c` (PR #313) — the **sixth** over-refusal of this shape,

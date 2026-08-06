@@ -37,6 +37,7 @@ import {
   environmentCarriesTransportOverride,
   pushDestinationToken,
   pushNamesRefspec,
+  pushDefaultConsultsBranchMerge,
   destinationLooksLikeUrl,
   pushUsesInlineConfig,
   pushUsesConfigEnv,
@@ -1626,6 +1627,83 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
         GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
       });
       assert.equal(result.decision, "deny", "an unreadable push does not get the explicit-refspec skip");
+    }
+    {
+      // 2026-08-06, Codex's PR #313 review — the SIXTH over-refusal of this shape,
+      // and one level below the refspec verdict above. A bare push does read the
+      // default-refspec configuration, but only some `push.default` modes derive
+      // the refspec from `branch.<b>.merge`; under `current` git names the
+      // destination from the branch and never opens the key, so comparing it
+      // denied a bare push over a value git would not have consulted.
+      //
+      // Reproduced on git 2.43.0 before fixing: under `push.default=current`,
+      // `push --dry-run --porcelain` reports `refs/heads/feature:refs/heads/feature`
+      // with `branch.feature.merge=refs/heads/main` set and unset alike, while the
+      // same pair under `upstream` reports `…:refs/heads/main` only when it is set.
+      const mergeOverride = {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "branch.main.merge",
+        GIT_CONFIG_VALUE_0: "refs/heads/elsewhere",
+      };
+      try {
+        git(["config", "push.default", "current"], work);
+        assert.equal(
+          runHook(barePush, mergeOverride).decision, "allow",
+          "under push.default=current a bare push never reads branch.merge, so an inherited value is inert",
+        );
+        // The control that keeps that skip from widening into a fail-open: the
+        // identical override under a mode that DOES consult the key moves where
+        // this push lands, and must still die.
+        git(["config", "push.default", "upstream"], work);
+        const denied = runHook(barePush, mergeOverride);
+        assert.equal(denied.decision, "deny", "under push.default=upstream the same inherited branch.merge is denied");
+        assert.match(denied.reason, /branch\.merge/, "the denial names the answer that changed");
+        // Unset is git's own default `simple`, which reads the key — absence must
+        // not read as permission to skip.
+        git(["config", "--unset", "push.default"], work);
+        assert.equal(
+          runHook(barePush, mergeOverride).decision, "deny",
+          "with push.default unset the default mode consults branch.merge, so the override still denies",
+        );
+        // And the mode itself arriving through the SAME inherited channel must not
+        // be able to buy the skip: read scrubbed, this repo is on the default mode.
+        assert.equal(
+          runHook(barePush, {
+            GIT_CONFIG_COUNT: "2",
+            GIT_CONFIG_KEY_0: "push.default", GIT_CONFIG_VALUE_0: "current",
+            GIT_CONFIG_KEY_1: "branch.main.merge", GIT_CONFIG_VALUE_1: "refs/heads/elsewhere",
+          }).decision,
+          "deny",
+          "an inherited push.default=current cannot silence the branch.merge it arrives with",
+        );
+      } finally {
+        git(["config", "--unset", "push.default"], work);
+      }
+    }
+    {
+      // The `remotes` lookup carried the same unscoped shape as `remote.*.push`:
+      // `git remote -v` lists EVERY remote, but a push consults only the one it
+      // resolves to. An inherited `remote.<other>.url` adds a `(push)` line on the
+      // ambient side alone, so the decision sets differed and denied a push that
+      // could not have touched that remote.
+      assert.equal(
+        runHook(featurePush, {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "remote.mirrorbox.url",
+          GIT_CONFIG_VALUE_0: path.join(tmp, "mirrorbox.git"),
+        }).decision,
+        "allow",
+        "an inherited remote this push never selects does not change where it goes",
+      );
+      // The control: the same override on the remote this push DOES select is the
+      // redirect the comparison exists to catch.
+      const denied = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.url",
+        GIT_CONFIG_VALUE_0: CRX_URL,
+      });
+      assert.equal(denied.decision, "deny", "the same override on the selected remote is still denied");
+      assert.match(denied.reason, /remotes/, "the denial names the answer that changed");
     }
     assert.equal(
       runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,

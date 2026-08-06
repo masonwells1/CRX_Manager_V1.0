@@ -800,6 +800,29 @@ export function pushNamesRefspec(cmd) {
 // half of this over-refusal live after the first was fixed (Codex, 2026-08-06).
 export const REFSPEC_DEFAULT_LOOKUPS = new Set(["push.default", "remote.*.push", "branch.merge"]);
 
+// Even a BARE push consults `branch.<b>.merge` only under some `push.default`
+// modes, and comparing it under the others is the same over-refusal one level
+// down: `pushNamesRefspec` correctly says "this push has no refspec", but git
+// still never reads the key. Only `upstream` (and its `tracking` alias) and
+// `simple` consult it — `simple` because it must compare the upstream's name to
+// refuse a mismatch. `current` and `matching` derive the destination refname
+// from the branch alone, and `nothing` refuses outright.
+//
+// Reproduced on git 2.43.0 before fixing, with `branch.feature.merge=refs/heads/main`
+// set and unset: under `current` the dry run reports
+// `refs/heads/feature:refs/heads/feature` BOTH times, while under `upstream` it
+// reports `refs/heads/feature:refs/heads/main` only with the key — so the two
+// modes genuinely differ and only the first is safe to skip (Codex, 2026-08-06).
+//
+// Unset means git's own default, which is `simple` — consulted, so absent reads
+// as "compare". Any unrecognised value also compares, fail-closed: a mode this
+// guard does not know about is not a mode it may declare harmless.
+export function pushDefaultConsultsBranchMerge(value) {
+  const mode = String(value ?? "").trim().toLowerCase();
+  if (mode === "") return true; // unset → git's default `simple`
+  return !["current", "matching", "nothing"].includes(mode);
+}
+
 // Does this push name the repository it pushes to? Git resolves a bare push's
 // remote through `branch.<b>.pushRemote` → `remote.pushDefault` →
 // `branch.<b>.remote` → `origin`, and consults NONE of them once the command
