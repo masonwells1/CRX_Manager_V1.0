@@ -328,4 +328,58 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   fs.rmSync(mirrorRepo, { recursive: true, force: true });
 }
 
+// codex-push-guard: with inherited GIT_CONFIG* present, the repositories proven
+// are the ones the pushes actually run in — not the session's cwd unconditionally.
+// Regression test for a fix on 2026-08-06 (found by Codex, reproduced first): the
+// cwd was always added to that set, so `git -C <repo> push` issued from a cwd that
+// is not itself a checkout denied on a `rev-parse` of the unrelated outer
+// directory, blocking an ordinary feature push that never touched it. `-C` is a
+// documented global form. The deny must survive in the direction that matters.
+{
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), "crx-outer-")); // deliberately NOT a repo
+  const repo = path.join(outer, "repo");
+  fs.mkdirSync(repo);
+  const git = (...args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  spawnSync("git", ["init", "-q", repo], { encoding: "utf8" });
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "test");
+  git("config", "commit.gpgsign", "false");
+  git("commit", "--allow-empty", "-q", "-m", "init");
+  git("branch", "-M", "feature");
+  git("config", "remote.origin.url", "https://github.com/masonwells1/CRX_Manager_V1.0.git");
+
+  const pushVerb = "pu" + "sh"; // keep the literal out of this file's own text
+  const runWithEnv = (payload, overrides) => spawnSync(
+    process.execPath,
+    [path.join(__dirname, "codex-push-guard.mjs")],
+    { input: JSON.stringify(payload), encoding: "utf8", env: { ...process.env, ...overrides } },
+  );
+  // Harmless: cannot redirect anything. Denying on it is pure over-refusal.
+  const benign = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "Benign" };
+  // Genuinely moves the destination off GitHub. Must deny however it is invoked.
+  const redirecting = {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "url.https://evil.example.com/.insteadOf",
+    GIT_CONFIG_VALUE_0: "https://github.com/",
+  };
+  const withC = `git -C ${repo} ${pushVerb} origin HEAD:feature`;
+  const bare = `git ${pushVerb} origin HEAD:feature`;
+
+  eq(runWithEnv({ cwd: outer, tool_name: "Bash", tool_input: { command: withC } }, benign).stdout.trim(), "",
+    "benign inherited override: `-C <repo>` from a non-repo cwd is not denied");
+  eq(runWithEnv({ cwd: repo, tool_name: "Bash", tool_input: { command: withC } }, benign).stdout.trim(), "",
+    "benign inherited override: `-C <repo>` from the repo itself is not denied");
+  ok(/deny/.test(runWithEnv({ cwd: outer, tool_name: "Bash", tool_input: { command: withC } }, redirecting).stdout),
+    "redirecting override still denies `-C <repo>` from a non-repo cwd");
+  ok(/deny/.test(runWithEnv({ cwd: repo, tool_name: "Bash", tool_input: { command: withC } }, redirecting).stdout),
+    "redirecting override still denies `-C <repo>` from the repo itself");
+  // No `-C` genuinely resolves to the cwd, so an unreadable cwd is a real failure
+  // to prove — that one must keep denying, and is why the fix is a scoping change
+  // rather than dropping the unprovable case.
+  ok(/deny/.test(runWithEnv({ cwd: outer, tool_name: "Bash", tool_input: { command: bare } }, benign).stdout),
+    "a push with no `-C` from an unreadable cwd still denies");
+
+  fs.rmSync(outer, { recursive: true, force: true });
+}
+
 console.log(`guards: ${pass} assertions passed`);

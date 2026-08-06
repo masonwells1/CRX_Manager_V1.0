@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — Inherited-override proof scoped to the repos each push runs in — BRANCH
+
+Codex finding on `6ca2b264` (PR #313), reproduced against the shipped guard
+before fixing. When inherited `GIT_CONFIG*` variables are present, the guard
+proves they cannot redirect the push by reading every classifying lookup twice —
+once scrubbed, once as the push will see them — in each repository the command
+could push from. That set added the session's cwd **unconditionally**.
+
+A push written with git's documented `-C <repo>` global form does not read the
+cwd's configuration at all, so proving the cwd proves nothing about it. Worse,
+when the cwd is not itself a checkout — a session working one directory up from
+the repo — the `rev-parse` that opens the proof could not read it and **denied an
+ordinary feature-branch push that was never going to touch it**. Reproduced with
+a harmless inherited `user.name` override: identical push, allowed from the repo,
+denied from its parent.
+
+The set is now built per push through `gitPushCwd`, which resolves to the cwd for
+a push that does not name `-C`, so the ordinary case still proves exactly the
+repository the push will use — nothing is given up. A command that reads as a
+push but yields no individual push segment falls back to the cwd rather than
+proving nothing. `guards.test.mjs` pins five directions, including the two that
+must keep denying: a redirecting rewrite still denies through `-C` from either
+cwd, and a push with no `-C` from an unreadable cwd still denies, since that one
+genuinely cannot be proven.
+
 ## 2026-08-06 — Push guard resolves real remotes before guessing at URLs — BRANCH
 
 Codex finding on `662836b2` (PR #313), reproduced against the shipped guard

@@ -146,16 +146,29 @@ const git = (args, cwd) => gitIn(args, cwd);
 // that errors on one side only.
 const inheritedOverrides = environmentCarriesConfigOverride(process.env);
 if (inheritedOverrides.length > 0) {
-  // Every repository this command could push from, not just the session's cwd:
-  // `git -C <other> push` must be proven in <other>, and a chained command can
+  // Every repository this command could push FROM — resolved per push, because
+  // `git -C <other> push` must be proven in <other> and a chained command can
   // name several. Parsing here is pure text work with no new dependencies.
-  const overrideRepoDirs = [...new Set([
-    projectDir,
-    ...shellSegments(cmd)
+  //
+  // The session's cwd is deliberately NOT added unconditionally (Codex, 2026-08-06,
+  // reproduced before fixing). A push that names `-C <repo>` does not read the
+  // cwd's configuration at all, so proving the cwd proves nothing about that push
+  // — and when the cwd is not itself a checkout, the `rev-parse` below cannot read
+  // it and denied an ordinary feature-branch push that was never going to touch
+  // it. `-C` is a documented global form, so this is a real invocation, not a
+  // contrived one. Nothing is given up: a push WITHOUT `-C` resolves to the cwd
+  // through `gitPushCwd`, so the ordinary case still proves exactly the
+  // repository the push will use.
+  const overrideRepoDirs = [...new Set(
+    shellSegments(cmd)
       .map((segment) => segment.trim())
       .filter((segment) => isGitPush(segment))
       .map((segment) => gitPushCwd(segment, projectDir)),
-  ])];
+  )];
+  // Fail closed if the command read as a push (line 86) but no individual segment
+  // did: an empty set would skip this proof entirely, so fall back to the widest
+  // thing known rather than proving nothing.
+  if (overrideRepoDirs.length === 0) overrideRepoDirs.push(projectDir);
   // Destinations compare by a normalised DECISION; everything else by exact
   // text. A credential proxy's whole job is re-spelling `git@github.com:` as
   // `https://github.com/` for the same repository, so comparing destination text
