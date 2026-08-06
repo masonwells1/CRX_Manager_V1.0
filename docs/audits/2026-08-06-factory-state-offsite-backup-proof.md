@@ -23,6 +23,9 @@ checkout.
   worktree only as a pre-deployment fallback. The operational worktree is
   created and locked at the reviewed commit before the temporary review
   worktree may be removed.
+- Any future change to either backup helper requires release closeout to move
+  this operational worktree to the reviewed merged commit, run the tracked
+  self-test, and re-lock it. The scheduled log records the exact deployed SHA.
 - Factory staging root: a unique `personal-dr-<timestamp>` directory under the
   operating-system temporary directory
 - Destinations: local backup drive when connected, plus the existing
@@ -32,6 +35,10 @@ The installed script fails the run unless the remote copy is downloaded through
 the encryption layer and its SHA-256 matches the local archive. Its `finally`
 block removes plaintext staging, restore-expansion, and local archive files on
 success or failure.
+If Factory staging itself fails, the task omits that component but still creates,
+uploads, downloads, and hash-verifies the rest of Personal DR before issuing a
+high-priority Factory alert and failing. A Factory-only failure therefore cannot
+silently cancel the night's secrets, configuration, and agent-memory backup.
 
 ## Real-path proof
 

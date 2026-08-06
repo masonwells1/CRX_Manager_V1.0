@@ -472,6 +472,8 @@ for (const explicitUnknownPrompt of [
   "transfer ticket-7 to this chat",
   "take over job #12 here",
   "move ticket: missing-job here",
+  "move the ticket here for job-99",
+  "transfer this job to this chat: ticket-42",
 ]) {
   const state = makeEmptyState(`unknown-token-source-${explicitUnknownPrompt.replace(/\W+/g, "-")}`);
   addParkedJob(state.paths, state.sessionId, "only-transferable-job");

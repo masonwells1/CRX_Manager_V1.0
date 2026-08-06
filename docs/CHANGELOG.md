@@ -21,6 +21,10 @@ current approval before replacing any existing shared Factory state.
 The append-only ledger's 75% size warning is now a distinct scheduled-task
 failure after a verified upload, preventing a quiet transition from warning to
 the bounded backup limit.
+A hard Factory snapshot failure no longer cancels the rest of the Personal DR
+archive: secrets, configuration, and agent memory still upload and verify before
+the task alerts and fails for the missing Factory component. The locked backup
+runtime has an explicit refresh-on-tool-change rule and logs its deployed SHA.
 
 Factory status and Board projections now show each job's governed working folder.
 Wrong-worktree denials give a stage-valid route: transferable waiting/parked jobs

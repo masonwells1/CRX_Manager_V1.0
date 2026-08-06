@@ -177,10 +177,12 @@ async function main() {
       FACTORY_TRANSFERABLE_STAGES.has(job.stage)
       && job.sessionId !== sessionId);
     const named = transferable.filter((job) => mentionsExactJobId(prompt, job.id));
-    const explicitJobToken = prompt.match(/\b(?:factory\s+)?(?:job|ticket)(?:\s*[-:#]\s*|\s+)([A-Za-z0-9][A-Za-z0-9._:@+=,-]*)\b/i)?.[1] || "";
+    const explicitJobTokens = [...prompt.matchAll(/\b(?:factory\s+)?(?:job|ticket)(?:\s*[-:#]\s*|\s+)([A-Za-z0-9][A-Za-z0-9._:@+=,-]*)\b/gi)]
+      .map((match) => match[1]);
     const namesKnownJob = snapshot.jobs.some((job) => mentionsExactJobId(prompt, job.id));
-    const genericTransferWord = new Set(["here", "this", "that", "to", "into", "please"]).has(explicitJobToken.toLowerCase());
-    const tokenLooksLikeJobId = Boolean(explicitJobToken) && !genericTransferWord && /[0-9._:@+=,-]/.test(explicitJobToken);
+    const genericTransferWords = new Set(["here", "this", "that", "to", "into", "please"]);
+    const tokenLooksLikeJobId = explicitJobTokens.some((token) =>
+      !genericTransferWords.has(token.toLowerCase()) && /[0-9._:@+=,-]/.test(token));
     const promptNamesUnknownJob = named.length === 0 && (namesKnownJob || tokenLooksLikeJobId);
     const candidates = named.length > 0 ? named : (promptNamesUnknownJob ? [] : transferable);
     if (candidates.length !== 1) {

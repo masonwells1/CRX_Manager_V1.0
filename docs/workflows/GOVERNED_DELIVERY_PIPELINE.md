@@ -567,6 +567,11 @@ before reporting success. A `finally` cleanup removes plaintext staging and rest
 or failure. The same encrypted archive is also copied to the local backup drive when it is connected.
 The non-secret schedule and first real-path proof are recorded in
 `docs/audits/2026-08-06-factory-state-offsite-backup-proof.md`.
+The operational backup worktree is a deliberately pinned, locked deployment rather than a live
+development checkout. Whenever `scripts/backup-factory-state.mjs` or
+`scripts/windows/stage-factory-state-for-personal-dr.ps1` changes, release closeout must move that
+worktree to the reviewed merged commit, rerun its self-test, and re-lock it before removing the review
+worktree. The scheduled log records the exact deployed SHA so drift is observable.
 
 ### Factory state restore
 
