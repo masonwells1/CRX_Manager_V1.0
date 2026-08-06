@@ -67,21 +67,28 @@ migrations lookup backfilled from recent history when the branch diff was empty;
 and the whole `--summary` string became the `##` heading. All four are fixed and
 guarded by `scripts/log-session.test.mjs`, now wired into `test:correction-guards`.
 
-Two further defects were found during review and fixed on the same branch. Both
-were introduced by the fixes above, not by the original script:
+Three further defects were found during review and fixed on the same branch. All
+three were introduced by the fixes above, not by the original script:
 
 - Collapsing every git error to `""` made an unreachable `origin/main`
   indistinguishable from "no commits ahead", so the script would silently use the
   unrelated 12-hour window and report no migrations — reviving the exact
-  false-attribution bug it was meant to end. `runGit()` now returns `{ok, out}`,
-  refuses to write on any git failure, and gates the time-window fallback behind a
-  real `HEAD === origin/main` SHA comparison. (CodeRabbit, PR #310.)
+  false-attribution bug it was meant to end. `runGit()` now returns `{ok, out}`
+  and refuses to write on any git failure. (CodeRabbit, PR #310.)
 - The guard suite called `git diff origin/main...HEAD` unguarded, which exits 128
   in any checkout without a local `origin/main` — shallow clones, fresh worktrees,
   remote containers. Because the suite runs in `test:correction-guards`, that
   aborted the pre-commit gate and blocked commits outright. Every git call in the
   suite is now guarded, blocks needing the ref skip with a stated reason and count,
   and a new block asserts the script's refusal path. (Codex, PR #310.)
+- The 12-hour window is **gone entirely** (Codex, PR #317). #310 shipped it behind
+  a `HEAD === origin/main` guard, on the reasoning that the fallback was only
+  reachable when the branch was level with main. That guard was the wrong shape:
+  level with main is the *common* state — right after a merge, or during any
+  session whose work is not yet committed — and there the last 12 hours of `main`
+  is other people's merged work. The guard narrowed the bug without fixing it.
+  Commits now come from one source, `origin/main..HEAD`, and an empty range
+  honestly reports `(none found)`.
 
 A third review finding — migrate all TypeScript money values to `bigint` — was
 declined and subsequently withdrawn by the reviewer. The "money is bigint cents"
@@ -94,12 +101,16 @@ branded `Cents` type or the lint rule `money.ts` already contemplates.
 PROOF — Ran: `npx vitest run --coverage` (320 files, 4259 tests, 0 failures;
 47.13 lines / 37.91 branches / 34.11 functions / 44.74 statements); `tsc --noEmit`;
 `eslint .`; `vite build`; `test:correction-guards`; `test:agent-workflows`. Saw:
-all green, 20 assertions in the log-session guard suite. Separately proved the new
+all green, 21 assertions in the log-session guard suite (20 at #310, plus the
+#317 guard asserting no `--since=` window can return). Separately proved the new
 ratchet is enforced — a single-file coverage run fails citing all four new
 thresholds — and mutation-tested the `--help` and `git log -15` guards, both of
 which fail the suite when the fix is reverted. The shallow-checkout fix was proved
 in a scratch repo with no `origin/main`: the pre-fix suite dies with status 128,
-the fixed suite exits 0 with 15 assertions and 3 stated skips.
+the fixed suite exits 0 with 15 assertions and 3 stated skips. The #317 fix was
+proved the same way: with `origin/main` set to `HEAD` and one unrelated commit in
+recent history, the pre-fix script claims that commit and the fixed script reports
+`(none found)`.
 
 - **Migrations touched**: none.
 - **Delivery note**: the code changes were pushed through the GitHub MCP API, not
@@ -205,16 +216,20 @@ dangerous — the container legitimately requires them.
    plus the `GIT_CONFIG_*` vars unset for that one command** — which item (1)
    forbids arranging. In practice: commit and push from a local machine.
 3. **`scripts/log-session.mjs` misattributed a session's work.** — **FIXED
-   2026-08-04/05** on branch `claude/test-coverage-analysis-3thnt5`. It used to
-   fall back to the last 15 commits when no commit matched its `--author=Mason`
-   heuristic, labelling the result "Commits this session" and "Migrations
-   touched"; on 2026-08-04 it attributed 14 unrelated commits and 7 statement
-   migrations to a docs-only session. It also folded the entire `--summary`
-   string into the `##` heading, and a `--help` invocation wrote a `{SUMMARY}`
-   template stub into `docs/CHANGELOG.md`. Commits are now scoped to
-   `origin/main..HEAD`, migrations are never backfilled, `--help` exits without
-   writing, and the heading is a short derived title. A git *failure* is no longer
-   treated as an empty result — the script refuses to write rather than guessing.
+   2026-08-04/05** on branches `claude/test-coverage-analysis-3thnt5` (#310) and
+   `claude/log-session-attribution-fix` (#317). It used to fall back to the last
+   15 commits when no commit matched its `--author=Mason` heuristic, labelling the
+   result "Commits this session" and "Migrations touched"; on 2026-08-04 it
+   attributed 14 unrelated commits and 7 statement migrations to a docs-only
+   session. It also folded the entire `--summary` string into the `##` heading,
+   and a `--help` invocation wrote a `{SUMMARY}` template stub into
+   `docs/CHANGELOG.md`. Commits are now scoped to `origin/main..HEAD`, migrations
+   are never backfilled, `--help` exits without writing, and the heading is a
+   short derived title. A git *failure* is no longer treated as an empty result —
+   the script refuses to write rather than guessing. There is no time-window
+   fallback of any kind: #317 removed the last one (a 12-hour window that #310 had
+   merely guarded behind `HEAD === origin/main`, which left the common
+   level-with-main case still claiming other people's merges).
    `scripts/log-session.test.mjs` guards all of it, and skips cleanly (with a
    stated reason) in checkouts that have no local `origin/main`.
 
