@@ -1629,6 +1629,49 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       assert.equal(result.decision, "deny", "an unreadable push does not get the explicit-refspec skip");
     }
     {
+      // 2026-08-06, Codex's PR #313 review — the NINTH over-refusal of this
+      // shape, and the one that shows a single command-wide verdict was still too
+      // coarse. A command that MIXES the forms keeps `remote.*.push` compared,
+      // correctly, because the bare `push archive` reads it — but the answer was
+      // scoped to every remote the command touches, so an inherited
+      // `remote.origin.push` denied it even though the origin push names its own
+      // refspec and git reads that key for NEITHER push. `git push -h` documents
+      // the forms per invocation; the dry-run destinations are identical with and
+      // without the variable.
+      const mixed = `git -C ${work} push origin main:refs/heads/feature && git -C ${work} push archive`;
+      assert.equal(
+        runHook(mixed, {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "remote.origin.push",
+          GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+        }).decision,
+        "allow",
+        "a default refspec belonging to the explicit push's remote is read by neither push",
+      );
+      // The control that keeps the narrowing from becoming a fail-open: the same
+      // override aimed at `archive` — the remote whose push IS bare — moves where
+      // that push lands and must still die.
+      const denied = runHook(mixed, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.archive.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+      });
+      assert.equal(denied.decision, "deny", "the same override on the bare push's own remote is still denied");
+      assert.match(denied.reason, /remote\.\*\.push/, "the denial names the answer that changed");
+      // And the narrowing is specific to `remote.*.push`: `remote.<n>.mirror` is
+      // read for an explicit push too, so it stays on the wider scope and an
+      // inherited mirror on the explicit push's remote still denies.
+      assert.equal(
+        runHook(mixed, {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "remote.origin.mirror",
+          GIT_CONFIG_VALUE_0: "true",
+        }).decision,
+        "deny",
+        "mirror is not a default-refspec key and keeps the wider remote scope",
+      );
+    }
+    {
       // 2026-08-06, Codex's PR #313 review — the SIXTH over-refusal of this shape,
       // and one level below the refspec verdict above. A bare push does read the
       // default-refspec configuration, but only some `push.default` modes derive

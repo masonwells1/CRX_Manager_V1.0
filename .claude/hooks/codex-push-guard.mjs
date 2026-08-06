@@ -338,9 +338,20 @@ if (inheritedOverrides.length > 0) {
     // different facts about a push, and each silences its own set of keys).
     // Reproduced against git's own dry run for all three keys before fixing.
     let everyPushNamesDestination = null;
+    // …and the narrower scope for `remote.<name>.push` specifically: the remotes of
+    // the BARE pushes only. One bare push keeps that key compared for the whole
+    // command (above), but git still reads it only for the remote that bare push
+    // selects — so in `push origin HEAD:feature && push archive` an inherited
+    // `remote.origin.push` moves neither push and must not deny (Codex, 2026-08-06,
+    // PR #313 review, the ninth over-refusal of this shape; reproduced against git's
+    // own dry run before fixing). Kept
+    // separate from `remoteScope`, which the explicit push still contributes to
+    // for every other per-remote key.
+    let refspecDefaultScope = new Set();
     for (const segment of shellSegments(cmd).map((s) => s.trim()).filter((s) => isGitPush(s))) {
       if (gitPushCwd(segment, projectDir) !== repoDir) continue;
-      everyPushNamesRefspec = (everyPushNamesRefspec ?? true) && pushNamesRefspec(segment);
+      const namesRefspec = pushNamesRefspec(segment);
+      everyPushNamesRefspec = (everyPushNamesRefspec ?? true) && namesRefspec;
       everyPushNamesDestination = (everyPushNamesDestination ?? true) && pushNamesDestination(segment);
       const resolved = resolvePushRemote(segment, repoDir, overrideBranch);
       // Leaving the loop early means the remaining segments were never examined, so
@@ -348,11 +359,15 @@ if (inheritedOverrides.length > 0) {
       // Fail them closed rather than skipping a lookup on unread evidence.
       if (resolved.remote === null && !resolved.rawUrl) {
         remoteScope = null;
+        refspecDefaultScope = null;
         everyPushNamesRefspec = false;
         everyPushNamesDestination = false;
         break;
       }
-      if (resolved.remote !== null) remoteScope.add(resolved.remote.toLowerCase());
+      if (resolved.remote !== null) {
+        remoteScope.add(resolved.remote.toLowerCase());
+        if (!namesRefspec) refspecDefaultScope.add(resolved.remote.toLowerCase());
+      }
     }
     // …and, one level down from the refspec verdict, whether a BARE push here
     // reads `branch.<b>.merge` at all. `pushNamesRefspec` correctly reports that
@@ -386,8 +401,11 @@ if (inheritedOverrides.length > 0) {
       if (everyPushNamesRefspec === true && REFSPEC_DEFAULT_LOOKUPS.has(name)) continue;
       if (name === "branch.merge" && !branchMergeIsConsulted) continue;
       if (everyPushNamesDestination === true && REMOTE_SELECTION_LOOKUPS.has(name)) continue;
-      scrubbed[name] = answerFor(name, args, repoDir, false, remoteScope);
-      ambient[name] = answerFor(name, args, repoDir, true, remoteScope);
+      // `remote.*.push` is read only for a bare push's own remote; every other
+      // per-remote answer is read for whichever remote its push selects.
+      const scope = name === "remote.*.push" ? refspecDefaultScope : remoteScope;
+      scrubbed[name] = answerFor(name, args, repoDir, false, scope);
+      ambient[name] = answerFor(name, args, repoDir, true, scope);
     }
     // NOT compared here: the URL-rewrite table and the settings naming a program
     // to carry the objects. Those two feed classifiers whose only power is to

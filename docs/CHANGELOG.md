@@ -2,6 +2,36 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — `remote.*.push` proof scoped to the BARE push's own remote — BRANCH
+
+Codex finding on `b0404398` (PR #313) — the **ninth** over-refusal of this shape,
+and the one showing that a single command-wide verdict was still too coarse. The
+sixth fix taught the guard to drop the default-refspec keys when **every** push
+names its refspec. A command that MIXES the forms — an explicit push to one
+remote, then a bare push to another — correctly keeps them compared, because the
+bare push does read them. But the comparison was scoped to `remoteScope`, every
+remote the command touches, so an inherited `remote.origin.push` denied it even
+though git reads that key for **neither** push: not for the explicit one, which
+names its own refspec, and not for the bare one, which resolves a different
+remote. `git push -h` documents the forms per invocation, and Codex confirmed
+identical dry-run destinations with and without the variable.
+
+`remote.*.push` now uses `refspecDefaultScope`, built only from the remotes of
+pushes that do **not** name a refspec. It is always a subset of `remoteScope`,
+which every other per-remote key keeps — `remote.*.mirror` is read for an
+explicit push too, so narrowing it would be a fail-open, and a test pins that
+the same override aimed at `remote.origin.mirror` still denies. An unreadable
+push nulls both scopes, unchanged.
+
+Fail-open check: the narrowing rests on git reading `remote.<name>.push` only
+for the remote a bare push selects. The control test — the same override aimed
+at `archive`, the remote whose push IS bare — still denies and still names
+`remote.*.push` as the answer that changed. Revert-check: with the fix reverted
+the new case fails on exactly its own assertion, and passes with it restored;
+`codex-push-lib.test.mjs`, `test:agent-workflows`, and manifest parity green.
+
+Files: `.claude/hooks/codex-push-guard.mjs`, `.claude/hooks/codex-push-lib.test.mjs`.
+
 ## 2026-08-06 — `remotes` proof scoped to the remote the push selects — BRANCH
 
 Codex finding on `a2fcd36c` (PR #313) — the **eighth** over-refusal of this shape,
