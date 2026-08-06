@@ -16,6 +16,7 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -47,12 +48,27 @@ export const FACTORY_AUTHORITY_NOTICE = [
 ].join(" ");
 export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 export const ACTIVE_STAGES = new Set(["building", "verifying", "in-review"]);
+export const FACTORY_MAX_ACTIVE_LANES = 3;
 export const FACTORY_CUSTODY_STAGES = new Set([
   "needs-ticket-ok",
   "queued",
   ...ACTIVE_STAGES,
   "awaiting-morning-review",
   "approved-to-land",
+]);
+export const FACTORY_WORKTREE_CUSTODY_STAGES = new Set([
+  "needs-ticket-ok",
+  "queued",
+  ...ACTIVE_STAGES,
+  "awaiting-morning-review",
+  "approved-to-land",
+  "parked",
+]);
+export const FACTORY_TRANSFERABLE_STAGES = new Set([
+  "needs-ticket-ok",
+  "queued",
+  "parked",
+  "awaiting-morning-review",
 ]);
 export const STALE_LOCK_MS = 5 * 60 * 1000;
 export const FACTORY_CLI_PERMIT_TTL_MS = 30 * 1000;
@@ -66,11 +82,36 @@ export const FACTORY_HARNESS_ALLOWLIST = new Set([
   "verify-deps",
   "check-doc-drift",
 ]);
+
+export function sameCanonicalPath(left, right) {
+  const normalized = (value) => {
+    const resolved = path.resolve(value);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  try {
+    return normalized(realpathSync(path.resolve(left))) === normalized(realpathSync(path.resolve(right)));
+  } catch {
+    return normalized(left) === normalized(right);
+  }
+}
 export const FACTORY_HARNESS_NODE_IMAGE = "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059";
 export const FACTORY_GITHUB_REPOSITORY = "masonwells1/CRX_Manager_V1.0";
 export const FACTORY_PRODUCTION_URL = "https://croprxsolutions.app/";
 export const FACTORY_REVIEW_MODEL = CODEX_REVIEW_MODEL;
 export const FACTORY_REVIEW_EFFORT = CODEX_REVIEW_EFFORT;
+
+export function factoryWorktreeRecoveryRoute(job) {
+  const worktree = String(job?.worktree || "").trim().replace(/[\r\n]+/g, " ");
+  const jobId = String(job?.id || "").trim().replace(/[\r\n]+/g, " ");
+  if (!worktree || !jobId) return "";
+  if (FACTORY_TRANSFERABLE_STAGES.has(job.stage)) {
+    const nextStep = job.stage === "awaiting-morning-review"
+      ? "revalidate proof and present the canonical morning question there"
+      : "re-present the ticket after the transfer revokes the old approval";
+    return ` Working folder: ${worktree}. Open a new chat in that folder. If this job must move, ask Mason there to take over factory job ${jobId}; ${nextStep}.`;
+  }
+  return ` Working folder: ${worktree}. Return to the existing Factory chat for this ${job.stage} job; active build, review, and landing custody cannot be transferred from a new chat. If that chat is gone, stop and report the job ID, stage, and working folder to Mason for governed recovery.`;
+}
 export const BOARD_STAGES = new Set([
   "needs-ticket-ok",
   "queued",
@@ -149,6 +190,13 @@ export function resolveRepoRoot(cwd = process.cwd()) {
   return path.resolve(git(["rev-parse", "--show-toplevel"], cwd));
 }
 
+export function isLinkedGitWorktree(cwd = process.cwd()) {
+  const repoRoot = resolveRepoRoot(cwd);
+  const commonDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--git-common-dir"], repoRoot));
+  const gitDir = path.resolve(git(["rev-parse", "--path-format=absolute", "--absolute-git-dir"], repoRoot));
+  return !sameCanonicalPath(commonDir, gitDir);
+}
+
 export function resolveFactoryPaths(cwd = process.cwd(), env = process.env) {
   if (env.CRX_FACTORY_TEST_STATE_DIR) {
     if (env.CRX_FACTORY_TEST_MODE !== "1") {
@@ -180,6 +228,7 @@ export function resolveHookFactoryPaths(cwd = process.cwd(), env = process.env) 
 }
 
 function buildPaths(stateDir) {
+  const managedSessionsDir = path.join(stateDir, "managed-sessions");
   return {
     stateDir,
     ticketsDir: path.join(stateDir, "tickets"),
@@ -188,6 +237,8 @@ function buildPaths(stateDir) {
     ownerReceiptsDir: path.join(stateDir, "permits", "owner-receipts"),
     ownerReceiptKeyPath: path.join(stateDir, "permits", "owner-receipt.key"),
     intentLatchesDir: path.join(stateDir, "intent-latches"),
+    managedSessionsDir,
+    managedSessionsBackfillPath: path.join(managedSessionsDir, "historical-backfill-v1.json"),
     eventsPath: path.join(stateDir, "events.jsonl"),
     lockPath: path.join(stateDir, "events.lock"),
     harnessRunsDir: path.join(stateDir, "harness-runs"),
@@ -206,12 +257,136 @@ export function ensureFactoryDirs(paths) {
   mkdirSync(paths.permitsDir, { recursive: true });
   mkdirSync(paths.ownerReceiptsDir, { recursive: true });
   mkdirSync(paths.intentLatchesDir, { recursive: true });
+  mkdirSync(paths.managedSessionsDir, { recursive: true });
   mkdirSync(paths.harnessRunsDir, { recursive: true });
 }
 
 function factoryIntentLatchPath(paths, sessionId) {
   const session = requiredText(sessionId, "factory intent sessionId", 200);
   return path.join(paths.intentLatchesDir, `${sha256(session)}.json`);
+}
+
+function factoryManagedSessionPath(paths, sessionId) {
+  const session = requiredText(sessionId, "factory managed sessionId", 200);
+  return path.join(paths.managedSessionsDir, `${sha256(session)}.json`);
+}
+
+export function hasFactoryManagedSessionMarker(paths, sessionId) {
+  if (!sessionId) return false;
+  return existsSync(factoryManagedSessionPath(paths, sessionId));
+}
+
+function factoryManagedSessionBackfillIdentity(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.factoryIntentSessions) || !Array.isArray(snapshot.jobs)) {
+    throw new Error("A healthy factory snapshot is required to identify the historical managed-session backfill.");
+  }
+  const sessionIds = [...new Set([
+    ...snapshot.factoryIntentSessions,
+    ...snapshot.jobs.flatMap((job) => [job?.sessionId, job?.laneSessionId]),
+  ].filter(Boolean))].sort();
+  return {
+    lastEventHash: requiredText(snapshot.lastEventHash, "factory snapshot lastEventHash", 64),
+    sessionIds,
+    sessionHashes: sessionIds.map((sessionId) => sha256(sessionId)),
+  };
+}
+
+export function hasFactoryManagedSessionBackfillComplete(paths, snapshot = null) {
+  try {
+    const record = JSON.parse(readFileSync(paths.managedSessionsBackfillPath, "utf8"));
+    const recordValid = record?.schemaVersion === FACTORY_SCHEMA_VERSION
+      && record?.kind === "historical-managed-session-backfill"
+      && /^[a-f0-9]{64}$/.test(record.lastEventHash)
+      && Array.isArray(record.sessionHashes)
+      && record.sessionHashes.length === new Set(record.sessionHashes).size
+      && record.sessionHashes.every((hash) =>
+        /^[a-f0-9]{64}$/.test(hash)
+        && existsSync(path.join(paths.managedSessionsDir, `${hash}.json`)),
+      );
+    if (!recordValid || !snapshot) return recordValid;
+    const expected = factoryManagedSessionBackfillIdentity(snapshot);
+    return record.lastEventHash === expected.lastEventHash
+      && canonicalJson(record.sessionHashes) === canonicalJson(expected.sessionHashes);
+  } catch {
+    return false;
+  }
+}
+
+export function setFactoryManagedSessionMarker(paths, { sessionId, actorTool }) {
+  authorizedFactoryManagedSessionMarkerWriter(paths);
+  ensureFactoryDirs(paths);
+  const target = factoryManagedSessionPath(paths, sessionId);
+  const bytes = `${canonicalJson({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    sessionId,
+    actorTool: requiredText(actorTool, "factory managed actorTool", 40),
+    createdAt: new Date().toISOString(),
+  })}\n`;
+  try {
+    writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  return target;
+}
+
+export function completeFactoryManagedSessionBackfill(paths, { snapshot, actorTool }) {
+  authorizedFactoryManagedSessionMarkerWriter(paths);
+  ensureFactoryDirs(paths);
+  const identity = factoryManagedSessionBackfillIdentity(snapshot);
+  for (const sessionId of identity.sessionIds) {
+    setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
+  }
+  if (hasFactoryManagedSessionBackfillComplete(paths, snapshot)) return paths.managedSessionsBackfillPath;
+  const target = paths.managedSessionsBackfillPath;
+  const bytes = `${canonicalJson({
+    schemaVersion: FACTORY_SCHEMA_VERSION,
+    kind: "historical-managed-session-backfill",
+    actorTool: requiredText(actorTool, "factory managed actorTool", 40),
+    completedAt: new Date().toISOString(),
+    lastEventHash: identity.lastEventHash,
+    sessionHashes: identity.sessionHashes,
+  })}\n`;
+  const temporaryPath = path.join(
+    paths.managedSessionsDir,
+    `.historical-backfill-v1-${identity.lastEventHash}-${randomUUID()}.tmp`,
+  );
+  let temporaryFd;
+  let primaryError;
+  try {
+    const buffer = Buffer.from(bytes, "utf8");
+    temporaryFd = openSync(temporaryPath, "wx", 0o600);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const written = writeSync(temporaryFd, buffer, offset, buffer.length - offset, offset);
+      if (written <= 0) throw new Error("Historical managed-session backfill staging made no write progress.");
+      offset += written;
+    }
+    fsyncSync(temporaryFd);
+    const observation = fstatSync(temporaryFd);
+    if (!observation.isFile() || observation.isSymbolicLink() || observation.size !== buffer.length) {
+      throw new Error("Historical managed-session backfill staging did not produce the exact intended file.");
+    }
+    closeSync(temporaryFd);
+    temporaryFd = undefined;
+    renameSync(temporaryPath, target);
+    flushFactoryDirectory(paths.managedSessionsDir);
+  } catch (error) {
+    primaryError = error;
+  }
+  if (temporaryFd !== undefined) {
+    try { closeSync(temporaryFd); } catch (error) {
+      if (!primaryError) primaryError = error;
+    }
+  }
+  try { unlinkSync(temporaryPath); } catch (error) {
+    if (error?.code !== "ENOENT" && !primaryError) primaryError = error;
+  }
+  if (primaryError) throw primaryError;
+  if (!hasFactoryManagedSessionBackfillComplete(paths, snapshot)) {
+    throw new Error("Historical managed-session backfill boundary is incomplete or invalid.");
+  }
+  return target;
 }
 
 export function hasFactoryIntentFailureLatch(paths, sessionId) {
@@ -240,6 +415,7 @@ export function setFactoryIntentFailureLatch(paths, {
     ownerRequestRejected: ownerRequestRejected === true,
     createdAt: new Date().toISOString(),
   })}\n`;
+  setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
   try {
     writeFileSync(target, bytes, { encoding: "utf8", flag: "wx" });
   } catch (error) {
@@ -873,6 +1049,9 @@ const ALLOWED_WRITERS = new Set([
 const OWNER_DECISION_WRITER = path.resolve(
   path.join(FACTORY_ROOT, ".claude", "hooks", "factory-owner-input.mjs"),
 ).toLowerCase();
+const MANAGED_SESSION_MARKER_ONLY_WRITER = path.resolve(
+  path.join(FACTORY_ROOT, ".claude", "hooks", "factory-state-integrity-guard.mjs"),
+).toLowerCase();
 
 function factoryWriterAuthorization(paths) {
   const invoked = process.argv[1] ? path.resolve(process.argv[1]).toLowerCase() : "";
@@ -901,6 +1080,21 @@ function factoryWriterAuthorization(paths) {
 
 function authorizedFactoryWriter(paths) {
   return factoryWriterAuthorization(paths);
+}
+
+function authorizedFactoryManagedSessionMarkerWriter(paths) {
+  try {
+    return authorizedFactoryWriter(paths);
+  } catch (error) {
+    const invoked = process.argv[1] ? path.resolve(process.argv[1]).toLowerCase() : "";
+    const stack = String(new Error().stack || "").toLowerCase().replaceAll("/", "\\");
+    if (invoked === MANAGED_SESSION_MARKER_ONLY_WRITER
+        && process.execArgv.length === 0
+        && stack.includes(MANAGED_SESSION_MARKER_ONLY_WRITER.replaceAll("/", "\\"))) {
+      return { invoked, ownerDecisionWriter: false, isolatedTest: false, markerOnlyWriter: true };
+    }
+    throw error;
+  }
 }
 
 function acquireEmergencyHoldCommitGate(paths, timeoutMs = 5_000, isolatedMetadataProbe = null) {
@@ -2059,6 +2253,8 @@ function appendFactoryEventLocked(paths, writer, current, {
 
 export function appendFactoryEvent(paths, eventInput, {
   expectedLastEventHash = "",
+  expectedJobEventHash = "",
+  expectedFactoryControlHash = "",
   requireFactoryRunning = false,
   compatibilityReplay = null,
   isolatedCommitProbe = null,
@@ -2076,9 +2272,32 @@ export function appendFactoryEvent(paths, eventInput, {
       if (current.degraded) {
         throw new Error("Factory ledger has an incomplete trailing event; repair or archive it before appending.");
       }
+      if (eventInput?.type === "job-stage" && eventInput?.payload?.stage === "approved-to-land") {
+        const landingJob = buildFactorySnapshot(paths).jobs.find((job) =>
+          job.id !== eventInput.jobId && job.stage === "approved-to-land");
+        if (landingJob) {
+          throw new Error(`Factory job ${landingJob.id} is already approved to land. Land or park it before accepting another result.`);
+        }
+      }
       const previousHash = current.events.at(-1)?.eventHash || "0".repeat(64);
       if (expectedLastEventHash && previousHash !== expectedLastEventHash) {
         throw new Error("Factory state changed after this decision was presented; re-read and re-present it.");
+      }
+      if (expectedJobEventHash) {
+        const currentJobEventHash = [...current.events]
+          .reverse()
+          .find((event) => event.jobId === eventInput.jobId)?.eventHash || "0".repeat(64);
+        if (currentJobEventHash !== expectedJobEventHash) {
+          throw new Error(`Factory job ${eventInput.jobId} changed while this operation ran; re-read its current state.`);
+        }
+      }
+      if (expectedFactoryControlHash) {
+        const currentFactoryControlHash = [...current.events]
+          .reverse()
+          .find((event) => event.type === "factory-held" || event.type === "factory-resumed")?.eventHash || "0".repeat(64);
+        if (currentFactoryControlHash !== expectedFactoryControlHash) {
+          throw new Error("Factory pause/resume state changed while this operation ran; its result was not attached.");
+        }
       }
       if (requireFactoryRunning && factoryHeldFromCurrent(paths, current)) {
         throw new Error("Factory was paused before evidence attachment; the receipt was not attached.");
@@ -2660,7 +2879,7 @@ export function validateRepositoryScope(job, cwd = FACTORY_ROOT, {
   return changed;
 }
 
-function directoryContentFingerprint(root, { ignoreRelative = () => false } = {}) {
+function directoryContentManifest(root, { ignoreRelative = () => false } = {}) {
   const base = path.resolve(root);
   const listed = [];
   function visit(directory) {
@@ -2674,24 +2893,17 @@ function directoryContentFingerprint(root, { ignoreRelative = () => false } = {}
   }
   if (existsSync(base)) visit(base);
   listed.sort((left, right) => left.relative.localeCompare(right.relative));
-  const hash = createHash("sha256");
-  for (const item of listed) {
+  return listed.map((item) => {
     const info = lstatSync(item.fullPath);
-    hash.update(`path:${Buffer.byteLength(item.relative)}:${item.relative}\0`);
     if (info.isSymbolicLink()) {
       const target = readlinkSync(item.fullPath);
-      hash.update(`symlink:${Buffer.byteLength(target)}:${target}\0`);
-    } else {
-      const bytes = readFileSync(item.fullPath);
-      hash.update(`file:${bytes.length}:`);
-      hash.update(bytes);
-      hash.update("\0");
+      return { relative: item.relative, kind: "symlink", sha256: sha256(target) };
     }
-  }
-  return hash.digest("hex");
+    return { relative: item.relative, kind: "file", sha256: sha256(readFileSync(item.fullPath)) };
+  });
 }
 
-function factoryProtectedContentFingerprint(paths) {
+function factoryProtectedContentSnapshot(paths) {
   const coordinationOnly = (relative) => relative === "events.jsonl"
     || relative === "events.lock"
     || relative === "COORDINATION-MUTATION.lock"
@@ -2704,11 +2916,37 @@ function factoryProtectedContentFingerprint(paths) {
     || relative === "permits/owner-receipts"
     || relative === "intent-latches"
     || relative.startsWith("intent-latches/")
+    || relative === "managed-sessions"
+    || relative.startsWith("managed-sessions/")
     || relative === "harness-runs"
     || relative.startsWith("harness-runs/")
     || relative === "recovery"
     || relative.startsWith("recovery/");
-  return directoryContentFingerprint(paths.stateDir, { ignoreRelative: coordinationOnly });
+  return directoryContentManifest(paths.stateDir, { ignoreRelative: coordinationOnly });
+}
+
+export function factoryProtectedContentUnchanged(before, after) {
+  const beforeByPath = new Map(before.map((entry) => [entry.relative, entry]));
+  const afterByPath = new Map(after.map((entry) => [entry.relative, entry]));
+  for (const [relative, expected] of beforeByPath) {
+    const actual = afterByPath.get(relative);
+    if (!actual || actual.kind !== expected.kind || actual.sha256 !== expected.sha256) return false;
+  }
+  for (const relative of afterByPath.keys()) {
+    if (beforeByPath.has(relative)) continue;
+    const legitimateConcurrentAppend = /^tickets\/[^/]+\.json$/i.test(relative)
+      || /^evidence\/[^/]+\/[^/]+\.json$/i.test(relative);
+    if (!legitimateConcurrentAppend) return false;
+  }
+  return true;
+}
+
+export function boundedFactoryProbeTimeout(deadlineMs, nowMs = Date.now()) {
+  const remaining = Number(deadlineMs) - Number(nowMs);
+  if (!Number.isFinite(remaining) || remaining < 100) {
+    throw new Error("Parked worktree custody inspection exceeded its hook budget.");
+  }
+  return Math.min(1_500, remaining);
 }
 
 export function factoryReviewInputBindingRequired(events, eventIndex) {
@@ -2721,10 +2959,24 @@ export function factoryReviewInputBindingRequired(events, eventIndex) {
 
 export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
   const log = readEventLog(paths);
+  // Worktree binding was added after the first factory ledgers existed. Accept
+  // the old shape only when later verified history has already removed its
+  // active custody: a parked transition or a fresh ticket boundary. A legacy
+  // lane that is still active remains fail-closed instead of being assigned to
+  // an inferred checkout.
+  const safelyClosedLegacyLaneStarts = new Set(log.events.flatMap((event, eventIndex) => {
+    if (event.type !== "lane-started" || String(event.payload.worktree || "").trim()) return [];
+    const laterSafeBoundary = log.events.slice(eventIndex + 1).some((candidate) =>
+      candidate.jobId === event.jobId
+      && (candidate.type === "ticket-drafted"
+        || (candidate.type === "job-stage" && candidate.payload.stage === "parked")));
+    return laterSafeBoundary ? [event.eventId] : [];
+  }));
   const jobs = new Map();
   const factoryIntents = new Map();
   let held = false;
   let holdReason = "";
+  let factoryControlHash = "0".repeat(64);
 
   for (const [eventIndex, event] of log.events.entries()) {
     if (event.type === "factory-intent") {
@@ -2739,12 +2991,14 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       validateHookOriginReceipt(paths, event);
       held = true;
       holdReason = String(event.payload.reason || "Factory paused by Mason.");
+      factoryControlHash = event.eventHash;
       continue;
     }
     if (event.type === "factory-resumed") {
       validateHookOriginReceipt(paths, event);
       held = false;
       holdReason = "";
+      factoryControlHash = event.eventHash;
       continue;
     }
     if (!event.jobId) continue;
@@ -2758,6 +3012,8 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
       ticket: null,
       sessionId: "",
       laneSessionId: "",
+      worktree: "",
+      legacyWorktreeMissing: false,
       actorTool: "",
       baseSha: "",
       approvalExpiresAt: "",
@@ -2807,6 +3063,8 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         job.evidence = [];
         job.reviews = [];
         job.laneSessionId = "";
+        job.worktree = "";
+        job.legacyWorktreeMissing = false;
         job.baseSha = "";
         job.approvalExpiresAt = "";
         job.approvalReply = "";
@@ -2894,19 +3152,26 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         break;
       }
       case "lane-started":
+        {
+        const recordedWorktree = String(event.payload.worktree || "").trim();
+        const safelyClosedLegacyLane = !recordedWorktree
+          && safelyClosedLegacyLaneStarts.has(event.eventId);
         if (job.stage !== "queued"
             || job.sessionId !== event.sessionId
             || job.actorTool !== event.actorTool
             || String(event.payload.ticketHash || "") !== job.ticketHash
             || String(event.payload.baseSha || "") !== job.baseSha
-            || !String(event.payload.worktree || "").trim()
+            || (!recordedWorktree && !safelyClosedLegacyLane)
             || !job.approvalExpiresAt
             || Date.parse(job.approvalExpiresAt) <= Date.parse(event.timestamp)) {
           throw new Error(`Lane start for ${job.id} is not bound to its approved chat session.`);
         }
         job.stage = "building";
         job.laneSessionId = event.sessionId;
+        job.worktree = recordedWorktree ? path.resolve(recordedWorktree) : "";
+        job.legacyWorktreeMissing = safelyClosedLegacyLane;
         break;
+        }
       case "review-presented":
         if (job.stage !== "awaiting-morning-review"
             || job.sessionId !== event.sessionId
@@ -3161,6 +3426,9 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
     degraded: log.degraded,
     warning: log.warning,
     lastEventHash: log.events.at(-1)?.eventHash || "0".repeat(64),
+    factoryControlHash,
+    activeLaneCount: [...jobs.values()].filter((job) => ACTIVE_STAGES.has(job.stage)).length,
+    maxActiveLanes: FACTORY_MAX_ACTIVE_LANES,
     factoryIntentSessions: [...factoryIntents.keys()].sort(),
     jobs: [...jobs.values()].sort((a, b) => b.lastActivity.localeCompare(a.lastActivity)),
   };
@@ -3262,10 +3530,33 @@ export function validateLaneStart({
   }
   const loaded = readTicket(resolvePathsFromSnapshot(snapshot), job.ticketFile);
   if (loaded.hash !== job.ticketHash) throw new Error("Ticket bytes changed after approval.");
-  if (cwd) validateRepositoryScope(job, cwd, { requireCleanBase: true });
-  const custody = snapshot.jobs.filter((candidate) =>
-    candidate.id !== jobId && FACTORY_CUSTODY_STAGES.has(candidate.stage));
-  if (custody.length > 0) throw new Error(`Pilot allows one custody window; ${custody[0].id} is still ${custody[0].stage}.`);
+  const active = activeJobs(snapshot).filter((candidate) => candidate.id !== jobId);
+  if (active.length >= FACTORY_MAX_ACTIVE_LANES) {
+    throw new Error(
+      `Factory capacity is full: ${active.length}/${FACTORY_MAX_ACTIVE_LANES} active lanes. `
+      + `Park or finish an active job before starting ${jobId}.`,
+    );
+  }
+  if (cwd) {
+    const collision = snapshot.jobs.find((candidate) =>
+      candidate.id !== jobId
+      && FACTORY_WORKTREE_CUSTODY_STAGES.has(candidate.stage)
+      && candidate.worktree
+      && sameCanonicalPath(candidate.worktree, cwd));
+    if (collision) {
+      throw new Error(
+        `Factory job ${collision.id} already owns this worktree; start ${jobId} in a separate clean worktree.`,
+      );
+    }
+    if (!isLinkedGitWorktree(cwd)) {
+      throw new Error(
+        `Factory lane ${jobId} must start in a dedicated linked Git worktree, not the primary checkout. `
+        + `If this ticket was approved in the wrong checkout, open a new chat in a clean worktree at current origin/main `
+        + `and ask Mason to take over factory job ${jobId} here; the transfer revokes this approval so the ticket can be re-presented safely.`,
+      );
+    }
+    validateRepositoryScope(job, cwd, { requireCleanBase: true });
+  }
   return job;
 }
 
@@ -3638,13 +3929,25 @@ export function runHarnessEvidence(paths, {
   }
   const repositoryBefore = repositoryContentFingerprint(cwd);
   const packageJsonBytes = readFileSync(path.join(cwd, "package.json"));
-  const factoryStateBefore = factoryProtectedContentFingerprint(paths);
+  const factoryStateBefore = factoryProtectedContentSnapshot(paths);
   const result = isolatedHarnessTestMode(paths, cwd)
     ? { ...runIsolatedTestHarness(cwd, scriptName), testSandbox: true }
     : runFactoryHarnessSandbox(cwd, scriptName, repositoryBefore);
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`Repository harness npm run ${scriptName} failed with exit ${result.status}.`);
+    const stdout = String(result.stdout || "");
+    const stderr = String(result.stderr || "");
+    try {
+      rejectSecretBearingText(stdout, "Failed harness stdout");
+      rejectSecretBearingText(stderr, "Failed harness stderr");
+    } catch {
+      setEmergencyFactoryHold(paths, `Harness ${scriptName} emitted secret-shaped output while failing.`);
+      throw new Error(
+        `Repository harness npm run ${scriptName} failed with exit ${result.status}; its output was suppressed because it contained credential or secret material. The factory is held for review.`,
+      );
+    }
+    const detail = [stderr, stdout].filter(Boolean).join("\n").trim().slice(-2_000);
+    throw new Error(`Repository harness npm run ${scriptName} failed with exit ${result.status}${detail ? `: ${detail}` : "."}`);
   }
   try {
     rejectSecretBearingText(result.stdout, "Harness stdout");
@@ -3654,9 +3957,9 @@ export function runHarnessEvidence(paths, {
     throw error;
   }
   const repositoryAfter = repositoryContentFingerprint(cwd);
-  const factoryStateAfter = factoryProtectedContentFingerprint(paths);
+  const factoryStateAfter = factoryProtectedContentSnapshot(paths);
   if (repositoryAfter.repositoryContentHash !== repositoryBefore.repositoryContentHash
-      || factoryStateAfter !== factoryStateBefore) {
+      || !factoryProtectedContentUnchanged(factoryStateBefore, factoryStateAfter)) {
     setEmergencyFactoryHold(paths, `Harness ${scriptName} mutated protected repository or factory-state bytes.`);
     throw new Error(`Protected repository or factory-state content changed while npm run ${scriptName} executed; the factory is held for review.`);
   }
@@ -3811,7 +4114,8 @@ export function runAndAttachHarnessEvidence(paths, {
       timestamp: now().toISOString(),
       payload: harnessEvidenceEventPayload(evidence),
     }, {
-      expectedLastEventHash: snapshot.lastEventHash,
+      expectedJobEventHash: job.terminalLedgerHash,
+      expectedFactoryControlHash: snapshot.factoryControlHash,
       requireFactoryRunning: true,
     });
     return evidence;
@@ -4397,7 +4701,7 @@ export function runIndependentReviewEvidence(paths, {
   const repositoryBefore = repositoryContentFingerprint(cwd);
   validateRepositoryScope(job, cwd);
   validateFactoryRiskClassification(job, cwd);
-  const stateBefore = factoryProtectedContentFingerprint(paths);
+  const stateBefore = factoryProtectedContentSnapshot(paths);
   const isolatedTest = env.CRX_FACTORY_TEST_MODE === "1"
     && path.resolve(cwd).toLowerCase().startsWith(`${path.resolve(tmpdir()).toLowerCase()}${path.sep}`);
   let result;
@@ -4478,7 +4782,7 @@ export function runIndependentReviewEvidence(paths, {
     git(["config", "core.autocrlf", "true"], cwd);
   }
   const repositoryAfter = repositoryContentFingerprint(cwd);
-  const stateAfter = factoryProtectedContentFingerprint(paths);
+  const stateAfter = factoryProtectedContentSnapshot(paths);
   const originMainAfter = currentOriginMain(cwd);
   if (repositoryAfter.headSha !== repositoryBefore.headSha
       || repositoryAfter.headTreeSha !== repositoryBefore.headTreeSha
@@ -4486,7 +4790,7 @@ export function runIndependentReviewEvidence(paths, {
       || repositoryAfter.repositoryCommitContentHash !== repositoryBefore.repositoryCommitContentHash
       || repositoryAfter.repositoryFileCount !== repositoryBefore.repositoryFileCount
       || originMainAfter !== baseSha
-      || stateAfter !== stateBefore) {
+      || !factoryProtectedContentUnchanged(stateBefore, stateAfter)) {
     setEmergencyFactoryHold(paths, "Independent review mutated protected repository or factory-state bytes.");
     throw new Error("Protected repository or factory-state content changed during independent review.");
   }
@@ -4617,22 +4921,23 @@ export function validateCurrentIndependentReview(job, cwd = FACTORY_ROOT, {
   return accepted;
 }
 
+export function selectSoleApprovedFactoryLanding(snapshot) {
+  const approved = snapshot.jobs.filter((job) => job.stage === "approved-to-land");
+  if (approved.length === 0) return null;
+  if (approved.length !== 1) {
+    throw new Error("Factory landing is blocked because more than one job is approved to land. Park all but one before any push or merge.");
+  }
+  return approved[0];
+}
+
 export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
   paths = resolveHookFactoryPaths(cwd),
   commitish = "",
   expectedBaseSha = "",
 } = {}) {
   const snapshot = loadFactorySnapshot(paths);
-  const approved = snapshot.jobs.filter((job) => job.stage === "approved-to-land");
-  if (approved.length === 0) return { required: false };
-  if (approved.length !== 1) {
-    throw new Error("Factory landing is blocked because more than one job is approved to land.");
-  }
-  const job = approved[0];
-  const authoritativeBase = expectedBaseSha || currentOriginMain(cwd);
-  if (!/^[a-f0-9]{40}$/i.test(String(authoritativeBase || ""))) {
-    throw new Error("The factory landing base is not an exact commit SHA.");
-  }
+  const job = selectSoleApprovedFactoryLanding(snapshot);
+  if (!job) return { required: false };
   if (!/^[a-f0-9]{64}$/i.test(String(job.acceptedRepositoryContentHash || ""))
       || !/^[a-f0-9]{64}$/i.test(String(job.acceptedRepositoryCommitContentHash || ""))
       || !Number.isInteger(job.acceptedRepositoryFileCount)
@@ -4642,6 +4947,10 @@ export function validateApprovedFactoryLanding(cwd = FACTORY_ROOT, {
   const repository = commitish
     ? repositoryCommitFingerprint(cwd, commitish)
     : repositoryContentFingerprint(cwd);
+  const authoritativeBase = expectedBaseSha || currentOriginMain(cwd);
+  if (!/^[a-f0-9]{40}$/i.test(String(authoritativeBase || ""))) {
+    throw new Error("The factory landing base is not an exact commit SHA.");
+  }
   const acceptedBytesMatch = commitish
     ? repository.repositoryCommitContentHash === job.acceptedRepositoryCommitContentHash
     : repository.repositoryContentHash === job.acceptedRepositoryContentHash

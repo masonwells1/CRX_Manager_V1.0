@@ -24,6 +24,7 @@ import {
   appendFactoryControlEvent,
   appendFactoryEvent,
   appendFactoryRecoveryEvent,
+  boundedFactoryProbeTimeout,
   buildFactorySnapshot,
   buildFactoryReviewExecArgs,
   canonicalMorningReviewQuestion,
@@ -38,6 +39,7 @@ import {
   FACTORY_ORIGIN_MAIN_REPLAY_MODULES,
   FACTORY_REVIEW_TOKEN,
   factoryProcessLivenessState,
+  factoryProtectedContentUnchanged,
   factoryReviewInputBindingRequired,
   factoryChangeRequiresHighRiskControls,
   factoryCanonicalReplayEnvironment,
@@ -66,6 +68,7 @@ import {
   runAndAttachHarnessEvidence,
   runHarnessEvidence,
   sanitizedRepositoryGitEnvironment,
+  selectSoleApprovedFactoryLanding,
   setEmergencyFactoryHold,
   clearEmergencyFactoryHold,
   sha256,
@@ -104,6 +107,40 @@ let pass = 0;
 const ok = (value, message) => { assert.ok(value, message); pass++; };
 const eq = (actual, expected, message) => { assert.deepEqual(actual, expected, message); pass++; };
 const throws = (fn, pattern, message) => { assert.throws(fn, pattern, message); pass++; };
+
+eq(boundedFactoryProbeTimeout(10_000, 8_000), 1_500, "parked custody caps each real Git subprocess below the hook deadline");
+eq(boundedFactoryProbeTimeout(10_000, 9_750), 250, "parked custody uses only the remaining shared hook budget");
+throws(
+  () => boundedFactoryProbeTimeout(10_000, 9_950),
+  /exceeded its hook budget/i,
+  "parked custody fails closed before the hook itself can expire",
+);
+const protectedBefore = [
+  { relative: "tickets/existing.json", kind: "file", sha256: "a".repeat(64) },
+];
+eq(factoryProtectedContentUnchanged(protectedBefore, [
+  ...protectedBefore,
+  { relative: "tickets/concurrent.json", kind: "file", sha256: "b".repeat(64) },
+  { relative: "evidence/other-job/concurrent.json", kind: "file", sha256: "c".repeat(64) },
+]), true, "concurrent immutable ticket and evidence additions do not invalidate another lane's proof");
+eq(factoryProtectedContentUnchanged(protectedBefore, [
+  ...protectedBefore,
+  { relative: "permits/planted.json", kind: "file", sha256: "d".repeat(64) },
+]), false, "an added protected-state file outside the exact ticket and evidence patterns invalidates proof");
+eq(factoryProtectedContentUnchanged(protectedBefore, [
+  { relative: "tickets/existing.json", kind: "file", sha256: "e".repeat(64) },
+]), false, "overwriting an existing protected artifact still invalidates proof");
+
+throws(
+  () => selectSoleApprovedFactoryLanding({
+    jobs: [
+      { id: "approved-a", stage: "approved-to-land" },
+      { id: "approved-b", stage: "approved-to-land" },
+    ],
+  }),
+  /more than one job is approved to land/i,
+  "historical duplicate landing approvals fail closed before repository fingerprint validation",
+);
 
 eq(rejectSecretBearingText("HTTP 200; behavior verified.", "proof"), "HTTP 200; behavior verified.", "ordinary proof text is accepted");
 eq(
@@ -942,6 +979,182 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
 }
 
 {
+  const { paths, cleanup } = fixture();
+  const harnessRepo = mkdtempSync(path.join(tmpdir(), "crx-factory-harness-concurrent-additions-"));
+  writeFileSync(path.join(harnessRepo, "package.json"), `${JSON.stringify({
+    scripts: {
+      "verify-deps": "node -e \"const fs=require('node:fs');const path=require('node:path');for(const target of [process.env.FACTORY_CONCURRENT_TICKET,process.env.FACTORY_CONCURRENT_EVIDENCE]){fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,'{}\\n',{flag:'wx'})}process.stdout.write('CONCURRENT_APPEND_ONLY_PASS')\"",
+    },
+  })}\n`);
+  for (const args of [
+    ["init", "-q", "-b", "main"],
+    ["add", "package.json"],
+    ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"],
+    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+  ]) {
+    execFileSync("git", args, { cwd: harnessRepo, stdio: "ignore" });
+  }
+  process.env.FACTORY_CONCURRENT_TICKET = path.join(paths.ticketsDir, "other-lane-ticket.json");
+  process.env.FACTORY_CONCURRENT_EVIDENCE = path.join(paths.evidenceDir, "other-lane", "other-lane-evidence.json");
+  const evidence = runHarnessEvidence(paths, {
+    jobId: "concurrent-additions-proof",
+    ticketHash: "c".repeat(64),
+    label: "concurrent append-only additions",
+    scriptName: "verify-deps",
+    cwd: harnessRepo,
+  });
+  ok(evidence.verified === true, "a harness tolerates concurrent immutable ticket and evidence additions");
+  ok(!existsSync(paths.emergencyHoldPath), "legitimate append-only additions do not falsely hold the factory");
+  delete process.env.FACTORY_CONCURRENT_TICKET;
+  delete process.env.FACTORY_CONCURRENT_EVIDENCE;
+  rmSync(harnessRepo, { recursive: true, force: true });
+  cleanup();
+}
+
+{
+  const { paths, cleanup } = fixture();
+  const first = writeImmutableTicket(paths, ticket("parallel-cas-first"));
+  const second = writeImmutableTicket(paths, ticket("parallel-cas-second"));
+  for (const written of [first, second]) {
+    append(paths, "ticket-drafted", written.ticket.id, {
+      ticketFile: written.filename,
+      ticketHash: written.hash,
+      ticketVersion: 1,
+      title: written.ticket.title,
+    });
+  }
+  const beforeParallelAppend = loadFactorySnapshot(paths);
+  const firstJobHash = beforeParallelAppend.jobs.find((job) => job.id === first.ticket.id).terminalLedgerHash;
+  append(paths, "ticket-presented", second.ticket.id, {
+    ticketHash: second.hash,
+    questionText: "Approve second?",
+    questionHash: sha256("Approve second?"),
+    baseSha: "a".repeat(40),
+  });
+  appendFactoryEvent(paths, {
+    type: "ticket-presented",
+    jobId: first.ticket.id,
+    actorTool: "codex",
+    sessionId: "session-1",
+    payload: {
+      ticketHash: first.hash,
+      questionText: "Approve first?",
+      questionHash: sha256("Approve first?"),
+      baseSha: "a".repeat(40),
+    },
+  }, {
+    expectedJobEventHash: firstJobHash,
+    expectedFactoryControlHash: beforeParallelAppend.factoryControlHash,
+  });
+  eq(
+    loadFactorySnapshot(paths).jobs.find((job) => job.id === first.ticket.id).questionText,
+    "Approve first?",
+    "a job-scoped append tolerates an unrelated job advancing the global ledger tail",
+  );
+  throws(
+    () => appendFactoryEvent(paths, {
+      type: "ticket-presented",
+      jobId: first.ticket.id,
+      actorTool: "codex",
+      sessionId: "session-1",
+      payload: {
+        ticketHash: first.hash,
+        questionText: "Stale first?",
+        questionHash: sha256("Stale first?"),
+        baseSha: "a".repeat(40),
+      },
+    }, { expectedJobEventHash: firstJobHash }),
+    /job parallel-cas-first changed while this operation ran/,
+    "a job-scoped append still refuses same-job drift",
+  );
+  const beforeOwnerDecision = loadFactorySnapshot(paths);
+  const ownerDecisionJob = beforeOwnerDecision.jobs.find((job) => job.id === first.ticket.id);
+  append(paths, "factory-intent", null, {
+    ownerRequest: "advance an unrelated lane before the owner decision commits",
+  }, { sessionId: "unrelated-owner-decision-lane" });
+  const ownerDecisionTimestamp = new Date().toISOString();
+  appendFactoryEvent(paths, {
+    type: "ticket-approved",
+    jobId: first.ticket.id,
+    actorTool: "codex",
+    sessionId: "session-1",
+    timestamp: ownerDecisionTimestamp,
+    payload: {
+      ticketHash: first.hash,
+      questionHash: sha256("Approve first?"),
+      ownerReply: "yes",
+      baseSha: "a".repeat(40),
+      expiresAt: new Date(Date.parse(ownerDecisionTimestamp) + APPROVAL_TTL_MS).toISOString(),
+    },
+  }, {
+    expectedJobEventHash: ownerDecisionJob.terminalLedgerHash,
+    expectedFactoryControlHash: beforeOwnerDecision.factoryControlHash,
+  });
+  eq(
+    loadFactorySnapshot(paths).jobs.find((job) => job.id === first.ticket.id).stage,
+    "queued",
+    "an owner decision survives an unrelated lane append without a test-only seam in the production hook",
+  );
+  cleanup();
+}
+
+{
+  const { root, paths, cleanup } = fixture();
+  const written = writeImmutableTicket(paths, ticket("legacy-worktree-binding"));
+  const question = "Approve the legacy worktree compatibility ticket?";
+  append(paths, "ticket-drafted", written.ticket.id, {
+    ticketFile: written.filename,
+    ticketHash: written.hash,
+    ticketVersion: 1,
+    title: written.ticket.title,
+  });
+  append(paths, "ticket-presented", written.ticket.id, {
+    ticketHash: written.hash,
+    questionText: question,
+    questionHash: sha256(question),
+    baseSha: "a".repeat(40),
+  });
+  append(paths, "ticket-approved", written.ticket.id, {
+    ticketHash: written.hash,
+    questionHash: sha256(question),
+    ownerReply: "yes",
+    baseSha: "a".repeat(40),
+    expiresAt: new Date(Date.parse("2026-07-30T12:00:00.000Z") + APPROVAL_TTL_MS).toISOString(),
+  });
+  append(paths, "lane-started", written.ticket.id, {
+    ticketHash: written.hash,
+    baseSha: "a".repeat(40),
+    worktree: root,
+  });
+  append(paths, "job-stage", written.ticket.id, {
+    stage: "parked",
+    behaviorSummary: "Historical lane was preserved.",
+    blocker: "Historical lane ended before worktree binding became mandatory.",
+  });
+  const legacyEvents = readEventLog(paths).events.map((event) => JSON.parse(JSON.stringify(event)));
+  let previousHash = "0".repeat(64);
+  for (const event of legacyEvents) {
+    delete event.eventHash;
+    event.previousHash = previousHash;
+    if (event.type === "lane-started") delete event.payload.worktree;
+    event.eventHash = sha256(canonicalJson(event));
+    previousHash = event.eventHash;
+  }
+  writeFileSync(paths.eventsPath, `${legacyEvents.map((event) => canonicalJson(event)).join("\n")}\n`);
+  const compatible = loadFactorySnapshot(paths);
+  eq(compatible.jobs[0].stage, "parked", "a safely parked pre-worktree lane remains readable after the binding upgrade");
+  eq(compatible.jobs[0].worktree, "", "legacy replay never invents a worktree custody path");
+  eq(compatible.jobs[0].legacyWorktreeMissing, true, "the snapshot identifies the narrowly accepted legacy shape");
+  writeFileSync(paths.eventsPath, `${legacyEvents.slice(0, -1).map((event) => canonicalJson(event)).join("\n")}\n`);
+  throws(
+    () => loadFactorySnapshot(paths),
+    /Lane start.*approved chat session/i,
+    "an active lane without a recorded worktree remains fail-closed",
+  );
+  cleanup();
+}
+
+{
   const { root, paths, cleanup } = fixture();
   const written = writeImmutableTicket(paths, ticket("custody-replay"));
   append(paths, "ticket-drafted", written.ticket.id, {
@@ -1040,6 +1253,92 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
     written.ticket.id,
     "lane starts only with matching session, base, expiry, and ticket bytes",
   );
+  const pendingOrphan = {
+    ...snapshot.jobs[0],
+    id: "orphaned-expired-ticket",
+    stage: "needs-ticket-ok",
+    sessionId: "gone-session",
+    laneSessionId: "",
+    approvalExpiresAt: "2026-07-29T12:00:00.000Z",
+  };
+  snapshot.jobs.push(pendingOrphan);
+  eq(
+    validateLaneStart({
+      snapshot,
+      jobId: written.ticket.id,
+      sessionId: "session-1",
+      currentBaseSha: "a".repeat(40),
+      nowMs: Date.parse("2026-07-30T13:00:00.000Z"),
+    }).id,
+    written.ticket.id,
+    "an orphaned pending approval does not consume active-lane capacity",
+  );
+  snapshot.jobs.pop();
+  const activeLane = (id, stage) => ({
+    ...snapshot.jobs[0],
+    id,
+    stage,
+    sessionId: `${id}-session`,
+    laneSessionId: `${id}-session`,
+    worktree: path.join(root, id),
+  });
+  const twoActiveLanes = [
+    activeLane("parallel-build", "building"),
+    activeLane("parallel-verify", "verifying"),
+  ];
+  snapshot.jobs.push(...twoActiveLanes);
+  eq(
+    validateLaneStart({
+      snapshot,
+      jobId: written.ticket.id,
+      sessionId: "session-1",
+      currentBaseSha: "a".repeat(40),
+      nowMs: Date.parse("2026-07-30T13:00:00.000Z"),
+    }).id,
+    written.ticket.id,
+    "a third active lane can start while two other jobs run",
+  );
+  throws(
+    () => validateLaneStart({
+      snapshot,
+      jobId: written.ticket.id,
+      sessionId: "session-1",
+      currentBaseSha: "a".repeat(40),
+      cwd: path.join(root, "parallel-build"),
+      nowMs: Date.parse("2026-07-30T13:00:00.000Z"),
+    }),
+    /already owns this worktree/,
+    "an active lane's worktree cannot be reused by another job",
+  );
+  const ownedWorktree = path.join(root, "parallel-build");
+  const aliasedWorktree = path.join(root, "parallel-build-alias");
+  mkdirSync(ownedWorktree, { recursive: true });
+  symlinkSync(ownedWorktree, aliasedWorktree, process.platform === "win32" ? "junction" : "dir");
+  throws(
+    () => validateLaneStart({
+      snapshot,
+      jobId: written.ticket.id,
+      sessionId: "session-1",
+      currentBaseSha: "a".repeat(40),
+      cwd: aliasedWorktree,
+      nowMs: Date.parse("2026-07-30T13:00:00.000Z"),
+    }),
+    /already owns this worktree/,
+    "a junction or symlink alias cannot bypass worktree custody",
+  );
+  snapshot.jobs.push(activeLane("parallel-review", "in-review"));
+  throws(
+    () => validateLaneStart({
+      snapshot,
+      jobId: written.ticket.id,
+      sessionId: "session-1",
+      currentBaseSha: "a".repeat(40),
+      nowMs: Date.parse("2026-07-30T13:00:00.000Z"),
+    }),
+    /capacity is full: 3\/3 active lanes/,
+    "a fourth active lane is refused at the bounded concurrency limit",
+  );
+  snapshot.jobs.splice(-3);
   throws(
     () => validateLaneStart({
       snapshot,
@@ -2558,7 +2857,8 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
   const harnessRepo = mkdtempSync(path.join(tmpdir(), "crx-factory-harness-state-"));
   writeFileSync(path.join(harnessRepo, "package.json"), `${JSON.stringify({
     scripts: {
-      "verify-deps": "node -e \"require('node:fs').writeFileSync(process.env.FACTORY_MUTATE_TARGET,'forged')\"",
+      "verify-deps": "node -e \"const fs=require('node:fs');const path=require('node:path');fs.mkdirSync(path.dirname(process.env.FACTORY_MUTATE_TARGET),{recursive:true});fs.writeFileSync(process.env.FACTORY_MUTATE_TARGET,'forged')\"",
+      "test:factory": "node -e \"process.stderr.write('benign harness failure');process.stdout.write('OPENAI_API_KEY=sk-failed-harness-must-not-leak');process.exit(1)\"",
     },
   })}\n`);
   for (const args of [
@@ -2569,6 +2869,17 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
   ]) {
     execFileSync("git", args, { cwd: harnessRepo, stdio: "ignore" });
   }
+  process.env.FACTORY_MUTATE_TARGET = path.join(paths.managedSessionsDir, "concurrent-session.json");
+  const coordinationOnlyEvidence = runHarnessEvidence(paths, {
+    jobId: "managed-session-marker-proof",
+    ticketHash: "9".repeat(64),
+    label: "coordination-only marker",
+    scriptName: "verify-deps",
+    cwd: harnessRepo,
+  });
+  ok(coordinationOnlyEvidence.createdArtifact, "a concurrent managed-session marker does not invalidate harness evidence");
+  ok(existsSync(process.env.FACTORY_MUTATE_TARGET), "the concurrent managed-session marker remains durable");
+  ok(!existsSync(paths.emergencyHoldPath), "coordination-only managed-session metadata does not hold the factory");
   mkdirSync(paths.stateDir, { recursive: true });
   mkdirSync(paths.permitsDir, { recursive: true });
   process.env.FACTORY_MUTATE_TARGET = path.join(paths.permitsDir, "forged.txt");
@@ -2599,6 +2910,22 @@ function publishCommitGateRecovery(paths, recovered, nowMs, sessionId) {
     "trusted harness broker detects replacement of the owner receipt authentication key",
   );
   ok(existsSync(paths.emergencyHoldPath), "owner receipt key mutation creates an emergency hold");
+  clearEmergencyFactoryHold(paths);
+  let failedHarnessMessage = "";
+  try {
+    runHarnessEvidence(paths, {
+      jobId: "failed-secret-output-proof",
+      ticketHash: "c".repeat(64),
+      label: "must suppress secret output",
+      scriptName: "test:factory",
+      cwd: harnessRepo,
+    });
+  } catch (error) {
+    failedHarnessMessage = error.message;
+  }
+  ok(/output was suppressed.*credential or secret material/i.test(failedHarnessMessage), "failed harness secret output is replaced with a safe error");
+  ok(!failedHarnessMessage.includes("sk-failed-harness-must-not-leak"), "failed harness errors do not disclose secret-shaped output");
+  ok(existsSync(paths.emergencyHoldPath), "secret-shaped failed harness output creates an emergency hold");
   delete process.env.FACTORY_MUTATE_TARGET;
   rmSync(harnessRepo, { recursive: true, force: true });
   cleanup();

@@ -104,10 +104,23 @@ fingerprint before the ticket or morning decision is re-presented there.
 
 ## Pilot limits
 
-- One factory custody window at a time. From ticket drafting/presentation through queued, build,
-  verification, independent review, and the morning decision, build writes
-  and opaque helper execution from every other chat are denied, including fresh chats with no prior
-  factory intent. Native editing,
+- Up to three factory lanes may be active at once. Only `building`, `verifying`, and `in-review`
+  consume capacity; an expired or orphaned pending ticket, a queued ticket, and a job waiting for
+  owner disposition do not consume a worker slot. Every active or evidence-holding job is bound to
+  its own clean linked Git worktree; lane start rejects the shared primary checkout, and another chat
+  cannot write into or reuse that worktree. Create or select that clean worktree at current
+  `origin/main` and open the Factory chat there before drafting or presenting the ticket. If a ticket
+  was accidentally approved from the primary checkout, do not bypass lane start: open a new chat in
+  the correct worktree and ask Mason to “take over factory job `<job-id>` here.” The owner-input hook
+  transfers that one queued job, revokes the old approval, and requires the canonical ticket question
+  to be re-presented in the new chat. If a parked job already records a worktree, re-presentation or
+  transfer retains that worktree custody until a revised `ticket-drafted` event explicitly clears it.
+  No manual ledger edit is required. Structured mutation targets are checked across checkout
+  boundaries. Shell or opaque mutations from another chat fail closed while a nonterminal factory
+  worktree is in custody because their final destination cannot be proven. A terminal parked job keeps
+  targeted structured-write custody; it also keeps fail-closed opaque/shell custody while its worktree
+  has local changes, unpushed commits, or cannot be verified. A clean, fully committed-at-base or
+  removed parked worktree does not globally block unrelated shell work. Native editing,
   MCP filesystem tools, shell file commands, redirects, Git mutation, and unknown repository scripts
   all count as writes. Inside the active lane, source changes use structured Write/Edit/apply_patch
   calls whose targets are visible to the guards. Every target is canonicalized and must stay inside
@@ -128,6 +141,10 @@ fingerprint before the ticket or morning decision is re-presented there.
   item/property/ACL writers, and secret-shaped added content fail closed.
   Shell `rg` is not exempt because
   its preprocessing/hostname options can execute programs; agents use the structured Grep tool instead.
+- Build and review work may run in three lanes, but landing acceptance remains single-file: while one
+  job is `approved-to-land`, the owner hook and locked ledger append refuse a second acceptance and
+  tell Mason to land or park the first job. Historical duplicate approvals fail closed until all but
+  one are parked; they never fall back to ordinary push or merge gates.
 - During governed operation, any explicit shell `cwd` or `workdir` must resolve to the exact
   governed repository root. Recognized factory commands are rewritten to the canonical absolute
   `scripts/factory.mjs` broker path before a permit or read-only status execution is allowed.
@@ -137,6 +154,14 @@ fingerprint before the ticket or morning decision is re-presented there.
 - A lane starts only from a clean checkout whose `HEAD` is the exact approved `origin/main` SHA.
   Before evidence acceptance, owner review, and closeout, the factory recomputes committed,
   working-tree, and untracked paths from that base and rejects any path outside the ticket.
+- Shared-ledger commands still use a global compare-and-swap at authorization time. Long-running
+  harness and independent-review attachments instead bind to the target job's latest event and the
+  factory pause/resume epoch, so unrelated lanes may append safely while a proof runs. Owner ticket,
+  transfer, and morning-review decisions use the same job-scoped binding, so unrelated lane activity
+  cannot discard Mason's response during repository verification. A same-job transition or any
+  pause/resume transition still invalidates the in-flight attachment or decision. Existing
+  tickets and evidence artifacts remain immutable; concurrent additions for another job are allowed,
+  but changing or removing any pre-existing protected artifact holds the factory.
 - Before any real shared-ledger append, the factory fetches canonical GitHub `main` into a new disposable bare repository using an approved absolute system Git executable, a fixed system-only executable path, an empty global configuration, disabled system configuration, and no inherited `GIT_*` variables. It extracts that exact
   reducer and its fail-closed allowlisted relative module dependencies from the trusted repository into a disposable directory, and asks that reducer
   to replay a temporary copy of the complete proposed event chain. If main cannot replay it, the
@@ -266,7 +291,8 @@ fingerprint before the ticket or morning decision is re-presented there.
   cannot land between that check and append.
 - A parked job stays terminal. Its original lane session may refresh only the plain-English behavior
   result and a nonempty blocker while keeping the stage `parked`; another session, an empty result,
-  an empty blocker, or any attempted stage advance fails closed.
+  an empty blocker, or any attempted stage advance fails closed. Drafting a revised mission ticket for
+  that same parked job clears its prior worktree custody and returns it to fresh owner approval.
 - A job becomes `live` only when authenticated Vercel inspection resolves the deployment currently
   attached to the fixed canonical production alias, that deployment is `READY`, its Git source is
   the governed repository's exact `main` commit, and a matching GitHub Production deployment has a
@@ -280,7 +306,21 @@ fingerprint before the ticket or morning decision is re-presented there.
   phrase. Negated, qualified, or ambiguous phrases such as “do not resume,” “under no
   circumstances resume,” or “I have no plans to resume” leave the hold active.
 - The first pilot stops before commit unless Mason separately authorizes the ordinary landing step.
-- Multi-lane execution stays disabled until the single-lane pilot demonstrates honest evidence, bounded cost, safe pause/resume, and no unsupported completion claims.
+- Multi-lane execution is bounded at three active lanes and retains per-job single-flight evidence,
+  separate-worktree custody, global pause/resume, and all independent release and production gates.
+- The one `approved-to-land` lane may execute only the existing exact landing-command allowlist while
+  other lanes remain active. Foreign structured writes into its worktree are still denied, and other
+  shell or opaque commands do not gain this exception. Exact accepted-byte, proof, push, PR, merge,
+  and production gates continue to validate the landing command after custody routing.
+- Ledger replay accepts a pre-worktree-binding `lane-started` event only when later verified history
+  safely parked that lane or replaced it with a fresh ticket. It never invents a custody path, and a
+  legacy lane that is still active without a recorded worktree remains fail-closed.
+- Parked-worktree Git custody probes share an eight-second total hook budget and a 1.5-second cap per
+  subprocess, both below the installed 15-second PreToolUse deadline. Timeout or Git failure denies
+  the opaque or shell mutation instead of allowing the hook process to expire without a decision.
+- Concurrent additions are tolerated only at new immutable `tickets/*.json` and
+  `evidence/<job>/*.json` paths. Runtime tests cover both permitted additions and denial of a planted
+  protected-state file or overwrite of an existing artifact.
 
 ## Operator recovery
 
@@ -428,10 +468,32 @@ that gate first establishes the order: the pause blocks attachment, or the event
 A resume compares and clears only the exact emergency-marker bytes it observed before work began while
 holding the same gate; a newer fallback pause written while that resume is replaying remains enforced.
 
-If factory state cannot be verified, repository mutations fail closed. Reads remain available for
-diagnosis, and the canonical factory status/recovery CLI remains reachable. A corruption that cannot
-be repaired by the backup-first stale-lock or torn-tail modes remains parked for an owner recovery
-decision; it does not brick unrelated read-only work.
+Every chat that requests Factory-managed work gets a separate durable managed-session marker before
+the ledger append is attempted. A healthy replay also backfills that marker for pre-existing Factory
+sessions before allowing their next governed action. The earlier integrity guard has authority only to
+write this marker, not to mutate the ledger or other Factory state, so a historical active session stays
+governed even on its first attempted self-governance edit. A healthy replay marks every historical session
+visible in the snapshot and then atomically writes a durable backfill-complete boundary bound to that exact
+ledger hash and session set. The zero-session case creates the directory and boundary explicitly, and a later
+healthy snapshot replaces stale metadata before it is accepted. Before that boundary exists,
+ledger corruption keeps the complete deterministic safety surface globally fail-closed: Claude/Codex hooks
+and configuration, Husky gates, CI workflows, local ESLint safety rules, safety scripts, dependency/build configuration, and opaque or
+dynamic execution. Unrelated structured application edits remain available; afterward, only marked Factory
+chats retain that fail-closed scope.
+The owner-input hook applies the same marker-first order to ticket and morning decisions, rejection or
+revision, intent clearing, hold/resume, and custody transfer. When its ledger snapshot is healthy it also
+completes the exact historical backfill before appending; the emergency hold path still persists the current
+chat marker when the ledger itself cannot be replayed.
+These markers and the boundary are coordination-only metadata and
+are excluded from protected-content fingerprints so creating one cannot invalidate an active evidence
+or review run. Before the durable backfill-complete boundary exists, unverifiable Factory state keeps the
+deterministic safety surface globally fail-closed. After that boundary exists, unverifiable Factory state
+makes mutations fail closed only for marked Factory chats and explicit Factory CLI actions. Unrelated chats then continue
+through both installed Factory PreToolUse guards and remain under the repository's ordinary guards
+instead of inheriting a global Factory outage. Reads remain
+available for diagnosis, and the canonical factory status/recovery CLI remains reachable. A
+corruption that cannot be repaired by the backup-first stale-lock or torn-tail modes remains parked
+for an owner recovery decision.
 An event becomes durable only when its complete canonical JSON and terminating newline are present.
 Even syntactically valid final JSON without that newline is treated as a torn tail, excluded from
 replay, and blocks every append until the validated recovery route archives and removes it.
@@ -487,8 +549,51 @@ Torn-tail recovery refuses a locked ledger, archives the original bytes, and rem
 incomplete final line before recording a recovery event.
 
 Closed-job audit packets must be committed under `docs/audits/factory/jobs/` before a job can be
-described as durably closed. Add the shared active-state directory to the off-site backup inventory
-before enabling multiple lanes.
+described as durably closed. The shared active-state directory is included in the workstation's
+nightly Personal DR backup. `scripts/backup-factory-state.mjs` captures two matching reads of the
+durable ledger, tickets, evidence, owner receipts, emergency-hold history, and recovery records;
+short-lived CLI permits, session latches, harness locks, and coordination locks are deliberately
+excluded so a restored machine cannot revive dead-process authority. The helper stages only under the
+operating-system temporary directory and writes a SHA-256 manifest. A clean replay exits `0`. Stable
+damaged or torn bytes are still preserved with `replay_ok: false` and exit `4`, then uploaded with a
+high-priority alert and a failed task result; that snapshot is evidence for recovery and is never
+reported as a clean backup. A clean ledger at or above 75% of the bounded per-file limit exits `5`;
+the task preserves and verifies that backup off-site, then alerts and fails so reviewed archival can
+happen before the hard limit. The tracked `scripts/windows/stage-factory-state-for-personal-dr.ps1` runner is installed in
+the workstation's existing Personal DR task. That task expands the actual archive and reruns restore
+verification before uploading through the client-side encrypted, Object-Locked Backblaze remote;
+it downloads the remote object through the encryption layer and requires an exact SHA-256 match
+before reporting success. A `finally` cleanup removes plaintext staging and restore copies on success
+or failure. The same encrypted archive is also copied to the local backup drive when it is connected.
+The non-secret schedule and first real-path proof are recorded in
+`docs/audits/2026-08-06-factory-state-offsite-backup-proof.md`.
+The operational backup worktree is a deliberately pinned, locked deployment rather than a live
+development checkout. Whenever `scripts/backup-factory-state.mjs` or
+`scripts/windows/stage-factory-state-for-personal-dr.ps1` changes, release closeout must move that
+worktree to the reviewed merged commit, rerun its self-test, and re-lock it before removing the review
+worktree. The scheduled log records the exact deployed SHA so drift is observable.
+
+### Factory state restore
+
+Restore is deliberately not an automated overwrite. Replacing an existing ledger changes the
+Factory's coordination history, so it requires Mason's explicit approval in the current conversation.
+An agent restores it as follows:
+
+1. Download and decrypt the selected Personal DR archive, then locate its
+   `crx-factory-state/` snapshot directory.
+2. Run `node scripts/backup-factory-state.mjs --verify <snapshot-directory>`. Exit `0` means the
+   manifest and Factory replay are clean. Exit `4` means the exact damaged bytes were preserved;
+   keep that snapshot for governed repair or forensics, but do not install it as clean state.
+3. Resolve the destination with `git rev-parse --path-format=absolute --git-common-dir`; the shared
+   state belongs in `<git-common-dir>/crx-factory/`. Stop all Factory sessions first. If that target
+   already exists, archive it before replacement and obtain Mason's current explicit approval.
+4. On a new machine or when the approved target is absent, copy the snapshot's `state/` contents into
+   the target. Transient permits, intent latches, harness-run locks, and coordination locks are
+   intentionally absent. Do not recreate them from an old machine; supported Factory commands create
+   safe empty transient directories as needed.
+5. Run `node scripts/factory.mjs status --json` from the repository. Require `degraded: false`, inspect
+   the jobs and worktree paths, and only then resume Factory work.
 
 The Board's `/api/state` response is also an owner projection: it omits chat/lane session identifiers,
-approval internals, ticket contents, and proof base hashes.
+approval internals, ticket contents, and proof base hashes. It includes the governed worktree path so
+Mason and agents can route a stuck job without reading the protected ledger directly.

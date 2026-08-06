@@ -33,7 +33,7 @@
     "graph:view": "node scripts/graphify-view.mjs",
     "factory:board": "node scripts/factory-board.mjs",
     "factory:status": "node scripts/factory.mjs status",
-    "test:factory": "node --test scripts/factory-state-lib.test.mjs scripts/factory-board.test.mjs scripts/factory-cli.test.mjs .claude/hooks/factory-owner-input.test.mjs .claude/hooks/factory-guards.test.mjs",
+    "test:factory": "node --test scripts/factory-state-lib.test.mjs scripts/factory-board.test.mjs scripts/factory-cli.test.mjs scripts/backup-factory-state.test.mjs .claude/hooks/factory-owner-input.test.mjs .claude/hooks/factory-guards.test.mjs",
     "check-doc-drift": "node scripts/check-doc-drift.mjs",
     "verify-deps": "node scripts/verify-deps.mjs",
     "db-sweeps": "node scripts/db-invariant-sweeps/run-sweeps.mjs",

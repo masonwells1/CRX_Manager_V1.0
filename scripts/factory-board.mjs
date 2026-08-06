@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildFactorySnapshot,
   FACTORY_AUTHORITY_NOTICE,
+  FACTORY_MAX_ACTIVE_LANES,
   resolveFactoryPaths,
   safeId,
 } from "./factory-state-lib.mjs";
@@ -60,6 +61,9 @@ function jobCard(job) {
   const blocker = job.blocker
     ? `<div class="needs"><strong>Needs attention:</strong> ${escapeHtml(job.blocker)}</div>`
     : "";
+  const worktree = job.worktree
+    ? `<p class="timestamp"><strong>Working in:</strong> <code>${escapeHtml(job.worktree)}</code></p>`
+    : `<p class="timestamp"><strong>Working in:</strong> Not assigned yet.</p>`;
   return `
     <article class="job" data-stage="${escapeHtml(job.stage)}">
       <div class="job-main">
@@ -74,6 +78,7 @@ function jobCard(job) {
       <details>
         <summary>Proof and timing</summary>
         ${evidence}
+        ${worktree}
         <p class="timestamp">Last activity: ${escapeHtml(job.lastActivity)}</p>
       </details>
     </article>`;
@@ -90,7 +95,7 @@ export function renderFactoryBoard(snapshot) {
     ? snapshot.jobs.map(jobCard).join("")
     : `<section class="empty"><h2>No factory jobs yet</h2><p>Describe the first job in ordinary Claude or Codex chat. The session will prepare the ticket for your yes or no.</p></section>`;
   const awaiting = snapshot.jobs.filter((job) => job.stage === "awaiting-morning-review").length;
-  const active = snapshot.jobs.filter((job) => ["building", "verifying", "in-review"].includes(job.stage)).length;
+  const active = snapshot.activeLaneCount ?? 0;
 
   return `<!doctype html>
 <html lang="en">
@@ -151,7 +156,7 @@ export function renderFactoryBoard(snapshot) {
         <p class="sub">One read-only coordination view of CRX jobs. Approvals happen in ordinary chat.</p>
       </div>
       <div class="counts" aria-label="Factory summary">
-        <div class="count"><strong>${active}</strong><span>working now</span></div>
+        <div class="count"><strong>${active}/${snapshot.maxActiveLanes || FACTORY_MAX_ACTIVE_LANES}</strong><span>working now</span></div>
         <div class="count"><strong>${awaiting}</strong><span>ready for you</span></div>
       </div>
     </header>
@@ -181,10 +186,13 @@ export function projectFactoryBoardState(snapshot) {
     holdReason: snapshot.holdReason,
     degraded: snapshot.degraded,
     warning: snapshot.warning,
+    activeLaneCount: snapshot.activeLaneCount,
+    maxActiveLanes: snapshot.maxActiveLanes,
     jobs: snapshot.jobs.map((job) => ({
       id: job.id,
       title: job.title,
       stage: job.stage,
+      worktree: job.worktree,
       behaviorSummary: job.behaviorSummary,
       blocker: job.blocker,
       evidence: job.evidence.map((item) => ({

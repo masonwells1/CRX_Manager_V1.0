@@ -10,6 +10,8 @@ import {
   buildFactorySnapshot,
   canonicalMorningReviewQuestion,
   hasFactoryIntentFailureLatch,
+  hasFactoryManagedSessionBackfillComplete,
+  hasFactoryManagedSessionMarker,
   resolveFactoryPaths,
   runHarnessEvidence,
   runIndependentReviewEvidence,
@@ -35,6 +37,7 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace
 const hook = path.join(root, ".claude", "hooks", "factory-owner-input.mjs");
 const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
+const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integrity-guard.mjs");
 const baseSha = spawnSync("git", ["rev-parse", "origin/main"], { cwd: root, encoding: "utf8" }).stdout.trim();
 let assertions = 0;
 
@@ -108,7 +111,65 @@ function makeState(sessionId = "codex-thread-1", explicitJobId = "") {
   return { dir, paths, ...presented, sessionId };
 }
 
-function runHook(state, payload) {
+function addParkedJob(paths, sessionId, jobId, worktree = root) {
+  const written = writeImmutableTicket(paths, {
+    id: jobId,
+    version: 1,
+    title: "Preserve parked worktree custody",
+    goal: "Keep parked work protected until a revised ticket explicitly releases it.",
+    definitionOfDone: ["Re-presentation and transfer preserve the recorded worktree."],
+    mustNotChange: ["Files in the parked worktree."],
+    allowedPaths: ["src/"],
+    proofRequirements: ["Guard regression."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before landing.",
+    riskAreas: [],
+  });
+  const question = `Approve parked ticket ${jobId}?`;
+  for (const event of [
+    { type: "ticket-drafted", payload: { ticketFile: written.filename, ticketHash: written.hash, ticketVersion: 1, title: written.ticket.title } },
+    { type: "ticket-presented", payload: { ticketHash: written.hash, questionText: question, questionHash: sha256(question), baseSha } },
+    { type: "ticket-approved", payload: { ticketHash: written.hash, questionHash: sha256(question), ownerReply: "yes", baseSha, expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "lane-started", payload: { ticketHash: written.hash, baseSha, worktree } },
+    { type: "job-stage", payload: { stage: "parked", behaviorSummary: "Local work retained.", blocker: "Waiting for revised scope." } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId,
+      actorTool: "codex",
+      sessionId,
+    });
+  }
+  return written;
+}
+
+function addBuildingJob(paths, sessionId, jobId, worktree = root) {
+  const written = writeImmutableTicket(paths, {
+    id: jobId,
+    version: 1,
+    title: "Active factory job",
+    goal: "Keep active custody bound to its existing chat.",
+    definitionOfDone: ["A new chat cannot take over active work."],
+    mustNotChange: ["Active lane custody."],
+    allowedPaths: ["src/"],
+    proofRequirements: ["Owner-input regression."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before landing.",
+    riskAreas: [],
+  });
+  const question = `Approve active ticket ${jobId}?`;
+  for (const event of [
+    { type: "ticket-drafted", payload: { ticketFile: written.filename, ticketHash: written.hash, ticketVersion: 1, title: written.ticket.title } },
+    { type: "ticket-presented", payload: { ticketHash: written.hash, questionText: question, questionHash: sha256(question), baseSha } },
+    { type: "ticket-approved", payload: { ticketHash: written.hash, questionHash: sha256(question), ownerReply: "yes", baseSha, expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "lane-started", payload: { ticketHash: written.hash, baseSha, worktree } },
+  ]) {
+    appendFactoryEvent(paths, { ...event, jobId, actorTool: "codex", sessionId });
+  }
+  return written;
+}
+
+function runHook(state, payload, extraEnv = {}) {
   const projectRoot = state.root || root;
   return spawnSync(process.execPath, [hook], {
     cwd: projectRoot,
@@ -120,6 +181,7 @@ function runHook(state, payload) {
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: state.dir,
       NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-owner-input-test",
+      ...extraEnv,
     },
     input: JSON.stringify(payload),
   });
@@ -160,6 +222,15 @@ function runShipHook(state, payload) {
   equal(snapshot.jobs[0].approvalReply, "yes", "verbatim owner reply is retained");
   const events = readFileSync(state.paths.eventsPath, "utf8");
   ok(events.includes('"actorTool":"codex"'), "Codex surface provenance is retained");
+  ok(hasFactoryManagedSessionMarker(state.paths, state.sessionId), "owner approval persists its managed-session marker before the ledger event");
+  ok(hasFactoryManagedSessionBackfillComplete(state.paths), "owner approval completes the historical managed-session boundary before the ledger event");
+  writeFileSync(state.paths.eventsPath, "{not-valid-json}\n");
+  const corruptApplicationEdit = runInstalledPreToolHooks(state, {
+    thread_id: state.sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts"), content: "unsafe" },
+  });
+  ok(/factory-managed build writes fail closed/i.test(corruptApplicationEdit.stdout), "owner-approved session remains governed after immediate ledger corruption");
 }
 
 {
@@ -250,8 +321,36 @@ function runLaneHook(state, payload) {
   });
 }
 
+function runInstalledPreToolHooks(state, payload) {
+  let result;
+  for (const installedHook of [integrityHook, laneHook]) {
+    result = spawnSync(process.execPath, [installedHook], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: root,
+        CRX_AGENT_SURFACE: "codex",
+        CRX_FACTORY_TEST_MODE: "1",
+        CRX_FACTORY_TEST_STATE_DIR: state.dir,
+        NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-owner-input-test",
+      },
+      input: JSON.stringify(payload),
+    });
+    if (result.status !== 0 || result.error || result.stdout) break;
+  }
+  return result;
+}
+
 {
   const state = makeState("original-transfer-thread");
+  const boundaryRead = runInstalledPreToolHooks(state, {
+    thread_id: state.sessionId,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "README.md") },
+  });
+  equal(boundaryRead.stdout, "", "healthy pre-transfer replay creates the historical boundary without blocking reads");
+  ok(hasFactoryManagedSessionBackfillComplete(state.paths), "pre-transfer historical boundary is valid");
   const result = runHook(state, {
     prompt: `take over factory ticket ${state.jobId} in this chat`,
     thread_id: "new-transfer-thread",
@@ -261,6 +360,132 @@ function runLaneHook(state, payload) {
   equal(transferred.sessionId, "new-transfer-thread", "owner-authorized transfer binds the job to the new chat");
   equal(transferred.stage, "needs-ticket-ok", "owner-authorized transfer requires a fresh ticket presentation and approval");
   equal(transferred.questionHash, "", "owner-authorized transfer invalidates the old decision fingerprint");
+  ok(hasFactoryManagedSessionMarker(state.paths, "new-transfer-thread"), "custody transfer persists the destination-session marker before its ledger event");
+  writeFileSync(state.paths.eventsPath, "{not-valid-json}\n");
+  const corruptGovernanceEdit = runInstalledPreToolHooks(state, {
+    thread_id: "new-transfer-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, ".claude", "hooks", "migration-apply-guard.mjs"), content: "forged" },
+  });
+  ok(/cannot modify its own governance|protected governance edits/i.test(corruptGovernanceEdit.stdout), "transferred destination remains governed after immediate ledger corruption");
+}
+
+{
+  const state = makeEmptyState("parked-representation-thread");
+  const written = addParkedJob(state.paths, state.sessionId, "parked-representation-job");
+  const question = "Approve the unchanged parked ticket again?";
+  appendFactoryEvent(state.paths, {
+    type: "ticket-presented",
+    jobId: written.ticket.id,
+    actorTool: "codex",
+    sessionId: state.sessionId,
+    payload: {
+      ticketHash: written.hash,
+      questionText: question,
+      questionHash: sha256(question),
+      baseSha,
+    },
+  });
+  const represented = buildFactorySnapshot(state.paths).jobs[0];
+  equal(represented.stage, "needs-ticket-ok", "re-presenting an unchanged parked ticket revokes approval");
+  equal(represented.worktree, root, "re-presenting an unchanged parked ticket retains worktree custody");
+  const blocked = runLaneHook(state, {
+    thread_id: "unrelated-representation-thread",
+    tool_name: "mcp__filesystem__edit_file",
+    tool_input: { path: path.join(root, "src", "example.ts"), edits: [] },
+  });
+  ok(/owns this governed worktree/i.test(blocked.stdout), "re-presented parked work remains protected from a newer MCP editor");
+  const revised = writeImmutableTicket(state.paths, {
+    ...written.ticket,
+    version: 2,
+    goal: "Start a new authorization boundary that releases the prior parked worktree.",
+  });
+  appendFactoryEvent(state.paths, {
+    type: "ticket-drafted",
+    jobId: revised.ticket.id,
+    actorTool: "codex",
+    sessionId: state.sessionId,
+    payload: { ticketFile: revised.filename, ticketHash: revised.hash, ticketVersion: 2, title: revised.ticket.title },
+  });
+  equal(buildFactorySnapshot(state.paths).jobs[0].worktree, "", "a revised ticket explicitly releases the prior worktree custody");
+}
+
+{
+  const state = makeEmptyState("parked-transfer-source-thread");
+  const written = addParkedJob(state.paths, state.sessionId, "parked-transfer-job");
+  const transfer = runHook(state, {
+    prompt: `take over factory job ${written.ticket.id} here`,
+    thread_id: "parked-transfer-destination-thread",
+  });
+  ok(transfer.stdout.includes("moved") && transfer.stdout.includes("revoked"), "explicit transfer moves the parked job and revokes approval");
+  const transferred = buildFactorySnapshot(state.paths).jobs[0];
+  equal(transferred.stage, "needs-ticket-ok", "transferred parked work requires fresh approval");
+  equal(transferred.worktree, root, "transferred parked work retains worktree custody until revision");
+  const blocked = runLaneHook(state, {
+    thread_id: "unrelated-transfer-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts"), content: "forged" },
+  });
+  ok(/owns this governed worktree/i.test(blocked.stdout), "transferred parked work remains protected from another chat");
+  const revised = writeImmutableTicket(state.paths, {
+    ...written.ticket,
+    version: 2,
+    goal: "Revise transferred scope and explicitly release the old worktree.",
+  });
+  appendFactoryEvent(state.paths, {
+    type: "ticket-drafted",
+    jobId: revised.ticket.id,
+    actorTool: "codex",
+    sessionId: "parked-transfer-destination-thread",
+    payload: { ticketFile: revised.filename, ticketHash: revised.hash, ticketVersion: 2, title: revised.ticket.title },
+  });
+  equal(buildFactorySnapshot(state.paths).jobs[0].worktree, "", "a revised transferred ticket releases the old worktree custody");
+}
+
+{
+  const state = makeEmptyState("active-transfer-source-thread");
+  addBuildingJob(state.paths, state.sessionId, "supplier-pricing-3c");
+  addParkedJob(state.paths, "unrelated-parked-source", "unrelated-parked-job", path.join(root, "unrelated-parked-worktree"));
+  const transfer = runHook(state, {
+    prompt: "take over factory job supplier-pricing-3c here",
+    thread_id: "active-transfer-destination-thread",
+  });
+  ok(/recorded no custody transfer/i.test(transfer.stdout), "an explicit active-stage job ID never falls back to a different transferable job");
+  const snapshot = buildFactorySnapshot(state.paths);
+  equal(snapshot.jobs.find((job) => job.id === "supplier-pricing-3c").sessionId, state.sessionId, "active custody stays with its existing chat");
+  equal(snapshot.jobs.find((job) => job.id === "unrelated-parked-job").sessionId, "unrelated-parked-source", "the unrelated transferable job is not moved by fallback");
+}
+
+{
+  const state = makeEmptyState("generic-transfer-source-thread");
+  addParkedJob(state.paths, state.sessionId, "only-transferable-job");
+  const transfer = runHook(state, {
+    prompt: "move that ticket here",
+    thread_id: "generic-transfer-destination-thread",
+  });
+  ok(/moved.*revoked/i.test(transfer.stdout), "generic transfer wording still uses the safe single-candidate fallback");
+  equal(buildFactorySnapshot(state.paths).jobs[0].sessionId, "generic-transfer-destination-thread", "generic single-candidate transfer binds the intended job");
+}
+
+for (const explicitUnknownPrompt of [
+  "move job-10 here",
+  "transfer ticket-7 to this chat",
+  "take over job #12 here",
+  "move ticket: missing-job here",
+  "move the ticket here for job-99",
+  "transfer this job to this chat: ticket-42",
+  "take over factory ticket payroll here",
+  "move the payroll ticket here",
+  'move ticket "payroll-fix" here',
+]) {
+  const state = makeEmptyState(`unknown-token-source-${explicitUnknownPrompt.replace(/\W+/g, "-")}`);
+  addParkedJob(state.paths, state.sessionId, "only-transferable-job");
+  const transfer = runHook(state, {
+    prompt: explicitUnknownPrompt,
+    thread_id: "unknown-token-destination-thread",
+  });
+  ok(/recorded no custody transfer/i.test(transfer.stdout), `unknown explicit reference is refused: ${explicitUnknownPrompt}`);
+  equal(buildFactorySnapshot(state.paths).jobs[0].sessionId, state.sessionId, `unknown reference never falls back to the lone job: ${explicitUnknownPrompt}`);
 }
 
 {
@@ -649,6 +874,14 @@ function runLaneHook(state, payload) {
   equal(accepted.acceptedRepositoryContentHash, review.repositoryContentHash, "morning acceptance binds the exact independently reviewed repository hash");
   equal(accepted.acceptedRepositoryCommitContentHash, review.repositoryCommitContentHash, "morning acceptance separately binds the Git-cleaned landing hash");
   equal(accepted.acceptedRepositoryFileCount, review.repositoryFileCount, "morning acceptance binds the exact reviewed file count");
+  assertions++;
+  assert.throws(() => appendFactoryEvent(state.paths, {
+    type: "job-stage",
+    jobId: "second-approved-job",
+    actorTool: "codex",
+    sessionId: "second-owner-session",
+    payload: { stage: "approved-to-land" },
+  }), /already approved to land.*land or park/i, "the ledger lock atomically refuses a second approved-to-land event");
 }
 
 console.log(`factory-owner-input: ${assertions} assertions passed`);

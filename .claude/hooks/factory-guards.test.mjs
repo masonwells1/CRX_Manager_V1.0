@@ -1,23 +1,47 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
   appendFactoryEvent,
+  hasFactoryManagedSessionBackfillComplete,
+  hasFactoryManagedSessionMarker,
   loadFactorySnapshot,
   resolveFactoryPaths,
   sha256,
   writeImmutableTicket,
 } from "../../scripts/factory-state-lib.mjs";
+import {
+  isPotentialStructuredMutationTool,
+  isStructuredFilesystemMutationTool,
+} from "./factory-tool-classification.mjs";
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "../..");
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
 const integrityHook = path.join(root, ".claude", "hooks", "factory-state-integrity-guard.mjs");
+const shipHook = path.join(root, ".claude", "hooks", "ship-intent-reminder.mjs");
 let assertions = 0;
 const temporaryStateDirs = new Set();
+
+for (const [toolName, potentialMutation, localFilesystemMutation] of [
+  ["Write", true, true],
+  ["mcp__filesystem__edit_file", true, true],
+  ["mcp__desktop_commander__edit_block", true, true],
+  ["mcp__filesystem__read_file", false, false],
+  ["mcp__github__get_file_contents", false, false],
+  ["mcp__github__create_or_update_file", true, false],
+  ["mcp__github__delete_file", true, false],
+  ["mcp__github__push_files", true, false],
+  ["mcp__future__future_mutator", true, false],
+]) {
+  assertions++;
+  assert.equal(isPotentialStructuredMutationTool(toolName), potentialMutation, `${toolName} potential-mutation classification`);
+  assertions++;
+  assert.equal(isStructuredFilesystemMutationTool(toolName), localFilesystemMutation, `${toolName} local-filesystem classification`);
+}
 
 function temporaryStateDir(prefix) {
   const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -29,13 +53,17 @@ process.on("exit", () => {
   for (const dir of temporaryStateDirs) rmSync(dir, { recursive: true, force: true });
 });
 
-function run(hook, stateDir, payload) {
+function run(hook, stateDir, payload, projectDir = root) {
+  const hookEnv = { ...process.env };
+  for (const name of Object.keys(hookEnv)) {
+    if (/^GIT_/i.test(name)) delete hookEnv[name];
+  }
   return spawnSync(process.execPath, [hook], {
-    cwd: root,
+    cwd: projectDir,
     encoding: "utf8",
     env: {
-      ...process.env,
-      CLAUDE_PROJECT_DIR: root,
+      ...hookEnv,
+      CLAUDE_PROJECT_DIR: projectDir,
       CRX_AGENT_SURFACE: "codex",
       CRX_FACTORY_TEST_MODE: "1",
       CRX_FACTORY_TEST_STATE_DIR: stateDir,
@@ -43,6 +71,15 @@ function run(hook, stateDir, payload) {
     },
     input: JSON.stringify(payload),
   });
+}
+
+function runHookChain(hooks, stateDir, payload) {
+  let result;
+  for (const hook of hooks) {
+    result = run(hook, stateDir, payload);
+    if (result.status !== 0 || result.error || result.stdout) return result;
+  }
+  return result;
 }
 
 function denied(result, pattern, message) {
@@ -56,6 +93,24 @@ function denied(result, pattern, message) {
 
 function hookOutput(result) {
   return result.stdout ? JSON.parse(result.stdout).hookSpecificOutput : null;
+}
+
+function recoveryRouted(result, expectedWorktree, message, { transferable = false } = {}) {
+  const reason = hookOutput(result)?.permissionDecisionReason || "";
+  assertions++;
+  assert.ok(reason.includes(`Working folder: ${expectedWorktree}.`), `${message}: names the exact governed worktree`);
+  assertions++;
+  assert.match(
+    reason,
+    transferable ? /open a new chat in that folder/i : /return to the existing Factory chat/i,
+    `${message}: gives a stage-valid recovery route`,
+  );
+  assertions++;
+  if (transferable) {
+    assert.match(reason, /ask Mason there to take over factory job/i, `${message}: names the governed takeover route`);
+  } else {
+    assert.doesNotMatch(reason, /ask Mason there to take over factory job/i, `${message}: does not promise an illegal active-stage takeover`);
+  }
 }
 
 function bashExecutable() {
@@ -256,6 +311,36 @@ function bashExecutable() {
   }), /cannot modify its own governance/i, "governed sessions cannot rewrite the factory implementation");
   denied(run(integrityHook, stateDir, {
     thread_id: sessionId,
+    tool_name: "mcp__filesystem__write_file",
+    tool_input: { path: path.join(root, ".claude", "hooks", "factory-lane-guard.mjs"), content: "forged" },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite factory governance through the filesystem MCP writer");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__desktop_commander__write_file",
+    tool_input: { file_path: path.join(root, "scripts", "factory.mjs"), content: "forged" },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite factory governance through the desktop commander MCP writer");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__edit_file",
+    tool_input: { path: path.join(root, ".claude", "hooks", "factory-lane-guard.mjs"), edits: [] },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite factory governance through a newly configured MCP edit_file operation");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__desktop_commander__edit_block",
+    tool_input: { file_path: path.join(root, "scripts", "factory.mjs"), old_string: "old", new_string: "new" },
+  }), /cannot modify its own governance/i, "governed sessions cannot rewrite factory governance through an MCP edit_block operation");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__github__create_or_update_file",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", path: "scripts/factory.mjs", content: "forged" },
+  }), /cannot modify its own governance/i, "the integrity guard broadly denies remote MCP governance writers even though the lane guard never treats them as local edits");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__github__push_files",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", files: [{ path: ".claude/hooks/factory-lane-guard.mjs", content: "forged" }] },
+  }), /cannot modify its own governance/i, "the integrity guard denies remote MCP push operations that target governance");
+  denied(run(integrityHook, stateDir, {
+    thread_id: sessionId,
     tool_name: "apply_patch",
     tool_input: { input: "*** Begin Patch\n*** Update File: scripts/factory.mjs\n@@\n-old\n+new\n*** End Patch\n" },
   }), /cannot modify its own governance/i, "governed sessions cannot hide a governance rewrite in an input patch payload");
@@ -382,11 +467,13 @@ function bashExecutable() {
     sessionId,
     payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: sha256("Approve?"), baseSha: "b".repeat(40) },
   });
-  denied(run(laneHook, stateDir, {
+  const pendingParallel = run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
-  }), /under factory custody/i, "fresh chats cannot execute a prebuilt helper while a ticket decision is pending");
+  });
+  assertions++;
+  assert.equal(pendingParallel.stdout, "", "a pending ticket does not globally lock unrelated chats");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
@@ -405,16 +492,21 @@ function bashExecutable() {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     },
   });
-  denied(run(laneHook, stateDir, {
+  const queuedParallel = run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
-  }), /under factory custody/i, "fresh chats cannot execute a prebuilt helper while an approved job is queued");
-  denied(run(laneHook, stateDir, {
+  });
+  assertions++;
+  assert.equal(queuedParallel.stdout, "", "a queued ticket does not globally lock unrelated chats");
+  const queuedDenial = run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Edit",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
-  }), /lane-start check has not run/i, "approved ticket still requires deterministic lane start");
+  });
+  denied(queuedDenial, /lane-start check has not run/i, "approved ticket still requires deterministic lane start");
+  assertions++;
+  assert.match(queuedDenial.stdout, /take over factory job lane-job here/i, "wrong-checkout approval denial gives the exact custody-transfer recovery path");
 
   appendFactoryEvent(paths, {
     type: "lane-started",
@@ -435,6 +527,50 @@ function bashExecutable() {
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "outside-ticket.ts") },
   }), /outside the approved ticket paths/i, "active lane cannot widen its approved file scope");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__write_file",
+    tool_input: { path: path.join(root, "src", "outside-ticket.ts"), content: "forged" },
+  }), /outside the approved ticket paths/i, "active lane MCP writers cannot widen the approved file scope");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__github__create_or_update_file",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", path: "src/example.ts", content: "remote mutation" },
+  }), /direct commands and helper-process execution/i, "active lanes keep remote GitHub file writers opaque and denied even for an approved local-looking path");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__github__delete_file",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", path: "src/example.ts" },
+  }), /direct commands and helper-process execution/i, "active lanes keep remote GitHub file deletion opaque and denied");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__github__push_files",
+    tool_input: { owner: "attacker", repo: "elsewhere", branch: "main", files: [{ path: "src/example.ts", content: "remote mutation" }] },
+  }), /direct commands and helper-process execution/i, "active lanes keep remote GitHub push operations opaque and denied");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__edit_file",
+    tool_input: {
+      path: path.join(root, "src", "example.ts"),
+      edits: [{ oldText: "safe", newText: "OPENAI_API_KEY=sk-structured-edit-must-not-pass" }],
+    },
+  }), /credential or secret material/i, "active lane secret scanning covers filesystem edit_file newText replacements");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__edit_file",
+    tool_input: {
+      path: path.join(root, "src", "example.ts"),
+      new_text: "OPENAI_API_KEY=sk-direct-snake-case-edit-must-not-pass",
+    },
+  }), /credential or secret material/i, "active lane secret scanning covers direct new_text replacements");
+  denied(run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "mcp__filesystem__edit_file",
+    tool_input: {
+      path: path.join(root, "src", "example.ts"),
+      edits: [{ old_text: "safe", new_text: "OPENAI_API_KEY=sk-nested-snake-case-edit-must-not-pass" }],
+    },
+  }), /credential or secret material/i, "active lane secret scanning covers edits[].new_text replacements");
   denied(run(laneHook, stateDir, {
     thread_id: sessionId,
     tool_name: "Edit",
@@ -723,21 +859,83 @@ function bashExecutable() {
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/factory.mjs stage --job lane-job`nnode scripts/generated-helper.mjs --stage verifying" },
   }), /direct commands and helper-process execution/i, "factory CLI permit rejects multiline command injection");
-  denied(run(laneHook, stateDir, {
+  const parallelTicket = Buffer.from(JSON.stringify({
+    id: "parallel-lane-job",
+    title: "Parallel lane",
+    goal: "Prove the hook admits another governed job.",
+    definitionOfDone: ["Lane starts."],
+    mustNotChange: ["Production."],
+    allowedPaths: ["src/parallel.ts"],
+    proofRequirements: ["Factory tests pass."],
+    proofHarnesses: ["test:factory"],
+    deliveryGate: "Stop before commit.",
+    riskAreas: [],
+  }), "utf8").toString("base64");
+  const parallelDraft = run(laneHook, stateDir, {
+    thread_id: "fresh-parallel-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: `node scripts/factory.mjs ticket draft --ticket-base64 ${parallelTicket}` },
+  });
+  assertions++;
+  assert.equal(
+    hookOutput(parallelDraft).permissionDecision,
+    "allow",
+    "an active lane does not globally block a second chat from drafting its own governed job",
+  );
+  const foreignTargetDeny = run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "parallel.ts") },
-  }), /under factory custody/i, "fresh chats cannot bypass an active factory lane");
+  });
+  denied(foreignTargetDeny, /owns this governed worktree/i, "fresh chats cannot write into another active lane's worktree");
+  recoveryRouted(foreignTargetDeny, root, "foreign structured-write denial");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
     tool_input: { command: "Set-Content src/parallel.ts forged" },
-  }), /under factory custody/i, "fresh chats cannot bypass one-lane enforcement with shell writes");
+  }), /destinations cannot be custody-checked/i, "fresh chats cannot use shell writes while another active lane holds worktree custody");
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "mcp__desktop_commander__write_file",
     tool_input: { path: path.join(root, "src", "parallel.ts"), content: "forged" },
-  }), /under factory custody/i, "fresh chats cannot bypass one-lane enforcement with MCP writers");
+  }), /owns this governed worktree/i, "fresh chats cannot use MCP writers in another active lane's worktree");
+  const wrongWorktree = temporaryStateDir("crx-factory-wrong-worktree-");
+  const crossCheckoutDeny = run(laneHook, stateDir, {
+    thread_id: "fresh-cross-checkout-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts"), content: "forged" },
+  }, wrongWorktree);
+  denied(crossCheckoutDeny, /owns this governed worktree.*mutation targets/i, "a chat in another checkout cannot target an active lane's worktree");
+  recoveryRouted(crossCheckoutDeny, root, "cross-checkout target denial");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-cross-checkout-thread",
+    tool_name: "mcp__desktop_commander__write_file",
+    tool_input: { path: path.join(root, "src", "example.ts"), content: "forged" },
+  }, wrongWorktree), /owns this governed worktree.*mutation targets/i, "a cross-checkout MCP writer cannot target an active lane's worktree");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-cross-checkout-thread",
+    tool_name: "mcp__filesystem__write_file",
+    tool_input: { request: { destination: path.join(root, "src", "example.ts"), content: "forged" } },
+  }, wrongWorktree), /destinations cannot be custody-checked/i, "an MCP writer with an unrecognized target shape fails closed while another lane has custody");
+  denied(run(laneHook, stateDir, {
+    thread_id: "fresh-cross-checkout-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: `Set-Content -LiteralPath "${path.join(root, "src", "example.ts")}" -Value forged` },
+  }, wrongWorktree), /destinations cannot be custody-checked/i, "cross-checkout shell mutations fail closed while another lane has custody");
+  const owningChatWrongCheckout = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(wrongWorktree, "src", "example.ts") },
+  }, wrongWorktree);
+  denied(owningChatWrongCheckout, /bound to a different governed worktree/i, "the owning chat cannot move its active lane into another checkout");
+  recoveryRouted(owningChatWrongCheckout, root, "owning-chat wrong-checkout denial");
+  const cliWrongCheckout = run(laneHook, stateDir, {
+    thread_id: sessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: `node scripts/factory.mjs stage --job ${ticket.ticket.id} --stage verifying` },
+  }, wrongWorktree);
+  denied(cliWrongCheckout, /belongs to a different governed worktree/i, "factory CLI commands cannot run from the wrong checkout");
+  recoveryRouted(cliWrongCheckout, root, "factory CLI wrong-checkout denial");
 
   appendFactoryEvent(paths, {
     type: "factory-held",
@@ -766,9 +964,26 @@ function bashExecutable() {
 {
   const sessionId = "landing-thread";
   const stateDir = temporaryStateDir("crx-factory-landing-");
+  const landingRepo = temporaryStateDir("crx-factory-landing-repo-");
+  const landingGitEnv = { ...process.env };
+  for (const name of Object.keys(landingGitEnv)) {
+    if (/^GIT_/i.test(name)) delete landingGitEnv[name];
+  }
+  landingGitEnv.GIT_CONFIG_NOSYSTEM = "1";
+  landingGitEnv.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  writeFileSync(path.join(landingRepo, "README.md"), "factory landing fixture\n");
+  for (const args of [
+    ["init", "-q", "-b", "factory-test-landing"],
+    ["add", "README.md"],
+    ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"],
+    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+  ]) {
+    execFileSync("git", args, { cwd: landingRepo, env: landingGitEnv, stdio: "ignore" });
+  }
+  const runLanding = (payload) => run(laneHook, stateDir, payload, landingRepo);
   process.env.CRX_FACTORY_TEST_MODE = "1";
   process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
-  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const paths = resolveFactoryPaths(landingRepo, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
   const ticket = writeImmutableTicket(paths, {
     id: "landing-job",
     title: "Release factory custody",
@@ -786,7 +1001,7 @@ function bashExecutable() {
     { type: "ticket-drafted", payload: { ticketFile: ticket.filename, ticketHash: ticket.hash, ticketVersion: 1, title: ticket.ticket.title } },
     { type: "ticket-presented", payload: { ticketHash: ticket.hash, questionText: "Approve?", questionHash: sha256("Approve?"), baseSha: "b".repeat(40) } },
     { type: "ticket-approved", payload: { ticketHash: ticket.hash, questionHash: sha256("Approve?"), ownerReply: "yes", baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
-    { type: "lane-started", payload: { ticketHash: ticket.hash, baseSha: "b".repeat(40), worktree: root } },
+    { type: "lane-started", payload: { ticketHash: ticket.hash, baseSha: "b".repeat(40), worktree: landingRepo } },
     { type: "job-stage", payload: { stage: "in-review", behaviorSummary: "", blocker: "" } },
     { type: "job-stage", payload: { stage: "awaiting-morning-review", behaviorSummary: "Proof accepted.", blocker: "" } },
     { type: "review-presented", payload: { ticketHash: ticket.hash, questionText: landingReviewQuestion, questionHash: sha256(landingReviewQuestion), baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
@@ -812,76 +1027,504 @@ function bashExecutable() {
       sessionId,
     });
   }
-  const landingWrite = run(laneHook, stateDir, {
+  const parallelWorktree = temporaryStateDir("crx-factory-parallel-landing-lane-");
+  const parallelTicket = writeImmutableTicket(paths, {
+    id: "parallel-building-job",
+    title: "Keep building beside landing",
+    goal: "Prove landing and build custody can coexist.",
+    definitionOfDone: ["The accepted lane can reach landing validation."],
+    mustNotChange: ["The landing worktree."],
+    allowedPaths: ["src/parallel.ts"],
+    proofRequirements: ["Factory guard result."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before landing.",
+    riskAreas: [],
+  });
+  for (const event of [
+    { type: "ticket-drafted", payload: { ticketFile: parallelTicket.filename, ticketHash: parallelTicket.hash, ticketVersion: 1, title: parallelTicket.ticket.title } },
+    { type: "ticket-presented", payload: { ticketHash: parallelTicket.hash, questionText: "Approve parallel lane?", questionHash: sha256("Approve parallel lane?"), baseSha: "b".repeat(40) } },
+    { type: "ticket-approved", payload: { ticketHash: parallelTicket.hash, questionHash: sha256("Approve parallel lane?"), ownerReply: "yes", baseSha: "b".repeat(40), expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "lane-started", payload: { ticketHash: parallelTicket.hash, baseSha: "b".repeat(40), worktree: parallelWorktree } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId: parallelTicket.ticket.id,
+      actorTool: "codex",
+      sessionId: "parallel-building-thread",
+    });
+  }
+  for (const [command, route] of [
+    ["git push origin HEAD:factory-test-landing", "feature-branch push"],
+    ["gh pr view", "pull-request read"],
+  ]) {
+    const concurrentLanding = runLanding({
+      thread_id: sessionId,
+      tool_name: "PowerShell",
+      tool_input: { command },
+    });
+    denied(concurrentLanding, /accepted landing bytes are no longer valid/i, `${route} reaches exact-byte landing validation while another lane remains active`);
+    assertions++;
+    assert.doesNotMatch(concurrentLanding.stdout, /destinations cannot be custody-checked/i, `foreign active custody does not preempt the accepted lane's ${route} allowlist`);
+  }
+  appendFactoryEvent(paths, {
+    type: "job-stage",
+    jobId: parallelTicket.ticket.id,
+    actorTool: "codex",
+    sessionId: "parallel-building-thread",
+    payload: { stage: "parked", behaviorSummary: "Concurrency route proven.", blocker: "Fixture complete." },
+  });
+  rmSync(parallelWorktree, { recursive: true, force: true });
+  const landingWrite = runLanding({
     thread_id: sessionId,
     tool_name: "Write",
-    tool_input: { file_path: path.join(root, "src", "landing.ts") },
+    tool_input: { file_path: path.join(landingRepo, "src", "landing.ts") },
   });
   denied(landingWrite, /only exact-byte.*landing commands/i, "approved-to-land retains custody and blocks post-acceptance source edits");
-  denied(run(laneHook, stateDir, {
+  denied(runLanding({
     thread_id: "different-landing-thread",
     tool_name: "Write",
-    tool_input: { file_path: path.join(root, "src", "landing.ts") },
-  }), /under factory custody/i, "approved-to-land blocks parallel chats until landing completes or the job is parked");
-  denied(run(laneHook, stateDir, {
+    tool_input: { file_path: path.join(landingRepo, "src", "landing.ts") },
+  }), /owns this governed worktree/i, "a foreign building lane still cannot write into the approved landing worktree");
+  denied(runLanding({
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "git push origin other-ref:factory-result" },
   }), /only exact-byte.*landing commands|alternate local refs/i, "approved-to-land rejects pushes sourced from alternate local refs");
-  denied(run(laneHook, stateDir, {
+  denied(runLanding({
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "git push origin HEAD:production" },
   }), /only exact-byte.*landing commands/i, "approved-to-land cannot grant a push to a protected production branch");
-  denied(run(laneHook, stateDir, {
+  denied(runLanding({
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "git commit -F .env" },
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects commit messages read from ignored files");
-  denied(run(laneHook, stateDir, {
+  denied(runLanding({
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "git commit --template=.env -m release" },
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects commit templates read from ignored files");
-  denied(run(laneHook, stateDir, {
+  denied(runLanding({
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "gh pr create -H other-ref" },
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects the short PR head override alias");
-  denied(run(laneHook, stateDir, {
+  denied(runLanding({
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "gh pr create -B release" },
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects the short PR base override alias");
-  denied(run(laneHook, stateDir, {
+  denied(runLanding({
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "gh pr create --template .env" },
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects PR bodies read from ignored templates");
-  denied(run(laneHook, stateDir, {
+  denied(runLanding({
     thread_id: sessionId,
     tool_name: "PowerShell",
     tool_input: { command: "gh pr create --fill" },
   }), /only exact-byte.*landing commands/i, "approved-to-land rejects PR bodies synthesized from unreviewed commit metadata");
+  appendFactoryEvent(paths, {
+    type: "job-stage",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { stage: "parked", behaviorSummary: "Landing paused.", blocker: "Tested terminal custody." },
+  });
+  const unrelatedWorktree = temporaryStateDir("crx-factory-parked-unrelated-");
+  const parkedTargetDeny = run(laneHook, stateDir, {
+    thread_id: "unrelated-parked-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(landingRepo, "src", "landing.ts"), content: "forged" },
+  }, unrelatedWorktree);
+  denied(parkedTargetDeny, /owns this governed worktree.*mutation targets/i, "parked custody still blocks targeted writes into its worktree");
+  recoveryRouted(parkedTargetDeny, landingRepo, "parked-worktree denial", { transferable: true });
+}
+
+{
+  const sessionId = "parked-dirty-custody-thread";
+  const stateDir = temporaryStateDir("crx-factory-parked-dirty-state-");
+  const parkedRepo = temporaryStateDir("crx-factory-parked-dirty-repo-");
+  const unrelatedWorktree = temporaryStateDir("crx-factory-parked-dirty-unrelated-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const gitEnv = { ...process.env };
+  for (const name of Object.keys(gitEnv)) {
+    if (/^GIT_/i.test(name)) delete gitEnv[name];
+  }
+  gitEnv.GIT_CONFIG_NOSYSTEM = "1";
+  gitEnv.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  const git = (args) => spawnSync("git", args, { cwd: parkedRepo, encoding: "utf8", env: gitEnv });
+  assert.equal(git(["init", "-q"]).status, 0, "parked custody fixture initializes");
+  writeFileSync(path.join(parkedRepo, "tracked.txt"), "clean\n");
+  assert.equal(git(["add", "tracked.txt"]).status, 0, "parked custody fixture stages its tracked file");
+  assert.equal(git(["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"]).status, 0, "parked custody fixture commits cleanly");
+  const baseSha = git(["rev-parse", "HEAD"]).stdout.trim();
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const ticket = writeImmutableTicket(paths, {
+    id: "parked-dirty-custody-job",
+    title: "Preserve parked local work",
+    goal: "Keep dirty parked bytes under cross-chat shell custody.",
+    definitionOfDone: ["Dirty parked bytes cannot be overwritten from another chat."],
+    mustNotChange: ["Unrelated clean worktrees."],
+    allowedPaths: ["tracked.txt"],
+    proofRequirements: ["Guard regression."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Use existing ship gates.",
+    riskAreas: [],
+  });
+  for (const event of [
+    { type: "ticket-drafted", payload: { ticketFile: ticket.filename, ticketHash: ticket.hash, ticketVersion: 1, title: ticket.ticket.title } },
+    { type: "ticket-presented", payload: { ticketHash: ticket.hash, questionText: "Approve parked custody?", questionHash: sha256("Approve parked custody?"), baseSha } },
+    { type: "ticket-approved", payload: { ticketHash: ticket.hash, questionHash: sha256("Approve parked custody?"), ownerReply: "yes", baseSha, expiresAt: new Date(Date.now() + 60_000).toISOString() } },
+    { type: "lane-started", payload: { ticketHash: ticket.hash, baseSha, worktree: parkedRepo } },
+    { type: "job-stage", payload: { stage: "parked", behaviorSummary: "Local work is parked.", blocker: "Waiting for revision." } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId: ticket.ticket.id,
+      actorTool: "codex",
+      sessionId,
+    });
+  }
+  const cleanParkedShell = run(laneHook, stateDir, {
+    thread_id: "unrelated-clean-parked-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content unrelated.txt allowed" },
+  }, unrelatedWorktree);
+  assertions++;
+  assert.equal(cleanParkedShell.stdout, "", "a clean terminal parked worktree does not globally block unrelated shell mutations");
+  writeFileSync(path.join(parkedRepo, "tracked.txt"), "dirty local work\n");
+  denied(run(laneHook, stateDir, {
+    thread_id: "unrelated-dirty-parked-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: `Set-Content -LiteralPath "${path.join(parkedRepo, "tracked.txt")}" -Value forged` },
+  }, unrelatedWorktree), /destinations cannot be custody-checked/i, "dirty parked worktrees fail closed against cross-chat shell writes");
+  assert.equal(git(["add", "tracked.txt"]).status, 0, "parked custody fixture stages its local commit");
+  assert.equal(git(["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "unpushed parked work"]).status, 0, "parked custody fixture records an unpushed local commit");
+  denied(run(laneHook, stateDir, {
+    thread_id: "unrelated-unpushed-parked-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: `Set-Content -LiteralPath "${path.join(parkedRepo, "tracked.txt")}" -Value forged` },
+  }, unrelatedWorktree), /destinations cannot be custody-checked/i, "clean parked worktrees with unpushed commits retain cross-chat shell custody");
+  rmSync(parkedRepo, { recursive: true, force: true });
+  const removedParkedShell = run(laneHook, stateDir, {
+    thread_id: "unrelated-removed-parked-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content unrelated.txt allowed" },
+  }, unrelatedWorktree);
+  assertions++;
+  assert.equal(removedParkedShell.stdout, "", "a removed parked worktree cannot recreate the global orphan shell lock");
+}
+
+function repositoryFilesUnder(relativeDirectory) {
+  return readdirSync(path.join(root, relativeDirectory), { withFileTypes: true })
+    .flatMap((entry) => {
+      const relativePath = path.posix.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) return repositoryFilesUnder(relativePath);
+      return entry.isFile() ? [relativePath] : [];
+    });
+}
+
+function deterministicSafetyPaths() {
+  const modulePaths = [
+    [".claude", "hooks"],
+    [".codex", "hooks"],
+  ].flatMap((segments) => readdirSync(path.join(root, ...segments), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".mjs"))
+    .map((entry) => [...segments, entry.name].join("/")));
+  const localLintRulePaths = repositoryFilesUnder("eslint-local-rules");
+  return [...new Set([
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".gitignore",
+    "package.json",
+    "package-lock.json",
+    "eslint-local-rules.cjs",
+    "eslint.config.js",
+    "postcss.config.js",
+    "tailwind.config.js",
+    "tsconfig.app.json",
+    "tsconfig.json",
+    "tsconfig.node.json",
+    "vite.config.ts",
+    ".claude/settings.json",
+    ".claude/settings.local.json",
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".codex/sync-from-claude.ps1",
+    ".husky/commit-msg",
+    ".husky/pre-commit",
+    ".husky/pre-push",
+    ".github/workflows/ci.yml",
+    ".github/workflows/phase3-private-artifact-containment.yml",
+    "scripts/factory.mjs",
+    "scripts/write-codex-push-proof.mjs",
+    "scripts/write-apply-proofs.mjs",
+    "scripts/overnight-codex-gate.mjs",
+    "scripts/validate-sql.sh",
+    "scripts/check-supplier-pricing-phase3-private-artifacts.mjs",
+    ...localLintRulePaths,
+    ...modulePaths,
+  ])].sort();
+}
+
+{
+  const sessionId = "historical-governance-first-action";
+  const stateDir = temporaryStateDir("crx-factory-historical-governance-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const governancePaths = deterministicSafetyPaths();
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    actorTool: "codex",
+    sessionId,
+    payload: { ownerRequest: "Historical active Factory session before managed-session markers existed." },
+  });
+  const historicalTicket = writeImmutableTicket(paths, {
+    id: "historical-governance-first-action-job",
+    title: "Historical governance first-action proof",
+    goal: "Prove historical sessions cannot self-modify governance on their first action.",
+    definitionOfDone: ["Every protected governance category remains independently denied."],
+    mustNotChange: ["Factory governance."],
+    allowedPaths: governancePaths,
+    proofRequirements: ["Full installed hook-chain denial."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before commit.",
+    riskAreas: ["security", "permissions"],
+    businessExample: "A historical Factory session must not be able to weaken its own safety hooks before the managed-session marker is backfilled.",
+    forbiddenOutcome: "The first protected governance write must never run before the session is marked and denied.",
+  });
+  appendFactoryEvent(paths, {
+    type: "ticket-drafted",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: {
+      ticketFile: historicalTicket.filename,
+      ticketHash: historicalTicket.hash,
+      ticketVersion: 1,
+      title: historicalTicket.ticket.title,
+    },
+  });
+  const questionText = "Approve the historical governance first-action proof?";
+  const questionHash = sha256(questionText);
+  const baseSha = "c".repeat(40);
+  appendFactoryEvent(paths, {
+    type: "ticket-presented",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { ticketHash: historicalTicket.hash, questionText, questionHash, baseSha },
+  });
+  appendFactoryEvent(paths, {
+    type: "ticket-approved",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: {
+      ticketHash: historicalTicket.hash,
+      questionHash,
+      ownerReply: "yes",
+      baseSha,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+  appendFactoryEvent(paths, {
+    type: "lane-started",
+    jobId: historicalTicket.ticket.id,
+    actorTool: "codex",
+    sessionId,
+    payload: { ticketHash: historicalTicket.hash, baseSha, worktree: root },
+  });
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, sessionId), false, "historical active session starts without a managed-session marker");
+  denied(runHookChain([integrityHook, laneHook], stateDir, {
+    thread_id: sessionId,
+    tool_name: "MultiEdit",
+    tool_input: {
+      edits: governancePaths.map((relativePath) => ({ file_path: path.join(root, relativePath), new_string: "forged" })),
+    },
+  }), /cannot modify its own governance/i, "historical active session's first action cannot target any protected governance category");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, sessionId), true, "integrity guard persists the historical session marker before denying its first governance action");
+}
+
+{
+  const stateDir = temporaryStateDir("crx-factory-empty-backfill-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const emptyRead = run(integrityHook, stateDir, {
+    thread_id: "unrelated-empty-factory-thread",
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "README.md") },
+  });
+  assertions++;
+  assert.equal(emptyRead.stdout, "", "fresh empty ledger permits ordinary reads while creating its zero-session boundary");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths, loadFactorySnapshot(paths)), true, "fresh empty ledger creates a valid zero-session backfill boundary");
+  const laterHistoricalSession = "historical-session-after-stale-boundary";
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    sessionId: laterHistoricalSession,
+    actorTool: "codex",
+    payload: { ownerRequest: "Exercise repair of stale historical backfill metadata." },
+  });
+  const laterSnapshot = loadFactorySnapshot(paths);
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths, laterSnapshot), false, "the prior boundary is stale against a newer healthy snapshot");
+  const laterRead = run(integrityHook, stateDir, {
+    thread_id: laterHistoricalSession,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "README.md") },
+  });
+  assertions++;
+  assert.equal(laterRead.stdout, "", "healthy replay repairs stale backfill metadata without blocking the historical session's read");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, laterHistoricalSession), true, "repair creates the newly discovered historical session marker");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths, laterSnapshot), true, "repair atomically replaces the boundary with the intended snapshot identity");
+}
+
+{
+  const stateDir = temporaryStateDir("crx-factory-pre-backfill-corrupt-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const historicalSessionId = "historical-corrupt-before-first-upgrade-action";
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    sessionId: historicalSessionId,
+    actorTool: "codex",
+    payload: { ownerRequest: "Historical factory request whose ledger corrupts before its first upgraded action." },
+  });
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), false, "pre-upgrade historical session has no independent marker");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths), false, "historical backfill boundary is absent before any healthy upgraded replay");
+  writeFileSync(paths.eventsPath, "{not-valid-json}\n");
+  const installedHookChain = [integrityHook, laneHook];
+  const unrelatedStructuredWrite = runHookChain(installedHookChain, stateDir, {
+    thread_id: "unrelated-pre-backfill-thread",
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  });
+  assertions++;
+  assert.equal(unrelatedStructuredWrite.stdout, "", "pre-backfill corruption still permits an unrelated structured non-governance edit");
+  for (const relativePath of deterministicSafetyPaths()) {
+    denied(runHookChain(installedHookChain, stateDir, {
+      thread_id: historicalSessionId,
+      tool_name: "Write",
+      tool_input: { file_path: path.join(root, relativePath), content: "forged" },
+    }), /backfill is durably complete/i, `pre-backfill corruption independently protects ${relativePath}`);
+  }
+  for (const [toolName, toolInput] of [
+    ["mcp__filesystem__edit_file", { path: path.join(root, ".claude", "hooks", "factory-lane-guard.mjs"), edits: [] }],
+    ["mcp__desktop_commander__edit_block", { file_path: path.join(root, "scripts", "factory.mjs"), old_string: "old", new_string: "new" }],
+  ]) {
+    denied(runHookChain(installedHookChain, stateDir, {
+      thread_id: "unrelated-pre-backfill-thread",
+      tool_name: toolName,
+      tool_input: toolInput,
+    }), /backfill is durably complete/i, `pre-backfill corruption globally blocks newly introduced MCP writer ${toolName}`);
+  }
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Set-Content .claude/hooks/migration-apply-guard.mjs -Value forged" },
+  }), /backfill is durably complete/i, "pre-backfill corruption cannot mutate an independent safety guard through the shell");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "PowerShell",
+    tool_input: { command: "Remove-Item .claude -Recurse" },
+  }), /backfill is durably complete/i, "pre-backfill corruption cannot remove an entire safety configuration directory");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: "unrelated-pre-backfill-thread",
+    tool_name: "Bash",
+    tool_input: { command: "node -e \"process.stdout.write('opaque')\"" },
+  }), /backfill is durably complete|historical Factory session backfill/i, "pre-backfill corruption keeps dynamic execution globally fail-closed");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: "unrelated-pre-backfill-thread",
+    tool_name: "mcp__opaque__execute",
+    tool_input: {},
+  }), /historical Factory session backfill/i, "pre-backfill corruption keeps opaque helper execution globally fail-closed");
 }
 
 {
   const stateDir = temporaryStateDir("crx-factory-corrupt-");
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
   const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const managedSessionId = "managed-corrupt-thread";
+  const intentResult = run(shipHook, stateDir, {
+    thread_id: managedSessionId,
+    prompt: "Run the factory overnight.",
+  });
+  assertions++;
+  assert.equal(intentResult.status, 0, "factory intent records its independent managed-session marker before corruption");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, managedSessionId), true, "successful new factory intent retains its managed-session marker");
+  const historicalSessionId = "historical-managed-corrupt-thread";
+  appendFactoryEvent(paths, {
+    type: "factory-intent",
+    jobId: null,
+    sessionId: historicalSessionId,
+    actorTool: "codex",
+    payload: { ownerRequest: "Historical factory request before managed-session markers existed." },
+  });
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), false, "historical factory intent starts without the new independent marker");
+  const historicalRead = run(laneHook, stateDir, {
+    thread_id: historicalSessionId,
+    tool_name: "Read",
+    tool_input: { file_path: path.join(root, "docs", "workflows", "GOVERNED_DELIVERY_PIPELINE.md") },
+  });
+  assertions++;
+  assert.equal(historicalRead.stdout, "", "historical managed session remains readable while its healthy ledger marker is backfilled");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionMarker(paths, historicalSessionId), true, "healthy replay backfills the marker for pre-existing factory sessions");
+  assertions++;
+  assert.equal(hasFactoryManagedSessionBackfillComplete(paths), true, "healthy replay records the durable historical backfill boundary");
   writeFileSync(paths.eventsPath, "{not-valid-json}\n");
-  const readResult = run(laneHook, stateDir, {
+  const installedHookChain = [integrityHook, laneHook];
+  const readResult = runHookChain(installedHookChain, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "Read",
     tool_input: { file_path: path.join(root, "docs", "workflows", "GOVERNED_DELIVERY_PIPELINE.md") },
   });
   assertions++;
   assert.equal(readResult.stdout, "", "corrupt factory state leaves read-only diagnosis available");
-  denied(run(laneHook, stateDir, {
+  const unrelatedWrite = runHookChain(installedHookChain, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "Write",
     tool_input: { file_path: path.join(root, "src", "example.ts") },
-  }), /build writes fail closed/i, "corrupt factory state still denies repository mutation");
-  const recoveryResult = run(laneHook, stateDir, {
+  });
+  assertions++;
+  assert.equal(unrelatedWrite.stdout, "", "corrupt factory state does not block writes in an unrelated non-factory session");
+  const unrelatedDynamicShell = runHookChain(installedHookChain, stateDir, {
+    thread_id: "diagnostic-thread",
+    tool_name: "Bash",
+    tool_input: { command: "node -e \"process.stdout.write('ordinary work')\"" },
+  });
+  assertions++;
+  assert.equal(unrelatedDynamicShell.stdout, "", "the full corrupt-state hook chain leaves unrelated dynamic shell work under ordinary guards");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: managedSessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(root, "src", "example.ts") },
+  }), /factory-managed build writes fail closed/i, "corrupt factory state still denies mutation in the factory-managed session");
+  denied(runHookChain(installedHookChain, stateDir, {
+    thread_id: managedSessionId,
+    tool_name: "Bash",
+    tool_input: { command: "node -e \"process.stdout.write('bypass')\"" },
+  }), /dynamic inline code execution is disabled inside a governed lane/i, "the full corrupt-state hook chain keeps marked factory sessions governed");
+  const recoveryResult = runHookChain(installedHookChain, stateDir, {
     thread_id: "diagnostic-thread",
     tool_name: "PowerShell",
     tool_input: { command: "node scripts/factory.mjs recover torn-tail --reason-base64 cmVjb3Zlcnk= --session diagnostic-thread --tool codex" },

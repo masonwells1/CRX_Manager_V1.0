@@ -35,13 +35,14 @@ const script = path.join(root, "scripts", "factory.mjs");
 const laneHook = path.join(root, ".claude", "hooks", "factory-lane-guard.mjs");
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-cli-"));
 const fixtureDir = mkdtempSync(path.join(os.tmpdir(), "crx-factory-fixture-"));
+const fixturePrimaryRepo = path.join(fixtureDir, "primary-repo");
 const fixtureRepo = path.join(fixtureDir, "repo");
 process.on("exit", () => {
   rmSync(stateDir, { recursive: true, force: true });
   rmSync(fixtureDir, { recursive: true, force: true });
 });
-mkdirSync(fixtureRepo, { recursive: true });
-writeFileSync(path.join(fixtureRepo, "package.json"), `${JSON.stringify({
+mkdirSync(fixturePrimaryRepo, { recursive: true });
+writeFileSync(path.join(fixturePrimaryRepo, "package.json"), `${JSON.stringify({
   scripts: {
     "verify-deps": "node -e \"Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Number(process.env.CRX_FACTORY_TEST_HARNESS_DELAY_MS||500));process.stdout.write('FACTORY_TEST_HARNESS_PASS')\"",
   },
@@ -53,7 +54,14 @@ for (const args of [
   ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "fixture"],
   ["update-ref", "refs/remotes/origin/main", "HEAD"],
 ]) {
-  const result = spawnSync("git", args, { cwd: fixtureRepo, encoding: "utf8" });
+  const result = spawnSync("git", args, { cwd: fixturePrimaryRepo, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+}
+{
+  const result = spawnSync("git", ["worktree", "add", "--detach", fixtureRepo, "HEAD"], {
+    cwd: fixturePrimaryRepo,
+    encoding: "utf8",
+  });
   assert.equal(result.status, 0, result.stderr);
 }
 const env = {
@@ -325,6 +333,13 @@ const replayedEvidence = spawnSync(process.execPath, [
   env: { ...env, CRX_FACTORY_PERMIT: replayedEvidencePermit.token },
   encoding: "utf8",
 });
+appendFactoryEvent(paths, {
+  type: "factory-intent",
+  jobId: null,
+  actorTool: "codex",
+  sessionId: "parallel-ledger-thread",
+  payload: { prompt: "a different lane changes the shared ledger tail" },
+});
 const firstEvidenceStatus = await new Promise((resolve) => firstEvidence.once("close", resolve));
 assertions++;
 assert.equal(firstEvidenceStatus, 0, `the primary harness completes without a false factory hold: ${firstEvidenceStderr}`);
@@ -338,6 +353,13 @@ assertions++;
 assert.equal(loadFactorySnapshot(paths).jobs[0].evidence.length, 1, "only the primary concurrent harness attaches evidence");
 assertions++;
 assert.equal(loadFactorySnapshot(paths).held, false, "legitimate permit churn does not trigger an emergency factory hold");
+appendFactoryEvent(paths, {
+  type: "factory-intent-cleared",
+  jobId: null,
+  actorTool: "codex",
+  sessionId: "parallel-ledger-thread",
+  payload: { reason: "parallel ledger proof completed" },
+});
 const rewindActiveLane = run(["ticket", "present", "--job", jobId]);
 assertions++;
 assert.notEqual(rewindActiveLane.status, 0, "the owning chat cannot rewind an active lane through ticket presentation");
@@ -583,6 +605,8 @@ pass(status, "read status");
 assertions++;
 assert.equal(JSON.parse(status.stdout).jobs[0].id, jobId);
 assertions++;
+assert.equal(JSON.parse(status.stdout).jobs[0].worktree, fixtureRepo, "status JSON exposes the governed worktree for recovery routing");
+assertions++;
 assert.equal(status.stdout.includes(sessionId), false, "status JSON does not expose owner or lane session identity");
 assertions++;
 assert.equal(status.stdout.includes(snapshot.jobs[0].ticketHash), false, "status JSON does not expose ticket hashes");
@@ -780,6 +804,23 @@ assert.equal(
   live.jobs[0].closeoutCommit,
   "final live attestation requires the exact packet-containing closeout commit at the production alias",
 );
+const postLiveWrite = spawnSync(process.execPath, [laneHook], {
+  cwd: fixtureRepo,
+  env: {
+    ...env,
+    CLAUDE_PROJECT_DIR: fixtureRepo,
+    CRX_AGENT_SURFACE: "codex",
+    NODE_TEST_CONTEXT: process.env.NODE_TEST_CONTEXT || "factory-hook-test",
+  },
+  input: JSON.stringify({
+    thread_id: sessionId,
+    tool_name: "Write",
+    tool_input: { file_path: path.join(fixtureRepo, "feature.txt"), content: "next task" },
+  }),
+  encoding: "utf8",
+});
+assertions++;
+assert.equal(postLiveWrite.stdout, "", "a completed live job releases its chat and worktree from factory write custody");
 const repeatedCloseout = run(closeoutArgs);
 pass(repeatedCloseout, "repeat an already successful closeout");
 assertions++;
@@ -987,5 +1028,151 @@ await runFactoryCli(guardedArgs, {
 });
 assertions++;
 assert.equal(readEventLog(paths).events.filter((event) => event.type === "factory-recovered").length, 2, "guarded retry publishes the pending recovery exactly once after ledger repair");
+
+{
+  const concurrencyStateDir = path.join(fixtureDir, "concurrency-state");
+  const concurrencyRepo = path.join(fixtureDir, "concurrency-repo");
+  mkdirSync(concurrencyStateDir, { recursive: true });
+  const previousFactoryTestStateDir = process.env.CRX_FACTORY_TEST_STATE_DIR;
+  process.env.CRX_FACTORY_TEST_STATE_DIR = concurrencyStateDir;
+  mkdirSync(concurrencyRepo, { recursive: true });
+  writeFileSync(path.join(concurrencyRepo, "package.json"), `${JSON.stringify({
+    scripts: { "verify-deps": "node -e \"process.stdout.write('PARALLEL_FACTORY_PASS')\"" },
+  }, null, 2)}\n`);
+  for (const args of [
+    ["init", "-q", "-b", "main"],
+    ["config", "core.autocrlf", "false"],
+    ["add", "package.json"],
+    ["-c", "user.name=Factory Test", "-c", "user.email=factory@example.invalid", "commit", "-qm", "parallel fixture"],
+    ["update-ref", "refs/remotes/origin/main", "HEAD"],
+  ]) {
+    const result = spawnSync("git", args, { cwd: concurrencyRepo, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const laneRepos = [];
+  for (let index = 1; index <= 4; index++) {
+    const laneRepo = path.join(fixtureDir, `concurrency-lane-${index}`);
+    const result = spawnSync("git", ["worktree", "add", "--detach", laneRepo, "HEAD"], {
+      cwd: concurrencyRepo,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    laneRepos.push(laneRepo);
+  }
+  const concurrencyPaths = resolveFactoryPaths(concurrencyRepo, {
+    CRX_FACTORY_TEST_MODE: "1",
+    CRX_FACTORY_TEST_STATE_DIR: concurrencyStateDir,
+  });
+  const concurrencyEnv = {
+    ...env,
+    CRX_FACTORY_TEST_STATE_DIR: concurrencyStateDir,
+  };
+  const runConcurrency = (repo, args, identity) => {
+    const permit = mintFactoryCliPermit(concurrencyPaths, {
+      ...identity,
+      expectedLastEventHash: loadFactorySnapshot(concurrencyPaths).lastEventHash,
+    });
+    return spawnSync(process.execPath, [script, ...args], {
+      cwd: root,
+      env: {
+        ...concurrencyEnv,
+        CRX_FACTORY_TEST_REPO_DIR: repo,
+        CRX_FACTORY_PERMIT: permit.token,
+      },
+      encoding: "utf8",
+    });
+  };
+  const draftAndQueue = (id, identity, repo) => {
+    const parallelTicket = JSON.stringify({
+      id,
+      title: `Parallel factory lane ${id}`,
+      goal: "Prove bounded multi-lane admission in a distinct worktree.",
+      definitionOfDone: ["Lane starts."],
+      mustNotChange: ["Production."],
+      allowedPaths: [`${id}.txt`],
+      proofRequirements: ["Factory tests pass."],
+      proofHarnesses: ["verify-deps"],
+      deliveryGate: "Stop before commit.",
+      riskAreas: [],
+    });
+    pass(runConcurrency(repo, ["ticket", "draft", "--ticket-base64", base64(parallelTicket)], identity), `draft ${id}`);
+    pass(runConcurrency(repo, ["ticket", "present", "--job", id], identity), `present ${id}`);
+    const queuedSnapshot = loadFactorySnapshot(concurrencyPaths);
+    const queuedJob = queuedSnapshot.jobs.find((job) => job.id === id);
+    appendFactoryEvent(concurrencyPaths, {
+      type: "ticket-approved",
+      jobId: id,
+      actorTool: identity.actorTool,
+      sessionId: identity.sessionId,
+      payload: {
+        ticketHash: queuedJob.ticketHash,
+        questionHash: queuedJob.questionHash,
+        ownerReply: "yes",
+        baseSha: queuedJob.baseSha,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    });
+  };
+  const orphanIdentity = { sessionId: "orphaned-session", actorTool: "codex" };
+  const orphanTicket = JSON.stringify({
+    id: "orphaned-pending-ticket",
+    title: "Orphaned pending ticket",
+    goal: "Remain pending without consuming a worker.",
+    definitionOfDone: ["No active lane."],
+    mustNotChange: ["Production."],
+    allowedPaths: ["orphan.txt"],
+    proofRequirements: ["None."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Stop before commit.",
+    riskAreas: [],
+  });
+  pass(runConcurrency(concurrencyRepo, ["ticket", "draft", "--ticket-base64", base64(orphanTicket)], orphanIdentity), "draft real orphaned ticket");
+  pass(runConcurrency(concurrencyRepo, ["ticket", "present", "--job", "orphaned-pending-ticket"], orphanIdentity), "present real orphaned ticket");
+
+  const identities = [1, 2, 3, 4].map((index) => ({ sessionId: `parallel-session-${index}`, actorTool: "codex" }));
+  draftAndQueue("parallel-job-1", identities[0], laneRepos[0]);
+  const primaryCheckoutStart = runConcurrency(concurrencyRepo, ["lane", "start", "--job", "parallel-job-1"], identities[0]);
+  assertions++;
+  assert.notEqual(primaryCheckoutStart.status, 0, "a lane cannot start in the shared primary checkout");
+  assertions++;
+  assert.match(primaryCheckoutStart.stderr, /dedicated linked Git worktree, not the primary checkout/i, "primary-checkout refusal explains the safe recovery path");
+  pass(runConcurrency(laneRepos[0], ["lane", "start", "--job", "parallel-job-1"], identities[0]), "start first parallel lane beside orphan");
+  draftAndQueue("parallel-job-2", identities[1], laneRepos[1]);
+  const reusedWorktree = runConcurrency(laneRepos[0], ["lane", "start", "--job", "parallel-job-2"], identities[1]);
+  assertions++;
+  assert.notEqual(reusedWorktree.status, 0, "a second lane cannot reuse the first lane's worktree");
+  assertions++;
+  assert.match(reusedWorktree.stderr, /already owns this worktree/i, "worktree collision explains the refusal");
+  pass(runConcurrency(laneRepos[1], ["lane", "start", "--job", "parallel-job-2"], identities[1]), "start second parallel lane");
+  draftAndQueue("parallel-job-3", identities[2], laneRepos[2]);
+  pass(runConcurrency(laneRepos[2], ["lane", "start", "--job", "parallel-job-3"], identities[2]), "start third parallel lane");
+  draftAndQueue("parallel-job-4", identities[3], laneRepos[3]);
+  const overCapacity = runConcurrency(laneRepos[3], ["lane", "start", "--job", "parallel-job-4"], identities[3]);
+  assertions++;
+  assert.notEqual(overCapacity.status, 0, "a fourth active lane is refused");
+  assertions++;
+  assert.match(overCapacity.stderr, /capacity is full: 3\/3 active lanes/i, "bounded capacity explains the fourth-lane refusal");
+  const concurrencySnapshot = loadFactorySnapshot(concurrencyPaths);
+  assertions++;
+  assert.equal(concurrencySnapshot.activeLaneCount, 3, "three real ledger-backed lanes are active");
+  assertions++;
+  assert.equal(concurrencySnapshot.maxActiveLanes, 3, "status exposes the three-lane capacity");
+  assertions++;
+  assert.equal(
+    concurrencySnapshot.jobs.find((job) => job.id === "orphaned-pending-ticket")?.stage,
+    "needs-ticket-ok",
+    "the real orphan remains visible without blocking active capacity",
+  );
+  assertions++;
+  assert.deepEqual(
+    concurrencySnapshot.jobs
+      .filter((job) => /^parallel-job-[123]$/.test(job.id))
+      .map((job) => path.resolve(job.worktree).toLowerCase())
+      .sort(),
+    laneRepos.slice(0, 3).map((repo) => path.resolve(repo).toLowerCase()).sort(),
+    "each active lane records a distinct real Git worktree",
+  );
+  process.env.CRX_FACTORY_TEST_STATE_DIR = previousFactoryTestStateDir;
+}
 
 console.log(`factory-cli: ${assertions} assertions passed`);

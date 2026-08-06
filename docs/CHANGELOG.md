@@ -2,6 +2,251 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — Factory durability and recovery routing — PREPARED
+
+The factory durability follow-up adds a stable, SHA-256-manifested snapshot of
+the shared ledger, tickets, evidence, owner receipts, emergency-hold history,
+and recovery records to the workstation's nightly Personal DR flow. Short-lived
+CLI permits, session latches, harness locks, and coordination locks are excluded,
+so a restored machine cannot revive authority held by a dead process. The tracked
+runner stages only under the operating-system temporary directory; the installed
+task replays the restored ledger, uploads the archive through the client-side
+encrypted Backblaze remote, downloads it through that same encryption layer,
+compares SHA-256 values, and clears plaintext staging on success or failure.
+Stable damaged or torn ledger bytes are preserved off-site with a distinct
+`replay_ok: false` manifest and failing task result instead of being discarded or
+misreported as clean. The governed restore runbook verifies the decrypted archive,
+keeps transient dead-process authority out of the restore, and requires Mason's
+current approval before replacing any existing shared Factory state.
+The append-only ledger's 75% size warning is now a distinct scheduled-task
+failure after a verified upload, preventing a quiet transition from warning to
+the bounded backup limit.
+A hard Factory snapshot failure no longer cancels the rest of the Personal DR
+archive: secrets, configuration, and agent memory still upload and verify before
+the task alerts and fails for the missing Factory component. The locked backup
+runtime has an explicit refresh-on-tool-change rule and logs its deployed SHA.
+
+Factory status and Board projections now show each job's governed working folder.
+Wrong-worktree denials give a stage-valid route: transferable waiting/parked jobs
+name the exact chat takeover flow, while active build/review/landing jobs route
+back to their existing Factory chat and never promise an illegal transfer.
+Review remediation makes takeover requests fail closed for unknown alphabetic,
+prefix-position, and quoted ticket IDs instead of falling back to an unrelated
+lone job. Backup verification now returns a normal invalid-manifest result for
+case-variant ledger entries, preserves the primary capture error if cleanup also
+fails, and covers manifest tampering directly. The tracked runner also disables
+PowerShell 7's native-command exception conversion so intentional degraded and
+capacity exit codes remain available to the encrypted off-site upload workflow.
+
+This entry describes the reviewed follow-up branch; it does not claim merge or
+production deployment.
+
+## 2026-08-05 — Factory concurrency and orphan recovery — LIVE
+
+The governed software factory now admits up to three active lanes instead of
+globally serializing all work behind one job. Only `building`, `verifying`, and
+`in-review` consume capacity, so an expired pending approval or historical
+parked job remains visible without occupying a worker slot. Each lane must start
+in its own clean linked Git worktree; the primary checkout and worktree reuse are
+refused. A wrong-checkout approval now reports the exact safe recovery route:
+open the job's clean worktree in a new chat, transfer the named job through Mason's
+ordinary chat request, and re-present the ticket after the old approval is revoked.
+Cross-chat custody checks cover canonical structured-write targets even
+when the calling chat is in another checkout, while terminal parked jobs retain
+targeted custody without globally blocking unrelated shell work.
+
+Long-running harness and independent-review attachments now compare the target
+job plus the factory pause/resume checkpoint instead of the unrelated global
+ledger tail, allowing independent lanes to record progress concurrently without
+weakening same-job or emergency-hold protection. Owner decisions use the same
+job-scoped concurrency boundary. Failed harness output is secret-scanned before
+being surfaced, and secret-shaped output is suppressed while the factory is
+held for review. The owner-facing CLI and Board report active capacity as
+`N/3`; the governed-delivery policy documents the bounded concurrency and
+worktree recovery behavior. Landing acceptance remains serialized: an atomic
+ledger check refuses a second `approved-to-land` job, while duplicate historical
+approvals fail closed until reconciled. Parked worktrees with local changes also
+retain fail-closed shell custody, as do clean worktrees with unpushed commits;
+clean worktrees at their recorded base and removed parked worktrees do not globally
+block unrelated shell work. Parked jobs never consume one of the three worker slots.
+Verified legacy ledgers remain readable when an old lane without a worktree field was
+later safely parked or re-ticketed; an unbound lane that is still active fails closed.
+Parked-worktree Git probes now finish inside an eight-second total budget with bounded
+subprocess timeouts, so the installed 15-second hook cannot silently expire open.
+The live local ledger was checked before this compatibility change: all three existing
+`lane-started` events already contain worktree bindings.
+An accepted landing lane now reaches its exact landing-command and byte-validation gates
+while other lanes remain active; those other chats still cannot target the landing worktree.
+The concurrent protected-state allowance has direct positive and negative regression tests,
+and the shared parked-custody timeout helper is exercised as running code rather than checked
+through source-text matching. The two-lane routing regression exercises both the feature-branch
+push and PR-read routes from a fixed fixture, independent of the ambient checkout. Governance
+self-edit protection classifies MCP write operations by capability, including `edit_file` and
+`edit_block`, so newly configured writers fail closed. Failed harnesses scan both output streams
+for secrets, and atomic backfill cleanup preserves the original operation failure. Parked worktree
+custody survives unchanged-ticket re-presentation and cross-chat transfer until a revised ticket
+opens the new authorization boundary. Both installed guards share one MCP writer parser, while only
+the known local filesystem servers enter the lane's structured-edit allow path; remote GitHub/API
+writers remain opaque and denied. Filesystem `newText` replacements are included in secret scanning.
+The shared classifier now recognizes remote `push`, `apply`, `update`, `append`, and `deploy`
+operations explicitly, and unknown non-read MCP operations fail closed. Direct classifier tables
+and installed-hook regressions cover GitHub `push_files` without admitting it as a local edit;
+secret-scanning regressions cover both direct and nested snake_case `new_text` payloads.
+Merged through PR #319 at `1cdeb2a41c13a080944c153ec1fbbbf4aae5e76e`.
+Production verification observed the alias-bound Vercel deployment `READY`, the
+canonical site returning HTTP 200, and the post-merge CI and CodeQL runs green.
+
+## 2026-08-05 — Bulk order import lifecycle parity — LIVE
+
+The Section 4 live-foundation refresh found that Bulk Order Import could label a
+completely undelivered order as partially fulfilled, fulfilled, or cancelled. It
+also bypassed the normal inventory reservation, booked inventory ledger,
+commission creation, and atomic order activity performed by canonical order
+creation.
+
+Live migration `20260805211951_harden_bulk_order_import_lifecycle` now creates
+confirmed imports only, validates active actors/customers/products, recomputes
+totals in PostgreSQL, and performs every required lifecycle side effect in the
+same transaction. The import UI rejects terminal statuses before calling the
+RPC, while PostgreSQL remains the authoritative backstop. Both content-bound
+Sol/high migration reviews, the full test/build suite, 21 live invariant sweeps,
+and pre/post-apply rollback smokes passed. No smoke fixtures remained, and the
+schema registry was refreshed to the new live high-water.
+
+The first exact-commit adversarial review then caught PostgreSQL's special
+`numeric` values: ordinary range checks do not reject `NaN` or positive
+`Infinity`. Follow-up live migration
+`20260805220757_reject_nonfinite_bulk_import_values` now rejects
+`NaN`/`Infinity`/`-Infinity` for imported quantities, prices, and costs and
+normalizes legacy dollar inputs to cents before any write. The expanded
+rollback smoke exercises all nine field/value combinations, sub-cent
+normalization, and zero residue across orders, inventory, commissions,
+activity, and idempotency. That migration's live function hash is
+`4c38bd47d81f7c5dec54533cb7d57bca`.
+
+A second exact-commit adversarial review found that an omitted optional
+`unit_cost` was still being submitted as zero just as imports began creating
+commissions, which could overstate order profit and commission liability.
+Forward-only live migration
+`20260805224819_snapshot_bulk_import_product_cost` now snapshots the active
+Product's `current_cost` when cost is absent, preserves an explicit zero,
+rejects malformed or unavailable cost, and uses one normalized item snapshot
+for order lines, totals, and commissions. The frontend validates the catalog
+cost for operator feedback but leaves omitted cost absent in the RPC payload so
+PostgreSQL takes the authoritative transactional snapshot. The expanded rollback smoke proved omitted-cost success,
+malformed-cost rejection, exact commission basis, and zero residue. Both
+content-bound Sol/high migration reviews, all 21 invariant sweeps, and the live
+catalog/grant checks passed after the apply.
+
+The next exact-SHA review found that accepting an explicit imported cost still
+let a sales rep lower commission cost basis and inflate pending commission
+liability. Forward-only live migration
+`20260806000752_authorize_bulk_import_product_cost` now validates supplied cost
+syntax but always snapshots the active Product's `current_cost` for order-line,
+profit, and commission math. The browser sends no caller cost and previews the
+same Product value. A rollback-only active-sales-rep attack passes an explicit
+zero and proves Product cost, profit, and commission basis win with zero residue.
+
+The final exact-SHA review then found two additional money-safety gaps: fractional
+multi-line imports could create commission liability from a stale per-line-rounded
+profit accumulator, and same-key retries were not bound to the original actor and
+payload. Forward-only live migration
+`20260806004644_bind_bulk_import_intent_and_profit` rereads the trigger-canonical
+order totals before commission creation, reconciles line-profit totals to the
+stored header, and stores a server-derived actor/payload fingerprint under an
+idempotency advisory lock. The strengthened rollback smoke proves a deliberately
+rounding-sensitive ten-line import, exact commission/header/line agreement,
+same-intent replay, changed-intent rejection, and zero residue. Both migration
+review charters and all 21 live invariant predicates passed.
+
+A later exact-SHA pass found that individual fractional lines could retain
+sub-cent profit and that the immutable-cost trigger could reread Product cost
+after a concurrent governed update. Forward-only live migration
+`20260806012423_lock_bulk_import_cost_snapshot` locks all requested Products in
+stable UUID order, derives one bigint-cent cost snapshot, explicitly writes the
+same `cost_at_time_cents`, and keeps every line profit whole-cent before assigning
+the aggregate remainder deterministically. Candidate and installed rollback
+smokes proved line-level cents, immutable snapshot equality, and zero residue;
+both migration reviewers returned CLEAN. The post-`20260806012423` end-state
+live function hash is `473152377f9e8f67db8cb0470a43a01f`; schema high-water is
+`20260806012423`.
+
+CodeRabbit's publication review then found that bulk imports reserved inventory
+under the approved warn-not-block policy but returned no Net Position warning,
+and that the browser's compatibility totals still used floating-point dollars.
+Forward-only live migration
+`20260806023048_surface_bulk_import_inventory_warnings` aggregates repeated
+Product lines, locks existing Main Warehouse inventory rows in stable order,
+returns canonical pre-reservation shortage warnings, and records them in order
+activity and idempotent results. The import UI displays the warnings and computes
+all compatibility totals in integer cents. Candidate and installed rollback
+smokes, both migration reviewers, focused 96-test coverage, all 21 invariant
+predicates, catalog/grant checks, and the genuine live registry refresh passed.
+The final live function hash is `b878d0927ad5b6fea5732cb317bce187`;
+schema high-water is `20260806023048`.
+
+## 2026-08-05 — Factory ledger failure containment
+
+Factory intent now leaves a durable per-chat marker outside the event ledger before attempting the
+intent append, and healthy replay backfills markers for pre-existing Factory chats. If the shared
+Factory ledger later becomes unreadable, explicit Factory commands and only those marked Factory
+chats continue to fail closed; unrelated work remains governed by the repository's ordinary safety
+hooks instead of being blocked by the Factory outage. The same boundary is enforced by both installed
+Factory PreToolUse guards, including dynamic shell commands. Regression proof covers both sides of that
+boundary while preserving read-only diagnosis and the canonical recovery route. The integrity guard has
+marker-only write authority so a historical active session is durably classified before its very first
+action, including when its approved ticket names protected governance paths. A durable historical-backfill
+boundary records the exact ledger hash and session set from the last healthy replay, including the empty-ledger
+case, and is atomically replaced when that snapshot identity changes. If corruption
+precedes that boundary, unrelated application edits remain available while the complete deterministic safety
+surface (all Claude/Codex hooks and configuration, Husky gates, CI workflows, local ESLint safety rules, safety scripts, dependency and
+build configuration, and case-normalized root agent contracts), opaque helpers, and dynamic execution stay
+globally fail-closed; once the boundary
+exists, only marked Factory chats fail closed.
+Every owner-input Factory event now completes the healthy historical marker backfill and persists the
+current chat's marker before its ledger append; hold/resume retains the marker-first emergency path even
+when the ledger is unavailable. Ticket approval, morning acceptance, rejection/revision, intent clearing,
+and custody transfer therefore remain governed if corruption occurs immediately after the owner decision.
+The existing narrow
+same-lane replay rule continues to accept the complete legacy duplicate parked event that previously
+prevented `factory.mjs status` from loading while rejecting other illegal or cross-custody stage
+changes. Managed-session markers are coordination-only state and are excluded from protected-content
+fingerprints so a concurrent chat cannot falsely invalidate an active evidence or review run.
+
+## 2026-08-05 — Historical AR report cutoff fixes — LIVE
+
+The Section 2 live-foundation refresh found that the date selectors on the AR
+aging and customer balance listing reports did not reconstruct balances at the
+requested business-date cutoff. A reviewed migration now makes both reports
+exclude documents and balance activity after the cutoff, reject unreconstructable
+historical state instead of returning a plausible but wrong total, and keep
+historical customer-balance access admin-only. The customer balance listing now
+also excludes unposted invoices and calculates overdue amounts from the requested
+date.
+
+Supabase applied the submitted migration
+`20260805124533_fix_historical_ar_report_cutoffs` as live ledger version
+`20260805151605`. Post-apply catalog checks
+confirmed fixed search paths, deliberate grants, one live overload per report,
+and a private reconstruction helper. The rollback-only behavior smoke returned
+`SMOKE_PASS_ROLLBACK`; authenticated live execution confirmed current reports
+remain callable while a sales-representative historical request is rejected.
+The schema registry and migration/RPC references were refreshed from the live
+catalog, and focused regression coverage is registered in the billing and
+regression-prevention suites.
+
+The first exact-commit review caught that the new Customer Balance Listing
+limited its cumulative Invoiced, Paid, Prepay Applied, and invoice-count fields
+to invoices that still had a positive balance. That would omit fully paid
+invoices whenever the customer also had an open invoice. Follow-up migration
+`20260805171334_fix_customer_balance_paid_invoice_totals` is live: cumulative
+fields now include every cutoff-eligible non-credit invoice, while only
+Outstanding Balance and Oldest Unpaid remain open-invoice measures. The
+expanded rollback smoke proves a $50 fully paid invoice plus a $100 open invoice
+returns $150 invoiced, $50 paid, two invoices, and $100 outstanding. The
+follow-up passed content-bound security/drift reviews, post-apply catalog and
+grant checks, and left no fixture or business-data residue.
+
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 
 The reviewed Section 2 remediation aligns customer statements across the target

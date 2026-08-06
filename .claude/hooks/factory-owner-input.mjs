@@ -8,6 +8,8 @@ import {
   APPROVAL_TTL_MS,
   appendFactoryControlEvent,
   appendFactoryEvent,
+  completeFactoryManagedSessionBackfill,
+  FACTORY_TRANSFERABLE_STAGES,
   loadFactorySnapshot,
   normalizeOwnerQuestion,
   pendingTicketForSession,
@@ -16,6 +18,7 @@ import {
   rejectSecretBearingText,
   repositoryContentFingerprint,
   resolveHookFactoryPaths,
+  setFactoryManagedSessionMarker,
   setEmergencyFactoryHold,
   sha256,
   unqualifiedOwnerApproval,
@@ -138,6 +141,20 @@ function mentionsExactJobId(prompt, jobId) {
     .test(String(prompt || ""));
 }
 
+function ownerDecisionCheckpoint(snapshot, job = null) {
+  return {
+    ...(job ? { expectedJobEventHash: job.terminalLedgerHash } : {}),
+    expectedFactoryControlHash: snapshot.factoryControlHash,
+  };
+}
+
+function prepareFactoryManagedSession(paths, { snapshot = null, sessionId, actorTool }) {
+  if (snapshot) {
+    completeFactoryManagedSessionBackfill(paths, { snapshot, actorTool });
+  }
+  setFactoryManagedSessionMarker(paths, { sessionId, actorTool });
+}
+
 async function main() {
   let payload;
   try { payload = JSON.parse(readFileSync(0, "utf8")); } catch { emit(); }
@@ -156,17 +173,26 @@ async function main() {
       emit("CRX Factory could not bind this custody-transfer request to a chat session, so it changed nothing.");
     }
     const snapshot = loadFactorySnapshot(paths);
-    const transferableStages = new Set(["needs-ticket-ok", "queued", "parked", "awaiting-morning-review"]);
     const transferable = snapshot.jobs.filter((job) =>
-      transferableStages.has(job.stage)
+      FACTORY_TRANSFERABLE_STAGES.has(job.stage)
       && job.sessionId !== sessionId);
     const named = transferable.filter((job) => mentionsExactJobId(prompt, job.id));
-    const promptNamesUnknownJob = /\b(?:job|ticket)-[A-Za-z0-9._-]+\b/i.test(prompt) && named.length === 0;
+    const tokensAfterJobWords = [...prompt.matchAll(/\b(?:factory\s+)?(?:job|ticket)(?:\s*[-:#]\s*|\s+)[\s"'([{<]*([A-Za-z0-9][A-Za-z0-9._:@+=,-]*)\b/gi)]
+      .map((match) => match[1]);
+    const tokensBeforeJobWords = [...prompt.matchAll(/\b([A-Za-z0-9][A-Za-z0-9._:@+=,-]*)[\s"')\]}>]*\s+(?:factory\s+)?(?:job|ticket)\b/gi)]
+      .map((match) => match[1]);
+    const explicitJobTokens = [...tokensAfterJobWords, ...tokensBeforeJobWords];
+    const namesKnownJob = snapshot.jobs.some((job) => mentionsExactJobId(prompt, job.id));
+    const genericTransferWords = new Set(["a", "an", "here", "this", "that", "it", "my", "the", "to", "into", "in", "on", "over", "from", "now", "please"]);
+    const tokenLooksLikeJobId = explicitJobTokens.some((token) =>
+      !genericTransferWords.has(token.toLowerCase()));
+    const promptNamesUnknownJob = named.length === 0 && (namesKnownJob || tokenLooksLikeJobId);
     const candidates = named.length > 0 ? named : (promptNamesUnknownJob ? [] : transferable);
     if (candidates.length !== 1) {
       emit("CRX Factory recorded no custody transfer because the request did not identify exactly one transferable job. Name the job shown on the Factory Board and ask to move it to this chat.");
     }
     const job = candidates[0];
+    prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
     appendFactoryEvent(paths, {
       type: "job-session-transferred",
       jobId: job.id,
@@ -177,7 +203,7 @@ async function main() {
         ownerReply: prompt.slice(0, 500),
         priorStage: job.stage,
       },
-    }, { expectedLastEventHash: snapshot.lastEventHash });
+    }, ownerDecisionCheckpoint(snapshot, job));
     emit(job.stage === "awaiting-morning-review"
       ? `CRX Factory moved ${job.id}'s pending morning decision to this chat at Mason's explicit request. Revalidate proof and present the canonical morning question here; no build custody transferred.`
       : `CRX Factory moved ${job.id} to this chat at Mason's explicit request and revoked any prior ticket approval. Re-present the canonical ticket question here before work starts.`);
@@ -193,6 +219,9 @@ async function main() {
   }
   if (requestedHold) {
     if (!sessionId) emit("CRX Factory could not bind this hold request to a chat session, so it changed nothing. Re-state the request in this chat.");
+    let controlSnapshot = null;
+    try { controlSnapshot = loadFactorySnapshot(paths); } catch { /* The emergency hold path must remain available during ledger failure. */ }
+    prepareFactoryManagedSession(paths, { snapshot: controlSnapshot, sessionId, actorTool });
     try {
       rejectSecretBearingText(prompt, "Factory hold request");
     } catch {
@@ -245,6 +274,7 @@ async function main() {
     if (hasStartedFactoryJob) {
       emit("CRX Factory did not clear governance because this chat already has a ticket or lane. Reject the pending ticket or park the job in chat instead.");
     }
+    prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
     appendFactoryEvent(paths, {
       type: "factory-intent-cleared",
       jobId: null,
@@ -255,7 +285,7 @@ async function main() {
         reason: prompt.slice(0, 500),
         ownerReply: prompt.slice(0, 500),
       },
-    }, { expectedLastEventHash: snapshot.lastEventHash });
+    }, ownerDecisionCheckpoint(snapshot));
     emit("CRX Factory recorded Mason's request to use the normal guarded workflow in this chat. No factory ticket or lane was started.");
   }
 
@@ -311,6 +341,11 @@ async function main() {
     }
     let acceptedRepository;
     if (disposition === "approve") {
+      const landingJob = snapshot.jobs.find((candidate) =>
+        candidate.id !== job.id && candidate.stage === "approved-to-land");
+      if (landingJob) {
+        emit(`CRX Factory recorded no morning acceptance because ${landingJob.id} is already approved to land. Land or park that job before accepting another result.`);
+      }
       try {
         acceptedRepository = repositoryContentFingerprint(projectDir);
         validateCurrentHarnessEvidence(job, projectDir, {
@@ -326,6 +361,7 @@ async function main() {
       }
     }
     const nextStage = disposition === "approve" ? "approved-to-land" : "parked";
+    prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
     appendFactoryEvent(paths, {
       type: "job-stage",
       jobId: job.id,
@@ -346,7 +382,7 @@ async function main() {
           acceptedRepositoryFileCount: acceptedRepository.repositoryFileCount,
         } : {}),
       },
-    }, { expectedLastEventHash: snapshot.lastEventHash });
+    }, ownerDecisionCheckpoint(snapshot, job));
     emit(disposition === "approve"
       ? `CRX Factory recorded Mason's morning acceptance for ${job.id}. The job is approved to enter the existing /ship landing gates; it is not yet live.`
       : `CRX Factory parked ${job.id} from Mason's morning response. Do not land it; revise only after a new approved ticket.`);
@@ -360,6 +396,7 @@ async function main() {
     emit("CRX Factory recorded no approval because origin/main moved after the ticket was presented. Re-check the plan against current main and re-present it.");
   }
 
+  prepareFactoryManagedSession(paths, { snapshot, sessionId, actorTool });
   const now = new Date();
   const common = {
     jobId: job.id,
@@ -378,7 +415,7 @@ async function main() {
         baseSha,
         expiresAt: new Date(now.getTime() + APPROVAL_TTL_MS).toISOString(),
       },
-    }, { expectedLastEventHash: snapshot.lastEventHash });
+    }, ownerDecisionCheckpoint(snapshot, job));
     emit(`CRX Factory recorded Mason's exact approval for ticket ${job.id}, bound to this chat, ticket hash, and origin/main. Start the lane only through: node scripts/factory.mjs lane start --job ${job.id} --session ${sessionId} --tool ${actorTool}`);
   }
 
@@ -391,7 +428,7 @@ async function main() {
       ownerReply: prompt,
       baseSha,
     },
-  }, { expectedLastEventHash: snapshot.lastEventHash });
+  }, ownerDecisionCheckpoint(snapshot, job));
   emit(disposition === "reject"
     ? `CRX Factory recorded Mason's rejection for ticket ${job.id}. Do not start the lane.`
     : `CRX Factory recorded a revision request for ticket ${job.id}. Update the ticket, create a new hash, and re-present it before any build work.`);
