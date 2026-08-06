@@ -1495,6 +1495,34 @@ assert.equal(pushDestinationToken("git push"), null);
       assert.equal(result.decision, "deny", "an inherited pushDefault override is denied");
       assert.match(result.reason, /remote\.pushDefault/, "the denial names the answer that changed");
     }
+    {
+      // 2026-08-06, the fourth over-refusal of this shape. `remote.*.push` is read
+      // repository-WIDE by regexp, but git consults only the remote the push
+      // resolves to, so an inherited refspec for a remote this push never touches
+      // used to diverge and deny. Two failures stacked here: the comparison was
+      // unscoped, and `--get-regexp` exits 1 when nothing matches — so once the
+      // ambient side was scoped down to nothing, one side read `err:1` and the
+      // other an empty match, which is absence on both sides, not a difference.
+      git(["remote", "add", "archive", path.join(tmp, "archive.git")], work);
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.archive.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/archive",
+      });
+      assert.equal(result.decision, "allow", "an inherited refspec for a remote this push never consults is allowed");
+    }
+    {
+      // The other side of that scoping: the SAME override on the remote the push
+      // actually selects moves where this push lands, and must still die. This is
+      // what keeps the fix above from being widened into a fail-open.
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+      });
+      assert.equal(result.decision, "deny", "an inherited refspec on the targeted remote is still denied");
+      assert.match(result.reason, /remote\.\*\.push/, "the denial names the answer that changed");
+    }
     assert.equal(
       runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,
       "allow",

@@ -2,6 +2,33 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-06 — Inherited push refspecs scoped to the remote each push selects — BRANCH
+
+Codex finding on `db6b683d` (PR #313), reproduced against the shipped guard
+before fixing — the **fourth** over-refusal of this shape on this branch, and the
+one the mirror-classifier fix below did not reach.
+
+`remote.*.push` and `remote.*.mirror` are read repository-wide by regexp, but git
+consults only the remote a given push resolves to. Comparing the whole set denied
+an ordinary feature-branch push merely because an inherited `GIT_CONFIG*`
+override added `remote.archive.push` for a remote that push never touches.
+
+The answer is now scoped rather than the git command, so the lookup itself is
+unchanged, a command pushing to several remotes still compares every remote it
+selects, and a push whose remote cannot be resolved keeps the full text — an
+unresolved remote must never narrow what is compared.
+
+Scoping alone still denied, for a second and independent reason: `--get-regexp`
+exits 1 when no key matches, and the guard recorded every non-zero exit as an
+error so a failure on one side only would stay visible. Once the ambient side was
+scoped down to nothing, one side read `err:1` and the other an empty match —
+absence on both sides, counted as a divergence. That exit now maps into the same
+space as an empty match; any other status stays a real, fail-closed error.
+
+Both halves are pinned end-to-end against the hook in `codex-push-lib.test.mjs`:
+the unrelated remote is allowed, and the same override on the *targeted* remote
+still denies, which is what keeps the fix from widening into a fail-open.
+
 ## 2026-08-06 — Inherited-override proof scoped to the repos each push runs in — BRANCH
 
 Codex finding on `6ca2b264` (PR #313), reproduced against the shipped guard

@@ -127,6 +127,55 @@ function gitIn(args, cwd, { keepConfigOverrides = false } = {}) {
 }
 const git = (args, cwd) => gitIn(args, cwd);
 
+// Which remote will a given push actually use? Git's own resolution order, in one
+// place because two separate checks need it: the inherited-override proof below
+// (to compare only the per-remote settings this push consults) and the per-remote
+// transport/mirror classifiers further down (to deny only on the remote it
+// targets). They disagreed for one revision, which is how the same over-refusal
+// reached the second call site after being fixed at the first (Codex, 2026-08-06).
+//
+// Returns `{ remote: null }` when resolution fails — every caller then falls back
+// to full breadth rather than trusting a name it could not compute. `rawUrl` means
+// the destination is a literal URL, which consults no `remote.<name>.*` at all.
+function resolvePushRemote(pushCmd, repoDir, branch) {
+  try {
+    const destinationToken = pushDestinationToken(pushCmd);
+    // Ask git which remotes EXIST rather than inferring from the token's shape.
+    // A configured remote name may legally contain `/` — `team/origin` is a name
+    // git accepts and resolves — and the URL heuristic reads that as a raw URL.
+    // That mattered because "raw URL" means "no `remote.<name>.*` applies", so
+    // `remote.team/origin.mirror=true` skipped every per-remote check and the
+    // guard ALLOWED a mirror push carrying main (Codex, 2026-08-06, reproduced
+    // before fixing). An existing remote therefore wins over the shape test; the
+    // heuristic only decides tokens that are not remotes at all.
+    //
+    // Read across both environments for the same reason as the config reads: an
+    // inherited GIT_CONFIG* can define a remote the scrubbed read cannot see, and
+    // recognising more remotes here can only make more checks apply.
+    const configuredRemotes = [
+      gitIn(["remote"], repoDir, { keepConfigOverrides: false }),
+      gitIn(["remote"], repoDir, { keepConfigOverrides: true }),
+    ].join("\n").split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+    if (destinationToken && configuredRemotes.includes(destinationToken)) {
+      return { remote: destinationToken, rawUrl: false };
+    }
+    if (destinationToken && destinationLooksLikeUrl(destinationToken)) {
+      return { remote: null, rawUrl: true };
+    }
+    const config = (key) => { try { return git(["config", "--get", key], repoDir); } catch { return ""; } };
+    return {
+      remote: destinationToken
+        || config(`branch.${branch}.pushRemote`)
+        || config("remote.pushDefault")
+        || config(`branch.${branch}.remote`)
+        || "origin",
+      rawUrl: false,
+    };
+  } catch (_error) {
+    return { remote: null, rawUrl: false }; // fail CLOSED — every remote stays in scope
+  }
+}
+
 // The command text is only half the story. A GIT_CONFIG* variable set by an
 // EARLIER command is still live when this push runs, and the push command itself
 // then looks completely ordinary. This hook inherits the same environment the
@@ -178,7 +227,30 @@ if (inheritedOverrides.length > 0) {
   // for why neither half alone is safe. The other lookups are config VALUES (a
   // remote name, a refspec), which a rewrite does not re-spell, so they stay
   // literal.
-  const normalizeAnswer = (name, text) => {
+  // `remote.*.push` and `remote.*.mirror` are read repository-WIDE by regexp, but
+  // git consults only the remote a given push resolves to. Comparing the whole
+  // set denied `push origin HEAD:feature` merely because an inherited override
+  // added `remote.archive.push` for a remote that push never touches — the fourth
+  // over-refusal of this shape on this branch (Codex, 2026-08-06, reproduced
+  // before fixing), and the same one already fixed for the mirror classifier
+  // below, which this earlier comparison had not inherited.
+  //
+  // Scoping the ANSWER rather than the git command keeps the lookup itself
+  // unchanged and handles a command that pushes to several remotes. `null` in the
+  // scope set means a push whose remote could not be resolved, and that keeps the
+  // full text — an unresolved remote must not narrow what is compared.
+  const scopeRemoteAnswer = (text, scope) => {
+    if (scope === null) return text;
+    return String(text).split(/\r?\n/).filter((line) => {
+      const key = /^remote\.(.*)\.(?:push|mirror)\b/.exec(line.trim());
+      if (!key) return true; // not a per-remote line — never filtered away
+      return scope.has(key[1].toLowerCase());
+    }).join("\n");
+  };
+  const normalizeAnswer = (name, text, scope) => {
+    if (name === "remote.*.push" || name === "remote.*.mirror") {
+      return scopeRemoteAnswer(text, scope);
+    }
     if (name === "remotes") return pushDestinationDecisions(text);
     // A literal URL destination resolves to one URL and gets the same pair. It
     // used to get the classification ALONE, which was the identical fail-open
@@ -191,12 +263,23 @@ if (inheritedOverrides.length > 0) {
     }
     return text;
   };
-  const answerFor = (name, args, cwd, keepConfigOverrides) => {
+  const answerFor = (name, args, cwd, keepConfigOverrides, scope) => {
     // `config --get` exits 1 when a key is unset, which is the ordinary case and
     // must read as "absent", not "failed" — but it has to be DISTINGUISHABLE from
     // a real failure, because an error on one side only is itself a divergence.
-    try { return `ok:${normalizeAnswer(name, gitIn(args, cwd, { keepConfigOverrides }))}`; }
-    catch (error) { return `err:${error?.status ?? error?.message ?? "failed"}`; }
+    try { return `ok:${normalizeAnswer(name, gitIn(args, cwd, { keepConfigOverrides }), scope)}`; }
+    catch (error) {
+      // `--get-regexp` exits 1 for "no keys matched", which is absence, not
+      // failure — and once the per-remote answers are scoped (above), a side that
+      // matched only out-of-scope keys normalises to the empty string while the
+      // other side exited 1. Recording that as an error made the two incomparable
+      // and denied on a difference that isn't one. Map it into the same space as
+      // an empty match; any other status stays a real, still-fail-closed error.
+      if (error?.status === 1 && args.includes("--get-regexp")) {
+        return `ok:${normalizeAnswer(name, "", scope)}`;
+      }
+      return `err:${error?.status ?? error?.message ?? "failed"}`;
+    }
   };
   for (const repoDir of overrideRepoDirs) {
     let overrideBranch = "";
@@ -205,11 +288,22 @@ if (inheritedOverrides.length > 0) {
     } catch (error) {
       deny(`CODEX GATE: this shell has GIT_CONFIG* variables set (${inheritedOverrides.join(", ")}) and the guard could not read ${repoDir} to prove they do not redirect the push. ${error?.message || error}`);
     }
+    // The remotes the pushes running in THIS repository actually consult. A push
+    // whose remote cannot be resolved collapses the whole set to `null` (compare
+    // everything); a raw-URL destination contributes no remote, because git reads
+    // no `remote.<name>.*` for it.
+    let remoteScope = new Set();
+    for (const segment of shellSegments(cmd).map((s) => s.trim()).filter((s) => isGitPush(s))) {
+      if (gitPushCwd(segment, projectDir) !== repoDir) continue;
+      const resolved = resolvePushRemote(segment, repoDir, overrideBranch);
+      if (resolved.remote === null && !resolved.rawUrl) { remoteScope = null; break; }
+      if (resolved.remote !== null) remoteScope.add(resolved.remote.toLowerCase());
+    }
     const scrubbed = {};
     const ambient = {};
     for (const [name, args] of pushDestinationLookupArgs(overrideBranch)) {
-      scrubbed[name] = answerFor(name, args, repoDir, false);
-      ambient[name] = answerFor(name, args, repoDir, true);
+      scrubbed[name] = answerFor(name, args, repoDir, false, remoteScope);
+      ambient[name] = answerFor(name, args, repoDir, true, remoteScope);
     }
     // NOT compared here: the URL-rewrite table and the settings naming a program
     // to carry the objects. Those two feed classifiers whose only power is to
@@ -447,43 +541,10 @@ for (const pushCmd of pushCommands) {
   // Resolution order is git's own, and matches the destination lookup further
   // down. `null` means "could not resolve", and every check below then falls back
   // to full breadth rather than trusting a name it failed to compute.
-  let targetRemote = null;
-  let targetIsRawUrl = false;
-  try {
-    const destinationToken = pushDestinationToken(pushCmd);
-    // Ask git which remotes EXIST rather than inferring from the token's shape.
-    // A configured remote name may legally contain `/` — `team/origin` is a name
-    // git accepts and resolves — and the URL heuristic reads that as a raw URL.
-    // That mattered because "raw URL" means "no `remote.<name>.*` applies", so
-    // `remote.team/origin.mirror=true` skipped every per-remote check and the
-    // guard ALLOWED a mirror push carrying main (Codex, 2026-08-06, reproduced
-    // before fixing). An existing remote therefore wins over the shape test; the
-    // heuristic only decides tokens that are not remotes at all.
-    //
-    // Read across both environments for the same reason as the config above: an
-    // inherited GIT_CONFIG* can define a remote the scrubbed read cannot see, and
-    // recognising more remotes here can only make the checks below apply.
-    const configuredRemotes = [
-      gitIn(["remote"], pushRepoDir, { keepConfigOverrides: false }),
-      gitIn(["remote"], pushRepoDir, { keepConfigOverrides: true }),
-    ].join("\n").split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
-    if (destinationToken && configuredRemotes.includes(destinationToken)) {
-      targetRemote = destinationToken;
-    } else if (destinationToken && destinationLooksLikeUrl(destinationToken)) {
-      // A raw URL is not a configured remote, so no `remote.<name>.*` applies to
-      // it. It is judged by the destination checks below, not by these.
-      targetIsRawUrl = true;
-    } else {
-      const config = (key) => { try { return git(["config", "--get", key], pushRepoDir); } catch { return ""; } };
-      targetRemote = destinationToken
-        || config(`branch.${branch}.pushRemote`)
-        || config("remote.pushDefault")
-        || config(`branch.${branch}.remote`)
-        || "origin";
-    }
-  } catch (_error) {
-    targetRemote = null; // fail CLOSED — unresolved means every remote stays in scope
-  }
+  // Shared with the inherited-override proof above — see `resolvePushRemote`.
+  // Keeping one implementation is the point: these two call sites drifted once,
+  // and the over-refusal fixed here survived at the other one for a full revision.
+  const { remote: targetRemote, rawUrl: targetIsRawUrl } = resolvePushRemote(pushCmd, pushRepoDir, branch);
   // Compared case-INsensitively even though a subsection name is case-sensitive
   // to git. The mismatch can only make this deny more (a remote differing from
   // the configured one by case alone is treated as in scope), which is the safe
