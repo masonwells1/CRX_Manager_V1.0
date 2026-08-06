@@ -232,7 +232,7 @@ describe('BulkOrderImport', () => {
     expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
   });
 
-  it('preserves an explicit zero cost instead of replacing it with Product cost', async () => {
+  it('does not let an explicit zero override the authoritative Product cost', async () => {
     const { container } = render(<BulkOrderImport {...defaultProps} />);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit,unit_cost',
@@ -250,9 +250,11 @@ describe('BulkOrderImport', () => {
 
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
     const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
-      p_items: Array<{ unit_cost: number }>;
+      p_items: Array<{ unit_cost?: number }>;
+      p_total_cost: number;
     };
-    expect(args.p_items[0].unit_cost).toBe(0);
+    expect(args.p_items[0]).not.toHaveProperty('unit_cost');
+    expect(args.p_total_cost).toBe(14);
   });
 
   it('rejects a terminal imported status before bulk_import_order', async () => {

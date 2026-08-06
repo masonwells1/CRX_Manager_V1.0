@@ -1153,7 +1153,7 @@ interface BulkImportOrderParams {
     product_id: string;
     product_name: string;
     price_per_unit: number;
-    unit_cost: number;
+    unit_cost?: number;
     total_units_needed: number;
     unit_size?: string;
     notes?: string;
@@ -1304,6 +1304,10 @@ describe('RPC contract: bulk_import_order', () => {
     expect(body).toContain('round(v_qty * v_price_per_unit, 2)');
     expect(body).toContain("NULLIF(btrim(v_item->>'unit_cost'), '')::numeric");
     expect(body).toContain('v_product.current_cost');
+    expect(body).toContain('v_supplied_cost :=');
+    expect(body).toContain('v_cost_per_unit := v_product.current_cost');
+    expect(body).not.toContain('v_cost_per_unit := COALESCE');
+    expect(body).toContain("ITEM_INVALID: supplied unit_cost must be finite and >= 0");
     expect(body).toContain("RAISE EXCEPTION 'ITEM_INVALID: quantity, price, cost, and sort order must be valid numbers'");
     expect(body).toContain('v_normalized_items := v_normalized_items || jsonb_build_array');
     expect(body).toContain('jsonb_array_elements(v_normalized_items)');

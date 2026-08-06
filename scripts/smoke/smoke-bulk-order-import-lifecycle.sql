@@ -2,14 +2,16 @@
 -- smoke-bulk-order-import-lifecycle.sql
 -- Chain for 20260805211951_harden_bulk_order_import_lifecycle.sql and
 -- 20260805220757_reject_nonfinite_bulk_import_values.sql and
--- 20260805224819_snapshot_bulk_import_product_cost.sql.
+-- 20260805224819_snapshot_bulk_import_product_cost.sql and
+-- 20260806000752_authorize_bulk_import_product_cost.sql.
 --
 -- Proves that a bulk import cannot forge a partial/terminal lifecycle state and
 -- that a confirmed import atomically creates its order lines, inventory booking,
 -- booked ledger row, commission, activity event, and idempotency receipt. It
 -- also proves NaN/+Infinity/-Infinity are rejected for every imported numeric
 -- field without residue, sub-cent prices are normalized, omitted cost snapshots
--- the Product cost, and malformed cost fails without residue.
+-- the Product cost, malformed cost fails without residue, and an active sales
+-- rep cannot inflate commission profit with an explicit zero/lower cost.
 -- The terminal SMOKE_PASS_ROLLBACK exception aborts every synthetic write.
 -- ============================================================================
 DO $$
@@ -33,6 +35,9 @@ DECLARE
   v_total_cost numeric;
   v_total_profit numeric;
   v_total_margin numeric;
+  v_expected_cost numeric;
+  v_expected_profit numeric;
+  v_expected_margin numeric;
   v_item_count integer;
   v_quantity_delivered numeric;
   v_quantity_remaining numeric;
@@ -56,13 +61,13 @@ BEGIN
   SELECT id, full_name
     INTO v_actor, v_actor_name
   FROM public.profiles
-  WHERE role IN ('admin', 'sales_rep')
+  WHERE role = 'sales_rep'
     AND is_active = true
-  ORDER BY CASE role WHEN 'sales_rep' THEN 0 ELSE 1 END, id
+  ORDER BY id
   LIMIT 1;
 
   IF v_actor IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_SETUP: no active admin or sales_rep profile';
+    RAISE EXCEPTION 'SMOKE_SETUP: no active sales_rep profile';
   END IF;
 
   INSERT INTO public.customers (
@@ -121,11 +126,16 @@ BEGIN
     'product_id', v_product_id,
     'product_name', v_product_name,
     'price_per_unit', 10.004,
-    'unit_cost', 6.004,
+    -- Deliberately hostile caller cost: Product current_cost must win.
+    'unit_cost', 0,
     'total_units_needed', 5,
     'unit_size', v_product_unit_size,
     'sort_order', 1
   ));
+
+  v_expected_cost := round(5 * round(v_product_cost, 2), 2);
+  v_expected_profit := 50 - v_expected_cost;
+  v_expected_margin := (v_expected_profit / 50) * 100;
 
   PERFORM set_config(
     'request.jwt.claims',
@@ -378,8 +388,8 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: malformed-cost import wrote idempotency receipt';
   END IF;
 
-  -- Deliberately pass false totals and sub-cent item prices. The RPC must
-  -- normalize unit values to 10.00/6.00 and recompute 50/30/20/40.
+  -- Deliberately pass false totals, a sub-cent item price, and caller cost 0.
+  -- The RPC must normalize price, ignore caller cost, and derive Product cost.
   SELECT public.bulk_import_order(
     p_order_number := v_order_number,
     p_customer_id := v_customer_id,
@@ -406,9 +416,9 @@ BEGIN
 
   IF v_status <> 'confirmed'
      OR v_total_price <> 50
-     OR v_total_cost <> 30
-     OR v_total_profit <> 20
-     OR v_total_margin <> 40 THEN
+     OR v_total_cost <> v_expected_cost
+     OR v_total_profit <> v_expected_profit
+     OR v_total_margin <> v_expected_margin THEN
     RAISE EXCEPTION
       'SMOKE_FAIL: order state/totals mismatch status=% totals=%/%/%/%',
       v_status, v_total_price, v_total_cost, v_total_profit, v_total_margin;
@@ -425,8 +435,8 @@ BEGIN
      OR v_quantity_delivered <> 0
      OR v_quantity_remaining <> 5
      OR v_item_total <> 50
-     OR v_item_profit <> 20
-     OR v_item_margin <> 40 THEN
+     OR v_item_profit <> v_expected_profit
+     OR v_item_margin <> ((10 - round(v_product_cost, 2)) / 10) * 100 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: imported line bookkeeping mismatch';
   END IF;
 
@@ -453,7 +463,8 @@ BEGIN
 
   SELECT count(*) INTO v_count
   FROM public.commissions
-  WHERE order_id = v_order_id;
+  WHERE order_id = v_order_id
+    AND order_profit = v_expected_profit;
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: expected one imported-order commission, got %', v_count;
   END IF;
@@ -472,9 +483,9 @@ BEGIN
     p_customer_id := v_customer_id,
     p_status := 'confirmed',
     p_total_price := 50,
-    p_total_cost := 30,
-    p_total_profit := 20,
-    p_total_margin_pct := 40,
+    p_total_cost := v_expected_cost,
+    p_total_profit := v_expected_profit,
+    p_total_margin_pct := v_expected_margin,
     p_order_date := CURRENT_DATE,
     p_items := v_items,
     p_idempotency_key := v_key

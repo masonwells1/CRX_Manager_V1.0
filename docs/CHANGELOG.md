@@ -82,7 +82,7 @@ normalizes legacy dollar inputs to cents before any write. The expanded
 rollback smoke exercises all nine field/value combinations, sub-cent
 normalization, and zero residue across orders, inventory, commissions,
 activity, and idempotency. Final live function hash is
-`4d2846e11bd8b1e0753c667c2d194abf`; schema high-water is `20260805224819`.
+`6002800ed43b5f574a2e162f974014ea`; schema high-water is `20260806000752`.
 
 A second exact-commit adversarial review found that an omitted optional
 `unit_cost` was still being submitted as zero just as imports began creating
@@ -97,6 +97,15 @@ PostgreSQL takes the authoritative transactional snapshot. The expanded rollback
 malformed-cost rejection, exact commission basis, and zero residue. Both
 content-bound Sol/high migration reviews, all 21 invariant sweeps, and the live
 catalog/grant checks passed after the apply.
+
+The next exact-SHA review found that accepting an explicit imported cost still
+let a sales rep lower commission cost basis and inflate pending commission
+liability. Forward-only live migration
+`20260806000752_authorize_bulk_import_product_cost` now validates supplied cost
+syntax but always snapshots the active Product's `current_cost` for order-line,
+profit, and commission math. The browser sends no caller cost and previews the
+same Product value. A rollback-only active-sales-rep attack passes an explicit
+zero and proves Product cost, profit, and commission basis win with zero residue.
 
 ## 2026-08-05 — Factory ledger failure containment
 

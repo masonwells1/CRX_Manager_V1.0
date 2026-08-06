@@ -445,9 +445,9 @@ export default function BulkOrderImport({
           continue;
         }
 
-        const unresolvedCosts = resolvedItems.filter(({ item, resolution }) => {
+        const unresolvedCosts = resolvedItems.filter(({ resolution }) => {
           if (resolution.status !== 'unique') return false;
-          const cost = item.unit_cost ?? resolution.product.current_cost;
+          const cost = resolution.product.current_cost;
           return cost == null || !Number.isFinite(cost) || cost < 0;
         });
         if (unresolvedCosts.length > 0) {
@@ -462,18 +462,14 @@ export default function BulkOrderImport({
         }
 
         // The entire order is rejected above unless every Product resolves to
-        // one active immutable UUID and a finite cost snapshot. Never send
-        // null, a sibling guess, or a silent zero for missing cost.
+        // one active immutable UUID and a finite Product cost. Never send
+        // caller cost: PostgreSQL snapshots current_cost transactionally.
         const itemsPayload = resolvedItems.map(({ item, resolution }, idx) => {
           const product = resolution.status === 'unique' ? resolution.product : null;
           return {
               product_id: product!.id,
               product_name: item.product_name,
               price_per_unit: item.price_per_unit,
-              // Preserve absence so PostgreSQL snapshots current_cost inside
-              // the authoritative import transaction. Explicit zero remains
-              // an intentional caller override.
-              ...(item.unit_cost !== undefined ? { unit_cost: item.unit_cost } : {}),
               total_units_needed: item.quantity,
               unit_size: item.unit_size,
               notes: item.notes,
@@ -487,7 +483,7 @@ export default function BulkOrderImport({
         );
         const totalCost = resolvedItems.reduce((sum, { item, resolution }) => {
           if (resolution.status !== 'unique') return sum; // Rejected above.
-          return sum + item.quantity * (item.unit_cost ?? resolution.product.current_cost!);
+          return sum + item.quantity * resolution.product.current_cost!;
         }, 0);
         const totalProfit = totalPrice - totalCost;
         const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
@@ -561,7 +557,7 @@ export default function BulkOrderImport({
                   <p className="font-medium text-xs">CSV Files:</p>
                   <ul className="list-disc list-inside space-y-1 text-xs ml-2">
                     <li>Required: order_number, customer_name, product_name, quantity, price_per_unit</li>
-                    <li>Optional: order_date, unit_cost, unit_size, notes (missing cost uses the Product's current cost)</li>
+                    <li>Optional: order_date, unit_cost, unit_size, notes (Product current cost is always authoritative)</li>
                     <li>Imports always create confirmed orders; fulfillment and cancellation use the normal workflow</li>
                   </ul>
                 </div>
