@@ -1150,10 +1150,10 @@ interface BulkImportOrderParams {
   p_total_margin_pct: number;
   p_order_date: string;  // ISO date
   p_items: Array<{
-    product_id: string | null;
+    product_id: string;
     product_name: string;
     price_per_unit: number;
-    unit_cost: number;
+    unit_cost?: number;
     total_units_needed: number;
     unit_size?: string;
     notes?: string;
@@ -1263,7 +1263,7 @@ describe('RPC contract: bulk_import_order', () => {
     expect(params.p_items[0].product_id).toBeTruthy();
   });
 
-  it('accepts items with null product_id (unknown product fallback)', () => {
+  it('requires the resolved product UUID used for inventory booking', () => {
     const params = assertShape<BulkImportOrderParams>({
       p_order_number: 'IMP-002',
       p_customer_id: 'cust-uuid',
@@ -1275,8 +1275,8 @@ describe('RPC contract: bulk_import_order', () => {
       p_order_date: '2026-05-15',
       p_items: [
         {
-          product_id: null,
-          product_name: 'Unknown product',
+          product_id: 'prod-uuid',
+          product_name: 'Resolved product',
           price_per_unit: 0,
           unit_cost: 0,
           total_units_needed: 1,
@@ -1284,7 +1284,49 @@ describe('RPC contract: bulk_import_order', () => {
         },
       ],
     });
-    expect(params.p_items[0].product_id).toBeNull();
+    expect(params.p_items[0].product_id).toBe('prod-uuid');
+  });
+
+  it('enforces canonical lifecycle side effects in the final Section 4 migration body', () => {
+    const body = getMigrationFiles().find(
+      ({ name }) => name === '20260806023048_surface_bulk_import_inventory_warnings.sql',
+    )?.content ?? null;
+    expect(body).not.toBeNull();
+    expect(body).toContain("INVALID_IMPORT_STATUS: only confirmed orders can be imported");
+    expect(body).toMatch(/'confirmed',\s+v_total_price/);
+    expect(body).toContain('quantity_prebooked = public.inventory.quantity_prebooked + EXCLUDED.quantity_prebooked');
+    expect(body).toContain("'booked',");
+    expect(body).toContain('public._insert_commissions_for_order(');
+    expect(body).toContain('INSERT INTO public.activity_feed');
+    expect(body).toContain("v_qty::text IN ('NaN', 'Infinity', '-Infinity')");
+    expect(body).toContain("v_price_per_unit::text IN ('NaN', 'Infinity', '-Infinity')");
+    expect(body).toContain("v_cost_per_unit::text IN ('NaN', 'Infinity', '-Infinity')");
+    expect(body).toContain('v_price_per_unit := round(v_price_per_unit, 2)');
+    expect(body).toContain('v_cost_per_unit := round(v_cost_per_unit, 2)');
+    expect(body).toContain('round(v_qty * v_price_per_unit, 2)');
+    expect(body).toContain("NULLIF(btrim(v_item->>'unit_cost'), '')::numeric");
+    expect(body).toContain('v_product.current_cost');
+    expect(body).toContain('v_supplied_cost :=');
+    expect(body).toContain('v_cost_per_unit := v_cost_cents::numeric / 100');
+    expect(body).not.toContain('v_cost_per_unit := COALESCE');
+    expect(body).toContain("ITEM_INVALID: supplied unit_cost must be finite and >= 0");
+    expect(body).toContain("RAISE EXCEPTION 'ITEM_INVALID: quantity, price, cost, and sort order must be valid numbers'");
+    expect(body).toContain('v_normalized_items := v_normalized_items || jsonb_build_array');
+    expect(body).toContain('jsonb_array_elements(v_normalized_items)');
+    expect(body).toContain("hashtextextended('crx:idempotency:' || p_idempotency_key, 0)");
+    expect(body).toContain('request_actor_id IS DISTINCT FROM v_actor');
+    expect(body).toContain('request_fingerprint IS DISTINCT FROM v_request_fingerprint');
+    expect(body).toContain("RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH'");
+    expect(body).toMatch(/SELECT total_price, total_cost, total_profit, total_margin_pct[\s\S]*FROM public\.orders/);
+    expect(body).toContain('SET profit = profit + (v_total_profit - v_line_profit_sum)');
+    expect(body).toMatch(/public\._insert_commissions_for_order\([\s\S]*v_total_profit/);
+    expect(body).toContain('FOR SHARE OF p');
+    expect(body).toContain('v_cost_cents := round(v_product.current_cost * 100)::bigint');
+    expect(body).toContain("'cost_at_time_cents', v_cost_cents");
+    expect(body).toMatch(/cost_per_unit,\s+cost_at_time_cents,\s+total_units_needed/);
+    expect(body).toContain('round(v_qty * v_price_per_unit, 2) - round(v_qty * v_cost_per_unit, 2)');
+    expect(body).toContain('jsonb_to_recordset(v_normalized_items)');
+    expect(body).toContain("'warnings', to_jsonb(v_warnings)");
   });
 });
 

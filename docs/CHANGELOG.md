@@ -785,7 +785,46 @@ and resolved rep name, and surfaces a count of active customers with no rep.
 
 No migrations, no live writes, no schema changes.
 
-## 2026-08-05 — Factory concurrency and orphan recovery — PREPARED
+## 2026-08-06 — Factory durability and recovery routing — PREPARED
+
+The factory durability follow-up adds a stable, SHA-256-manifested snapshot of
+the shared ledger, tickets, evidence, owner receipts, emergency-hold history,
+and recovery records to the workstation's nightly Personal DR flow. Short-lived
+CLI permits, session latches, harness locks, and coordination locks are excluded,
+so a restored machine cannot revive authority held by a dead process. The tracked
+runner stages only under the operating-system temporary directory; the installed
+task replays the restored ledger, uploads the archive through the client-side
+encrypted Backblaze remote, downloads it through that same encryption layer,
+compares SHA-256 values, and clears plaintext staging on success or failure.
+Stable damaged or torn ledger bytes are preserved off-site with a distinct
+`replay_ok: false` manifest and failing task result instead of being discarded or
+misreported as clean. The governed restore runbook verifies the decrypted archive,
+keeps transient dead-process authority out of the restore, and requires Mason's
+current approval before replacing any existing shared Factory state.
+The append-only ledger's 75% size warning is now a distinct scheduled-task
+failure after a verified upload, preventing a quiet transition from warning to
+the bounded backup limit.
+A hard Factory snapshot failure no longer cancels the rest of the Personal DR
+archive: secrets, configuration, and agent memory still upload and verify before
+the task alerts and fails for the missing Factory component. The locked backup
+runtime has an explicit refresh-on-tool-change rule and logs its deployed SHA.
+
+Factory status and Board projections now show each job's governed working folder.
+Wrong-worktree denials give a stage-valid route: transferable waiting/parked jobs
+name the exact chat takeover flow, while active build/review/landing jobs route
+back to their existing Factory chat and never promise an illegal transfer.
+Review remediation makes takeover requests fail closed for unknown alphabetic,
+prefix-position, and quoted ticket IDs instead of falling back to an unrelated
+lone job. Backup verification now returns a normal invalid-manifest result for
+case-variant ledger entries, preserves the primary capture error if cleanup also
+fails, and covers manifest tampering directly. The tracked runner also disables
+PowerShell 7's native-command exception conversion so intentional degraded and
+capacity exit codes remain available to the encrypted off-site upload workflow.
+
+This entry describes the reviewed follow-up branch; it does not claim merge or
+production deployment.
+
+## 2026-08-05 — Factory concurrency and orphan recovery — LIVE
 
 The governed software factory now admits up to three active lanes instead of
 globally serializing all work behind one job. Only `building`, `verifying`, and
@@ -836,8 +875,98 @@ The shared classifier now recognizes remote `push`, `apply`, `update`, `append`,
 operations explicitly, and unknown non-read MCP operations fail closed. Direct classifier tables
 and installed-hook regressions cover GitHub `push_files` without admitting it as a local edit;
 secret-scanning regressions cover both direct and nested snake_case `new_text` payloads.
-This entry records the reviewed release candidate; it does not claim a merge or
-production deployment.
+Merged through PR #319 at `1cdeb2a41c13a080944c153ec1fbbbf4aae5e76e`.
+Production verification observed the alias-bound Vercel deployment `READY`, the
+canonical site returning HTTP 200, and the post-merge CI and CodeQL runs green.
+
+## 2026-08-05 — Bulk order import lifecycle parity — LIVE
+
+The Section 4 live-foundation refresh found that Bulk Order Import could label a
+completely undelivered order as partially fulfilled, fulfilled, or cancelled. It
+also bypassed the normal inventory reservation, booked inventory ledger,
+commission creation, and atomic order activity performed by canonical order
+creation.
+
+Live migration `20260805211951_harden_bulk_order_import_lifecycle` now creates
+confirmed imports only, validates active actors/customers/products, recomputes
+totals in PostgreSQL, and performs every required lifecycle side effect in the
+same transaction. The import UI rejects terminal statuses before calling the
+RPC, while PostgreSQL remains the authoritative backstop. Both content-bound
+Sol/high migration reviews, the full test/build suite, 21 live invariant sweeps,
+and pre/post-apply rollback smokes passed. No smoke fixtures remained, and the
+schema registry was refreshed to the new live high-water.
+
+The first exact-commit adversarial review then caught PostgreSQL's special
+`numeric` values: ordinary range checks do not reject `NaN` or positive
+`Infinity`. Follow-up live migration
+`20260805220757_reject_nonfinite_bulk_import_values` now rejects
+`NaN`/`Infinity`/`-Infinity` for imported quantities, prices, and costs and
+normalizes legacy dollar inputs to cents before any write. The expanded
+rollback smoke exercises all nine field/value combinations, sub-cent
+normalization, and zero residue across orders, inventory, commissions,
+activity, and idempotency. That migration's live function hash is
+`4c38bd47d81f7c5dec54533cb7d57bca`.
+
+A second exact-commit adversarial review found that an omitted optional
+`unit_cost` was still being submitted as zero just as imports began creating
+commissions, which could overstate order profit and commission liability.
+Forward-only live migration
+`20260805224819_snapshot_bulk_import_product_cost` now snapshots the active
+Product's `current_cost` when cost is absent, preserves an explicit zero,
+rejects malformed or unavailable cost, and uses one normalized item snapshot
+for order lines, totals, and commissions. The frontend validates the catalog
+cost for operator feedback but leaves omitted cost absent in the RPC payload so
+PostgreSQL takes the authoritative transactional snapshot. The expanded rollback smoke proved omitted-cost success,
+malformed-cost rejection, exact commission basis, and zero residue. Both
+content-bound Sol/high migration reviews, all 21 invariant sweeps, and the live
+catalog/grant checks passed after the apply.
+
+The next exact-SHA review found that accepting an explicit imported cost still
+let a sales rep lower commission cost basis and inflate pending commission
+liability. Forward-only live migration
+`20260806000752_authorize_bulk_import_product_cost` now validates supplied cost
+syntax but always snapshots the active Product's `current_cost` for order-line,
+profit, and commission math. The browser sends no caller cost and previews the
+same Product value. A rollback-only active-sales-rep attack passes an explicit
+zero and proves Product cost, profit, and commission basis win with zero residue.
+
+The final exact-SHA review then found two additional money-safety gaps: fractional
+multi-line imports could create commission liability from a stale per-line-rounded
+profit accumulator, and same-key retries were not bound to the original actor and
+payload. Forward-only live migration
+`20260806004644_bind_bulk_import_intent_and_profit` rereads the trigger-canonical
+order totals before commission creation, reconciles line-profit totals to the
+stored header, and stores a server-derived actor/payload fingerprint under an
+idempotency advisory lock. The strengthened rollback smoke proves a deliberately
+rounding-sensitive ten-line import, exact commission/header/line agreement,
+same-intent replay, changed-intent rejection, and zero residue. Both migration
+review charters and all 21 live invariant predicates passed.
+
+A later exact-SHA pass found that individual fractional lines could retain
+sub-cent profit and that the immutable-cost trigger could reread Product cost
+after a concurrent governed update. Forward-only live migration
+`20260806012423_lock_bulk_import_cost_snapshot` locks all requested Products in
+stable UUID order, derives one bigint-cent cost snapshot, explicitly writes the
+same `cost_at_time_cents`, and keeps every line profit whole-cent before assigning
+the aggregate remainder deterministically. Candidate and installed rollback
+smokes proved line-level cents, immutable snapshot equality, and zero residue;
+both migration reviewers returned CLEAN. The post-`20260806012423` end-state
+live function hash is `473152377f9e8f67db8cb0470a43a01f`; schema high-water is
+`20260806012423`.
+
+CodeRabbit's publication review then found that bulk imports reserved inventory
+under the approved warn-not-block policy but returned no Net Position warning,
+and that the browser's compatibility totals still used floating-point dollars.
+Forward-only live migration
+`20260806023048_surface_bulk_import_inventory_warnings` aggregates repeated
+Product lines, locks existing Main Warehouse inventory rows in stable order,
+returns canonical pre-reservation shortage warnings, and records them in order
+activity and idempotent results. The import UI displays the warnings and computes
+all compatibility totals in integer cents. Candidate and installed rollback
+smokes, both migration reviewers, focused 96-test coverage, all 21 invariant
+predicates, catalog/grant checks, and the genuine live registry refresh passed.
+The final live function hash is `b878d0927ad5b6fea5732cb317bce187`;
+schema high-water is `20260806023048`.
 
 ## 2026-08-05 — Factory ledger failure containment
 

@@ -64,6 +64,12 @@ export const FACTORY_WORKTREE_CUSTODY_STAGES = new Set([
   "approved-to-land",
   "parked",
 ]);
+export const FACTORY_TRANSFERABLE_STAGES = new Set([
+  "needs-ticket-ok",
+  "queued",
+  "parked",
+  "awaiting-morning-review",
+]);
 export const STALE_LOCK_MS = 5 * 60 * 1000;
 export const FACTORY_CLI_PERMIT_TTL_MS = 30 * 1000;
 export const FACTORY_HARNESS_ALLOWLIST = new Set([
@@ -93,6 +99,19 @@ export const FACTORY_GITHUB_REPOSITORY = "masonwells1/CRX_Manager_V1.0";
 export const FACTORY_PRODUCTION_URL = "https://croprxsolutions.app/";
 export const FACTORY_REVIEW_MODEL = CODEX_REVIEW_MODEL;
 export const FACTORY_REVIEW_EFFORT = CODEX_REVIEW_EFFORT;
+
+export function factoryWorktreeRecoveryRoute(job) {
+  const worktree = String(job?.worktree || "").trim().replace(/[\r\n]+/g, " ");
+  const jobId = String(job?.id || "").trim().replace(/[\r\n]+/g, " ");
+  if (!worktree || !jobId) return "";
+  if (FACTORY_TRANSFERABLE_STAGES.has(job.stage)) {
+    const nextStep = job.stage === "awaiting-morning-review"
+      ? "revalidate proof and present the canonical morning question there"
+      : "re-present the ticket after the transfer revokes the old approval";
+    return ` Working folder: ${worktree}. Open a new chat in that folder. If this job must move, ask Mason there to take over factory job ${jobId}; ${nextStep}.`;
+  }
+  return ` Working folder: ${worktree}. Return to the existing Factory chat for this ${job.stage} job; active build, review, and landing custody cannot be transferred from a new chat. If that chat is gone, stop and report the job ID, stage, and working folder to Mason for governed recovery.`;
+}
 export const BOARD_STAGES = new Set([
   "needs-ticket-ok",
   "queued",

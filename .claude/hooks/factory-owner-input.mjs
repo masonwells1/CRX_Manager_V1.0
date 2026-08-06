@@ -9,6 +9,7 @@ import {
   appendFactoryControlEvent,
   appendFactoryEvent,
   completeFactoryManagedSessionBackfill,
+  FACTORY_TRANSFERABLE_STAGES,
   loadFactorySnapshot,
   normalizeOwnerQuestion,
   pendingTicketForSession,
@@ -172,12 +173,20 @@ async function main() {
       emit("CRX Factory could not bind this custody-transfer request to a chat session, so it changed nothing.");
     }
     const snapshot = loadFactorySnapshot(paths);
-    const transferableStages = new Set(["needs-ticket-ok", "queued", "parked", "awaiting-morning-review"]);
     const transferable = snapshot.jobs.filter((job) =>
-      transferableStages.has(job.stage)
+      FACTORY_TRANSFERABLE_STAGES.has(job.stage)
       && job.sessionId !== sessionId);
     const named = transferable.filter((job) => mentionsExactJobId(prompt, job.id));
-    const promptNamesUnknownJob = /\b(?:job|ticket)-[A-Za-z0-9._-]+\b/i.test(prompt) && named.length === 0;
+    const tokensAfterJobWords = [...prompt.matchAll(/\b(?:factory\s+)?(?:job|ticket)(?:\s*[-:#]\s*|\s+)[\s"'([{<]*([A-Za-z0-9][A-Za-z0-9._:@+=,-]*)\b/gi)]
+      .map((match) => match[1]);
+    const tokensBeforeJobWords = [...prompt.matchAll(/\b([A-Za-z0-9][A-Za-z0-9._:@+=,-]*)[\s"')\]}>]*\s+(?:factory\s+)?(?:job|ticket)\b/gi)]
+      .map((match) => match[1]);
+    const explicitJobTokens = [...tokensAfterJobWords, ...tokensBeforeJobWords];
+    const namesKnownJob = snapshot.jobs.some((job) => mentionsExactJobId(prompt, job.id));
+    const genericTransferWords = new Set(["a", "an", "here", "this", "that", "it", "my", "the", "to", "into", "in", "on", "over", "from", "now", "please"]);
+    const tokenLooksLikeJobId = explicitJobTokens.some((token) =>
+      !genericTransferWords.has(token.toLowerCase()));
+    const promptNamesUnknownJob = named.length === 0 && (namesKnownJob || tokenLooksLikeJobId);
     const candidates = named.length > 0 ? named : (promptNamesUnknownJob ? [] : transferable);
     if (candidates.length !== 1) {
       emit("CRX Factory recorded no custody transfer because the request did not identify exactly one transferable job. Name the job shown on the Factory Board and ask to move it to this chat.");

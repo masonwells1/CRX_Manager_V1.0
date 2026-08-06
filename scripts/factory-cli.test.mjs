@@ -605,6 +605,8 @@ pass(status, "read status");
 assertions++;
 assert.equal(JSON.parse(status.stdout).jobs[0].id, jobId);
 assertions++;
+assert.equal(JSON.parse(status.stdout).jobs[0].worktree, fixtureRepo, "status JSON exposes the governed worktree for recovery routing");
+assertions++;
 assert.equal(status.stdout.includes(sessionId), false, "status JSON does not expose owner or lane session identity");
 assertions++;
 assert.equal(status.stdout.includes(snapshot.jobs[0].ticketHash), false, "status JSON does not expose ticket hashes");
