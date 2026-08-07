@@ -226,4 +226,39 @@ r = runHook(fn(`
 ok(isDeny(r), "unparseable parameter list fails CLOSED, not silently allowed");
 ok(r.stdout.includes("could not parse"), "fail-closed message explains the parse failure");
 
+// ── Codex P2 round 4a: a COMMENTED-OUT function header must not be scanned as
+//    live DDL — its unmatched '(' tripped the fail-closed deny on a VALID file ─
+r = runHook("-- legacy: CREATE FUNCTION public.old_rpc(\n" + fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'test_fn') INTO v_existing;
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+  END;
+`));
+ok(!isDeny(r), "commented-out CREATE FUNCTION header does not false-positive the fail-closed path");
+
+// ── Codex P2 round 4b: E-string with a DOUBLED quote then a backslash-escaped
+//    quote — closing on the doubled pair cleared escape mode and desynced ──────
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'test_fn') INTO v_existing;
+  UPDATE customers SET name = 'x' WHERE id = 1;
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+  END;
+`, "p_note text DEFAULT E'it''s \\'open (', p_idempotency_key text DEFAULT NULL::text"));
+ok(!isDeny(r), "E-string mixing doubled and backslash-escaped quotes: wired function is allowed (no parse false-positive)");
+
+// ── CodeRabbit Major (PR #335): "AS $fake$...$fake$" inside a comment between
+//    the parameter list and the real body must not be read as the body — the old
+//    unbounded regex latched onto it and could skip a later REAL function ──────
+r = runHook(fn(`
+  UPDATE customers SET name = 'x' WHERE id = 1;
+`).replace(
+  "SECURITY DEFINER",
+  "SECURITY DEFINER /* legacy shim: AS $fake$ SELECT 1; $fake$ */"
+));
+ok(isDeny(r), "fake AS $tag$ inside a comment is ignored — the REAL unwired body is still blocked");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

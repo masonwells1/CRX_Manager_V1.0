@@ -101,21 +101,94 @@ if (/--\s*idempotency-body-check:\s*exempt/i.test(content)) {
 // (same fix as actor-binding-check.mjs).
 const fnHeadRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(/gi;
 
+/** From the index of an opening ' or ", return the index just past the closing
+ * quote, or -1 if unterminated. Handles doubled quotes ('' / "") as literal
+ * characters INSIDE the string, and backslash escapes in E'...' strings —
+ * including the mix E'it''s \'x' where a doubled quote must not clear escape
+ * mode (Codex P2 round 4). */
+function scanQuoted(text, openIdx) {
+  const strCh = text[openIdx];
+  const isEStr = strCh === "'" &&
+    /[eE]/.test(text[openIdx - 1] || "") && !/[\w$]/.test(text[openIdx - 2] || "");
+  for (let i = openIdx + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (isEStr && ch === "\\") { i++; continue; }
+    if (ch === strCh) {
+      if (text[i + 1] === strCh) { i++; continue; } // doubled quote: stay inside
+      return i + 1;
+    }
+  }
+  return -1;
+}
+
+/** Replace SQL comments (-- to end of line, and NESTED block comments) with
+ * spaces, honoring quoted strings and dollar-quoted literals so comment-looking
+ * text inside them is untouched. Length-preserving. Returns null when a string,
+ * block comment, or dollar-quote never terminates (caller fails CLOSED).
+ * This is the structural fix for two review findings on PR #335:
+ *  - a commented-out "CREATE FUNCTION foo(" header must not be scanned as live
+ *    DDL (its unmatched paren tripped the fail-closed deny — Codex P2 round 4);
+ *  - a comment containing "AS $fake$...$fake$" must not be mistaken for a
+ *    function body, which could skip a later REAL function (CodeRabbit Major). */
+function stripSqlComments(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "-" && text[i + 1] === "-") {
+      let nl = text.indexOf("\n", i + 2);
+      if (nl === -1) nl = text.length; // comment to EOF is valid SQL
+      out += " ".repeat(nl - i);
+      i = nl;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { depth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      if (depth > 0) return null;
+      out += " ".repeat(j - i);
+      i = j;
+      continue;
+    }
+    if (ch === "$") {
+      const dq = /^\$\w*\$/.exec(text.slice(i, i + 64));
+      if (dq) {
+        const close = text.indexOf(dq[0], i + dq[0].length);
+        if (close === -1) return null;
+        const end = close + dq[0].length;
+        out += text.slice(i, end);
+        i = end;
+        continue;
+      }
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return null;
+      out += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
 /** From the index of a '(' , return {params, end} where end is just past its match.
  * Skips SQL comments (-- to end of line, block comments) so an unmatched paren
  * inside a parameter comment cannot desync the depth count (Codex P2, PR #335). */
 function readBalancedParens(text, openIdx) {
   let depth = 0;
-  let inStr = false;
-  let strCh = "";
-  let inEStr = false; // E'...' escape strings honor backslash escapes (Codex P2 round 3)
   for (let i = openIdx; i < text.length; i++) {
     const ch = text[i];
-    if (inStr) {
-      if (inEStr && ch === "\\") { i++; continue; }
-      if (ch === strCh) { inStr = false; inEStr = false; }
-      continue;
-    }
     if (ch === "-" && text[i + 1] === "-") {
       const nl = text.indexOf("\n", i + 2);
       if (nl === -1) return null;
@@ -148,9 +221,9 @@ function readBalancedParens(text, openIdx) {
       continue;
     }
     if (ch === "'" || ch === '"') {
-      inStr = true;
-      strCh = ch;
-      inEStr = ch === "'" && /[eE]/.test(text[i - 1] || "") && !/[\w$]/.test(text[i - 2] || "");
+      const end = scanQuoted(text, i); // doubled-quote + E-string aware (Codex P2 rounds 3–4)
+      if (end === -1) return null;
+      i = end - 1;
       continue;
     }
     if (ch === "(") { depth++; continue; }
@@ -162,23 +235,66 @@ function readBalancedParens(text, openIdx) {
   return null;
 }
 
-/** From just past the parameter list, return {body, end} for the AS $tag$...$tag$ block. */
+/** From just past the parameter list, return {body, end} for the AS $tag$...$tag$
+ * block. Walks the (already comment-stripped) text skipping quoted strings and
+ * non-body dollar-quoted literals, and only accepts a $tag$ directly preceded by
+ * the AS keyword — so "AS $fake$" text inside a quoted option value can never be
+ * mistaken for the body (CodeRabbit Major, PR #335). */
 function readDollarQuotedBody(text, fromIdx) {
-  const tagMatch = /\bAS\s+(\$\w*\$)/i.exec(text.slice(fromIdx));
-  if (!tagMatch) return null;
-  const tag = tagMatch[1];
-  const bodyStart = fromIdx + tagMatch.index + tagMatch[0].length;
-  const bodyEnd = text.indexOf(tag, bodyStart);
-  if (bodyEnd === -1) return null;
-  return { body: text.slice(bodyStart, bodyEnd), end: bodyEnd + tag.length };
+  let i = fromIdx;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return null;
+      i = end;
+      continue;
+    }
+    if (ch === "$") {
+      const dq = /^\$\w*\$/.exec(text.slice(i, i + 64));
+      if (dq) {
+        const tag = dq[0];
+        if (/\bAS\s+$/i.test(text.slice(fromIdx, i))) {
+          const bodyStart = i + tag.length;
+          const bodyEnd = text.indexOf(tag, bodyStart);
+          if (bodyEnd === -1) return null;
+          return { body: text.slice(bodyStart, bodyEnd), end: bodyEnd + tag.length };
+        }
+        // A dollar-quoted literal that is NOT the body (e.g. a SET option value):
+        // skip it whole.
+        const close = text.indexOf(tag, i + tag.length);
+        if (close === -1) return null;
+        i = close + tag.length;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    // Stop at the next CREATE so one function's missing body can never swallow
+    // the next function's real body.
+    if ((ch === "c" || ch === "C") && /^CREATE\s/i.test(text.slice(i, i + 7)) && !/[\w$]/.test(text[i - 1] || "")) {
+      return null;
+    }
+    i++;
+  }
+  return null;
 }
 
 const violations = [];
 try {
+// Strip comments first so commented-out DDL is invisible to every scan below.
+const stripped = stripSqlComments(content);
+if (stripped === null) {
+  violations.push(
+    "This migration could not parse (unterminated string, block comment, or dollar-quote) — " +
+    "the idempotency guard cannot inspect it. Fix the unterminated construct, or if it is " +
+    "genuinely valid SQL the lexer mishandles, add the exempt marker and get a manual review."
+  );
+}
 let head;
-while ((head = fnHeadRe.exec(content)) !== null) {
+while (stripped !== null && (head = fnHeadRe.exec(stripped)) !== null) {
   const fnName = head[1];
-  const parsed = readBalancedParens(content, fnHeadRe.lastIndex - 1);
+  const parsed = readBalancedParens(stripped, fnHeadRe.lastIndex - 1);
   if (!parsed) {
     // FAIL CLOSED: a parameter list this lexer cannot close is exactly where a
     // hidden p_idempotency_key could live (Codex PR #335 found three such lexer
@@ -193,7 +309,7 @@ while ((head = fnHeadRe.exec(content)) !== null) {
     break;
   }
   const params = parsed.params;
-  const rest = readDollarQuotedBody(content, parsed.end);
+  const rest = readDollarQuotedBody(stripped, parsed.end);
   if (!rest) continue;
   const body = rest.body;
   // Resume scanning after this function so a nested CREATE FUNCTION inside a

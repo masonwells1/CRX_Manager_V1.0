@@ -26,6 +26,13 @@ Round 3 fixed E-string backslash-escaped quotes (`E'can\'t ('`) and — to end
 the lexer whack-a-mole structurally — an unparseable parameter list now FAILS
 CLOSED with an explanatory block instead of silently skipping the function;
 the file-level exempt marker remains the escape hatch.
+Round 4 (Codex ×2 + CodeRabbit Major): a comment-stripping pre-pass now runs
+before any scanning, so a commented-out `CREATE FUNCTION foo(` header no longer
+trips the fail-closed deny on a valid file, and a fake `AS $tag$…$tag$` inside a
+comment can no longer be mistaken for a function body (which could skip a later
+REAL function — a silent-allow hole). The quote scanner also handles doubled
+quotes inside E-strings (`E'it''s \'x'`), and the body reader is quote-aware and
+stops at the next `CREATE`. All three proven red on the prior commit.
 
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 
