@@ -50,7 +50,9 @@ function finalPolicyStatements(): Map<string, string> {
   return policies;
 }
 
-describe('commission payout gauntlet guards', () => {
+// Each test rescans every file in supabase/migrations/ (~900 files); under
+// full-suite CPU load that exceeds vitest's 5s default and flakes the commit.
+describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
   const activeAdminPolicyPattern = /USING\s*\(\s*\(*\s*(?:SELECT\s+)?(?:public\.)?is_admin\(\)\s*\)*\s*\)/i;
 
   it('create_commission_payment rejects stale selections instead of inserting a pending subset', () => {
