@@ -663,6 +663,27 @@ assert.ok(
   "the transport-helper command setting is named too",
 );
 
+// Known-hole pin: `core.hooksPath` and shell-form `credential.helper` are
+// DELIBERATELY absent from EXECUTABLE_TRANSPORT_KEYS. See KNOWN_ISSUES.md,
+// "Third instance — the executable-config classifier misses core.hooksPath"
+// (2026-08-05): a naive addition denies every push in THIS repository, because
+// husky legitimately sets core.hooksPath=.husky/_ here. This is not a test
+// that the gap is safe — it is a tripwire so any future change to the key
+// list forces a deliberate look at that KNOWN_ISSUES entry rather than
+// silently closing or silently leaving open a real bypass.
+assert.ok(
+  !executableTransportSettings("core.hooksPath=/tmp/evil-hooks").includes("core.hookspath"),
+  "core.hooksPath is currently NOT recognised as an executable-transport setting (known hole, parked)",
+);
+assert.ok(
+  !executableTransportSettings("credential.helper=!/tmp/evil-helper").includes("credential.helper"),
+  "shell-form credential.helper is currently NOT recognised either (known hole, parked)",
+);
+assert.ok(
+  executableTransportSettings("core.sshCommand=ssh -i /tmp/relay").includes("core.sshcommand"),
+  "core.sshCommand, by contrast, IS present in the list",
+);
+
 // ── round 22: an unknown scheme names a program, not a place ─────────────────
 // Git dispatches any scheme it does not implement to `git-remote-<scheme>`, which
 // is free to ignore the address. Unlike `ext::`, these PARSE — so canonicalRepoId
@@ -2142,6 +2163,27 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       }
     }
     assert.equal(runHook(push).decision, "allow", "and unsetting them restores an ordinary push");
+
+    // 2026-08-05 hoist regression: the transport-program and mirror-remote
+    // checks used to sit AFTER `mainPushSource`'s `if (!srcRef) continue`, so
+    // they only ever ran for a push already classified as main-bound. A
+    // feature-branch push (this repo's `featurePush`, bound to `refs/heads/
+    // feature`, never main) sailed straight past `continue` and skipped both
+    // checks entirely — `core.sshCommand` allowed it outright. They were moved
+    // above that early exit specifically so a non-main push is checked too.
+    // This must fail if the classifier ever moves back below the exit: revert
+    // the hoist and `featurePush` again resolves `srcRef === null`, hits
+    // `continue`, and this assertion sees "allow" instead of "deny".
+    try {
+      git(["config", "core.sshCommand", "ssh -i /tmp/relay"], work);
+      const result = runHook(featurePush);
+      assert.equal(result.decision, "deny", "a feature-bound (non-main) push with core.sshCommand set is denied");
+      assert.match(result.reason, /name a program to carry the push/, "the denial names the transport-program gate");
+      assert.match(result.reason, /core\.sshcommand/, "and quotes the setting itself");
+    } finally {
+      git(["config", "--unset", "core.sshCommand"], work);
+    }
+    assert.equal(runHook(featurePush).decision, "allow", "and unsetting it restores the ordinary feature-branch push");
 
     // A named remote can push to every configured pushurl. The first URL is the
     // harmless local bare repo; the second invokes a custom remote helper that
