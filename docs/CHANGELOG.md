@@ -4,9 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-07 — UI experience improvements: WorkspaceTabs route-preserving tab bars for…
 
-UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/Products/Insights clusters, condensed sidebar (Products & Pricing folded into Inventory & Buying, Insights as one link), FREQUENT sidebar section from visit counts, and large-screen readability via responsive root font-size (16px base; 17/18/20px at 1920/2560/3200px). Verified live in Chrome at 3440px and at 1440/1920/2560 in preview pane. PR #338. Codex review fixes: sidebar workspace entries honor per-user deny lists by falling through to the first accessible sibling page, and the tab bar matches by page key so `/invoices/field-app/*` highlights Field Invoices (verified live; regression tests added).
+UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/Products/Insights clusters, condensed sidebar (Products & Pricing folded into Inventory & Buying, Insights as one link), FREQUENT sidebar section from visit counts, and large-screen readability via responsive root font-size (16px base; 17/18/20px at 1920/2560/3200px). Verified live in Chrome at 3440px and at 1440/1920/2560 in preview pane. PR #338. Codex review fixes: sidebar workspace entries honor per-user deny lists by falling through to the first accessible sibling page, and the tab bar matches by page key so `/invoices/field-app/*` highlights Field Invoices (verified live; regression tests added). Codex round 3: visit counts keyed by canonical page key, root font-size steps changed to percentages (106.25%/112.5%/125%) so a user-configured browser font size scales instead of being overridden (verified live at 3200/1920px), and Frequent counts sum across a condensed entry's sibling pages (regression test).
 
 - **Commits this session** (git log origin/main..HEAD):
+  - `fe7835b6 fix(ui): honor browser font-size preference and aggregate sibling visit counts`
+  - `cf7335e7 fix(nav): key visit counts by canonical page, not raw first segment`
+  - `3de0ba68 docs: record Codex review fixes in session changelog entry`
   - `23963c0f fix(nav): honor deny-list siblings in sidebar and page-key tab matching`
   - `96c13bd5 docs: changelog entry for UI improvements session`
   - `05389e01 feat(ui): scale root font size up on large screens`
