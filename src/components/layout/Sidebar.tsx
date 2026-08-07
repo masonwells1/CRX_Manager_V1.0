@@ -345,7 +345,14 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       }
     }
     return candidates
-      .map((item) => ({ item, count: counts[getVisitCountKey(item.path)] || 0 }))
+      .map((item) => {
+        // A condensed entry fronts several workspace pages; visits to any of
+        // them (path or activePaths siblings) count toward this one link.
+        const keys = new Set([item.path, ...(item.activePaths ?? [])].map(getVisitCountKey));
+        let count = 0;
+        for (const key of keys) count += counts[key] || 0;
+        return { item, count };
+      })
       .filter((c) => c.count >= 3)
       .sort((a, b) => b.count - a.count)
       .slice(0, 5)

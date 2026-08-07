@@ -151,6 +151,20 @@ describe('Sidebar', () => {
     }
   });
 
+  it('credits sibling-page visits to the condensed workspace entry in Frequent', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'admin', full_name: 'Admin User' });
+    // Visits landed on the siblings the condensed entry fronts, not on /products itself
+    localStorage.setItem(
+      'crx-page-visit-counts',
+      JSON.stringify({ 'supplier-pricing': 2, 'brand-vs-generic': 2 })
+    );
+    renderSidebar(true);
+
+    expect(screen.getAllByText('Frequent').length).toBeGreaterThan(0);
+    const frequentSection = screen.getAllByText('Frequent')[0].closest('div')?.parentElement;
+    expect(frequentSection?.textContent).toContain('Products & Pricing');
+  });
+
   it('traps focus within the open mobile drawer', () => {
     mockProfile.mockReturnValue({ id: '1', role: 'driver', full_name: 'Driver User' });
     renderSidebar(true);
