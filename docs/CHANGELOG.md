@@ -2,9 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-07 — CRM add-fact retry safety — PREPARED (parked)
+## 2026-08-07 — Both parked migrations APPLIED LIVE + CRM fact cutover
 
-Parked migration `20260807120000_log_customer_fact_rpc.sql` adds `log_customer_fact`, an idempotent SECURITY DEFINER RPC mirroring `log_customer_interaction` (payload-fingerprinted replay, role gate, server-pinned `entered_by`/`source`), closing the retry-unsafe direct insert in `CustomerFacts.tsx` found by the incident-vs-guard audit. NOT applied — awaiting migration-review + apply gates + owner approval; the frontend cutover is staged as a comment and lands post-apply. `rpcContracts.test.ts` registers the RPC under `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`.
+Owner-approved apply session. Both parked migrations went through the full gate
+path (migration-review charters CLEAN, fresh apply proofs, in-transaction pre/postflights)
+and are live:
+
+- **`20260807215532_profile_role_lock_covers_insert`** (authored as 20260807153000) —
+  `_guard_profile_role_lock` now fires `BEFORE INSERT OR UPDATE` (tgtype 23), closing the
+  §0d escalation where a non-admin could re-insert their own `profiles` row as admin.
+  Postflight included a live behavioral probe: an impersonated active non-admin's
+  escalation insert was blocked with the `PROFILE_INSERT_LOCK:` token. Paired predicate
+  `profile-role-lock-insert-arm.sql` verified red→green (2 rows before, 0 after).
+- **`20260807220323_log_customer_fact_rpc`** (authored as 20260807120000, re-stamped
+  20260807221500 pre-apply) — `log_customer_fact` idempotent SECURITY DEFINER RPC live;
+  anon EXECUTE revoked, authenticated granted, single overload verified.
+
+Frontend cutover landed: `CustomerFacts.tsx` saveFact now calls the RPC with an
+idempotency key (retry-safe). `rpcContracts.test.ts` moved `log_customer_fact` to
+`MUTATING_RPCS_WITH_IDEMPOTENCY` (migration-only bucket empty again);
+`rpcFixtureLiveDiff.test.ts` snapshot fully regenerated (558 live functions, md5-verified);
+`src/types/supabase.ts` regenerated. Live migration high-water: `20260807220323`.
+
+## 2026-08-07 — CRM add-fact retry safety — PREPARED (parked; superseded above)
+
+Parked migration `20260807120000_log_customer_fact_rpc.sql` adds `log_customer_fact`, an idempotent SECURITY DEFINER RPC mirroring `log_customer_interaction` (payload-fingerprinted replay, role gate, server-pinned `entered_by`/`source`), closing the retry-unsafe direct insert in `CustomerFacts.tsx` found by the incident-vs-guard audit. NOT applied — awaiting migration-review + apply gates + owner approval; the frontend cutover is staged as a comment and lands post-apply. `rpcContracts.test.ts` registers the RPC under `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`. *(Applied later the same day — see entry above.)*
 
 ## 2026-08-07 — Incident-vs-guard audit: 7 gaps closed with new hard guards
 
@@ -17,6 +39,7 @@ matching hard guard. All 7 are now covered on branch `claude/crx-self-improving-
    §0d follow-up where a non-admin could re-insert their own `profiles` row as
    `role = 'admin'`. Paired red/green predicate `profile-role-lock-insert-arm.sql`
    (2 rows today → 0 after apply). NOT applied — awaiting migration-review + apply gates.
+   *(Applied later the same day as live version 20260807215532 — see entry above.)*
 2. **Transport-key known-hole tripwire** — `codex-push-lib.test.mjs` now pins that
    `core.hooksPath` and shell-form `credential.helper` are deliberately absent from
    `EXECUTABLE_TRANSPORT_KEYS` (husky sets `core.hooksPath` legitimately), so any

@@ -1,4 +1,6 @@
--- PARKED — NOT APPLIED — awaiting migration-review + apply gates
+-- APPLIED LIVE 2026-08-07 as version 20260807215532 (Supabase-assigned at apply time;
+-- authored as 20260807153000). Reviewed CLEAN by both Codex charters; all pre/postflight
+-- checks passed at apply, including the live non-admin escalation-insert probe.
 --
 -- Extend `_guard_profile_role_lock` to INSERT (residual of KNOWN_ISSUES §0d).
 --
@@ -66,7 +68,17 @@ DO $preflight$
 DECLARE
   v_guard_hash text;
   v_tgtype smallint;
+  v_high_water text;
 BEGIN
+  -- CHECK 6 (self-proving): this file must be strictly above the live ledger
+  -- high-water at the moment of apply — a fresher migration already in the
+  -- ledger means this file was stamped in the past and must be re-stamped.
+  SELECT max(version) INTO v_high_water FROM supabase_migrations.schema_migrations;
+  IF v_high_water IS NULL OR v_high_water >= '20260807153000' THEN
+    RAISE EXCEPTION 'PREFLIGHT_FAIL: live migration high-water % is not below 20260807153000 — re-stamp this file',
+      COALESCE(v_high_water, '(none)');
+  END IF;
+
   SELECT md5(p.prosrc)
     INTO v_guard_hash
     FROM pg_proc p
@@ -129,6 +141,11 @@ $function$;
 REVOKE ALL ON FUNCTION public._guard_profile_role_lock() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public._guard_profile_role_lock() FROM anon;
 
+-- CREATE OR REPLACE preserves the old catalog comment, which described the
+-- UPDATE arm only — re-emit it to cover the new INSERT lock.
+COMMENT ON FUNCTION public._guard_profile_role_lock() IS
+  'Blocks non-admin UPDATE that would change role/is_active/denied_pages/full_name, and blocks any non-admin logged-in INSERT into profiles (PROFILE_INSERT_LOCK). Service-key/edge-function writes (auth.uid() NULL) are exempt.';
+
 -- Widen the event list. DROP + CREATE rather than adding a second trigger: two
 -- triggers on the same table fire in name order, and an INSERT-only companion
 -- would be silently droppable on its own.
@@ -189,8 +206,17 @@ BEGIN
                          true);
       SET LOCAL ROLE authenticated;
 
-      -- Same shape as the §0d path: the row is deleted, then re-inserted.
-      DELETE FROM public.profiles WHERE id = v_victim;
+      -- Same shape as the §0d path: the row is deleted, then re-inserted. The
+      -- DELETE may be silently skipped (no DELETE policy → 0 rows) or raise
+      -- (FK/permission); swallow that in its own subtransaction — either way
+      -- the INSERT below still hits the BEFORE INSERT arm, which fires ahead
+      -- of any RLS WITH CHECK or PK error, so the proof stays unambiguous.
+      BEGIN
+        DELETE FROM public.profiles WHERE id = v_victim;
+      EXCEPTION WHEN OTHERS THEN
+        NULL;
+      END;
+
       INSERT INTO public.profiles (id, email, full_name, role, is_active)
       VALUES (v_victim, v_email, 'postflight escalation probe', 'admin', true);
 
@@ -199,10 +225,10 @@ BEGIN
       IF SQLERRM = 'PROFILE_INSERT_LOCK_POSTFLIGHT_FAILED' THEN
         RAISE;
       END IF;
-      -- The DELETE may itself be denied (no DELETE policy on profiles) or be
-      -- blocked by an FK — both mean the escalation is unreachable, also a pass.
-      IF SQLERRM NOT LIKE 'PROFILE_INSERT_LOCK:%'
-         AND SQLSTATE NOT IN ('42501', '23503') THEN
+      -- ONLY the new arm's own token counts. A generic 42501 (RLS WITH CHECK)
+      -- would mean the arm never fired — that is a postflight FAILURE, not a
+      -- pass (drift review M4, 2026-08-07).
+      IF SQLERRM NOT LIKE 'PROFILE_INSERT_LOCK:%' THEN
         RAISE EXCEPTION 'PROFILE_INSERT_LOCK_POSTFLIGHT_WRONG_ERROR: % (%)', SQLERRM, SQLSTATE;
       END IF;
     END;
