@@ -2,7 +2,24 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-07 — Expired Factory custody-transfer replay repair — PREPARED
+## 2026-08-07 — Same-chat Factory actor transfer — PREPARED
+
+Factory custody transfer now also handles an authenticated tool-surface change
+inside the same chat session. The signed transfer preserves the chat identity,
+rebinds custody to the destination tool, and revokes the prior presentation so
+the ticket must be presented and approved again. This prevents a ticket
+presented through one agent adapter from becoming permanently unapprovable in
+the same owner chat through another adapter.
+The append-time origin-main compatibility gate now compares SHA-256 hashes of
+the complete derived Factory snapshot both immediately and after the approval
+expiry horizon, so a schema-valid event is rejected when branch and current main
+would interpret its custody semantics differently without piping the full ledger
+snapshot through the compatibility subprocess.
+
+This entry describes local reviewed work; it does not claim merge or production
+deployment.
+
+## 2026-08-07 — Expired Factory custody-transfer replay repair — SHIPPED
 
 Factory custody transfer now treats an expired durable `queued` approval as the
 owner-visible `needs-ticket-ok` stage when validating the authenticated transfer
