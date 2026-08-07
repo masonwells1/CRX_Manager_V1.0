@@ -4,9 +4,11 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-07 — UI experience improvements: WorkspaceTabs route-preserving tab bars for…
 
-UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/Products/Insights clusters, condensed sidebar (Products & Pricing folded into Inventory & Buying, Insights as one link), FREQUENT sidebar section from visit counts, and large-screen readability via responsive root font-size (16px base; 17/18/20px at 1920/2560/3200px). Verified live in Chrome at 3440px and at 1440/1920/2560 in preview pane. Branch claude/crx-manager-ui-improvements-4ca60a pushed (05389e01); PR next.
+UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/Products/Insights clusters, condensed sidebar (Products & Pricing folded into Inventory & Buying, Insights as one link), FREQUENT sidebar section from visit counts, and large-screen readability via responsive root font-size (16px base; 17/18/20px at 1920/2560/3200px). Verified live in Chrome at 3440px and at 1440/1920/2560 in preview pane. PR #338. Codex review fixes: sidebar workspace entries honor per-user deny lists by falling through to the first accessible sibling page, and the tab bar matches by page key so `/invoices/field-app/*` highlights Field Invoices (verified live; regression tests added).
 
 - **Commits this session** (git log origin/main..HEAD):
+  - `23963c0f fix(nav): honor deny-list siblings in sidebar and page-key tab matching`
+  - `96c13bd5 docs: changelog entry for UI improvements session`
   - `05389e01 feat(ui): scale root font size up on large screens`
   - `58f0fea5 feat(ui): workspace tab bars, condensed sidebar, and frequent-pages section`
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
