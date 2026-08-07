@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import CommandPalette from './CommandPalette';
-import { recordPageVisit } from '../../lib/recentPages';
+import { recordPageVisit, getVisitCountKey } from '../../lib/recentPages';
 
 const mockNavigate = vi.fn();
 
@@ -149,5 +149,19 @@ describe('recordPageVisit', () => {
     }
     const stored = JSON.parse(localStorage.getItem('crx-recent-pages') || '[]');
     expect(stored).toHaveLength(20);
+  });
+
+  it('credits reused field-app editor routes to Field Invoices, not Chemical Invoices', () => {
+    recordPageVisit('/invoices/field-app/new', 'Field Invoice');
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    // Must land on the same key the sidebar uses for its /field-invoices entry
+    expect(counts[getVisitCountKey('/field-invoices')]).toBe(1);
+    expect(counts[getVisitCountKey('/invoices')]).toBeUndefined();
+  });
+
+  it('keys nested nav paths the same way the sidebar looks them up', () => {
+    recordPageVisit('/split-billing/new', 'Split Billing');
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    expect(counts[getVisitCountKey('/split-billing/new')]).toBe(1);
   });
 });

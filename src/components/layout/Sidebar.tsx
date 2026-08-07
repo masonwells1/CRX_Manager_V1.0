@@ -45,7 +45,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
-import { getVisitCounts } from '../../lib/recentPages';
+import { getVisitCounts, getVisitCountKey } from '../../lib/recentPages';
 import { supabase } from '../../lib/db';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../../lib/splitBillingSetting';
 import type { UserRole } from '../../types';
@@ -345,7 +345,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       }
     }
     return candidates
-      .map((item) => ({ item, count: counts[item.path] || 0 }))
+      .map((item) => ({ item, count: counts[getVisitCountKey(item.path)] || 0 }))
       .filter((c) => c.count >= 3)
       .sort((a, b) => b.count - a.count)
       .slice(0, 5)

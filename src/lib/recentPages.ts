@@ -4,6 +4,8 @@
  * in CommandPalette.tsx (which must only export React components).
  */
 
+import { getPageKeyFromPath } from './pagePermissions';
+
 const RECENT_KEY = 'crx-recent-pages';
 const COUNT_KEY = 'crx-page-visit-counts';
 const MAX_RECENT = 20;
@@ -24,8 +26,19 @@ export function getRecentItems(): RecentItem[] {
 }
 
 /**
- * Lifetime visit counts keyed by base path ('/invoices/abc-123' counts as
- * '/invoices'). Feeds the sidebar "Frequent" section.
+ * Canonical visit-count key for a route. Uses the permission page key, so
+ * reused editor routes (/invoices/field-app/* → 'field-invoices') and nested
+ * nav paths (/split-billing/new) credit the page they belong to. Falls back
+ * to the first path segment for non-permissionable routes (/team-board etc.).
+ * Both the recorder and the sidebar "Frequent" lookup must use this key.
+ */
+export function getVisitCountKey(path: string): string {
+  return getPageKeyFromPath(path) ?? '/' + (path.split('/')[1] || '');
+}
+
+/**
+ * Lifetime visit counts keyed by getVisitCountKey(). Feeds the sidebar
+ * "Frequent" section.
  */
 export function getVisitCounts(): Record<string, number> {
   try {
@@ -46,9 +59,9 @@ export function recordPageVisit(path: string, title: string) {
     // ignore storage errors
   }
   try {
-    const base = '/' + (path.split('/')[1] || '');
+    const key = getVisitCountKey(path);
     const counts = getVisitCounts();
-    counts[base] = (counts[base] || 0) + 1;
+    counts[key] = (counts[key] || 0) + 1;
     localStorage.setItem(COUNT_KEY, JSON.stringify(counts));
   } catch {
     // ignore storage errors
