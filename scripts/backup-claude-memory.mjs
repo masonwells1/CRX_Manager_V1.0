@@ -421,17 +421,16 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
       `      Nothing was written.`
     );
   }
+  // Until 2026-08-04 the mere EXISTENCE of any rewrite refused the run. That was
+  // stricter than the danger and made the runbook unusable wherever GitHub URLs
+  // are legitimately rewritten: Claude Code on the web ships two harmless ones
+  // (`git@github.com:` and `ssh://git@github.com/` → `https://github.com/`) and a
+  // credential proxy installs another, so the off-site backup could not be run
+  // from a web or mobile session at all — while a laptop passed, which is why it
+  // went unnoticed. Counted here only to describe the refusal below; a rewrite is
+  // dangerous when it MOVES the destination, and that is decided against the
+  // resolved address inside the backup-repo branch.
   const urlRewrites = gitUrlRewriteSettings(configList.stdout);
-  if (urlRewrites.length > 0) {
-    return (
-      `FAIL: refusing to ${verb} — Git URL rewrite settings are active\n` +
-      `      (${urlRewrites.length} setting${urlRewrites.length === 1 ? "" : "s"}). ` +
-      `\`url.*.insteadOf\` and \`url.*.pushInsteadOf\` can\n` +
-      `      silently replace the verified private-backup address when the runbook pushes.\n` +
-      `      Remove those settings from the local, global, or inherited Git configuration and\n` +
-      `      re-run. Nothing was written.`
-    );
-  }
 
   // A remote URL can carry a credential (`https://<token>@github.com/...`), and
   // canonical identity deliberately ignores it — so a token-bearing URL was
@@ -475,6 +474,64 @@ function destinationIsPublishable(outDir, names, verb = "stage") {
   }
 
   if (pushUrls.length > 0 && pushUrls.every((url) => canonicalRepoId(url) === BACKUP_REPO_ID)) {
+    // Everything above judged the `(push)` lines of `git remote -v`, and that is
+    // sound ONLY because git prints those already rewritten: both `url.*.insteadOf`
+    // and `url.*.pushInsteadOf` are expanded in that output, byte-identical to
+    // `git remote get-url --push` (verified against git 2.43 for both forms). That
+    // is precisely why the blanket rewrite ban removed above was redundant — a
+    // rewrite that redirects the push changes `pushUrls` itself, so the repository
+    // identity, credential, and transport checks were already looking at the real
+    // destination and already refused it.
+    //
+    // That redundancy is load-bearing, so pin the assumption rather than trusting
+    // it: ask git directly for each remote's push URL and require it to match what
+    // was just validated. If a git version, alias, or configuration ever made
+    // `remote -v` show something other than the address git will contact, this
+    // refuses instead of silently validating a URL that is never used. Fails
+    // CLOSED — unenumerable remotes or an unresolvable URL leave the destination
+    // unproven and nothing is written.
+    const remoteList = git(["remote"]);
+    if (remoteList.status !== 0) {
+      return (
+        `FAIL: refusing to ${verb} — git could not list this checkout's remotes, so the address\n` +
+        `      the runbook would push to cannot be confirmed. Fix \`git remote\` and re-run.\n` +
+        `      Nothing was written.`
+      );
+    }
+    const resolvedPushUrls = [];
+    for (const remoteName of String(remoteList.stdout || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
+      // `--all` matters: without it git prints only the FIRST push URL, while
+      // `remote -v` above prints every one. A remote carrying two approved
+      // `pushurl` entries then produced two verified URLs against one resolved
+      // URL and the set comparison refused a destination that was entirely
+      // correct — a false refusal of the ordinary backup, which is the failure
+      // mode this whole check exists to avoid creating.
+      const resolved = git(["remote", "get-url", "--push", "--all", remoteName]);
+      if (resolved.status !== 0) {
+        return (
+          `FAIL: refusing to ${verb} — git could not resolve the effective push URL for remote\n` +
+          `      "${remoteName}", so the verified address cannot be confirmed as the one git will\n` +
+          `      actually contact. Nothing was written.`
+        );
+      }
+      for (const url of String(resolved.stdout || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
+        resolvedPushUrls.push(url);
+      }
+    }
+    // Set comparison, not order: one remote can carry several push URLs.
+    const sortedResolved = [...resolvedPushUrls].sort();
+    const sortedVerified = [...pushUrls].sort();
+    const agrees = sortedResolved.length === sortedVerified.length
+      && sortedResolved.every((url, index) => url === sortedVerified[index]);
+    if (!agrees) {
+      return (
+        `FAIL: refusing to ${verb} — the push URLs git resolves for this checkout do not match the\n` +
+        `      ones just verified (${urlRewrites.length} URL rewrite setting${urlRewrites.length === 1 ? "" : "s"} active). The address\n` +
+        `      checked against the private-backup repository is therefore not provably the address\n` +
+        `      git would contact. (Neither URL is reproduced here on purpose.) Remove any\n` +
+        `      \`url.*.insteadOf\`/\`url.*.pushInsteadOf\` settings and re-run. Nothing was written.`
+      );
+    }
     // Being the right repository is not the same as still being private. A
     // visibility flip on GitHub would silently turn every future snapshot into a
     // publication, and nothing on disk would look different (Codex round 10). Ask

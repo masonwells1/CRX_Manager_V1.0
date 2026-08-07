@@ -49,6 +49,864 @@ ticket during the current-main compatibility check.
 This entry describes the local reviewed branch; it does not claim merge or
 production deployment.
 
+## 2026-08-07 — `remote.<name>.push` outranks the whole `push.default` mechanism — BRANCH
+
+Codex finding on `a9ad2c52` (PR #313) — the tenth over-refusal of this shape, and
+one level below the `push.default` MODE check from the previous round. That check
+asks which mode is in force; this one asks whether the mode is consulted at all.
+It is not: `remote.<name>.push` supplies the refspec directly and outranks the
+mechanism, so a bare push whose remote has that key reads neither `push.default`
+nor `branch.<b>.merge`, and comparing them denied the ordinary landing path over
+configuration git never opens.
+
+Reproduced on git 2.43.0 before fixing, and the precedence is **total**, not
+partial. With `remote.origin.push=HEAD:refs/heads/fixed`, a bare `push origin`
+dry-runs to `HEAD:refs/heads/fixed` under `current`, `upstream`, `matching`,
+`nothing`, and unset alike, and with `branch.<b>.merge` set or unset. Codex
+reported the `push.default` half; the probe showed `branch.merge` rides along, so
+both are skipped together.
+
+Fail-open check: `remote.*.push` itself is deliberately still compared — it is the
+key actually supplying the refspec, so a change to it IS the redirect, and a test
+pins that an inherited `remote.origin.push=HEAD:refs/heads/hijacked` still denies
+and still names that answer. The skip is decided from reads under BOTH
+environments and applies only when they agree the key is set for every bare
+push's remote: an inherited variable that ADDS the key leaves the scrubbed side
+empty, so nothing is skipped, and it denies on `remote.*.push` regardless. A
+further test pins that removing the key restores the `push.default` comparison.
+Remote names are read in their original case, since a git config subsection name
+is case-sensitive and the lower-cased scope key would read the wrong one.
+
+Revert-check: with the skip removed the new cases fail on exactly their own
+assertions. `codex-push-lib.test.mjs`, `guards.test.mjs` (161),
+`factory-guards.test.mjs` (349), and `test:agent-workflows` green.
+
+Files: `.claude/hooks/codex-push-guard.mjs`, `.claude/hooks/codex-push-lib.test.mjs`.
+
+## 2026-08-06 — remote-answer scoping keys off git's own remote names — BRANCH
+
+Codex finding on `53475b15` (PR #313), and the first of this run that is a
+**fail-OPEN, not an over-refusal**. The eight preceding fixes all narrowed what
+the inherited-`GIT_CONFIG*` proof compares; this is the bill for narrowing with
+a parser that cannot actually identify a remote. Both scopers filtered the
+**selected** remote's own lines out of *both* comparison sets, so a real
+redirect compared equal and the guard emitted an allow.
+
+Two independent parse bugs, same shape:
+
+- **`git remote -v`, split on `\S+`.** A remote name is not a whitespace-delimited
+  token. `git remote add` rejects a name containing a space, but writing
+  `remote.<name>.url` into the config directly creates one git then honours —
+  verified here that `git remote` lists `my remote`, `remote -v` prints it
+  TAB-separated, and `get-url --push 'my remote'` resolves it. `\S+` captured
+  `my`. Codex reproduced the end-to-end allow with `branch.feature.remote='my
+  remote'` and an inherited `remote.my remote.pushurl` aimed at production.
+- **`git config --get-regexp`, matched greedily.** The name sits between two dots,
+  so `^remote\.(.*)\.(?:push|mirror)\b` backtracked to the LAST match in the
+  line — including one inside the **value**. Refspecs may contain dots:
+  `remote.origin.push HEAD:refs/heads/evil.push` keyed as `origin.push
+  HEAD:refs/heads/evil`. Found while fixing the first and confirmed against real
+  `git config` output.
+
+Both now resolve the name against the list `git remote` actually returns (read
+under both environments, longest name first so a prefix name cannot shadow a
+longer one). A line matching no configured name is **kept** in the comparison
+rather than dropped — the fail-closed direction. That is safe to rely on because
+`git remote` lists a remote having any `remote.<name>.*` key, so an unknown key
+is genuinely anomalous and belongs in the diff.
+
+Fail-open check: the allow direction is pinned too — a whitespace-named remote
+the push never selects still narrows away, so the fix does not simply revive the
+over-refusal. Revert-check: with each parser reverted independently, the new
+cases fail on exactly their own assertions and pass with them restored;
+`codex-push-lib.test.mjs`, `guards.test.mjs` (161 assertions),
+`test:agent-workflows`, and manifest parity green.
+
+Files: `.claude/hooks/codex-push-guard.mjs`, `.claude/hooks/codex-push-lib.test.mjs`.
+
+## 2026-08-06 — `remote.*.push` proof scoped to the BARE push's own remote — BRANCH
+
+Codex finding on `b0404398` (PR #313) — the **ninth** over-refusal of this shape,
+and the one showing that a single command-wide verdict was still too coarse. The
+sixth fix taught the guard to drop the default-refspec keys when **every** push
+names its refspec. A command that MIXES the forms — an explicit push to one
+remote, then a bare push to another — correctly keeps them compared, because the
+bare push does read them. But the comparison was scoped to `remoteScope`, every
+remote the command touches, so an inherited `remote.origin.push` denied it even
+though git reads that key for **neither** push: not for the explicit one, which
+names its own refspec, and not for the bare one, which resolves a different
+remote. `git push -h` documents the forms per invocation, and Codex confirmed
+identical dry-run destinations with and without the variable.
+
+`remote.*.push` now uses `refspecDefaultScope`, built only from the remotes of
+pushes that do **not** name a refspec. It is always a subset of `remoteScope`,
+which every other per-remote key keeps — `remote.*.mirror` is read for an
+explicit push too, so narrowing it would be a fail-open, and a test pins that
+the same override aimed at `remote.origin.mirror` still denies. An unreadable
+push nulls both scopes, unchanged.
+
+Fail-open check: the narrowing rests on git reading `remote.<name>.push` only
+for the remote a bare push selects. The control test — the same override aimed
+at `archive`, the remote whose push IS bare — still denies and still names
+`remote.*.push` as the answer that changed. Revert-check: with the fix reverted
+the new case fails on exactly its own assertion, and passes with it restored;
+`codex-push-lib.test.mjs`, `test:agent-workflows`, and manifest parity green.
+
+Files: `.claude/hooks/codex-push-guard.mjs`, `.claude/hooks/codex-push-lib.test.mjs`.
+
+## 2026-08-06 — `remotes` proof scoped to the remote the push selects — BRANCH
+
+Codex finding on `a2fcd36c` (PR #313) — the **eighth** over-refusal of this shape,
+and a straggler of the scoping fix further below rather than a new class. That
+round taught `remote.*.push` and `remote.*.mirror` to compare only the remote a
+push resolves to. `remotes` needed the identical narrowing and did not get it,
+because it normalises through `pushDestinationDecisions` instead of the shared
+per-remote path, so the fix had nowhere to attach.
+
+`git remote -v` lists **every** remote. An inherited `remote.<other>.url` adds a
+`(push)` line on the ambient side alone, the two decision sets differ, and
+`push origin HEAD:feature` is denied over a remote it could not have touched —
+again the feature-branch landing path a protected `main` requires. Reproduced
+against the hook before fixing with `remote.mirrorbox.url`: git's own dry run
+updates `origin` either way, while the guard reported `remotes` differing.
+
+An **empty** scope is deliberately not narrowed, unlike the value-key path: an
+empty scope means no push here resolved to a named remote, so there is no
+positive evidence to narrow by and narrowing to nothing would compare nothing.
+`null` keeps the full text for the same reason. An unparseable line is never
+filtered away, so it stays fail-closed.
+
+The control holds: the same override aimed at `origin`, the remote this push does
+select, is still denied and still names `remotes` as the answer that changed.
+
+## 2026-08-06 — `branch.merge` compared only under the `push.default` modes that read it — BRANCH
+
+Codex finding on `a2fcd36c` (PR #313) — the **seventh** over-refusal of this
+shape, sitting one level *below* the refspec verdict two entries down.
+`pushNamesRefspec` is correct that a bare push has no refspec of its own, so the
+default-refspec lookups are kept. But only some `push.default` modes then derive
+that refspec from `branch.<b>.merge`; under `current` git names the destination
+from the branch and never opens the key, so comparing it denied a bare push over
+a value git would not have consulted.
+
+Reproduced on git 2.43.0 before fixing, with `branch.feature.merge=refs/heads/main`
+set and unset: under `current` the dry run reports
+`refs/heads/feature:refs/heads/feature` **both** times, while the same pair under
+`upstream` reports `refs/heads/feature:refs/heads/main` only when the key is set.
+The modes genuinely differ, and only the first is safe to skip.
+
+`pushDefaultConsultsBranchMerge` decides it and answers "compare" for everything
+it does not recognise. Unset reads as compare, since git's own default is `simple`,
+which consults the key. Only `current`, `matching`, and `nothing` skip it.
+
+The mode is read under **both** environments and the key skipped only when the two
+agree it is ignored, so an inherited override that flips `current` to `upstream`
+keeps `branch.merge` compared. That vector denies twice over in any case, since
+`push.default` is itself compared whenever a bare push is present. An unreadable
+mode compares, fail-closed.
+
+## 2026-08-06 — Remote-selection proof skipped for pushes that name their destination — BRANCH
+
+Codex finding on `51f3cc2c` (PR #313) — the **sixth** over-refusal of this shape,
+and the mirror of the fix directly below rather than a repeat of it. That round
+answered "does this push name its refspec?", correctly kept the remote-*selection*
+keys compared, and stopped there. It never asked the second question: does this
+push name its **destination**? Those are different facts about a push, and each
+silences only its own lookups — treating one question as covering both is exactly
+what left this half live.
+
+Git resolves a bare push's remote through `branch.<b>.pushRemote` →
+`remote.pushDefault` → `branch.<b>.remote` → `origin`, and consults **none** of
+them once the command names a destination. Comparing all three regardless meant an
+inherited `GIT_CONFIG*` value for a key the push could not have used denied
+`push origin HEAD:feature` — once again the exact feature-branch landing path a
+protected `main` requires. Reproduced on git 2.43.0 before fixing, for each of the
+three keys pointed at a second remote: `push --dry-run --porcelain origin
+main:refs/heads/feature` reports `To <origin.git>` every time, while the bare
+`push` under that same config reports `To <unrelated.git>` every time.
+
+`pushNamesDestination` decides it, and everything uncertain answers `false` so the
+lookups are kept: an unknown value-taking option (whose value would otherwise look
+like the positional destination), an unresolved remote that ended the segment scan
+early, and any chained command in which even one push is still bare. `--repo=<dest>`
+**does** count here, unlike for refspecs — the asymmetry is git's, since `--repo`
+names a repository and so answers this question and not the other. Confirmed
+against the dry run rather than reasoned.
+
+The per-remote keys (`remotes`, `remote.*.push`, `remote.*.mirror`) stay compared:
+they say where a named remote points and what it sends, which naming that remote
+does not answer. An inherited `remote.origin.pushurl` still redirects a push that
+names `origin`, and the scoped comparison must keep catching it.
+
+Pinned end-to-end against the hook in both directions, for all three keys: the
+same inherited override now allows the push that names its destination and still
+denies one that names no remote.
+
+## 2026-08-06 — Default-refspec proof skipped for pushes that name their refspec — BRANCH
+
+Codex finding on `1dea595d` (PR #313) — the **fifth** over-refusal of this shape
+on this branch, and the one the remote-scoping fix below could not reach, because
+the offending key was on the remote the push actually selects.
+
+Git's usage is `git push [<repository> [<refspec>…]]`: when refspecs are on the
+command line git does not read the **default**-refspec configuration at all. So
+comparing `push.default`, `remote.*.push`, and `branch.<b>.merge` across the
+scrubbed and inherited environments could only over-refuse — it denied the exact
+feature-branch push that a protected `main` requires, over an inherited value git
+was never going to consult. Reproduced on git 2.43.0 in a scratch repo before
+fixing: under `remote.origin.push=HEAD:refs/heads/unrelated`, an explicit
+`push --dry-run origin main:refs/heads/feature` reports `main -> feature` and
+nothing else, while a bare `push --dry-run origin` under that same config reports
+`HEAD -> unrelated`.
+
+`pushNamesRefspec` decides it, and everything uncertain answers `false` so the
+lookups are kept: an unknown option (whose value could pass for a refspec), a
+`--repo` value (git documents the positional as taking precedence, so the lone
+positional there is the repository), an unresolved remote that ended the segment
+scan early, and any chained command in which even one push is still bare — the
+lookups are repository-wide, so a single bare push keeps them compared.
+
+Pinned end-to-end against the hook, in both directions: the same inherited
+`remote.origin.push` now allows the explicit push and still denies the bare one,
+an unreadable push does not get the skip, and the remote-selection keys are
+untouched — an explicit refspec says nothing about which remote a push picks.
+
+Along the way this fixed the 2026-08-05 config-root false positive one round
+further out. That fix excluded a preceding `/`, which covered `/home/user/repo`
+but not a hyphenated path **segment** — and this environment names its scratch
+directories exactly that way (`/tmp/claude-0/-home-user-…/`), so `git -C <scratch
+path> push`, again the form the guard's own denials recommend, was refused as a
+`HOME` override. It is what blocked the scratch-repo reproduction above until it
+was fixed. A shell assignment name cannot contain `-`, so a hyphen on either side
+of the match means path or branch text, never a variable.
+
+## 2026-08-06 — Inherited push refspecs scoped to the remote each push selects — BRANCH
+
+Codex finding on `db6b683d` (PR #313), reproduced against the shipped guard
+before fixing — the **fourth** over-refusal of this shape on this branch, and the
+one the mirror-classifier fix below did not reach.
+
+`remote.*.push` and `remote.*.mirror` are read repository-wide by regexp, but git
+consults only the remote a given push resolves to. Comparing the whole set denied
+an ordinary feature-branch push merely because an inherited `GIT_CONFIG*`
+override added `remote.archive.push` for a remote that push never touches.
+
+The answer is now scoped rather than the git command, so the lookup itself is
+unchanged, a command pushing to several remotes still compares every remote it
+selects, and a push whose remote cannot be resolved keeps the full text — an
+unresolved remote must never narrow what is compared.
+
+Scoping alone still denied, for a second and independent reason: `--get-regexp`
+exits 1 when no key matches, and the guard recorded every non-zero exit as an
+error so a failure on one side only would stay visible. Once the ambient side was
+scoped down to nothing, one side read `err:1` and the other an empty match —
+absence on both sides, counted as a divergence. That exit now maps into the same
+space as an empty match; any other status stays a real, fail-closed error.
+
+Both halves are pinned end-to-end against the hook in `codex-push-lib.test.mjs`:
+the unrelated remote is allowed, and the same override on the *targeted* remote
+still denies, which is what keeps the fix from widening into a fail-open.
+
+## 2026-08-06 — Inherited-override proof scoped to the repos each push runs in — BRANCH
+
+Codex finding on `6ca2b264` (PR #313), reproduced against the shipped guard
+before fixing. When inherited `GIT_CONFIG*` variables are present, the guard
+proves they cannot redirect the push by reading every classifying lookup twice —
+once scrubbed, once as the push will see them — in each repository the command
+could push from. That set added the session's cwd **unconditionally**.
+
+A push written with git's documented `-C <repo>` global form does not read the
+cwd's configuration at all, so proving the cwd proves nothing about it. Worse,
+when the cwd is not itself a checkout — a session working one directory up from
+the repo — the `rev-parse` that opens the proof could not read it and **denied an
+ordinary feature-branch push that was never going to touch it**. Reproduced with
+a harmless inherited `user.name` override: identical push, allowed from the repo,
+denied from its parent.
+
+The set is now built per push through `gitPushCwd`, which resolves to the cwd for
+a push that does not name `-C`, so the ordinary case still proves exactly the
+repository the push will use — nothing is given up. A command that reads as a
+push but yields no individual push segment falls back to the cwd rather than
+proving nothing. `guards.test.mjs` pins five directions, including the two that
+must keep denying: a redirecting rewrite still denies through `-C` from either
+cwd, and a push with no `-C` from an unreadable cwd still denies, since that one
+genuinely cannot be proven.
+
+## 2026-08-06 — Push guard resolves real remotes before guessing at URLs — BRANCH
+
+Codex finding on `662836b2` (PR #313), reproduced against the shipped guard
+before fixing. **The scoping fix in the entry below opened its own fail-open
+hole.** Scoping the per-remote checks to the targeted remote meant deciding
+whether the push destination was a configured remote or a raw URL, and that
+decision was made from the token's *shape*. Git accepts a remote name containing
+`/` — `team/origin` is a name it resolves — so the URL heuristic read a real
+remote as a URL. "Raw URL" means no `remote.<name>.*` applies, so
+`remote.team/origin.mirror=true` skipped every per-remote check and the guard
+**allowed** a push that git's own dry run showed carrying `main`. `receivepack`
+and the other per-remote carriers were skipped the same way.
+
+The guard now asks git which remotes exist and lets an existing remote win; the
+shape heuristic only decides tokens that are not remotes at all. Remotes are read
+across both the scrubbed and inherited config environments for the same reason
+the config reads below it are — an inherited `GIT_CONFIG*` can define a remote
+the scrubbed read cannot see, and recognising *more* remotes can only make more
+checks apply. An unreadable remote list still falls back to full breadth.
+`guards.test.mjs` pins the case: a mirrored slash-named remote denies, and the
+six earlier scoping cases still hold.
+
+## 2026-08-06 — Mirror deny scoped to the targeted remote; inactive reps named — BRANCH
+
+Two Codex findings on `48149870` (PR #313), both reproduced before fixing.
+
+**The mirror deny was over-refusing, and the hoist is what caused it.** Widening
+the check to every push form (previous entry) also widened *which remotes it
+answered for*: it denied whenever **any** configured remote was mirrored, so a
+checkout carrying an unrelated mirrored backup remote could not push at all.
+Reproduced — with `remote.archive.mirror=true`, `push origin HEAD:feature` was
+denied because `archive` was mirrored, a remote that push never touches. While
+the check only ran on main-bound pushes the blast radius was small; at full
+breadth it blocks ordinary branch→PR work, which is the flow the guard exists to
+protect.
+
+`mirror`, `receivepack`, `uploadpack`, and `vcs` are all per-remote settings, so
+the deny now resolves the remote git will actually use — the command's token,
+else `branch.<b>.pushRemote`, `remote.pushDefault`, `branch.<b>.remote`, else
+`origin` — and scopes to it. Global carriers (`core.sshCommand`, `core.gitProxy`,
+`protocol.*.command`, `ssh.variant`) are never scoped away, since they carry the
+objects whichever remote is picked. Unresolvable remote → full breadth, and a
+raw-URL destination consults no `remote.*` config at all. Both directions are
+pinned in `guards.test.mjs`: an untargeted mirror allows, while pushing to the
+mirrored remote — including a bare push that resolves there via `pushDefault` —
+still denies.
+
+**Customers list showed every former rep as "Unknown rep".** The rep-name lookup
+filtered `is_active = true`, but a customer keeps its `assigned_sales_rep` when
+that rep is deactivated, so all former reps collapsed to one indistinguishable
+label in both the column and the filter dropdown — precisely the population an
+admin needs to separate in order to reassign the accounts. Name resolution now
+covers all profiles and marks inactive ones `(inactive)`. The map is display-only,
+so this does not widen who can be assigned work.
+
+## 2026-08-05 — Mirror-remote guard: parse fixed, and the check made reachable — BRANCH
+
+Codex's review of `a7c55978` on PR #313 reported that `configuredMirrorRemotes()`
+split each config line on its first `=`-or-space and skipped a bare
+`remote.origin.mirror` as "carries no value". Git reads a valueless boolean as
+**true** — `git config --bool --get` agrees — so that spelling walked past the
+deny. Reproduced against real `git config` output before fixing, and the same
+reproduction turned up two more parse defects and one placement defect:
+
+- `remote.my remote.mirror=true` — subsection names may contain spaces, and the
+  first-space split mis-keyed it as `remote.my`, matching nothing.
+- `mirror=` (empty value) is git's **false** and must not deny. The old code got
+  this right by accident; the new key-shape match gets it right on purpose.
+- The remote name is a case-sensitive subsection and is now reported verbatim.
+  The deny text hands Mason `git config --unset remote.<name>.mirror`, which
+  silently does nothing when the name is not spelled exactly as stored. The old
+  code lower-cased it, so the remedy it printed could not work.
+
+**The placement defect is the more serious of the two, and it is (b) from the
+parked entry below.** The mirror and executable-config checks sat *after* the
+`if (!srcRef) continue` that skips non-main pushes, so they only ever ran on a
+push already classified as main-bound. For the mirror check that is exactly
+backwards: the hazard named in its own deny text is that a bare push updates
+every ref *including main* without naming one, which is precisely the case
+`mainPushSource()` returns nothing for. Measured against the shipped guard on a
+repo carrying `remote.origin.mirror`:
+
+```
+push origin feature   ALLOW      push origin        ALLOW
+push (bare)           ALLOW      push origin HEAD:main   DENY
+```
+
+Only the one form a mirror remote makes unnecessary was caught. Both checks now
+run at full breadth, as their own comments had claimed all along. Fixing the
+parse without this would have shipped a correct parser into a dead call site.
+
+Verified end-to-end against the real hook rather than the parser alone: all four
+forms deny, a control repo without the flag still passes through, and a real push
+from this checkout is unaffected — the hoist is safe here only because (a) below
+is still open, so the husky `core.hooksPath` collision does not fire.
+`guards.test.mjs` pins both directions; those assertions fail on the old ordering.
+
+## 2026-08-05 — Third parked guard finding: executable-config classifier gaps — BRANCH
+
+Codex's re-review of `a9c7b7c1` on PR #313 raised a P1 on the executable-config
+classifier. Reproduced, and it is two defects rather than one: `core.hooksPath`
+and shell-form `credential.helper` are missing from `EXECUTABLE_TRANSPORT_KEYS`
+(a), *and* the classifier sits after a main-bound-only early exit at
+`codex-push-guard.mjs:395`, so on a feature push even `core.sshCommand` — which
+is in the list — allows (b). Codex reported (a) and reproduced (b); its suggested
+fix addresses (a) alone and so would leave its own reproduction allowing.
+
+Parked, not patched, on evidence that the literal fix self-DoSes: husky sets
+`core.hooksPath=.husky/_` in this repo, so naming that key would deny **every**
+push from here. The guard needs to distinguish the committed `.husky/_` path from
+an inherited absolute one — the same approved-value notion the two rewrite
+instances need, now wanted in a third place. Detail, reproductions, and the husky
+collision are in `docs/manual/KNOWN_ISSUES.md`.
+
+Unlike the other two parked instances this one fails **open** rather than closed,
+bounded by already needing command execution in the session to set the config.
+
+## 2026-08-05 — Push guard now denies an inherited `remote.*.mirror` — BRANCH
+
+Codex found on PR #313 that an inherited `GIT_CONFIG*` setting
+`remote.origin.mirror=true` slipped past the destination comparison. `mirror` is
+the config spelling of `--mirror`, and it is the one key here that changes *which
+refs* a bare push sends rather than where they go: with it set, a bare push from a
+feature branch also updates `main`. `mainPushSource()` sees no explicit `main`
+refspec, so the production proof gate was skipped on a push that would in fact
+move `main`. Confirmed against git before fixing — with the override, a dry run
+enumerated `feature -> feature` **and** `main -> main`; without it the same
+command failed with "no upstream branch".
+
+Two mechanisms cover it now, and they fail in opposite directions:
+
+- `configuredMirrorRemotes()` classifies a mirror remote from `config --list`
+  read across both environments. This is the primary deny, and it covers the
+  inherited and local vectors alike.
+- `remote.*.mirror` joins the compared destination lookups. Measured rather than
+  assumed: with that line deleted, every behavioural test still passes, so it is
+  **not** what catches the bug. It stays because the classifier's config read
+  swallows errors and returns `""` — an unreadable config denies nothing —
+  whereas a lookup that succeeds ambiently and fails scrubbed is itself a
+  divergence. It is the fail-closed path for when the classifier goes quiet.
+
+The test asserting that lookup's presence is structural for the same reason, and
+now says so in place: nothing in that file can provoke the case it guards, so
+asserting presence is the only thing stopping a future cleanup from removing it
+as dead weight.
+
+Verified: run against the real inherited `GIT_CONFIG*` in this web session, the
+guard allows an ordinary feature-branch push; a constructed
+`remote.origin.mirror=true` override is denied with the divergence message.
+
+Codex's other two findings on the same PR — that a credential-proxy rewrite makes
+the two reads disagree and denies an ordinary push — are the already-parked issue
+in the entry directly below, not new. The SSH-spelling variant they describe
+(`git@github.com:` → `https://github.com/`) already compares equal through the
+GitHub allow-list; that is this session's own config, and its push is allowed.
+
+## 2026-08-05 — Push guard still denies proxy-installed web sessions — PARKED
+
+Codex found on PR #313, and reproduction confirmed, that the web/mobile push-guard
+fix earlier on this branch does not cover sessions that also install a
+credential-proxy rewrite — the "third" rewrite noted in the resolved
+`backup-claude-memory` entry. Sessions carrying only the two SSH-spelling
+normalizations push fine, which is the shape the fix was developed and verified
+in, so it went unnoticed.
+
+With `url.http://<proxy>/git/.insteadOf https://github.com/`, `remote -v` reports
+the proxy URL, `pushDestinationKey()` falls back to `raw <url>` where the scrubbed
+read produced `github <id>`, and `divergentPushLookups()` denies even an ordinary
+`HEAD:feature` push — in exactly the environment the guard exists to unblock.
+
+Parked rather than patched. A fix needs an explicit notion of an approved rewrite
+target: comparing only the `guarded-app` boolean is the draft already rejected as
+too weak, matching on the `owner/repo` suffix would let any host with a matching
+path compare equal, and applying the unioned rewrite table to both reads makes
+them agree by construction. This session carries no proxy rewrite, so only
+unit-level proof was available — a security guard that has already sprung five
+fail-open holes deserves better than that. Full reproduction and the recommended
+approach are in `docs/manual/KNOWN_ISSUES.md`; fix it from a session that has the
+proxy installed, where the real push is the proof.
+
+Codex found a second instance of the same defect on the same PR, after this one
+was parked: `backup-claude-memory` refuses under a proxy rewrite too, because the
+proxy-spelled push URL fails its `BACKUP_REPO_ID` identity check. The
+`backup-claude-memory` RESOLVED note in `KNOWN_ISSUES.md` claimed more than it had
+proved — it was verified against the two SSH-spelling rewrites, not a proxy — and
+has been corrected to say so. Both instances want the same approved-rewrite-target
+notion and should be fixed together.
+
+## 2026-08-05 — Create-form defaults survive the customer route reset — BRANCH
+
+The stale-customer fix earlier in this branch cleared `CustomerDetail`'s record
+on every `:id` change, which was correct for switching between customers but
+overshot on `/customers/new`. That route reuses the same component, so the reset
+ran there too and replaced the create defaults with `{}` — dropping
+`assigned_sales_rep`, `assigned_tier`, `is_active` and the default commission
+split that `useState` seeds a fresh visit with.
+
+Nothing looked wrong: those fields are not typed in, so the form appeared
+normal. The damage showed up in the payload. `save_customer` requires a sales
+rep to self-assign, so a rep who opened the create form by navigating from an
+existing customer could fill in a farm name, hit Create Customer, and have the
+create rejected — while an admin doing the same silently produced an
+unassigned, untiered customer. (Codex, PR #313.)
+
+The defaults now live in one `makeBlankCustomer()` factory used by both the
+initial mount and the reset, so the two paths cannot drift again. The reset
+reads the current profile id through a ref rather than an effect dependency —
+adding `profile?.id` to the deps would re-run the reset when the profile
+resolves and clobber an already-loaded customer.
+
+Regression test asserts the create payload carries `assigned_sales_rep`,
+`assigned_tier` and `is_active` after a jump from an open customer; it fails
+against the `{}` reset. The mocked `CommissionSplitEditor` became controlled in
+the process — as a bare `<div />` it hid that the seeded split row starts with
+an empty recipient and blocks saving until filled.
+
+## 2026-08-05 — Replaced destination identity with a gate-decision comparison — BRANCH
+
+Five review rounds found five distinct holes in the same helper, and every fix
+sprang the next leak. The helper answered "are these two URLs the same
+repository?" — a question with no reliable string answer:
+
+- **Port invisible** (CodeRabbit) — `URL.hostname` drops the port, so
+  `github.com:8443/owner/repo` canonicalized identically to the real repository.
+- **Namespace collision** (Codex) — canonical keys and the raw fallback shared a
+  spelling, so a bare `github.com/owner/repo` token compared equal to the
+  canonical key of `https://github.com/owner/repo`.
+- **Lowercased path** (CodeRabbit) — folding the whole path merged `Team/Repo`
+  with `team/repo`, which are different repositories on a case-sensitive server.
+- **Dropped SSH user** (Codex) — `alice@host:repo` and `bob@host:repo`
+  canonicalized identically, though a relative path resolves under a different
+  account.
+- Plus the original SSH-spelling gap that started the sequence.
+
+Mason's call: stop patching and change the question. The first attempt went too
+far in that direction — it compared ONLY the boolean "is this destination the
+guarded production repo", on the theory that a port, path case, or SSH user
+could differ freely as long as neither side was production.
+
+**That version was fail-open, and running the real guard proved it.** Two
+reasons, both invisible to the unit tests:
+
+1. `urlIsGuardedApp` is **path-only by design** — it gates on `owner/repo`
+   whatever host precedes it, so an SSH alias or mirror of the production repo
+   still gates. Correct for gating; wrong for comparison. It returns `true` for
+   `https://evil.example.com/masonwells1/CRX_Manager_V1.0`, so a rewrite moving
+   the push to another HOST folded to `guarded-app` on both sides, the
+   comparison saw no change, and the push was **allowed**. Failing closed in the
+   classifier fails OPEN in a comparison built on it.
+2. A feature-branch push is not gated at all, so this comparison is the only
+   thing between an inherited rewrite and the objects landing elsewhere.
+   "Neither side is production" does not mean nothing was lost.
+
+The shipped design carries **both** halves: the gate classification and a
+spelling key. Spelling collapses in exactly one place — GitHub, whose repository
+paths are genuinely case-insensitive and whose alternate hostnames GitHub itself
+publishes. That covers the case this rework exists for (a credential proxy
+re-spelling `git@github.com:owner/repo` as `https://github.com/owner/repo`).
+Everywhere else the key is the raw URL text, so a changed host, path case, SSH
+login user, or port all differ and deny.
+
+Both reviewers were right and were asking for the same boundary from opposite
+sides — CodeRabbit that a lowercased path merges `Team/Repo` with `team/repo`,
+Codex that a dropped SSH user merges `alice@host:repo` with `bob@host:repo`.
+Neither is possible now, because off GitHub nothing is normalized at all. The
+cost is a false *denial* if a proxy re-spells a non-GitHub remote: the safe
+direction, not applicable to this repo, and the deny message names the lookup
+that disagreed.
+
+Verified by running the real hook against a real repo under real inherited
+`GIT_CONFIG_*`: 8 cases — ordinary branch push clean and under the web-session
+rewrite (both allowed), redirects to another repo and another host, pushes to
+`main` clean and rewritten, a force push, and an inline `-c` push (all denied).
+That harness is what caught the off-host hole; it also caught a bad fixture in
+its own first draft, where an `insteadOf` value carried a `.git` suffix the
+remote URL lacks, so the rewrite never matched and the test proved nothing.
+
+Writing the tests immediately caught a fail-open bug in the new code: splitting
+the line on whitespace put the literal `(push)` marker into the URL slot when a
+URL was missing, classifying a malformed line as `unrelated` — failing open on
+exactly the input that must fail closed. Now parsed by line shape, with an
+explicit test.
+
+Re-verified end to end: ordinary pushes still allowed on all three remote
+spellings, and rewrites to a different repository, a different host, plain http,
+a loopback proxy, a non-default port, plus any main-bound push, all still deny.
+All 22 hook suites, the Codex production-action-guard suite, and
+`test:agent-workflows` pass.
+
+### Round six — the same mistake one layer in
+
+Both reviewers landed on the same remaining hole, from opposite directions: the
+GitHub carve-out was keyed on `canonicalRepoId` starting with `github.com/`, and
+that is a *gating* normalizer, not a comparison one. It reads `URL.hostname`
+(no port) and ignores the scheme entirely, so `https://github.com:8443/…`,
+`http://github.com/…` and `git://github.com/…` all produced the same key as
+plain HTTPS. An inherited rewrite from HTTPS to any of them changed the endpoint
+or downgraded the transport while the comparison saw nothing move.
+
+Exactly the failure the off-host hole was one round earlier — a normalizer built
+for gating, reused for comparison, discards precisely what comparison needs.
+
+The carve-out is now an allow-list of **spellings**, parsed on its own terms:
+HTTPS on implicit-or-explicit 443, SSH on implicit-or-explicit 22,
+`ssh.github.com` only on its documented explicit 443, and scp-style
+`git@github.com:owner/repo`, with the SSH user absent or `git` (the only one
+GitHub accepts). Every other scheme, port, host, user or unparseable form gets a
+raw key and denies.
+
+Also fixed: `CONFIG_ROOT_ENV_RE`'s lookahead excluded `[A-Za-z0-9]` but not `_`,
+so `HOME_DIR=…` and `GIT_DIR_BACKUP=…` matched their own prefixes and denied an
+ordinary push. (CodeRabbit's example, `GIT_DIRTY`, never actually matched — `T`
+was already excluded — but the underscore gap it pointed at was real.)
+
+Verified by re-running the real hook against a real repo under real inherited
+`GIT_CONFIG_*`: 11 cases, all passing. Allowed — an ordinary feature push, and
+the web-session rewrite re-spelling the same repo as both `git@github.com:` and
+`ssh://git@github.com/`. Denied — rewrites to a different repo, a different
+host, a non-default GitHub port, `http://`, `git://`, a non-`git` SSH user, plus
+main-bound and force pushes. The three GitHub-endpoint cases are the ones this
+round closed, and the unit tests alone did not catch them.
+
+### Round six, CRM side
+
+Two findings on `CustomerDetail`, both from the reused-component shape:
+
+- **`/customers/new` kept the previous customer** (Codex). The route-change
+  effect returned early on `isNew`, reasoning a blank form needs no
+  invalidation — true only when the create form is opened fresh. Jumping to it
+  FROM a customer left that customer's fields, addresses and row version behind
+  a "Create Customer" button, and saving sent the stale payload with
+  `p_customer_id: null`, duplicating the old record. The clears now always run;
+  only the loading skeleton is conditional. Covered by a new test.
+- **Deferred `initialLoadDone` flag** (CodeRabbit). The flag is set a macrotask
+  late, so a route change can land in the gap and the previous customer's timer
+  re-arms it after the route-change effect cleared it — marking the next
+  customer's freshly loaded record dirty. Now `isSuperseded()`-guarded like
+  every other deferred write in that loader.
+
+## 2026-08-05 — Codex review of PR #313: the push-guard fix was half-done — BRANCH
+
+Marking the PR ready triggered an independent Codex review, and it found that the
+2026-08-04 push-guard fix **did not actually fix the reported problem for every
+checkout.**
+
+Comparing `git remote -v` as raw text was too literal. A credential proxy's
+rewrite exists precisely to re-spell `git@github.com:owner/repo` as
+`https://github.com/owner/repo` — the same repository, reached the same way — so
+the scrubbed and ambient reads differ as strings while nothing about the
+destination has moved. Every SSH-remote checkout in a web or mobile session was
+therefore still denied: the original bug, still live, in the change that was
+supposed to remove it.
+
+It survived the first round's verification because **this checkout happens to use
+an HTTPS remote.** Testing the one configuration to hand, and generalising from
+it, is what let a half-fix read as a whole one. Reproduced before fixing: HTTPS
+remote allowed, `git@github.com:` and `ssh://git@github.com/` both denied.
+
+Destinations now compare by REPOSITORY IDENTITY rather than spelling.
+`equivalentDestinationKey` maps a URL to its canonical repository only when the
+transport is one git reaches that repository with (https, ssh, scp-style);
+`canonicalPushDestinations` applies it to the push lines of `remote -v`. Anything
+without a canonical form — a different repository, another host, a downgrade to
+plain http, a proxy interception, an unrecognised transport — keeps its raw text,
+differs from the other side, and denies. It fails closed by construction rather
+than by an added rule.
+
+Re-verified against the real guard, not just units. Allowed: the benign SSH→HTTPS
+re-spelling, on all three remote spellings. Still denied: a rewrite to a different
+repository, to a different host, to plain http, to a loopback proxy, and any
+main-bound push. All 22 hook suites, the Codex production-action-guard suite, and
+`test:agent-workflows` pass.
+
+## 2026-08-05 — CodeRabbit third review round on PR #313 — BRANCH
+
+One finding, and a correct one: the last remaining leak of the route-session
+class. `fetchAddresses` applied its result with no route check. The save guard
+added in the previous round only covers the moment the RPC answers — the address
+reload that save *starts* outlives it. So customer A's save completes, its
+address read is still in flight when the route moves to customer B, and A's rows
+land in B's address editor. Guarded after the await, before both the error branch
+and `setAddresses`.
+
+The ref that guard reads had to move above `fetchAddresses` to be in scope, which
+also puts it above every per-customer read that uses it.
+
+Regression test delays customer 1's post-save address read, navigates to customer
+2, then releases it; verified failing without the guard, where customer 1's
+street genuinely appears in customer 2's form. 347 tests across 45 page suites,
+typecheck and lint clean.
+
+## 2026-08-05 — CodeRabbit second review round on PR #313 — BRANCH
+
+Three findings on the previous round's fixes. Two were defects introduced by
+those fixes.
+
+**`backup-claude-memory.mjs` false refusal on multiple push URLs.** The new
+resolved-vs-verified comparison called `git remote get-url --push <remote>`,
+which prints only the FIRST push URL, while `git remote -v` prints every one. A
+remote carrying two approved `pushurl` entries produced two verified URLs
+against one resolved URL, so the sets disagreed and the backup was refused —
+a false refusal of a correct destination, precisely the failure this check
+exists to avoid creating. Now uses `--push --all`. Reproduced against real git
+first, and the regression test was verified failing without the flag. Note the
+fixture needs TWO added entries: the first `--add --push` only converts the
+remote's single `url` into one `pushurl`, which resolves correctly either way,
+so a one-entry fixture passes without the fix and proves nothing.
+
+**`CustomerDetail` ref mutated during render.** `currentIdRef.current = id` ran
+in the render body. React may replay or discard a render, so a discarded render
+could publish a customer id that was never committed. Moved into a
+`useLayoutEffect`, which commits before the passive data-loading effects, so the
+ref is always the committed route by the time any fetch reads it.
+
+**`CustomerDetail` route session not fully scoped.** Guarding the in-flight
+snapshot stopped the previous customer being installed over the new one, but two
+gaps remained. The previous customer stayed *on screen* — name, fields,
+addresses, row version — until the new snapshot landed, so editing looked like
+editing the new customer while every field belonged to the last. That state is
+now dropped on a committed id change and the loading skeleton shows until the
+real record arrives. Separately, a save issued for customer A and answered after
+navigating to B applied A's post-save handling to B's session: its row version,
+conflict dialog, success toast, and an address reload that pulled A's addresses
+into B. That work is now skipped when the route has moved on, while the
+idempotency key is still released and `saving` still clears — leaving either
+would wedge the next save.
+
+The save test needed strengthening before it proved anything: with the guard
+disabled it still passed, because the cleared row version diverted the stale
+save into the recovery path rather than the success path. It now asserts on what
+actually leaks — customer A's stale-save conflict dialog appearing over customer
+B, demanding a Reload of a record never touched — and was verified failing
+without the guard.
+
+346 tests across 45 page suites, backup suite 235 assertions, all 22 hook
+suites, typecheck and lint clean.
+
+## 2026-08-04 — CodeRabbit review round on PR #313 — BRANCH
+
+Five findings, all verified against the code before acting; none dismissed.
+
+**`CustomerDetail` primary-record stale write (the real one).** The earlier fix in
+this branch sequence-guarded the tab loader but left the primary record
+unguarded. `fetchCustomerSnapshot` had no staleness check, so navigating A → B
+while A's reads were in flight let A install its customer, addresses, and row
+version over B — and the next save would then write A's form fields to B's `id`
+under A's row version. `handleSave` had no guard either. Both now do: the
+snapshot bails at every await once the route has moved on (the parent-name
+lookup included, since it outlives the snapshot it belongs to), and a save
+refuses while the loaded record and the route disagree. The new test was
+verified failing without the guard — customer 1's row genuinely overwrote
+customer 2's form.
+
+**`Customers` truncation false positive.** `rows.length >= CUSTOMER_FETCH_LIMIT`
+flagged a book of exactly 1,000 as truncated, warning that customers were hidden
+when every one was shown. It now decides from the server's exact total, falling
+back to the page-length test only when no count is returned — over-warning is
+the safe direction, silently dropping customers is not. Covered both ways.
+
+**`backup-claude-memory.test.mjs` incomplete isolation.** The new environment
+sweep cleared `GIT_CONFIG_COUNT`/`KEY_<n>`/`VALUE_<n>` but not
+`GIT_CONFIG_PARAMETERS`, which is how git propagates `-c` settings to child
+processes, nor plain `GIT_CONFIG`. A suite run under `git -c …` would still have
+tested the caller rather than the script. The sweep is now `GIT_CONFIG*` and runs
+BEFORE the empty-file pins are installed, since a broad sweep afterward would
+delete them.
+
+**Two documentation corrections.** The audit verdict said everything remaining
+was a coverage or adoption gap while the same document records an open
+retry-unsafe fact insert; the verdict now names that weakness explicitly.
+`afterwards` → `afterward`.
+
+## 2026-08-04 — Push guard no longer denies every web/mobile session — BRANCH
+
+`codex-push-guard` treated the mere PRESENCE of `GIT_CONFIG*` variables, and of
+an inherited `GIT_ASKPASS`, as evidence a push could reach production. Claude
+Code on the web sets both — `GIT_CONFIG_*` installs a `url.…insteadOf` rewrite
+for its credential proxy, and `GIT_ASKPASS` points at that proxy — so **every**
+push from a web or mobile session was denied, ordinary feature branches
+included. The guard was unusable outside a laptop.
+
+Presence was never the hazard; a changed destination is. For `GIT_CONFIG*`, the
+guard now reads every answer it classifies a push from twice — once with the
+variables stripped, once exactly as the push will see them — and denies only
+when the two disagree. `pushDestinationLookupArgs` names those answers (the
+destination remotes, the remote a bare push picks, the refspec it sends) and
+`divergentPushLookups` compares them, counting a one-sided error as a
+divergence. The URL-rewrite table and the settings naming a carrier program are
+deliberately not compared but UNIONED across both reads: those classifiers can
+only ever make the gate APPLY, so reading both can gate more and never less —
+strictly safer than the single scrubbed read used before.
+
+`GIT_ASKPASS`, `SSH_ASKPASS`, and `GIT_CREDENTIAL_HELPER` no longer count as
+inherited destination overrides. They answer a prompt on a connection git has
+already resolved, so they cannot move objects to another repository, and only a
+shell already controlling the guard's own process could set them. Written into
+the command they remain a deliberate act and are still denied by
+`pushUsesTransportEnv`; only the inherited read is relaxed.
+
+Verified in the web session where the regression reproduces: an ordinary
+feature-branch push is allowed, a main-bound push is still gated, and a written
+`GIT_ASKPASS` or `GIT_SSH_COMMAND` is still denied. All 22 `.claude/hooks`
+suites, the Codex production-action-guard suite, and `test:agent-workflows`
+pass. No migrations, no live writes, no schema changes.
+
+The same proxy configuration also broke `scripts/backup-claude-memory.test.mjs`,
+which read the host's global git config instead of pinning its own — and since
+the pre-commit hook runs that suite, it blocked every commit from a web session.
+The suite now pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to an empty file and
+strips inherited `GIT_CONFIG_*` at startup, so it exercises the script rather
+than the machine; its round-26 cases still install their own rewrites and still
+detect them.
+
+`backup-claude-memory.mjs` itself had the same defect for the same reason and,
+on Mason's approval, is fixed here too: it refused to stage whenever ANY
+`url.*.insteadOf`/`url.*.pushInsteadOf` rewrite existed, so the off-site memory
+backup could not run from a web or mobile session at all.
+
+Investigating it turned up the fact that decided the fix — **the ban was
+redundant.** `git remote -v` prints its `(push)` line with both rewrite forms
+already applied, byte-identical to `git remote get-url --push` (verified against
+git 2.43). The script derives its push URLs from exactly those lines, so a
+rewrite that redirects the push changes those URLs, and the existing
+repository-identity, credential, and transport checks were already judging the
+real destination and already refusing it. The ban was a cruder second layer over
+a control that was already working, and it was the layer denying every harmless
+rewrite.
+
+So it was removed rather than reworked, and replaced by a check that the
+redundancy holds: the script now asks git for each remote's push URL and
+requires that set to match the URLs it just validated, failing closed on
+divergence, unenumerable remotes, or an unresolvable URL. If a future git ever
+made `remote -v` show something other than the address git contacts, the run
+refuses instead of validating a URL that is never used.
+
+All three round-26 redirect cases still refuse — the local `pushInsteadOf` one
+now via the credential check, one step later and for a more specific reason,
+still without echoing the secret — and a new case covers the relaxation itself.
+234 assertions pass. Verified in the real web session: staging into a private
+`CRX_Backups` clone with the ambient rewrites active now succeeds and reports
+`Destination verified`.
+
+## 2026-08-04 — CRM functional audit + two fixes — BRANCH
+
+Full read-only audit of the customer-relationship surface (`/customers`,
+`/customers/:id`, `/call-lists`, customer applicator licenses, the six CRM
+tables and their RPCs), written up in
+`docs/audits/2026-08-04-crm-functional-and-coverage-audit.md`. RLS is enabled
+with policies on all nine customer-domain tables and the July
+relationship-intelligence build is intact; the material finding is that the CRM
+holds no interactions, facts, documents, or customer applicator licenses, and
+97% of active customers have no assigned sales rep — which is what makes the
+unassigned-accounts call list, the crop filter, credit limits, statement email,
+and RUP compliance status non-functional in practice.
+
+Two code defects were found and fixed:
+
+`CustomerDetail` is not remounted when only the `:id` route param changes, so
+its cached Financials fetch and its unguarded tab loads could render one
+customer's AR aging, statement transactions, prepay credits, quotes, orders,
+deliveries, fields, timeline, or purchase history under a different customer's
+name — reachable by jumping between customer profiles through the command
+palette. Every state write in `fetchTabData` is now sequence-guarded and all
+per-customer caches reset on `id` change. The regression test was verified
+failing without the fix.
+
+The customer list fetched with a silent 500-row cap, had no active/inactive
+filter (so deactivated customers stayed in the working list permanently), and
+had no sales-rep column or filter despite rep assignment being the axis the call
+lists and RLS scoping are built on. It now warns on truncation, defaults to the
+active book, filters by status and by rep (including unassigned), shows email
+and resolved rep name, and surfaces a count of active customers with no rep.
+
+No migrations, no live writes, no schema changes.
+
 ## 2026-08-06 — Factory durability and recovery routing — PREPARED
 
 The factory durability follow-up adds a stable, SHA-256-manifested snapshot of
@@ -293,6 +1151,122 @@ expanded rollback smoke proves a $50 fully paid invoice plus a $100 open invoice
 returns $150 invoiced, $50 paid, two invoices, and $100 outstanding. The
 follow-up passed content-bound security/drift reviews, post-apply catalog and
 grant checks, and left no fixture or business-data residue.
+
+## 2026-08-05 — Coverage ratchet raised and six untested modules covered
+
+Acts on the quick-win recommendations of the previous day's coverage analysis. The
+`vite.config.ts` ratchet floor was raised from 36/27/24/34 to 45/36/32/43 — it
+had been set against the 2026-07-13 baseline and drifted ~11 points below actual,
+so coverage could have fallen by a quarter with CI still green. Six new test
+files (102 assertions) cover `money.ts` and five small pure modules that had none.
+`money.test.ts` pins the cents-vs-dollars distinction the module exists to
+prevent, including that passing a cents value to `formatUSD` overstates by
+exactly 100x; every `formatUSD` call site passing a `*_cents` value was checked
+and is correct, so there is no live bug — but nothing enforced the manual `/ 100`
+until now.
+
+`scripts/log-session.mjs` had four defects, all found while it generated the
+analysis session's own changelog entry: `--help` was unhandled and wrote a live
+{SUMMARY} stub into this file; `--author=Mason` never matched agent commits so
+every agent session fell back to the last 15 commits and claimed unrelated merged
+work (14 commits and 7 migrations were attributed to a docs-only session); the
+migrations lookup backfilled from recent history when the branch diff was empty;
+and the whole `--summary` string became the `##` heading. All four are fixed and
+guarded by `scripts/log-session.test.mjs`, now wired into `test:correction-guards`.
+
+Three further defects were found during review and fixed on follow-up branches.
+All three were introduced by the fixes above, not by the original script:
+
+- Collapsing every git error to `""` made an unreachable `origin/main`
+  indistinguishable from "no commits ahead", so the script would silently use the
+  unrelated 12-hour window and report no migrations — reviving the exact
+  false-attribution bug it was meant to end. `runGit()` now returns `{ok, out}`
+  and refuses to write on any git failure. (CodeRabbit, PR #310.)
+- The guard suite called `git diff origin/main...HEAD` unguarded, which exits 128
+  in any checkout without a local `origin/main` — shallow clones, fresh worktrees,
+  remote containers. Because the suite runs in `test:correction-guards`, that
+  aborted the pre-commit gate and blocked commits outright. Every git call in the
+  suite is now guarded, blocks needing the ref skip with a stated reason and count,
+  and a new block asserts the script's refusal path. (Codex, PR #310.)
+- The 12-hour window is **gone entirely** (Codex, PR #317). #310 shipped it behind
+  a `HEAD === origin/main` guard, on the reasoning that the fallback was only
+  reachable when the branch was level with main. That guard was the wrong shape:
+  level with main is the *common* state — right after a merge, or during any
+  session whose work is not yet committed — and there the last 12 hours of `main`
+  is other people's merged work. The guard narrowed the bug without fixing it.
+  Commits now come from one source, `origin/main..HEAD`, and an empty range
+  honestly reports `(none found)`.
+
+A further review finding — migrate all TypeScript money values to `bigint` — was
+declined and subsequently withdrawn by the reviewer. The "money is bigint cents"
+hard rule governs Postgres storage and forbids float math; it is not a required
+TypeScript representation. `formatCents` returns a display string, so the proposed
+bigint return had nowhere to go, and a money-representation refactor does not
+belong in a test-coverage change. The durable fix for the real risk here is a
+branded `Cents` type or the lint rule `money.ts` already contemplates.
+
+PROOF — Ran: `npx vitest run --coverage` (320 files, 4259 tests, 0 failures;
+47.13 lines / 37.91 branches / 34.11 functions / 44.74 statements); `tsc --noEmit`;
+`eslint .`; `vite build`; `test:correction-guards`; `test:agent-workflows`. Saw:
+all green, 21 assertions in the log-session guard suite (20 at #310, plus the
+#317 guard asserting no `--since=` window can return). Separately proved the new
+ratchet is enforced — a single-file coverage run fails citing all four new
+thresholds — and mutation-tested the `--help` and `git log -15` guards, both of
+which fail the suite when the fix is reverted. The shallow-checkout fix was proved
+in a scratch repo with no `origin/main`: the pre-fix suite dies with status 128,
+the fixed suite exits 0 with 15 assertions and 3 stated skips. The #317 fix was
+proved the same way: with `origin/main` set to `HEAD` and one unrelated commit in
+recent history, the pre-fix script claims that commit and the fixed script reports
+`(none found)`.
+
+- **Migrations touched**: none.
+- **Delivery note**: the code changes were pushed through the GitHub MCP API, not
+  git; every file was verified byte-identical to the locally tested version
+  afterwards.
+
+## 2026-08-04 — Test coverage analysis
+
+Measured the real test-coverage baseline and identified six areas to improve. A
+full `vitest run --coverage` reports 47.11% lines / 44.71% statements / 37.85%
+branches / 34.07% functions — roughly 11 points above the ratchet floor in
+`vite.config.ts`, which has not been raised since the 2026-07-13 baseline.
+`src/lib` (79.9%) and `src/hooks` (81.3%) are healthy; 76% of all uncovered
+lines sit in `src/pages` (33.6% lines, 20.6% functions).
+
+Findings, worst first:
+
+- ~30 test files assert `toContain()` against applied migrations, which the hard
+  rules forbid editing — so they cannot fail. Cross-referencing the 33
+  test-pinned migrations against later `CREATE OR REPLACE` definitions found 20
+  stale pairs; `save_purchase_order` has been redefined 10x since the migration
+  its tests pin.
+- The 413 SQL functions (253 called from the frontend) have no executable tests,
+  and the 13 `describe.skipIf(!isLiveDB)` blocks in `schemaIntegrityLive.test.ts`
+  are skipped in every CI run — `CRX_LIVE_SCHEMA_TESTS` is set nowhere in
+  `.github/`.
+- 1075 E2E tests exist across 94 specs; CI runs the 6 tagged `@smoke`, because
+  Playwright targets the production Supabase project.
+- Mirror-style tests that re-implement page logic leave `NewDelivery.tsx`,
+  `FieldStop.tsx` and `LabelReview.tsx` at 0% coverage despite having test files.
+- Both prepay panels, `PaymentHistory.tsx` and `invoiceSummaryPdf.ts` are at 0%;
+  branch coverage lags lines sharply in `statementPdf.ts` (88%/54%) and
+  `invoicePdf.ts` (84%/61%).
+- `src/lib/money.ts` is untested and its documented no-alias rule is unenforced.
+  Every `formatUSD` call site passing a `*_cents` value was checked and is
+  correct — no live bug, but nothing verifies the manual `/100`.
+
+Analysis only — no source or test changes. Full write-up in
+`docs/audits/2026-08-04-test-coverage-analysis.md`.
+
+PROOF — Ran: `npx vitest run --coverage` (314 files, 4157 passed, 123 skipped,
+284s); a script cross-referencing every test-pinned migration against later
+function redefinitions; `grep` over `tests/e2e` for `@smoke` vs total `test()`
+count. Saw: the coverage summary above, the 20 stale pinned pairs, and 6
+`@smoke` tests against 1075 total.
+
+- **Migrations touched**: none.
+- **Not delivered by git** — the repo's guards block commit and push from a
+  remote container. The audit docs reached GitHub via the GitHub MCP API instead.
 
 ## 2026-08-03 — Statement balance consistency fixes — LIVE
 

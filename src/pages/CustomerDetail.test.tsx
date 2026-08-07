@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 
 const {
   mockFrom,
@@ -26,7 +26,7 @@ type QueryResult = { data: unknown; error: unknown };
 function query(result: QueryResult): Record<string, unknown> {
   const chain: Record<string, unknown> = {};
   const self = (..._args: unknown[]) => chain;
-  for (const name of ['eq', 'neq', 'is', 'in', 'order', 'limit', 'single', 'maybeSingle', 'insert', 'update', 'delete', 'select']) {
+  for (const name of ['eq', 'neq', 'is', 'in', 'gt', 'order', 'limit', 'single', 'maybeSingle', 'insert', 'update', 'delete', 'select']) {
     chain[name] = self;
   }
   const promise = Promise.resolve(result);
@@ -81,7 +81,18 @@ vi.mock('../hooks/useIdempotencyKey', () => ({
 vi.mock('../hooks/useUnsavedChanges', () => ({ useUnsavedChanges: (dirty: boolean) => { dirtyStates.push(dirty); return { state: 'unblocked', reset: vi.fn(), proceed: vi.fn() }; } }));
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
 vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
-vi.mock('../components/ui/CommissionSplitEditor', () => ({ default: () => <div /> }));
+// Controlled, like the real editor: the create form seeds one split row with an
+// empty recipient, and saving is blocked until it is filled. A `<div />` mock
+// hides that, so the create-route tests below need a way to fill it in.
+vi.mock('../components/ui/CommissionSplitEditor', () => ({
+  default: ({ value, onChange }: { value?: { splits?: { recipient: string; percentage: number }[] }; onChange: (v: { splits: { recipient: string; percentage: number }[] }) => void }) => (
+    <input
+      aria-label="commission recipient"
+      value={value?.splits?.[0]?.recipient ?? ''}
+      onChange={(e) => onChange({ splits: [{ recipient: e.target.value, percentage: 100 }] })}
+    />
+  ),
+}));
 vi.mock('../components/field-app/ApplicationServicePicker', () => ({ default: () => <div /> }));
 vi.mock('../components/customers/CustomerSummaryBar', () => ({ default: () => <div /> }));
 vi.mock('../components/customers/CustomerContacts', () => ({ default: () => <div />, CustomerInteractionsHistory: () => <div /> }));
@@ -102,6 +113,41 @@ const newer = { ...original, farm_name: 'Newer Farm', contact_name: 'Newer Conta
 
 function renderDetail() {
   return render(<MemoryRouter initialEntries={['/customers/customer-1']}><Routes><Route path="/customers/:id" element={<CustomerDetail />} /></Routes></MemoryRouter>);
+}
+
+/**
+ * Jump to another customer WITHOUT unmounting CustomerDetail — exactly what the
+ * command palette does from an open customer profile. The route element has no
+ * key, so React Router keeps the same instance mounted across the :id change and
+ * every per-customer cache inside it has to invalidate itself.
+ */
+function SwitchCustomerButton() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate('/customers/customer-2')}>Jump to customer 2</button>;
+}
+
+function renderDetailWithCustomerSwitch() {
+  return render(
+    <MemoryRouter initialEntries={['/customers/customer-1']}>
+      <SwitchCustomerButton />
+      <Routes><Route path="/customers/:id" element={<CustomerDetail />} /></Routes>
+    </MemoryRouter>,
+  );
+}
+
+/** Same reused-instance jump, but to the CREATE route (`:id` === 'new'). */
+function NewCustomerButton() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate('/customers/new')}>New customer</button>;
+}
+
+function renderDetailWithNewCustomerJump() {
+  return render(
+    <MemoryRouter initialEntries={['/customers/customer-1']}>
+      <NewCustomerButton />
+      <Routes><Route path="/customers/:id" element={<CustomerDetail />} /></Routes>
+    </MemoryRouter>,
+  );
 }
 
 describe('CustomerDetail stale whole-record save', () => {
@@ -291,6 +337,267 @@ describe('CustomerDetail stale whole-record save', () => {
         farm_name: 'Second edit after uncertain save',
       }),
     })));
+  });
+
+  it('reloads the financials tab when the route switches customers without remounting the page', async () => {
+    // The financials tab caches its fetch in a ref. CustomerDetail is not
+    // remounted when only :id changes, so before this guard existed the tab
+    // short-circuited on the cached flag and rendered the PREVIOUS customer's
+    // AR aging, statement and prepay credits under the new customer's name.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') return customerQuery(() => original);
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'get_ar_aging') {
+        return Promise.resolve({
+          data: [
+            { customer_id: 'customer-1', farm_name: 'Original Farm', current_amount: 1234, days_30: 0, days_60: 0, days_90: 0, over_90: 0, total_outstanding: 1234 },
+            { customer_id: 'customer-2', farm_name: 'Second Farm', current_amount: 5678, days_30: 0, days_60: 0, days_90: 0, over_90: 0, total_outstanding: 5678 },
+          ],
+          error: null,
+        });
+      }
+      if (name === 'get_customer_statement') return Promise.resolve({ data: [], error: null });
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderDetailWithCustomerSwitch();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'financials' }));
+    expect(await screen.findByText('$1,234.00')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+
+    expect(await screen.findByText('$5,678.00')).toBeInTheDocument();
+    expect(screen.queryByText('$1,234.00')).not.toBeInTheDocument();
+  });
+
+  it('ignores a slow snapshot for the previous customer that lands after the route moved on', async () => {
+    // The tab loader was sequence-guarded, but the PRIMARY record was not. Customer
+    // 1's reads are held open here until customer 2 is already on screen, which is
+    // what a slow connection does on its own. Without the guard, customer 1's
+    // record, addresses and row version install over customer 2 — and the next save
+    // writes customer 1's fields to customer 2's id under customer 1's row version.
+    let releaseFirstCustomer!: () => void;
+    const firstCustomerGate = new Promise<void>((resolve) => { releaseFirstCustomer = resolve; });
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 3, crops: [], default_commission_split: null }
+      : { id: 'customer-1', farm_name: 'Original Farm', row_version: 1, crops: [], default_commission_split: null });
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'customers') return query({ data: [], error: null });
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+      const settle = async (): Promise<QueryResult> => {
+        if (requested === 'customer-1') await firstCustomerGate;
+        return { data: record(requested), error: null };
+      };
+      chain.maybeSingle = () => settle();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => settle().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => settle().catch(reject);
+      chain.finally = (callback: () => void) => settle().finally(callback);
+      return chain;
+    });
+
+    renderDetailWithCustomerSwitch();
+    // Customer 1 is still in flight — jump away before it can land.
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+    expect(await screen.findByDisplayValue('Second Farm')).toBeInTheDocument();
+
+    releaseFirstCustomer();
+    await waitFor(() => expect(screen.getByDisplayValue('Second Farm')).toBeInTheDocument());
+    expect(screen.queryByDisplayValue('Original Farm')).not.toBeInTheDocument();
+  });
+
+  it('does not land a save for the previous customer on the one now open', async () => {
+    // Saving customer 1 and navigating to customer 2 before the RPC answers. Every
+    // post-save step belongs to customer 1 — its row version, its success toast,
+    // its address reload — so none of it may apply to customer 2's session.
+    let releaseSave!: (value: { data: unknown; error: unknown }) => void;
+    const savePending = new Promise<{ data: unknown; error: unknown }>((resolve) => { releaseSave = resolve; });
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 3, crops: [], default_commission_split: null }
+      : { ...original, id: 'customer-1' });
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table !== 'customers') return query({ data: [], error: null });
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+      const result = () => Promise.resolve({ data: record(requested), error: null });
+      chain.maybeSingle = () => result();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => result().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => result().catch(reject);
+      chain.finally = (callback: () => void) => result().finally(callback);
+      return chain;
+    });
+    mockRpc.mockImplementation(() => savePending);
+
+    renderDetailWithCustomerSwitch();
+    const farmName = await screen.findByDisplayValue('Original Farm');
+    fireEvent.change(farmName, { target: { value: 'Edited While Leaving' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+    expect(await screen.findByDisplayValue('Second Farm')).toBeInTheDocument();
+
+    releaseSave({ data: { customer_id: 'customer-1', row_version: 5 }, error: null });
+
+    await waitFor(() => expect(screen.getByDisplayValue('Second Farm')).toBeInTheDocument());
+    // The strongest signal: customer 1's row version is gone with its session, so
+    // ungated post-save handling resolves the returned token against nothing,
+    // decides it cannot prove ownership, and raises customer 1's stale-save
+    // conflict dialog over customer 2 — demanding a Reload of a record that was
+    // never touched. Neither that dialog nor its warning belongs here.
+    expect(screen.queryByRole('button', { name: 'Reload Customer' })).not.toBeInTheDocument();
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Customer updated');
+    expect(mockToast).not.toHaveBeenCalledWith(
+      'warning',
+      'Customer saved, but its save-protection version could not be confirmed. Reload before editing or saving it again.',
+    );
+    expect(screen.queryByDisplayValue('Edited While Leaving')).not.toBeInTheDocument();
+    // Save must be usable again on customer 2 rather than stuck from customer 1's run.
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled();
+  });
+
+  it('does not install the previous customer\'s addresses after navigating away', async () => {
+    // The save guard runs when the RPC answers, but the post-save address reload
+    // it starts outlives it. Customer 1's save completes, its address read is
+    // still in flight when the route moves to customer 2, and those rows would
+    // land in customer 2's address editor — a leak the save guard cannot catch
+    // because it has already passed by then.
+    let releaseAddresses!: () => void;
+    const addressGate = new Promise<void>((resolve) => { releaseAddresses = resolve; });
+    let customerOneAddressReads = 0;
+    const addressRow = (customerId: string) => ({
+      id: `${customerId}-addr`, customer_id: customerId, label: 'Main',
+      address_line: customerId === 'customer-2' ? 'Second Street' : 'Original Street',
+      city: 'Town', state: 'IA', zip: '50000', delivery_notes: '', is_default: true,
+    });
+    const record = (customerId: string) => (customerId === 'customer-2'
+      ? { id: 'customer-2', farm_name: 'Second Farm', row_version: 9, crops: [], default_commission_split: { splits: [] } }
+      : original);
+
+    mockFrom.mockImplementation((table: string) => {
+      const chain: Record<string, unknown> = {};
+      let requested = 'customer-1';
+      const self = (..._args: unknown[]) => chain;
+      for (const name of ['neq', 'is', 'in', 'order', 'limit', 'single', 'insert', 'update', 'delete', 'select']) chain[name] = self;
+      chain.eq = (_column: unknown, value: unknown) => { requested = String(value); return chain; };
+
+      const settle = async (): Promise<QueryResult> => {
+        if (table === 'customer_addresses') {
+          // Customer 1's FIRST read is its initial snapshot and must land; the
+          // second is the post-save reload, and that is the one held open.
+          if (requested === 'customer-1') {
+            customerOneAddressReads += 1;
+            if (customerOneAddressReads > 1) await addressGate;
+          }
+          return { data: [addressRow(requested)], error: null };
+        }
+        if (table === 'customers') return { data: record(requested), error: null };
+        return { data: [], error: null };
+      };
+      chain.maybeSingle = () => settle();
+      chain.then = (resolve: (value: QueryResult) => unknown, reject?: (reason: unknown) => unknown) => settle().then(resolve, reject);
+      chain.catch = (reject: (reason: unknown) => unknown) => settle().catch(reject);
+      chain.finally = (callback: () => void) => settle().finally(callback);
+      return chain;
+    });
+    mockRpc.mockResolvedValue({ data: { customer_id: 'customer-1', row_version: 5 }, error: null });
+
+    renderDetailWithCustomerSwitch();
+    expect(await screen.findByDisplayValue('Original Street')).toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue('Original Farm'), { target: { value: 'Edited Farm' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.anything()));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to customer 2' }));
+    expect(await screen.findByDisplayValue('Second Street')).toBeInTheDocument();
+
+    releaseAddresses();
+    await waitFor(() => expect(screen.getByDisplayValue('Second Street')).toBeInTheDocument());
+    expect(screen.queryByDisplayValue('Original Street')).not.toBeInTheDocument();
+  });
+
+  it('clears the open customer when the route jumps to the create form', async () => {
+    // `/customers/new` reuses this component, so a jump to it from an open
+    // customer does not remount. The route-change effect used to return early
+    // when `isNew` — "a blank form needs no invalidation" — which is only true
+    // when the create form is opened fresh. Coming FROM a customer it left that
+    // customer's name, fields, addresses and row version on screen behind a
+    // "Create Customer" button, and saving sent the stale payload with
+    // `p_customer_id: null`, duplicating the old record. (Codex, PR #313.)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') return customerQuery(() => original);
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: { customer_id: 'created-1', row_version: 1 }, error: null });
+
+    renderDetailWithNewCustomerJump();
+    await screen.findByDisplayValue('Original Farm');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New customer' }));
+
+    // The create form is on screen AND the previous customer is gone from it.
+    expect(await screen.findByRole('button', { name: 'Create Customer' })).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Original Farm')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Original Contact')).not.toBeInTheDocument();
+
+    // And the create it sends carries none of the old record either — the half
+    // that actually wrote a duplicate customer. The farm name has to be typed
+    // in: the cleared form fails the required-field check, which is itself the
+    // proof that nothing carried over.
+    mockRpc.mockClear();
+    fireEvent.change(screen.getByLabelText(/farm name/i), { target: { value: 'Brand New Farm' } });
+    fireEvent.change(screen.getByLabelText('commission recipient'), { target: { value: 'Admin' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Customer' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.anything()));
+    const payload = mockRpc.mock.calls.find(([name]) => name === 'save_customer')?.[1] as Record<string, unknown>;
+    expect(payload.p_customer_id).toBeNull();
+    expect(JSON.stringify(payload)).not.toContain('Original Farm');
+  });
+
+  it('restores the create-form defaults on that jump, not an empty form', async () => {
+    // The clear above went too far in its first revision: it reset to `{}`, which
+    // drops the defaults `useState` seeds a fresh /customers/new with. The form
+    // LOOKS right — those fields are not typed in — but the create payload then
+    // omits `assigned_sales_rep`, and `save_customer` requires a rep to
+    // self-assign, so creating from the normal route fails for reps and silently
+    // produces unassigned, untiered customers for admins. (Codex, PR #313.)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'customers') return customerQuery(() => original);
+      return query({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: { customer_id: 'created-1', row_version: 1 }, error: null });
+
+    renderDetailWithNewCustomerJump();
+    await screen.findByDisplayValue('Original Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'New customer' }));
+    await screen.findByRole('button', { name: 'Create Customer' });
+
+    mockRpc.mockClear();
+    fireEvent.change(screen.getByLabelText(/farm name/i), { target: { value: 'Brand New Farm' } });
+    // The one create field that IS seeded blank by design; everything asserted
+    // below is a default the reset has to put back on its own.
+    fireEvent.change(screen.getByLabelText('commission recipient'), { target: { value: 'Admin' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Customer' }));
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('save_customer', expect.anything()));
+
+    const payload = mockRpc.mock.calls.find(([name]) => name === 'save_customer')?.[1] as Record<string, unknown>;
+    expect(payload.p_customer_id).toBeNull();
+    expect(payload.p_customer_payload).toEqual(expect.objectContaining({
+      farm_name: 'Brand New Farm',
+      assigned_sales_rep: 'admin-1',
+      assigned_tier: 1,
+      is_active: true,
+    }));
   });
 
   it('keeps the committed crop but clears a jumped 4-to-6 token and requires recovery before a whole-record save', async () => {
