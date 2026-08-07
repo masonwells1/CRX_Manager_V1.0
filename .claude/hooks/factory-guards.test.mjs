@@ -1664,4 +1664,66 @@ function deterministicSafetyPaths() {
   assert.match(recoveryHook.updatedInput.command, /CRX_FACTORY_PERMIT/, "recovery receives a trusted one-time permit");
 }
 
+for (const mismatch of [
+  {
+    id: "live-queued-transfer-mismatch",
+    expired: false,
+    claimedStage: "needs-ticket-ok",
+    message: "a live queued approval rejects a transfer that claims the expired presentation stage",
+  },
+  {
+    id: "expired-queued-transfer-mismatch",
+    expired: true,
+    claimedStage: "queued",
+    message: "an expired queued approval rejects a transfer that claims the stale durable stage",
+  },
+]) {
+  const stateDir = temporaryStateDir(`crx-factory-${mismatch.id}-`);
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const baseSha = "a".repeat(40);
+  const ticket = writeImmutableTicket(paths, {
+    id: mismatch.id,
+    title: "Reject mismatched transfer custody",
+    goal: "Keep ticket transfer bound to the owner-visible stage.",
+    definitionOfDone: ["A mismatched transfer stage fails closed."],
+    mustNotChange: ["Valid transfers remain available."],
+    allowedPaths: ["tracked.txt"],
+    proofRequirements: ["Guard regression."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Use existing ship gates.",
+    riskAreas: [],
+  });
+  const approvalNow = Date.now();
+  const timestamps = mismatch.expired
+    ? [approvalNow - 240_000, approvalNow - 180_000, approvalNow - 120_000]
+    : [approvalNow - 3_000, approvalNow - 2_000, approvalNow - 1_000];
+  for (const event of [
+    { type: "ticket-drafted", timestamp: new Date(timestamps[0]).toISOString(), payload: { ticketFile: ticket.filename, ticketHash: ticket.hash, ticketVersion: 1, title: ticket.ticket.title } },
+    { type: "ticket-presented", timestamp: new Date(timestamps[1]).toISOString(), payload: { ticketHash: ticket.hash, questionText: "Approve bound custody?", questionHash: sha256("Approve bound custody?"), baseSha } },
+    { type: "ticket-approved", timestamp: new Date(timestamps[2]).toISOString(), payload: { ticketHash: ticket.hash, questionHash: sha256("Approve bound custody?"), ownerReply: "yes", baseSha, expiresAt: new Date(mismatch.expired ? approvalNow - 60_000 : approvalNow + 60_000).toISOString() } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId: ticket.ticket.id,
+      actorTool: "codex",
+      sessionId: `${mismatch.id}-old-thread`,
+    });
+  }
+  appendFactoryEvent(paths, {
+    type: "job-session-transferred",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId: `${mismatch.id}-new-thread`,
+    payload: { ownerReply: "Move this ticket here.", priorStage: mismatch.claimedStage },
+  });
+  assertions++;
+  assert.throws(
+    () => loadFactorySnapshot(paths),
+    /does not match its current custody state/,
+    mismatch.message,
+  );
+}
+
 console.log(`factory-guards: ${assertions} assertions passed`);
