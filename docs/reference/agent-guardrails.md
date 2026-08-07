@@ -4,7 +4,10 @@
 > automated safety net; `CLAUDE.md` keeps only a short summary + a pointer here. Regenerate the schema registry the
 > hooks read after schema changes: `node scripts/regenerate-schema-registry.mjs`.
 >
-> Last reconciled against `.claude/settings.json` hook wiring on 2026-07-16 (scaffolding-review pass: `pr-merge-guard.mjs` added — the PR-merge twin of `codex-push-guard` for the post-2026-07-14 branch-protection landing path; `bash-safety-lib.mjs` db-push pattern made npx-optional and `supabase migration up` added; `write-apply-proofs.mjs` proof stamping made unconditionally machine-minted: every stamp executes EACH required reviewer charter as its own trusted-Codex machine-verdict run; the caller-supplied `--codex-verdict` form and the say-so reviewer-only stamp were both removed). Previous pass 2026-07-13 (guard-hardening: `mcp-tool-guard.mjs` and `review-proof-guard.mjs` added; `bash-safety.mjs`, `hold-latch-lib.mjs`, `codex-push-lib.mjs`, `live-testdata-lib.mjs`, `idempotency-body-check.mjs` broadened — see their rows below).
+> Last reconciled against `.claude/settings.json` and `.codex/hooks.json` hook wiring on 2026-08-07 (Governed
+> Software Factory removal: the three factory hooks — `factory-state-integrity`, the factory lane guard, and
+> `factory-owner-input` — were deregistered from both manifests; `ship-intent-reminder` and every pre-factory
+> guard remain wired exactly as before). Previous reconciliation 2026-07-16 (scaffolding-review pass: `pr-merge-guard.mjs` added — the PR-merge twin of `codex-push-guard` for the post-2026-07-14 branch-protection landing path; `bash-safety-lib.mjs` db-push pattern made npx-optional and `supabase migration up` added; `write-apply-proofs.mjs` proof stamping made unconditionally machine-minted: every stamp executes EACH required reviewer charter as its own trusted-Codex machine-verdict run; the caller-supplied `--codex-verdict` form and the say-so reviewer-only stamp were both removed). Previous pass 2026-07-13 (guard-hardening: `mcp-tool-guard.mjs` and `review-proof-guard.mjs` added; `bash-safety.mjs`, `hold-latch-lib.mjs`, `codex-push-lib.mjs`, `live-testdata-lib.mjs`, `idempotency-body-check.mjs` broadened — see their rows below).
 
 ---
 
