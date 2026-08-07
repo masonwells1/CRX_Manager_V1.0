@@ -14,6 +14,25 @@ import { isGitPush, pushTargetsMain, mainPushSource, riskyFiles, contentIsRisky,
 import { DENY_TOOLNAME_RE } from "./autopilot-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Git exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE into a hook's environment,
+// and a child `git` honors those over `-C <path>`. The mirror-remote block below
+// builds a throwaway repo and configures it, so when this suite runs from the
+// pre-commit hook those writes land in the REAL repository instead — observed
+// 2026-08-07, when a pre-commit run wrote `remote.origin.mirror=true` into this
+// repo, which the push guard then (correctly) refuses every push against. The
+// throwaway repo meanwhile stays unconfigured, so the guard under test sees no
+// mirror and the assertions fail. Strip them once for the whole process, the same
+// shape as the inherited-GIT_CONFIG_* strip in scripts/backup-claude-memory.test.mjs.
+for (const key of [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_COMMON_DIR",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+]) delete process.env[key];
+
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
