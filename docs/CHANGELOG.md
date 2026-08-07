@@ -16,6 +16,30 @@ practice. The pipeline spec is archived at
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
 
+## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
+
+The mirror-remote block in `.claude/hooks/guards.test.mjs` builds a throwaway git
+repo to exercise the push guard. Git exports `GIT_DIR`, `GIT_INDEX_FILE`, and
+`GIT_WORK_TREE` into a pre-commit hook's environment, and a child `git` honors
+those over `-C <path>` — so when the suite ran from the hook, its setup commands
+configured `C:\CRX_Manager` instead of the scratch repo. Observed live: it set
+`core.bare = true` (which broke git in every worktree with "this operation must be
+run in a work tree"), set `remote.origin.mirror = true` on the real origin, wrote a
+`test <test@example.com>` commit identity into the shared config, and renamed the
+checked-out branch to `feature`. The scratch repo meanwhile stayed unconfigured, so
+the guard under test saw no mirror and the assertions failed — the failure and the
+damage were the same event, and each retry re-applied it.
+
+No commits were lost; the test's own `git commit` attempts failed on the hooks.
+The four config mutations were reverted by hand and both the affected worktree and
+the main checkout verified healthy.
+
+The suite now deletes the redirecting `GIT_*` variables once at startup, the same
+shape as the inherited-`GIT_CONFIG_*` strip in `scripts/backup-claude-memory.test.mjs`.
+Proven red-to-green: with `GIT_DIR`/`GIT_INDEX_FILE` set the suite previously failed
+at the first mirror assertion and now passes 161/161, and writes nothing to the real
+repo in either environment.
+
 ## 2026-08-07 — Expired Factory custody-transfer replay repair — PREPARED
 
 Factory custody transfer now treats an expired durable `queued` approval as the
