@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — Expired Factory custody-transfer replay repair — PREPARED
+
+Factory custody transfer now treats an expired durable `queued` approval as the
+owner-visible `needs-ticket-ok` stage when validating the authenticated transfer
+event. This keeps the append-time current-main replay check aligned with the
+read-only Board snapshot, revokes the stale approval, and allows a lost chat's
+expired ticket to move into the owner's current chat without weakening custody.
+A regression recreates the expired approval, transfers it to a new session, and
+proves it remains gated on a fresh exact decision.
+
 ## 2026-08-06 — Pending-ticket custody blast-radius repair — PREPARED
 
 A Factory ticket waiting for Mason's approval no longer globally blocks structured
