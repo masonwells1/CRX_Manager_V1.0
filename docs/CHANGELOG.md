@@ -11,6 +11,9 @@ read-only Board snapshot, revokes the stale approval, and allows a lost chat's
 expired ticket to move into the owner's current chat without weakening custody.
 A regression recreates the expired approval, transfers it to a new session, and
 proves it remains gated on a fresh exact decision.
+Negative regressions also prove that a live queued approval cannot claim the
+expired presentation stage and an expired approval cannot claim stale queued
+custody during transfer replay.
 
 ## 2026-08-06 — Pending-ticket custody blast-radius repair — PREPARED
 
