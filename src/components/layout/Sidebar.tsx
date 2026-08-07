@@ -45,7 +45,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
-import { getVisitCounts, getVisitCountKey } from '../../lib/recentPages';
+import { getVisitCounts, getVisitCountKey, VISIT_COUNTS_CHANGED_EVENT } from '../../lib/recentPages';
 import { supabase } from '../../lib/db';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../../lib/splitBillingSetting';
 import type { UserRole } from '../../types';
@@ -332,6 +332,15 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
     );
   }, [userRole, splitBillingEnabled]);
 
+  // Bumped when recordPageVisit() writes a count, so the threshold-crossing
+  // visit surfaces in FREQUENT immediately, not on the next navigation.
+  const [visitVersion, setVisitVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setVisitVersion((v) => v + 1);
+    window.addEventListener(VISIT_COUNTS_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(VISIT_COUNTS_CHANGED_EVENT, bump);
+  }, []);
+
   // Top 5 most-visited category sub-pages (visit counts live in localStorage).
   // Surfaces buried pages as one-click links; hidden until real usage builds up.
   // Office roles only — applicator/driver navs are already flat and short.
@@ -357,9 +366,10 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       .sort((a, b) => b.count - a.count)
       .slice(0, 5)
       .map((c) => c.item);
-    // location.pathname keeps counts fresh as the user navigates this session
+    // location.pathname keeps counts fresh as the user navigates this session;
+    // visitVersion re-runs it when recordPageVisit fires the change event.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, userRole, deniedPages, location.pathname]);
+  }, [navigation, userRole, deniedPages, location.pathname, visitVersion]);
 
   // Expanded category id (null = collapsed sidebar, string = that category is open)
   const [openCategory, setOpenCategory] = useState<string | null>(() => {

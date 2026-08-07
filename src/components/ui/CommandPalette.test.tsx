@@ -162,6 +162,17 @@ describe('recordPageVisit', () => {
   it('keys nested nav paths the same way the sidebar looks them up', () => {
     recordPageVisit('/split-billing/new', 'Split Billing');
     const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
-    expect(counts[getVisitCountKey('/split-billing/new')]).toBe(1);
+    // The nested route must normalize to the workspace root's key
+    expect(getVisitCountKey('/split-billing/new')).toBe(getVisitCountKey('/split-billing'));
+    expect(counts[getVisitCountKey('/split-billing')]).toBe(1);
+  });
+
+  it('counts a redirect alias pair as one visit, not two', () => {
+    // /field-invoices/unbilled immediately <Navigate>s to /field-invoices?tab=…,
+    // committing two pathnames for one user click. Only one should count.
+    recordPageVisit('/field-invoices/unbilled', 'Unbilled Field Invoices');
+    recordPageVisit('/field-invoices', 'Field Invoices');
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    expect(counts[getVisitCountKey('/field-invoices')]).toBe(1);
   });
 });

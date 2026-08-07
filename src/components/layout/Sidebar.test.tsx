@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const mockProfile = vi.fn();
@@ -20,6 +20,7 @@ vi.mock('../../lib/pagePermissions', () => ({
 
 import Sidebar from './Sidebar';
 import { hasPageAccess } from '../../lib/pagePermissions';
+import { recordPageVisit } from '../../lib/recentPages';
 
 function renderSidebar(mobileOpen = false) {
   return render(
@@ -159,6 +160,24 @@ describe('Sidebar', () => {
       JSON.stringify({ 'supplier-pricing': 2, 'brand-vs-generic': 2 })
     );
     renderSidebar(true);
+
+    expect(screen.getAllByText('Frequent').length).toBeGreaterThan(0);
+    const frequentSection = screen.getAllByText('Frequent')[0].closest('div')?.parentElement;
+    expect(frequentSection?.textContent).toContain('Products & Pricing');
+  });
+
+  it('surfaces an entry in Frequent immediately when a visit crosses the threshold', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'admin', full_name: 'Admin User' });
+    // One visit short of the threshold of 3 for the Products & Pricing entry
+    localStorage.setItem('crx-page-visit-counts', JSON.stringify({ 'supplier-pricing': 2 }));
+    renderSidebar(true);
+    expect(screen.queryAllByText('Frequent')).toHaveLength(0);
+
+    // The threshold-crossing visit must refresh the already-rendered sidebar
+    // via the change event, without waiting for another navigation.
+    act(() => {
+      recordPageVisit('/brand-vs-generic', 'Brand vs Generic');
+    });
 
     expect(screen.getAllByText('Frequent').length).toBeGreaterThan(0);
     const frequentSection = screen.getAllByText('Frequent')[0].closest('div')?.parentElement;
