@@ -19,6 +19,7 @@ vi.mock('../../lib/pagePermissions', () => ({
 }));
 
 import Sidebar from './Sidebar';
+import { hasPageAccess } from '../../lib/pagePermissions';
 
 function renderSidebar(mobileOpen = false) {
   return render(
@@ -113,6 +114,41 @@ describe('Sidebar', () => {
     expect(screen.getByRole('dialog', { name: 'Navigation menu' })).toHaveAttribute('aria-modal', 'true');
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a workspace entry visible when only its lead page is denied, linking to the first allowed sibling', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'sales_rep', full_name: 'Sales Rep' });
+    vi.mocked(hasPageAccess).mockImplementation(
+      (_role, _denied, pageKey) => pageKey !== 'products' && pageKey !== 'supplier-pricing'
+    );
+    renderSidebar(true);
+
+    const links = screen.getAllByText('Products & Pricing').map((el) => el.closest('a'));
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute('href', '/brand-vs-generic');
+    }
+  });
+
+  it('hides a workspace entry when every sibling page is denied', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'sales_rep', full_name: 'Sales Rep' });
+    const denied = new Set(['products', 'supplier-pricing', 'brand-vs-generic']);
+    vi.mocked(hasPageAccess).mockImplementation((_role, _denied, pageKey) => !denied.has(pageKey));
+    renderSidebar(true);
+
+    expect(screen.queryAllByText('Products & Pricing')).toHaveLength(0);
+  });
+
+  it('keeps the Insights standalone visible when only /dashboard is denied, linking to Reports', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'sales_rep', full_name: 'Sales Rep' });
+    vi.mocked(hasPageAccess).mockImplementation((_role, _denied, pageKey) => pageKey !== 'dashboard');
+    renderSidebar(true);
+
+    const links = screen.getAllByText('Insights').map((el) => el.closest('a'));
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute('href', '/reports');
+    }
   });
 
   it('traps focus within the open mobile drawer', () => {

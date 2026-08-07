@@ -243,23 +243,37 @@ function hasRoleAccess(roles: UserRole[] | undefined, userRole: UserRole | undef
   return !!userRole && roles.includes(userRole);
 }
 
-function hasNavAccess(
+/**
+ * Resolve where a nav entry should link, honoring the per-user deny list.
+ * An entry fronting a workspace (activePaths) stays visible as long as ANY
+ * sibling page is accessible, and links to the first accessible one — denying
+ * the lead page must not hide siblings the user is still allowed to open.
+ * Returns null when none are accessible (entry hidden).
+ */
+function resolveNavPath(
   roles: UserRole[] | undefined,
   userRole: UserRole | undefined,
   deniedPages: string[],
-  path: string
-): boolean {
-  if (!hasRoleAccess(roles, userRole)) return false;
-  // Check per-user deny list
-  const pageKey = getPageKeyFromPath(path);
-  if (pageKey && userRole) {
-    return hasPageAccess(userRole, deniedPages, pageKey);
+  path: string,
+  activePaths?: string[]
+): string | null {
+  if (!hasRoleAccess(roles, userRole)) return null;
+  const candidates = [path, ...(activePaths ?? []).filter((p) => p !== path)];
+  for (const candidate of candidates) {
+    const pageKey = getPageKeyFromPath(candidate);
+    if (!pageKey || !userRole || hasPageAccess(userRole, deniedPages, pageKey)) {
+      return candidate;
+    }
   }
-  return true;
+  return null;
 }
 
 function getVisibleItems(items: NavSubItem[], userRole: UserRole | undefined, deniedPages: string[]): NavSubItem[] {
-  return items.filter((item) => hasNavAccess(item.roles, userRole, deniedPages, item.path));
+  return items.flatMap((item) => {
+    const target = resolveNavPath(item.roles, userRole, deniedPages, item.path, item.activePaths);
+    if (!target) return [];
+    return [target === item.path ? item : { ...item, path: target }];
+  });
 }
 
 function pathMatches(path: string, pathname: string): boolean {
@@ -475,7 +489,8 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
     navigation.map((entry) => {
       if (entry.type === 'standalone') {
         const { link } = entry;
-        if (!hasNavAccess(link.roles, userRole, deniedPages, link.path)) return null;
+        const target = resolveNavPath(link.roles, userRole, deniedPages, link.path, link.activePaths);
+        if (!target) return null;
 
         const active = isRouteActive(link.path, link.activePaths);
 
@@ -483,7 +498,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
           return (
             <NavLink
               key={link.id}
-              to={link.path}
+              to={target}
               onClick={onClose}
               className={`block transition-colors ${active ? 'text-white bg-white/5' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
             >
@@ -500,7 +515,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         return (
           <NavLink
             key={link.id}
-            to={link.path}
+            to={target}
             className={`group relative block transition-colors ${active ? 'text-white bg-white/5' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
           >
             <div className={`relative flex items-center gap-3 py-2.5 ${isExpanded ? 'px-4' : 'px-0 justify-center'}`}>

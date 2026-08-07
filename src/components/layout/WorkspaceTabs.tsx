@@ -1,4 +1,4 @@
-import { NavLink, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
 import type { UserRole } from '../../types';
@@ -60,8 +60,12 @@ export default function WorkspaceTabs() {
   const { role, deniedPages } = useAuth();
   const location = useLocation();
 
-  const basePath = '/' + (location.pathname.split('/')[1] || '');
-  const workspace = WORKSPACES.find((w) => w.tabs.some((t) => t.path === basePath));
+  // Match by page key, not path prefix: e.g. /invoices/field-app/* belongs to
+  // the Field Invoices page ('field-invoices'), not Chemical Invoices ('/invoices').
+  const currentPageKey = getPageKeyFromPath(location.pathname);
+  const workspace = currentPageKey
+    ? WORKSPACES.find((w) => w.tabs.some((t) => getPageKeyFromPath(t.path) === currentPageKey))
+    : undefined;
   if (!workspace) return null;
 
   const visibleTabs = workspace.tabs.filter((tab) => {
@@ -78,21 +82,23 @@ export default function WorkspaceTabs() {
       className="bg-cream border-b border-cream-dark"
     >
       <div className="flex gap-1.5 overflow-x-auto px-4 lg:px-6 py-2">
-        {visibleTabs.map((tab) => (
-          <NavLink
-            key={tab.path}
-            to={tab.path}
-            className={({ isActive }) =>
-              `flex items-center whitespace-nowrap rounded-full px-3.5 min-h-11 md:min-h-9 text-sm font-medium transition-colors touch-manipulation focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-crx-green ${
+        {visibleTabs.map((tab) => {
+          const isActive = getPageKeyFromPath(tab.path) === currentPageKey;
+          return (
+            <Link
+              key={tab.path}
+              to={tab.path}
+              aria-current={isActive ? 'page' : undefined}
+              className={`flex items-center whitespace-nowrap rounded-full px-3.5 min-h-11 md:min-h-9 text-sm font-medium transition-colors touch-manipulation focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-crx-green ${
                 isActive
                   ? 'bg-crx-green text-white'
                   : 'text-secondary hover:bg-cream-dark hover:text-gray-900'
-              }`
-            }
-          >
-            {tab.label}
-          </NavLink>
-        ))}
+              }`}
+            >
+              {tab.label}
+            </Link>
+          );
+        })}
       </div>
     </nav>
   );
