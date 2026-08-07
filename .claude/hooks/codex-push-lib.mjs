@@ -1021,6 +1021,22 @@ export function pushUsesTransportEnv(cmd) {
 // it. The residual risk is stated rather than hidden: a GIT_EXEC_PATH planted in
 // an earlier segment is indistinguishable from git's own export, so this rule
 // cannot see it.
+// SSH_ASKPASS is excluded on the same grounds, and only for git's own helper.
+// Git for Windows exports SSH_ASKPASS=/mingw64/bin/git-askpass.exe into EVERY
+// Git Bash shell, so its presence carries no signal at all — and treating it as
+// one denied every ordinary commit and push made from Git Bash, which is how
+// Mason's sessions run (the tracked guard suite caught this the same way it
+// caught GIT_EXEC_PATH). Only git's own askpass is admitted, and only as a bare
+// executable path: the value must terminate at `git-askpass.exe`, so a trailing
+// argument or an appended command is not a match, and shell metacharacters are
+// excluded from the directory prefix so a substituted or chained value cannot
+// wear the shape. Written into a command it is still a deliberate act, so
+// `pushUsesTransportEnv` keeps checking it. Residual risk, stated rather than
+// hidden: an attacker who can replace the binary at git's own askpass path is
+// indistinguishable from git here, but that attacker already owns the git
+// installation this guard runs under.
+const GIT_OWN_ASKPASS_RE =
+  /^(?:[A-Za-z]:)?[\\/](?:[^<>|&;$`'"*?\r\n]*[\\/])?mingw(?:32|64)[\\/]bin[\\/]git-askpass\.exe$/i;
 const INHERITED_TRANSPORT_ENV_NAME_SET = new Set(TRANSPORT_ENV_NAMES);
 const normalizedExecutablePath = (value) => path.resolve(String(value || "")).replace(/\\/g, "/").toLowerCase();
 export function environmentCarriesTransportOverride(env, trustedGitExecPath) {
@@ -1028,6 +1044,9 @@ export function environmentCarriesTransportOverride(env, trustedGitExecPath) {
   return Object.keys(env || {}).filter((key) => {
     const upper = key.toUpperCase();
     if (!INHERITED_TRANSPORT_ENV_NAME_SET.has(upper)) return false;
+    if (upper === "SSH_ASKPASS") {
+      return !GIT_OWN_ASKPASS_RE.test(String(env[key] ?? "").trim());
+    }
     if (upper === "GIT_EXEC_PATH") {
       // Git exports its own exec path into hooks. Compare it with a clean
       // `git --exec-path` lookup; a planted value is executable search-path

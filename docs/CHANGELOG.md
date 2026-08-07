@@ -2,6 +2,28 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — Git Bash SSH_ASKPASS push-guard false positive — PREPARED
+
+Git for Windows exports `SSH_ASKPASS=/mingw64/bin/git-askpass.exe` into every Git
+Bash shell. The inherited-transport scan treated that export as a deliberate
+transport override, so the guard denied every commit and push made from Git Bash
+regardless of destination — the same false positive `GIT_EXEC_PATH` hit, and the
+tracked guard suite caught this one the same way, on the "ordinary feature-branch
+push is allowed" assertion.
+
+`SSH_ASKPASS` is now excluded from the inherited scan only, and only for git's own
+helper: the value must be a bare executable path terminating at
+`mingw{32,64}/bin/git-askpass.exe`, in either the MSYS or drive-letter spelling.
+A trailing argument, an appended command, a smuggled suffix, or a substitution
+wearing that shape is still reported, and shell metacharacters are excluded from
+the directory prefix. Written into a command it remains a deliberate act:
+`SSH_ASKPASS=… git push` is still denied by the inline rule. Residual risk is
+stated rather than hidden — an attacker who can replace the binary at git's own
+askpass path already owns the git installation the guard runs under.
+
+This entry describes the local reviewed branch; it does not claim merge or
+production deployment.
+
 ## 2026-08-07 — Expired Factory custody-transfer replay repair — PREPARED
 
 Factory custody transfer now treats an expired durable `queued` approval as the
