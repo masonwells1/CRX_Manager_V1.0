@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — Governed Software Factory REMOVED
+
+At Mason's direction, the entire Governed Autonomous Software Factory was removed:
+factory CLI/state/board scripts, the three factory hooks (state-integrity, lane
+guard, owner-input) on both the Claude and Codex sides, the `factory:*` npm
+scripts, and every factory branch inside the surviving push/merge/production
+guards. Reason: it repeatedly locked up ordinary work and was unusable in
+practice. The pipeline spec is archived at
+`docs/archive/GOVERNED_DELIVERY_PIPELINE-removed-2026-08-07.md`; shared state in
+`<git-common-dir>/crx-factory/` is archived offline. All pre-factory guards
+(branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
+bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
+(2026-08-07).
+
 ## 2026-08-07 — Expired Factory custody-transfer replay repair — PREPARED
 
 Factory custody transfer now treats an expired durable `queued` approval as the
