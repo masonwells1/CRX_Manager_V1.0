@@ -29,6 +29,40 @@ ticket during the current-main compatibility check.
 This entry describes the local reviewed branch; it does not claim merge or
 production deployment.
 
+## 2026-08-07 — `remote.<name>.push` outranks the whole `push.default` mechanism — BRANCH
+
+Codex finding on `a9ad2c52` (PR #313) — the tenth over-refusal of this shape, and
+one level below the `push.default` MODE check from the previous round. That check
+asks which mode is in force; this one asks whether the mode is consulted at all.
+It is not: `remote.<name>.push` supplies the refspec directly and outranks the
+mechanism, so a bare push whose remote has that key reads neither `push.default`
+nor `branch.<b>.merge`, and comparing them denied the ordinary landing path over
+configuration git never opens.
+
+Reproduced on git 2.43.0 before fixing, and the precedence is **total**, not
+partial. With `remote.origin.push=HEAD:refs/heads/fixed`, a bare `push origin`
+dry-runs to `HEAD:refs/heads/fixed` under `current`, `upstream`, `matching`,
+`nothing`, and unset alike, and with `branch.<b>.merge` set or unset. Codex
+reported the `push.default` half; the probe showed `branch.merge` rides along, so
+both are skipped together.
+
+Fail-open check: `remote.*.push` itself is deliberately still compared — it is the
+key actually supplying the refspec, so a change to it IS the redirect, and a test
+pins that an inherited `remote.origin.push=HEAD:refs/heads/hijacked` still denies
+and still names that answer. The skip is decided from reads under BOTH
+environments and applies only when they agree the key is set for every bare
+push's remote: an inherited variable that ADDS the key leaves the scrubbed side
+empty, so nothing is skipped, and it denies on `remote.*.push` regardless. A
+further test pins that removing the key restores the `push.default` comparison.
+Remote names are read in their original case, since a git config subsection name
+is case-sensitive and the lower-cased scope key would read the wrong one.
+
+Revert-check: with the skip removed the new cases fail on exactly their own
+assertions. `codex-push-lib.test.mjs`, `guards.test.mjs` (161),
+`factory-guards.test.mjs` (349), and `test:agent-workflows` green.
+
+Files: `.claude/hooks/codex-push-guard.mjs`, `.claude/hooks/codex-push-lib.test.mjs`.
+
 ## 2026-08-06 — remote-answer scoping keys off git's own remote names — BRANCH
 
 Codex finding on `53475b15` (PR #313), and the first of this run that is a

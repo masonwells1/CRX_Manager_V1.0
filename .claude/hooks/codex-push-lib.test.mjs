@@ -1814,6 +1814,67 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       );
       assert.match(denied.reason, /remote\.\*\.push/, "the denial names the answer that changed");
     }
+    {
+      // 2026-08-06, Codex's PR #313 review — the tenth over-refusal of this shape
+      // and one level below the `push.default` MODE check above. That check asks
+      // which mode is in force; this one asks whether the mode is reached at all.
+      // `remote.<name>.push` outranks the whole mechanism, so when it is set a
+      // bare push consults neither `push.default` nor `branch.<b>.merge`.
+      //
+      // Reproduced on git 2.43.0 before fixing, and the precedence is TOTAL:
+      // with `remote.origin.push=HEAD:refs/heads/fixed`, `push origin` dry-runs to
+      // `HEAD:refs/heads/fixed` under `current`, `upstream`, `matching`, `nothing`,
+      // and unset alike, with `branch.<b>.merge` set or unset. Codex reported the
+      // `push.default` half; the probe showed `branch.merge` rides along.
+      git(["config", "remote.origin.push", "HEAD:refs/heads/fixed"], work);
+      try {
+        assert.equal(
+          runHook(barePush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "push.default", GIT_CONFIG_VALUE_0: "current",
+          }).decision,
+          "allow",
+          "with remote.<n>.push supplying the refspec, an inherited push.default is inert",
+        );
+        assert.equal(
+          runHook(barePush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "branch.main.merge", GIT_CONFIG_VALUE_0: "refs/heads/elsewhere",
+          }).decision,
+          "allow",
+          "the same precedence makes an inherited branch.merge inert",
+        );
+        // The control that stops this becoming a fail-open: the key that actually
+        // supplies the refspec is still compared, so changing IT still denies.
+        const denied = runHook(barePush, {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "remote.origin.push",
+          GIT_CONFIG_VALUE_0: "HEAD:refs/heads/hijacked",
+        });
+        assert.equal(denied.decision, "deny", "changing remote.<n>.push itself is the redirect and still denies");
+        assert.match(denied.reason, /remote\.\*\.push/, "the denial names the answer that changed");
+      } finally {
+        git(["config", "--unset", "remote.origin.push"], work);
+      }
+      // And the skip must not survive the key's absence: with no
+      // `remote.origin.push`, `push.default` is consulted again and an inherited
+      // one that changes the destination must still deny. (git's default mode is
+      // `simple`, which refuses a mismatched upstream; `current` pushes to the
+      // like-named branch — a genuine difference in where the objects land.)
+      git(["config", "branch.main.merge", "refs/heads/other"], work);
+      try {
+        assert.equal(
+          runHook(barePush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "push.default", GIT_CONFIG_VALUE_0: "current",
+          }).decision,
+          "deny",
+          "without remote.<n>.push the mode is consulted again and an inherited one denies",
+        );
+      } finally {
+        git(["config", "--unset", "branch.main.merge"], work);
+      }
+    }
     assert.equal(
       runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,
       "allow",

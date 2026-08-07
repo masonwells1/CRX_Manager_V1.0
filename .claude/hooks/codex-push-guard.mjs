@@ -414,6 +414,14 @@ if (inheritedOverrides.length > 0) {
     // separate from `remoteScope`, which the explicit push still contributes to
     // for every other per-remote key.
     let refspecDefaultScope = new Set();
+    // The same remotes in their ORIGINAL spelling. `refspecDefaultScope` is
+    // lower-cased for comparison against config output, but a git config
+    // subsection name is case-SENSITIVE — `remote.Origin.push` and
+    // `remote.origin.push` are different keys — so a `config --get` built from the
+    // lower-cased name would read the wrong one (silently absent) for a remote
+    // named `Origin`. Kept alongside rather than replacing the scope set, whose
+    // case-insensitive matching is deliberate.
+    let bareRemoteNames = new Set();
     for (const segment of shellSegments(cmd).map((s) => s.trim()).filter((s) => isGitPush(s))) {
       if (gitPushCwd(segment, projectDir) !== repoDir) continue;
       const namesRefspec = pushNamesRefspec(segment);
@@ -426,13 +434,17 @@ if (inheritedOverrides.length > 0) {
       if (resolved.remote === null && !resolved.rawUrl) {
         remoteScope = null;
         refspecDefaultScope = null;
+        bareRemoteNames = null;
         everyPushNamesRefspec = false;
         everyPushNamesDestination = false;
         break;
       }
       if (resolved.remote !== null) {
         remoteScope.add(resolved.remote.toLowerCase());
-        if (!namesRefspec) refspecDefaultScope.add(resolved.remote.toLowerCase());
+        if (!namesRefspec) {
+          refspecDefaultScope.add(resolved.remote.toLowerCase());
+          bareRemoteNames.add(resolved.remote);
+        }
       }
     }
     // …and, one level down from the refspec verdict, whether a BARE push here
@@ -461,10 +473,50 @@ if (inheritedOverrides.length > 0) {
       return pushDefaultConsultsBranchMerge(scrubbedMode)
         || pushDefaultConsultsBranchMerge(ambientMode);
     })();
+    // …and one level below THAT: whether the bare pushes get their refspec from
+    // `remote.<name>.push` in the first place. That key outranks the whole
+    // `push.default` mechanism, so when it is set neither `push.default` nor
+    // `branch.<b>.merge` is consulted at all and comparing them is pure
+    // over-refusal (Codex, 2026-08-06, PR #313 review, the tenth of this shape).
+    //
+    // Reproduced on git 2.43.0 before fixing, and the precedence is total, not
+    // partial: with `remote.origin.push=HEAD:refs/heads/fixed`, a bare
+    // `push origin` dry-runs to `HEAD:refs/heads/fixed` under EVERY mode —
+    // `current`, `upstream`, `matching`, `nothing`, and unset alike — and with
+    // `branch.<b>.merge` set or unset. Codex reported it for `push.default`; the
+    // probe showed `branch.merge` rides along, so both are skipped together.
+    //
+    // Fail-closed exactly like the mode check above: read under BOTH environments
+    // and skip only when the two AGREE the key is set for every bare push's
+    // remote. An inherited variable that ADDS `remote.<name>.push` leaves the
+    // scrubbed side empty, so nothing is skipped — and it diverges on
+    // `remote.*.push`, which is still compared here, so it denies anyway. An
+    // inherited CHANGE to the value denies on that same key. Unreadable compares.
+    const refspecComesFromRemotePush = (() => {
+      // No bare push here (or an unresolved one) — nothing to reason about, and
+      // the all-explicit case is already handled by `everyPushNamesRefspec`.
+      if (refspecDefaultScope === null || bareRemoteNames === null) return false;
+      if (bareRemoteNames.size === 0) return false;
+      const readRemotePush = (remote, keepConfigOverrides) => {
+        try { return gitIn(["config", "--get", `remote.${remote}.push`], repoDir, { keepConfigOverrides }); }
+        catch (error) { return error?.status === 1 ? "" : null; } // 1 = unset, not a failure
+      };
+      // EVERY bare push, not any: one whose remote lacks the key still reads the
+      // default-refspec configuration, and the lookups are repository-wide.
+      return [...bareRemoteNames].every((remote) => {
+        const scrubbedPush = readRemotePush(remote, false);
+        const ambientPush = readRemotePush(remote, true);
+        if (scrubbedPush === null || ambientPush === null) return false;
+        return scrubbedPush !== "" && ambientPush !== "";
+      });
+    })();
     const scrubbed = {};
     const ambient = {};
     for (const [name, args] of pushDestinationLookupArgs(overrideBranch)) {
       if (everyPushNamesRefspec === true && REFSPEC_DEFAULT_LOOKUPS.has(name)) continue;
+      // `remote.*.push` is deliberately NOT skipped here — it is the key actually
+      // supplying the refspec, so a change to it is the redirect, not a non-event.
+      if (refspecComesFromRemotePush && (name === "push.default" || name === "branch.merge")) continue;
       if (name === "branch.merge" && !branchMergeIsConsulted) continue;
       if (everyPushNamesDestination === true && REMOTE_SELECTION_LOOKUPS.has(name)) continue;
       // `remote.*.push` is read only for a bare push's own remote; every other
