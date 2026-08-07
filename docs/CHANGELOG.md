@@ -5,6 +5,41 @@ All significant development milestones, in reverse chronological order.
 ## 2026-08-07 — CRM add-fact retry safety — PREPARED (parked)
 
 Parked migration `20260807120000_log_customer_fact_rpc.sql` adds `log_customer_fact`, an idempotent SECURITY DEFINER RPC mirroring `log_customer_interaction` (payload-fingerprinted replay, role gate, server-pinned `entered_by`/`source`), closing the retry-unsafe direct insert in `CustomerFacts.tsx` found by the incident-vs-guard audit. NOT applied — awaiting migration-review + apply gates + owner approval; the frontend cutover is staged as a comment and lands post-apply. `rpcContracts.test.ts` registers the RPC under `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`.
+
+## 2026-08-07 — Incident-vs-guard audit: 7 gaps closed with new hard guards
+
+An audit mapped ~89 recorded incidents in `docs/manual/KNOWN_ISSUES.md` against the
+guard stack (sweep predicates, hooks, regression suites, CI) and found 7 without a
+matching hard guard. All 7 are now covered on branch `claude/crx-self-improving-harness-04cef9`:
+
+1. **Profile role-lock INSERT arm** — parked migration `20260807153000_profile_role_lock_covers_insert.sql`
+   extends `_guard_profile_role_lock` to `BEFORE INSERT OR UPDATE`, closing the
+   §0d follow-up where a non-admin could re-insert their own `profiles` row as
+   `role = 'admin'`. Paired red/green predicate `profile-role-lock-insert-arm.sql`
+   (2 rows today → 0 after apply). NOT applied — awaiting migration-review + apply gates.
+2. **Transport-key known-hole tripwire** — `codex-push-lib.test.mjs` now pins that
+   `core.hooksPath` and shell-form `credential.helper` are deliberately absent from
+   `EXECUTABLE_TRANSPORT_KEYS` (husky sets `core.hooksPath` legitimately), so any
+   edit to that list forces a deliberate decision.
+3. **Dispatch-sync silent-skip predicate** — `dispatch-sync-nonqualifying-profile.sql`
+   detects open jobs missing dispatch rows because the assignee didn't qualify
+   (0 rows live).
+4. **Parked items 66/67 built** — `audit-log-completeness.sql` predicate (0 rows live,
+   39 money-mutating SECDEF functions all log) and the write-time actor-binding hook
+   `.claude/hooks/actor-binding-check.mjs` (PreToolUse Write|Edit, 24 assertions,
+   wired on both Claude and Codex sides).
+5. **New financial identities** — `fin-vendor-bill-balance-identity.sql` (0 rows) and
+   `fin-po-receipt-identity.sql` (**22 live violations on March-2026 import POs,
+   deliberately not allowlisted — awaiting Mason's disposition**).
+6. **Commission name-reacquisition residual** — found already fixed live 2026-07-22
+   (`20260722184744_reuse_guard_covers_invoiced_jobs`); KNOWN_ISSUES entry marked RESOLVED.
+7. **Push-guard hoist regression test** — feature-branch push with `core.sshCommand`
+   set is asserted denied, locking in the 2026-08-05 fix.
+
+Sweep predicate count 21 → 26. Gates on the branch: typecheck clean,
+`test:correction-guards` 22 files pass, `test:agent-workflows` pass, vitest
+4287 passed / 1 known full-suite workbook flake (passes in isolation).
+
 ## 2026-08-07 — Same-chat Factory actor transfer — PREPARED
 
 Factory custody transfer now also handles an explicit tool-surface change
