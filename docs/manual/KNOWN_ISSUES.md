@@ -21,14 +21,22 @@ environment variables. Both of the repo's guards correctly treat URL rewrites as
 dangerous — the container legitimately requires them.
 
 1. **Branch delivery by git is impossible from a remote session.**
-   `.claude/hooks/codex-push-guard.mjs` denies while `GIT_CONFIG*` variables are
-   set ("Unset them before pushing"), and *also* denies any command that names
-   that namespace — so `env -u GIT_CONFIG_… git …` is refused too. The guard is a
-   PreToolUse hook reading the harness shell's own environment, so nothing done
-   inside a command can change what it observes. It additionally rejects command
-   text containing quoting or the literal push token anywhere, so even a commit
-   message describing the problem trips it. There is no in-session workaround
-   that does not disable the guard.
+   `.claude/hooks/codex-push-guard.mjs` denies a push while `GIT_CONFIG*`
+   variables are set ("Unset them before pushing"), and *also* denies a push
+   command that names that namespace — so `env -u GIT_CONFIG_… git push …` is
+   refused too. The guard is a PreToolUse hook reading the harness shell's own
+   environment, so nothing done inside the command can change what it observes.
+   There is no in-session workaround for the push that does not disable the guard.
+
+   **Scope correction (2026-08-07, from the PR review that landed this entry):**
+   these restrictions apply to **pushes only**. `codex-push-guard.mjs:81` passes
+   every non-push command straight through *before* reaching the `GIT_CONFIG`,
+   `HOME`, and repo-selector checks, and the tracked suite asserts the point
+   directly — `codex-push-lib.test.mjs:857`: `GIT_CONFIG_COUNT=1 git commit -m x`
+   is "not a push". An earlier draft of this entry said the guard refused
+   `env -u GIT_CONFIG_… git …` in general and therefore blocked arranging a clean
+   commit environment. That was wrong, and it would have told a remote agent to
+   give up on a commit that is not actually gated.
 2. **Committing is blocked too — two separate pre-commit tests fail.** Both run in
    the `test:correction-guards` gate:
    - `scripts/backup-claude-memory.test.mjs` — `stage()` refuses with "refusing to
@@ -41,8 +49,13 @@ dangerous — the container legitimately requires them.
    Both guards behave exactly as designed; the sandbox's proxy rewrite trips them.
    **Committing from a remote session therefore requires `HOME` pointed at a
    gitconfig that keeps `[user]`/`[gpg]`/`[commit]` but drops the `[url …]` block,
-   plus the `GIT_CONFIG_*` vars unset for that one command** — which item (1)
-   forbids arranging. In practice: commit and push from a local machine.
+   plus the `GIT_CONFIG_*` vars unset for that one command.** Per the scope
+   correction in item (1), the push guard does **not** forbid arranging that for a
+   commit — both failing guards read the environment and gitconfig the command
+   inherits, so a command-scoped sanitized environment should satisfy them. That
+   is reasoning from source, not an observed run: nobody has yet proved it inside
+   a live remote container, and the *push* stays blocked either way. Until someone
+   demonstrates it, commit and push from a local machine.
 3. **`scripts/log-session.mjs` misattributed a session's work.** — **FIXED
    2026-08-04/06** across PRs #310 and #317. It used to fall back to the last 15
    commits when no commit matched its `--author=Mason` heuristic, labelling the
@@ -60,8 +73,9 @@ dangerous — the container legitimately requires them.
    `scripts/log-session.test.mjs` guards all of it, and skips cleanly (with a
    stated reason) in checkouts that have no local `origin/main`.
 
-**Net effect:** an agent in a remote session can analyse and edit, but cannot
-commit or deliver a branch by git. Work must go through the GitHub MCP tools
+**Net effect:** an agent in a remote session can analyse and edit, cannot deliver
+a branch by git, and cannot commit either without the sanitized-environment
+arrangement described above (untested in a live container). Work must go through the GitHub MCP tools
 (`push_files` + `create_pull_request`), which address the repository by explicit
 `owner`/`repo`/`branch` and so carry none of the destination ambiguity the push
 guard exists to prevent. That route has its own ceiling: file content passes
