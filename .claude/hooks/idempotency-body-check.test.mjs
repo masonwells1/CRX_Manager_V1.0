@@ -198,4 +198,17 @@ r = runHook(fn(`
 `, "p_amount numeric, /* legacy (see #335 */ p_idempotency_key text DEFAULT NULL::text"));
 ok(isDeny(r), "unmatched '(' in a /* */ parameter comment: unwired mutation is still blocked");
 
+// nested block comment (PostgreSQL nests /* /* */ */) with an unmatched '(' —
+// a non-nesting skip stops at the inner */ and desyncs the depth count
+r = runHook(fn(`
+  UPDATE customers SET name = 'x' WHERE id = 1;
+`, "p_amount numeric, /* outer /* inner */ unmatched ( */ p_idempotency_key text DEFAULT NULL::text"));
+ok(isDeny(r), "unmatched '(' in a NESTED block comment: unwired mutation is still blocked");
+
+// dollar-quoted DEFAULT literal containing '(' before p_idempotency_key
+r = runHook(fn(`
+  UPDATE customers SET name = 'x' WHERE id = 1;
+`, "p_note text DEFAULT $d$normalize ($d$, p_idempotency_key text DEFAULT NULL::text"));
+ok(isDeny(r), "unmatched '(' inside a dollar-quoted default: unwired mutation is still blocked");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

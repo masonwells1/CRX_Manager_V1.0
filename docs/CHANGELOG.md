@@ -18,7 +18,10 @@ Codex PR-review follow-up (P2, PR #335): the balanced scan now also skips SQL
 `--` and `/* */` comments, since an unmatched `(` inside a parameter comment
 desynced the depth count and made the parse fail open — proven bypassing the
 first version and denied by the fix, with regression tests for both comment
-forms.
+forms. Round 2 of the same review closed two more fail-open holes: PostgreSQL
+block comments NEST (`/* /* */ */` — a non-nesting skip stopped at the inner
+`*/`), and dollar-quoted DEFAULT literals (`$d$…($d$`) hid an unmatched paren.
+Both proven red on the prior commit and covered by regression tests.
 
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 

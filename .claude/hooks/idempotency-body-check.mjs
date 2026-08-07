@@ -121,9 +121,28 @@ function readBalancedParens(text, openIdx) {
       continue;
     }
     if (ch === "/" && text[i + 1] === "*") {
-      const close = text.indexOf("*/", i + 2);
-      if (close === -1) return null;
-      i = close + 1;
+      // PostgreSQL block comments NEST — track depth, don't stop at the first */.
+      let cdepth = 1;
+      let j = i + 2;
+      while (j < text.length && cdepth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { cdepth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { cdepth--; j += 2; continue; }
+        j++;
+      }
+      if (cdepth > 0) return null;
+      i = j - 1;
+      continue;
+    }
+    if (ch === "$") {
+      // Dollar-quoted literal ($tag$...$tag$) in a DEFAULT expression — skip it
+      // whole so a '(' inside the literal isn't counted as syntax.
+      const dq = /^\$\w*\$/.exec(text.slice(i));
+      if (dq) {
+        const close = text.indexOf(dq[0], i + dq[0].length);
+        if (close === -1) return null;
+        i = close + dq[0].length - 1;
+        continue;
+      }
       continue;
     }
     if (ch === "'" || ch === '"') { inStr = true; strCh = ch; continue; }
