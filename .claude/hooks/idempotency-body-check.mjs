@@ -108,10 +108,12 @@ function readBalancedParens(text, openIdx) {
   let depth = 0;
   let inStr = false;
   let strCh = "";
+  let inEStr = false; // E'...' escape strings honor backslash escapes (Codex P2 round 3)
   for (let i = openIdx; i < text.length; i++) {
     const ch = text[i];
     if (inStr) {
-      if (ch === strCh) inStr = false;
+      if (inEStr && ch === "\\") { i++; continue; }
+      if (ch === strCh) { inStr = false; inEStr = false; }
       continue;
     }
     if (ch === "-" && text[i + 1] === "-") {
@@ -145,7 +147,12 @@ function readBalancedParens(text, openIdx) {
       }
       continue;
     }
-    if (ch === "'" || ch === '"') { inStr = true; strCh = ch; continue; }
+    if (ch === "'" || ch === '"') {
+      inStr = true;
+      strCh = ch;
+      inEStr = ch === "'" && /[eE]/.test(text[i - 1] || "") && !/[\w$]/.test(text[i - 2] || "");
+      continue;
+    }
     if (ch === "(") { depth++; continue; }
     if (ch === ")") {
       depth--;
@@ -172,7 +179,19 @@ let head;
 while ((head = fnHeadRe.exec(content)) !== null) {
   const fnName = head[1];
   const parsed = readBalancedParens(content, fnHeadRe.lastIndex - 1);
-  if (!parsed) continue;
+  if (!parsed) {
+    // FAIL CLOSED: a parameter list this lexer cannot close is exactly where a
+    // hidden p_idempotency_key could live (Codex PR #335 found three such lexer
+    // holes in a row). Blocking with an explanation beats silently skipping the
+    // function; the file-level exempt marker remains the escape hatch.
+    violations.push(
+      `Function ${fnName}: could not parse its parameter list (unbalanced parentheses, ` +
+      `unterminated string/comment/dollar-quote?) — the idempotency guard cannot inspect it. ` +
+      `Simplify the signature, or if it is genuinely valid SQL the lexer mishandles, add the ` +
+      `exempt marker and get a manual review.`
+    );
+    break;
+  }
   const params = parsed.params;
   const rest = readDollarQuotedBody(content, parsed.end);
   if (!rest) continue;

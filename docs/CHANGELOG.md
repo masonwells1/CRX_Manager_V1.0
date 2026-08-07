@@ -22,6 +22,10 @@ forms. Round 2 of the same review closed two more fail-open holes: PostgreSQL
 block comments NEST (`/* /* */ */` — a non-nesting skip stopped at the inner
 `*/`), and dollar-quoted DEFAULT literals (`$d$…($d$`) hid an unmatched paren.
 Both proven red on the prior commit and covered by regression tests.
+Round 3 fixed E-string backslash-escaped quotes (`E'can\'t ('`) and — to end
+the lexer whack-a-mole structurally — an unparseable parameter list now FAILS
+CLOSED with an explanatory block instead of silently skipping the function;
+the file-level exempt marker remains the escape hatch.
 
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 

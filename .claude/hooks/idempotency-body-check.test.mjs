@@ -211,4 +211,19 @@ r = runHook(fn(`
 `, "p_note text DEFAULT $d$normalize ($d$, p_idempotency_key text DEFAULT NULL::text"));
 ok(isDeny(r), "unmatched '(' inside a dollar-quoted default: unwired mutation is still blocked");
 
+// E-string default with a backslash-escaped quote and an unmatched '(' —
+// closing string state at the escaped quote counts the data '(' as syntax
+r = runHook(fn(`
+  UPDATE customers SET name = 'x' WHERE id = 1;
+`, "p_note text DEFAULT E'can\\'t (', p_idempotency_key text DEFAULT NULL::text"));
+ok(isDeny(r), "unmatched '(' after an escaped quote in an E-string default: unwired mutation is still blocked");
+
+// fail-CLOSED backstop: a parameter list the lexer cannot close (here, an
+// unterminated dollar-quote) blocks instead of silently skipping the function
+r = runHook(fn(`
+  UPDATE customers SET name = 'x' WHERE id = 1;
+`, "p_note text DEFAULT $broken$never closed, p_idempotency_key text DEFAULT NULL::text"));
+ok(isDeny(r), "unparseable parameter list fails CLOSED, not silently allowed");
+ok(r.stdout.includes("could not parse"), "fail-closed message explains the parse failure");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);
