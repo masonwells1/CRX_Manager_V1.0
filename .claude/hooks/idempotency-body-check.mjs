@@ -93,15 +93,60 @@ if (/--\s*idempotency-body-check:\s*exempt/i.test(content)) {
   out("allow");
 }
 
-const fnRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(([^)]*?)\)[\s\S]*?AS\s+(\$\w*\$)([\s\S]*?)\3/gi;
+// Locate each CREATE [OR REPLACE] FUNCTION header. The parameter list is then
+// read with a BALANCED-paren scan rather than a [^)]* capture, because a real
+// parameter list contains parens — numeric(12,2), varchar(50), timestamp(3).
+// A naive capture stops at the first inner ')' and silently truncates the list,
+// which would hide p_idempotency_key declared after a parenthesised type
+// (same fix as actor-binding-check.mjs).
+const fnHeadRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(/gi;
+
+/** From the index of a '(' , return {params, end} where end is just past its match. */
+function readBalancedParens(text, openIdx) {
+  let depth = 0;
+  let inStr = false;
+  let strCh = "";
+  for (let i = openIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (ch === strCh) inStr = false;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { inStr = true; strCh = ch; continue; }
+    if (ch === "(") { depth++; continue; }
+    if (ch === ")") {
+      depth--;
+      if (depth === 0) return { params: text.slice(openIdx + 1, i), end: i + 1 };
+    }
+  }
+  return null;
+}
+
+/** From just past the parameter list, return {body, end} for the AS $tag$...$tag$ block. */
+function readDollarQuotedBody(text, fromIdx) {
+  const tagMatch = /\bAS\s+(\$\w*\$)/i.exec(text.slice(fromIdx));
+  if (!tagMatch) return null;
+  const tag = tagMatch[1];
+  const bodyStart = fromIdx + tagMatch.index + tagMatch[0].length;
+  const bodyEnd = text.indexOf(tag, bodyStart);
+  if (bodyEnd === -1) return null;
+  return { body: text.slice(bodyStart, bodyEnd), end: bodyEnd + tag.length };
+}
 
 const violations = [];
 try {
-let match;
-while ((match = fnRe.exec(content)) !== null) {
-  const fnName = match[1];
-  const params = match[2];
-  const body = match[4];
+let head;
+while ((head = fnHeadRe.exec(content)) !== null) {
+  const fnName = head[1];
+  const parsed = readBalancedParens(content, fnHeadRe.lastIndex - 1);
+  if (!parsed) continue;
+  const params = parsed.params;
+  const rest = readDollarQuotedBody(content, parsed.end);
+  if (!rest) continue;
+  const body = rest.body;
+  // Resume scanning after this function so a nested CREATE FUNCTION inside a
+  // body (DO-block style migrations) isn't parsed twice.
+  fnHeadRe.lastIndex = rest.end;
 
   if (!/p_idempotency_key\s+text/i.test(params)) continue;
 

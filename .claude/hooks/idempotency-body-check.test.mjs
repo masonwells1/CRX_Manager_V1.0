@@ -165,4 +165,24 @@ r = runHook(fn(`
 `));
 ok(!isDeny(r), "two fully-closed operation pairings are allowed");
 
+// ── balanced-paren regression: a parenthesised type (numeric(12,2)) BEFORE
+//    p_idempotency_key must not truncate the parameter list. The old [^)]*?
+//    capture stopped at numeric(12,2)'s inner ')', so the guard never saw
+//    p_idempotency_key and silently allowed an unwired mutating function. ──────
+r = runHook(fn(`
+  UPDATE customers SET credit_cents = p_amount WHERE id = 1;
+`, "p_amount numeric(12,2), p_idempotency_key text DEFAULT NULL::text"));
+ok(isDeny(r), "numeric(12,2) before p_idempotency_key: unwired mutation is still blocked (balanced-paren scan)");
+
+// same parameter shape, correctly helper-wired: allowed
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'test_fn') INTO v_existing;
+  UPDATE customers SET credit_cents = p_amount WHERE id = 1;
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+  END;
+`, "p_amount numeric(12,2), p_idempotency_key text DEFAULT NULL::text"));
+ok(!isDeny(r), "numeric(12,2) before p_idempotency_key: correctly wired function is allowed");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

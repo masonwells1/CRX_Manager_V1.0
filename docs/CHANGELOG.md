@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — idempotency-body-check blind to parenthesised parameter types — FIXED
+
+`.claude/hooks/idempotency-body-check.mjs` captured SQL function parameter lists
+with `\(([^)]*?)\)`, which stops at the first inner `)`. A parameter list
+containing a parenthesised type — `numeric(12,2)`, `varchar(50)` — truncated
+there, the function failed to parse, and any `p_idempotency_key` declared after
+it was invisible: an unwired mutating RPC sailed through the guard. Ported the
+quote-aware balanced-paren scan and `AS $tag$…$tag$` body reader from
+`actor-binding-check.mjs` (which also now resumes past each body, so nested
+CREATE FUNCTIONs aren't double-parsed). Regression tests with
+`p_amount numeric(12,2)` before `p_idempotency_key` were proven red on the old
+parser and green on the new one; full `test:correction-guards` passes.
+
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 
 The mirror-remote block in `.claude/hooks/guards.test.mjs` builds a throwaway git
