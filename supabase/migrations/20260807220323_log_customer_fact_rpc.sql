@@ -1,4 +1,6 @@
--- PARKED — NOT APPLIED — awaiting migration-review + apply gates
+-- APPLIED LIVE 2026-08-07 as version 20260807220323 (Supabase-assigned at apply time;
+-- authored as 20260807120000, re-stamped 20260807221500 pre-apply). Reviewed CLEAN by
+-- both Codex charters; postflight ACL/overload/search_path assertions passed at apply.
 --
 -- Retry-safe CRM fact intake (2026-08-04 CRM audit §4, KNOWN_ISSUES §4).
 -- CustomerFacts adds a new fact with a direct `customer_facts` insert, so a
@@ -17,9 +19,21 @@
 -- own identity, so AI/web/system provenance is never writable through here —
 -- the same restriction the rep INSERT policy enforces today.
 --
--- NOT APPLIED: no live schema or data was changed by this file. The frontend
--- caller in src/components/customers/CustomerFacts.tsx stays on the direct
--- insert until this migration is applied (see the cutover note in that file).
+-- The frontend caller in src/components/customers/CustomerFacts.tsx cuts over to
+-- this RPC in the same change that lands this rename.
+
+-- Preflight: log_customer_fact must not exist in any form. With 6 DEFAULT
+-- arguments, an out-of-band lower-arity overload would make PostgREST calls
+-- ambiguous instead of erroring loudly, so assert a clean slate before CREATE.
+DO $$
+BEGIN
+  IF (SELECT count(*) FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'log_customer_fact') <> 0 THEN
+    RAISE EXCEPTION 'PREFLIGHT_FAIL: log_customer_fact already exists — expected zero overloads';
+  END IF;
+END;
+$$;
 
 CREATE OR REPLACE FUNCTION public.log_customer_fact(
   p_customer_id uuid,
@@ -46,10 +60,21 @@ DECLARE
   v_result jsonb;
   v_fingerprint text;
 BEGIN
+  -- The idempotency key is REQUIRED: an omitted key would silently give the
+  -- caller zero retry protection — the exact double-log this RPC exists to fix
+  -- (pending_review facts have no unique index to catch the duplicate).
+  IF p_idempotency_key IS NULL OR btrim(p_idempotency_key) = '' THEN
+    RAISE EXCEPTION 'FACT_IDEMPOTENCY_KEY_REQUIRED';
+  END IF;
+
   -- Argument validation mirrors the customer_facts CHECK constraints so callers
   -- get stable machine-readable tokens instead of raw constraint errors. Every
-  -- check is deterministic on the arguments, so running them before the
-  -- idempotency replay cannot reject a replay of a committed call.
+  -- check below is deterministic on the arguments, so running them before the
+  -- idempotency replay cannot reject a replay of a committed call. The one
+  -- non-deterministic check — p_expires_at against now() — deliberately runs
+  -- AFTER the replay return, or a committed call retried after a short expiry
+  -- passed would error instead of replaying (the bug 20260716195012 fixed for
+  -- supersede_customer_fact on this same table).
   IF p_customer_id IS NULL THEN
     RAISE EXCEPTION 'CUSTOMER_ID_REQUIRED';
   END IF;
@@ -78,10 +103,6 @@ BEGIN
   IF p_confidence IS NOT NULL AND (p_confidence < 0 OR p_confidence > 1) THEN
     RAISE EXCEPTION 'FACT_CONFIDENCE_INVALID';
   END IF;
-  IF p_expires_at IS NOT NULL AND p_expires_at <= now() THEN
-    RAISE EXCEPTION 'FACT_EXPIRY_INVALID';
-  END IF;
-
   v_status := CASE WHEN COALESCE(p_save_verified, false) THEN 'verified' ELSE 'pending_review' END;
 
   IF NOT EXISTS (
@@ -111,14 +132,18 @@ BEGIN
     'status', v_status
   )::text);
 
-  IF p_idempotency_key IS NOT NULL THEN
-    v_existing := public.check_idempotency(p_idempotency_key, 'log_customer_fact');
-    IF v_existing IS NOT NULL THEN
-      IF v_existing->>'request_fingerprint' IS DISTINCT FROM v_fingerprint THEN
-        RAISE EXCEPTION 'FACT_REPLAY_PAYLOAD_MISMATCH: this key already saved a fact with different values';
-      END IF;
-      RETURN v_existing;
+  v_existing := public.check_idempotency(p_idempotency_key, 'log_customer_fact');
+  IF v_existing IS NOT NULL THEN
+    IF v_existing->>'request_fingerprint' IS DISTINCT FROM v_fingerprint THEN
+      RAISE EXCEPTION 'FACT_REPLAY_PAYLOAD_MISMATCH: this key already saved a fact with different values';
     END IF;
+    RETURN v_existing;
+  END IF;
+
+  -- Non-deterministic (clock-dependent) check: must stay AFTER the replay
+  -- return above — see the ordering note at the top of this function.
+  IF p_expires_at IS NOT NULL AND p_expires_at <= now() THEN
+    RAISE EXCEPTION 'FACT_EXPIRY_INVALID';
   END IF;
 
   BEGIN
@@ -146,9 +171,7 @@ BEGIN
     'status', v_status,
     'request_fingerprint', v_fingerprint
   );
-  IF p_idempotency_key IS NOT NULL THEN
-    PERFORM public.save_idempotency(p_idempotency_key, 'log_customer_fact', v_result);
-  END IF;
+  PERFORM public.save_idempotency(p_idempotency_key, 'log_customer_fact', v_result);
   RETURN v_result;
 END;
 $$;
@@ -163,3 +186,42 @@ GRANT EXECUTE ON FUNCTION public.log_customer_fact(
 COMMENT ON FUNCTION public.log_customer_fact(
   uuid, text, text, text, jsonb, numeric, timestamptz, boolean, text
 ) IS 'Idempotently records a rep-sourced customer fact under active-admin or assigned-rep authorization; a replayed key with different values fails closed.';
+
+-- Postflight: exactly one overload, SECURITY DEFINER, pinned search_path, and
+-- the intended ACLs (anon/PUBLIC denied, authenticated allowed) — the standard
+-- house assertions, so a partial apply cannot pass silently.
+DO $$
+DECLARE
+  v_count int;
+  v_secdef boolean;
+  v_config text[];
+BEGIN
+  SELECT count(*) INTO v_count
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'log_customer_fact';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAIL: expected exactly 1 log_customer_fact overload, found %', v_count;
+  END IF;
+
+  SELECT p.prosecdef, p.proconfig INTO v_secdef, v_config
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'log_customer_fact';
+  IF NOT v_secdef THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAIL: log_customer_fact is not SECURITY DEFINER';
+  END IF;
+  IF NOT ('search_path=public, pg_temp' = ANY (v_config)) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAIL: log_customer_fact search_path is not pinned to public, pg_temp';
+  END IF;
+
+  IF has_function_privilege('anon',
+       'public.log_customer_fact(uuid, text, text, text, jsonb, numeric, timestamptz, boolean, text)',
+       'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAIL: anon can execute log_customer_fact';
+  END IF;
+  IF NOT has_function_privilege('authenticated',
+       'public.log_customer_fact(uuid, text, text, text, jsonb, numeric, timestamptz, boolean, text)',
+       'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAIL: authenticated cannot execute log_customer_fact';
+  END IF;
+END;
+$$;
