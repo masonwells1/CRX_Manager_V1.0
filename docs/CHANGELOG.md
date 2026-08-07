@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — CRM add-fact retry safety — PREPARED (parked)
+
+Parked migration `20260807120000_log_customer_fact_rpc.sql` adds `log_customer_fact`, an idempotent SECURITY DEFINER RPC mirroring `log_customer_interaction` (payload-fingerprinted replay, role gate, server-pinned `entered_by`/`source`), closing the retry-unsafe direct insert in `CustomerFacts.tsx` found by the incident-vs-guard audit. NOT applied — awaiting migration-review + apply gates + owner approval; the frontend cutover is staged as a comment and lands post-apply. `rpcContracts.test.ts` registers the RPC under `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`.
+
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 
 The mirror-remote block in `.claude/hooks/guards.test.mjs` builds a throwaway git
