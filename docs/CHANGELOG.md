@@ -17,6 +17,67 @@ UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
 
+## 2026-08-07 — CRM add-fact retry safety — PREPARED (parked)
+
+Parked migration `20260807120000_log_customer_fact_rpc.sql` adds `log_customer_fact`, an idempotent SECURITY DEFINER RPC mirroring `log_customer_interaction` (payload-fingerprinted replay, role gate, server-pinned `entered_by`/`source`), closing the retry-unsafe direct insert in `CustomerFacts.tsx` found by the incident-vs-guard audit. NOT applied — awaiting migration-review + apply gates + owner approval; the frontend cutover is staged as a comment and lands post-apply. `rpcContracts.test.ts` registers the RPC under `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`.
+
+## 2026-08-07 — Incident-vs-guard audit: 7 gaps closed with new hard guards
+
+An audit mapped ~89 recorded incidents in `docs/manual/KNOWN_ISSUES.md` against the
+guard stack (sweep predicates, hooks, regression suites, CI) and found 7 without a
+matching hard guard. All 7 are now covered on branch `claude/crx-self-improving-harness-04cef9`:
+
+1. **Profile role-lock INSERT arm** — parked migration `20260807153000_profile_role_lock_covers_insert.sql`
+   extends `_guard_profile_role_lock` to `BEFORE INSERT OR UPDATE`, closing the
+   §0d follow-up where a non-admin could re-insert their own `profiles` row as
+   `role = 'admin'`. Paired red/green predicate `profile-role-lock-insert-arm.sql`
+   (2 rows today → 0 after apply). NOT applied — awaiting migration-review + apply gates.
+2. **Transport-key known-hole tripwire** — `codex-push-lib.test.mjs` now pins that
+   `core.hooksPath` and shell-form `credential.helper` are deliberately absent from
+   `EXECUTABLE_TRANSPORT_KEYS` (husky sets `core.hooksPath` legitimately), so any
+   edit to that list forces a deliberate decision.
+3. **Dispatch-sync silent-skip predicate** — `dispatch-sync-nonqualifying-profile.sql`
+   detects open jobs missing dispatch rows because the assignee didn't qualify
+   (0 rows live).
+4. **Parked items 66/67 built** — `audit-log-completeness.sql` predicate (0 rows live,
+   39 money-mutating SECDEF functions all log) and the write-time actor-binding hook
+   `.claude/hooks/actor-binding-check.mjs` (PreToolUse Write|Edit, 24 assertions,
+   wired on both Claude and Codex sides).
+5. **New financial identities** — `fin-vendor-bill-balance-identity.sql` (0 rows) and
+   `fin-po-receipt-identity.sql` (**22 live violations on March-2026 import POs,
+   deliberately not allowlisted — awaiting Mason's disposition**).
+6. **Commission name-reacquisition residual** — found already fixed live 2026-07-22
+   (`20260722184744_reuse_guard_covers_invoiced_jobs`); KNOWN_ISSUES entry marked RESOLVED.
+7. **Push-guard hoist regression test** — feature-branch push with `core.sshCommand`
+   set is asserted denied, locking in the 2026-08-05 fix.
+
+Sweep predicate count 21 → 26. Gates on the branch: typecheck clean,
+`test:correction-guards` 22 files pass, `test:agent-workflows` pass, vitest
+4287 passed / 1 known full-suite workbook flake (passes in isolation).
+
+## 2026-08-07 — Same-chat Factory actor transfer — PREPARED
+
+Factory custody transfer now also handles an explicit tool-surface change
+inside the same chat session. The canonical owner-input hook records the
+transfer, preserves the chat identity, rebinds custody to the destination tool,
+and revokes the prior presentation so the ticket must be presented and approved
+again. Its receipt proves hook origin rather than authenticating the Windows
+user or another same-user process. This prevents a ticket presented through one
+agent adapter from becoming permanently unapprovable in the same owner chat
+through another adapter.
+The append-time origin-main compatibility gate now compares SHA-256 hashes of
+the complete derived Factory snapshot both immediately and after the approval
+expiry horizon, so a schema-valid event is rejected when branch and current main
+would interpret its custody semantics differently without piping the full ledger
+snapshot through the compatibility subprocess.
+
+This entry describes local reviewed work; it does not claim merge or production
+deployment.
+
+The branch reconciliation retains the Git-hook fixture isolation shipped in
+PR #333 and removes the duplicate per-spawn implementation discovered while
+addressing this change's review feedback.
+
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 
 The mirror-remote block in `.claude/hooks/guards.test.mjs` builds a throwaway git
@@ -41,7 +102,7 @@ Proven red-to-green: with `GIT_DIR`/`GIT_INDEX_FILE` set the suite previously fa
 at the first mirror assertion and now passes 161/161, and writes nothing to the real
 repo in either environment.
 
-## 2026-08-07 — Expired Factory custody-transfer replay repair — PREPARED
+## 2026-08-07 — Expired Factory custody-transfer replay repair — SHIPPED
 
 Factory custody transfer now treats an expired durable `queued` approval as the
 owner-visible `needs-ticket-ok` stage when validating the authenticated transfer
@@ -436,7 +497,7 @@ every ref *including main* without naming one, which is precisely the case
 `mainPushSource()` returns nothing for. Measured against the shipped guard on a
 repo carrying `remote.origin.mirror`:
 
-```
+```text
 push origin feature   ALLOW      push origin        ALLOW
 push (bare)           ALLOW      push origin HEAD:main   DENY
 ```
@@ -1231,7 +1292,7 @@ PROOF — Ran: `npx vitest run --coverage` (320 files, 4259 tests, 0 failures;
 47.13 lines / 37.91 branches / 34.11 functions / 44.74 statements); `tsc --noEmit`;
 `eslint .`; `vite build`; `test:correction-guards`; `test:agent-workflows`. Saw:
 all green, 21 assertions in the log-session guard suite (20 at #310, plus the
-#317 guard asserting no `--since=` window can return). Separately proved the new
+issue #317 guard asserting no `--since=` window can return). Separately proved the new
 ratchet is enforced — a single-file coverage run fails citing all four new
 thresholds — and mutation-tested the `--help` and `git log -15` guards, both of
 which fail the suite when the fix is reverted. The shallow-checkout fix was proved

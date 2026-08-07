@@ -2217,6 +2217,12 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
   // here until the next truthful live type regeneration.
+  // Retry-safe CRM fact intake, PARKED in
+  // 20260807120000_log_customer_fact_rpc.sql (closes the add-fact gap in the
+  // 2026-08-04 CRM audit §4). Declares p_idempotency_key and replays through
+  // check_idempotency/save_idempotency with an exact-request fingerprint. Move
+  // to MUTATING_RPCS_WITH_IDEMPOTENCY after the apply and the next type regen.
+  'log_customer_fact',
 ]);
 
 /**

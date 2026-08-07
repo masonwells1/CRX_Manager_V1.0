@@ -45,6 +45,29 @@ export default function CustomerFacts({ customerId, userId }: { customerId: stri
   const isCurrent = (fact: CustomerFact) => fact.status === 'verified' && !fact.superseded_at && (!fact.expires_at || new Date(fact.expires_at).getTime() > Date.now());
   const current = useMemo(() => facts.filter(isCurrent), [facts]); const pending = useMemo(() => facts.filter((fact) => fact.status === 'pending_review'), [facts]); const history = useMemo(() => facts.filter((fact) => !isCurrent(fact) && fact.status !== 'pending_review'), [facts]);
   const openAdd = () => { setDraft(blankDraft()); setAddOpen(true); };
+  // RETRY-SAFETY CUTOVER (parked). saveFact below is still a direct insert, so a committed response
+  // lost in transit and then retried double-logs the fact (2026-08-04 CRM audit §4, KNOWN_ISSUES §4).
+  // The replacement RPC is written and PARKED in
+  // supabase/migrations/20260807120000_log_customer_fact_rpc.sql. It is NOT live yet, and calling a
+  // non-live RPC from production source is a hard test failure — src/lib/rpcFixtureLiveDiff.test.ts
+  // asserts "every literal production RPC call exists live or in a verified queued migration", and its
+  // "does not commit queued RPC exceptions" rule forbids merging the QUEUED_MIGRATION_FUNCTIONS bridge.
+  // It would also not typecheck until src/types/supabase.ts is regenerated. So the caller stays on the
+  // insert until the migration applies.
+  // AFTER THE APPLY: replace the insert in saveFact with the call below, then delete this note.
+  //   const intent = `add:${draft.category}:${factKey}`;
+  //   const { data, error } = await supabase.rpc('log_customer_fact', {
+  //     p_customer_id: customerId, p_category: draft.category, p_fact_key: factKey,
+  //     p_value_text: draft.valueText.trim(), p_value_json: null, p_confidence: confidence,
+  //     p_expires_at: draft.expiresAt ? new Date(`${draft.expiresAt}T00:00:00`).toISOString() : null,
+  //     p_save_verified: draft.saveVerified, p_idempotency_key: keyForIntent(intent),
+  //   });
+  //   if (error) throw error;
+  //   const saved = assertRpcResult<{ success: boolean; fact_id: string }>(data, 'log_customer_fact');
+  //   clearIntent(intent);
+  // then read `saved.fact_id` where `factId` is read today. Also regenerate the pg_proc snapshot in
+  // rpcFixtureLiveDiff.test.ts and add 'log_customer_fact' to MUTATING_RPCS_WITH_IDEMPOTENCY in
+  // rpcContracts.test.ts.
   const saveFact = async () => { const factKey = draft.factKey.trim().toLowerCase(); const validKey = /^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(factKey); const confidence = draft.confidence === '' ? null : Number(draft.confidence); if (!validKey) { toast('error', 'Fact key must be a lowercase slug, such as preferred_brand'); return; } if (!draft.valueText.trim()) { toast('error', 'Add the fact value'); return; } if (confidence !== null && (!Number.isFinite(confidence) || confidence < 0 || confidence > 1)) { toast('error', 'Confidence must be between 0 and 1'); return; }
     setSaving(true); try { const now = new Date().toISOString(); const result = await supabase.from('customer_facts').insert({ customer_id: customerId, category: draft.category, fact_key: factKey, value_text: draft.valueText.trim(), value_json: null, confidence, source: 'rep', entered_by: userId, status: draft.saveVerified ? 'verified' : 'pending_review', reviewed_by: draft.saveVerified ? userId : null, reviewed_at: draft.saveVerified ? now : null, expires_at: draft.expiresAt ? new Date(`${draft.expiresAt}T00:00:00`).toISOString() : null }).select(); checkMutationResult(result, 'add customer fact'); const factId = result.data?.[0]?.id; await logActivity({ event: 'fact_added', description: `Added ${label(draft.category)} fact: ${factKey}`, performedBy: userId, entityType: 'customer_fact', entityId: factId, customerId }); toast('success', draft.saveVerified ? 'Verified fact saved' : 'Fact saved for review'); setAddOpen(false); await loadFacts(); } catch (error: unknown) { Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'CustomerFacts.add' } }); toast('error', errorMessage(error, 'Failed to save fact')); } finally { setSaving(false); } };
   const review = async (fact: CustomerFact, verdict: 'verified' | 'rejected') => { const intent = `review:${fact.id}:${verdict}`; setSaving(true); try { const { data, error } = await supabase.rpc('review_customer_fact', { p_fact_id: fact.id, p_verdict: verdict, p_review_note: reviewNotes[fact.id]?.trim() || undefined, p_idempotency_key: keyForIntent(intent) }); if (error) throw error; assertRpcResult<{ success: boolean }>(data, 'review_customer_fact'); clearIntent(intent); await logActivity({ event: 'fact_reviewed', description: `${verdict === 'verified' ? 'Verified' : 'Rejected'} fact: ${fact.fact_key}`, performedBy: userId, entityType: 'customer_fact', entityId: fact.id, customerId }); toast('success', verdict === 'verified' ? 'Fact verified' : 'Fact rejected'); await loadFacts(); } catch (error: unknown) { Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'CustomerFacts.review' } }); toast('error', errorMessage(error, 'Failed to review fact')); } finally { setSaving(false); } };
