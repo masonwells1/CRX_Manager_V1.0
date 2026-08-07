@@ -444,7 +444,7 @@ every ref *including main* without naming one, which is precisely the case
 `mainPushSource()` returns nothing for. Measured against the shipped guard on a
 repo carrying `remote.origin.mirror`:
 
-```
+```text
 push origin feature   ALLOW      push origin        ALLOW
 push (bare)           ALLOW      push origin HEAD:main   DENY
 ```
@@ -1239,7 +1239,7 @@ PROOF — Ran: `npx vitest run --coverage` (320 files, 4259 tests, 0 failures;
 47.13 lines / 37.91 branches / 34.11 functions / 44.74 statements); `tsc --noEmit`;
 `eslint .`; `vite build`; `test:correction-guards`; `test:agent-workflows`. Saw:
 all green, 21 assertions in the log-session guard suite (20 at #310, plus the
-#317 guard asserting no `--since=` window can return). Separately proved the new
+issue #317 guard asserting no `--since=` window can return). Separately proved the new
 ratchet is enforced — a single-file coverage run fails citing all four new
 thresholds — and mutation-tested the `--help` and `git log -15` guards, both of
 which fail the suite when the fix is reverted. The shallow-checkout fix was proved
