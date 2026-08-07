@@ -714,6 +714,12 @@ const visibleMutationTargets = structuredMutationTargets(payload?.tool_name, pay
 const targetedForeignWorktree = foreignWorktreeCustody.find((job) =>
   visibleMutationTargets.some((target) => targetFallsInsideWorktree(target, projectDir, job.worktree)),
 );
+const shellCommand = String(payload?.tool_input?.command || "").trim();
+const recognizedShellTool = /^(?:Bash|PowerShell|shell_command)$/i.test(String(payload?.tool_name || ""));
+const safeUnrelatedPendingTicketCommand = recognizedShellTool
+  && foreignWorktreeCustody.length > 0
+  && foreignWorktreeCustody.every((job) => job.stage === "needs-ticket-ok")
+  && SAFE_NODE_RE.test(shellCommand);
 if (buildMutation && targetedForeignWorktree) {
   deny(`CRX FACTORY GATE: job ${targetedForeignWorktree.id} owns this governed worktree from another chat; the mutation targets it from a different checkout.${factoryWorktreeRecoveryRoute(targetedForeignWorktree)}`);
 }
@@ -721,6 +727,7 @@ if (buildMutation
     && visibleMutationTargets.length === 0
     && (shellMutation || opaqueExecution || isStructuredMutationTool(payload?.tool_name))
     && !currentLandingAction
+    && !safeUnrelatedPendingTicketCommand
     && foreignWorktreeCustody.some((job) =>
       job.stage !== "parked" || parkedWorktreeNeedsUntargetedCustody(job))) {
   deny("CRX FACTORY GATE: shell or opaque mutations are disabled while another chat owns a factory worktree because their destinations cannot be custody-checked. Use a structured Write/Edit/apply_patch operation with exact targets.");
