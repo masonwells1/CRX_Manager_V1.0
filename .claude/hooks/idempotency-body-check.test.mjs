@@ -310,4 +310,27 @@ r = runHook(fn(`
 `));
 ok(isDeny(r), "operation literals inside the body survive masking (mismatch still blocked)");
 
+// ── Codex P2 round 7: an ordinary dollar-quoted LITERAL is opaque data — lexing
+//    its payload as SQL saw $q$can't$q$'s quote as unterminated and denied the
+//    whole valid migration. Only AS/DO bodies are recursed now. ────────────────
+r = runHook("SELECT $q$can't$q$;\n" + wiredFn);
+ok(!isDeny(r), "dollar-quoted literal payload with a lone quote is opaque (no false deny)");
+
+r = runHook("SELECT $q$/* not a comment$q$;\n" + wiredFn);
+ok(!isDeny(r), "dollar-quoted literal payload with a lone /* is opaque (no false deny)");
+
+// the AS/DO carve-out must NOT hide nested DDL: an unwired function created
+// INSIDE a DO block is still scanned and blocked
+r = runHook(`DO $do$
+BEGIN
+  CREATE OR REPLACE FUNCTION public.nested_fn(p_idempotency_key text DEFAULT NULL::text)
+  RETURNS void LANGUAGE plpgsql AS $inner$
+  BEGIN
+    UPDATE customers SET name = 'x' WHERE id = 1;
+  END;
+  $inner$;
+END;
+$do$;`);
+ok(isDeny(r), "unwired CREATE FUNCTION nested inside a DO block is still scanned and blocked");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

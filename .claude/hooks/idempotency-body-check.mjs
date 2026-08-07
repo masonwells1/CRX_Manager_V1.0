@@ -179,7 +179,14 @@ function maskSqlNoise(text) {
       if (tag) {
         const close = text.indexOf(tag, i + tag.length);
         if (close === -1) return null;
-        const inner = maskSqlNoise(text.slice(i + tag.length, close));
+        const payload = text.slice(i + tag.length, close);
+        // Only PROCEDURAL bodies (AS $tag$ / DO $tag$) contain SQL worth
+        // lexing — recurse so nested CREATE FUNCTIONs stay visible. Ordinary
+        // dollar-quoted literals are opaque data: mask them wholesale, since
+        // lexing a payload like $q$can't$q$ as SQL sees an unterminated quote
+        // and falsely denies the whole migration (Codex P2 round 7).
+        const isBody = /\b(?:AS|DO)\s+$/i.test(out);
+        const inner = isBody ? maskSqlNoise(payload) : " ".repeat(payload.length);
         if (inner === null) return null;
         out += tag + inner + tag;
         i = close + tag.length;

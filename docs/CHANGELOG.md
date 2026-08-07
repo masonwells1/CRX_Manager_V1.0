@@ -48,6 +48,12 @@ dollar-quoted blocks), header/paren/body structure is scanned on the mask,
 and the body is sliced from the original by index so operation literals
 survive for the FIX 6 checks. Both repro shapes proven red on the prior
 commit; a mismatched-operation case guards against over-masking.
+Round 7 (Codex): the recursive mask lexed ordinary dollar-quoted LITERAL
+payloads as SQL, so `$q$can't$q$` looked like an unterminated quote and
+denied the whole valid migration. Only procedural bodies (`AS $tag$` /
+`DO $tag$`) are recursed now; other dollar-quoted payloads are masked as
+opaque data. Proven red on the prior commit; a DO-block-nested unwired
+function test proves the carve-out doesn't hide nested DDL.
 
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 
