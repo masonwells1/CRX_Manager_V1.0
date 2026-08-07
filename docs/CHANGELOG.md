@@ -40,6 +40,14 @@ dollar-quote opener, denying valid migrations. Both fixed with a shared
 uncapped, token-boundary-aware tag matcher; both proven red on the prior
 commit (after discovering the `/tmp` path in heredoc mutation runs wasn't
 MSYS-converted — the "old" hook wasn't running at all; re-proven properly).
+Round 6 (Codex): `CREATE FUNCTION foo(` inside a STRING literal (top-level or
+a RAISE NOTICE in a DO block) was scanned as live DDL and tripped the
+fail-closed deny on valid migrations. Reworked comment-stripping into full
+MASKING: comments and string contents become spaces (recursing into
+dollar-quoted blocks), header/paren/body structure is scanned on the mask,
+and the body is sliced from the original by index so operation literals
+survive for the FIX 6 checks. Both repro shapes proven red on the prior
+commit; a mismatched-operation case guards against over-masking.
 
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 

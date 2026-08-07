@@ -133,16 +133,23 @@ function dollarTagAt(text, i) {
   return m ? m[0] : null;
 }
 
-/** Replace SQL comments (-- to end of line, and NESTED block comments) with
- * spaces, honoring quoted strings and dollar-quoted literals so comment-looking
- * text inside them is untouched. Length-preserving. Returns null when a string,
- * block comment, or dollar-quote never terminates (caller fails CLOSED).
- * This is the structural fix for two review findings on PR #335:
+/** Replace SQL comments (-- to end of line, NESTED block comments) AND the
+ * CONTENTS of quoted strings with spaces, recursing into dollar-quoted blocks
+ * (delimiters kept) so their inner comments and strings are masked the same
+ * way. LENGTH-PRESERVING: every index into the masked text is a valid index
+ * into the original, so callers scan structure here and slice real content
+ * (parameter lists, function bodies) from the original by index.
+ * Returns null when a string, block comment, or dollar-quote never terminates
+ * (caller fails CLOSED).
+ * This is the structural fix for four review findings on PR #335:
  *  - a commented-out "CREATE FUNCTION foo(" header must not be scanned as live
  *    DDL (its unmatched paren tripped the fail-closed deny — Codex P2 round 4);
  *  - a comment containing "AS $fake$...$fake$" must not be mistaken for a
- *    function body, which could skip a later REAL function (CodeRabbit Major). */
-function stripSqlComments(text) {
+ *    function body, which could skip a later REAL function (CodeRabbit Major);
+ *  - "CREATE FUNCTION foo(" inside a string literal — top-level or in a
+ *    RAISE NOTICE within a DO block — must not be scanned as live DDL either
+ *    (Codex P2 round 6); masking string contents kills the whole class. */
+function maskSqlNoise(text) {
   let out = "";
   let i = 0;
   while (i < text.length) {
@@ -172,9 +179,10 @@ function stripSqlComments(text) {
       if (tag) {
         const close = text.indexOf(tag, i + tag.length);
         if (close === -1) return null;
-        const end = close + tag.length;
-        out += text.slice(i, end);
-        i = end;
+        const inner = maskSqlNoise(text.slice(i + tag.length, close));
+        if (inner === null) return null;
+        out += tag + inner + tag;
+        i = close + tag.length;
         continue;
       }
       out += ch;
@@ -184,7 +192,7 @@ function stripSqlComments(text) {
     if (ch === "'" || ch === '"') {
       const end = scanQuoted(text, i);
       if (end === -1) return null;
-      out += text.slice(i, end);
+      out += ch + " ".repeat(end - i - 2) + ch;
       i = end;
       continue;
     }
@@ -247,8 +255,8 @@ function readBalancedParens(text, openIdx) {
   return null;
 }
 
-/** From just past the parameter list, return {body, end} for the AS $tag$...$tag$
- * block. Walks the (already comment-stripped) text skipping quoted strings and
+/** From just past the parameter list, return {bodyStart, bodyEnd, end} for the
+ * AS $tag$...$tag$ block. Walks the MASKED text skipping quoted strings and
  * non-body dollar-quoted literals, and only accepts a $tag$ directly preceded by
  * the AS keyword — so "AS $fake$" text inside a quoted option value can never be
  * mistaken for the body (CodeRabbit Major, PR #335). */
@@ -269,7 +277,9 @@ function readDollarQuotedBody(text, fromIdx) {
           const bodyStart = i + tag.length;
           const bodyEnd = text.indexOf(tag, bodyStart);
           if (bodyEnd === -1) return null;
-          return { body: text.slice(bodyStart, bodyEnd), end: bodyEnd + tag.length };
+          // Return INDEXES, not a slice: the caller slices the body from the
+          // ORIGINAL content so string literals (operation names) survive masking.
+          return { bodyStart, bodyEnd, end: bodyEnd + tag.length };
         }
         // A dollar-quoted literal that is NOT the body (e.g. a SET option value):
         // skip it whole.
@@ -294,8 +304,10 @@ function readDollarQuotedBody(text, fromIdx) {
 const violations = [];
 try {
 // Strip comments first so commented-out DDL is invisible to every scan below.
-const stripped = stripSqlComments(content);
-if (stripped === null) {
+// Mask comments and string contents so neither can masquerade as DDL; scan
+// structure on the mask, slice real content from `content` by index.
+const masked = maskSqlNoise(content);
+if (masked === null) {
   violations.push(
     "This migration could not parse (unterminated string, block comment, or dollar-quote) — " +
     "the idempotency guard cannot inspect it. Fix the unterminated construct, or if it is " +
@@ -303,9 +315,9 @@ if (stripped === null) {
   );
 }
 let head;
-while (stripped !== null && (head = fnHeadRe.exec(stripped)) !== null) {
+while (masked !== null && (head = fnHeadRe.exec(masked)) !== null) {
   const fnName = head[1];
-  const parsed = readBalancedParens(stripped, fnHeadRe.lastIndex - 1);
+  const parsed = readBalancedParens(masked, fnHeadRe.lastIndex - 1);
   if (!parsed) {
     // FAIL CLOSED: a parameter list this lexer cannot close is exactly where a
     // hidden p_idempotency_key could live (Codex PR #335 found three such lexer
@@ -320,9 +332,12 @@ while (stripped !== null && (head = fnHeadRe.exec(stripped)) !== null) {
     break;
   }
   const params = parsed.params;
-  const rest = readDollarQuotedBody(stripped, parsed.end);
+  const rest = readDollarQuotedBody(masked, parsed.end);
   if (!rest) continue;
-  const body = rest.body;
+  // Slice the body from the ORIGINAL content (indexes align — masking is
+  // length-preserving) so operation-name string literals survive for the
+  // wiring and FIX 6 scoping checks below.
+  const body = content.slice(rest.bodyStart, rest.bodyEnd);
   // Resume scanning after this function so a nested CREATE FUNCTION inside a
   // body (DO-block style migrations) isn't parsed twice.
   fnHeadRe.lastIndex = rest.end;

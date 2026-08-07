@@ -282,4 +282,32 @@ r = runHook(fn(`
 `) + "\nCREATE INDEX idx_foo$bar$ ON customers (name);\n");
 ok(!isDeny(r), "top-level identifier containing dollar signs (idx_foo$bar$) does not false-positive the lexer");
 
+// ── Codex P2 round 6: "CREATE FUNCTION foo(" inside a STRING literal must not
+//    be scanned as live DDL — it tripped the fail-closed deny on valid files ───
+const wiredFn = fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'test_fn') INTO v_existing;
+  UPDATE customers SET name = 'x' WHERE id = 1;
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+  END;
+`);
+r = runHook("SELECT 'legacy CREATE FUNCTION public.old_rpc(';\n" + wiredFn);
+ok(!isDeny(r), "CREATE FUNCTION text inside a top-level string literal is not scanned as DDL");
+
+r = runHook("DO $do$ BEGIN RAISE NOTICE 'legacy CREATE FUNCTION public.old_rpc('; END $do$;\n" + wiredFn);
+ok(!isDeny(r), "CREATE FUNCTION text inside a RAISE NOTICE string in a DO block is not scanned as DDL");
+
+// masking must NOT hide the operation literals the FIX 6 checks read — a
+// mismatched check/save pair is still caught after the masking rework
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'wrong_op') INTO v_existing;
+  INSERT INTO customers (name) VALUES ('x');
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+  END;
+`));
+ok(isDeny(r), "operation literals inside the body survive masking (mismatch still blocked)");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);
