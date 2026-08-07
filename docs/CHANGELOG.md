@@ -54,6 +54,12 @@ denied the whole valid migration. Only procedural bodies (`AS $tag$` /
 `DO $tag$`) are recursed now; other dollar-quoted payloads are masked as
 opaque data. Proven red on the prior commit; a DO-block-nested unwired
 function test proves the carve-out doesn't hide nested DDL.
+Round 8 (Codex): the round-7 carve-out over-masked — `EXECUTE
+$ddl$CREATE FUNCTION…$ddl$` payloads were treated as opaque data, hiding an
+unwired dynamically created RPC (fail-open). Payloads now recurse when
+EXECUTE-adjacent or when they themselves contain a CREATE FUNCTION header
+(covers `EXECUTE format($fmt$…$fmt$, …)`). Proven red on the prior commit;
+regression tests for both dynamic-DDL shapes.
 
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 

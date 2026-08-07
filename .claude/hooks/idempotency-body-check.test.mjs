@@ -333,4 +333,36 @@ END;
 $do$;`);
 ok(isDeny(r), "unwired CREATE FUNCTION nested inside a DO block is still scanned and blocked");
 
+// ── Codex P2 round 8: dynamic DDL — EXECUTE $ddl$CREATE FUNCTION...$ddl$ — was
+//    masked as opaque data, hiding an unwired dynamically created RPC ──────────
+r = runHook(`DO $do$
+BEGIN
+  EXECUTE $ddl$
+    CREATE OR REPLACE FUNCTION public.dyn_fn(p_idempotency_key text DEFAULT NULL::text)
+    RETURNS void LANGUAGE plpgsql AS $inner$
+    BEGIN
+      UPDATE customers SET name = 'x' WHERE id = 1;
+    END;
+    $inner$;
+  $ddl$;
+END;
+$do$;`);
+ok(isDeny(r), "unwired CREATE FUNCTION inside EXECUTE dollar-quoted DDL is still scanned and blocked");
+
+// format()-built DDL: the payload is not EXECUTE-adjacent but contains a
+// CREATE FUNCTION header — the content trigger must still recurse into it
+r = runHook(`DO $do$
+BEGIN
+  EXECUTE format($fmt$
+    CREATE OR REPLACE FUNCTION public.dyn_fn(p_idempotency_key text DEFAULT NULL::text)
+    RETURNS void LANGUAGE plpgsql AS $inner$
+    BEGIN
+      UPDATE customers SET name = 'x' WHERE id = 1;
+    END;
+    $inner$;
+  $fmt$);
+END;
+$do$;`);
+ok(isDeny(r), "unwired CREATE FUNCTION inside EXECUTE format() dollar-quoted DDL is still scanned and blocked");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);
