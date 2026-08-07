@@ -430,6 +430,38 @@ function runInstalledPreToolHooks(state, payload) {
 }
 
 {
+  const state = makeState("same-session-same-tool-thread", "same-session-same-tool-job", "codex");
+  const presented = buildFactorySnapshot(state.paths).jobs[0];
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + APPROVAL_TTL_MS).toISOString();
+  appendFactoryEvent(state.paths, {
+    type: "ticket-approved",
+    jobId: state.jobId,
+    actorTool: "codex",
+    sessionId: state.sessionId,
+    timestamp: now.toISOString(),
+    payload: {
+      ticketHash: presented.ticketHash,
+      questionHash: presented.questionHash,
+      ownerReply: "yes",
+      baseSha,
+      expiresAt,
+    },
+  });
+  const before = buildFactorySnapshot(state.paths).jobs[0];
+  const result = runHook(state, {
+    prompt: `take over factory ticket ${state.jobId} in this chat`,
+    thread_id: state.sessionId,
+  });
+  ok(result.stdout.includes("no custody transfer"), "same-session same-tool takeover is not treated as a custody transfer");
+  const after = buildFactorySnapshot(state.paths).jobs[0];
+  equal(after.stage, before.stage, "rejected same-tool takeover preserves the approved stage");
+  equal(after.approvalExpiresAt, expiresAt, "rejected same-tool takeover preserves approval lifetime");
+  equal(after.laneSessionId, before.laneSessionId, "rejected same-tool takeover preserves lane authorization");
+  equal(after.questionHash, before.questionHash, "rejected same-tool takeover preserves the decision fingerprint");
+}
+
+{
   const state = makeState("same-session-reverse-tool-thread", "same-session-reverse-tool-job", "codex");
   const result = runHook(state, {
     prompt: `take over factory ticket ${state.jobId} in this chat`,

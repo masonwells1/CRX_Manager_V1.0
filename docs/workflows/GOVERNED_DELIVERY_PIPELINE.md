@@ -101,11 +101,13 @@ migration, live-data, secret, permission, or destructive-action gate.
 new chat does not carry over. Mason may explicitly ask the new chat to take over the named factory
 job; the canonical owner-input hook records the transfer and revokes the old approval/question
 fingerprint before the ticket or morning decision is re-presented there.
-The same authenticated takeover phrase also handles an agent-tool change inside
-one chat session. If custody says Claude but the owner continues through Codex,
-or the reverse, the transfer keeps the chat identity, rebinds the tool surface,
-revokes any live approval and question fingerprint, and requires the canonical
-decision to be presented and approved again before lane start.
+The same explicit takeover phrase also records an agent-tool change inside one
+chat session through the canonical owner-input hook. If custody says Claude but
+the owner continues through Codex, or the reverse, the transfer keeps the chat
+identity, rebinds the tool surface, revokes any live approval and question
+fingerprint, and requires the canonical decision to be presented and approved
+again before lane start. The hook receipt proves hook origin; it is not Windows
+user authentication and does not protect against another same-user process.
 
 ## Pilot limits
 

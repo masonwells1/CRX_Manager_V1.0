@@ -4,12 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-07 — Same-chat Factory actor transfer — PREPARED
 
-Factory custody transfer now also handles an authenticated tool-surface change
-inside the same chat session. The signed transfer preserves the chat identity,
-rebinds custody to the destination tool, and revokes the prior presentation so
-the ticket must be presented and approved again. This prevents a ticket
-presented through one agent adapter from becoming permanently unapprovable in
-the same owner chat through another adapter.
+Factory custody transfer now also handles an explicit tool-surface change
+inside the same chat session. The canonical owner-input hook records the
+transfer, preserves the chat identity, rebinds custody to the destination tool,
+and revokes the prior presentation so the ticket must be presented and approved
+again. Its receipt proves hook origin rather than authenticating the Windows
+user or another same-user process. This prevents a ticket presented through one
+agent adapter from becoming permanently unapprovable in the same owner chat
+through another adapter.
 The append-time origin-main compatibility gate now compares SHA-256 hashes of
 the complete derived Factory snapshot both immediately and after the approval
 expiry horizon, so a schema-valid event is rejected when branch and current main
