@@ -754,6 +754,109 @@ export function pushDestinationToken(cmd) {
   return repoOpt;
 }
 
+// Does this push name its refspecs outright? `git push [<repository> [<refspec>…]]`
+// — when refspecs are on the command line git does not consult the DEFAULT refspec
+// configuration (`remote.<n>.push`, `push.default`, `branch.<b>.merge`) at all, so
+// an inherited override of those cannot move where such a push lands. Verified
+// against git rather than assumed — Codex reported it on 2026-08-06 and a scratch
+// repo on git 2.43.0 reproduced it before this fix landed: with
+// `remote.origin.push=HEAD:refs/heads/unrelated` live, `push --dry-run origin
+// main:refs/heads/feature` reports `main -> feature` and nothing else, while
+// `push --dry-run origin` under the very same config reports `HEAD -> unrelated`.
+//
+// A second positional is the first refspec. `--repo=<url>` is deliberately NOT
+// counted: git documents the positional as taking precedence, so the lone
+// positional in `push --repo=<url> HEAD:main` is the REPOSITORY, not a refspec —
+// counting it would skip the default-refspec proof on a push that still needs it.
+// Everything uncertain therefore lands on `false`, which keeps the lookups.
+export function pushNamesRefspec(cmd) {
+  // An option this walk does not understand makes the count untrustworthy in the
+  // dangerous direction: an unknown VALUE-taking option leaves its value looking
+  // like a second positional, i.e. like a refspec, which would skip the lookups on
+  // a push that is really bare. The guard denies unknown options anyway, but it
+  // does so AFTER this comparison, so this cannot rely on that ordering.
+  if (unknownPushOptions(cmd).length > 0) return false;
+  const args = String(cmd || "").match(GIT_PUSH_RE)?.[1] || "";
+  const tokens = splitShellArgs(args);
+  let positionals = 0;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    // After `--` every remaining token is positional, options included.
+    if (token === "--") { positionals += tokens.length - (i + 1); break; }
+    if (!token.startsWith("-")) { positionals += 1; continue; }
+    const eq = token.indexOf("=");
+    const bare = eq === -1 ? token : token.slice(0, eq);
+    if (bare === "--repo") { if (eq === -1) i += 1; continue; }
+    if (eq === -1 && PUSH_OPTS_WITH_VALUE.has(bare)) i += 1;
+    else if (eq === -1 && !bare.startsWith("--") && bare.includes("o")) i += 1;
+  }
+  return positionals >= 2;
+}
+
+// The default-refspec lookups `pushNamesRefspec` makes irrelevant. The remote
+// SELECTION keys are not here: they answer which remote a push uses, which an
+// explicit refspec says nothing about — that is `pushNamesDestination`'s question,
+// and it is a genuinely separate one. Conflating the two is what left the second
+// half of this over-refusal live after the first was fixed (Codex, 2026-08-06).
+export const REFSPEC_DEFAULT_LOOKUPS = new Set(["push.default", "remote.*.push", "branch.merge"]);
+
+// Even a BARE push consults `branch.<b>.merge` only under some `push.default`
+// modes, and comparing it under the others is the same over-refusal one level
+// down: `pushNamesRefspec` correctly says "this push has no refspec", but git
+// still never reads the key. Only `upstream` (and its `tracking` alias) and
+// `simple` consult it — `simple` because it must compare the upstream's name to
+// refuse a mismatch. `current` and `matching` derive the destination refname
+// from the branch alone, and `nothing` refuses outright.
+//
+// Reproduced on git 2.43.0 before fixing, with `branch.feature.merge=refs/heads/main`
+// set and unset: under `current` the dry run reports
+// `refs/heads/feature:refs/heads/feature` BOTH times, while under `upstream` it
+// reports `refs/heads/feature:refs/heads/main` only with the key — so the two
+// modes genuinely differ and only the first is safe to skip (Codex, 2026-08-06).
+//
+// Unset means git's own default, which is `simple` — consulted, so absent reads
+// as "compare". Any unrecognised value also compares, fail-closed: a mode this
+// guard does not know about is not a mode it may declare harmless.
+export function pushDefaultConsultsBranchMerge(value) {
+  const mode = String(value ?? "").trim().toLowerCase();
+  if (mode === "") return true; // unset → git's default `simple`
+  return !["current", "matching", "nothing"].includes(mode);
+}
+
+// Does this push name the repository it pushes to? Git resolves a bare push's
+// remote through `branch.<b>.pushRemote` → `remote.pushDefault` →
+// `branch.<b>.remote` → `origin`, and consults NONE of them once the command
+// names a destination — so an inherited override of those cannot move such a
+// push. Reproduced on git 2.43.0 before this fix, for all three keys: with each
+// set to a second remote, `push --dry-run --porcelain origin main:refs/heads/feature`
+// reports `To <origin.git>` every time, while the bare push under the very same
+// config reports `To <unrelated.git>` every time.
+//
+// `--repo=<dest>` DOES count here, unlike in `pushNamesRefspec`. The asymmetry is
+// git's, not an inconsistency: `--repo` names a repository, so it answers this
+// question and not the refspec one. Confirmed rather than reasoned — `push
+// --repo=origin` under each of the three keys also reports `To <origin.git>`.
+// `pushDestinationToken` already prefers a positional over `--repo`, matching
+// git's documented precedence.
+export function pushNamesDestination(cmd) {
+  // Same fail-closed reason as `pushNamesRefspec`: an unknown value-taking option
+  // leaves its value looking like the positional destination, which would skip
+  // these lookups on a push that really is bare.
+  if (unknownPushOptions(cmd).length > 0) return false;
+  return pushDestinationToken(cmd) !== null;
+}
+
+// The remote-selection lookups `pushNamesDestination` makes irrelevant. The
+// per-remote keys (`remotes`, `remote.*.push`, `remote.*.mirror`) are NOT here:
+// they say where a named remote points and what it sends, which naming that
+// remote does not answer — an inherited `remote.origin.pushurl` still redirects
+// `push origin HEAD:feature`, and the scoped comparison must keep catching it.
+export const REMOTE_SELECTION_LOOKUPS = new Set([
+  "remote.pushDefault",
+  "branch.pushRemote",
+  "branch.remote",
+]);
+
 // Git treats a destination as a URL/path unless it is a bare remote name, and a
 // remote name can contain neither `:` nor a path separator.
 export function destinationLooksLikeUrl(token) {
@@ -835,6 +938,283 @@ export function environmentCarriesConfigOverride(env) {
   return Object.keys(env || {}).filter((key) => /^GIT_CONFIG(_|$)/i.test(key));
 }
 
+// …but "fails closed" was doing more work than the danger warranted, and it made
+// the guard unusable in every environment that routes git through a credential
+// proxy (Claude Code on the web sets `GIT_CONFIG_*` to install a `url.…insteadOf`
+// rewrite, so EVERY push from a web/mobile session was denied — 2026-08-04).
+//
+// The asymmetry note above CONFIG_ROOT_ENV_RE already states the principle: a
+// variable written into the push command is dangerous because the guard never
+// sees it, but an INHERITED one reaches this hook and the push alike. So the
+// honest question is not "is any GIT_CONFIG* set?" — it is "does it CHANGE any
+// answer this guard classifies the push from?". That is decidable: read every
+// such answer twice, once with the variables stripped and once exactly as the
+// push will see them, and compare.
+//
+// These are the answers. Between them they fix the destination repository
+// (`remote -v`, which has rewrites already applied), which remote a bare push
+// picks (`remote.pushDefault`, `branch.<b>.pushRemote`, `branch.<b>.remote`), and
+// which refspec it sends (`push.default`, `branch.<b>.merge`, `remote.<n>.push`).
+//
+// Three more are compared by the caller, because they are answers of CLASSIFIERS
+// rather than of git: `executableTransportSettings` over `config --list` (the
+// program that carries the objects decides where they land whatever the URLs
+// say), `rewritesReachGuardedApp` over the rewrite table (compared through the
+// classifier, not as raw text — inherited variables legitimately ADD rewrite
+// lines, and a rewrite that cannot reach the app repo changes no answer here),
+// and `ls-remote --get-url` per literal URL destination (a push naming a URL
+// outright is rewritten at transport time, where `remote -v` cannot see it).
+export function pushDestinationLookupArgs(branch) {
+  const ref = String(branch || "");
+  return [
+    ["remotes", ["remote", "-v"]],
+    ["remote.pushDefault", ["config", "--get", "remote.pushDefault"]],
+    ["push.default", ["config", "--get", "push.default"]],
+    ["remote.*.push", ["config", "--get-regexp", "^remote\\..*\\.push$"]],
+    ["branch.pushRemote", ["config", "--get", `branch.${ref}.pushRemote`]],
+    ["branch.remote", ["config", "--get", `branch.${ref}.remote`]],
+    ["branch.merge", ["config", "--get", `branch.${ref}.merge`]],
+    // `remote.<n>.mirror` is the config spelling of `--mirror`, and it changes
+    // WHICH REFS a bare push sends, not where they go — so it sits oddly among
+    // keys that all fix a destination. It earns its place by failing closed where
+    // the classifier that actually denies it fails open.
+    //
+    // `configuredMirrorRemotes` is the primary deny and already covers BOTH
+    // vectors, inherited and local, because the guard feeds it `config --list`
+    // unioned over both environments. Measured, not assumed: with this line
+    // deleted, every behavioural test below still passes. What differs is the
+    // failure mode. That union is built by a reader that swallows errors and
+    // returns "" — an unreadable config yields no mirror and no denial. This
+    // lookup goes through `answerFor`, where a read that succeeds ambiently and
+    // fails scrubbed is itself a divergence, so an inherited mirror still denies
+    // when the classifier has gone quiet.
+    //
+    // Codex's 2026-08-05 review of this change reported the inherited vector.
+    ["remote.*.mirror", ["config", "--get-regexp", "^remote\\..*\\.mirror$"]],
+  ];
+}
+
+// The same setting, read as a CLASSIFIER rather than as a compared answer. The
+// lookup above catches an inherited mirror; this catches one already sitting in
+// the repository's own config, which diverges from nothing and so would pass
+// that comparison untouched while still dragging main into every bare push.
+//
+// Git makes the remedy unambiguous: under a mirror remote an explicit refspec is
+// a hard error ("--mirror can't be combined with refspecs"), so the ONLY push
+// form that runs is the bare one, and that form always includes main. There is
+// no narrow push to preserve here — which is why the guard denies on this rather
+// than trying to classify a main-bound push it cannot see in the command text.
+// Values follow git's boolean spelling; only a true value mirrors.
+const GIT_TRUE_VALUES = ["true", "yes", "on", "1"];
+// Splitting the line on its first `=`-or-space was wrong in two separate ways,
+// both confirmed by reproduction against real `git config` output rather than
+// reasoned from the docs (Codex's 2026-08-05 review of this PR reported the
+// first). Git's own parser is the specification here:
+//
+//   remote.origin.mirror          valueless boolean -> TRUE  (`--bool` agrees)
+//   remote.origin.mirror=         empty string      -> false (git's own false)
+//   remote.my remote.mirror=true  spaces are legal in a subsection name -> TRUE
+//
+// The old split skipped the first outright ("a bare key carries no value") and
+// mis-keyed the third as `remote.my`, so both spellings sailed past the deny and
+// reached a bare push that carries main. Anchoring on the KEY SHAPE instead of
+// hunting a separator parses all three the same way, and handles both output
+// formats this is fed: `key=value` from `--list`, `key value` from
+// `--get-regexp`. The name capture is greedy so a remote actually named
+// `a.mirror` keeps its full name instead of being truncated at the first match.
+const MIRROR_LINE = /^remote\.(.+)\.mirror(?:=(.*)|[ \t]+(.*))?$/i;
+export function configuredMirrorRemotes(configOutput) {
+  const found = [];
+  for (const raw of String(configOutput ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const match = line.match(MIRROR_LINE);
+    if (!match) continue;
+    // Section and variable names are case-insensitive to git, but a SUBSECTION —
+    // the remote name — is case-sensitive, so it is captured verbatim. The deny
+    // message hands Mason `git config --unset remote.<name>.mirror`, and that
+    // command silently does nothing if the name is not spelled exactly as stored.
+    const remote = match[1];
+    const value = match[2] ?? match[3];
+    // An absent value is the valueless boolean, which git reads as true. An
+    // explicit value still has to spell true — `mirror=` is false.
+    if (value !== undefined && !GIT_TRUE_VALUES.includes(value.trim().toLowerCase())) continue;
+    if (!found.includes(remote)) found.push(remote);
+  }
+  return found;
+}
+
+// Comparing `remote -v` as raw text was too literal, and it left the original
+// bug half-alive (Codex's 2026-08-05 review of this very change). A credential
+// proxy's rewrite re-spells `git@github.com:owner/repo` as
+// `https://github.com/owner/repo` — the SAME repository, reached the same way,
+// which is the entire purpose of that rewrite. The two reads differ as strings,
+// so an ordinary feature-branch push from any SSH-remote checkout in a web
+// session was still denied. Verified by reproduction: an HTTPS-remote checkout
+// (which is what this repo happens to use, and why the first round of testing
+// missed it) was allowed while `git@github.com:` and `ssh://git@github.com/`
+// spellings were both denied.
+//
+// So destinations compare by REPOSITORY IDENTITY, not spelling. Two URLs are the
+// same destination when they name the same repository AND both arrive over a
+// transport from the sanctioned set below. Anything else — a different
+// repository, a proxy host, a downgraded or unrecognised transport — has no
+// canonical form here and falls back to its raw text, which then differs from
+// the other side and denies. Fails CLOSED by construction: `null` from
+// `canonicalRepoId` (unparseable, malformed escape, no repository named) also
+// falls back to raw text rather than comparing equal to anything.
+// Reworked 2026-08-05 (Mason's call) after FOUR consecutive review findings in
+// three rounds, each a new way two different destinations collapsed to one key:
+// the SSH re-spelling gap, a dropped port, a namespace collision between keys and
+// their raw fallback, and a lowercased path that merged `Team/Repo` with
+// `team/repo` on case-sensitive hosts. A fifth was self-inflicted — the port rule
+// would have denied `ssh://git@ssh.github.com:443/…`, GitHub's own documented
+// endpoint for networks blocking port 22.
+//
+// The leaks were characteristic of the approach, not bad luck: reconstructing
+// "same repository" from URL text means re-deriving, by hand, every rule git and
+// the host apply — case, ports, escapes, aliases, IDN, traversal. Get one wrong
+// and two destinations merge.
+//
+// So stop trying to prove two URLs are the same place, and prove the opposite
+// instead: that NOTHING about the destination moved. Each push line emits two
+// components — the gate classification (`guarded-app` / `unrelated`, from
+// `urlIsGuardedApp`, which fails CLOSED on anything it cannot resolve) and a
+// spelling key from `pushDestinationKey` — and the comparison denies when either
+// changes.
+//
+// An earlier version of this rework compared the classification ALONE, reasoning
+// that a port or a path case may differ freely as long as neither side is the
+// production repo. That was fail-open twice over and is documented at
+// `pushDestinationKey`: `urlIsGuardedApp` is path-only by design, so an off-HOST
+// rewrite read as production on both sides and compared equal; and a
+// feature-branch push is not gated at all, so this comparison is the only thing
+// protecting it.
+//
+// What that means concretely: two different non-GitHub URLs produce two different
+// raw keys and DENY, even when neither is the production repo — a changed host,
+// path case, SSH login user, port, or scheme all survive into the key. Only the
+// allow-listed GitHub spellings collapse. A destination that is unreadable or
+// fails closed keys off its own raw text, so it stays distinct from every
+// resolvable destination rather than quietly matching one.
+export function pushDestinationDecisions(remoteVerboseOutput) {
+  return String(remoteVerboseOutput ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    // `git remote -v` prints `<name> <url> (fetch|push)`; only push lines decide
+    // where objects go. Sorted, so remote ordering is not mistaken for a change.
+    .filter((line) => /\(push\)\s*$/.test(line))
+    .map((line) => {
+      // Parsed by shape, not by splitting on whitespace. Splitting put the
+      // literal `(push)` marker into the URL slot whenever the URL was missing,
+      // so a malformed line classified as UNRELATED — failing open on exactly
+      // the input that should fail closed. Caught by this function's own
+      // empty-destination test before it shipped.
+      const fields = /^(\S+)\s+(.*)\s+\(push\)\s*$/.exec(line);
+      if (!fields) return `${line} guarded-app`;
+      return `${fields[1]} ${pushDestinationDecision(fields[2].trim())}`;
+    })
+    .sort()
+    .join("\n");
+}
+
+// The spelling half of a destination decision. Deliberately NOT `urlIsGuardedApp`,
+// which is path-only on purpose ("decide on the path, whatever host precedes it")
+// so that an SSH alias or a mirror of the production repo still gates. That is
+// right for gating and wrong for comparison: it returns true for
+// `https://evil.example.com/masonwells1/CRX_Manager_V1.0`, so an inherited rewrite
+// moving a push to another HOST folded to the same answer on both sides, and a
+// comparison that sees no change allows. Failing closed there fails OPEN here.
+// Found by running the real guard against a real off-host rewrite; the unit tests
+// and three review rounds all missed it.
+//
+// So spelling collapses in exactly one place — GitHub, whose repository paths are
+// genuinely case-insensitive and whose alternate hostnames GitHub itself
+// publishes (`ssh.github.com:443` is its documented port-22-blocked endpoint).
+// That covers the case this rework exists for: a credential proxy re-spelling
+// `git@github.com:owner/repo` as `https://github.com/owner/repo`, the same
+// repository reached the same way.
+//
+// Everything else compares by RAW TEXT, so a changed host, path case, SSH login
+// user, or port all differ and deny. Both reviewers of this change were right and
+// were asking for the same boundary from opposite sides: CodeRabbit, that a
+// lowercased path merges `Team/Repo` with `team/repo` on case-sensitive servers;
+// Codex, that a dropped SSH user merges `alice@host:repo` with `bob@host:repo`.
+// Neither can happen now, because off GitHub nothing is normalised at all.
+//
+// The cost is a false DENIAL if a proxy re-spells a non-GitHub remote. That is the
+// safe direction, it does not affect this repo (whose remote is GitHub), and the
+// deny message says which lookup disagreed.
+// The GitHub carve-out is an ALLOW-LIST of spellings, not "any URL whose path
+// canonicalizes under github.com". Keying on the canonical id alone was still too
+// loose (CodeRabbit, 2026-08-05): `canonicalRepoId` reads `URL.hostname`, which
+// drops the port, and it does not look at the scheme at all — so
+// `https://github.com:8443/…`, `http://github.com/…` and `git://github.com/…` all
+// produced the SAME key as plain HTTPS. An inherited rewrite from HTTPS to any of
+// them changed the endpoint or downgraded the transport while the comparison saw
+// no change. Same failure as the off-host hole one round earlier: a normalizer
+// built for gating, reused for comparison, discards exactly what comparison needs.
+//
+// Only these spellings collapse, because only these are GitHub reached the normal
+// way: HTTPS on the implicit or explicit 443, SSH on the implicit or explicit 22,
+// `ssh.github.com` on an explicit 443 (GitHub's documented endpoint for networks
+// blocking 22), and the scp-style `git@github.com:owner/repo`. The SSH user must
+// be absent or `git`, which is the only one GitHub accepts. Everything else —
+// other scheme, other port, other host, unparseable — returns a raw key.
+const GITHUB_HOSTS = new Set(["github.com", "www.github.com"]);
+function githubSpelling(text) {
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text)) {
+    let parsed;
+    try { parsed = new URL(text); } catch { return false; }
+    const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+    const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
+    if (scheme === "https") return GITHUB_HOSTS.has(host) && (parsed.port === "" || parsed.port === "443");
+    if (scheme === "ssh") {
+      if (parsed.username && parsed.username.toLowerCase() !== "git") return false;
+      if (GITHUB_HOSTS.has(host)) return parsed.port === "" || parsed.port === "22";
+      // The alternate host is only GitHub on its documented port.
+      if (host === "ssh.github.com") return parsed.port === "443";
+    }
+    return false;
+  }
+  // scp-style `[user@]host:path` carries no scheme or port of its own.
+  const scp = /^(?:([^@\s/\\]+)@)?([^\s:/\\]{2,}):(?!\/)[\s\S]+$/.exec(text);
+  if (!scp) return false;
+  if (scp[1] && scp[1].toLowerCase() !== "git") return false;
+  return GITHUB_HOSTS.has(scp[2].toLowerCase().replace(/\.$/, ""));
+}
+// Exported because the guard resolves a literal URL destination separately, and
+// that path had the SAME boolean-only fail-open this rework removed from
+// `remote -v` (Codex, 2026-08-05): a `git push <url>` whose inherited rewrite
+// moved it off-host but kept the production path classified as `guarded-app` on
+// both sides and compared equal. One helper, both paths.
+export function pushDestinationDecision(url) {
+  return `${urlIsGuardedApp(url) ? "guarded-app" : "unrelated"} ${pushDestinationKey(url)}`;
+}
+function pushDestinationKey(url) {
+  const text = String(url ?? "").trim();
+  // Namespaced, so a raw URL can never collide with a canonical id.
+  if (githubSpelling(text)) {
+    const id = canonicalRepoId(text);
+    if (id) return `github ${id}`;
+  }
+  return `raw ${text}`;
+}
+
+
+// Compare two answer sets. A key whose value differs — including one side
+// erroring while the other does not — means the inherited configuration moves
+// this push somewhere the guard's own lookups would not have seen, so the caller
+// denies. Identical answers (including identically absent, and identically
+// failing) prove the variables cannot redirect this push.
+export function divergentPushLookups(scrubbed, ambient) {
+  const keys = [...new Set([
+    ...Object.keys(scrubbed || {}),
+    ...Object.keys(ambient || {}),
+  ])].sort();
+  return keys.filter((key) => String(scrubbed?.[key]) !== String(ambient?.[key]));
+}
+
 // `GIT_CONFIG*` names a config FILE. These name the DIRECTORY git looks in for
 // the global config, which reaches the same place by a longer road: point HOME
 // at a directory holding a `.gitconfig` with `url.<CRX Manager URL>.pushInsteadOf`
@@ -852,8 +1232,28 @@ export function environmentCarriesConfigOverride(env) {
 // both, so the guard reads the very config the push will use and classifies the
 // destination correctly — which is why this half needs no environment check, and
 // why `environmentCarriesConfigOverride` above stays scoped to `GIT_CONFIG*`.
+// The lookbehind excludes a preceding path separator, and that exclusion is
+// load-bearing rather than cosmetic. The match is case-insensitive (PowerShell
+// spells it `Env:userprofile`) and matches bare text anywhere in the command, so
+// before 2026-08-05 the plain Unix path `/home/user/repo` matched `HOME` — which
+// denied `git -C /home/user/CRX_Manager_V1.0 push`, the exact form this guard's
+// own denial messages tell you to use, on every Linux web/mobile session. A
+// variable name is never preceded by `/` or `\`, and no override spelling puts
+// one there, so excluding that position drops the false positive without
+// weakening any real case: the inline, quoted, and PowerShell forms below are
+// preceded by start-of-string, whitespace, a quote, or `:`.
+//
+// `-` joined it on 2026-08-06, for the same reason one round later. That fix
+// covered `/home/…` but not a path SEGMENT spelled with hyphens, and this
+// environment's scratch directories are named exactly that way
+// (`/tmp/claude-0/-home-user-CRX-Manager-V1-0/…`), so `git -C <scratch path>
+// push` — again the form the denials recommend — was refused; it is what blocked
+// the scratch-repo reproduction of the refspec fix in this same change. A shell
+// assignment name cannot contain `-` at all, and no override spelling below puts
+// one on either side of the name, so a hyphen adjacent to the match means the
+// text is part of a path or a branch name rather than a variable.
 const CONFIG_ROOT_ENV_RE =
-  /(?<![A-Za-z0-9_])(?:HOME|HOMEDRIVE|HOMEPATH|USERPROFILE|XDG_CONFIG_HOME|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM)(?![A-Za-z0-9])/i;
+  /(?<![A-Za-z0-9_/\\-])(?:HOME|HOMEDRIVE|HOMEPATH|USERPROFILE|XDG_CONFIG_HOME|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM)(?![A-Za-z0-9_-])/i;
 export function pushUsesConfigRootEnv(cmd) {
   const text = String(cmd || "");
   if (!isGitPush(text)) return false;
@@ -1021,7 +1421,24 @@ export function pushUsesTransportEnv(cmd) {
 // it. The residual risk is stated rather than hidden: a GIT_EXEC_PATH planted in
 // an earlier segment is indistinguishable from git's own export, so this rule
 // cannot see it.
-const INHERITED_TRANSPORT_ENV_NAME_SET = new Set(TRANSPORT_ENV_NAMES);
+//
+// The credential helpers below are excluded on the same grounds, for a reason
+// specific to what THIS gate decides. An askpass or credential helper answers a
+// prompt on a connection git has ALREADY resolved: it supplies a secret, it does
+// not choose a destination, so it cannot move objects to another repository.
+// (It is an executable git runs — but only a shell that already controls this
+// guard's own process could set it in the inherited environment, so the code
+// execution it grants is not a capability the attacker gained here.) Claude Code
+// on the web exports GIT_ASKPASS for its credential proxy, so treating presence
+// as intent denied every push from a web or mobile session. Written into the
+// command it is still a deliberate act and still denied by
+// `pushUsesTransportEnv`; only the inherited read is relaxed.
+const INHERITED_CREDENTIAL_ENV_NAMES = new Set([
+  "GIT_ASKPASS", "SSH_ASKPASS", "GIT_CREDENTIAL_HELPER",
+]);
+const INHERITED_TRANSPORT_ENV_NAME_SET = new Set(
+  TRANSPORT_ENV_NAMES.filter((name) => !INHERITED_CREDENTIAL_ENV_NAMES.has(name)),
+);
 const normalizedExecutablePath = (value) => path.resolve(String(value || "")).replace(/\\/g, "/").toLowerCase();
 export function environmentCarriesTransportOverride(env, trustedGitExecPath) {
   const checksGitExecPath = arguments.length >= 2;

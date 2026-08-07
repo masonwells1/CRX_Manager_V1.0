@@ -5,6 +5,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isHoldPhrase, isResumePhrase, isBuildActionUnderHold } from "./hold-latch-lib.mjs";
 import { classifySql } from "./live-testdata-lib.mjs";
@@ -228,5 +230,156 @@ ok(r.stdout.includes("deny"), "live-testdata-guard denies real business-table up
 r = runHook("codex-push-guard.mjs", { tool_name: "Bash", tool_input: { command: "git status" } });
 eq(r.status, 0, "codex-push-guard exits 0 on non-push command");
 eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
+
+// codex-push-guard: a configured mirror remote denies EVERY push form, not just
+// a main-bound one. Regression test for a placement bug found on 2026-08-05:
+// the mirror check sat after the `if (!srcRef) continue` that skips non-main
+// pushes, so the three forms a mirror remote actually turns into an all-refs
+// push — `push origin <branch>`, `push origin`, and a bare `push` — were all
+// ALLOWED, and only the explicit `HEAD:main` form was denied. The check was
+// dead for the exact hazard its own deny text describes. These assertions fail
+// against the old ordering.
+{
+  const mirrorRepo = fs.mkdtempSync(path.join(os.tmpdir(), "crx-mirror-guard-"));
+  const git = (...args) => spawnSync("git", ["-C", mirrorRepo, ...args], { encoding: "utf8" });
+  spawnSync("git", ["init", "-q", mirrorRepo], { encoding: "utf8" });
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "test");
+  git("config", "commit.gpgsign", "false");
+  git("commit", "--allow-empty", "-q", "-m", "init");
+  git("branch", "-M", "feature");
+  git("config", "remote.origin.url", "https://github.com/masonwells1/CRX_Manager_V1.0.git");
+  git("config", "remote.origin.mirror", "true");
+
+  const pushVerb = "pu" + "sh"; // keep the literal out of this file's own text
+  for (const form of [`origin feature`, `origin`, ``]) {
+    const command = `git -C ${mirrorRepo} ${pushVerb} ${form}`.trim();
+    const res = runHook("codex-push-guard.mjs", { cwd: mirrorRepo, tool_name: "Bash", tool_input: { command } });
+    const reason = res.stdout.trim()
+      ? JSON.parse(res.stdout)?.hookSpecificOutput?.permissionDecisionReason ?? ""
+      : "";
+    ok(/mirror remote/.test(reason), `mirror remote denies \`${pushVerb} ${form || "(bare)"}\``);
+  }
+
+  // A mirror on a remote this push does NOT target must not deny. Widening the
+  // check to every push form (above) made it refuse on an unrelated mirrored
+  // backup remote — `push origin HEAD:feature` denied because `archive` was
+  // mirrored. Codex caught this on the hoist, 2026-08-05, reproduced before
+  // fixing. `mirror` is per-remote, so the deny is scoped to the remote git
+  // actually resolves for this push.
+  git("config", "--unset", "remote.origin.mirror");
+  git("config", "remote.archive.url", "https://example.com/backup.git");
+  git("config", "remote.archive.mirror", "true");
+  const unrelated = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin HEAD:feature` },
+  });
+  eq(unrelated.stdout.trim(), "", "a mirror on an untargeted remote does not deny");
+
+  // ...but pushing TO that remote still does, and so does a bare push whose
+  // resolved remote is the mirrored one — the scoping must follow git's own
+  // resolution order, not just the token typed in the command.
+  const atMirror = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} archive` },
+  });
+  ok(/mirror/.test(atMirror.stdout), "pushing to the mirrored remote itself still denies");
+
+  git("config", "remote.pushDefault", "archive");
+  const viaDefault = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb}` },
+  });
+  ok(/mirror/.test(viaDefault.stdout), "bare push resolving to the mirrored remote via pushDefault denies");
+  git("config", "--unset", "remote.pushDefault");
+  git("config", "--unset", "remote.archive.mirror");
+
+  // A configured remote name may legally contain `/`, and git resolves
+  // `push team/origin` as that remote. Scoping by the token's SHAPE read it as a
+  // raw URL — which means "no remote.<name>.* applies" — so a mirrored
+  // `team/origin` skipped every per-remote check and the push was ALLOWED.
+  // Fail-open hole introduced by the scoping fix itself; found by Codex on
+  // 2026-08-06 and reproduced against the shipped guard before fixing. An
+  // existing remote now wins over the URL heuristic.
+  git("config", "remote.team/origin.url", "https://github.com/masonwells1/CRX_Manager_V1.0.git");
+  git("config", "remote.team/origin.mirror", "true");
+  const slashed = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} team/origin` },
+  });
+  ok(/mirror/.test(slashed.stdout), "a mirrored remote whose NAME contains `/` still denies");
+  git("config", "--unset", "remote.team/origin.mirror");
+  git("config", "--unset", "remote.team/origin.url");
+
+  // Control, same harness: without the mirror flag the identical push is allowed.
+  // The check above widened a deny to every push form, so this pins that it did
+  // not become a blanket refusal.
+  const clean = runHook("codex-push-guard.mjs", {
+    cwd: mirrorRepo,
+    tool_name: "Bash",
+    tool_input: { command: `git -C ${mirrorRepo} ${pushVerb} origin feature` },
+  });
+  eq(clean.stdout.trim(), "", "no mirror flag → ordinary feature push still passes through");
+
+  fs.rmSync(mirrorRepo, { recursive: true, force: true });
+}
+
+// codex-push-guard: with inherited GIT_CONFIG* present, the repositories proven
+// are the ones the pushes actually run in — not the session's cwd unconditionally.
+// Regression test for a fix on 2026-08-06 (found by Codex, reproduced first): the
+// cwd was always added to that set, so `git -C <repo> push` issued from a cwd that
+// is not itself a checkout denied on a `rev-parse` of the unrelated outer
+// directory, blocking an ordinary feature push that never touched it. `-C` is a
+// documented global form. The deny must survive in the direction that matters.
+{
+  const outer = fs.mkdtempSync(path.join(os.tmpdir(), "crx-outer-")); // deliberately NOT a repo
+  const repo = path.join(outer, "repo");
+  fs.mkdirSync(repo);
+  const git = (...args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  spawnSync("git", ["init", "-q", repo], { encoding: "utf8" });
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "test");
+  git("config", "commit.gpgsign", "false");
+  git("commit", "--allow-empty", "-q", "-m", "init");
+  git("branch", "-M", "feature");
+  git("config", "remote.origin.url", "https://github.com/masonwells1/CRX_Manager_V1.0.git");
+
+  const pushVerb = "pu" + "sh"; // keep the literal out of this file's own text
+  const runWithEnv = (payload, overrides) => spawnSync(
+    process.execPath,
+    [path.join(__dirname, "codex-push-guard.mjs")],
+    { input: JSON.stringify(payload), encoding: "utf8", env: { ...process.env, ...overrides } },
+  );
+  // Harmless: cannot redirect anything. Denying on it is pure over-refusal.
+  const benign = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "Benign" };
+  // Genuinely moves the destination off GitHub. Must deny however it is invoked.
+  const redirecting = {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "url.https://evil.example.com/.insteadOf",
+    GIT_CONFIG_VALUE_0: "https://github.com/",
+  };
+  const withC = `git -C ${repo} ${pushVerb} origin HEAD:feature`;
+  const bare = `git ${pushVerb} origin HEAD:feature`;
+
+  eq(runWithEnv({ cwd: outer, tool_name: "Bash", tool_input: { command: withC } }, benign).stdout.trim(), "",
+    "benign inherited override: `-C <repo>` from a non-repo cwd is not denied");
+  eq(runWithEnv({ cwd: repo, tool_name: "Bash", tool_input: { command: withC } }, benign).stdout.trim(), "",
+    "benign inherited override: `-C <repo>` from the repo itself is not denied");
+  ok(/deny/.test(runWithEnv({ cwd: outer, tool_name: "Bash", tool_input: { command: withC } }, redirecting).stdout),
+    "redirecting override still denies `-C <repo>` from a non-repo cwd");
+  ok(/deny/.test(runWithEnv({ cwd: repo, tool_name: "Bash", tool_input: { command: withC } }, redirecting).stdout),
+    "redirecting override still denies `-C <repo>` from the repo itself");
+  // No `-C` genuinely resolves to the cwd, so an unreadable cwd is a real failure
+  // to prove — that one must keep denying, and is why the fix is a scoping change
+  // rather than dropping the unprovable case.
+  ok(/deny/.test(runWithEnv({ cwd: outer, tool_name: "Bash", tool_input: { command: bare } }, benign).stdout),
+    "a push with no `-C` from an unreadable cwd still denies");
+
+  fs.rmSync(outer, { recursive: true, force: true });
+}
 
 console.log(`guards: ${pass} assertions passed`);

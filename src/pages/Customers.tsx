@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload, Download, FileText, ToggleLeft } from 'lucide-react';
+import { Plus, Upload, Download, FileText, ToggleLeft, AlertTriangle, UserX } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -19,6 +19,10 @@ import { Sentry } from '../lib/sentry';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import type { Customer } from '../types';
 
+const CUSTOMER_FETCH_LIMIT = 1000;
+/** Sentinel for the "no rep assigned" option — a real rep id is never this. */
+const UNASSIGNED_REP = '__unassigned__';
+
 export default function Customers() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -26,24 +30,42 @@ export default function Customers() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [tierFilter, setTierFilter] = useState('');
+  // Deactivated customers stay in the table forever; default the list to the
+  // active book so it stays a worklist rather than an ever-growing archive.
+  const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | 'all'>('active');
+  const [repFilter, setRepFilter] = useState('');
+  const [repNames, setRepNames] = useState<Record<string, string>>({});
+  const [truncated, setTruncated] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   const fetchCustomers = useCallback(async () => {
-    const { data, error } = await supabase
+    const { data, error, count } = await supabase
       .from('customers')
-      .select('*')
+      .select('*', { count: 'exact' })
       .order('farm_name')
-      .limit(500);
+      .limit(CUSTOMER_FETCH_LIMIT);
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_customers' } });
       toast('error', 'Failed to load customers. Please try again.');
       setLoading(false);
       return;
     }
-    setCustomers((data || []) as Customer[]);
+    const rows = (data || []) as Customer[];
+    // A silent cap reads as "this is everyone" — say so instead of hiding it. The
+    // total count is what decides that: a full page means only that the page is
+    // full, which is equally true of a book sitting exactly on the limit and
+    // showing every customer. Fall back to the page-length test when the count is
+    // unavailable — over-warning is the safe direction, silently dropping
+    // customers is not.
+    setTruncated(
+      count === null || count === undefined
+        ? rows.length >= CUSTOMER_FETCH_LIMIT
+        : count > CUSTOMER_FETCH_LIMIT,
+    );
+    setCustomers(rows);
     setLoading(false);
   }, [toast]);
 
@@ -51,10 +73,50 @@ export default function Customers() {
     fetchCustomers();
   }, [fetchCustomers]);
 
+  // Assigned-rep names for the column + filter. A failure here only costs the
+  // rep label (the id-based filter still works), so it never blocks the list.
+  //
+  // Deliberately NOT filtered to active profiles. A customer keeps its
+  // assigned_sales_rep when that rep is deactivated, so filtering here resolved
+  // every former rep to the same "Unknown rep" label — in the column and in the
+  // filter dropdown alike — which is exactly the population an admin needs to
+  // pick apart to reassign the accounts (Codex, 2026-08-05). Inactive reps are
+  // labelled rather than hidden; this map is display-only, so it never widens
+  // who can be *assigned* work.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name, is_active')
+        .order('full_name');
+      if (cancelled || error || !data) return;
+      setRepNames(Object.fromEntries(
+        data.flatMap((p: { id: string | null; full_name: string | null; is_active: boolean | null }) => {
+          if (!p.id) return [];
+          const name = p.full_name || 'Unnamed user';
+          return [[p.id, p.is_active === false ? `${name} (inactive)` : name]];
+        }),
+      ));
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const filtered = customers.filter((c) => {
     if (tierFilter && c.assigned_tier !== parseInt(tierFilter)) return false;
+    if (statusFilter === 'active' && !c.is_active) return false;
+    if (statusFilter === 'inactive' && c.is_active) return false;
+    if (repFilter === UNASSIGNED_REP && c.assigned_sales_rep) return false;
+    if (repFilter && repFilter !== UNASSIGNED_REP && c.assigned_sales_rep !== repFilter) return false;
     return true;
   });
+
+  // Only reps that actually hold accounts in the loaded book — an empty option
+  // that always filters to zero rows is worse than no option.
+  const repOptions = Array.from(new Set(customers.map((c) => c.assigned_sales_rep).filter(Boolean) as string[]))
+    .map((repId) => ({ id: repId, name: repNames[repId] || 'Unknown rep' }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const unassignedCount = customers.filter((c) => c.is_active && !c.assigned_sales_rep).length;
 
   const canBulkAction = profile?.role === 'admin' || profile?.role === 'sales_rep';
 
@@ -79,6 +141,19 @@ export default function Customers() {
     },
     { key: 'contact_name', header: 'Contact', sortable: true },
     { key: 'phone', header: 'Phone' },
+    {
+      key: 'email',
+      header: 'Email',
+      render: (row) => row.email || <span className="text-xs text-gray-400">—</span>,
+    },
+    {
+      key: 'assigned_sales_rep',
+      header: 'Sales Rep',
+      sortable: true,
+      render: (row) => (row.assigned_sales_rep
+        ? <span>{repNames[row.assigned_sales_rep] || 'Unknown rep'}</span>
+        : <span className="text-xs text-amber-600">Unassigned</span>),
+    },
     {
       key: 'assigned_tier',
       header: 'Tier',
@@ -229,6 +304,32 @@ export default function Customers() {
         onSuccess={fetchCustomers}
       />
 
+      {truncated && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Showing the first {CUSTOMER_FETCH_LIMIT.toLocaleString()} customers by farm name — this list is truncated.
+            Search and filters below only apply to the customers already loaded.
+          </span>
+        </div>
+      )}
+
+      {unassignedCount > 0 && repFilter !== UNASSIGNED_REP && (
+        <div className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-secondary">
+          <UserX className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <span>
+            {unassignedCount} active customer{unassignedCount === 1 ? ' has' : 's have'} no assigned sales rep.{' '}
+            <button
+              type="button"
+              onClick={() => { setRepFilter(UNASSIGNED_REP); setStatusFilter('active'); }}
+              className="font-medium text-crx-green hover:underline"
+            >
+              Show them
+            </button>
+          </span>
+        </div>
+      )}
+
       <BulkDeleteConfirmModal
         open={deactivateModalOpen}
         onClose={() => setDeactivateModalOpen(false)}
@@ -258,6 +359,28 @@ export default function Customers() {
             loading={loading}
             filters={
               <>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as 'active' | 'inactive' | 'all')}
+                  aria-label="Filter by status"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="active">Active only</option>
+                  <option value="inactive">Inactive only</option>
+                  <option value="all">All statuses</option>
+                </select>
+                <select
+                  value={repFilter}
+                  onChange={(e) => setRepFilter(e.target.value)}
+                  aria-label="Filter by sales rep"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">All reps</option>
+                  <option value={UNASSIGNED_REP}>Unassigned</option>
+                  {repOptions.map((rep) => (
+                    <option key={rep.id} value={rep.id}>{rep.name}</option>
+                  ))}
+                </select>
                 <select
                   value={tierFilter}
                   onChange={(e) => setTierFilter(e.target.value)}
