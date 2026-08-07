@@ -14,6 +14,11 @@ quote-aware balanced-paren scan and `AS $tag$…$tag$` body reader from
 CREATE FUNCTIONs aren't double-parsed). Regression tests with
 `p_amount numeric(12,2)` before `p_idempotency_key` were proven red on the old
 parser and green on the new one; full `test:correction-guards` passes.
+Codex PR-review follow-up (P2, PR #335): the balanced scan now also skips SQL
+`--` and `/* */` comments, since an unmatched `(` inside a parameter comment
+desynced the depth count and made the parse fail open — proven bypassing the
+first version and denied by the fix, with regression tests for both comment
+forms.
 
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 

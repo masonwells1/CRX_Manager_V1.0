@@ -101,7 +101,9 @@ if (/--\s*idempotency-body-check:\s*exempt/i.test(content)) {
 // (same fix as actor-binding-check.mjs).
 const fnHeadRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(/gi;
 
-/** From the index of a '(' , return {params, end} where end is just past its match. */
+/** From the index of a '(' , return {params, end} where end is just past its match.
+ * Skips SQL comments (-- to end of line, block comments) so an unmatched paren
+ * inside a parameter comment cannot desync the depth count (Codex P2, PR #335). */
 function readBalancedParens(text, openIdx) {
   let depth = 0;
   let inStr = false;
@@ -110,6 +112,18 @@ function readBalancedParens(text, openIdx) {
     const ch = text[i];
     if (inStr) {
       if (ch === strCh) inStr = false;
+      continue;
+    }
+    if (ch === "-" && text[i + 1] === "-") {
+      const nl = text.indexOf("\n", i + 2);
+      if (nl === -1) return null;
+      i = nl;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      if (close === -1) return null;
+      i = close + 1;
       continue;
     }
     if (ch === "'" || ch === '"') { inStr = true; strCh = ch; continue; }

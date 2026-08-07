@@ -185,4 +185,17 @@ r = runHook(fn(`
 `, "p_amount numeric(12,2), p_idempotency_key text DEFAULT NULL::text"));
 ok(!isDeny(r), "numeric(12,2) before p_idempotency_key: correctly wired function is allowed");
 
+// ── Codex P2 (PR #335): an SQL comment inside the parameter list containing an
+//    unmatched '(' must not desync the depth count — the scan would never close,
+//    parse would fail, and the unwired function would be silently ALLOWED. ─────
+r = runHook(fn(`
+  UPDATE customers SET name = 'x' WHERE id = 1;
+`, "p_amount numeric, -- retained for normalization (\n  p_idempotency_key text DEFAULT NULL::text"));
+ok(isDeny(r), "unmatched '(' in a -- parameter comment: unwired mutation is still blocked");
+
+r = runHook(fn(`
+  UPDATE customers SET name = 'x' WHERE id = 1;
+`, "p_amount numeric, /* legacy (see #335 */ p_idempotency_key text DEFAULT NULL::text"));
+ok(isDeny(r), "unmatched '(' in a /* */ parameter comment: unwired mutation is still blocked");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);
