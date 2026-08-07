@@ -474,6 +474,37 @@ function bashExecutable() {
   });
   assertions++;
   assert.equal(pendingParallel.stdout, "", "a pending ticket does not globally lock unrelated chats");
+  writeFileSync(paths.lockPath, `${JSON.stringify({
+    pid: 99999999,
+    createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+  })}\n`);
+  const pendingStatusWithStaleLock = run(laneHook, stateDir, {
+    thread_id: "fresh-status-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/factory.mjs status --json" },
+  });
+  assertions++;
+  assert.equal(
+    hookOutput(pendingStatusWithStaleLock).permissionDecision,
+    "allow",
+    "a stale coordination lock does not block canonical read-only factory status",
+  );
+  const pendingUnrelatedWithStaleLock = run(laneHook, stateDir, {
+    thread_id: "fresh-unrelated-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/prebuilt-ledger-writer.mjs" },
+  });
+  assertions++;
+  assert.equal(pendingUnrelatedWithStaleLock.status, 0, "unrelated non-factory work exits successfully while a stale pending-ticket lock exists");
+  assertions++;
+  assert.equal(pendingUnrelatedWithStaleLock.stderr, "", "unrelated non-factory work emits no hidden error while a stale pending-ticket lock exists");
+  assertions++;
+  assert.equal(
+    pendingUnrelatedWithStaleLock.stdout,
+    "",
+    "a stale coordination lock on a pending ticket does not freeze unrelated non-factory work",
+  );
+  rmSync(paths.lockPath);
   denied(run(laneHook, stateDir, {
     thread_id: "fresh-parallel-thread",
     tool_name: "PowerShell",
@@ -1208,14 +1239,111 @@ function bashExecutable() {
     tool_name: "PowerShell",
     tool_input: { command: `Set-Content -LiteralPath "${path.join(parkedRepo, "tracked.txt")}" -Value forged` },
   }, unrelatedWorktree), /destinations cannot be custody-checked/i, "clean parked worktrees with unpushed commits retain cross-chat shell custody");
+
+  const expiredTicket = writeImmutableTicket(paths, {
+    ...ticket.ticket,
+    id: "expired-queued-transfer",
+    title: "Transfer an expired queued ticket",
+  });
+  const expiredApprovalNow = Date.now();
+  for (const event of [
+    { type: "ticket-drafted", timestamp: new Date(expiredApprovalNow - 240_000).toISOString(), payload: { ticketFile: expiredTicket.filename, ticketHash: expiredTicket.hash, ticketVersion: 1, title: expiredTicket.ticket.title } },
+    { type: "ticket-presented", timestamp: new Date(expiredApprovalNow - 180_000).toISOString(), payload: { ticketHash: expiredTicket.hash, questionText: "Approve expired custody?", questionHash: sha256("Approve expired custody?"), baseSha } },
+    { type: "ticket-approved", timestamp: new Date(expiredApprovalNow - 120_000).toISOString(), payload: { ticketHash: expiredTicket.hash, questionHash: sha256("Approve expired custody?"), ownerReply: "yes", baseSha, expiresAt: new Date(expiredApprovalNow - 60_000).toISOString() } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId: expiredTicket.ticket.id,
+      actorTool: "codex",
+      sessionId: "expired-ticket-old-thread",
+    });
+  }
+  assertions++;
+  assert.equal(
+    loadFactorySnapshot(paths).jobs.find((job) => job.id === expiredTicket.ticket.id).stage,
+    "needs-ticket-ok",
+    "an expired queued approval is presented as needing a fresh ticket decision",
+  );
+  appendFactoryEvent(paths, {
+    type: "job-session-transferred",
+    jobId: expiredTicket.ticket.id,
+    actorTool: "codex",
+    sessionId: "expired-ticket-new-thread",
+    payload: { ownerReply: "Move this ticket here.", priorStage: "needs-ticket-ok" },
+  });
+  const transferredExpiredTicket = loadFactorySnapshot(paths).jobs.find((job) => job.id === expiredTicket.ticket.id);
+  assertions++;
+  assert.equal(transferredExpiredTicket.sessionId, "expired-ticket-new-thread", "expired queued approval transfers to the requested chat");
+  assertions++;
+  assert.equal(transferredExpiredTicket.stage, "needs-ticket-ok", "expired queued transfer remains gated on a fresh decision");
+  assertions++;
+  assert.equal(transferredExpiredTicket.approvalExpiresAt, "", "expired queued transfer revokes stale approval evidence");
+
+  appendFactoryEvent(paths, {
+    type: "job-session-transferred",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId: "pending-ticket-owner-thread",
+    payload: { ownerReply: "Move this ticket here.", priorStage: "parked" },
+  });
+  const beforeSameSessionReplay = loadFactorySnapshot(paths).jobs.find((job) => job.id === ticket.ticket.id);
+  appendFactoryEvent(paths, {
+    type: "job-session-transferred",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId: "pending-ticket-owner-thread",
+    payload: { ownerReply: "Move this ticket here.", priorStage: "needs-ticket-ok" },
+  });
+  const afterSameSessionReplay = loadFactorySnapshot(paths).jobs.find((job) => job.id === ticket.ticket.id);
+  assertions++;
+  assert.deepEqual(
+    {
+      stage: afterSameSessionReplay.stage,
+      approvalExpiresAt: afterSameSessionReplay.approvalExpiresAt,
+      approvalReply: afterSameSessionReplay.approvalReply,
+      questionHash: afterSameSessionReplay.questionHash,
+      questionText: afterSameSessionReplay.questionText,
+      reviewQuestionHash: afterSameSessionReplay.reviewQuestionHash,
+      reviewQuestionText: afterSameSessionReplay.reviewQuestionText,
+      laneSessionId: afterSameSessionReplay.laneSessionId,
+      worktree: afterSameSessionReplay.worktree,
+    },
+    {
+      stage: beforeSameSessionReplay.stage,
+      approvalExpiresAt: beforeSameSessionReplay.approvalExpiresAt,
+      approvalReply: beforeSameSessionReplay.approvalReply,
+      questionHash: beforeSameSessionReplay.questionHash,
+      questionText: beforeSameSessionReplay.questionText,
+      reviewQuestionHash: beforeSameSessionReplay.reviewQuestionHash,
+      reviewQuestionText: beforeSameSessionReplay.reviewQuestionText,
+      laneSessionId: beforeSameSessionReplay.laneSessionId,
+      worktree: beforeSameSessionReplay.worktree,
+    },
+    "same-session transfer replay leaves approval, review, lane, and worktree custody unchanged",
+  );
+  const pendingSafeShell = run(laneHook, stateDir, {
+    thread_id: "unrelated-pending-shell-thread",
+    tool_name: "PowerShell",
+    tool_input: { command: "node scripts/check-doc-drift.mjs" },
+  }, unrelatedWorktree);
+  assertions++;
+  assert.equal(pendingSafeShell.status, 0, "a fixed direct Node inspection exits successfully outside a retained pending-ticket worktree");
+  assertions++;
+  assert.equal(pendingSafeShell.stderr, "", "a fixed direct Node inspection emits no hidden error outside a retained pending-ticket worktree");
+  assertions++;
+  assert.equal(pendingSafeShell.stdout, "", "a fixed safe shell verification remains available outside a retained pending-ticket worktree");
+  denied(run(laneHook, stateDir, {
+    thread_id: "unrelated-pending-opaque-thread",
+    tool_name: "mcp__desktop_commander__start_process",
+    tool_input: { command: "node scripts/check-doc-drift.mjs", timeout_ms: 10_000 },
+  }, unrelatedWorktree), /destinations cannot be custody-checked/i, "a safe-looking command never exempts an opaque tool from retained pending-ticket custody");
   rmSync(parkedRepo, { recursive: true, force: true });
   const removedParkedShell = run(laneHook, stateDir, {
     thread_id: "unrelated-removed-parked-thread",
     tool_name: "PowerShell",
     tool_input: { command: "Set-Content unrelated.txt allowed" },
   }, unrelatedWorktree);
-  assertions++;
-  assert.equal(removedParkedShell.stdout, "", "a removed parked worktree cannot recreate the global orphan shell lock");
+  denied(removedParkedShell, /destinations cannot be custody-checked/i, "a transferred pending ticket still denies arbitrary shell writers after its retained worktree disappears");
 }
 
 function repositoryFilesUnder(relativeDirectory) {
@@ -1534,6 +1662,68 @@ function deterministicSafetyPaths() {
   assert.equal(recoveryHook.permissionDecision, "allow", "corrupt factory state leaves canonical recovery reachable");
   assertions++;
   assert.match(recoveryHook.updatedInput.command, /CRX_FACTORY_PERMIT/, "recovery receives a trusted one-time permit");
+}
+
+for (const mismatch of [
+  {
+    id: "live-queued-transfer-mismatch",
+    expired: false,
+    claimedStage: "needs-ticket-ok",
+    message: "a live queued approval rejects a transfer that claims the expired presentation stage",
+  },
+  {
+    id: "expired-queued-transfer-mismatch",
+    expired: true,
+    claimedStage: "queued",
+    message: "an expired queued approval rejects a transfer that claims the stale durable stage",
+  },
+]) {
+  const stateDir = temporaryStateDir(`crx-factory-${mismatch.id}-`);
+  process.env.CRX_FACTORY_TEST_MODE = "1";
+  process.env.CRX_FACTORY_TEST_STATE_DIR = stateDir;
+  const paths = resolveFactoryPaths(root, { CRX_FACTORY_TEST_MODE: "1", CRX_FACTORY_TEST_STATE_DIR: stateDir });
+  const baseSha = "a".repeat(40);
+  const ticket = writeImmutableTicket(paths, {
+    id: mismatch.id,
+    title: "Reject mismatched transfer custody",
+    goal: "Keep ticket transfer bound to the owner-visible stage.",
+    definitionOfDone: ["A mismatched transfer stage fails closed."],
+    mustNotChange: ["Valid transfers remain available."],
+    allowedPaths: ["tracked.txt"],
+    proofRequirements: ["Guard regression."],
+    proofHarnesses: ["verify-deps"],
+    deliveryGate: "Use existing ship gates.",
+    riskAreas: [],
+  });
+  const approvalNow = Date.now();
+  const timestamps = mismatch.expired
+    ? [approvalNow - 240_000, approvalNow - 180_000, approvalNow - 120_000]
+    : [approvalNow - 3_000, approvalNow - 2_000, approvalNow - 1_000];
+  for (const event of [
+    { type: "ticket-drafted", timestamp: new Date(timestamps[0]).toISOString(), payload: { ticketFile: ticket.filename, ticketHash: ticket.hash, ticketVersion: 1, title: ticket.ticket.title } },
+    { type: "ticket-presented", timestamp: new Date(timestamps[1]).toISOString(), payload: { ticketHash: ticket.hash, questionText: "Approve bound custody?", questionHash: sha256("Approve bound custody?"), baseSha } },
+    { type: "ticket-approved", timestamp: new Date(timestamps[2]).toISOString(), payload: { ticketHash: ticket.hash, questionHash: sha256("Approve bound custody?"), ownerReply: "yes", baseSha, expiresAt: new Date(mismatch.expired ? approvalNow - 60_000 : approvalNow + 60_000).toISOString() } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId: ticket.ticket.id,
+      actorTool: "codex",
+      sessionId: `${mismatch.id}-old-thread`,
+    });
+  }
+  appendFactoryEvent(paths, {
+    type: "job-session-transferred",
+    jobId: ticket.ticket.id,
+    actorTool: "codex",
+    sessionId: `${mismatch.id}-new-thread`,
+    payload: { ownerReply: "Move this ticket here.", priorStage: mismatch.claimedStage },
+  });
+  assertions++;
+  assert.throws(
+    () => loadFactorySnapshot(paths),
+    /does not match its current custody state/,
+    mismatch.message,
+  );
 }
 
 console.log(`factory-guards: ${assertions} assertions passed`);
