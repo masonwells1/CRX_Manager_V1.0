@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — UI experience improvements: WorkspaceTabs route-preserving tab bars for…
+
+UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/Products/Insights clusters, condensed sidebar (Products & Pricing folded into Inventory & Buying, Insights as one link), FREQUENT sidebar section from visit counts, and large-screen readability via responsive root font-size (16px base; 17/18/20px at 1920/2560/3200px). Verified live in Chrome at 3440px and at 1440/1920/2560 in preview pane. Branch claude/crx-manager-ui-improvements-4ca60a pushed (05389e01); PR next.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `05389e01 feat(ui): scale root font size up on large screens`
+  - `58f0fea5 feat(ui): workspace tab bars, condensed sidebar, and frequent-pages section`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 
 The mirror-remote block in `.claude/hooks/guards.test.mjs` builds a throwaway git
