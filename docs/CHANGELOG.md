@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — Same-chat Factory actor transfer — PREPARED
+
+Factory custody transfer now also handles an explicit tool-surface change
+inside the same chat session. The canonical owner-input hook records the
+transfer, preserves the chat identity, rebinds custody to the destination tool,
+and revokes the prior presentation so the ticket must be presented and approved
+again. Its receipt proves hook origin rather than authenticating the Windows
+user or another same-user process. This prevents a ticket presented through one
+agent adapter from becoming permanently unapprovable in the same owner chat
+through another adapter.
+The append-time origin-main compatibility gate now compares SHA-256 hashes of
+the complete derived Factory snapshot both immediately and after the approval
+expiry horizon, so a schema-valid event is rejected when branch and current main
+would interpret its custody semantics differently without piping the full ledger
+snapshot through the compatibility subprocess.
+
+This entry describes local reviewed work; it does not claim merge or production
+deployment.
+
+The branch reconciliation retains the Git-hook fixture isolation shipped in
+PR #333 and removes the duplicate per-spawn implementation discovered while
+addressing this change's review feedback.
+
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 
 The mirror-remote block in `.claude/hooks/guards.test.mjs` builds a throwaway git
@@ -26,7 +49,7 @@ Proven red-to-green: with `GIT_DIR`/`GIT_INDEX_FILE` set the suite previously fa
 at the first mirror assertion and now passes 161/161, and writes nothing to the real
 repo in either environment.
 
-## 2026-08-07 — Expired Factory custody-transfer replay repair — PREPARED
+## 2026-08-07 — Expired Factory custody-transfer replay repair — SHIPPED
 
 Factory custody transfer now treats an expired durable `queued` approval as the
 owner-visible `needs-ticket-ok` stage when validating the authenticated transfer
@@ -421,7 +444,7 @@ every ref *including main* without naming one, which is precisely the case
 `mainPushSource()` returns nothing for. Measured against the shipped guard on a
 repo carrying `remote.origin.mirror`:
 
-```
+```text
 push origin feature   ALLOW      push origin        ALLOW
 push (bare)           ALLOW      push origin HEAD:main   DENY
 ```
@@ -1216,7 +1239,7 @@ PROOF — Ran: `npx vitest run --coverage` (320 files, 4259 tests, 0 failures;
 47.13 lines / 37.91 branches / 34.11 functions / 44.74 statements); `tsc --noEmit`;
 `eslint .`; `vite build`; `test:correction-guards`; `test:agent-workflows`. Saw:
 all green, 21 assertions in the log-session guard suite (20 at #310, plus the
-#317 guard asserting no `--since=` window can return). Separately proved the new
+issue #317 guard asserting no `--since=` window can return). Separately proved the new
 ratchet is enforced — a single-file coverage run fails citing all four new
 thresholds — and mutation-tested the `--help` and `git log -15` guards, both of
 which fail the suite when the fix is reverted. The shallow-checkout fix was proved
