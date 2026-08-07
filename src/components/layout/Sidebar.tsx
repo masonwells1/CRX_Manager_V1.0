@@ -21,7 +21,6 @@ import {
   FileText,
   FlaskConical,
   Image,
-  LayoutDashboard,
   LayoutGrid,
   LogOut,
   MapPin,
@@ -33,7 +32,6 @@ import {
   Plane,
   Receipt,
   RotateCcw,
-  Scale,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -47,6 +45,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
+import { getVisitCounts } from '../../lib/recentPages';
 import { supabase } from '../../lib/db';
 import { SPLIT_BILLING_SETTING_KEY, parseSplitBillingEnabled } from '../../lib/splitBillingSetting';
 import type { UserRole } from '../../types';
@@ -59,6 +58,8 @@ interface NavSubItem {
   label: string;
   icon: React.ReactNode;
   roles?: UserRole[];
+  /** Extra base paths that keep this link highlighted (workspace tab siblings). */
+  activePaths?: string[];
 }
 
 interface NavCategory {
@@ -74,6 +75,8 @@ interface StandaloneLink {
   label: string;
   icon: React.ReactNode;
   roles?: UserRole[];
+  /** Extra base paths that keep this link highlighted (workspace tab siblings). */
+  activePaths?: string[];
 }
 
 type NavEntry =
@@ -133,9 +136,11 @@ const officeNavigation: NavEntry[] = [
       id: 'inventory-buying', label: 'Inventory & Buying', icon: <Warehouse className="w-5 h-5" />,
       items: [
         { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-4 h-4" /> },
-        { path: '/products', label: 'Products', icon: <Package className="w-4 h-4" /> },
-        { path: '/supplier-pricing', label: 'Supplier Pricing', icon: <BadgeDollarSign className="w-4 h-4" /> },
-        { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-4 h-4" /> },
+        {
+          path: '/products', label: 'Products & Pricing', icon: <Package className="w-4 h-4" />,
+          // Supplier Pricing + Brand vs Generic live as tabs on the Products workspace
+          activePaths: ['/products', '/supplier-pricing', '/brand-vs-generic'],
+        },
         { path: '/purchase-orders', label: 'Purchase Orders', icon: <ShoppingCart className="w-4 h-4" /> },
         { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" /> },
         { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin'] },
@@ -174,15 +179,13 @@ const officeNavigation: NavEntry[] = [
     },
   },
   {
-    type: 'category',
-    category: {
-      id: 'insights', label: 'Insights', icon: <BarChart3 className="w-5 h-5" />,
-      items: [
-        { path: '/dashboard', label: 'Overview (KPI Dashboard)', icon: <LayoutDashboard className="w-4 h-4" /> },
-        { path: '/reports', label: 'Reports Library', icon: <BarChart3 className="w-4 h-4" /> },
-        { path: '/sales-reports', label: 'Sales Reports', icon: <BarChart3 className="w-4 h-4" /> },
-        { path: '/financial-dashboard', label: 'Financial Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, roles: ['admin'] },
-      ],
+    // Insights is a single workspace page now — Reports, Sales Reports,
+    // Field Profitability, and Financial Dashboard are tabs on /dashboard.
+    type: 'standalone',
+    link: {
+      id: 'insights', path: '/dashboard', label: 'Insights', icon: <BarChart3 className="w-5 h-5" />,
+      roles: ['admin', 'sales_rep'],
+      activePaths: ['/dashboard', '/reports', '/sales-reports', '/field-profitability', '/financial-dashboard'],
     },
   },
   {
@@ -259,12 +262,16 @@ function getVisibleItems(items: NavSubItem[], userRole: UserRole | undefined, de
   return items.filter((item) => hasNavAccess(item.roles, userRole, deniedPages, item.path));
 }
 
-/** Check if any sub-item's route is the current active route */
+function pathMatches(path: string, pathname: string): boolean {
+  if (path === '/') return pathname === '/';
+  return pathname === path || pathname.startsWith(path + '/');
+}
+
+/** Check if any sub-item's route (or workspace sibling) is the current active route */
 function categoryHasActiveRoute(items: NavSubItem[], pathname: string): boolean {
-  return items.some((item) => {
-    if (item.path === '/') return pathname === '/';
-    return pathname === item.path || pathname.startsWith(item.path + '/');
-  });
+  return items.some((item) =>
+    (item.activePaths ?? [item.path]).some((p) => pathMatches(p, pathname))
+  );
 }
 
 // --- Component ---
@@ -310,6 +317,28 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         : entry,
     );
   }, [userRole, splitBillingEnabled]);
+
+  // Top 5 most-visited category sub-pages (visit counts live in localStorage).
+  // Surfaces buried pages as one-click links; hidden until real usage builds up.
+  // Office roles only — applicator/driver navs are already flat and short.
+  const frequentItems = useMemo<NavSubItem[]>(() => {
+    if (userRole === 'applicator' || userRole === 'driver') return [];
+    const counts = getVisitCounts();
+    const candidates: NavSubItem[] = [];
+    for (const entry of navigation) {
+      if (entry.type === 'category') {
+        candidates.push(...getVisibleItems(entry.category.items, userRole, deniedPages));
+      }
+    }
+    return candidates
+      .map((item) => ({ item, count: counts[item.path] || 0 }))
+      .filter((c) => c.count >= 3)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5)
+      .map((c) => c.item);
+    // location.pathname keeps counts fresh as the user navigates this session
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, userRole, deniedPages, location.pathname]);
 
   // Expanded category id (null = collapsed sidebar, string = that category is open)
   const [openCategory, setOpenCategory] = useState<string | null>(() => {
@@ -403,13 +432,44 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
     setOpenCategory(null);
   }, []);
 
-  const isRouteActive = (path: string) => {
-    if (path === '/') return location.pathname === '/';
-    return location.pathname === path || location.pathname.startsWith(path + '/');
-  };
+  const isRouteActive = (path: string, activePaths?: string[]) =>
+    (activePaths ?? [path]).some((p) => pathMatches(p, location.pathname));
 
   // --- Mobile: always show full expanded sidebar (legacy behavior) ---
   // --- Desktop: collapsible icon sidebar ---
+
+  // "Frequent" quick links — same visual language as standalone links,
+  // separated from the main nav by a divider. Desktop shows it only when
+  // the sidebar is expanded (icon-only rows would duplicate the categories).
+  const renderFrequent = (isMobile: boolean) => {
+    if (frequentItems.length === 0) return null;
+    if (!isMobile && !isExpanded) return null;
+    return (
+      <div>
+        <div className="px-4 pt-1 pb-1">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Frequent</span>
+        </div>
+        {frequentItems.map((item) => {
+          const active = isRouteActive(item.path, item.activePaths);
+          return (
+            <NavLink
+              key={`frequent-${item.path}`}
+              to={item.path}
+              onClick={isMobile ? onClose : undefined}
+              className={`block transition-colors ${active ? 'text-white bg-white/5' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+            >
+              <div className="relative flex items-center gap-3 px-4 py-2">
+                {active && <div className="absolute left-0 top-1 bottom-1 w-[3px] bg-crx-green rounded-r" />}
+                <span className={active ? 'text-crx-green' : 'text-gray-400'}>{item.icon}</span>
+                <span className="text-sm font-medium whitespace-nowrap">{item.label}</span>
+              </div>
+            </NavLink>
+          );
+        })}
+        <div className="mx-4 my-2 border-t border-white/10" aria-hidden="true" />
+      </div>
+    );
+  };
 
   const renderNavEntries = (isMobile: boolean) =>
     navigation.map((entry) => {
@@ -417,7 +477,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         const { link } = entry;
         if (!hasNavAccess(link.roles, userRole, deniedPages, link.path)) return null;
 
-        const active = isRouteActive(link.path);
+        const active = isRouteActive(link.path, link.activePaths);
 
         if (isMobile) {
           return (
@@ -474,7 +534,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
               <span className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">{category.label}</span>
             </div>
             {visibleItems.map((item) => {
-              const active = isRouteActive(item.path);
+              const active = isRouteActive(item.path, item.activePaths);
               return (
                 <NavLink
                   key={item.path}
@@ -523,7 +583,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
           {isOpen && isExpanded && (
             <div className="pb-1">
               {visibleItems.map((item) => {
-                const active = isRouteActive(item.path);
+                const active = isRouteActive(item.path, item.activePaths);
                 return (
                   <NavLink
                     key={item.path}
@@ -582,6 +642,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         </div>
 
         <nav aria-label="Main navigation" className="flex-1 py-3 overflow-y-auto">
+          {renderFrequent(true)}
           <div className="space-y-0.5">{renderNavEntries(true)}</div>
         </nav>
 
@@ -634,6 +695,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
 
         {/* Nav items */}
         <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden">
+          {renderFrequent(false)}
           <div className="space-y-0.5">{renderNavEntries(false)}</div>
         </nav>
 

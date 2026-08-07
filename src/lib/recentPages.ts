@@ -5,6 +5,7 @@
  */
 
 const RECENT_KEY = 'crx-recent-pages';
+const COUNT_KEY = 'crx-page-visit-counts';
 const MAX_RECENT = 20;
 
 export interface RecentItem {
@@ -22,11 +23,33 @@ export function getRecentItems(): RecentItem[] {
   }
 }
 
+/**
+ * Lifetime visit counts keyed by base path ('/invoices/abc-123' counts as
+ * '/invoices'). Feeds the sidebar "Frequent" section.
+ */
+export function getVisitCounts(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(COUNT_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 export function recordPageVisit(path: string, title: string) {
   try {
     const items = getRecentItems().filter((r) => r.path !== path);
     items.unshift({ path, title, timestamp: Date.now() });
     localStorage.setItem(RECENT_KEY, JSON.stringify(items.slice(0, MAX_RECENT)));
+  } catch {
+    // ignore storage errors
+  }
+  try {
+    const base = '/' + (path.split('/')[1] || '');
+    const counts = getVisitCounts();
+    counts[base] = (counts[base] || 0) + 1;
+    localStorage.setItem(COUNT_KEY, JSON.stringify(counts));
   } catch {
     // ignore storage errors
   }

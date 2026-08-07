@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import MobileBottomNav from './MobileBottomNav';
 import TopBar from './TopBar';
+import WorkspaceTabs from './WorkspaceTabs';
 import OfflineBanner from '../ui/OfflineBanner';
 import CommandPalette from '../ui/CommandPalette';
 import { recordPageVisit } from '../../lib/recentPages';
@@ -52,6 +53,7 @@ export default function AppLayout() {
           accent={accent}
         />
         <OfflineBanner />
+        <WorkspaceTabs />
         <main id="main-content" className="flex-1 p-4 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:p-4 lg:p-6">
           <Outlet />
         </main>
