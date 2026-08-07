@@ -37,11 +37,6 @@ let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
 
-const isolatedGitEnv = { ...process.env };
-for (const name of Object.keys(isolatedGitEnv)) {
-  if (/^GIT_/i.test(name)) delete isolatedGitEnv[name];
-}
-
 // ── hold-latch ───────────────────────────────────────────────────────────
 ok(isHoldPhrase("lets just stop here, cancel all background work"), "stop+cancel");
 ok(isHoldPhrase("pause this loop"), "pause");
@@ -229,11 +224,7 @@ ok(!proofValid({ ...good, verdict: "has-blockers" }, "abc", Date.now()), "non-cl
 
 // ── LIVE inert checks: guards emit NOTHING when their state files are absent ─
 function runHook(file, payload) {
-  return spawnSync(process.execPath, [path.join(__dirname, file)], {
-    input: JSON.stringify(payload),
-    encoding: "utf8",
-    env: isolatedGitEnv,
-  });
+  return spawnSync(process.execPath, [path.join(__dirname, file)], { input: JSON.stringify(payload), encoding: "utf8" });
 }
 // hold-latch-guard: no hold.json → nothing (assumes none latched; safe if a real repo has one, so only assert exit 0)
 let r = runHook("hold-latch-guard.mjs", { tool_name: "Edit", tool_input: { file_path: "src/x.tsx" } });
@@ -269,8 +260,8 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
 // against the old ordering.
 {
   const mirrorRepo = fs.mkdtempSync(path.join(os.tmpdir(), "crx-mirror-guard-"));
-  const git = (...args) => spawnSync("git", ["-C", mirrorRepo, ...args], { encoding: "utf8", env: isolatedGitEnv });
-  spawnSync("git", ["init", "-q", mirrorRepo], { encoding: "utf8", env: isolatedGitEnv });
+  const git = (...args) => spawnSync("git", ["-C", mirrorRepo, ...args], { encoding: "utf8" });
+  spawnSync("git", ["init", "-q", mirrorRepo], { encoding: "utf8" });
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "test");
   git("config", "commit.gpgsign", "false");
@@ -367,8 +358,8 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   const outer = fs.mkdtempSync(path.join(os.tmpdir(), "crx-outer-")); // deliberately NOT a repo
   const repo = path.join(outer, "repo");
   fs.mkdirSync(repo);
-  const git = (...args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", env: isolatedGitEnv });
-  spawnSync("git", ["init", "-q", repo], { encoding: "utf8", env: isolatedGitEnv });
+  const git = (...args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+  spawnSync("git", ["init", "-q", repo], { encoding: "utf8" });
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "test");
   git("config", "commit.gpgsign", "false");
@@ -380,7 +371,7 @@ eq(r.stdout.trim(), "", "codex-push-guard silent on non-push command");
   const runWithEnv = (payload, overrides) => spawnSync(
     process.execPath,
     [path.join(__dirname, "codex-push-guard.mjs")],
-    { input: JSON.stringify(payload), encoding: "utf8", env: { ...isolatedGitEnv, ...overrides } },
+    { input: JSON.stringify(payload), encoding: "utf8", env: { ...process.env, ...overrides } },
   );
   // Harmless: cannot redirect anything. Denying on it is pure over-refusal.
   const benign = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "Benign" };

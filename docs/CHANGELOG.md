@@ -21,6 +21,10 @@ snapshot through the compatibility subprocess.
 This entry describes local reviewed work; it does not claim merge or production
 deployment.
 
+The branch reconciliation retains the Git-hook fixture isolation shipped in
+PR #333 and removes the duplicate per-spawn implementation discovered while
+addressing this change's review feedback.
+
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 
 The mirror-remote block in `.claude/hooks/guards.test.mjs` builds a throwaway git
