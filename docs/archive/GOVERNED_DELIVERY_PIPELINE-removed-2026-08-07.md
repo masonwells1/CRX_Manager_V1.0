@@ -107,6 +107,13 @@ migration, live-data, secret, permission, or destructive-action gate.
 new chat does not carry over. Mason may explicitly ask the new chat to take over the named factory
 job; the canonical owner-input hook records the transfer and revokes the old approval/question
 fingerprint before the ticket or morning decision is re-presented there.
+The same explicit takeover phrase also records an agent-tool change inside one
+chat session through the canonical owner-input hook. If custody says Claude but
+the owner continues through Codex, or the reverse, the transfer keeps the chat
+identity, rebinds the tool surface, revokes any live approval and question
+fingerprint, and requires the canonical decision to be presented and approved
+again before lane start. The hook receipt proves hook origin; it is not Windows
+user authentication and does not protect against another same-user process.
 
 ## Pilot limits
 
@@ -179,6 +186,10 @@ fingerprint before the ticket or morning decision is re-presented there.
   support for a new event shape must therefore land before branch code may emit that shape. This
   prevents a feature branch from making the single shared ledger unreadable to the clean base that
   must start its replacement lane.
+  The compatibility check also requires branch and current main to derive the same complete Factory
+  snapshot both immediately and after the 24-hour approval window. If a branch deliberately changes
+  how an existing event is interpreted, that reader change must land on main through the ordinary
+  guarded workflow before any branch emits an event that depends on the new interpretation.
   The extracted base reducer process receives that same fixed executable path and empty/disabled Git
   configuration, so its legacy plain `git` calls cannot fall back to the caller's environment.
   Local `origin/main` refresh uses the same new-repository canonical fetch, imports its objects without
