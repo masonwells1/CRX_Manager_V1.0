@@ -3203,7 +3203,7 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
           throw new Error(`Factory job ${job.id} transfer does not match its current custody state.`);
         }
         validateHookOriginReceipt(paths, event);
-        if (job.sessionId === event.sessionId) {
+        if (job.sessionId === event.sessionId && job.actorTool === event.actorTool) {
           break;
         }
         job.sessionId = event.sessionId;
