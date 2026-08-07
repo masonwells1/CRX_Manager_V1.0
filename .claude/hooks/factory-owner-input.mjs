@@ -175,7 +175,7 @@ async function main() {
     const snapshot = loadFactorySnapshot(paths);
     const transferable = snapshot.jobs.filter((job) =>
       FACTORY_TRANSFERABLE_STAGES.has(job.stage)
-      && job.sessionId !== sessionId);
+      && (job.sessionId !== sessionId || job.actorTool !== actorTool));
     const named = transferable.filter((job) => mentionsExactJobId(prompt, job.id));
     const tokensAfterJobWords = [...prompt.matchAll(/\b(?:factory\s+)?(?:job|ticket)(?:\s*[-:#]\s*|\s+)[\s"'([{<]*([A-Za-z0-9][A-Za-z0-9._:@+=,-]*)\b/gi)]
       .map((match) => match[1]);
