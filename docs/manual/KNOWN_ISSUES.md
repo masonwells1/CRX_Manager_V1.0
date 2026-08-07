@@ -13,6 +13,14 @@ This file consolidates (does not replace) the source documents it points to. If 
 cause. None affect production; all affect an agent's ability to finish a session
 from a remote container.
 
+> **Update 2026-08-07 (reconciled when this entry merged with `main`):** since
+> this was written, PR #313 (2026-08-05) relaxed both guards for sessions
+> carrying only the two SSH-spelling rewrites, and removed the memory-backup
+> script's blanket rewrite ban — see the two entries immediately below. Neither
+> fix covers a container that *also* installs the credential proxy, which is the
+> shape described here, so this entry stays OPEN. The entries below are the
+> current, narrower statement of what still refuses and why.
+
 **Root cause for (1) and (2): URL rewrites.** A Claude Code on the web container
 reaches GitHub through a local proxy, configured in `/root/.gitconfig` as
 `url."http://local_proxy@127.0.0.1:<port>/git/".insteadOf = https://github.com/`,
@@ -94,6 +102,112 @@ pushes) may be worth revisiting, since it means a remote session cannot record i
 own work in the two largest docs. See
 `docs/audits/2026-08-04-test-coverage-analysis.md` for the session that surfaced
 these.
+
+## OPEN — the push guard AND the memory backup still refuse web/mobile sessions that install a credential-proxy rewrite
+
+**Found 2026-08-05 by Codex on PR #313 (P2), reproduced and confirmed the same day. Needs an owner decision; see "the decision this needs" below. Codex found the second instance (`backup-claude-memory`) on the same PR after the first was parked — see "Second instance" below.**
+
+PR #313 fixed the push guard denying *every* web/mobile session. It does not cover the variant where the session also installs a **credential-proxy rewrite** — the "third" rewrite noted in the RESOLVED entry below. Sessions carrying only the two SSH-spelling normalizations (`git@github.com:` / `ssh://git@github.com/` → `https://github.com/`) push fine; that is the shape the PR was developed and verified in, which is why it went unnoticed.
+
+With a proxy rewrite of the form `url.http://<proxy>/git/.insteadOf https://github.com/`, `git remote -v` reports the proxy URL, so the guard's two reads disagree:
+
+```
+scrubbed decision: guarded-app github github.com/masonwells1/crx_manager_v1.0
+ambient  decision: guarded-app raw http://proxy.invalid/git/masonwells1/CRX_Manager_V1.0.git
+divergent keys   : ["dest"]
+```
+
+`pushDestinationKey()` only canonicalizes direct GitHub spellings and falls back to `raw <url>` for anything else, so `divergentPushLookups()` reports a divergence and the guard denies — including an ordinary `HEAD:feature` push. That blocks the branch→PR landing path in exactly the environment the guard was meant to unblock.
+
+Reproduce: `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='url.http://proxy.invalid/git/.insteadOf' GIT_CONFIG_VALUE_0='https://github.com/' git remote -v` in an HTTPS-origin checkout, then compare `pushDestinationDecision()` on the scrubbed and ambient URLs.
+
+**Note both sides already classify the destination `guarded-app`** — `urlIsGuardedApp()` recognizes the proxy URL by path. The divergence is only in the identity half of the key.
+
+**The decision this needs.** A fix means teaching the guard which rewrite targets count as "the same repository," and every obvious shortcut re-opens the fail-open this helper has already sprung five times:
+
+- Comparing only the `guarded-app` boolean is the first draft that was rejected as too weak.
+- Matching on the `owner/repo` path suffix would make any host with a matching path compare equal — a redirect to an attacker-controlled host would pass.
+- Applying the unioned rewrite table to *both* reads makes them agree by construction, which defeats the divergence check entirely.
+
+So it wants an explicit notion of an approved rewrite target rather than another patch to the key function. Deliberately not attempted on PR #313: it is a security-relevant change to a push guard, and **this session cannot verify a fix end-to-end** — it carries the two SSH normalizations and no proxy rewrite, so only unit-level proof is available here. Recommend fixing it from a session that actually has the proxy installed, so the real push path is the proof.
+
+### Second instance — `backup-claude-memory` refuses the same way, for the same reason
+
+**Found 2026-08-05 by Codex on PR #313 (P2), reproduced and confirmed the same day.** The RESOLVED entry below says the memory backup now runs from a web or mobile session. **That claim is narrower than it reads, and the entry has been corrected**: what was verified there is a session carrying the two SSH-spelling normalizations. A session that also installs a credential proxy still refuses.
+
+`git remote -v` reports the proxy URL for the backup remote too, so the resolved push URL is `http://<proxy>/git/masonwells1/CRX_Backups.git`. `destinationIsPublishable()` gates the private-backup branch on `pushUrls.every((url) => canonicalRepoId(url) === BACKUP_REPO_ID)`, and the proxy URL does not canonicalize to that id, so the run falls through to the "not the off-site backup repo" refusal and stages nothing. Confirmed directly against the shipped helper:
+
+```
+ENTERS backup branch  "github.com/masonwells1/crx_backups"        <- https://github.com/masonwells1/CRX_Backups.git
+ENTERS backup branch  "github.com/masonwells1/crx_backups"        <- git@github.com:masonwells1/CRX_Backups.git
+REFUSES               "proxy.invalid/git/masonwells1/crx_backups" <- http://proxy.invalid/git/masonwells1/CRX_Backups.git
+```
+
+Same root cause as the push-guard instance above — no notion of an approved rewrite target — and the same safe failure direction: it refuses rather than writing private notes to an unverified address. Parked for the same reason, with one addition specific to this script: verifying a fix needs both a proxy-carrying session **and** a real private `CRX_Backups` clone to stage into, so the end-to-end proof is not available from an ordinary session at all. Fix both instances together; one approved-rewrite-target notion should serve both call sites.
+
+### Third instance — the executable-config classifier misses `core.hooksPath` — (b) FIXED 2026-08-05, (a) still parked
+
+**Found 2026-08-05 by Codex on PR #313 (P1), reproduced the same day. Two separate defects; Codex's report names one and reproduces the other.**
+
+> **Update, same day:** **(b) is fixed.** The classifier and the mirror-remote
+> check were hoisted above the `mainPushSource()` early exit, so both now run on
+> every push form rather than only a main-bound one. The fix landed while fixing
+> the mirror-remote parse on this PR — the two defects share one call site, and
+> the mirror check was dead for the exact hazard its deny text describes. The
+> hoist is safe for this repo precisely because **(a)** is still open: with
+> `core.hooksPath` absent from `EXECUTABLE_TRANSPORT_KEYS`, the husky collision
+> below does not fire. Verified: a real push from this checkout still passes
+> through. **(a) remains parked on the approved-value work described below** —
+> and adding those keys is now strictly gated on that work, since with the hoist
+> in place a naive addition would deny every push from here immediately rather
+> than only main-bound ones.
+
+`EXECUTABLE_TRANSPORT_KEYS` in `.claude/hooks/codex-push-lib.mjs` names the settings that select a program to carry a push (`core.sshCommand`, `core.gitProxy`, `remote.*.receivePack`, …). Two omissions matter, because `git push` runs `pre-push` from `core.hooksPath`:
+
+- **(a) The list is incomplete.** `core.hooksPath` and shell-form `credential.helper` are absent. On a **main-bound** push, `core.sshCommand` denies and both of these allow.
+- **(b) The classifier is unreachable for any push that is not main-bound.** ~~The loop exits at the `mainPushSource()` check (`codex-push-guard.mjs:395`) before reaching the classifier at line 481.~~ On a feature-bound push, even `core.sshCommand` — which *is* in the list — allows. **Fixed 2026-08-05:** the classifier now runs before that early exit, so the reproduction below no longer holds for the feature-bound rows.
+
+Reproduced against the shipped guard, plus a planted hook to prove execution is real:
+
+```
+--- MAIN-BOUND push (reaches the classifier) ---
+  core.sshCommand:    deny
+  core.hooksPath:     allow
+  credential.helper:  allow
+--- FEATURE-BOUND push (exits at guard line 395) ---
+  core.sshCommand:    allow
+  core.hooksPath:     allow
+
+planted pre-push hook executed by git?  YES
+```
+
+Codex reproduced (b) and proposed a fix for (a) — "deny executable configuration keys". Applied literally, **that fix denies every push from this repository**, because husky legitimately sets `core.hooksPath=.husky/_` here:
+
+```
+Keys in THIS repo the proposed list would flag:
+  core.hookspath=.husky/_
+=> every push from this repo would DENY
+```
+
+That collision is why this is parked rather than patched. The setting cannot be refused by name the way `core.sshCommand` can: the repo's own tooling sets it, so the guard needs to tell the committed `.husky/_` path from an inherited or absolute attacker path — which is the **same approved-value notion** the two rewrite instances above need, in a third place. Fix all three together.
+
+Failure direction differs from the other two and is worth stating plainly: these **allow** rather than refuse, so this instance is a genuine hole rather than an over-refusal. It is bounded by the fact that setting the config at all requires the ability to run commands in the session already.
+
+## RESOLVED — `backup-claude-memory` could not run from a web/mobile session
+
+**Found and fixed 2026-08-04 (Mason approved the fix the same day). Same "presence treated as intent" shape as the push-guard regression fixed alongside it, in a different script.**
+
+`scripts/backup-claude-memory.mjs` refused to stage the agent-memory snapshot whenever ANY `url.*.insteadOf` / `url.*.pushInsteadOf` rewrite was configured, on the grounds that a rewrite could silently replace the verified private-backup address before the push. Claude Code on the web ships such rewrites as a matter of course — two SSH-spelling normalizations (`git@github.com:` and `ssh://git@github.com/` → `https://github.com/`) plus, when a credential proxy is installed, a third. So the refusal fired on the ordinary case and the off-site memory backup could not be run at all from a web or mobile session. It passed on a laptop, which is why it went unnoticed.
+
+**The finding that decided the fix: the ban was redundant.** `git remote -v` prints its `(push)` line with `insteadOf` AND `pushInsteadOf` already applied — byte-identical to `git remote get-url --push`, verified against git 2.43 for both forms. The script derives `pushUrls` from exactly those lines, so a rewrite that redirects the push *changes `pushUrls` itself*, and the existing repository-identity, credential, and transport checks were already judging the real destination and already refusing it. The blanket ban was not the control catching redirects; it was a second, cruder layer on top of the one that was already working.
+
+So the ban was removed rather than reworked. What replaced it is a check that the redundancy is real: the script now asks git directly for each remote's push URL and requires that set to match the URLs it just validated, failing closed on any divergence, unenumerable remotes, or an unresolvable URL. If a future git version or configuration ever made `remote -v` show something other than the address git will contact, the run refuses instead of silently validating a URL that is never used.
+
+Coverage: the three round-26 redirect cases still refuse (the local `pushInsteadOf` case now via the credential check, one step later and for a more specific reason, still without echoing the secret), and a new case proves the actual relaxation — an identity-preserving rewrite no longer blocks the run. 234 assertions pass. Verified in the real web session: `stage()` into a private `CRX_Backups` clone with the ambient rewrites active now returns 0 and reports `Destination verified`.
+
+**Scope correction (2026-08-05, Codex on PR #313).** "The ambient rewrites" above means the two SSH-spelling normalizations this session carries — that is what was verified, and the resolution is real for that shape. It does **not** extend to a session that also installs a credential proxy: the proxy re-spelling makes the resolved push URL fail the `BACKUP_REPO_ID` identity check, and the run still refuses. Tracked as the second instance under the OPEN entry above. This entry stays RESOLVED for the rewrite shape it actually fixed rather than being reopened, since the blanket-ban removal it describes is sound and unaffected.
+
+Also fixed alongside it: the suite itself read the host's global git config instead of pinning its own, so the ambient rewrites failed it — and since the pre-commit hook runs that suite, it blocked every commit from a web session. It now pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to an empty file and strips inherited `GIT_CONFIG_*` at startup, so it tests the script rather than the machine.
 
 ## RESOLVED LIVE — Quote and Customer whole-record saves reject stale editors
 
@@ -877,6 +991,17 @@ Also open: **Sprint D leftovers** (`docs/loops/workflow-waves-ledger.md`) — D1
 ---
 
 ## 4. Deferred/parked feature work
+
+- **CRM adoption + coverage gaps (2026-08-04 audit)** — the July relationship-intelligence build is intact
+  and RLS-clean, but live data is empty: 0 interactions, 0 grower facts, 0 documents, 0 customer applicator
+  licenses, and 146 of 150 active customers have no assigned sales rep. That data state — not the code — is
+  what makes the unassigned-accounts call list, the crop filter, credit limits, statement email, and RUP
+  compliance status non-functional today. Open coverage gaps in priority order: customer applicator-license
+  visibility on the customer/prep-card/quote surfaces (legal exposure), pre-quote sales pipeline, duplicate-customer
+  detection, bulk-import/bulk-assign of `assigned_sales_rep`, and auto-logging outbound email into
+  `customer_interactions`. Also still open from the July loop: the **add-fact path is retry-unsafe**
+  (direct insert; the interaction path got its idempotent RPC on 2026-07-17, the fact path did not).
+  Full detail and recommendations: `docs/audits/2026-08-04-crm-functional-and-coverage-audit.md`.
 
 - ~~**Per-line-item custom split billing (field-app)**~~ — **no longer deferred. SHIPPED 2026-07-21 (PR #164)
   and live with the flag ON; see §0 for the current status and the one remaining gap (it has never been

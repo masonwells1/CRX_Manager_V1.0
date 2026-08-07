@@ -47,6 +47,39 @@ const eq = (actual, expected, message) => { assert.equal(actual, expected, messa
 
 const root = mkdtempSync(path.join(os.tmpdir(), "backup-memory-test-"));
 const fresh = (name) => { const dir = path.join(root, name); mkdirSync(dir, { recursive: true }); return dir; };
+
+// The suite must test the SCRIPT, not the git configuration of whatever machine
+// runs it. `stage()` builds its child environment from `process.env`, so the
+// host's global/system config and any inherited `GIT_CONFIG_*` reach the very
+// lookups under test — and one real setting was enough to invert a result:
+// Claude Code on the web installs `url.http://local_proxy@…/git/.insteadOf
+// https://github.com/` in the global config to route GitHub through its
+// credential proxy, which tripped the URL-rewrite refusal and failed the
+// "staging into the private backup clone is allowed" case on every web and
+// mobile session (2026-08-04). The same suite passed on a laptop, so the
+// difference was the host, not the code.
+//
+// Pin all three configuration sources to an empty file instead. This is the
+// baseline only: the round-26 cases below deliberately install their own
+// rewrites through these same variables and restore whatever they found, so
+// rewrite DETECTION is still exercised — it just starts from a known-clean
+// state. An empty real file rather than /dev/null so Windows behaves too.
+const EMPTY_GITCONFIG = path.join(root, "empty.gitconfig");
+writeFileSync(EMPTY_GITCONFIG, "");
+// Clear every inherited channel FIRST, then install the empty files. Order is
+// load-bearing: the sweep is deliberately broad, so running it after the
+// assignments would delete the very pins it exists to protect.
+//
+// Breadth matters too. `GIT_CONFIG_COUNT`/`KEY_<n>`/`VALUE_<n>` is the documented
+// trio, but `GIT_CONFIG_PARAMETERS` is how git propagates `-c` settings to child
+// processes, and plain `GIT_CONFIG` names a config file outright — so a suite run
+// under `git -c …`, or from a hook git invoked, would otherwise leak that
+// configuration straight into these fixtures and test the caller, not the script.
+for (const name of Object.keys(process.env)) {
+  if (/^GIT_CONFIG(_|$)/i.test(name)) delete process.env[name];
+}
+process.env.GIT_CONFIG_GLOBAL = EMPTY_GITCONFIG;
+process.env.GIT_CONFIG_SYSTEM = EMPTY_GITCONFIG;
 const quiet = (fn) => {
   // These functions report to the console by design; a passing suite should not
   // print their expected failure messages.
@@ -369,7 +402,16 @@ try {
         );
         const run = captured(() => stage(localDest, notes));
         eq(run.value, 1, "a local pushInsteadOf rewrite is refused");
-        ok(/URL rewrite settings are active/.test(run.said), "and the refusal explains the hidden redirect");
+        // 2026-08-04: this used to assert the blanket "URL rewrite settings are
+        // active" refusal, which fired on the mere EXISTENCE of a rewrite. That
+        // ban was removed because it was redundant AND it denied every harmless
+        // rewrite (see the identity-preserving case below). The redirect is still
+        // caught, one step later and for a more specific reason: `git remote -v`
+        // prints the `(push)` line with `insteadOf`/`pushInsteadOf` ALREADY
+        // applied, so the rewritten address is what the destination checks see.
+        // Here that address carries the marker as URL user information, so the
+        // credential check refuses it — and still never echoes the secret.
+        ok(/embeds a credential in its URL/.test(run.said), "and the refusal explains the hidden redirect");
         ok(!run.said.includes(credentialMarker), "and the refusal never prints URL user information from the setting name");
         ok(!readdirSafe(localDest), "and the local rewrite is refused before anything is written");
       } finally {
@@ -420,6 +462,82 @@ try {
           if (value === undefined) delete process.env[name];
           else process.env[name] = value;
         }
+      }
+    }
+    // One remote may carry SEVERAL push URLs. `git remote -v` prints every one,
+    // but `git remote get-url --push` prints only the first, so resolving without
+    // `--all` compared two verified URLs against one resolved URL and refused a
+    // destination that was entirely correct.
+    {
+      const extraPushUrl = 'https://github.com/masonwells1/CRX_Backups.git';
+      try {
+        // TWO entries, not one. The first `--add --push` only converts the
+        // remote's single `url` into one `pushurl`, which `get-url --push`
+        // reports correctly either way — the counts diverge only from the second
+        // entry onward, so a one-entry fixture passes without the fix.
+        for (const attempt of [1, 2]) {
+          assert.equal(
+            spawnSync(
+              "git",
+              ["-C", backupRepo, "remote", "set-url", "--add", "--push", "origin", extraPushUrl],
+              { encoding: "utf8", env: cleanEnv },
+            ).status,
+            0,
+            `test fixture: could not add push URL ${attempt}`,
+          );
+        }
+        // Prove the fixture actually built the multi-destination state this
+        // case claims to test, rather than silently collapsing to one entry.
+        // (CodeRabbit asked for two DISTINCT URLs; distinct spellings would
+        // test URL equivalence, which is a different function's job. What this
+        // case needs is >1 effective push destination, all approved.)
+        const effective = spawnSync(
+          "git", ["-C", backupRepo, "remote", "get-url", "--push", "--all", "origin"],
+          { encoding: "utf8", env: cleanEnv },
+        ).stdout.trim().split("\n").filter(Boolean);
+        eq(effective.length, 2, "test fixture: the remote must report two effective push URLs");
+        assert.ok(
+          effective.every((url) => url === extraPushUrl),
+          "test fixture: every effective push URL must be the approved backup repo",
+        );
+        eq(
+          quiet(() => stage(path.join(backupRepo, "claude-memory-multi-pushurl"), notes)), 0,
+          "a remote with several approved push URLs is not mistaken for a redirect",
+        );
+      } finally {
+        spawnSync("git", ["-C", backupRepo, "remote", "set-url", "--delete", "--push", "origin", extraPushUrl], {
+          encoding: "utf8", env: cleanEnv,
+        });
+      }
+    }
+
+    // The 2026-08-04 relaxation itself. A rewrite that does not touch the backup
+    // URL leaves the resolved push address identical, so the run proceeds — this
+    // is the case the removed blanket ban denied, and denying it made the runbook
+    // impossible to run from Claude Code on the web, which ships exactly these two
+    // SSH-spelling rewrites. A redirect is still refused (the three cases above);
+    // only "a rewrite exists" stopped being a reason on its own.
+    {
+      const harmlessKey = "url.https://github.com/.insteadOf";
+      try {
+        assert.equal(
+          spawnSync(
+            "git",
+            ["-C", backupRepo, "config", "--local", "--add", harmlessKey, "git@github.com:"],
+            { encoding: "utf8", env: cleanEnv },
+          ).status,
+          0,
+          "test fixture: could not set the identity-preserving URL rewrite",
+        );
+        const dest = path.join(backupRepo, "claude-memory-harmless-url-rewrite");
+        eq(
+          quiet(() => stage(dest, notes)), 0,
+          "a rewrite that does not move the backup URL no longer blocks the run",
+        );
+      } finally {
+        spawnSync("git", ["-C", backupRepo, "config", "--local", "--unset-all", harmlessKey], {
+          encoding: "utf8", env: cleanEnv,
+        });
       }
     }
     eq(

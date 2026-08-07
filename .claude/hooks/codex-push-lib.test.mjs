@@ -36,6 +36,8 @@ import {
   pushUsesTransportEnv,
   environmentCarriesTransportOverride,
   pushDestinationToken,
+  pushNamesRefspec,
+  pushDefaultConsultsBranchMerge,
   destinationLooksLikeUrl,
   pushUsesInlineConfig,
   pushUsesConfigEnv,
@@ -47,6 +49,10 @@ import {
   environmentCarriesConfigOverride,
   rewritesReachGuardedApp,
   riskyFiles,
+  pushDestinationDecisions,
+  divergentPushLookups,
+  configuredMirrorRemotes,
+  pushDestinationLookupArgs,
 } from "./codex-push-lib.mjs";
 
 const now = Date.parse("2026-07-13T18:00:00.000Z");
@@ -68,6 +74,127 @@ for (const option of ["--no-optional-locks", "--paginate", "--bare", "--glob-pat
   );
 }
 assert.deepEqual(unknownGitGlobalOptions("git -C /repo push origin main"), [], "supported -C remains inspectable");
+
+// Reworked 2026-08-05 (Mason's call). Deriving "same repository" from URL text
+// sprang a new leak every review round: an SSH re-spelling gap, a dropped port, a
+// key/raw namespace collision, a lowercased path merging `Team/Repo` with
+// `team/repo`, and an SSH login user that changed which account a relative path
+// resolved under. The gate never needed that question. It needs one boolean — is
+// this destination the guarded production repository. These cases pin the
+// behaviour AND the reason each former leak stopped mattering.
+{
+  const APP_HTTPS = "https://github.com/masonwells1/CRX_Manager_V1.0.git";
+  const APP_SCP = "git@github.com:masonwells1/CRX_Manager_V1.0.git";
+  const APP_SSH_URL = "ssh://git@github.com/masonwells1/CRX_Manager_V1.0.git";
+  const OTHER = "https://github.com/masonwells1/SomethingElse.git";
+  const line = (url, name = "origin") => `${name}\t${url} (push)\n`;
+
+  // Anchor: the decision is a real value, not vacuously identical everywhere.
+  // Both halves are pinned — the gate classification AND the spelling key —
+  // because an implementation that returned a constant would satisfy every
+  // equal/notEqual assertion below on its own (CodeRabbit, 2026-08-05).
+  assert.equal(
+    pushDestinationDecisions(line(APP_HTTPS)),
+    "origin guarded-app github github.com/masonwells1/crx_manager_v1.0",
+  );
+  assert.equal(
+    pushDestinationDecisions(line(OTHER)),
+    "origin unrelated github github.com/masonwells1/somethingelse",
+  );
+
+  // The regression this whole change exists for: a credential proxy re-spelling
+  // the remote must not read as a redirect.
+  for (const [label, spelling] of [["scp-style", APP_SCP], ["ssh://", APP_SSH_URL]]) {
+    assert.equal(
+      pushDestinationDecisions(line(spelling)), pushDestinationDecisions(line(APP_HTTPS)),
+      `the ${label} spelling of the production repo is the same decision`,
+    );
+  }
+
+  // A rewrite that turns an unrelated destination into production flips the
+  // boolean and denies. This is the case the comparison exists to catch.
+  assert.deepEqual(
+    divergentPushLookups(
+      { remotes: `ok:${pushDestinationDecisions(line(OTHER))}` },
+      { remotes: `ok:${pushDestinationDecisions(line(APP_HTTPS))}` },
+    ), ["remotes"], "an unrelated destination becoming production denies",
+  );
+
+  // Off GitHub nothing is normalised, so every one of these rewrites DENIES.
+  // An earlier round of this change argued the opposite — that both sides being
+  // unrelated meant no decision changed, so the differing text did not matter.
+  // That was wrong twice over. A feature-branch push is not gated at all, so this
+  // comparison is the ONLY thing standing between an inherited rewrite and the
+  // objects landing somewhere else; and `urlIsGuardedApp` is path-only by design,
+  // so the off-host case did not even reach the "both unrelated" branch — it read
+  // as production on BOTH sides and sailed through. Verified against the real
+  // guard, not just this function.
+  for (const [label, before, after] of [
+    // CodeRabbit, 2026-08-05: git paths are not universally case-insensitive.
+    ["path case on a case-sensitive host", "https://git.example.com/Team/Repo.git", "https://git.example.com/team/repo.git"],
+    // Codex, 2026-08-05: the scp form's user can select a different account/home.
+    ["ssh login user", "alice@git.example.com:repo.git", "bob@git.example.com:repo.git"],
+    ["non-default port", "https://git.example.com:8443/team/repo.git", "https://git.example.com/team/repo.git"],
+    // Found by running the real guard: the path is the production repo's, so
+    // `urlIsGuardedApp` says "production" for BOTH — only the host differs.
+    ["host, with the production path kept", APP_HTTPS, "https://evil.example.com/masonwells1/CRX_Manager_V1.0"],
+    ["a different repo on the same non-GitHub host", "https://git.example.com/team/a.git", "https://git.example.com/team/b.git"],
+    // The GitHub carve-out is an allow-list of SPELLINGS, not "any URL whose path
+    // canonicalises under github.com". Keying on the canonical id alone let these
+    // through: `canonicalRepoId` reads `URL.hostname` (no port) and ignores the
+    // scheme entirely, so an endpoint change or a transport downgrade ON GitHub
+    // compared equal. The non-GitHub port case above does not cover this path.
+    // (CodeRabbit, 2026-08-05.)
+    ["a non-default port on GitHub", APP_HTTPS, "https://github.com:8443/masonwells1/CRX_Manager_V1.0.git"],
+    ["a downgrade to http on GitHub", APP_HTTPS, "http://github.com/masonwells1/CRX_Manager_V1.0.git"],
+    ["a downgrade to the anonymous git protocol", APP_HTTPS, "git://github.com/masonwells1/CRX_Manager_V1.0.git"],
+    // ssh.github.com is GitHub only on its documented port-443 endpoint.
+    ["ssh.github.com on a port GitHub does not serve", "ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git", "ssh://git@ssh.github.com:22/masonwells1/CRX_Manager_V1.0.git"],
+    // GitHub accepts only the `git` SSH user; anything else is someone else's host.
+    ["a non-git SSH user on GitHub", APP_SCP, "mallory@github.com:masonwells1/CRX_Manager_V1.0.git"],
+  ]) {
+    assert.deepEqual(
+      divergentPushLookups(
+        { remotes: `ok:${pushDestinationDecisions(line(before))}` },
+        { remotes: `ok:${pushDestinationDecisions(line(after))}` },
+      ), ["remotes"], `${label}: an inherited rewrite that changes this must deny`,
+    );
+  }
+  // ...while the same variations ON the guarded repo still classify as
+  // production, so the gate cannot be spelled around.
+  for (const [label, url] of [
+    ["mixed case", "https://GitHub.com/MasonWells1/CRX_Manager_V1.0.git"],
+    ["explicit default port", "https://github.com:443/masonwells1/CRX_Manager_V1.0.git"],
+    ["GitHub's port-443 ssh host", "ssh://git@ssh.github.com:443/masonwells1/CRX_Manager_V1.0.git"],
+    ["no .git suffix", "https://github.com/masonwells1/CRX_Manager_V1.0"],
+  ]) {
+    // The CLASSIFICATION is what these pin; the spelling key rides along and is
+    // asserted exactly by the anchor above.
+    assert.match(pushDestinationDecisions(line(url)), /^origin guarded-app /, `${label} is still production`);
+  }
+
+  // Fails CLOSED: an unreadable or absent destination reads as production.
+  assert.match(pushDestinationDecisions("origin\t (push)\n"), /^origin guarded-app /, "an empty destination gates");
+  assert.match(
+    pushDestinationDecisions(line("ext::ssh git@github.com %S masonwells1/CRX_Manager_V1.0.git")),
+    /^origin guarded-app /, "remote-helper syntax gates rather than reading as unrelated",
+  );
+
+  // Only push lines participate, and remote ordering is not a change.
+  assert.equal(
+    pushDestinationDecisions(`origin\t${OTHER} (fetch)\n${line(APP_HTTPS)}`),
+    pushDestinationDecisions(line(APP_HTTPS)), "the fetch line does not participate",
+  );
+  assert.equal(
+    pushDestinationDecisions(line(APP_HTTPS, "a") + line(OTHER, "b")),
+    pushDestinationDecisions(line(OTHER, "b") + line(APP_HTTPS, "a")), "remote ordering is not a change",
+  );
+  // The remote NAME still matters: a bare push picks its destination by name.
+  assert.notEqual(
+    pushDestinationDecisions(line(APP_HTTPS, "origin")),
+    pushDestinationDecisions(line(APP_HTTPS, "upstream")), "a renamed remote is not silently equated",
+  );
+}
 assert.deepEqual(unknownGitGlobalOptions("git --no-pager push origin main"), [], "supported --no-pager remains inspectable");
 assert.deepEqual(unknownGitGlobalOptions("git --no-optional-locks status"), [], "an option before a non-push is outside this gate");
 assert.equal(mainPushSource("git.exe push origin HEAD:main", "feature"), "HEAD");
@@ -445,6 +572,84 @@ assert.deepEqual(
   "an ordinary configuration names no programs",
 );
 assert.deepEqual(executableTransportSettings(""), [], "and an empty config is empty");
+
+// `remote.<n>.mirror` — `--mirror` stored in config instead of typed. Verified
+// against git before writing these: with it set, `git push origin` from a
+// feature branch enumerated `feature -> feature` AND `main -> main`, and any
+// explicit refspec failed outright with "--mirror can't be combined with
+// refspecs". So a mirror remote has no narrow push form at all.
+{
+  const list = [
+    "remote.origin.mirror=true",
+    "remote.backup.mirror=false",
+    "remote.origin.url=git@github.com:masonwells1/CRX_Manager_V1.0.git",
+    "user.name=Mason",
+  ].join("\n");
+  assert.deepEqual(
+    configuredMirrorRemotes(list), ["origin"],
+    "a true mirror remote is named and a false one is not",
+  );
+}
+for (const truthy of ["true", "yes", "on", "1", "TRUE", "  True  "]) {
+  assert.deepEqual(
+    configuredMirrorRemotes(`remote.origin.mirror=${truthy}`), ["origin"],
+    `git's boolean spelling "${truthy}" reads as mirroring`,
+  );
+}
+for (const falsy of ["false", "no", "off", "0", ""]) {
+  assert.deepEqual(
+    configuredMirrorRemotes(`remote.origin.mirror=${falsy}`), [],
+    `"${falsy}" does not mirror, so it must not deny`,
+  );
+}
+// This assertion used to read the other way — "a valueless key proves nothing
+// and must not deny" — which encoded the bug as if it were the rule. Git says
+// otherwise, and `git config --bool --get remote.origin.mirror` prints `true`
+// against a config carrying the bare key. Reported by Codex on 2026-08-05 and
+// reproduced before the fix, so the inverted expectation is measured, not argued.
+assert.deepEqual(
+  configuredMirrorRemotes("remote.origin.mirror"), ["origin"],
+  "a valueless boolean is git's spelling of true and must deny",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("remote.origin.mirror="), [],
+  "but an empty value is git's false, and must not deny",
+);
+// Found while reproducing the above, in the same parse: `--list` prints a remote
+// named `my remote` as `remote.my remote.mirror=true`, and splitting on the first
+// space keyed that as `remote.my`, which matches nothing and denies nothing.
+assert.deepEqual(
+  configuredMirrorRemotes("remote.my remote.mirror=true"), ["my remote"],
+  "a remote name containing a space still parses as a mirror",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("remote.origin.mirror true"), ["origin"],
+  "`--get-regexp` separates key from value with a space, not an `=`",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("REMOTE.ORIGIN.MIRROR=true"), ["ORIGIN"],
+  "key matching is case-insensitive, but the remote NAME is a case-sensitive "
+  + "subsection and is reported verbatim so `--unset` can address it",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("remote.origin.mirrored=true\nremote.origin.url=x"), [],
+  "a key that merely starts like mirror is not swept up",
+);
+assert.deepEqual(
+  configuredMirrorRemotes("user.name=Mason\nremote.origin.url=git@github.com:x/y.git"), [],
+  "an ordinary configuration mirrors nothing",
+);
+assert.deepEqual(configuredMirrorRemotes(""), [], "and an empty config is empty");
+// Structural on purpose, and the comment at its definition explains why: the
+// classifier above is what denies a mirror in practice, so deleting this lookup
+// breaks no behavioural test here. It exists as the fail-closed path for when the
+// classifier's error-swallowing config read comes back empty, which no test in
+// this file can provoke. Asserting its presence is the only guard against a
+// future cleanup removing it as dead weight.
+assert.ok(
+  pushDestinationLookupArgs("feature").some(([name]) => name === "remote.*.mirror"),
+  "mirror config stays among the compared answers as the fail-closed backstop",
+);
 assert.ok(
   executableTransportSettings("CORE.SSHCOMMAND=ssh").includes("core.sshcommand"),
   "git config keys are case-insensitive, so the check is too",
@@ -793,8 +998,22 @@ assert.deepEqual(
   [], "inherited values in the sanctioned shapes are not",
 );
 assert.deepEqual(
-  environmentCarriesTransportOverride({ GIT_ASKPASS: "/tmp/x", GIT_PROXY_COMMAND: "/tmp/y" }).sort(),
-  ["GIT_ASKPASS", "GIT_PROXY_COMMAND"], "every offending name is listed, not just the first",
+  environmentCarriesTransportOverride({ GIT_PROXY_COMMAND: "/tmp/y", GIT_SSH: "/tmp/z" }).sort(),
+  ["GIT_PROXY_COMMAND", "GIT_SSH"], "every offending name is listed, not just the first",
+);
+// An inherited askpass/credential helper supplies a credential to a connection
+// git has already resolved — it cannot move the objects to another repository,
+// which is what this gate is for. Claude Code on the web exports GIT_ASKPASS for
+// its credential proxy, and treating it as an offender denied every push from a
+// web or mobile session. Written into the command it is still denied; see the
+// `export GIT_ASKPASS=…` case in the end-to-end round below.
+assert.deepEqual(
+  environmentCarriesTransportOverride({ GIT_ASKPASS: "/tmp/x", SSH_ASKPASS: "/tmp/y", GIT_CREDENTIAL_HELPER: "/tmp/z" }),
+  [], "an inherited credential helper is not a destination override",
+);
+assert.deepEqual(
+  environmentCarriesTransportOverride({ GIT_ASKPASS: "/tmp/x", GIT_SSH_COMMAND: "sh -c evil" }),
+  ["GIT_SSH_COMMAND"], "the transport itself is still an offender alongside a credential helper",
 );
 // Git exports GIT_EXEC_PATH into every hook it runs, so an inherited one says
 // nothing about intent. Treating it as an offender denied ordinary pushes.
@@ -922,6 +1141,57 @@ assert.equal(pushUsesConfigRootEnv(`GIT_OBJECT_DIRECTORY=/tmp/o git push origin 
 assert.equal(pushUsesConfigRootEnv("git -C C:/CRX_Manager push origin feature"), false, "an ordinary push names none of them");
 assert.equal(pushUsesConfigRootEnv("HOME=/tmp/evil git status"), false, "still only applies to push commands");
 assert.equal(pushUsesConfigRootEnv("git push origin chore/HOMEPAGE-copy"), false, "a branch name containing HOMEPAGE is not an override");
+// `_` is a word character in a variable NAME, so BOTH boundaries have to exclude
+// it. The lookbehind already did; the lookahead did not, so any longer name
+// beginning with one of these and continuing past an underscore matched its own
+// prefix, and an ordinary push carrying an unrelated variable denied.
+// (CodeRabbit, 2026-08-05 — its `GIT_DIRTY` example never actually matched,
+// since `T` was already excluded; the gap was the underscore specifically.)
+assert.equal(pushUsesConfigRootEnv("HOME_DIR=/tmp/x git push origin main"), false, "HOME_DIR is not HOME");
+assert.equal(pushUsesConfigRootEnv("GIT_DIR_BACKUP=/tmp/x git push origin main"), false, "GIT_DIR_BACKUP is not GIT_DIR");
+assert.equal(pushUsesConfigRootEnv("GIT_DIRTY=1 git push origin main"), false, "GIT_DIRTY is not GIT_DIR");
+assert.equal(pushUsesConfigRootEnv("MY_HOME=/tmp/x git push origin main"), false, "a variable ENDING in HOME is not HOME");
+assert.equal(pushUsesConfigRootEnv("GIT_DIR=/tmp/evil git push origin main"), true, "...but the real GIT_DIR still fires");
+// 2026-08-05: the check denied every Linux `git -C /home/... push`, because the
+// case-insensitive bare-text match hit the `/home/` path segment. That is the
+// form this guard's own denial messages recommend, so on a web/mobile session
+// the guard was telling the user to run a command it then refused.
+assert.equal(
+  pushUsesConfigRootEnv("git -C /home/user/CRX_Manager_V1.0 push -u origin feature/x"), false,
+  "a repo path under /home is not a HOME override",
+);
+assert.equal(
+  pushUsesConfigRootEnv("git -C /home/user/repo push origin HEAD:main"), false,
+  "the /home path segment does not fire even on a main-bound push",
+);
+assert.equal(
+  pushUsesConfigRootEnv("git -C C:\\Users\\mason\\homepath push origin feature"), false,
+  "a Windows path segment is not an override either",
+);
+// 2026-08-06, the same over-refusal one round later: the fix above covered the
+// `/home/` separator but not a path SEGMENT spelled with hyphens, and this
+// environment names its scratch directories exactly that way — so `git -C
+// /tmp/claude-0/-home-user-.../work push` was refused, which is what blocked the
+// scratch-repo reproduction of the refspec fix in this same change.
+assert.equal(
+  pushUsesConfigRootEnv("git -C /tmp/claude-0/-home-user-CRX-Manager-V1-0/abc/scratchpad/work push origin main:refs/heads/feature"), false,
+  "a hyphen-delimited -home-user- path segment is not a HOME override",
+);
+assert.equal(
+  pushUsesConfigRootEnv("git push origin chore/HOME-copy"), false,
+  "a branch name ending in a hyphen after HOME is not an override",
+);
+// ...and the real overrides still fire from every position they can occupy.
+assert.equal(pushUsesConfigRootEnv("env HOME=/home/user/evil git push origin main"), true, "an override whose VALUE is a /home path still fires");
+assert.equal(pushUsesConfigRootEnv("HOME=/tmp/x git -C /home/user/repo push origin main"), true, "a real override alongside a /home repo path still fires");
+assert.equal(
+  pushUsesConfigRootEnv("HOME=/tmp/evil git -C /tmp/claude-0/-home-user-CRX/work push origin main"), true,
+  "a real override alongside a hyphenated scratch path still fires",
+);
+assert.equal(
+  pushUsesConfigRootEnv("$env:HOME = \"/tmp/evil\"; git -C /tmp/claude-0/-home-user-CRX/work push origin main"), true,
+  "the PowerShell form still fires alongside a hyphenated scratch path",
+);
 
 // The general rule behind both: the guard resolves the destination in ITS
 // environment, so a push carrying ANY variable the guard does not is a push the
@@ -1097,6 +1367,31 @@ assert.equal(pushDestinationToken(`git push --repo=${CRX_URL} -- origin main`), 
 assert.equal(pushDestinationToken("git push origin main"), "origin");
 assert.equal(pushDestinationToken("git push"), null);
 
+// ── pushNamesRefspec: does git consult the DEFAULT refspec configuration? ────
+// `git push [<repository> [<refspec>…]]` — with refspecs on the command line git
+// never reads `remote.<n>.push` / `push.default` / `branch.<b>.merge`, so an
+// inherited override of those cannot move such a push and comparing them only
+// produces over-refusals (Codex, 2026-08-06). Everything uncertain answers
+// `false`, which KEEPS the comparison; only a plainly-explicit push skips it.
+assert.equal(pushNamesRefspec("git push origin main:refs/heads/feature"), true, "remote plus refspec");
+assert.equal(pushNamesRefspec("git push origin main"), true, "a plain branch name is still a refspec");
+assert.equal(pushNamesRefspec("git push -u origin HEAD:main"), true, "a valueless option does not consume the refspec");
+assert.equal(pushNamesRefspec("git push --force-with-lease=main origin main"), true, "an `=`-form option consumes no positional");
+assert.equal(pushNamesRefspec("git push -o ci.skip origin main"), true, "a short value-taking option consumes its own value only");
+assert.equal(pushNamesRefspec("git push origin -- main"), true, "positionals after `--` still count");
+assert.equal(pushNamesRefspec("git push origin"), false, "a remote alone is bare — git falls back to the default refspec");
+assert.equal(pushNamesRefspec("git push"), false, "no arguments at all is bare");
+assert.equal(pushNamesRefspec("git push --force"), false, "an option is not a refspec");
+assert.equal(pushNamesRefspec("git push --receive-pack=git-receive-pack origin"), false, "still bare once the `=`-form option is discounted");
+// `--repo=<url>` names the REPOSITORY, and git documents the positional as
+// taking precedence — so the lone positional here is the destination, not a
+// refspec, and skipping the lookups on it would fail open.
+assert.equal(pushNamesRefspec(`git push --repo=${CRX_URL} origin`), false, "--repo does not turn the lone positional into a refspec");
+assert.equal(pushNamesRefspec(`git push --repo ${CRX_URL} origin main`), true, "…but its value is consumed, so `origin main` is still repository plus refspec");
+// An option this walk cannot account for could leave its VALUE looking like a
+// refspec, so an unreadable push keeps the lookups rather than skipping them.
+assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/feature"), false, "an unknown option makes the count untrustworthy");
+
 // ── full-hook end-to-end: the guard itself, driven over stdin ────────────────
 // Codex round-4 (2026-07-30) asked for these specifically, and it was right to:
 // the helper assertions above were all green while an earlier version of this
@@ -1138,6 +1433,25 @@ assert.equal(pushDestinationToken("git push"), null);
     git(["remote", "add", "origin", dest], work);
 
     const push = `git -C ${work} push origin main`;
+    // An ordinary non-production push. The main-bound checks exit before the
+    // app-repo gate for this one, which is what makes it the right shape for
+    // asking "does an inherited GIT_CONFIG* variable block a normal push?".
+    const featurePush = `git -C ${work} push origin main:refs/heads/feature`;
+    // A push that names NO refspec, so git falls back to the default-refspec
+    // configuration (`push.default`, `remote.<n>.push`, `branch.<b>.merge`). The
+    // two forms are not interchangeable for those keys: git reads them for this
+    // one and not for `featurePush`, so each default-refspec case below is
+    // asserted on whichever form actually consults it (2026-08-06).
+    const barePush = `git -C ${work} push origin`;
+    // A push that names NO destination either, so git additionally falls back to
+    // the remote-SELECTION configuration (`branch.<b>.pushRemote`,
+    // `remote.pushDefault`, `branch.<b>.remote`). `barePush` does not reach those:
+    // naming `origin` already answers which remote, which is why the two are
+    // separate fixtures. Reproduced on git 2.43.0 for all three keys, each set to
+    // a second remote: `push --dry-run --porcelain` lands on the OTHER remote for
+    // this form, and on `origin` for `push origin …`, `push origin`, and
+    // `push --repo=origin` alike (2026-08-06).
+    const remotelessPush = `git -C ${work} push`;
     const deniedBecause = (command, pattern, message) => {
       const result = runHook(command);
       assert.equal(result.decision, "deny", `${message} — got ${result.decision}`);
@@ -1170,6 +1484,396 @@ assert.equal(pushDestinationToken("git push"), null);
       const result = runHook(push, { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "remote.origin.pushurl", GIT_CONFIG_VALUE_0: CRX_URL });
       assert.equal(result.decision, "deny", "an innocent push command inheriting GIT_CONFIG* is denied");
       assert.match(result.reason, /GIT_CONFIG_COUNT/, "the denial names the variable that is set");
+    }
+
+    // 2026-08-04: presence alone used to be the test, which denied every push
+    // from an environment that routes git through a credential proxy (Claude
+    // Code on the web installs a `url.…insteadOf` rewrite exactly this way) and
+    // made web/mobile sessions unable to push at all. The question is now whether
+    // the variables CHANGE an answer the guard classifies the push from — read
+    // once stripped, once as the push will see them, and compared.
+    {
+      // THE REGRESSION THIS CHANGE EXISTS FOR. A credential proxy installs a URL
+      // rewrite through GIT_CONFIG_*; `remote -v` is unchanged, no refspec or
+      // carrier moves, so an ordinary feature-branch push has nothing to
+      // disagree about and proceeds. Before 2026-08-04 the mere presence of the
+      // variables denied this, which locked every web/mobile session out of
+      // pushing anything at all.
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "url.http://proxy.invalid/.insteadOf",
+        GIT_CONFIG_VALUE_0: "https://unrelated.invalid/",
+      });
+      assert.equal(result.decision, "allow", "an inherited rewrite that moves nothing in this repo is allowed");
+    }
+    {
+      // Same ordinary push, but the variables move the destination to production.
+      // `remote -v` diverges between the stripped and inherited reads, so it dies.
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.pushurl",
+        GIT_CONFIG_VALUE_0: CRX_URL,
+      });
+      assert.equal(result.decision, "deny", "an inherited pushurl redirect is denied on an ordinary push too");
+      assert.match(result.reason, /remotes/, "the denial names the answer that changed");
+    }
+    {
+      // Same mechanism, but the rewrite makes a short alias reach production.
+      // The rewrite table is not compared for equality — it is UNIONED into the
+      // gate's own classifier — so this is caught by the app-repo gate applying
+      // to a main-bound push, which then demands the Sol proof. Denied either
+      // way; what matters is that a rewrite visible ONLY in the inherited
+      // environment still gates, which the pre-2026-08-04 single scrubbed read
+      // would have missed entirely had presence not been blanket-denied.
+      const result = runHook(push, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: `url.${CRX_URL}.insteadOf`,
+        GIT_CONFIG_VALUE_0: "crx:",
+      });
+      assert.equal(result.decision, "deny", "an inherited rewrite that reaches the production app repo still gates");
+      // Getting THIS far is the proof: both messages come from inside the
+      // app-repo gate, i.e. past the "unrelated repository, skip the gate" exit.
+      // (The scratch remote has never been pushed to, so origin/main is the ref
+      // that fails first; on a real checkout it is the Sol proof demand.)
+      assert.match(result.reason, /proof|origin\/main/i, "the app-repo gate applied rather than being skipped");
+    }
+    {
+      // Not the destination but the REFSPEC: a bare push's default can be moved
+      // by config just as invisibly, so those answers are compared too.
+      const result = runHook(barePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "push.default",
+        GIT_CONFIG_VALUE_0: "matching",
+      });
+      assert.equal(result.decision, "deny", "an inherited refspec-default override is denied");
+      assert.match(result.reason, /push\.default/, "the denial names the answer that changed");
+    }
+    {
+      // And the remote a bare push would pick — asserted on the form that actually
+      // consults it. This case used to ride on `featurePush`, which was the fifth
+      // over-refusal of this shape (Codex, 2026-08-06): git never reads the
+      // remote-selection keys once the command names its destination, so comparing
+      // them denied the required feature-branch landing path over a key the push
+      // could not have used. Both directions are pinned below.
+      for (const key of ["remote.pushDefault", "branch.pushRemote", "branch.remote"]) {
+        const env = {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: key === "remote.pushDefault" ? key : `branch.main.${key.slice("branch.".length)}`,
+          GIT_CONFIG_VALUE_0: "elsewhere",
+        };
+        const denied = runHook(remotelessPush, env);
+        assert.equal(denied.decision, "deny", `an inherited ${key} override is denied on a push that names no remote`);
+        assert.match(denied.reason, new RegExp(key.replace(".", "\\.")), "the denial names the answer that changed");
+
+        const allowed = runHook(featurePush, env);
+        assert.notEqual(
+          allowed.decision,
+          "deny",
+          `${key} must not deny a push that names its destination — git never consults it there`,
+        );
+      }
+    }
+    {
+      // 2026-08-06, the fourth over-refusal of this shape. `remote.*.push` is read
+      // repository-WIDE by regexp, but git consults only the remote the push
+      // resolves to, so an inherited refspec for a remote this push never touches
+      // used to diverge and deny. Two failures stacked here: the comparison was
+      // unscoped, and `--get-regexp` exits 1 when nothing matches — so once the
+      // ambient side was scoped down to nothing, one side read `err:1` and the
+      // other an empty match, which is absence on both sides, not a difference.
+      git(["remote", "add", "archive", path.join(tmp, "archive.git")], work);
+      const result = runHook(barePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.archive.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/archive",
+      });
+      assert.equal(result.decision, "allow", "an inherited refspec for a remote this push never consults is allowed");
+    }
+    {
+      // The other side of that scoping: the SAME override on the remote the push
+      // actually selects moves where this push lands, and must still die. This is
+      // what keeps the fix above from being widened into a fail-open.
+      const result = runHook(barePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+      });
+      assert.equal(result.decision, "deny", "an inherited refspec on the targeted remote is still denied");
+      assert.match(result.reason, /remote\.\*\.push/, "the denial names the answer that changed");
+    }
+    {
+      // 2026-08-06, the fifth over-refusal of this shape, and the one Codex
+      // reproduced against git itself: the override above is fatal to a BARE push
+      // and inert against this one. `git push [<repository> [<refspec>…]]` — with
+      // refspecs on the command line git never reads the default-refspec keys, so
+      // comparing them denied the exact feature-branch push this repo's protected
+      // `main` requires. `--dry-run` under that inherited value updates only
+      // `feature`; the same value on `barePush` moves it.
+      const result = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+      });
+      assert.equal(result.decision, "allow", "a default refspec git never consults does not block an explicit push");
+    }
+    {
+      // The fix keys off the refspec being NAMED, not off the command being long:
+      // an option the argv walk cannot account for could leave its own value
+      // looking like a refspec, so an unreadable push keeps the lookups (and dies
+      // on the unknown option, which is the same answer for a different reason).
+      const result = runHook(`git -C ${work} push --future-option origin main:refs/heads/feature`, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+      });
+      assert.equal(result.decision, "deny", "an unreadable push does not get the explicit-refspec skip");
+    }
+    {
+      // 2026-08-06, Codex's PR #313 review — the NINTH over-refusal of this
+      // shape, and the one that shows a single command-wide verdict was still too
+      // coarse. A command that MIXES the forms keeps `remote.*.push` compared,
+      // correctly, because the bare `push archive` reads it — but the answer was
+      // scoped to every remote the command touches, so an inherited
+      // `remote.origin.push` denied it even though the origin push names its own
+      // refspec and git reads that key for NEITHER push. `git push -h` documents
+      // the forms per invocation; the dry-run destinations are identical with and
+      // without the variable.
+      const mixed = `git -C ${work} push origin main:refs/heads/feature && git -C ${work} push archive`;
+      assert.equal(
+        runHook(mixed, {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "remote.origin.push",
+          GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+        }).decision,
+        "allow",
+        "a default refspec belonging to the explicit push's remote is read by neither push",
+      );
+      // The control that keeps the narrowing from becoming a fail-open: the same
+      // override aimed at `archive` — the remote whose push IS bare — moves where
+      // that push lands and must still die.
+      const denied = runHook(mixed, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.archive.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/main",
+      });
+      assert.equal(denied.decision, "deny", "the same override on the bare push's own remote is still denied");
+      assert.match(denied.reason, /remote\.\*\.push/, "the denial names the answer that changed");
+      // And the narrowing is specific to `remote.*.push`: `remote.<n>.mirror` is
+      // read for an explicit push too, so it stays on the wider scope and an
+      // inherited mirror on the explicit push's remote still denies.
+      assert.equal(
+        runHook(mixed, {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "remote.origin.mirror",
+          GIT_CONFIG_VALUE_0: "true",
+        }).decision,
+        "deny",
+        "mirror is not a default-refspec key and keeps the wider remote scope",
+      );
+    }
+    {
+      // 2026-08-06, Codex's PR #313 review — the SIXTH over-refusal of this shape,
+      // and one level below the refspec verdict above. A bare push does read the
+      // default-refspec configuration, but only some `push.default` modes derive
+      // the refspec from `branch.<b>.merge`; under `current` git names the
+      // destination from the branch and never opens the key, so comparing it
+      // denied a bare push over a value git would not have consulted.
+      //
+      // Reproduced on git 2.43.0 before fixing: under `push.default=current`,
+      // `push --dry-run --porcelain` reports `refs/heads/feature:refs/heads/feature`
+      // with `branch.feature.merge=refs/heads/main` set and unset alike, while the
+      // same pair under `upstream` reports `…:refs/heads/main` only when it is set.
+      const mergeOverride = {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "branch.main.merge",
+        GIT_CONFIG_VALUE_0: "refs/heads/elsewhere",
+      };
+      try {
+        git(["config", "push.default", "current"], work);
+        assert.equal(
+          runHook(barePush, mergeOverride).decision, "allow",
+          "under push.default=current a bare push never reads branch.merge, so an inherited value is inert",
+        );
+        // The control that keeps that skip from widening into a fail-open: the
+        // identical override under a mode that DOES consult the key moves where
+        // this push lands, and must still die.
+        git(["config", "push.default", "upstream"], work);
+        const denied = runHook(barePush, mergeOverride);
+        assert.equal(denied.decision, "deny", "under push.default=upstream the same inherited branch.merge is denied");
+        assert.match(denied.reason, /branch\.merge/, "the denial names the answer that changed");
+        // Unset is git's own default `simple`, which reads the key — absence must
+        // not read as permission to skip.
+        git(["config", "--unset", "push.default"], work);
+        assert.equal(
+          runHook(barePush, mergeOverride).decision, "deny",
+          "with push.default unset the default mode consults branch.merge, so the override still denies",
+        );
+        // And the mode itself arriving through the SAME inherited channel must not
+        // be able to buy the skip: read scrubbed, this repo is on the default mode.
+        assert.equal(
+          runHook(barePush, {
+            GIT_CONFIG_COUNT: "2",
+            GIT_CONFIG_KEY_0: "push.default", GIT_CONFIG_VALUE_0: "current",
+            GIT_CONFIG_KEY_1: "branch.main.merge", GIT_CONFIG_VALUE_1: "refs/heads/elsewhere",
+          }).decision,
+          "deny",
+          "an inherited push.default=current cannot silence the branch.merge it arrives with",
+        );
+      } finally {
+        git(["config", "--unset", "push.default"], work);
+      }
+    }
+    {
+      // The `remotes` lookup carried the same unscoped shape as `remote.*.push`:
+      // `git remote -v` lists EVERY remote, but a push consults only the one it
+      // resolves to. An inherited `remote.<other>.url` adds a `(push)` line on the
+      // ambient side alone, so the decision sets differed and denied a push that
+      // could not have touched that remote.
+      assert.equal(
+        runHook(featurePush, {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "remote.mirrorbox.url",
+          GIT_CONFIG_VALUE_0: path.join(tmp, "mirrorbox.git"),
+        }).decision,
+        "allow",
+        "an inherited remote this push never selects does not change where it goes",
+      );
+      // The control: the same override on the remote this push DOES select is the
+      // redirect the comparison exists to catch.
+      const denied = runHook(featurePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.url",
+        GIT_CONFIG_VALUE_0: CRX_URL,
+      });
+      assert.equal(denied.decision, "deny", "the same override on the selected remote is still denied");
+      assert.match(denied.reason, /remotes/, "the denial names the answer that changed");
+    }
+    {
+      // 2026-08-06, Codex's PR #313 review — the round where the accumulated
+      // over-refusal fixes turn fail-OPEN one layer down. A remote name is NOT a
+      // whitespace-delimited token: `git remote add` rejects a space, but writing
+      // `remote.<name>.url` straight into the config creates one git then honours
+      // — verified here that `git remote` lists `my remote`, `remote -v` prints it
+      // TAB-separated, and `get-url --push 'my remote'` resolves it.
+      //
+      // Both scope parsers read that name as `my`, which matches no scope entry,
+      // so the SELECTED remote's own lines were filtered out of BOTH comparison
+      // sets and an inherited pushurl aimed at production compared equal. Codex's
+      // repro, replayed: resolve the remote through `branch.<b>.remote` so the
+      // name must survive scoping, then redirect it at the app repo.
+      git(["config", "remote.my remote.url", path.join(tmp, "spaced.git")], work);
+      git(["config", "branch.main.remote", "my remote"], work);
+      try {
+        assert.ok(
+          git(["remote"], work).stdout.split("\n").includes("my remote"),
+          "premise: git itself lists the whitespace-named remote",
+        );
+        assert.equal(
+          runHook(remotelessPush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "remote.my remote.pushurl",
+            GIT_CONFIG_VALUE_0: CRX_URL,
+          }).decision,
+          "deny",
+          "a redirect on the whitespace-named remote this push selects is not filtered away",
+        );
+        // The allow direction still holds for the same name shape: a whitespace-named
+        // remote this push does NOT select must stay narrowable, or the fix above
+        // would just be the over-refusal coming back.
+        assert.equal(
+          runHook(featurePush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "remote.my remote.push",
+            GIT_CONFIG_VALUE_0: "HEAD:refs/heads/elsewhere",
+          }).decision,
+          "allow",
+          "a whitespace-named remote this push never selects is still narrowed away",
+        );
+      } finally {
+        git(["config", "--unset", "branch.main.remote"], work);
+        git(["config", "--remove-section", "remote.my remote"], work);
+      }
+    }
+    {
+      // The same lookup-by-known-name question one key over, and the reason the
+      // config-key parser cannot use a delimiter guess either: the remote name
+      // sits between two dots, so a greedy `^remote\.(.*)\.(?:push|mirror)\b`
+      // backtracks to the LAST match in the whole line — including one inside the
+      // VALUE. A refspec may legally contain dots, verified here: git prints
+      // `remote.origin.push HEAD:refs/heads/evil.push`, which keyed as
+      // `origin.push HEAD:refs/heads/evil` and so belonged to no scope, dropping
+      // the redirecting line from both sets. Same fail-open shape as above.
+      const denied = runHook(barePush, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.push",
+        GIT_CONFIG_VALUE_0: "HEAD:refs/heads/evil.push",
+      });
+      assert.equal(
+        denied.decision, "deny",
+        "a default refspec whose VALUE ends in .push still keys to the remote it belongs to",
+      );
+      assert.match(denied.reason, /remote\.\*\.push/, "the denial names the answer that changed");
+    }
+    {
+      // 2026-08-06, Codex's PR #313 review — the tenth over-refusal of this shape
+      // and one level below the `push.default` MODE check above. That check asks
+      // which mode is in force; this one asks whether the mode is reached at all.
+      // `remote.<name>.push` outranks the whole mechanism, so when it is set a
+      // bare push consults neither `push.default` nor `branch.<b>.merge`.
+      //
+      // Reproduced on git 2.43.0 before fixing, and the precedence is TOTAL:
+      // with `remote.origin.push=HEAD:refs/heads/fixed`, `push origin` dry-runs to
+      // `HEAD:refs/heads/fixed` under `current`, `upstream`, `matching`, `nothing`,
+      // and unset alike, with `branch.<b>.merge` set or unset. Codex reported the
+      // `push.default` half; the probe showed `branch.merge` rides along.
+      git(["config", "remote.origin.push", "HEAD:refs/heads/fixed"], work);
+      try {
+        assert.equal(
+          runHook(barePush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "push.default", GIT_CONFIG_VALUE_0: "current",
+          }).decision,
+          "allow",
+          "with remote.<n>.push supplying the refspec, an inherited push.default is inert",
+        );
+        assert.equal(
+          runHook(barePush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "branch.main.merge", GIT_CONFIG_VALUE_0: "refs/heads/elsewhere",
+          }).decision,
+          "allow",
+          "the same precedence makes an inherited branch.merge inert",
+        );
+        // The control that stops this becoming a fail-open: the key that actually
+        // supplies the refspec is still compared, so changing IT still denies.
+        const denied = runHook(barePush, {
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: "remote.origin.push",
+          GIT_CONFIG_VALUE_0: "HEAD:refs/heads/hijacked",
+        });
+        assert.equal(denied.decision, "deny", "changing remote.<n>.push itself is the redirect and still denies");
+        assert.match(denied.reason, /remote\.\*\.push/, "the denial names the answer that changed");
+      } finally {
+        git(["config", "--unset", "remote.origin.push"], work);
+      }
+      // And the skip must not survive the key's absence: with no
+      // `remote.origin.push`, `push.default` is consulted again and an inherited
+      // one that changes the destination must still deny. (git's default mode is
+      // `simple`, which refuses a mismatched upstream; `current` pushes to the
+      // like-named branch — a genuine difference in where the objects land.)
+      git(["config", "branch.main.merge", "refs/heads/other"], work);
+      try {
+        assert.equal(
+          runHook(barePush, {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "push.default", GIT_CONFIG_VALUE_0: "current",
+          }).decision,
+          "deny",
+          "without remote.<n>.push the mode is consulted again and an inherited one denies",
+        );
+      } finally {
+        git(["config", "--unset", "branch.main.merge"], work);
+      }
     }
     assert.equal(
       runHook(push, { GIT_SSH_COMMAND: "ssh -o ServerAliveInterval=20" }).decision,
@@ -1468,6 +2172,41 @@ assert.equal(pushDestinationToken("git push"), null);
       assert.match(partialRewrite.reason, /CODEX GATE/, "the actual hook explains the production gate");
     } finally {
       git(["config", "--unset-all", "url.git@github.com:masonwells1/CRX_.insteadOf"], work);
+    }
+
+    // A mirror remote configured in the repository's OWN config. This diverges
+    // from nothing, so the scrubbed-vs-ambient comparison cannot catch it — and
+    // `mainPushSource` only ever reads command TEXT, so a bare `git push origin`
+    // classifies as "touches no main" while git pushes every ref including main.
+    // Codex's 2026-08-05 review; reproduced against real git before fixing.
+    try {
+      git(["config", "remote.origin.mirror", "true"], work);
+      const localMirror = runHook(`git -C ${work} push origin`);
+      assert.equal(localMirror.decision, "deny", "a mirror remote in the repo's own config is denied");
+      assert.match(localMirror.reason, /mirror/i, "and the denial names the setting to unset");
+    } finally {
+      git(["config", "--unset-all", "remote.origin.mirror"], work);
+    }
+    // The same setting arriving through an inherited GIT_CONFIG*, which is the
+    // exact vector reported: nothing in the compared lookups read it, so the
+    // override compared equal and the push was allowed.
+    {
+      const inheritedMirror = runHook(`git -C ${work} push origin`, {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "remote.origin.mirror",
+        GIT_CONFIG_VALUE_0: "true",
+      });
+      assert.equal(inheritedMirror.decision, "deny", "an inherited mirror override is denied too");
+    }
+    // Control for the pair above: the same key set to false must still push.
+    try {
+      git(["config", "remote.origin.mirror", "false"], work);
+      assert.equal(
+        runHook(push).decision, "allow",
+        "a mirror setting explicitly turned off denies nothing",
+      );
+    } finally {
+      git(["config", "--unset-all", "remote.origin.mirror"], work);
     }
 
     // Controls: the guard must not have become a blanket denier. Both of these

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList, Zap, SprayCan, PhoneCall } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -68,6 +68,31 @@ interface RemainderRow {
   [key: string]: unknown;
 }
 
+// The create-form defaults, shared by the initial mount and the per-route reset
+// below. They have to be the same object shape in both places: /customers/new
+// reached by navigating FROM an existing customer reuses this component and runs
+// the reset, so resetting to `{}` there would drop `assigned_sales_rep`,
+// `assigned_tier`, `is_active` and the default split that a fresh visit gets —
+// and `save_customer` rejects a rep who has not self-assigned. (Codex, PR #313.)
+const makeBlankCustomer = (salesRepId: string | undefined): Partial<Customer> => ({
+  farm_name: '',
+  contact_name: '',
+  phone: '',
+  email: '',
+  billing_address: '',
+  assigned_tier: 1,
+  assigned_sales_rep: salesRepId,
+  total_acres: undefined,
+  corn_acres: undefined,
+  soybean_acres: undefined,
+  other_acres: undefined,
+  payment_terms: '',
+  notes: '',
+  is_active: true,
+  default_commission_split: { splits: [{ recipient: '', percentage: 100 }] },
+  default_application_service_id: null,
+});
+
 export default function CustomerDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -80,24 +105,11 @@ export default function CustomerDetail() {
   } = useIdempotencyKey('save_customer', profile?.id || '');
   const isNew = id === 'new';
 
-  const [customer, setCustomer] = useState<Partial<Customer>>({
-    farm_name: '',
-    contact_name: '',
-    phone: '',
-    email: '',
-    billing_address: '',
-    assigned_tier: 1,
-    assigned_sales_rep: profile?.id,
-    total_acres: undefined,
-    corn_acres: undefined,
-    soybean_acres: undefined,
-    other_acres: undefined,
-    payment_terms: '',
-    notes: '',
-    is_active: true,
-    default_commission_split: { splits: [{ recipient: '', percentage: 100 }] },
-    default_application_service_id: null,
-  });
+  const [customer, setCustomer] = useState<Partial<Customer>>(() => makeBlankCustomer(profile?.id));
+  // Read by the route-change reset, which must not re-run when the profile
+  // resolves — that would clobber an already-loaded customer.
+  const salesRepIdRef = useRef(profile?.id);
+  salesRepIdRef.current = profile?.id;
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   // Lost-update guard: split as loaded from the DB, and whether the user has
   // changed it this session (see src/lib/commissionSplitConcurrency.ts).
@@ -157,8 +169,32 @@ export default function CustomerDetail() {
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
+  // The tab loader below guards its writes with a sequence number, but the PRIMARY
+  // record needs the same discipline and did not have it. The per-customer reads
+  // below are recreated per route id, so the `id` each closes over names the
+  // customer it was started FOR, while this ref always holds the one the route is
+  // on NOW. Navigating A -> B while A's reads are in flight would otherwise let A
+  // install its customer, addresses and row version over B — and the next save
+  // would then write A's form payload to B's id under A's row version.
+  //
+  // Written in a layout effect, never during render: React may replay or discard
+  // a render, and a discarded render's write would publish a customer id that was
+  // never committed — leaving in-flight reads comparing against a route the user
+  // is not on. A layout effect runs on commit and before the data-loading passive
+  // effects below, so the ref is always the committed route by the time any fetch
+  // that reads it starts.
+  const currentIdRef = useRef(id);
+  useLayoutEffect(() => {
+    currentIdRef.current = id;
+  }, [id]);
+
   const fetchAddresses = useCallback(async () => {
     const { data, error } = await supabase.from('customer_addresses').select('*').eq('customer_id', id!).order('created_at');
+    // Reached from the post-save reload as well as the snapshot, so it outlives
+    // both. A save for customer A that finishes just before the route changes
+    // starts THIS read against A; without the guard its rows land in customer B's
+    // form, and the save guard cannot help — it has already run by then.
+    if (currentIdRef.current !== id) return false;
     if (error) {
       Sentry.captureException(error, { tags: { source: 'read', action: 'load_customer_addresses' } });
       toast('error', 'Failed to load addresses');
@@ -170,7 +206,11 @@ export default function CustomerDetail() {
 
   const fetchCustomerSnapshot = useCallback(async (requireStableRowVersion = false): Promise<boolean> => {
     if (!id) return false;
+    // Silent by design: a superseded load is not a failure the user needs to see,
+    // and it must not clear loading state or toast over the customer now on screen.
+    const isSuperseded = () => currentIdRef.current !== id;
     const customerRes = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
+    if (isSuperseded()) return false;
 
     // Do not install either half until both required reads succeeded. This is
     // especially important after a stale-save conflict: the user must retain
@@ -189,6 +229,7 @@ export default function CustomerDetail() {
       .select('*')
       .eq('customer_id', id)
       .order('created_at');
+    if (isSuperseded()) return false;
     if (addressesRes.error) {
       Sentry.captureException(addressesRes.error, { tags: { source: 'read', action: 'load_customer_addresses_snapshot' } });
       toast('error', 'Could not load the complete customer record. Your current edits were kept; try Reload again or refresh the page.');
@@ -201,6 +242,7 @@ export default function CustomerDetail() {
       .select('*')
       .eq('id', id)
       .maybeSingle();
+    if (isSuperseded()) return false;
     const finalRowVersion = readRowVersion((finalHeader as { row_version?: unknown } | null)?.row_version);
     const stableVersion = initialRowVersion === finalRowVersion
       && (initialRowVersion !== null || !requireStableRowVersion);
@@ -222,7 +264,16 @@ export default function CustomerDetail() {
     setAddresses(loadedAddresses);
     setParentName('');
     setLoading(false);
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
+    // Superseded-guarded like every other deferred write in this loader. The
+    // flag is deliberately set a macrotask late, so a route change can land in
+    // the gap: without this check, customer A's timer re-arms the flag after
+    // the route-change effect cleared it, and customer B's freshly loaded
+    // snapshot is then marked dirty — an unsaved-changes prompt on a record
+    // nobody edited. (CodeRabbit, PR #313.)
+    setTimeout(() => {
+      if (isSuperseded()) return;
+      initialLoadDone.current = true;
+    }, 0);
 
     // Parent display text is auxiliary to the editable customer/address
     // snapshot, so a parent lookup failure cannot discard this complete reload.
@@ -233,6 +284,8 @@ export default function CustomerDetail() {
         .eq('id', loadedCustomer.parent_customer_id)
         .maybeSingle()
         .then(({ data: parent, error: parentError }) => {
+          // Outlives the snapshot it belongs to, so it needs the same guard.
+          if (isSuperseded()) return;
           if (parentError) {
             Sentry.captureException(parentError, { tags: { source: 'read', action: 'load_parent_customer_name' } });
             toast('warning', 'Customer loaded, but the parent customer name could not be refreshed.');
@@ -295,13 +348,75 @@ export default function CustomerDetail() {
     if (!isNew && id) {
       void fetchCustomerSnapshot();
     } else {
-      // New customer — mark ready immediately
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
+      // New customer — mark ready immediately. Same deferred-flag hazard as the
+      // snapshot loader above: navigating from /customers/new to an existing
+      // customer while this timer is pending would otherwise re-arm the flag
+      // and mark that customer's loaded snapshot dirty.
+      setTimeout(() => {
+        if (currentIdRef.current !== id) return;
+        initialLoadDone.current = true;
+      }, 0);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isNew, fetchCustomerSnapshot]);
 
+  // CustomerDetail is NOT remounted when only :id changes (the route element has
+  // no key), so every per-customer tab cache below must be invalidated by hand.
+  // Same discipline the CRM child components got via `key={id}` (Sol 2.G r2):
+  // an in-flight tab load for customer A must never write into customer B's
+  // view, and B must never render A's leftover rows while its own load runs.
+  const tabRequestSeq = useRef(0);
+
+  useEffect(() => {
+    tabRequestSeq.current += 1;
+    setQuotes([]);
+    setOrders([]);
+    setDeliveries([]);
+    setFields([]);
+    setHistory([]);
+    setCustomerRemainders([]);
+    setTimeline([]);
+    setAging(null);
+    setTransactions([]);
+    setPrepayCredits([]);
+    // Without this reset the financials tab short-circuits on the cached flag and
+    // renders the PREVIOUS customer's AR aging, statement and prepay credits.
+    financialsFetched.current = false;
+
+    // The PRIMARY record needs the same invalidation, not just the tabs. Guarding
+    // the in-flight writes stops the previous customer being installed over this
+    // one, but on its own it still leaves that customer on screen — name, form
+    // fields, addresses, row version — until the new snapshot lands. Editing then
+    // looks like editing this customer while every field belongs to the last one.
+    // Drop it and show the loading skeleton until the real record arrives.
+    //
+    // `isNew` is NOT exempt, though an earlier version of this returned early on
+    // the reasoning that a blank form needs no invalidation. That only holds when
+    // /customers/new is opened fresh. Navigating to it FROM an existing customer
+    // reuses this component, so the early return left that customer's name, form
+    // fields, addresses and row version on screen behind a "Create Customer"
+    // button — and saving sent the stale payload with `p_customer_id: null`,
+    // duplicating the old record as a new customer. (Codex, PR #313.)
+    //
+    // So the clears always run; only the skeleton is conditional, because a new
+    // customer genuinely has nothing to fetch. The reset goes back to the create
+    // defaults rather than `{}` — on /customers/new they ARE the form, and an
+    // existing customer overwrites them wholesale when its snapshot lands.
+    setCustomer(makeBlankCustomer(salesRepIdRef.current));
+    setAddresses([]);
+    setCrops([]);
+    setParentName('');
+    customerRowVersionRef.current = null;
+    loadedDefaultSplitRef.current = null;
+    defaultSplitTouchedRef.current = false;
+    initialLoadDone.current = false;
+    setIsDirty(false);
+    setLoading(!isNew);
+  }, [id, isNew]);
+
   const fetchTabData = useCallback(async (selectedTab: string) => {
+    const seq = ++tabRequestSeq.current;
+    const isStale = () => seq !== tabRequestSeq.current;
     setTabLoading(true);
     if (selectedTab === 'fields') {
       const { data, error: fieldError } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
@@ -313,6 +428,7 @@ export default function CustomerDetail() {
         ...f,
         customer_name: f.customer_name || '',
       }));
+      if (isStale()) return;
       setFields(rows);
     } else if (selectedTab === 'quotes') {
       const { data } = await supabase
@@ -320,6 +436,7 @@ export default function CustomerDetail() {
         .select('*')
         .eq('customer_id', id!)
         .order('created_at', { ascending: false });
+      if (isStale()) return;
       setQuotes((data || []) as Quote[]);
     } else if (selectedTab === 'orders') {
       const { data } = await supabase
@@ -331,6 +448,7 @@ export default function CustomerDetail() {
       const rows = ((data || []) as Order[]).map((o) => {
         return { ...o, fulfillment_pct: 0 };
       });
+      if (isStale()) return;
       setOrders(rows);
 
       const orderIds = rows.map((o) => o.id);
@@ -345,6 +463,7 @@ export default function CustomerDetail() {
           byOrder[item.order_id].needed += item.total_units_needed || 0;
           byOrder[item.order_id].delivered += item.quantity_delivered || 0;
         });
+        if (isStale()) return;
         setOrders((prev) =>
           prev.map((o) => {
             const stats = byOrder[o.id];
@@ -379,6 +498,7 @@ export default function CustomerDetail() {
         ...d,
         driver_name: d.assigned_driver ? driverMap[d.assigned_driver] || 'Unassigned' : 'Unassigned',
       }));
+      if (isStale()) return;
       setDeliveries(rows);
 
       // Fetch pending remainders for this customer
@@ -393,6 +513,7 @@ export default function CustomerDetail() {
         product_name: r.product?.product_name || 'Unknown',
         original_delivery_number: r.original_delivery?.delivery_number || '-',
       }));
+      if (isStale()) return;
       setCustomerRemainders(remainders as unknown as DeliveryRemainder[]);
     } else if (selectedTab === 'financials') {
       if (financialsFetched.current) { setTabLoading(false); return; }
@@ -411,21 +532,26 @@ export default function CustomerDetail() {
         if (agingError) throw agingError;
         const allAging = assertRpcResult<AgingRow[]>(agingData, 'get_ar_aging');
         const myAging = allAging.find((a) => a.customer_id === id) || null;
+        if (isStale()) return;
         setAging(myAging);
 
         const { data: txnData, error: txnError } = await supabase.rpc('get_customer_statement', { p_customer_id: id!, p_start_date: ninetyDaysAgo, p_end_date: today });
         if (txnError) throw txnError;
-        setTransactions(assertRpcResult<TxnRow[]>(txnData, 'get_customer_statement'));
+        const txnRows = assertRpcResult<TxnRow[]>(txnData, 'get_customer_statement');
+        if (isStale()) return;
+        setTransactions(txnRows);
 
         const { data: prepayData, error: prepayError } = await supabase.from('prepay_credits').select('*').eq('customer_id', id!).gt('balance_cents', 0);
         if (prepayError) throw prepayError;
+        if (isStale()) return;
         setPrepayCredits((prepayData || []) as PrepayRow[]);
         financialsFetched.current = true;
       } catch (err: unknown) {
+        if (isStale()) return;
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'customer_financials_tab' } });
         toast('error', 'Failed to load financials');
       } finally {
-        setFinancialsLoading(false);
+        if (!isStale()) setFinancialsLoading(false);
       }
     } else if (selectedTab === 'timeline') {
       setTimelineLoading(true);
@@ -455,6 +581,7 @@ export default function CustomerDetail() {
             if (p.id) performerMap[p.id] = { id: p.id, full_name: p.full_name ?? '', role: p.role ?? '' };
           });
         }
+        if (isStale()) return;
         setTimeline(
           rows.map((r) => ({
             ...r,
@@ -462,7 +589,7 @@ export default function CustomerDetail() {
           })),
         );
       } finally {
-        setTimelineLoading(false);
+        if (!isStale()) setTimelineLoading(false);
       }
     } else if (selectedTab === 'history') {
       // GAP FIX #15: Fetch purchase history — all products this customer has ordered
@@ -490,11 +617,14 @@ export default function CustomerDetail() {
           productMap[key].total_delivered += Number(item.quantity_delivered) || 0;
           productMap[key].order_count += 1;
         });
+        if (isStale()) return;
         setHistory(Object.values(productMap).sort((a, b) => b.total_spent - a.total_spent));
       } else {
+        if (isStale()) return;
         setHistory([]);
       }
     }
+    if (isStale()) return;
     setTabLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -507,6 +637,16 @@ export default function CustomerDetail() {
 
   const handleSave = async () => {
     if (saving) return;
+    // The save writes the CURRENT route id, so it must never carry a form that
+    // belongs to a previously-viewed customer. `fetchCustomerSnapshot` is guarded
+    // against installing a stale snapshot, which leaves exactly one window: a save
+    // fired after the route changed but before the new snapshot landed. Here the
+    // loaded record and the route disagree, and saving would write the old
+    // customer's fields — under the old row version — onto the new customer's row.
+    if (!isNew && customer.id && customer.id !== id) {
+      toast('error', 'This customer is still loading. Wait for it to finish, then save again.');
+      return;
+    }
     if (!customer.farm_name) {
       toast('error', 'Farm name is required');
       return;
@@ -626,6 +766,20 @@ export default function CustomerDetail() {
         p_performed_by: profile?.id as string,
         p_idempotency_key: idemKey,
       });
+
+      // The route can change while this RPC is in flight. Everything below belongs
+      // to the customer that was saved — its row version, dirty flag, conflict
+      // dialog, success toast and the address reload that would pull ITS addresses
+      // into whatever is on screen now. None of it may land on a different
+      // customer's session. Two things still run, because they describe this
+      // component rather than that customer: the idempotency key is released (the
+      // save did commit, and reusing its key would collide on the next one) and
+      // `saving` clears (leaving it set would wedge the Save button for good).
+      if (currentIdRef.current !== id) {
+        if (!error) resetSaveCustomerIdempotencyKey();
+        setSaving(false);
+        return;
+      }
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.CUSTOMER_STALE_WRITE)
