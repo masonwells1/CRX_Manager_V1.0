@@ -7,6 +7,80 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN — agent tooling breaks in remote (Claude Code on the web) sessions
+
+**Found 2026-08-04**, extended 2026-08-05. Three problems, two sharing one root
+cause. None affect production; all affect an agent's ability to finish a session
+from a remote container.
+
+**Root cause for (1) and (2): URL rewrites.** A Claude Code on the web container
+reaches GitHub through a local proxy, configured in `/root/.gitconfig` as
+`url."http://local_proxy@127.0.0.1:<port>/git/".insteadOf = https://github.com/`,
+plus two more `insteadOf` rules injected as `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*`
+environment variables. Both of the repo's guards correctly treat URL rewrites as
+dangerous — the container legitimately requires them.
+
+1. **Branch delivery by git is impossible from a remote session.**
+   `.claude/hooks/codex-push-guard.mjs` denies while `GIT_CONFIG*` variables are
+   set ("Unset them before pushing"), and *also* denies any command that names
+   that namespace — so `env -u GIT_CONFIG_… git …` is refused too. The guard is a
+   PreToolUse hook reading the harness shell's own environment, so nothing done
+   inside a command can change what it observes. It additionally rejects command
+   text containing quoting or the literal push token anywhere, so even a commit
+   message describing the problem trips it. There is no in-session workaround
+   that does not disable the guard.
+2. **Committing is blocked too — two separate pre-commit tests fail.** Both run in
+   the `test:correction-guards` gate:
+   - `scripts/backup-claude-memory.test.mjs` — `stage()` refuses with "refusing to
+     stage — Git URL rewrite settings are active (3 settings)".
+   - `.codex/hooks/production-action-guard.test.mjs:318` — asserts "Claude guard
+     still allows an ordinary feature-branch push", which fails because the guard
+     correctly denies while `GIT_CONFIG*` is set. Confirmed 2026-08-05: this
+     aborts `git commit` outright in a remote container.
+
+   Both guards behave exactly as designed; the sandbox's proxy rewrite trips them.
+   **Committing from a remote session therefore requires `HOME` pointed at a
+   gitconfig that keeps `[user]`/`[gpg]`/`[commit]` but drops the `[url …]` block,
+   plus the `GIT_CONFIG_*` vars unset for that one command** — which item (1)
+   forbids arranging. In practice: commit and push from a local machine.
+3. **`scripts/log-session.mjs` misattributed a session's work.** — **FIXED
+   2026-08-04/06** across PRs #310 and #317. It used to fall back to the last 15
+   commits when no commit matched its `--author=Mason` heuristic, labelling the
+   result "Commits this session" and "Migrations touched"; on 2026-08-04 it
+   attributed 14 unrelated commits and 7 statement migrations to a docs-only
+   session. It also folded the entire `--summary` string into the `##` heading,
+   and a `--help` invocation wrote a `{SUMMARY}` template stub into
+   `docs/CHANGELOG.md`. Commits are now scoped to `origin/main..HEAD`, migrations
+   are never backfilled, `--help` exits without writing, and the heading is a
+   short derived title. A git *failure* is no longer treated as an empty result —
+   the script refuses to write rather than guessing. There is no time-window
+   fallback of any kind: #317 removed the last one (a 12-hour window that #310 had
+   merely guarded behind `HEAD === origin/main`, which left the common
+   level-with-main case still claiming other people's merges).
+   `scripts/log-session.test.mjs` guards all of it, and skips cleanly (with a
+   stated reason) in checkouts that have no local `origin/main`.
+
+**Net effect:** an agent in a remote session can analyse and edit, but cannot
+commit or deliver a branch by git. Work must go through the GitHub MCP tools
+(`push_files` + `create_pull_request`), which address the repository by explicit
+`owner`/`repo`/`branch` and so carry none of the destination ambiguity the push
+guard exists to prevent. That route has its own ceiling: file content passes
+through the tool call, so files in the hundreds of KB (`docs/CHANGELOG.md` is
+977 KB, `docs/manual/KNOWN_ISSUES.md` is 108 KB) cannot be delivered this way at
+all — which is why doc updates to those two files must be applied by hand from a
+local machine.
+
+**Fix options (not yet decided):** teach `codex-push-guard`, the memory-backup
+guard, and `production-action-guard.test.mjs` to accept a known-safe proxy-rewrite
+shape the way `GIT_SSH_COMMAND` already has a sanctioned keepalive shape; or gate
+them on a detected remote-container marker; or leave as-is and treat the GitHub
+MCP path as the supported remote delivery route. Mason chose **leave as-is** on
+2026-08-04; the 2026-08-05 finding that commits are blocked as well (not just
+pushes) may be worth revisiting, since it means a remote session cannot record its
+own work in the two largest docs. See
+`docs/audits/2026-08-04-test-coverage-analysis.md` for the session that surfaced
+these.
+
 ## RESOLVED LIVE — Quote and Customer whole-record saves reject stale editors
 
 **Applied live 2026-07-30.** The frontend-first bundle landed through PR #290, then the governed migration was submitted as `20260730201230_quote_customer_row_version_guard` and Supabase assigned ledger/disk version `20260730235031`. Trigger-maintained `row_version` columns now close the known last-write-wins exposure for whole-record `save_quote` and `save_customer` updates. Immediate catalog, trigger, overload, owner, search-path, grant, and child-table ACL checks passed. The primary Quote/Customer rollback chain plus planned-hold, restore/version, and drawn-booking companion chains all reached exact `SMOKE_PASS_ROLLBACK`; zero fixture rows remained. All 21 standing live invariant predicates returned zero unallowlisted findings. The schema registry was refreshed again through the later live high-water `20260731001654` and retains the assigned row-version migration name and both columns. Cached pre-migration bundles fail closed and must refresh; the already-deployed compatible bundle avoids an all-user outage. No rollout toggle is required.
