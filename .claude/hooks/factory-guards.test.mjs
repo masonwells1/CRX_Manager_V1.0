@@ -1239,6 +1239,46 @@ function bashExecutable() {
     tool_name: "PowerShell",
     tool_input: { command: `Set-Content -LiteralPath "${path.join(parkedRepo, "tracked.txt")}" -Value forged` },
   }, unrelatedWorktree), /destinations cannot be custody-checked/i, "clean parked worktrees with unpushed commits retain cross-chat shell custody");
+
+  const expiredTicket = writeImmutableTicket(paths, {
+    ...ticket.ticket,
+    id: "expired-queued-transfer",
+    title: "Transfer an expired queued ticket",
+  });
+  const expiredApprovalNow = Date.now();
+  for (const event of [
+    { type: "ticket-drafted", timestamp: new Date(expiredApprovalNow - 240_000).toISOString(), payload: { ticketFile: expiredTicket.filename, ticketHash: expiredTicket.hash, ticketVersion: 1, title: expiredTicket.ticket.title } },
+    { type: "ticket-presented", timestamp: new Date(expiredApprovalNow - 180_000).toISOString(), payload: { ticketHash: expiredTicket.hash, questionText: "Approve expired custody?", questionHash: sha256("Approve expired custody?"), baseSha } },
+    { type: "ticket-approved", timestamp: new Date(expiredApprovalNow - 120_000).toISOString(), payload: { ticketHash: expiredTicket.hash, questionHash: sha256("Approve expired custody?"), ownerReply: "yes", baseSha, expiresAt: new Date(expiredApprovalNow - 60_000).toISOString() } },
+  ]) {
+    appendFactoryEvent(paths, {
+      ...event,
+      jobId: expiredTicket.ticket.id,
+      actorTool: "codex",
+      sessionId: "expired-ticket-old-thread",
+    });
+  }
+  assertions++;
+  assert.equal(
+    loadFactorySnapshot(paths).jobs.find((job) => job.id === expiredTicket.ticket.id).stage,
+    "needs-ticket-ok",
+    "an expired queued approval is presented as needing a fresh ticket decision",
+  );
+  appendFactoryEvent(paths, {
+    type: "job-session-transferred",
+    jobId: expiredTicket.ticket.id,
+    actorTool: "codex",
+    sessionId: "expired-ticket-new-thread",
+    payload: { ownerReply: "Move this ticket here.", priorStage: "needs-ticket-ok" },
+  });
+  const transferredExpiredTicket = loadFactorySnapshot(paths).jobs.find((job) => job.id === expiredTicket.ticket.id);
+  assertions++;
+  assert.equal(transferredExpiredTicket.sessionId, "expired-ticket-new-thread", "expired queued approval transfers to the requested chat");
+  assertions++;
+  assert.equal(transferredExpiredTicket.stage, "needs-ticket-ok", "expired queued transfer remains gated on a fresh decision");
+  assertions++;
+  assert.equal(transferredExpiredTicket.approvalExpiresAt, "", "expired queued transfer revokes stale approval evidence");
+
   appendFactoryEvent(paths, {
     type: "job-session-transferred",
     jobId: ticket.ticket.id,

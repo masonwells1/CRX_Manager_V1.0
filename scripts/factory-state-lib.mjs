@@ -3193,7 +3193,12 @@ export function buildFactorySnapshot(paths, { nowMs = Date.now() } = {}) {
         if (!new Set(["needs-ticket-ok", "queued", "parked", "awaiting-morning-review"]).has(job.stage)) {
           throw new Error(`Factory job ${job.id} cannot transfer chat custody while it is ${job.stage}.`);
         }
-        if (String(event.payload.priorStage || "") !== job.stage
+        const transferPriorStage = job.stage === "queued"
+          && job.approvalExpiresAt
+          && Date.parse(job.approvalExpiresAt) <= Date.parse(event.timestamp)
+          ? "needs-ticket-ok"
+          : job.stage;
+        if (String(event.payload.priorStage || "") !== transferPriorStage
             || !String(event.payload.ownerReply || "").trim()) {
           throw new Error(`Factory job ${job.id} transfer does not match its current custody state.`);
         }
