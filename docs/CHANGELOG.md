@@ -33,6 +33,13 @@ comment can no longer be mistaken for a function body (which could skip a later
 REAL function — a silent-allow hole). The quote scanner also handles doubled
 quotes inside E-strings (`E'it''s \'x'`), and the body reader is quote-aware and
 stops at the next `CREATE`. All three proven red on the prior commit.
+Round 5 (Codex ×2): the dollar-quote tag matcher had a 64-char window, so a
+longer tag made the body reader return null and silently SKIP an unwired RPC
+(fail-open); and `$` inside an identifier (`idx_foo$bar$`) was lexed as a
+dollar-quote opener, denying valid migrations. Both fixed with a shared
+uncapped, token-boundary-aware tag matcher; both proven red on the prior
+commit (after discovering the `/tmp` path in heredoc mutation runs wasn't
+MSYS-converted — the "old" hook wasn't running at all; re-proven properly).
 
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 

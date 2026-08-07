@@ -121,6 +121,18 @@ function scanQuoted(text, openIdx) {
   return -1;
 }
 
+/** Match a dollar-quote opener ($tag$) at index i, or return null. No length
+ * cap — a bounded slice window silently missed long tags and skipped the body
+ * (fail-open). Requires a token boundary before the '$': in an identifier like
+ * foo$bar$, the '$' is part of the name, not a delimiter (Codex P2 round 5). */
+const DOLLAR_TAG_RE = /\$\w*\$/y;
+function dollarTagAt(text, i) {
+  if (/[\w$]/.test(text[i - 1] || "")) return null;
+  DOLLAR_TAG_RE.lastIndex = i;
+  const m = DOLLAR_TAG_RE.exec(text);
+  return m ? m[0] : null;
+}
+
 /** Replace SQL comments (-- to end of line, and NESTED block comments) with
  * spaces, honoring quoted strings and dollar-quoted literals so comment-looking
  * text inside them is untouched. Length-preserving. Returns null when a string,
@@ -156,11 +168,11 @@ function stripSqlComments(text) {
       continue;
     }
     if (ch === "$") {
-      const dq = /^\$\w*\$/.exec(text.slice(i, i + 64));
-      if (dq) {
-        const close = text.indexOf(dq[0], i + dq[0].length);
+      const tag = dollarTagAt(text, i);
+      if (tag) {
+        const close = text.indexOf(tag, i + tag.length);
         if (close === -1) return null;
-        const end = close + dq[0].length;
+        const end = close + tag.length;
         out += text.slice(i, end);
         i = end;
         continue;
@@ -211,11 +223,11 @@ function readBalancedParens(text, openIdx) {
     if (ch === "$") {
       // Dollar-quoted literal ($tag$...$tag$) in a DEFAULT expression — skip it
       // whole so a '(' inside the literal isn't counted as syntax.
-      const dq = /^\$\w*\$/.exec(text.slice(i));
-      if (dq) {
-        const close = text.indexOf(dq[0], i + dq[0].length);
+      const tag = dollarTagAt(text, i);
+      if (tag) {
+        const close = text.indexOf(tag, i + tag.length);
         if (close === -1) return null;
-        i = close + dq[0].length - 1;
+        i = close + tag.length - 1;
         continue;
       }
       continue;
@@ -251,9 +263,8 @@ function readDollarQuotedBody(text, fromIdx) {
       continue;
     }
     if (ch === "$") {
-      const dq = /^\$\w*\$/.exec(text.slice(i, i + 64));
-      if (dq) {
-        const tag = dq[0];
+      const tag = dollarTagAt(text, i);
+      if (tag) {
         if (/\bAS\s+$/i.test(text.slice(fromIdx, i))) {
           const bodyStart = i + tag.length;
           const bodyEnd = text.indexOf(tag, bodyStart);

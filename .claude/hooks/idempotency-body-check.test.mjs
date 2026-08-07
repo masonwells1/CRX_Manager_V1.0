@@ -261,4 +261,25 @@ r = runHook(fn(`
 ));
 ok(isDeny(r), "fake AS $tag$ inside a comment is ignored — the REAL unwired body is still blocked");
 
+// ── Codex P2 round 5a: a 63+-char dollar-quote tag overflowed the bounded
+//    64-char match window, the body reader returned null, and the unwired
+//    function was silently ALLOWED ─────────────────────────────────────────────
+const longTag = "$" + "t".repeat(70) + "$";
+r = runHook(fn(`
+  UPDATE customers SET name = 'x' WHERE id = 1;
+`).replaceAll("$function$", longTag));
+ok(isDeny(r), "70-char dollar-quote tag: unwired mutation is still blocked (no tag-length cap)");
+
+// ── Codex P2 round 5b: '$' is valid INSIDE a PostgreSQL identifier — foo$bar$
+//    must not be lexed as a dollar-quote opener (it denied the whole file) ─────
+r = runHook(fn(`
+  DECLARE v_existing jsonb;
+  BEGIN
+  SELECT check_idempotency(p_idempotency_key, 'test_fn') INTO v_existing;
+  UPDATE customers SET name = 'x' WHERE id = 1;
+  PERFORM save_idempotency(p_idempotency_key, 'test_fn', '{}'::jsonb);
+  END;
+`) + "\nCREATE INDEX idx_foo$bar$ ON customers (name);\n");
+ok(!isDeny(r), "top-level identifier containing dollar signs (idx_foo$bar$) does not false-positive the lexer");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);
