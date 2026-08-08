@@ -132,6 +132,7 @@
       "Bash(npx supabase functions deploy:*)",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function",
       "mcp__supabase__deploy_edge_function",
+      "mcp__Supabase__deploy_edge_function",
       "mcp__claude_ai_Supabase__deploy_edge_function",
       "mcp__Vercel__deploy_to_vercel",
       "mcp__Vercel__update_project_deployment_protection",
