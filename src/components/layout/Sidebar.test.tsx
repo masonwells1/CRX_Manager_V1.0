@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const mockProfile = vi.fn();
@@ -19,6 +19,8 @@ vi.mock('../../lib/pagePermissions', () => ({
 }));
 
 import Sidebar from './Sidebar';
+import { hasPageAccess } from '../../lib/pagePermissions';
+import { recordPageVisit } from '../../lib/recentPages';
 
 function renderSidebar(mobileOpen = false) {
   return render(
@@ -113,6 +115,73 @@ describe('Sidebar', () => {
     expect(screen.getByRole('dialog', { name: 'Navigation menu' })).toHaveAttribute('aria-modal', 'true');
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a workspace entry visible when only its lead page is denied, linking to the first allowed sibling', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'sales_rep', full_name: 'Sales Rep' });
+    vi.mocked(hasPageAccess).mockImplementation(
+      (_role, _denied, pageKey) => pageKey !== 'products' && pageKey !== 'supplier-pricing'
+    );
+    renderSidebar(true);
+
+    const links = screen.getAllByText('Products & Pricing').map((el) => el.closest('a'));
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute('href', '/brand-vs-generic');
+    }
+  });
+
+  it('hides a workspace entry when every sibling page is denied', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'sales_rep', full_name: 'Sales Rep' });
+    const denied = new Set(['products', 'supplier-pricing', 'brand-vs-generic']);
+    vi.mocked(hasPageAccess).mockImplementation((_role, _denied, pageKey) => !denied.has(pageKey));
+    renderSidebar(true);
+
+    expect(screen.queryAllByText('Products & Pricing')).toHaveLength(0);
+  });
+
+  it('keeps the Insights standalone visible when only /dashboard is denied, linking to Reports', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'sales_rep', full_name: 'Sales Rep' });
+    vi.mocked(hasPageAccess).mockImplementation((_role, _denied, pageKey) => pageKey !== 'dashboard');
+    renderSidebar(true);
+
+    const links = screen.getAllByText('Insights').map((el) => el.closest('a'));
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute('href', '/reports');
+    }
+  });
+
+  it('credits sibling-page visits to the condensed workspace entry in Frequent', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'admin', full_name: 'Admin User' });
+    // Visits landed on the siblings the condensed entry fronts, not on /products itself
+    localStorage.setItem(
+      'crx-page-visit-counts',
+      JSON.stringify({ 'supplier-pricing': 2, 'brand-vs-generic': 2 })
+    );
+    renderSidebar(true);
+
+    expect(screen.getAllByText('Frequent').length).toBeGreaterThan(0);
+    const frequentSection = screen.getAllByText('Frequent')[0].closest('div')?.parentElement;
+    expect(frequentSection?.textContent).toContain('Products & Pricing');
+  });
+
+  it('surfaces an entry in Frequent immediately when a visit crosses the threshold', () => {
+    mockProfile.mockReturnValue({ id: '1', role: 'admin', full_name: 'Admin User' });
+    // One visit short of the threshold of 3 for the Products & Pricing entry
+    localStorage.setItem('crx-page-visit-counts', JSON.stringify({ 'supplier-pricing': 2 }));
+    renderSidebar(true);
+    expect(screen.queryAllByText('Frequent')).toHaveLength(0);
+
+    // The threshold-crossing visit must refresh the already-rendered sidebar
+    // via the change event, without waiting for another navigation.
+    act(() => {
+      recordPageVisit('/brand-vs-generic', 'Brand vs Generic');
+    });
+
+    expect(screen.getAllByText('Frequent').length).toBeGreaterThan(0);
+    const frequentSection = screen.getAllByText('Frequent')[0].closest('div')?.parentElement;
+    expect(frequentSection?.textContent).toContain('Products & Pricing');
   });
 
   it('traps focus within the open mobile drawer', () => {

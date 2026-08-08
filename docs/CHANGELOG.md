@@ -13,6 +13,31 @@ All significant development milestones, in reverse chronological order.
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
 
+## 2026-08-07 — UI experience improvements: WorkspaceTabs route-preserving tab bars for…
+
+UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/Products/Insights clusters, condensed sidebar (Products & Pricing folded into Inventory & Buying, Insights as one link), FREQUENT sidebar section from visit counts, and large-screen readability via responsive root font-size (16px base; 17/18/20px at 1920/2560/3200px). Verified live in Chrome at 3440px and at 1440/1920/2560 in preview pane. PR #338. Codex review fixes: sidebar workspace entries honor per-user deny lists by falling through to the first accessible sibling page, and the tab bar matches by page key so `/invoices/field-app/*` highlights Field Invoices (verified live; regression tests added). Codex round 3: visit counts keyed by canonical page key, root font-size steps changed to percentages (106.25%/112.5%/125%) so a user-configured browser font size scales instead of being overridden (verified live at 3200/1920px), and Frequent counts sum across a condensed entry's sibling pages (regression test). Round 4 (CodeRabbit + Codex): the Frequent section now refreshes the moment a visit crosses the threshold via a `crx:visit-counts-changed` window event, stored visit counts are validated on read (malformed data resets instead of crashing), and the redirect aliases (`/field-invoices/unbilled` → `?tab=` URLs) no longer double-count one click — all covered by regression tests. Round 5 (CodeRabbit): the redirect dedupe now requires the second pathname to be REPLACE-committed (via `useNavigationType()`) or identical, so a genuine quick visit to a sibling page sharing a canonical key still counts (proven live via module import; regression tests added). Round 6 (Codex): a redirect that changes page keys (`/invoices/:id` REPLACE-navigating to `/field-invoices/:id`) now moves the count to the destination instead of crediting both pages for one click (proven live; regression test added).
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `fe7835b6 fix(ui): honor browser font-size preference and aggregate sibling visit counts`
+  - `cf7335e7 fix(nav): key visit counts by canonical page, not raw first segment`
+  - `3de0ba68 docs: record Codex review fixes in session changelog entry`
+  - `23963c0f fix(nav): honor deny-list siblings in sidebar and page-key tab matching`
+  - `96c13bd5 docs: changelog entry for UI improvements session`
+  - `05389e01 feat(ui): scale root font size up on large screens`
+  - `58f0fea5 feat(ui): workspace tab bars, condensed sidebar, and frequent-pages section`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-07 — PO-receipt import-era violations accepted and baselined
+
+Mason's disposition on the 22 `fin-po-receipt-identity.sql` findings (15 over_receipt
+lines on PO-2026-0008/0009/0012/0028 + 7 fully_received_incomplete lines on
+PO-2026-0008, all March-2026 import-era data): **accept-and-baseline**. Each of the
+22 rows is allowlisted per-`violation_key` in `allowlist.json` with the live
+ordered/received figures recorded in its justification; no live data was modified.
+The identity stays armed — any new over-receipt or premature close-out surfaces
+under a fresh key and fails the sweep. Verified: 22 live rows − 22 allowlist keys = 0.
+
 ## 2026-08-07 — Both parked migrations APPLIED LIVE + CRM fact cutover
 
 Owner-approved apply session. Both parked migrations went through the full gate
@@ -64,7 +89,8 @@ matching hard guard. All 7 are now covered on branch `claude/crx-self-improving-
    wired on both Claude and Codex sides).
 5. **New financial identities** — `fin-vendor-bill-balance-identity.sql` (0 rows) and
    `fin-po-receipt-identity.sql` (**22 live violations on March-2026 import POs,
-   deliberately not allowlisted — awaiting Mason's disposition**).
+   deliberately not allowlisted — awaiting Mason's disposition**;
+   *baselined later the same day — see entry above*).
 6. **Commission name-reacquisition residual** — found already fixed live 2026-07-22
    (`20260722184744_reuse_guard_covers_invoiced_jobs`); KNOWN_ISSUES entry marked RESOLVED.
 7. **Push-guard hoist regression test** — feature-branch push with `core.sshCommand`
