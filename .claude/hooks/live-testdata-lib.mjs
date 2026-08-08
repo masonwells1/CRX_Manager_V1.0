@@ -218,6 +218,97 @@ export function stripCommentsQuoteAware(sql) {
   return out;
 }
 
+// ── SELECT-invoked function classification (Codex P1 round 4, PR #352) ───────
+// A mutating-verb blocklist can never converge (save_customer, close_accounting_
+// period, restore_quote_version all slipped it), so this is DEFAULT-DENY: any
+// custom function invoked in the statement is blocked unless its name carries a
+// read-only prefix or is a recognized SQL builtin. A false positive denies —
+// the safe direction — and REAL-DATA-OK (checked by the guard) overrides.
+const READONLY_FN_PREFIX_RE = /^(?:get|check|list|find|search|count|calc|calculate|compute|report|fetch|lookup|has|is|can|validate|verify|preview|estimate|summarize|derive)_/;
+const SQL_BUILTIN_FNS = new Set([
+  // aggregates / window
+  "count", "sum", "avg", "min", "max", "string_agg", "array_agg", "jsonb_agg",
+  "json_agg", "jsonb_object_agg", "json_object_agg", "bool_and", "bool_or",
+  "row_number", "rank", "dense_rank", "percent_rank", "ntile", "lag", "lead",
+  "first_value", "last_value", "nth_value", "percentile_cont", "percentile_disc",
+  // conditionals / generic
+  "coalesce", "nullif", "greatest", "least", "num_nonnulls", "num_nulls",
+  // json
+  "jsonb_build_object", "json_build_object", "jsonb_build_array", "json_build_array",
+  "jsonb_array_elements", "json_array_elements", "jsonb_array_elements_text",
+  "jsonb_each", "json_each", "jsonb_each_text", "jsonb_object_keys", "json_object_keys",
+  "jsonb_typeof", "json_typeof", "jsonb_array_length", "json_array_length",
+  "jsonb_extract_path", "jsonb_extract_path_text", "jsonb_path_query",
+  "jsonb_path_query_array", "jsonb_path_exists", "jsonb_pretty", "jsonb_strip_nulls",
+  "to_json", "to_jsonb", "row_to_json", "array_to_json", "json_populate_record",
+  "jsonb_populate_record", "jsonb_set", "jsonb_insert", "jsonb_concat",
+  // arrays / sets
+  "unnest", "generate_series", "generate_subscripts", "array_length", "cardinality",
+  "array_position", "array_positions", "array_to_string", "string_to_array",
+  "array_append", "array_prepend", "array_remove", "array_replace", "array_cat",
+  "array_fill", "array_agg_distinct", "array_upper", "array_lower", "array_ndims",
+  // date / time
+  "now", "clock_timestamp", "statement_timestamp", "transaction_timestamp",
+  "date_trunc", "date_part", "extract", "to_char", "to_date", "to_timestamp",
+  "to_number", "age", "justify_interval", "justify_days", "justify_hours",
+  "make_date", "make_time", "make_timestamp", "make_timestamptz", "make_interval",
+  "date_bin", "timezone", "isfinite",
+  // math
+  "round", "floor", "ceil", "ceiling", "abs", "sign", "mod", "power", "sqrt",
+  "cbrt", "exp", "ln", "log", "log10", "trunc", "random", "setseed", "width_bucket",
+  "div", "gcd", "lcm", "factorial", "pi", "degrees", "radians",
+  // strings
+  "length", "char_length", "character_length", "octet_length", "bit_length",
+  "lower", "upper", "initcap", "trim", "ltrim", "rtrim", "btrim", "lpad", "rpad",
+  "substring", "substr", "replace", "translate", "overlay", "split_part",
+  "position", "strpos", "starts_with", "concat", "concat_ws", "left", "right",
+  "reverse", "repeat", "format", "quote_ident", "quote_literal", "quote_nullable",
+  "regexp_replace", "regexp_matches", "regexp_match", "regexp_split_to_table",
+  "regexp_split_to_array", "regexp_count", "regexp_like", "regexp_instr",
+  "regexp_substr", "md5", "encode", "decode", "convert_from", "convert_to",
+  "to_hex", "ascii", "chr", "parse_ident",
+  // casts / type info / misc reads
+  "cast", "pg_typeof", "pg_column_size", "pg_size_pretty", "version",
+  "current_setting", "current_database", "current_schema", "current_user",
+  "session_user", "pg_backend_pid", "txid_current", "pg_is_in_recovery",
+  "obj_description", "col_description", "shobj_description",
+  "pg_get_serial_sequence", "pg_get_functiondef", "pg_get_constraintdef",
+  "pg_get_indexdef", "pg_get_viewdef", "pg_get_expr", "pg_relation_size",
+  "pg_total_relation_size", "pg_table_size", "pg_indexes_size", "pg_database_size",
+  "format_type", "to_regclass", "to_regproc", "to_regtype",
+  "has_table_privilege", "has_column_privilege", "has_function_privilege",
+  "has_schema_privilege", "has_database_privilege", "pg_has_role",
+  "gen_random_uuid", "uuid_generate_v4", "exists", "currval", "lastval",
+  // full-text search (read-only)
+  "to_tsvector", "to_tsquery", "plainto_tsquery", "phraseto_tsquery",
+  "websearch_to_tsquery", "ts_rank", "ts_rank_cd", "ts_headline",
+]);
+// SQL keywords that look like `word (` in text but are not function calls.
+const SQL_KEYWORD_FNS = new Set([
+  "select", "from", "where", "and", "or", "not", "in", "on", "as", "join",
+  "values", "using", "over", "filter", "within", "group", "order", "by",
+  "having", "limit", "offset", "union", "all", "any", "some", "distinct",
+  "case", "when", "then", "else", "end", "between", "like", "ilike", "similar",
+  "is", "null", "true", "false", "interval", "array", "row", "with", "lateral",
+  "cross", "inner", "outer", "full", "grouping", "window", "partition", "if",
+]);
+
+export function findNonReadFunctionCall(sqlText) {
+  const text = String(sqlText || "");
+  if (!/\bselect\b/i.test(text)) return null;
+  const re = /(?:"?public"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const name = m[1].toLowerCase();
+    if (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name)) continue;
+    if (READONLY_FN_PREFIX_RE.test(name)) continue;
+    // pg_catalog/information_schema internals are reads
+    if (name.startsWith("pg_stat") || name.startsWith("pg_ls") || name.startsWith("information_schema")) continue;
+    return name;
+  }
+  return null;
+}
+
 // Returns { block: false } | { block: true, kind, reason }
 export function classifySql(query) {
   const q = String(query || "");
@@ -280,12 +371,15 @@ export function classifySql(query) {
       reason: "setval()/nextval() changes live sequence state (e.g. invoice numbering) even inside a SELECT. Read with currval()/last_value instead, or get Mason's explicit REAL-DATA-OK for a real sequence change.",
     };
   }
-  if (/\bselect\b[\s\S]*?\b(?:"?public"?\s*\.\s*)?"?(?:apply|batch|cancel|void|create|post|record|adjust|reserve|release|transfer|pay|write_off|process|generate|allocate|convert|complete|fulfill|receive|issue|reverse|restock)_[a-z0-9_]+"?\s*\(/i.test(t)) {
-    return {
-      block: true,
-      kind: "rpc-via-select",
-      reason: "This SELECT invokes a mutating application function (RPC) — calling it changes live data even though the statement starts with SELECT. Mutating RPCs run through the app or with Mason's explicit REAL-DATA-OK.",
-    };
+  {
+    const rpc = findNonReadFunctionCall(t);
+    if (rpc) {
+      return {
+        block: true,
+        kind: "rpc-via-select",
+        reason: `This statement invokes "${rpc}()", which is not a known read-only function — calling an application RPC changes live data even when the statement starts with SELECT. Use the app, or get Mason's explicit REAL-DATA-OK. (Read-prefixed functions like get_/check_/list_ and SQL builtins stay allowed.)`,
+      };
+    }
   }
 
   // 4. Clearly-fake test data is fine for ordinary data writes.
