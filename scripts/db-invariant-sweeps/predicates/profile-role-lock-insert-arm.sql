@@ -1,12 +1,9 @@
 -- predicate: profile role-lock guard covers INSERT, not only UPDATE
 --
--- EXPECTED RED AS OF 2026-08-07. This predicate is written AHEAD of its fix and
--- WILL RETURN ROWS against today's live database. That is deliberate — the
--- red-before/green-after pair is the proof that it is not vacuous. It turns
--- green only once the PARKED migration
--- `20260807153000_profile_role_lock_covers_insert.sql` is reviewed and applied.
--- Do NOT allowlist it in the meantime; if the migration is abandoned, delete
--- this file in the same change.
+-- GREEN AS OF 2026-08-07 (evening): the fix migration was applied live as
+-- `20260807215532_profile_role_lock_covers_insert` and this predicate was
+-- verified 2 rows red before the apply and 0 rows after. It now stands as the
+-- permanent regression alarm for the INSERT arm (see KNOWN LIMIT below).
 --
 -- Live state 2026-08-07, which is exactly what the two INSERT-arm rows below fire on:
 --   trg_guard_profile_role_lock -> BEFORE UPDATE ON public.profiles FOR EACH ROW
