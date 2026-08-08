@@ -9,6 +9,27 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* Every Tailwind size in the app is rem-based, so scaling the root font-size
+     scales text, spacing, and icons together. Wider screens sit farther from
+     the viewer, so the whole UI steps up with viewport width; screens under
+     1920px keep the browser default. Percentages (not px) so a user-configured
+     larger browser font size is scaled, never overridden. */
+  @media (min-width: 1920px) {
+    html {
+      font-size: 106.25%; /* 17px at the 16px default */
+    }
+  }
+  @media (min-width: 2560px) {
+    html {
+      font-size: 112.5%; /* 18px at the 16px default */
+    }
+  }
+  @media (min-width: 3200px) {
+    html {
+      font-size: 125%; /* 20px at the 16px default */
+    }
+  }
+
   body {
     @apply bg-cream text-nav-dark;
     line-height: 1.5;

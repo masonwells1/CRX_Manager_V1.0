@@ -2,6 +2,57 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — UI experience improvements: WorkspaceTabs route-preserving tab bars for…
+
+UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/Products/Insights clusters, condensed sidebar (Products & Pricing folded into Inventory & Buying, Insights as one link), FREQUENT sidebar section from visit counts, and large-screen readability via responsive root font-size (16px base; 17/18/20px at 1920/2560/3200px). Verified live in Chrome at 3440px and at 1440/1920/2560 in preview pane. PR #338. Codex review fixes: sidebar workspace entries honor per-user deny lists by falling through to the first accessible sibling page, and the tab bar matches by page key so `/invoices/field-app/*` highlights Field Invoices (verified live; regression tests added). Codex round 3: visit counts keyed by canonical page key, root font-size steps changed to percentages (106.25%/112.5%/125%) so a user-configured browser font size scales instead of being overridden (verified live at 3200/1920px), and Frequent counts sum across a condensed entry's sibling pages (regression test). Round 4 (CodeRabbit + Codex): the Frequent section now refreshes the moment a visit crosses the threshold via a `crx:visit-counts-changed` window event, stored visit counts are validated on read (malformed data resets instead of crashing), and the redirect aliases (`/field-invoices/unbilled` → `?tab=` URLs) no longer double-count one click — all covered by regression tests. Round 5 (CodeRabbit): the redirect dedupe now requires the second pathname to be REPLACE-committed (via `useNavigationType()`) or identical, so a genuine quick visit to a sibling page sharing a canonical key still counts (proven live via module import; regression tests added). Round 6 (Codex): a redirect that changes page keys (`/invoices/:id` REPLACE-navigating to `/field-invoices/:id`) now moves the count to the destination instead of crediting both pages for one click (proven live; regression test added).
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `fe7835b6 fix(ui): honor browser font-size preference and aggregate sibling visit counts`
+  - `cf7335e7 fix(nav): key visit counts by canonical page, not raw first segment`
+  - `3de0ba68 docs: record Codex review fixes in session changelog entry`
+  - `23963c0f fix(nav): honor deny-list siblings in sidebar and page-key tab matching`
+  - `96c13bd5 docs: changelog entry for UI improvements session`
+  - `05389e01 feat(ui): scale root font size up on large screens`
+  - `58f0fea5 feat(ui): workspace tab bars, condensed sidebar, and frequent-pages section`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-07 — PO-receipt import-era violations accepted and baselined
+
+Mason's disposition on the 22 `fin-po-receipt-identity.sql` findings (15 over_receipt
+lines on PO-2026-0008/0009/0012/0028 + 7 fully_received_incomplete lines on
+PO-2026-0008, all March-2026 import-era data): **accept-and-baseline**. Each of the
+22 rows is allowlisted per-`violation_key` in `allowlist.json` with the live
+ordered/received figures recorded in its justification; no live data was modified.
+The identity stays armed — any new over-receipt or premature close-out surfaces
+under a fresh key and fails the sweep. Verified: 22 live rows − 22 allowlist keys = 0.
+
+## 2026-08-07 — Both parked migrations APPLIED LIVE + CRM fact cutover
+
+Owner-approved apply session. Both parked migrations went through the full gate
+path (migration-review charters CLEAN, fresh apply proofs, in-transaction pre/postflights)
+and are live:
+
+- **`20260807215532_profile_role_lock_covers_insert`** (authored as 20260807153000) —
+  `_guard_profile_role_lock` now fires `BEFORE INSERT OR UPDATE` (tgtype 23), closing the
+  §0d escalation where a non-admin could re-insert their own `profiles` row as admin.
+  Postflight included a live behavioral probe: an impersonated active non-admin's
+  escalation insert was blocked with the `PROFILE_INSERT_LOCK:` token. Paired predicate
+  `profile-role-lock-insert-arm.sql` verified red→green (2 rows before, 0 after).
+- **`20260807220323_log_customer_fact_rpc`** (authored as 20260807120000, re-stamped
+  20260807221500 pre-apply) — `log_customer_fact` idempotent SECURITY DEFINER RPC live;
+  anon EXECUTE revoked, authenticated granted, single overload verified.
+
+Frontend cutover landed: `CustomerFacts.tsx` saveFact now calls the RPC with an
+idempotency key (retry-safe). `rpcContracts.test.ts` moved `log_customer_fact` to
+`MUTATING_RPCS_WITH_IDEMPOTENCY` (migration-only bucket empty again);
+`rpcFixtureLiveDiff.test.ts` snapshot fully regenerated (558 live functions, md5-verified);
+`src/types/supabase.ts` regenerated. Live migration high-water: `20260807220323`.
+
+## 2026-08-07 — CRM add-fact retry safety — PREPARED (parked; superseded above)
+
+Parked migration `20260807120000_log_customer_fact_rpc.sql` adds `log_customer_fact`, an idempotent SECURITY DEFINER RPC mirroring `log_customer_interaction` (payload-fingerprinted replay, role gate, server-pinned `entered_by`/`source`), closing the retry-unsafe direct insert in `CustomerFacts.tsx` found by the incident-vs-guard audit. NOT applied — awaiting migration-review + apply gates + owner approval; the frontend cutover is staged as a comment and lands post-apply. `rpcContracts.test.ts` registers the RPC under `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`. *(Applied later the same day — see entry above.)*
+
 ## 2026-08-07 — Incident-vs-guard audit: 7 gaps closed with new hard guards
 
 An audit mapped ~89 recorded incidents in `docs/manual/KNOWN_ISSUES.md` against the
@@ -13,6 +64,7 @@ matching hard guard. All 7 are now covered on branch `claude/crx-self-improving-
    §0d follow-up where a non-admin could re-insert their own `profiles` row as
    `role = 'admin'`. Paired red/green predicate `profile-role-lock-insert-arm.sql`
    (2 rows today → 0 after apply). NOT applied — awaiting migration-review + apply gates.
+   *(Applied later the same day as live version 20260807215532 — see entry above.)*
 2. **Transport-key known-hole tripwire** — `codex-push-lib.test.mjs` now pins that
    `core.hooksPath` and shell-form `credential.helper` are deliberately absent from
    `EXECUTABLE_TRANSPORT_KEYS` (husky sets `core.hooksPath` legitimately), so any
@@ -26,7 +78,8 @@ matching hard guard. All 7 are now covered on branch `claude/crx-self-improving-
    wired on both Claude and Codex sides).
 5. **New financial identities** — `fin-vendor-bill-balance-identity.sql` (0 rows) and
    `fin-po-receipt-identity.sql` (**22 live violations on March-2026 import POs,
-   deliberately not allowlisted — awaiting Mason's disposition**).
+   deliberately not allowlisted — awaiting Mason's disposition**;
+   *baselined later the same day — see entry above*).
 6. **Commission name-reacquisition residual** — found already fixed live 2026-07-22
    (`20260722184744_reuse_guard_covers_invoiced_jobs`); KNOWN_ISSUES entry marked RESOLVED.
 7. **Push-guard hoist regression test** — feature-branch push with `core.sshCommand`

@@ -2093,6 +2093,7 @@ export type Database = {
           payment_terms: string | null
           phone: string | null
           prepay_balance_cents: number
+          row_version: number
           shipping_address: string | null
           soybean_acres: number | null
           state: string | null
@@ -2126,6 +2127,7 @@ export type Database = {
           payment_terms?: string | null
           phone?: string | null
           prepay_balance_cents?: number
+          row_version?: number
           shipping_address?: string | null
           soybean_acres?: number | null
           state?: string | null
@@ -2159,6 +2161,7 @@ export type Database = {
           payment_terms?: string | null
           phone?: string | null
           prepay_balance_cents?: number
+          row_version?: number
           shipping_address?: string | null
           soybean_acres?: number | null
           state?: string | null
@@ -8400,6 +8403,7 @@ export type Database = {
           pdf_columns_override: Json | null
           pdf_template_id: string | null
           quote_number: string
+          row_version: number
           salesman_id: string | null
           season: number | null
           sent_at: string | null
@@ -8426,6 +8430,7 @@ export type Database = {
           pdf_columns_override?: Json | null
           pdf_template_id?: string | null
           quote_number: string
+          row_version?: number
           salesman_id?: string | null
           season?: number | null
           sent_at?: string | null
@@ -8452,6 +8457,7 @@ export type Database = {
           pdf_columns_override?: Json | null
           pdf_template_id?: string | null
           quote_number?: string
+          row_version?: number
           salesman_id?: string | null
           season?: number | null
           sent_at?: string | null
@@ -10820,6 +10826,14 @@ export type Database = {
         }
         Returns: Json
       }
+      _convert_quote_to_order_owner_impl: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_quote_id: string
+        }
+        Returns: Json
+      }
       _create_invoice_for_unbilled_delivery_idem_impl_20260721: {
         Args: {
           p_delivery_id: string
@@ -10853,6 +10867,28 @@ export type Database = {
           p_salesman_id?: string
         }
         Returns: string
+      }
+      _create_quick_delivery_intent_impl_20260802: {
+        Args: {
+          p_customer_id: string
+          p_delivery_notes?: string
+          p_driver_id?: string
+          p_idempotency_key?: string
+          p_items: Json
+          p_performed_by?: string
+          p_scheduled_date?: string
+          p_skip_invoice?: boolean
+        }
+        Returns: Json
+      }
+      _create_quote_version_owner_impl: {
+        Args: {
+          p_idempotency_key?: string
+          p_method?: string
+          p_performed_by: string
+          p_quote_id: string
+        }
+        Returns: Json
       }
       _create_split_invoices_from_order_provenance_impl_20260719: {
         Args: {
@@ -10931,6 +10967,10 @@ export type Database = {
         }
         Returns: Json
       }
+      _lock_accounting_months: {
+        Args: { p_dates: string[]; p_exclusive?: boolean }
+        Returns: undefined
+      }
       _lr_allocate_int: {
         Args: { p_total: number; p_weights: Json }
         Returns: Json
@@ -10995,6 +11035,15 @@ export type Database = {
       }
       _require_auth: { Args: never; Returns: string }
       _resolve_product_cost_basis_row: { Args: { p_row: Json }; Returns: Json }
+      _restore_quote_version_owner_impl: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_quote_id: string
+          p_version_id: string
+        }
+        Returns: Json
+      }
       _reverse_completed_cycle_count_impl: {
         Args: {
           p_cycle_count_id: string
@@ -11039,6 +11088,10 @@ export type Database = {
         Returns: Json
       }
       _save_invoice_governed_split_guard_impl_20260720: {
+        Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
+        Returns: string
+      }
+      _save_invoice_intent_impl_20260802: {
         Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
         Returns: string
       }
@@ -11324,6 +11377,10 @@ export type Database = {
           p_row_ids: string[]
         }
         Returns: Json
+      }
+      assert_customer_balance_reconstructable_as_of: {
+        Args: { p_as_of_date: string; p_customer_id: string }
+        Returns: undefined
       }
       assert_phase3_product_metadata_change_safe: {
         Args: { p_product_id: string }
@@ -11645,6 +11702,7 @@ export type Database = {
       }
       convert_quote_to_order: {
         Args: {
+          p_expected_row_version?: number
           p_idempotency_key?: string
           p_performed_by?: string
           p_quote_id: string
@@ -11867,6 +11925,7 @@ export type Database = {
       }
       create_quote_version: {
         Args: {
+          p_expected_row_version?: number
           p_idempotency_key?: string
           p_method?: string
           p_performed_by: string
@@ -12859,6 +12918,20 @@ export type Database = {
         Args: { p_product_ids: string[] }
         Returns: undefined
       }
+      log_customer_fact: {
+        Args: {
+          p_category: string
+          p_confidence?: number
+          p_customer_id: string
+          p_expires_at?: string
+          p_fact_key: string
+          p_idempotency_key?: string
+          p_save_verified?: boolean
+          p_value_json?: Json
+          p_value_text?: string
+        }
+        Returns: Json
+      }
       log_customer_interaction: {
         Args: {
           p_contact_id?: string
@@ -13492,6 +13565,7 @@ export type Database = {
       }
       restore_quote_version: {
         Args: {
+          p_expected_row_version?: number
           p_idempotency_key?: string
           p_performed_by: string
           p_quote_id: string
@@ -13880,6 +13954,18 @@ export type Database = {
           p_performed_by: string
         }
         Returns: Json
+      }
+      statement_customer_has_later_balance_activity: {
+        Args: { p_as_of_date: string; p_customer_id: string }
+        Returns: boolean
+      }
+      statement_invoice_was_posted_as_of: {
+        Args: {
+          p_as_of_date: string
+          p_current_posted_at: string
+          p_invoice_id: string
+        }
+        Returns: boolean
       }
       submit_purchase_order: {
         Args: {

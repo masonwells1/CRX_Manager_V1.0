@@ -1465,6 +1465,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'increment_customer_prepay',
   'issue_return_credit',
   'link_blend_ticket_to_order',
+  // CRM retry-safe fact intake (applied live 2026-08-07 as 20260807220323) —
+  // required p_idempotency_key, replays via check_idempotency/save_idempotency
+  // with an exact-request fingerprint.
+  'log_customer_fact',
   // CRM retry-safe call logging (migration 20260717060000) — declares
   // p_idempotency_key and replays via check_idempotency/save_idempotency.
   'log_customer_interaction',
