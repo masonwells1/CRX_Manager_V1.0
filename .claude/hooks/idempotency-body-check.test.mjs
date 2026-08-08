@@ -555,12 +555,21 @@ r = runHook(`DO $do$ BEGIN
 END $do$;`);
 ok(isDeny(r), "DDL split INSIDE the CREATE FUNCTION header is refused");
 
-// M1: a %L argument is data that Postgres quotes — never code. Lexing it as SQL
-// hit its `$5$` and denied a perfectly valid migration.
+// Round 12 tried to let this through by proving the argument was `%L` data.
+// Round 14 abandoned that: proving code-vs-data per literal lost five gate
+// rounds. Function-SHAPED text inside a runtime-built statement is now refused
+// unless the guard can read it as one complete literal — and this one it cannot
+// (the `$5$` is an unterminated dollar tag). The exempt marker is the way out.
 r = runHook(`DO $do$ BEGIN
   EXECUTE format('INSERT INTO docs (body) VALUES (%L)', 'CREATE OR REPLACE FUNCTION public.example(p_idempotency_key text) priced at $5$ per call');
 END $do$;`);
-ok(!isDeny(r), "a %L data argument is never lexed as SQL, even when function-shaped");
+ok(isDeny(r), "function-shaped text in a runtime-built statement is refused when unreadable");
+
+r = runHook(`-- idempotency-body-check: exempt
+DO $do$ BEGIN
+  EXECUTE format('INSERT INTO docs (body) VALUES (%L)', 'CREATE OR REPLACE FUNCTION public.example(p_idempotency_key text) priced at $5$ per call');
+END $do$;`);
+ok(!isDeny(r), "...and the exempt marker is a working escape hatch for that case");
 
 // --- Round 13 (Codex push-proof gate blocked round-12) ---------------------
 
@@ -590,5 +599,33 @@ BEGIN
   EXECUTE v_ddl;
 END $do$;`);
 ok(isDeny(r), "a semicolon inside a following string does not hide the INTO assignment");
+
+// --- Round 14: fail-closed redesign (Codex gate blocked round-13) ----------
+
+// the signature in one literal, the mutating BODY in another. Round 13 exempted
+// the chain as soon as any fragment carried a complete signature, so this was
+// allowed; the body it could not see is where the missing wiring lives.
+r = runHook(`DO $do$ BEGIN
+  EXECUTE 'CREATE OR REPLACE FUNCTION public.split_body(p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN '
+    || 'UPDATE invoices SET total_cents = 0; END $fn$;';
+END $do$;`);
+ok(isDeny(r), "a function whose BODY continues in a second literal is refused");
+
+// %s can carry a width as well as a position — %1$10s still splices in code
+r = runHook(`DO $do$ BEGIN
+  EXECUTE format('%1$10s', '${UNWIRED_DDL_R13}');
+END $do$;`);
+ok(isDeny(r), "a width-and-position format spec (%1$10s) still splices its argument in as code");
+
+// a literal that is not an argument of the format() call at all
+r = runHook(`DO $do$ BEGIN
+  EXECUTE CASE WHEN false THEN format('%L', 'ignored') ELSE '${UNWIRED_DDL_R13}' END;
+END $do$;`);
+ok(isDeny(r), "a literal in a CASE arm is not treated as a preceding format() call's data");
+
+// ...but the fail-closed rule must stay inside runtime-built SQL. Two literals
+// that together spell a header in a PLAIN INSERT are documentation, not DDL.
+r = runHook(`INSERT INTO docs (body) VALUES ('CREATE OR REPLACE ' || 'FUNCTION public.example(p_idempotency_key text)');`);
+ok(!isDeny(r), "fragments spelling a header in a plain INSERT are data, and stay allowed");
 
 console.log(`idempotency-body-check: ${pass} assertions passed`);

@@ -95,6 +95,32 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+## 2026-08-08 — idempotency-body-check round-14: fail-closed redesign (Mason's call)
+
+Rounds 10–13 all failed the same way. Each one asked, literal by literal, "is this text code or is it
+data?", and each time PostgreSQL had another spelling that the answer missed: `%1$10s`, a
+dollar-quoted `format()` template, a literal in a `CASE` arm, a header split mid-word, a body
+continued in a second fragment. Five straight gate blocks. After the fifth, Mason chose the redesign
+over another patch round.
+
+**The default is inverted.** Inside a statement that builds SQL at runtime, if the literals *together*
+spell a `CREATE FUNCTION` header, then some single literal must carry that header. Anything else is
+refused, and the author either writes the dynamic DDL as one string literal or uses the file-level
+`-- idempotency-body-check: exempt` marker and gets a human review. The guard no longer enumerates
+syntax variants, so there is no next variant to discover.
+
+Deleted: `isDataArgOfFormat`, `formatTemplate`, and the `p_idempotency_key` half of the lexing
+trigger — every rule whose job was to decide code-vs-data. Net less code than round 13.
+
+**Accepted trade-off, deliberately:** function-shaped *prose* passed as a `%L` argument inside a
+runtime-built statement is now refused rather than allowed. Round 12 had special-cased it; that
+special case is what rounds 12 and 13 were blocked on. For a guard against duplicate customer
+charges, refusing too much is the safe side, and the exempt marker is a tested escape hatch.
+
+77 assertions. Every clause of the new rule was individually reverted and the suite went red for each
+— including two clauses that SURVIVED their mutation and turned out to be redundant with the masker's
+existing fail-closed path; those were deleted rather than kept as decoration.
+
 ## 2026-08-08 — idempotency-body-check round-13: both round-12 carve-outs were too literal
 
 Fourth gate block, two findings — both in the *narrowing* rules round 12 added, which is where a
