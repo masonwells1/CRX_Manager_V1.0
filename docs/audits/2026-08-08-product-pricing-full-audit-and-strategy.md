@@ -1,0 +1,75 @@
+# Product Pricing — Full Audit and Strategy (2026-08-08)
+
+Read-only audit of everything that touches product pricing: cost capture, margin math, vendor/price history, and how to keep a ~600-SKU list current. Evidence = current source, migrations, and live read-only queries against project `rhyzpcqhnizqbxphqdkr` on 2026-08-08. No data was changed.
+
+## Verdict
+
+**PARTIAL — the pricing machinery is strong; the pricing *practice* is behind the machinery.** The governed pricing engine (preview → approve → apply, with history) built in the July phases is live and hardened, but it is barely being used: the multi-vendor pipeline covers ~10 of 604 products, cost freshness is untrackable for 98% of the catalog, and no written pricing strategy (target margins, tier formula, refresh cadence) exists anywhere. Plus a short list of real defects that corrupt margin numbers.
+
+## 1. What exists today (and works)
+
+- **Catalog**: 604 products (595 active), 13 vendors. Only 2 products missing cost, 3 missing tier-1 price.
+- **Three price tiers per product** (`tier1/2/3_price`), derived from `current_cost × (1 + markup)` by a DB trigger; customers get a tier via `customers.assigned_tier`. Sell-price resolution at sale time: manual override → quoted price → tier price.
+- **Governed price-change engine** (Phase 1a/2, live): Product-page edits, Products-list inline edits, and a monthly Excel workbook round-trip all flow through the same `preview_product_cost_basis_changes` → `apply_product_cost_basis_change_set` RPCs, with old→new diffs, optimistic concurrency (`pricing_version`, row tokens), expiring change sets, and a single database history writer. Direct pricing writes from app roles are denied (`20260718190000`). This is the hardened path — use it.
+- **Bulk update capability already exists**: `generateProductPricingWorkbook` / `parseProductPricingWorkbook` (`src/lib/productPricingWorkbook.ts`) export a styled .xlsx of the whole catalog, accept edited costs, margins, or prices back (margin-driven or price-driven per row), detect formulas and stale rows, and apply atomically. **The 600-SKU reprice tool Mason is asking for is already built** — it needs adoption, not construction.
+- **Multi-vendor price evidence pipeline** (Phase 1b/3, live but gated): `vendors` → `product_supplier_links` (with SKU + unit-of-measure conversion) → `supplier_price_imports` → `supplier_price_observations` (bigint cents, effective-dated, supersession) → `product_cost_basis` (one active, provenance-checked cost basis per product). Supplier quote-sheet .xlsx export/re-import with staging + approval lives at `src/pages/SupplierPricing.tsx`.
+- **Cost snapshots at transaction time**: `order_items.cost_at_time_cents`, `invoice_items.cost_cents`, PO items with `cost_provenance` + `cost_snapshot_at`, locked after receipt.
+- **Margin reporting**: `FieldProfitability` and `FinancialDashboard` are server-computed; commission math is a locked canonical helper minting from chemical-line profit.
+
+## 2. Live-data findings
+
+| Metric (live, 2026-08-08) | Value | Meaning |
+|---|---|---|
+| Products with supplier links / price observations | 10 / 604 | Multi-vendor pipeline ~2% adopted |
+| Cost basis rows still `manual_override / migration_baseline` | 601 of 602 active | Real vendor evidence backs 1 product's cost |
+| `cost_updated_date` NULL | 591 of 604 | Cost freshness is untrackable for 98% of SKUs |
+| `cost_history` rows | 32 total | Pre-July price changes are unrecorded (settled: no backfill without source documents) |
+| `supplier_cost_basis_enabled` | false (Wells canary only) | The governed cost-basis engine is dark for the catalog |
+| Avg tier-1 gross margin (computed from price/cost) | 14.3% | Tier-3 avg 29.5% |
+| Tier-1 SKUs under 10% gross margin | 131 of 593 | Thin-margin tail worth a deliberate look |
+| Invoice lines missing cost snapshot | 4 of 15 | Small volume, but 27% of margin data absent |
+| Pricing workbook exports ever run | 0 | The bulk tool has never been used in production |
+
+## 3. Defects and design risks (ranked)
+
+1. **Margin/markup columns are swapped in live data.** Sampled rows show `tierN_margin` actually holds gross margin ((price−cost)/price) and `tierN_gross_margin` holds markup (price/cost−1) — the opposite of what the trigger in `20260206191700_add_gross_margin_display.sql` computes and what the names say (589/594 rows inconsistent with the trigger formula). Any report or decision reading these columns by name may present markup as margin or vice versa. Needs a root-cause pass and either a data fix or a rename.
+2. **Returns reverse revenue but never COGS** (`issue_return_credit`) — known open defect; every return overstates cost and understates margin. Same family: partial delivery corrects price but not cost (overnight-bug-hunt REPORT.md:334). These corrupt the exact margin numbers this audit is about.
+3. **Reports disagree on cost source.** Dashboard/report RPCs (`20260308200000`) read mutable `order_items.cost_per_unit`, not the immutable `cost_at_time_cents` snapshot; `Reports.tsx` and `SalesReports.tsx` compute margin in React from raw selects while two other pages use server RPCs. Two report pages can show different margins for the same period.
+4. **Quote costs re-sync live on every save** (`20260730235031:419`): a stored quote's margin silently changes when admin updates product cost. Price overrides are preserved; cost is not.
+5. **No active automated cost-update path.** PO receiving stopped writing `current_cost` in March (deliberate — cost is a pricing basis, not a purchase echo), and the governed replacement is feature-flagged off. Cost updates are 100% manual admin action, with `cost_updated_date` effectively writer-less.
+6. **No inventory costing method.** On-hand value = quantity × live `current_cost`; no FIFO/average layer, so inventory valuation and COGS drift from actual paid cost.
+7. **`products` money is `numeric` dollars, not bigint cents** — everything newer is cents; ~15 `round(x*100)` conversion boundaries exist. Contained by the cent-scale trigger guard, but `InvoiceDetail.tsx:645-647`'s float `Math.round(price*100)` and `NewPurchaseOrder.tsx`'s `parseFloat` path are the weak boundaries.
+8. **Sale-time margin guardrails are cosmetic.** A rep can save a below-cost line freely; the only signal is text color (`NewOrder.tsx:955`). The catalog is far better protected than the transaction.
+9. **`products.vendor` is free text**, parallel to the real `vendors`/`product_supplier_links` truth — a second, unvalidated vendor source that has already needed typo-merge migrations.
+
+## 4. Recommended plan
+
+**Phase A — turn on what's built (biggest payoff, mostly process not code):**
+1. Run the first real **pricing workbook cycle**: export the full catalog, review the 131 sub-10% tier-1 SKUs and the 35 no-cost/no-price stragglers, apply through the governed preview. This also seeds `cost_history` and `cost_updated_date` going forward.
+2. **Scale the supplier-pricing pipeline past the Wells canary**: pick the top 2–3 vendors by spend, run the quote-sheet export → vendor fills → import → approve loop, and expand the `product_cost_basis` rollout gate vendor-by-vendor until `supplier_cost_basis_enabled` can flip on. Target: every A-mover SKU has ≥1 current supplier observation before spring season.
+3. **Write the pricing strategy doc** (one page, Mason decides): target gross margin by category/tier, floor margin, tier formula, and a refresh cadence (e.g., monthly workbook cycle + event-driven vendor sheet imports). Today 209 distinct tier-1 markups exist with no stated policy.
+
+**Phase B — fix the margin-corrupting defects (small, high value):**
+4. Returns-COGS fix (already recommended "yes, soon" in the inventory-costing plan) and the partial-delivery cost correction.
+5. Resolve the margin/markup column swap (investigate → data fix or rename + report audit).
+6. Point margin reports at `cost_at_time_cents` and move `Reports.tsx`/`SalesReports.tsx` margin math server-side so all four report surfaces agree.
+
+**Phase C — guardrails and depth (after A/B):**
+7. Below-cost / below-floor sale confirmation (a `ConfirmModal` + reason, or office approval) instead of a color hint.
+8. Snapshot quote cost at quote time (like invoices already do) so accepted-quote margins are stable.
+9. Longer-term: inventory cost layers (average or FIFO) for true COGS, `vendor_id` FK on products (or retire the text column in favor of links), and price-position analytics (margin by vendor, cost-trend per SKU from observations).
+
+## 5. Ideas surfaced for brainstorm (not commitments)
+
+- **Vendor sheet ingestion at scale**: the OCR path was deliberately retired; the durable version is the structured quote-sheet .xlsx per vendor (already built). A per-vendor "standing sheet" emailed quarterly + a staleness dashboard ("SKUs with no observation < 90 days") makes 600 SKUs maintainable by one person in an afternoon per month.
+- **Cost-staleness alerting**: a simple report/RPC listing products whose active cost basis or observation is older than N days, ranked by sales velocity — refresh effort goes where the money moves.
+- **Margin-floor by category** instead of one global number (commodity glyphosate vs. specialty biologicals earn very different margins).
+- **Multi-vendor cost comparison view**: once observations exist for 2+ vendors per SKU, a "best current cost vs. selected basis" screen turns the pipeline into a negotiating tool.
+- **What-if repricing** (already a VISION item G12): workbook preview already computes old→new margins; a percent-uplift or target-margin batch fill on top of the existing export is a small step.
+
+## Proof observed
+
+- Live queries: product/vendor counts, cost/price null and staleness counts, cost-basis and observation adoption, margin distribution recomputed from price/cost, invoice-line snapshot coverage, margin-column swap sample.
+- Source: pricing trigger chain, guard trigger, receive-path history, workbook/change-set RPC surface, sale-time snapshot paths, report cost sources (file:line citations throughout).
+
+**Recommended next step:** run one real pricing-workbook cycle on the live catalog (Phase A step 1) — it exercises the built machinery end-to-end, fixes the stragglers, and starts the history clock, all with zero new code.
