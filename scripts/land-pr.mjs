@@ -110,6 +110,12 @@ function updateBranch() {
 let riskiness = null; // classified lazily, re-checked never (diff won't change under us except via update-branch merge commits, which add no new files)
 const deadline = Date.now() + timeoutMins * 60_000;
 let lastLine = "";
+// GitHub's mergeStateStatus is recomputed asynchronously: for a minute or two
+// after a push it can report a STALE value (observed 2026-08-08 on PR #347 —
+// DIRTY reported right after the conflict-resolution push landed, flipping to
+// BLOCKED on the next poll). Require 3 consecutive DIRTY reads before treating
+// the conflict as real.
+let dirtyStreak = 0;
 
 for (;;) {
   const pr = view();
@@ -129,10 +135,15 @@ for (;;) {
   const line = `state=${state} mergeState=${mss} checks=${ok}/${total} ok, ${pending} pending, ${failed} failed, autoMerge=${armed ? "armed" : "OFF"}`;
   if (line !== lastLine) { console.log(`[land-pr] ${line}`); lastLine = line; }
 
+  if (mss !== "DIRTY") dirtyStreak = 0;
   if (mss === "BEHIND") updateBranch();
   else if (mss === "DIRTY") {
-    console.error(`[land-pr] PR #${prNumber} has merge conflicts with main (mergeStateStatus=DIRTY). Resolve them on the branch, then re-run.`);
-    process.exit(1);
+    dirtyStreak += 1;
+    if (dirtyStreak >= 3 || once) {
+      console.error(`[land-pr] PR #${prNumber} has merge conflicts with main (mergeStateStatus=DIRTY on ${dirtyStreak} consecutive poll(s)). Resolve them on the branch, then re-run.`);
+      process.exit(1);
+    }
+    console.log(`[land-pr] DIRTY reported (${dirtyStreak}/3) — may be a stale post-push recompute; confirming before giving up.`);
   } else if (failed > 0 && pending === 0) {
     console.error(`[land-pr] ${failed} check(s) FAILED — fix and push, then re-run. ${pr.url || ""}`.trim());
     process.exit(1);
