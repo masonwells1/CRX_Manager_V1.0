@@ -2,6 +2,37 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Forward migrations for the 2026-08-08 audit findings (written, NOT applied)
+
+Wrote the forward migrations for the audit's decided findings. **None has been applied to live** — no
+database backup exists (Supabase Free, no PITR) and the Codex CLI is unavailable in the cloud
+container, so the exact-SHA `gpt-5.6-sol` adversarial gate that risky money/RLS diffs require could
+not be run. Both gates are unmet by environment, not by choice.
+
+- `20260808150100` restores the `batch_apply_prepayments` actor guard. It delegates to
+  `_batch_apply_prepayments_impl` but **keeps `is_admin()` in the wrapper** — live inspection showed
+  `_impl` carries no authorization of its own, so delegating the admin check as the handoff
+  originally suggested would have silently dropped the admin gate.
+- `20260808150200` zeroes `order_items.quantity_remaining` on full cancel. **Scope correction to the
+  audit:** full cancel ALREADY releases prebooked stock and writes its `released` ledger row
+  (verified live on ORD-2026-0330, which has that row). The `partially_fulfilled` path already
+  handled both halves. Only `quantity_remaining` was genuinely stranded, so that is all this changes.
+  The residual `quantity_prebooked = 36` is March 2026 drift (audit L2), not a cancel_order defect.
+- `20260808150300` revokes `TRUNCATE` on `inventory` from `authenticated` (RLS does not constrain
+  TRUNCATE) and comments `payments` as a dead legacy table.
+- `20260808150400` installs a canonical whole-cents rounding trigger on `order_items.total_price`
+  and `commissions.commission_amount`. A trigger rather than editing writers: 9 and 11 live
+  functions respectively assign those columns, and a trigger also covers frontend and future
+  writers. Forward-looking only — the repair of the 49 existing fractional rows (including the
+  $5,245.195 pending payout) restates live money and is left commented out pending separate approval.
+- `scripts/db-invariant-sweeps/predicates/fin-money-whole-cents.sql` is the standing-data half of
+  that rule. It will report the 49 rows until they are repaired; that is intended, not a defect.
+- `.claude/hooks/migration-ordering-lib.mjs` is the out-of-order replay guard — the durable
+  prevention for the §2 finding. **It is NOT wired into `migration-apply-guard.mjs`**: that edit was
+  declined. Wiring it is one import plus one check, and it remains the highest-value follow-up.
+
+Migration reviewer subagents were NOT dispatched, since nothing is being applied from here.
+
 ## 2026-08-08 — 2026-08-08 foundation ultra review (cloud, unattended):…
 
 2026-08-08 foundation ultra review (cloud, unattended): SOLID-WITH-FOLLOWUPS, zero blockers, zero surviving HIGH. Recorded Mason's four owner decisions. Four forward migrations parked, unwritten.
