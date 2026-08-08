@@ -209,6 +209,30 @@ Coverage: the three round-26 redirect cases still refuse (the local `pushInstead
 
 Also fixed alongside it: the suite itself read the host's global git config instead of pinning its own, so the ambient rewrites failed it — and since the pre-commit hook runs that suite, it blocked every commit from a web session. It now pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to an empty file and strips inherited `GIT_CONFIG_*` at startup, so it tests the script rather than the machine.
 
+## OPEN — the migration ordering guard cannot see applies from another checkout
+
+**Found 2026-08-08 (Codex P1, PR #354).** The guard decides whether a migration
+is out of order by reading a snapshot file of the applied ledger,
+`.claude/session-state/applied-migrations.json`. PR #354 made an *apply*
+invalidate that snapshot instead of trusting a 24-hour clock, which closes the
+single-session hole that caused the 2026-07-15 revert.
+
+It does not close the concurrent case. The invalidation hook deletes the file in
+the checkout it runs in. A second worktree, another machine, or an apply made
+outside this tooling leaves that checkout's snapshot intact — stale, but
+"fresh" by every check the guard has. Given Mason runs concurrent sessions, this
+is a real shape, not a theoretical one.
+
+**The sound fix** is for the guard to query the live ledger at apply time rather
+than read a cached file. That means giving a hook database access it currently
+does not have, so it is a real design change and was not bolted on mid-review.
+
+**Context on how much this matters:** the guard is defence in depth, not the
+enforcement point — Supabase's own ledger rejects a genuinely out-of-order
+apply. What it uniquely catches is an OLDER migration file re-submitted under a
+NEWER version, which lands as a "forward" apply and silently reverts whatever
+the newer one had fixed. That is exactly what happened on 2026-07-15.
+
 ## OPEN — order header profit can still differ a cent from the sum of its own lines
 
 **Found 2026-08-08 (Codex P2, PR #354). Not a regression — it predates the
