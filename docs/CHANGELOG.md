@@ -127,6 +127,27 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+## 2026-08-08 — idempotency-body-check round-17: comments are separators
+
+Codex H1 against round 16, and the same root cause as round 15 in a different place: matching RAW
+text where the file already has a lexer. PostgreSQL allows a comment anywhere whitespace is allowed,
+including between a function's name and its parameter list —
+
+    CREATE FUNCTION public.f /* legal comment */ ( p_idempotency_key text DEFAULT NULL )
+
+`CREATE_FN_HEAD_RE` ran against the raw literal, so that did not look like a header. The literal was
+classified as data, never lexed, and an unwired invoice-mutating RPC was allowed. Codex verified it
+against the base: base denied, candidate allowed.
+
+Fixed with `blankComments()` — a comment-only, length-preserving blanker that leaves string literals
+alone. Deliberately NOT `maskSqlNoise()`: that function calls `carriesFnHeader()`, so reusing it
+would recurse forever. The header test now accepts a match on either the raw or the comment-blanked
+text; blanking can only remove text, and keeping the raw test stops a comment marker living inside a
+string from blanking a real header away.
+
+86 assertions. Five new probes (block comment, line comment, dollar-quoted, every separator position,
+nested); both the comment-aware match and the nesting depth are individually mutation-killed.
+
 ## 2026-08-08 — idempotency-body-check round-16: a header is not a definition
 
 Codex HIGH against round 15. The fail-closed rule handed the statement to the normal scan as soon as

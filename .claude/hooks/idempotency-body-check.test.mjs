@@ -670,4 +670,27 @@ r = runHook(`DO $do$ BEGIN
 END $do$;`);
 ok(isDeny(r), "a comment fragment between AS and the body does not reopen the gap");
 
+// --- Round 17: comments as separators in the header (Codex H1 on round 16) --
+// PostgreSQL allows a comment anywhere whitespace is allowed, including between
+// the function name and its parameter list. The header regex ran on the RAW
+// literal, so `public.f /* legal */ (` did not look like a header, the literal
+// was classified as data and never lexed, and the unwired body sailed through.
+const UNWIRED_CMT_BODY =
+  "RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;";
+
+r = runHook(`DO $do$ BEGIN\n  EXECUTE 'CREATE FUNCTION public.f17 /* legal comment */ (p_idempotency_key text DEFAULT NULL) ${UNWIRED_CMT_BODY}';\nEND $do$;`);
+ok(isDeny(r), "a block comment between the function name and ( does not hide the header");
+
+r = runHook(`DO $do$ BEGIN\n  EXECUTE 'CREATE FUNCTION public.f17b -- legal comment\n(p_idempotency_key text DEFAULT NULL) ${UNWIRED_CMT_BODY}';\nEND $do$;`);
+ok(isDeny(r), "a line comment between the function name and ( does not hide the header");
+
+r = runHook(`DO $do$ BEGIN\n  EXECUTE $q$CREATE FUNCTION public.f17c /* legal */ (p_idempotency_key text DEFAULT NULL) ${UNWIRED_CMT_BODY}$q$;\nEND $do$;`);
+ok(isDeny(r), "the same comment trick inside a dollar-quoted literal is caught too");
+
+r = runHook(`DO $do$ BEGIN\n  EXECUTE 'CREATE /* c1 */ OR REPLACE FUNCTION /* c2 */ public.f17d /* c3 */ (p_idempotency_key text DEFAULT NULL) ${UNWIRED_CMT_BODY}';\nEND $do$;`);
+ok(isDeny(r), "comments at every separator position in the header are all seen through");
+
+r = runHook(`DO $do$ BEGIN\n  EXECUTE 'CREATE FUNCTION public.f17e /* outer /* inner */ still open */ (p_idempotency_key text DEFAULT NULL) ${UNWIRED_CMT_BODY}';\nEND $do$;`);
+ok(isDeny(r), "a NESTED comment in the header position is blanked to the right depth");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

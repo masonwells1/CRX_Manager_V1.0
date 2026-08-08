@@ -255,8 +255,50 @@ const CREATE_FN_HEAD_RE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+[\w."]+\s*\(/
  * offering another spelling (`%1$10s`, a dollar-quoted template, a CASE arm,
  * fragments). The guard no longer tries to win that argument — see
  * `checkDynamicDdl`. */
+/** Blank SQL comments to spaces, length-preservingly, WITHOUT touching string
+ * literals. This is deliberately not `maskSqlNoise()`: that function calls
+ * `carriesFnHeader()`, so reusing it here would recurse forever. Block comments
+ * nest, same as everywhere else in this file. */
+function blankComments(s) {
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "-" && s[i + 1] === "-") {
+      const nl = s.indexOf("\n", i + 2);
+      const stop = nl === -1 ? s.length : nl;
+      out += " ".repeat(stop - i);
+      i = stop;
+      continue;
+    }
+    if (s[i] === "/" && s[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < s.length && depth > 0) {
+        if (s[j] === "/" && s[j + 1] === "*") { depth++; j += 2; continue; }
+        if (s[j] === "*" && s[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      out += " ".repeat(j - i);
+      i = j;
+      continue;
+    }
+    out += s[i];
+    i++;
+  }
+  return out;
+}
+
 function carriesFnHeader(payload) {
-  return CREATE_FN_HEAD_RE.test(payload);
+  // PostgreSQL allows comments wherever whitespace is allowed, including
+  // between the function name and its parameter list:
+  //   CREATE FUNCTION public.f /* legal */ ( p_idempotency_key text ...
+  // Matching the RAW text missed that, so the literal was classified as data,
+  // never lexed, and an unwired invoice-mutating RPC was allowed (Codex H1,
+  // round 17). Test both spellings and take either: blanking comments can only
+  // ever remove text, and testing raw as well keeps a comment marker that lives
+  // INSIDE a string from blanking a real header away.
+  return CREATE_FN_HEAD_RE.test(payload) ||
+    CREATE_FN_HEAD_RE.test(blankComments(payload));
 }
 
 function maskSqlNoise(text) {
