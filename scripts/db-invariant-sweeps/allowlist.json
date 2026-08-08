@@ -365,6 +365,138 @@
       "violation_key": "process_offline_action(p_client_action_id uuid, p_idempotency_key text)",
       "justification": "Intentionally callable by any active authenticated field actor for that actor's own permanent offline receipt. Live body verified 2026-07-14: binds v_actor from auth.uid(), requires an active profile, row-locks the receipt, rejects actor_id mismatch with ACTOR_MISMATCH, binds the exact receipt idempotency key, and delegates only to complete_delivery/complete_job, whose canonical authorization remains authoritative. It cannot process another user's receipt or bypass the underlying business-role checks.",
       "dated": "2026-07-14"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:0c4bcdad-44c7-46b9-934b-936886abeee7:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Miravis Top - 2.5 Gal, ordered 137 / received 180 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:10db94bc-a366-4ae7-a8bf-fb7f65b241ea:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Miravis Neo - 2.5 Gal, ordered 42 / received 42.5 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:1665c92d-978a-4ae0-9f88-7045d79bcf01:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Anthem Maxx - 2.5 Gal, ordered 47 / received 47.5 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:2ae6f96a-73eb-458d-8ca6-1efa53f4f36b:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0028 — Roundup 5.4# Generic - Bulk, ordered 530 / received 540 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:3f1225d6-ffa6-4f4d-9774-1fbcc79dbdd5:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0009 — Zidua SC - 2.5 Gal, ordered 227 / received 227.5 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:579c5f2d-f1ef-4b03-9499-3f40057f02da:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Roundup 5.4# Generic - Bulk, ordered 2965 / received 3020 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:5f7bf266-d4b6-4ef8-af73-ab96b97345a1:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — NIS 90 - 2.5 Gal, ordered 437 / received 437.5 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:69947979-82fa-4d26-8cff-b84bdee559aa:fully_received_incomplete",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Effect-GC - 1 Qt, ordered 30 / received 0 (fully_received_incomplete). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:6d56e23e-2a27-4784-89ae-080b63b1c225:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Gen Valor EZ - 2.5 Gal, ordered 92 / received 92.5 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:7a8db11d-7d10-4437-a3fc-48e166459e35:fully_received_incomplete",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Endigo ZCX - 1 Gal, ordered 17 / received 0 (fully_received_incomplete). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:a261e391-778e-40a6-8f7b-db82296e1c3d:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Gen Liberty - Bulk, ordered 3643 / received 4082 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:b749e271-1f03-46f7-959d-035b3a7c2d04:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — COC XL - 2.5 Gal, ordered 287 / received 287.5 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:bc679327-9dc6-45fe-b577-5a1412e58305:fully_received_incomplete",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Gen Dual S Moc, ordered 670 / received 140 (fully_received_incomplete). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:be5e3c12-a690-42f3-a9d2-ec291038ecc8:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0012 — MSO XL - 2.5 Gal, ordered 180 / received 235 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:bf1656b9-b707-4b3f-97dd-c88e0b8df26c:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Ammonium Sulfate - 51# Bag, ordered 60537 / received 73450 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:c2c84608-2776-4239-ab9b-1951a4c17246:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0009 — Trivapro - 2.5 Gal, ordered 97 / received 97.5 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:cba30e24-acad-49c0-92ba-03bbefbd80cf:fully_received_incomplete",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Lucento - 2.5 Gal, ordered 45 / received 0 (fully_received_incomplete). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:ced60a8d-4417-4416-9283-f6168b181a80:fully_received_incomplete",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Gen Liberty Higher Quality - Bulk, ordered 530 / received 0 (fully_received_incomplete). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:db264a75-22d0-408e-b60e-e15c5a27366d:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Gen Select 2LB - 2.5 Gal, ordered 422 / received 474.5 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:db89ee92-9fd5-4125-a9e5-39833f9364b9:over_receipt",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0012 — Gen Warrior 1LB - 1 Gal, ordered 50 / received 65 (over_receipt). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:ddd87f6f-cc43-419e-8d9d-812e1f0c155e:fully_received_incomplete",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — MagnifySi - 2.5 Gal, ordered 131.89 / received 0 (fully_received_incomplete). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
+    },
+    {
+      "predicate": "fin-po-receipt-identity",
+      "violation_key": "po_item:e81c9c15-e1fb-4093-8e91-79cd161c8e21:fully_received_incomplete",
+      "justification": "Owner accept-and-baseline (Mason, in-chat 2026-08-07): March-2026 import-era data on PO-2026-0008 — Gen Callisto High Quality - 1 Gal, ordered 126 / received 0 (fully_received_incomplete). Verified live 2026-08-07; pre-existing data condition from the initial import, commercially settled, not a code-path defect. Any NEW violation on a different key still fails the sweep.",
+      "dated": "2026-08-07"
     }
   ]
 }
