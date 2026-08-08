@@ -15,6 +15,24 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+## 2026-08-08 — idempotency-body-check round-10: dynamic-DDL fail-open + data-literal false-deny — FIXED
+
+Two Codex P2 findings landed on PR #335 after it merged, both now closed.
+(1) **Fail-open.** Round 9 only recognised dynamic DDL whose literal sat
+DIRECTLY after `EXECUTE` or `EXECUTE format(`, so `EXECUTE ('CREATE …')` and the
+non-first argument of `EXECUTE format('%s', 'CREATE …')` stayed opaque data — an
+unwired dynamically created RPC was invisible. The lexer now treats any literal
+inside an `EXECUTE` statement (statement-scoped, since the last `;`) as dynamic
+SQL. (2) **False-deny.** The content trigger recursed into any dollar-quoted
+payload merely MENTIONING "CREATE FUNCTION", so a prose literal with one
+apostrophe (`can't`) read as an unterminated string and denied the whole
+migration; the trigger now also requires `p_idempotency_key` — the only payloads
+this guard can act on — and a payload we chose to recurse into but cannot lex is
+masked opaque rather than failing the file closed. Top-level fail-closed
+behavior on genuinely unterminated SQL is unchanged. 12 new regression
+assertions (55 total); each of the four new guards was mutation-tested — reverted
+individually, every one turns the suite red.
+
 ## 2026-08-08 — `scripts/land-pr.mjs`: PRs can no longer stall on BEHIND
 
 New landing helper closing the gap that stalled PR #345 overnight: GitHub branch protection requires the PR branch to be up to date with `main`, so a sibling merge flips a fully green PR to `mergeStateStatus=BEHIND` and armed auto-merge never fires — and our watchers only polled checks, not state. `node scripts/land-pr.mjs <n>` watches state, runs `gh pr update-branch` whenever the PR falls behind (re-running if main moves again mid-wait), and exits 0 only on MERGED. It deliberately never merges anything itself — merging stays with the hook-gated `gh pr merge`, so no new bypass path exists; for risky diffs it waits until green/current, then prints the proof-and-merge steps. Proven live: reported `MERGED c65b431d` for PR #345, and detected + un-stuck Dependabot PR #341 (green, 8/8 checks, BEHIND) on its first real pass. Wired into `/ship` Step 8 and `docs/reference/agent-guardrails.md`. Hardened during its own landing (PR #347): GitHub recomputes mergeStateStatus asynchronously and briefly reported a stale DIRTY right after a push, so the script now requires 3 consecutive DIRTY polls before declaring a real conflict.
