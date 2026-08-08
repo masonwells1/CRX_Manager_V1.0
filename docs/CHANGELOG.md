@@ -127,6 +127,19 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+## 2026-08-08 — idempotency-body-check round-15: nested block comments
+
+Codex HIGH against round 14, and a real regression rather than another carve-out.
+`firstTopLevelSemicolon()` — the round-13 helper that finds where a statement ends — stopped at the
+first `*/`. PostgreSQL block comments nest, so with `/* outer /* inner */ still open ; */` the scanner
+was still inside the comment, read the `;` as the end of the statement, and missed the `INTO`
+assignment after it. The dynamic DDL then looked like inert data and an unwired invoice-mutating RPC
+was allowed through. Codex demonstrated it: denied on the base snapshot, allowed on the candidate.
+
+The cause was writing a second comment scanner by hand when `maskSqlNoise()` already tracks nesting
+correctly. Fixed by counting depth the same way. 78 assertions; the new nested-comment probe is
+mutation-killed (reverting to the naive scan fails exactly that assertion).
+
 ## 2026-08-08 — idempotency-body-check round-14: fail-closed redesign (Mason's call)
 
 Rounds 10–13 all failed the same way. Each one asked, literal by literal, "is this text code or is it

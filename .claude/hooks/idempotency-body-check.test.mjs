@@ -628,4 +628,17 @@ ok(isDeny(r), "a literal in a CASE arm is not treated as a preceding format() ca
 r = runHook(`INSERT INTO docs (body) VALUES ('CREATE OR REPLACE ' || 'FUNCTION public.example(p_idempotency_key text)');`);
 ok(!isDeny(r), "fragments spelling a header in a plain INSERT are data, and stay allowed");
 
+// --- Round 15: nested block comments (Codex HIGH on round 14) --------------
+// PostgreSQL block comments nest. The statement-end scanner stopped at the
+// FIRST `*/`, so a `;` inside the still-open outer comment looked like the end
+// of the statement and hid the `INTO` that follows. The literal was then read
+// as inert data, and an unwired invoice-mutating RPC was allowed through.
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  SELECT $ddl$${UNWIRED_DDL_R13}$ddl$ /* outer /* inner */ still open ; */ INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "a semicolon inside a NESTED block comment does not hide the INTO assignment");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

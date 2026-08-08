@@ -188,9 +188,21 @@ function firstTopLevelSemicolon(text, from) {
       continue;
     }
     if (ch === "/" && text[i + 1] === "*") {
-      const close = text.indexOf("*/", i + 2);
-      if (close === -1) return -1;
-      i = close + 2;
+      // PostgreSQL block comments NEST. Stopping at the first `*/` left us
+      // scanning inside a still-open comment, so a `;` in there looked like a
+      // statement end and hid the `INTO` assignment that follows — the guard
+      // then read a dynamic-DDL statement as inert data and allowed an unwired
+      // mutating RPC through (Codex HIGH, round 14). Count depth, as the masker
+      // at maskSqlNoise() already does.
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { depth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      if (depth > 0) return -1;
+      i = j;
       continue;
     }
     if (ch === "'" || ch === '"') {
