@@ -2,6 +2,17 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — 2026-08-08 foundation ultra review (cloud, unattended):…
+
+2026-08-08 foundation ultra review (cloud, unattended): SOLID-WITH-FOLLOWUPS, zero blockers, zero surviving HIGH. Recorded Mason's four owner decisions. Four forward migrations parked, unwritten.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `51582137 chore: commit auto-added local permission entry`
+  - `c6c45fb5 docs: record Mason's four foundation-ultra-review owner decisions`
+  - `f5811338 audit: 2026-08-08 foundation ultra review + bucket-1 doc/test fixes`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-07 — Both parked migrations APPLIED LIVE + CRM fact cutover
 
 Owner-approved apply session. Both parked migrations went through the full gate
