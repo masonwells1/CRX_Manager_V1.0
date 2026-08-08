@@ -365,4 +365,17 @@ END;
 $do$;`);
 ok(isDeny(r), "unwired CREATE FUNCTION inside EXECUTE format() dollar-quoted DDL is still scanned and blocked");
 
+// ── Codex P2 round 9: dynamic DDL in ORDINARY string form — EXECUTE 'CREATE
+//    FUNCTION...' never reached the dollar-payload carve-out, so the header
+//    stayed masked and an unwired dynamically created RPC slipped through ─────
+r = runHook(`DO $do$ BEGIN
+  EXECUTE 'CREATE OR REPLACE FUNCTION public.dyn_sq(p_customer uuid, p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0 WHERE customer_id = p_customer; END $fn$;';
+END $do$;`);
+ok(isDeny(r), "unwired CREATE FUNCTION inside EXECUTE '...' single-quoted DDL is still scanned and blocked");
+
+// EXECUTE of dynamic non-DDL stays allowed — recursion must not turn ordinary
+// dynamic SQL into a false positive
+r = runHook(`DO $do$ BEGIN EXECUTE 'UPDATE settings SET v = 1'; END $do$;`);
+ok(!isDeny(r), "EXECUTE of single-quoted dynamic SQL without a CREATE FUNCTION stays allowed");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

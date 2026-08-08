@@ -60,6 +60,14 @@ unwired dynamically created RPC (fail-open). Payloads now recurse when
 EXECUTE-adjacent or when they themselves contain a CREATE FUNCTION header
 (covers `EXECUTE format($fmt$…$fmt$, …)`). Proven red on the prior commit;
 regression tests for both dynamic-DDL shapes.
+Round 9 (Codex): the same dynamic-DDL hole in ordinary string form —
+`EXECUTE 'CREATE OR REPLACE FUNCTION …'` never reaches the dollar-payload
+carve-out, so the header stayed masked and an unwired dynamically created
+RPC slipped through (fail-open). Single-quoted strings now recurse when
+EXECUTE-adjacent (incl. `EXECUTE format('…')`); all other strings stay
+opaque data, so the round-6 false positive on literals that merely mention
+"CREATE FUNCTION" stays fixed. Proven red on the prior commit; deny and
+allow regression tests added (43 assertions).
 
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 

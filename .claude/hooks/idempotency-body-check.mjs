@@ -203,7 +203,22 @@ function maskSqlNoise(text) {
     if (ch === "'" || ch === '"') {
       const end = scanQuoted(text, i);
       if (end === -1) return null;
-      out += ch + " ".repeat(end - i - 2) + ch;
+      // EXECUTE 'CREATE OR REPLACE FUNCTION ...' is dynamic DDL in ordinary
+      // string form and never reaches the dollar-payload carve-out above, so
+      // an unwired RPC created that way was invisible (Codex P2 round 9).
+      // Recurse into EXECUTE-adjacent strings (incl. EXECUTE format('...'))
+      // so the header stays visible; all other strings stay opaque data —
+      // recursing on content would re-open the round-6 false positive on
+      // literals that merely mention "CREATE FUNCTION".
+      const isDynamicSql = ch === "'" && /\bEXECUTE\s+(?:format\s*\(\s*)?E?$/i.test(out);
+      if (isDynamicSql) {
+        const payload = text.slice(i + 1, end - 1);
+        const inner = maskSqlNoise(payload);
+        if (inner === null) return null;
+        out += ch + inner + ch;
+      } else {
+        out += ch + " ".repeat(end - i - 2) + ch;
+      }
       i = end;
       continue;
     }
