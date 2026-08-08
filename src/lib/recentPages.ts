@@ -68,10 +68,12 @@ const REDIRECT_DEDUPE_MS = 5000;
 
 export interface RecordPageVisitOptions {
   /**
-   * True when this pathname was committed by a REPLACE navigation (a
-   * `<Navigate replace>` redirect alias), not a user click. Only then may a
-   * same-key visit within the dedupe window be skipped — a genuine PUSH visit
-   * to a sibling page sharing the canonical key always counts.
+   * True when this pathname was committed by a REPLACE navigation (a redirect,
+   * not a user click). Within the dedupe window a redirect never adds a second
+   * count for one click: same canonical key → skip; different key (e.g.
+   * /invoices/:id REPLACE-navigating to /field-invoices/:id) → the previous
+   * pathname's count moves to the destination key. A genuine PUSH visit to a
+   * sibling page sharing the canonical key always counts.
    */
   isRedirect?: boolean;
 }
@@ -89,13 +91,27 @@ export function recordPageVisit(path: string, title: string, options?: RecordPag
   }
   try {
     const key = getVisitCountKey(path);
-    const isRedirectDuplicate =
-      previous !== undefined &&
-      (options?.isRedirect === true || previous.path === path) &&
-      getVisitCountKey(previous.path) === key &&
-      Date.now() - previous.timestamp < REDIRECT_DEDUPE_MS;
-    if (!isRedirectDuplicate) {
+    const previousKey = previous !== undefined ? getVisitCountKey(previous.path) : undefined;
+    const withinWindow =
+      previous !== undefined && Date.now() - previous.timestamp < REDIRECT_DEDUPE_MS;
+    // Skip: an effect re-fire of the same pathname, or a redirect landing on
+    // the same canonical key — either way the count is already right.
+    const alreadyCounted =
+      withinWindow &&
+      (previous!.path === path || (options?.isRedirect === true && previousKey === key));
+    if (!alreadyCounted) {
       const counts = getVisitCounts();
+      // A redirect that CHANGES page keys (e.g. /invoices/:id REPLACE-navigating
+      // to /field-invoices/:id) means the previous pathname was transient — move
+      // its count to where the user actually landed instead of counting both.
+      if (options?.isRedirect === true && withinWindow && previousKey !== undefined) {
+        const prevCount = counts[previousKey] || 0;
+        if (prevCount <= 1) {
+          delete counts[previousKey];
+        } else {
+          counts[previousKey] = prevCount - 1;
+        }
+      }
       counts[key] = (counts[key] || 0) + 1;
       localStorage.setItem(COUNT_KEY, JSON.stringify(counts));
       window.dispatchEvent(new Event(VISIT_COUNTS_CHANGED_EVENT));

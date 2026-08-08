@@ -186,6 +186,17 @@ describe('recordPageVisit', () => {
     expect(counts[getVisitCountKey('/field-invoices')]).toBe(2);
   });
 
+  it('moves the count to the destination when a redirect changes page keys', () => {
+    // Opening a field invoice from a generic invoice link hits /invoices/:id,
+    // which REPLACE-navigates to /field-invoices/:id. One click must credit
+    // only Field Invoices — not also Chemical Invoices.
+    recordPageVisit('/invoices/abc-123', 'Invoice');
+    recordPageVisit('/field-invoices/abc-123', 'Field Invoice', { isRedirect: true });
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    expect(counts[getVisitCountKey('/invoices/abc-123')]).toBeUndefined();
+    expect(counts[getVisitCountKey('/field-invoices/abc-123')]).toBe(1);
+  });
+
   it('does not double-count an effect re-fire on the same pathname', () => {
     recordPageVisit('/orders', 'Orders');
     recordPageVisit('/orders', 'Orders Updated Title');
