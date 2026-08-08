@@ -139,6 +139,15 @@ Both verified against current source this session; both survive items 1 and 5.
   the exemption to demonstrably synthetic targets (an e2e-prefixed row/tenant
   predicate), and make it per-statement rather than per-batch so a mixed batch
   cannot smuggle a real mutation alongside a test one.
+- **`SELECT … INTO` creates a persistent table without hitting the DDL matcher.**
+  `SELECT * INTO public.guard_bypass FROM public.profiles` returns
+  `{block: false}` — verified — while the exactly equivalent
+  `CREATE TABLE public.guard_bypass2 AS SELECT * FROM public.profiles` is
+  correctly blocked as `raw-ddl`. `DDL_STMT_RE` recognizes only
+  CREATE/ALTER/DROP, and the SELECT path only inspects function calls. Add
+  `SELECT … INTO` (and the `CREATE TABLE … AS` sibling spelling, already covered)
+  to the DDL matcher with a regression test. This one also exfiltrates: it
+  copies a whole table's rows into an unguarded new one.
 
 ## Context that carries over
 
