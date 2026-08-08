@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import CommandPalette from './CommandPalette';
-import { recordPageVisit } from '../../lib/recentPages';
+import { recordPageVisit, getVisitCountKey } from '../../lib/recentPages';
 
 const mockNavigate = vi.fn();
 
@@ -149,5 +149,58 @@ describe('recordPageVisit', () => {
     }
     const stored = JSON.parse(localStorage.getItem('crx-recent-pages') || '[]');
     expect(stored).toHaveLength(20);
+  });
+
+  it('credits reused field-app editor routes to Field Invoices, not Chemical Invoices', () => {
+    recordPageVisit('/invoices/field-app/new', 'Field Invoice');
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    // Must land on the same key the sidebar uses for its /field-invoices entry
+    expect(counts[getVisitCountKey('/field-invoices')]).toBe(1);
+    expect(counts[getVisitCountKey('/invoices')]).toBeUndefined();
+  });
+
+  it('keys nested nav paths the same way the sidebar looks them up', () => {
+    recordPageVisit('/split-billing/new', 'Split Billing');
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    // The nested route must normalize to the workspace root's key
+    expect(getVisitCountKey('/split-billing/new')).toBe(getVisitCountKey('/split-billing'));
+    expect(counts[getVisitCountKey('/split-billing')]).toBe(1);
+  });
+
+  it('counts a redirect alias pair as one visit, not two', () => {
+    // /field-invoices/unbilled immediately <Navigate replace>s to
+    // /field-invoices?tab=…, committing two pathnames for one user click.
+    // The REPLACE-committed second pathname must not count again.
+    recordPageVisit('/field-invoices/unbilled', 'Unbilled Field Invoices');
+    recordPageVisit('/field-invoices', 'Field Invoices', { isRedirect: true });
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    expect(counts[getVisitCountKey('/field-invoices')]).toBe(1);
+  });
+
+  it('counts quick same-key visits from real navigations to different pages', () => {
+    // Two distinct pages sharing one canonical key, visited back-to-back by
+    // user clicks (no redirect flag) — both are genuine visits.
+    recordPageVisit('/invoices/field-app/new', 'Field Invoice');
+    recordPageVisit('/field-invoices', 'Field Invoices');
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    expect(counts[getVisitCountKey('/field-invoices')]).toBe(2);
+  });
+
+  it('moves the count to the destination when a redirect changes page keys', () => {
+    // Opening a field invoice from a generic invoice link hits /invoices/:id,
+    // which REPLACE-navigates to /field-invoices/:id. One click must credit
+    // only Field Invoices — not also Chemical Invoices.
+    recordPageVisit('/invoices/abc-123', 'Invoice');
+    recordPageVisit('/field-invoices/abc-123', 'Field Invoice', { isRedirect: true });
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    expect(counts[getVisitCountKey('/invoices/abc-123')]).toBeUndefined();
+    expect(counts[getVisitCountKey('/field-invoices/abc-123')]).toBe(1);
+  });
+
+  it('does not double-count an effect re-fire on the same pathname', () => {
+    recordPageVisit('/orders', 'Orders');
+    recordPageVisit('/orders', 'Orders Updated Title');
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    expect(counts[getVisitCountKey('/orders')]).toBe(1);
   });
 });
