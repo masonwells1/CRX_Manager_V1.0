@@ -1093,7 +1093,11 @@ export default function QuoteBuilder() {
       // catalog cost when the line has none yet. Product add/change sets
       // current_cost from the catalog, so a new or swapped product still
       // refreshes — but recalcs no longer drift a saved line's cost.
-      const currentCost = item.current_cost || product.current_cost || 0;
+      // ?? not ||: a zero snapshot is a real cost, not a missing one. Treating it
+      // as absent would swap in today's catalog cost, so the page would show a
+      // different profit than save_quote stores and could raise a false
+      // below-cost approval prompt.
+      const currentCost = item.current_cost ?? product.current_cost ?? 0;
 
       if (item.calc_mode === 'units_direct') {
         // User entered total_units_needed directly — skip rate×acres computation
@@ -1222,6 +1226,12 @@ export default function QuoteBuilder() {
             if (item._key !== itemKey) return item;
             const updated: LocalItem = {
               ...item,
+              // Swapping the product makes this a different quoted line. save_quote
+              // only reuses an echoed id when the prior row's product_id still
+              // matches, so keeping the old id here would leave the page holding a
+              // dead id and re-stamp cost_at_quote_cents on every later save. Drop
+              // it so the line is saved as new.
+              id: undefined,
               product_id: product.id,
               product,
               notes: preferredQuoteNotes(product),

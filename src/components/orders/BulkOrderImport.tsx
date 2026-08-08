@@ -11,6 +11,7 @@ import { Sentry } from '../../lib/sentry';
 import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
 import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
+import BelowCostConfirmModal, { type BelowCostLine } from '../ui/BelowCostConfirmModal';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -93,6 +94,11 @@ export default function BulkOrderImport({
     failed: number;
     failures: OrderImportFailure[];
   } | null>(null);
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
+  const isFieldStaff = profile?.role === 'driver' || profile?.role === 'applicator';
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -395,6 +401,41 @@ export default function BulkOrderImport({
     }
     const productCatalog = productResult.data || [];
 
+    // Below-cost guardrail (non-field-staff only): the bulk path must not be a
+    // way around the reason the single-order path requires. Cost is the
+    // authoritative Product current_cost — the same value the RPC snapshots —
+    // so rows whose Product does not resolve uniquely or has no usable cost are
+    // skipped here and rejected/priced by the per-order logic below.
+    let belowCostReason: string | null = null;
+    if (!isFieldStaff) {
+      const belowCostLines: BelowCostLine[] = [];
+      for (const order of validation.valid) {
+        for (const item of order.items) {
+          const resolution = resolveExactProductIdentity(item.product_name, productCatalog);
+          if (resolution.status !== 'unique') continue;
+          const cost = resolution.product.current_cost;
+          if (cost == null || !Number.isFinite(cost) || cost <= 0) continue;
+          if (item.price_per_unit < cost) {
+            belowCostLines.push({
+              productName: `${order.order_number} — ${item.product_name}`,
+              price: item.price_per_unit,
+              cost,
+            });
+          }
+        }
+      }
+
+      if (belowCostLines.length > 0) {
+        belowCostReason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: belowCostLines, resolve })
+        );
+        if (belowCostReason === null) {
+          setUploading(false);
+          return;
+        }
+      }
+    }
+
     for (const order of validation.valid) {
       try {
         const { data: customer, error: custError } = await supabase
@@ -506,7 +547,11 @@ export default function BulkOrderImport({
           p_total_margin_pct: totalMarginPct,
           p_order_date: order.order_date,
           p_items: itemsPayload,
-          p_notes: order.notes,
+          // The approval reason rides along with the same import that creates
+          // the below-cost lines, so it is durable even if activity logging fails.
+          p_notes: belowCostReason
+            ? [order.notes, `Below-cost approved: ${belowCostReason}`].filter(Boolean).join(' — ')
+            : order.notes,
           p_idempotency_key: order.idempotency_key,
         });
 
@@ -532,7 +577,13 @@ export default function BulkOrderImport({
 
     if (successCount > 0) {
       if (profile) {
-        await logActivity({ event: 'orders_bulk_imported', description: `Bulk imported ${successCount} order(s)`, performedBy: profile.id });
+        await logActivity({
+          event: 'orders_bulk_imported',
+          description: belowCostReason
+            ? `Bulk imported ${successCount} order(s) — below-cost approved: ${belowCostReason}`
+            : `Bulk imported ${successCount} order(s)`,
+          performedBy: profile.id,
+        });
       }
       toast('success', `Imported ${successCount} order${successCount !== 1 ? 's' : ''}`);
       if (failedCount === 0) {
@@ -551,6 +602,7 @@ export default function BulkOrderImport({
   };
 
   return (
+    <>
     <Modal open={open} onClose={handleClose} title="Import Orders" size="large">
       <div className="space-y-4">
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -701,5 +753,19 @@ export default function BulkOrderImport({
         )}
       </div>
     </Modal>
+
+    <BelowCostConfirmModal
+      open={belowCostPrompt !== null}
+      lines={belowCostPrompt?.lines ?? []}
+      onClose={() => {
+        belowCostPrompt?.resolve(null);
+        setBelowCostPrompt(null);
+      }}
+      onConfirm={(reason) => {
+        belowCostPrompt?.resolve(reason);
+        setBelowCostPrompt(null);
+      }}
+    />
+    </>
   );
 }

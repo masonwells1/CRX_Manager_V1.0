@@ -2,6 +2,28 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Codex review round 3: stable quote item ids, dashboard on snapshot cost, below-cost gate on bulk import
+
+Addressed the third Codex review round on the pricing Phase B/C branch. `save_quote`
+now reuses the caller-echoed `quote_items.id` when it matches a prior line of the same
+quote and product, so `QuoteBuilder` (which never refetches after a draft save) keeps
+working ids and no longer re-stamps `cost_at_quote_cents` from today's catalog on every
+later save; each prior id is consumed at most once and a repeat raises
+`QUOTE_ITEM_ID_DUPLICATE` before the insert. `financial_dashboard_summary`'s headline
+and monthly-trend figures now aggregate from `order_items` using the canonical snapshot
+cost expression, so they agree with the section-level margins in the same RPC.
+`BulkOrderImport` now runs the same below-cost confirmation as `NewOrder` and persists
+the typed reason into `bulk_import_order`'s `p_notes`. `recalcItem` uses `??` rather
+than `||` so a legitimate zero cost snapshot is preserved.
+
+Both migrations remain **PARKED, not applied** — the apply guard could not mint proof in
+this container (no trusted Codex CLI binary), so Mason applies them from his own machine.
+RLS re-review returned zero findings across all ten checks on the id-reuse change.
+
+- **Migrations touched**:
+  - `supabase/migrations/20260808170100_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260808170200_quote_items_cost_at_quote_snapshot.sql`
+
 ## 2026-08-08 — Pricing audit + Phase B/C: full pricing audit doc; gotchas entry for…
 
 Pricing audit + Phase B/C: full pricing audit doc; gotchas entry for margin/markup semantics; three PARKED reviewed migrations (returns-COGS reversal, snapshot-cost report unification + get_profitability_report, quote-time cost snapshot with anti-forgery); BelowCostConfirmModal below-cost sale gate; QuoteBuilder line-id preservation. Migrations await Mason-machine Codex-proof apply.

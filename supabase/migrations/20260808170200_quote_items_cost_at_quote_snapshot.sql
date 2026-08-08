@@ -35,6 +35,27 @@
 --      new / changed-product lines insert NULL and the trigger stamps today's
 --      cost. (QuoteBuilder sends each loaded line's database id in the payload
 --      as of this branch — see src/pages/QuoteBuilder.tsx.)
+--
+--      ID REUSE (Codex P1-A). The reinserted row REUSES the echoed quote_item
+--      uuid whenever that id+product match holds, instead of generating a fresh
+--      one. QuoteBuilder does NOT refetch after save (handleSaveDraft calls
+--      saveQuote and never re-runs fetchQuote), so without reuse the ids held
+--      by the still-open page go stale on the FIRST save; the SECOND save from
+--      that page would echo dead ids, the id-keyed preservation would miss, and
+--      the trigger would re-stamp today's catalog cost — silently breaking the
+--      immutable quote-time cost. With reuse, client-held ids stay valid across
+--      unlimited saves with no refetch. Rows with no valid echoed id still get
+--      gen_random_uuid(). The capture map now includes prior rows whose snapshot
+--      is NULL too, so their ids are stable as well (their cost stays NULL and
+--      the trigger stamps it).
+--
+--      CONSUME-ONCE (Codex P1-B). Each prior id may be claimed by at most one
+--      payload row. A payload that repeats ANY id within one save raises
+--      'QUOTE_ITEM_ID_DUPLICATE' before the INSERT — otherwise one legitimate
+--      prior id could copy a single old snapshot onto arbitrarily many new lines
+--      of the same product. The explicit check fires FIRST so the caller gets a
+--      clear domain error rather than the primary-key violation that id reuse
+--      would otherwise produce.
 --      The recompute CTE now prices cc from the snapshot:
 --        cc = COALESCE(qi.cost_at_quote_cents / 100.0, p.current_cost, 0)
 --      and still writes current_cost = f.cc, so current_cost becomes
@@ -170,6 +191,13 @@ DECLARE
   -- SNAPSHOT<<< prior-item cost map (id -> {p: product_id, c: cost}) captured
   -- before the delete+reinsert. Strictly id-keyed; no product_id fallback.
   v_prior_item_costs jsonb := '{}'::jsonb;
+  -- Ids already claimed by an earlier payload row in THIS save. Each prior id
+  -- may be consumed at most once (P1-B); a repeat is a hard domain error.
+  v_consumed_item_ids jsonb := '{}'::jsonb;
+  -- Per-row scratch for the reinsert loop.
+  v_payload_item_id text;
+  v_reuse_item_id uuid;
+  v_preserved_cost bigint;
   -- >>>SNAPSHOT
 BEGIN
   v_actor := auth.uid();
@@ -330,6 +358,9 @@ BEGIN
     -- line's snapshot to a different product). Deliberately NO product_id
     -- fallback: a genuinely new line for a product already on the quote must
     -- get today's cost from the trigger, not inherit an old snapshot.
+    -- The map also drives ID REUSE (P1-A), so it deliberately includes rows
+    -- whose cost_at_quote_cents is NULL: their id must stay stable too (their
+    -- 'c' is JSON null, so the reinsert passes NULL and the trigger stamps).
     SELECT COALESCE(
              jsonb_object_agg(
                id::text,
@@ -338,8 +369,7 @@ BEGIN
              '{}'::jsonb)
       INTO v_prior_item_costs
     FROM quote_items
-    WHERE quote_id = v_quote_id
-      AND cost_at_quote_cents IS NOT NULL;
+    WHERE quote_id = v_quote_id;
     -- >>>SNAPSHOT
 
     DELETE FROM quote_sections WHERE quote_id = v_quote_id;
@@ -399,6 +429,30 @@ BEGIN
 
     FOR v_item IN SELECT * FROM jsonb_array_elements(v_section->'items')
     LOOP
+      -- SNAPSHOT<<< resolve this payload row's identity BEFORE the INSERT.
+      -- (a) consume-once (P1-B): any id repeated within one save is rejected
+      --     here, so the caller sees a clear domain error instead of the
+      --     primary-key violation that id reuse (below) would raise.
+      -- (b) id reuse (P1-A): when the echoed id belongs to a prior line of
+      --     THIS quote and that prior line's product matches, the reinserted
+      --     row keeps the same uuid, so ids the still-open QuoteBuilder page
+      --     holds remain valid across repeated saves without a refetch.
+      v_payload_item_id := NULLIF(v_item->>'id', '');
+      v_reuse_item_id := NULL;
+      v_preserved_cost := NULL;
+      IF v_payload_item_id IS NOT NULL THEN
+        IF v_consumed_item_ids ? v_payload_item_id THEN
+          RAISE EXCEPTION 'QUOTE_ITEM_ID_DUPLICATE: quote item ids must be unique within a save'
+            USING ERRCODE = 'P0001';
+        END IF;
+        v_consumed_item_ids := v_consumed_item_ids || jsonb_build_object(v_payload_item_id, true);
+        IF v_prior_item_costs ? v_payload_item_id
+           AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id' THEN
+          v_reuse_item_id := v_payload_item_id::uuid;
+          v_preserved_cost := (v_prior_item_costs->v_payload_item_id->>'c')::bigint;
+        END IF;
+      END IF;
+      -- >>>SNAPSHOT
       INSERT INTO quote_items (
         id, quote_id, section_id, product_id, sort_order, notes,
         price_per_unit, price_override, current_cost, suggested_rate, actual_rate,
@@ -407,7 +461,9 @@ BEGIN
         calc_mode, price_unit,
         cost_at_quote_cents -- SNAPSHOT: preserved value or NULL (trigger snapshots)
       ) VALUES (
-        gen_random_uuid(),
+        -- SNAPSHOT: reuse the echoed id when it matched a prior line of this
+        -- quote (same product); otherwise mint a fresh one as before.
+        COALESCE(v_reuse_item_id, gen_random_uuid()),
         v_quote_id,
         v_section_id,
         (v_item->>'product_id')::uuid,
@@ -432,15 +488,11 @@ BEGIN
         -- SNAPSHOT<<< carry the quote-time cost across the reinsert ONLY when
         -- the payload echoes a prior item id AND that prior line's product_id
         -- equals this row's product_id (id-echo forgery cannot move a snapshot
-        -- onto a different product). Otherwise NULL: the BEFORE INSERT trigger
+        -- onto a different product), and only once per prior id. Resolved into
+        -- v_preserved_cost above; NULL here means the BEFORE INSERT trigger
         -- stamps today's products.current_cost — correct for genuinely new or
-        -- changed-product lines.
-        CASE
-          WHEN v_prior_item_costs ? COALESCE(v_item->>'id', '')
-               AND v_prior_item_costs->(v_item->>'id')->>'p' = v_item->>'product_id'
-          THEN (v_prior_item_costs->(v_item->>'id')->>'c')::bigint
-          ELSE NULL
-        END
+        -- changed-product lines (and for a prior line that never snapshotted).
+        v_preserved_cost
         -- >>>SNAPSHOT
       );
     END LOOP;
@@ -711,6 +763,13 @@ BEGIN
       -- id-keyed preservation only (no product_id fallback map) + passthrough armed
       AND position('crx.quote_cost_snapshot_passthrough' in p.prosrc) > 0
       AND position('v_prior_product_costs' in p.prosrc) = 0
+      -- P1-A: the reinserted row reuses the echoed quote_item id instead of
+      -- always minting a new one (client-held ids survive repeated saves).
+      AND position('COALESCE(v_reuse_item_id, gen_random_uuid())' in p.prosrc) > 0
+      -- P1-B: each prior id is consumable once, and the duplicate is a clear
+      -- domain error raised before the INSERT (not a PK violation).
+      AND position('v_consumed_item_ids' in p.prosrc) > 0
+      AND position('QUOTE_ITEM_ID_DUPLICATE' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: save_quote not snapshot-aware or security posture wrong';
   END IF;

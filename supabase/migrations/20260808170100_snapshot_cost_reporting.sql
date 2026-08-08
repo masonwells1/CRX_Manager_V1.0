@@ -364,8 +364,11 @@ $function$;
 
 -- -----------------------------------------------------------------------------
 -- 4. financial_dashboard_summary: snapshot cost in committed_orders and
---    bottom_products; bottom_customers and monthly_margin rewritten as
---    item-level aggregations (they previously read orders.total_cost).
+--    bottom_products; the headline order_agg (total_revenue/total_profit/
+--    overall_margin), bottom_customers and monthly_margin rewritten as
+--    item-level aggregations (they previously read orders.total_cost /
+--    total_profit, so the headline disagreed with the sections below it).
+--    monthly_revenue moves with the headline for the same reason.
 --    Floor inventory valuation intentionally stays on products.current_cost.
 --    JSON keys, guard, and all non-margin behavior unchanged.
 -- -----------------------------------------------------------------------------
@@ -383,13 +386,25 @@ BEGIN
   END IF;
 
   WITH
+  -- HEADLINE (Codex P2-C): revenue/profit are aggregated item-level from the
+  -- SAME canonical snapshot expression the lower CTEs use, instead of the
+  -- stored orders.total_price / total_profit header columns. Those header
+  -- columns drift from the snapshot basis, so the one RPC used to return a
+  -- headline profit that disagreed with its own bottom_products /
+  -- bottom_customers / monthly_margin sections (FinancialDashboard.tsx and
+  -- FinanceSnapshotCard.tsx read the headline). Filters (deleted_at, status)
+  -- and the emitted JSON keys are unchanged.
   order_agg AS (
     SELECT
-      COALESCE(SUM(total_price), 0) AS total_revenue,
-      COALESCE(SUM(total_profit), 0) AS total_profit
-    FROM public.orders
-    WHERE deleted_at IS NULL
-      AND status NOT IN ('cancelled', 'voided', 'draft')
+      COALESCE(SUM(oi.total_price), 0) AS total_revenue,
+      COALESCE(SUM(
+        oi.total_price
+        - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed
+      ), 0) AS total_profit
+    FROM public.order_items oi
+    JOIN public.orders o ON o.id = oi.order_id
+    WHERE o.deleted_at IS NULL
+      AND o.status NOT IN ('cancelled', 'voided', 'draft')
   ),
   quote_agg AS (
     SELECT
@@ -399,16 +414,24 @@ BEGIN
       COALESCE(SUM(total_price) FILTER (WHERE status IN ('draft', 'sent')), 0) AS pipeline_value
     FROM public.quotes
   ),
+  -- monthly_revenue rides on the same headline basis (P2-C): it is the revenue
+  -- /profit trend shown beside the headline totals, so it is aggregated
+  -- item-level from the canonical snapshot expression too. Keys (month,
+  -- revenue, profit), ordering, and the 12-month window are unchanged.
   monthly AS (
     SELECT jsonb_agg(row_to_json(m)::jsonb ORDER BY m.month) AS arr
     FROM (
       SELECT
-        TO_CHAR(COALESCE(order_date, created_at::date), 'YYYY-MM') AS month,
-        COALESCE(SUM(total_price), 0) AS revenue,
-        COALESCE(SUM(total_profit), 0) AS profit
-      FROM public.orders
-      WHERE deleted_at IS NULL
-        AND status NOT IN ('cancelled', 'voided', 'draft')
+        TO_CHAR(COALESCE(o.order_date, o.created_at::date), 'YYYY-MM') AS month,
+        COALESCE(SUM(oi.total_price), 0) AS revenue,
+        COALESCE(SUM(
+          oi.total_price
+          - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed
+        ), 0) AS profit
+      FROM public.order_items oi
+      JOIN public.orders o ON o.id = oi.order_id
+      WHERE o.deleted_at IS NULL
+        AND o.status NOT IN ('cancelled', 'voided', 'draft')
       GROUP BY 1
       ORDER BY 1 DESC
       LIMIT 12
@@ -788,6 +811,17 @@ BEGIN
   IF v_src NOT LIKE '%status NOT IN (''cancelled'', ''voided'', ''draft'')%'
      OR v_src NOT LIKE '%IF NOT public.is_admin() THEN%' THEN
     RAISE EXCEPTION 'financial dashboard status/active-admin guards missing';
+  END IF;
+
+  -- P2-C: the headline (and its monthly trend) must derive profit from the
+  -- canonical snapshot expression, not from the stored orders.total_profit
+  -- header column, so the headline agrees with bottom_products /
+  -- bottom_customers / monthly_margin in this same RPC.
+  IF v_src LIKE '%SUM(total_profit)%' THEN
+    RAISE EXCEPTION 'financial dashboard still aggregates orders.total_profit';
+  END IF;
+  IF v_src NOT LIKE '%order_agg AS (%public.order_items%' THEN
+    RAISE EXCEPTION 'financial dashboard headline is not item-level';
   END IF;
 
   IF has_function_privilege('anon', 'public.get_profitability_report(text,date,date)', 'EXECUTE') THEN
