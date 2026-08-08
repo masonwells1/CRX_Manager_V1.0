@@ -62,6 +62,12 @@ const MONEY_COL_RE = /\b[a-z_]*(?:cents|amount|total|balance|price|rate|paid)[a-
 // when they match; this only fires for everything else.
 const UPDATE_ANY_RE = new RegExp(`\\bupdate\\s+${QUAL}(${tableAlt(BUSINESS_TABLES)})"?\\b`, "i");
 
+// Same catch-all standard for DELETE: the financial-table DELETE rule above
+// missed non-financial business tables (customers, products, quotes, ...) — a
+// raw `DELETE FROM customers` sailed through (CodeRabbit critical follow-up,
+// PR #352: consequential now that execute_sql auto-approves under dontAsk).
+const DELETE_ANY_RE = new RegExp(`\\bdelete\\s+from\\s+${QUAL}(${tableAlt(BUSINESS_TABLES)})"?\\b`, "i");
+
 // A DO body is hand-written SQL that EXECUTES immediately (a DO block can even
 // COMMIT mid-transaction), so unlike a stored function body it must stay visible
 // to the classifier. Matches "DO $tag$" and "DO LANGUAGE plpgsql $tag$".
@@ -298,6 +304,16 @@ export function classifySql(query) {
         reason: `This UPDATEs a money column on the live financial table "${m[1]}" via raw SQL. Real financial amounts change only through the app's RPCs (or Mason's explicit REAL-DATA-OK authorization) — surface the row IDs and the proposed correction instead.`,
       };
     }
+  }
+
+  // 5b. DELETE catch-all: any DELETE against a real (non-[E2E]) business table,
+  //     not just the financial subset (rule 4 above already handled those).
+  if ((m = DELETE_ANY_RE.exec(t))) {
+    return {
+      block: true,
+      kind: "real-delete",
+      reason: `This DELETEs from the live business table "${m[1]}" without the [E2E] fake-data marker. Deleting real records is Mason's call — surface the record IDs instead of acting. (Override: he authorizes via .claude/session-state/REAL-DATA-OK.)`,
+    };
   }
 
   // 6. FIX 5 catch-all: any OTHER UPDATE against a real (non-[E2E]) business
