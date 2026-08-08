@@ -127,6 +127,31 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+## 2026-08-08 — idempotency-body-check round-16: a header is not a definition
+
+Codex HIGH against round 15. The fail-closed rule handed the statement to the normal scan as soon as
+SOME literal carried the whole `CREATE FUNCTION` header. But a header is not a definition — the body
+can sit entirely in a second, perfectly well-formed fragment:
+
+    EXECUTE 'CREATE FUNCTION public.f(p_idempotency_key text DEFAULT NULL) RETURNS void
+             LANGUAGE plpgsql AS ' || '$fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;'
+
+Both fragments parse, so round 14's parse-error path never fired, and the normal scan only ever saw
+the header literal. The mutating body was invisible and the unwired RPC was allowed. Verified
+directly: ALLOW on the old rule, deny on the fix.
+
+Now a dynamic statement is handed on only when it has EXACTLY ONE literal and that literal carries
+the header. Any additional literal means some part of the definition is somewhere the guard cannot
+follow, so it is refused.
+
+**Behaviour change:** a complete, correctly wired definition wrapped in `format('%s', …)` is now
+refused, where rounds 12–15 allowed it — the wrapper is a second literal. Deliberately not
+special-cased: deciding which literals "really" contribute is the same code-vs-data judgement that
+failed six consecutive Codex rounds. The author `EXECUTE`s the literal directly, which is simpler,
+and the exempt marker remains for genuine cases. Both spellings are now tested.
+
+81 assertions; the one-literal rule is mutation-killed on Codex's exact probe.
+
 ## 2026-08-08 — idempotency-body-check round-15: nested block comments
 
 Codex HIGH against round 14, and a real regression rather than another carve-out.

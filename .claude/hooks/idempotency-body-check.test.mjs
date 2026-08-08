@@ -510,12 +510,21 @@ r = runHook(`DO $do$ BEGIN
 END $do$;`);
 ok(isDeny(r), "DDL split across separate format() arguments is refused");
 
-// ...but a COMPLETE signature in one format() argument is still lexed normally
-// and judged on its wiring, not refused as assembled
-r = runHook(`DO $do$ BEGIN
-  EXECUTE format('%s', 'CREATE OR REPLACE FUNCTION public.wired_fmt(p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN PERFORM check_idempotency(p_idempotency_key, ''wired_fmt''); UPDATE invoices SET total_cents = 0; PERFORM save_idempotency(p_idempotency_key, ''wired_fmt'', NULL); END $fn$;');
-END $do$;`);
-ok(!isDeny(r), "a complete, correctly wired signature in one format() argument is still allowed");
+// A complete, correctly wired definition wrapped in format('%s', ...) is now
+// REFUSED (round 16, was allowed in rounds 12-15). The wrapper makes a second
+// literal, and round 16 stopped trying to judge which literals "really"
+// contribute — that judgement is what failed six Codex rounds in a row. The
+// cost is this case: the author drops the pointless format() wrapper and
+// EXECUTEs the literal directly, which is simpler anyway.
+const WIRED_FMT_BODY =
+  "'CREATE OR REPLACE FUNCTION public.wired_fmt(p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN PERFORM check_idempotency(p_idempotency_key, ''wired_fmt''); UPDATE invoices SET total_cents = 0; PERFORM save_idempotency(p_idempotency_key, ''wired_fmt'', NULL); END $fn$;'";
+r = runHook(`DO $do$ BEGIN\n  EXECUTE format('%s', ${WIRED_FMT_BODY});\nEND $do$;`);
+ok(isDeny(r), "a wired definition wrapped in format('%s', ...) is refused — two literals");
+
+// ...and the same definition EXECUTEd directly is one literal, so it is lexed
+// normally and judged on its wiring. This is the supported way to write it.
+r = runHook(`DO $do$ BEGIN\n  EXECUTE ${WIRED_FMT_BODY};\nEND $do$;`);
+ok(!isDeny(r), "the same wired definition as a single EXECUTEd literal is allowed");
 
 // --- Round 12 (Codex push-proof gate blocked round-11c) --------------------
 
@@ -640,5 +649,25 @@ BEGIN
   EXECUTE v_ddl;
 END $do$;`);
 ok(isDeny(r), "a semicolon inside a NESTED block comment does not hide the INTO assignment");
+
+// --- Round 16: a header is not a definition (Codex HIGH on round 15) -------
+// Round 15 allowed the statement as soon as SOME literal carried the whole
+// header. But the BODY can sit entirely in a second, well-formed fragment: the
+// first literal ends right after `AS`, the second opens and closes `$fn$`
+// around a mutating UPDATE. Both fragments parse, so the round-14 parse-error
+// path never fired, and the normal scan only ever saw the header literal — the
+// unwired body was invisible. Codex's exact probe:
+r = runHook(`DO $do$ BEGIN
+  EXECUTE 'CREATE FUNCTION public.f16(p_idempotency_key text DEFAULT NULL) RETURNS void LANGUAGE plpgsql AS '
+    || '$fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;';
+END $do$;`);
+ok(isDeny(r), "a body split into its own well-formed second literal is refused");
+
+// The same gap reached by splitting on a comment rather than mid-clause.
+r = runHook(`DO $do$ BEGIN
+  EXECUTE 'CREATE FUNCTION public.f16b(p_idempotency_key text DEFAULT NULL) RETURNS void LANGUAGE plpgsql AS '
+    || '/* harmless */ ' || '$fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;';
+END $do$;`);
+ok(isDeny(r), "a comment fragment between AS and the body does not reopen the gap");
 
 console.log(`idempotency-body-check: ${pass} assertions passed`);

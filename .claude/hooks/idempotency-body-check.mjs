@@ -498,13 +498,18 @@ function checkDynamicDdl(from, to) {
     if (lits.length === 0) return false;
     if (!isDynamicSqlStatement(masked.slice(stmtStart, stmtEnd))) return false;
     if (!carriesFnHeader(lits.map((l) => l.payload).join(""))) return false;
-    // Some single literal carries the whole header: hand it to the normal
-    // signature/wiring scan, which has already lexed it in place. Its
-    // READABILITY needs no test here — the masker lexes any header-bearing
-    // literal inside a dynamic statement, and an unparseable one already fails
-    // the file closed above. Re-checking it here was decoration: mutating the
-    // check away left every test green.
-    if (lits.some((l) => carriesFnHeader(l.payload))) return false;
+    // EXACTLY ONE literal in the whole statement, and it carries the header:
+    // then that literal IS the definition, and the normal signature/wiring scan
+    // has already lexed it in place.
+    //
+    // Round 15 accepted "some literal carries the header" here, which was not
+    // enough. A header is not a definition — the BODY can live in a second
+    // fragment (`EXECUTE '...LANGUAGE plpgsql AS ' || '$fn$ BEGIN UPDATE
+    // invoices ... END $fn$;'`). The normal scan only ever sees the
+    // header-bearing literal, so the mutating body was invisible and an unwired
+    // RPC was allowed (Codex HIGH, round 16). Any additional literal means some
+    // part of the definition is somewhere this guard cannot follow.
+    if (lits.length === 1 && carriesFnHeader(lits[0].payload)) return false;
     violations.push(
       "This migration builds a CREATE FUNCTION statement at runtime, and this guard cannot read it " +
       "as one complete literal — the definition is split across fragments, or a fragment is not " +
