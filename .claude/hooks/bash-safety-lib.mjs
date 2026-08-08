@@ -18,10 +18,12 @@ import path from "node:path";
 // marked below.
 export const DANGEROUS_CMD_CHECKS = [
   [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/, "Blocked force push. Force pushing any branch requires Mason's explicit approval."],
-  [/git\s+reset\s+--hard\b/, "Blocked `git reset --hard`. Permanently destroys uncommitted work. Use `git stash` or `git restore <file>`."],
-  [/git\s+checkout\s+\.\s*(?:$|;|&|\|)/, "Blocked discard-all. Use targeted `git restore <file>`."],
-  [/git\s+restore\s+\.\s*(?:$|;|&|\|)/, "Blocked discard-all. Use targeted `git restore <file>`."],
-  [/git\s+clean\s+-[A-Za-z]*[fdx][A-Za-z]*\b/, "Blocked `git clean -f`. Permanently deletes untracked files. Review with `git clean -n` first."],
+  // Tolerate intervening git options (`git -C <path> reset --hard`, `git -c x=y clean -fd`)
+  // — the adjacent-words-only spellings were bypassable (Codex P1, PR #352).
+  [/\bgit\b[^\r\n;&|]*\breset\b[^\r\n;&|]*--hard\b/, "Blocked `git reset --hard`. Permanently destroys uncommitted work. Use `git stash` or `git restore <file>`."],
+  [/\bgit\b[^\r\n;&|]*\bcheckout\s+\.\s*(?:$|;|&|\|)/, "Blocked discard-all. Use targeted `git restore <file>`."],
+  [/\bgit\b[^\r\n;&|]*\brestore\s+\.\s*(?:$|;|&|\|)/, "Blocked discard-all. Use targeted `git restore <file>`."],
+  [/\bgit\b[^\r\n;&|]*\bclean\s+-[A-Za-z]*[fdx][A-Za-z]*\b/, "Blocked `git clean -f`. Permanently deletes untracked files. Review with `git clean -n` first."],
   [/--no-verify\b/, "Blocked `--no-verify`. Pre-commit hooks prevent bugs — fix the underlying issue."],
   [/\brm\s+-[A-Za-z]*r[A-Za-z]*f?[A-Za-z]*\s+(?:\.\.?\s*(?:$|;|&|\|)|\.\.?\/(?:src|supabase|docs)(?:\b|\/)|\/?(?:src|supabase|docs)(?:\b|\/))/, "Blocked recursive deletion of project source/migrations/docs."],
   [/\bnpm\s+uninstall\s+(?:react|@supabase\/supabase-js|vite|typescript)\b/, "Blocked uninstall of a core dependency."],
@@ -52,6 +54,26 @@ export const DANGEROUS_CMD_CHECKS = [
   // matching env-guard.mjs's exemptions (Codex P2 round 4).
   [/(?:>>?\s*|\btee\b\s+)['"]?[^\s'";|&]*\.env(?!(?:\.[\w-]+)*\.(?:example|template|sample)\b)(?:\.[\w-]+)?\b/, "Blocked shell-redirect write to .env*. Secrets must never be written this way."],
 ];
+
+// Production-deploy spellings that must PROMPT (permissionDecision "ask"), not
+// auto-approve — added for PR #352 (Codex P1): with a broad Bash allow in
+// settings.json, prefix-matched ask rules miss variant spellings like
+// `npx vercel --prod`. These are deterministic content checks instead.
+// First match wins. Consumed by bash-safety.mjs; mcp-tool-guard.mjs's Desktop
+// Commander paths already route deploy tools through the settings ask list.
+export const ASK_CMD_CHECKS = [
+  [/\b(?:npx\s+)?vercel\b[^\r\n;&|]*(?:--prod\b|--production\b|\bpromote\b|\brollback\b)/, "Production Vercel deploy/promote/rollback — needs Mason's explicit OK (AGENTS.md hard gate)."],
+  [/\b(?:npx\s+)?supabase\s+functions\s+deploy\b/, "Edge-function deploy — needs Mason's explicit OK (AGENTS.md hard gate)."],
+];
+
+export function checkAskCommand(cmd) {
+  const text = String(cmd || "");
+  if (!text) return null;
+  for (const [re, reason] of ASK_CMD_CHECKS) {
+    if (re.test(text)) return reason;
+  }
+  return null;
+}
 
 // Destructive raw SQL via psql/supabase CLI (kept as its own exported check
 // since the original file ran it as a second, independent condition).
@@ -187,6 +209,27 @@ export function checkCommandDeep(cmd, cwd) {
       // 2026-07-13: only checkDangerousCommand ran here, so npm indirection
       // still bypassed the migration-immutability guard).
       const reason = checkDangerousCommand(resolved) || checkMigrationModify(resolved, cwd);
+      if (reason) return `${reason} (found inside \`npm run ${name}\`'s script body)`;
+    }
+  }
+  return null;
+}
+
+// Ask-tier twin of checkCommandDeep: literal text first, then resolved npm-script
+// bodies, so `npm run deploy-prod` can't hide a production deploy either.
+export function checkAskDeep(cmd, cwd) {
+  const direct = checkAskCommand(cmd);
+  if (direct) return direct;
+
+  const names = extractNpmRunNames(cmd);
+  if (names.length === 0) return null;
+  const scripts = readPackageScripts(cwd);
+  if (scripts === null) return null;
+
+  const seen = new Set();
+  for (const name of names) {
+    for (const resolved of resolveNpmScriptChain(scripts, name, 0, 3, seen)) {
+      const reason = checkAskCommand(resolved);
       if (reason) return `${reason} (found inside \`npm run ${name}\`'s script body)`;
     }
   }
