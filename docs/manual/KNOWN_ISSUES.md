@@ -916,7 +916,7 @@ The three reviewed migrations were applied live on 2026-07-15 and `process-blend
 
 - Migration `20260714230100` removed the legacy direct-insert path. Tabs still running the old bundle must refresh before another blend upload; tell office users to use the existing “A new version of the app is ready” prompt (or reload).
 - **Owner decision — live-data cleanup:** eight empty unposted `SEED` commission batches ($1,500 headers), PO-2026-0008's stale fully-received status/open lines, PO-2026-0015's legacy receipt gap, one explicit E2E zero-item invoice, and five historical completed deliveries without items.
-- Reconcile 18 negative inventory rows only from physical counts. Negative stock is intentional discrepancy evidence, not a value to zero-clamp.
+- Reconcile 19 negative inventory rows (live count re-verified 2026-08-08) only from physical counts. Negative stock is intentional discrepancy evidence, not a value to zero-clamp.
 
 The frontend/live-RPC fixture is regenerated and green; both `create_blend_ticket` and `commit_blend_ticket_ocr_result` are present live. Evidence: `docs/audits/gauntlet/2026-07-14-full-gauntlet-codex-only-remediation.md`.
 

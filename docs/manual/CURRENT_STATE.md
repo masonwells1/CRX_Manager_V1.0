@@ -41,8 +41,17 @@ the database was near-empty on 2026-06-13, and by 2026-07-12 it held roughly
 153 customers and 604 products. As of this snapshot (2026-07-18) those two
 numbers are unchanged, but **deliveries are now flowing through the app**
 (107 recorded) while payments remain at zero — see the table below. Treat this
-as a business in early adoption: operational usage is real, the money loop
-(invoice → post → payment) has not completed a real cycle yet.
+as a business in early adoption: operational usage is real, and the money loop
+(invoice → post → payment) **has** completed one real cycle — see the correction
+below.
+
+> **Correction (2026-08-08 foundation ultra review):** the `payments` row count
+> below is not evidence the money loop is unexercised. `payments` is a **dead
+> legacy table** with zero writers; the live ledger is `allocation_sets` +
+> `prepay_credits`. On 2026-07-17 a $6,800 check was recorded against the owner's
+> own customer record — $5,020.40 allocated to invoice CS-2026-0094 and $1,779.60
+> booked as prepay credit — and both halves reconcile exactly. Do not read
+> `payments = 0` as missing money or as an unrun money loop.
 
 ## 2. Live operational snapshot
 
@@ -57,7 +66,7 @@ captured 2026-07-18. These age immediately — re-run before relying on them.
 | quotes | 4 | |
 | orders | 64 | |
 | invoices | 11 | 8 draft / 2 posted / 1 paid |
-| payments | 0 | none recorded yet |
+| payments | 0 | **dead legacy table, zero writers** — real payments live in `allocation_sets`/`prepay_credits` (1 allocation set as of 2026-08-08) |
 | jobs | 4 | |
 | deliveries | 107 | deliveries are the most-used transactional surface |
 | blend_tickets | 0 | none recorded yet |
