@@ -163,11 +163,52 @@ function inExecuteStatement(out, text, afterIdx) {
   // v_ddl`), so the prefix alone is not the statement. Read on from just past
   // the literal to the next `;` — starting past it, because the literal's own
   // body routinely contains semicolons.
-  const rest = text.slice(afterIdx);
-  const semi = rest.indexOf(";");
+  // The statement end must be found the same way the masker finds one: a raw
+  // indexOf(";") stops at a semicolon inside a following string or comment, and
+  // truncating before the `INTO` made a function-bearing literal look like data
+  // (Codex H2, round 13). Unreadable rest → scan it all, which can only widen
+  // the context, i.e. err toward treating the literal as executable.
+  const semi = firstTopLevelSemicolon(text, afterIdx);
   return isDynamicSqlStatement(
-    before + " " + (semi === -1 ? rest : rest.slice(0, semi))
+    before + " " + text.slice(afterIdx, semi === -1 ? text.length : semi)
   );
+}
+
+/** The first `;` that actually ends a statement — skipping comments, quoted
+ * strings and dollar-quoted bodies. -1 when none is readable. */
+function firstTopLevelSemicolon(text, from) {
+  let i = from;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === ";") return i;
+    if (ch === "-" && text[i + 1] === "-") {
+      const nl = text.indexOf("\n", i + 2);
+      if (nl === -1) return -1;
+      i = nl + 1;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      if (close === -1) return -1;
+      i = close + 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return -1;
+      i = end;
+      continue;
+    }
+    const tag = ch === "$" ? dollarTagAt(text, i) : null;
+    if (tag) {
+      const close = text.indexOf(tag, i + tag.length);
+      if (close === -1) return -1;
+      i = close + tag.length;
+      continue;
+    }
+    i++;
+  }
+  return -1;
 }
 
 /** A statement that builds or runs dynamic SQL: it EXECUTEs, or it assigns the
@@ -194,11 +235,32 @@ function isDataArgOfFormat(text, out, litStart) {
   const stmtStart = out.lastIndexOf(";") + 1;
   const call = [...text.slice(stmtStart, litStart).matchAll(/\bformat\s*\(/gi)].pop();
   if (!call) return false;
-  const tmplStart = text.indexOf("'", stmtStart + call.index + call[0].length);
-  if (tmplStart === -1 || tmplStart >= litStart) return false; // this IS the template
-  const tmplEnd = scanQuoted(text, tmplStart);
-  if (tmplEnd === -1 || tmplEnd > litStart) return false;
-  return !/%s/i.test(text.slice(tmplStart + 1, tmplEnd - 1));
+  const tmpl = formatTemplate(text, stmtStart + call.index + call[0].length, litStart);
+  // null = this literal IS the template, or the template is unreadable. Either
+  // way, do not claim it is data — that claim is the thing that stops a literal
+  // being lexed, so an unreadable template must not silently disarm the guard.
+  if (tmpl === null) return false;
+  // `%s` is the only conversion that pastes an argument in as CODE, and it can
+  // carry an explicit position: `%1$s`. Reading only bare `%s`, and only from a
+  // single-quoted template, let valid dynamic DDL through (Codex H1, round 13).
+  return !/%(?:\d+\$)?s/i.test(tmpl);
+}
+
+/** The template argument of a `format(` call — the first literal after the open
+ * paren, single-quoted or dollar-quoted. Null if it starts at/after `limit`
+ * (i.e. the literal under test is itself the template) or cannot be read. */
+function formatTemplate(text, from, limit) {
+  let i = from;
+  while (i < limit && /\s/.test(text[i])) i++;
+  if (i >= limit) return null;
+  if (text[i] === "'") {
+    const end = scanQuoted(text, i);
+    return end === -1 || end > limit ? null : text.slice(i + 1, end - 1);
+  }
+  const tag = dollarTagAt(text, i);
+  if (!tag) return null;
+  const close = text.indexOf(tag, i + tag.length);
+  return close === -1 || close > limit ? null : text.slice(i + tag.length, close);
 }
 
 /** A REAL CREATE FUNCTION header — name plus an opening paren — as opposed to

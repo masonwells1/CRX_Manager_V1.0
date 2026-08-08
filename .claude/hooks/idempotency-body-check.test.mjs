@@ -562,4 +562,33 @@ r = runHook(`DO $do$ BEGIN
 END $do$;`);
 ok(!isDeny(r), "a %L data argument is never lexed as SQL, even when function-shaped");
 
+// --- Round 13 (Codex push-proof gate blocked round-12) ---------------------
+
+const UNWIRED_DDL_R13 =
+  "CREATE OR REPLACE FUNCTION public.dyn_r13(p_idempotency_key text DEFAULT NULL::text) " +
+  "RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;";
+
+// %s can carry an explicit argument position — %1$s is still code, not data
+r = runHook(`DO $do$ BEGIN
+  EXECUTE format('%1$s', '${UNWIRED_DDL_R13}');
+END $do$;`);
+ok(isDeny(r), "a positional %1$s format template still splices its argument in as CODE");
+
+// ...and the template itself may be dollar-quoted rather than single-quoted.
+// Two arguments, so that reading "the first single-quoted literal" as the
+// template picks up an ARGUMENT instead and wrongly calls the DDL data.
+r = runHook(`DO $do$ BEGIN
+  EXECUTE format($fmt$-- %s\n%s$fmt$, 'a note', '${UNWIRED_DDL_R13}');
+END $do$;`);
+ok(isDeny(r), "a dollar-quoted format template is read, so its argument is still lexed as code");
+
+// a semicolon inside a LATER string must not truncate the search for `INTO`
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  SELECT $ddl$${UNWIRED_DDL_R13}$ddl$ || ';' INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "a semicolon inside a following string does not hide the INTO assignment");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

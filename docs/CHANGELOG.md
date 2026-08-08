@@ -95,6 +95,24 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+## 2026-08-08 — idempotency-body-check round-13: both round-12 carve-outs were too literal
+
+Fourth gate block, two findings — both in the *narrowing* rules round 12 added, which is where a
+guard gets dangerous: a carve-out that is too broad is a fail-open.
+
+- **Positional and dollar-quoted `format()` templates.** The `%s`-means-code test read only a bare
+  `%s` in a single-quoted template. PostgreSQL also writes `%1$s`, and the template may be
+  dollar-quoted — in which case the old scan grabbed the *first argument* as the template, found no
+  `%s` in it, and called the real DDL data. Templates are now located properly (single- or
+  dollar-quoted), and `%1$s` counts as code.
+- **Statement end was found with a raw `indexOf(";")`.** A semicolon inside a following string ended
+  the scan early, hiding the `INTO` and masking a function-bearing literal as data. Statement ends
+  are now found the same way the masker finds them, skipping comments, strings and dollar bodies.
+
+72 assertions. All three new guards individually mutation-killed — including a first attempt at the
+dollar-quoted-template test that SURVIVED its mutation because it used only one `format()` argument;
+the probe was rewritten until it genuinely failed against the old code.
+
 ## 2026-08-08 — idempotency-body-check round-12: every dynamic-SQL assignment form, and `%L` is data
 
 Third Codex push-proof gate block on this branch, three findings, all real:
