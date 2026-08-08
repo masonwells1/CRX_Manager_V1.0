@@ -2,6 +2,22 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Pricing audit + Phase B/C: full pricing audit doc; gotchas entry for…
+
+Pricing audit + Phase B/C: full pricing audit doc; gotchas entry for margin/markup semantics; three PARKED reviewed migrations (returns-COGS reversal, snapshot-cost report unification + get_profitability_report, quote-time cost snapshot with anti-forgery); BelowCostConfirmModal below-cost sale gate; QuoteBuilder line-id preservation. Migrations await Mason-machine Codex-proof apply.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `8d7e71c42 Pricing Phase B/C: returns-COGS reversal, snapshot-cost reporting, quote cost snapshot, below-cost confirmation`
+  - `c75d3e323 Address Codex review: workbook freshness scope + SalesReports data-flow`
+  - `c742e75fd Resolve margin/markup 'swap' finding as naming-only; document semantics in gotchas`
+  - `6576747ac Mark partial-delivery cost defect as already fixed per Codex review`
+  - `3b9040da8 Log pricing audit session in changelog`
+  - `54b4aa949 Add full product pricing audit and strategy (2026-08-08)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260808170000_return_credit_cogs_reversal.sql`
+  - `supabase/migrations/20260808170100_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260808170200_quote_items_cost_at_quote_snapshot.sql`
+
 ## 2026-08-08 — Read-only product pricing audit: added…
 
 Read-only product pricing audit: added docs/audits/2026-08-08-product-pricing-full-audit-and-strategy.md (cost capture, margins, vendor price history, 600-SKU update strategy); pushed branch claude/pricing-audit-strategy-jym8rr, draft PR #350. No code/schema/data changes.
