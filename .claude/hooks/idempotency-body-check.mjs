@@ -149,6 +149,18 @@ function dollarTagAt(text, i) {
  *  - "CREATE FUNCTION foo(" inside a string literal — top-level or in a
  *    RAISE NOTICE within a DO block — must not be scanned as live DDL either
  *    (Codex P2 round 6); masking string contents kills the whole class. */
+/** True when the text emitted so far puts us inside an EXECUTE statement, i.e.
+ * an EXECUTE keyword appears in the current statement (since the last ';').
+ * Round 9 only recognised the two shapes where the literal sits DIRECTLY after
+ * EXECUTE / EXECUTE format( — so `EXECUTE ('CREATE ...')` and
+ * `EXECUTE format('%s', 'CREATE ...')` fell through as opaque data and an
+ * unwired dynamically-created RPC was invisible (Codex P2 round 10). Statement
+ * scoped, and comments/string contents are already blanked in `out`, so an
+ * EXECUTE in a comment or an earlier statement cannot leak context forward. */
+function inExecuteStatement(out) {
+  return /\bEXECUTE\b/i.test(out.slice(out.lastIndexOf(";") + 1));
+}
+
 function maskSqlNoise(text) {
   let out = "";
   let i = 0;
@@ -188,10 +200,19 @@ function maskSqlNoise(text) {
         // Everything else is opaque data: mask it wholesale, since lexing a
         // payload like $q$can't$q$ as SQL sees an unterminated quote and
         // falsely denies the whole migration (Codex P2 round 7).
+        // The content trigger additionally requires p_idempotency_key: a prose
+        // literal that merely MENTIONS "CREATE FUNCTION" was lexed as SQL, and
+        // one apostrophe in it ("can't") read as an unterminated string and
+        // denied the whole migration (Codex P2 round 10). Only payloads that
+        // could actually carry this guard's bug class are worth recursing into.
         const isExecutable = /\b(?:AS|DO|EXECUTE)\s+$/i.test(out) ||
-          /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION/i.test(payload);
-        const inner = isExecutable ? maskSqlNoise(payload) : " ".repeat(payload.length);
-        if (inner === null) return null;
+          inExecuteStatement(out) ||
+          (/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION/i.test(payload) && /p_idempotency_key/i.test(payload));
+        // A payload we chose to recurse into but cannot lex is data, not a
+        // parse failure of THIS file: mask it opaque instead of failing the
+        // whole migration closed. The outer level still fails closed on a
+        // genuinely unterminated construct.
+        const inner = (isExecutable ? maskSqlNoise(payload) : null) ?? " ".repeat(payload.length);
         out += tag + inner + tag;
         i = close + tag.length;
         continue;
@@ -210,11 +231,13 @@ function maskSqlNoise(text) {
       // so the header stays visible; all other strings stay opaque data —
       // recursing on content would re-open the round-6 false positive on
       // literals that merely mention "CREATE FUNCTION".
-      const isDynamicSql = ch === "'" && /\bEXECUTE\s+(?:format\s*\(\s*)?E?$/i.test(out);
+      // Round 10 widened "EXECUTE-adjacent" to "anywhere in an EXECUTE
+      // statement" so `EXECUTE ('CREATE ...')` and the non-first argument of
+      // `EXECUTE format('%s', 'CREATE ...')` are inspected too.
+      const isDynamicSql = ch === "'" && inExecuteStatement(out);
       if (isDynamicSql) {
         const payload = text.slice(i + 1, end - 1);
-        const inner = maskSqlNoise(payload);
-        if (inner === null) return null;
+        const inner = maskSqlNoise(payload) ?? " ".repeat(payload.length);
         out += ch + inner + ch;
       } else {
         out += ch + " ".repeat(end - i - 2) + ch;

@@ -378,4 +378,78 @@ ok(isDeny(r), "unwired CREATE FUNCTION inside EXECUTE '...' single-quoted DDL is
 r = runHook(`DO $do$ BEGIN EXECUTE 'UPDATE settings SET v = 1'; END $do$;`);
 ok(!isDeny(r), "EXECUTE of single-quoted dynamic SQL without a CREATE FUNCTION stays allowed");
 
+
+
+// ── Codex P2 round 10 (a): dynamic DDL whose literal is not DIRECTLY after
+//    EXECUTE / EXECUTE format( — a parenthesised EXECUTE argument, or any
+//    non-first format() argument — was opaque data, so an unwired dynamically
+//    created RPC was invisible (fail-open) ───────────────────────────────────
+const UNWIRED_DDL = "CREATE OR REPLACE FUNCTION public.dyn_r10(p_idempotency_key text DEFAULT NULL::text) " +
+  "RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;";
+
+r = runHook(`DO $do$ BEGIN EXECUTE ('${UNWIRED_DDL}'); END $do$;`);
+ok(isDeny(r), "unwired CREATE FUNCTION inside a parenthesised EXECUTE ('...') is scanned and blocked");
+
+r = runHook(`DO $do$ BEGIN EXECUTE format('%s', '${UNWIRED_DDL}'); END $do$;`);
+ok(isDeny(r), "unwired CREATE FUNCTION in a NON-first format() argument is scanned and blocked");
+
+r = runHook(`DO $do$ BEGIN EXECUTE format('%s', $ddl$${UNWIRED_DDL}$ddl$); END $do$;`);
+ok(isDeny(r), "unwired CREATE FUNCTION in a non-first format() dollar-quoted argument is scanned and blocked");
+
+// ── Codex P2 round 10 (b): opaque DATA must not be lexed as SQL. A literal
+//    that merely MENTIONS "CREATE FUNCTION" and contains an apostrophe read as
+//    an unterminated string and denied the whole migration (false-deny) ──────
+r = runHook(`DO $do$ BEGIN
+  INSERT INTO notes (body) VALUES ($q$you can't CREATE FUNCTION here$q$);
+END $do$;`);
+ok(!isDeny(r), "dollar-quoted DATA mentioning CREATE FUNCTION with an apostrophe is opaque, not a parse failure");
+
+r = runHook(`DO $do$ BEGIN
+  INSERT INTO notes (body) VALUES ($q$CREATE FUNCTION docs say don't do this$q$);
+  UPDATE settings SET v = 1;
+END $do$;`);
+ok(!isDeny(r), "prose payload without p_idempotency_key is never treated as live DDL");
+
+r = runHook(`DO $do$ BEGIN EXECUTE 'UPDATE settings SET note = ''don''''t'''; END $do$;`);
+ok(!isDeny(r), "doubled quotes inside an EXECUTE literal do not read as an unterminated string");
+
+// the fail-CLOSED behavior at the OUTER level is unchanged by the inner fallback
+r = runHook(`CREATE OR REPLACE FUNCTION public.broken(p_idempotency_key text DEFAULT NULL::text)
+RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE customers SET name = 'x; END $fn$;`);
+ok(isDeny(r), "a genuinely unterminated string at the top level still fails CLOSED");
+
+// a correctly wired function created dynamically is still allowed
+r = runHook(`DO $do$ BEGIN EXECUTE ('CREATE OR REPLACE FUNCTION public.dyn_ok(p_idempotency_key text DEFAULT NULL::text) ` +
+  `RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN PERFORM check_idempotency(p_idempotency_key, ''dyn_ok''); ` +
+  `UPDATE invoices SET total_cents = 0; PERFORM save_idempotency(p_idempotency_key, ''dyn_ok'', ''{}''::jsonb); END $fn$;'); END $do$;`);
+ok(!isDeny(r), "correctly wired dynamically created function stays allowed");
+
+
+// isolates the p_idempotency_key narrowing: a doc literal that merely mentions
+// CREATE FUNCTION and has an unbalanced paren must stay opaque, not be lexed as
+// a header the paren-scanner then fails (and fail-closed) on
+r = runHook(`DO $do$ BEGIN
+  INSERT INTO docs (body) VALUES ($doc$See CREATE FUNCTION public.foo( -- args vary by version
+$doc$);
+END $do$;`);
+ok(!isDeny(r), "doc literal mentioning CREATE FUNCTION without p_idempotency_key is never lexed as DDL");
+
+// isolates the doubled-quote unescape: without it the DDL payload reads as an
+// unterminated string and the unwired function goes UNDETECTED (fail-open)
+r = runHook(`DO $do$ BEGIN EXECUTE 'CREATE OR REPLACE FUNCTION public.dyn_q(p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN RAISE NOTICE ''starting''; UPDATE invoices SET total_cents = 0; END $fn$;'; END $do$;`);
+ok(isDeny(r), "unwired dynamic DDL containing doubled-quote literals is still detected");
+
+// isolates the opaque fallback in the STRING branch: a money literal like $5$
+// inside dynamic SQL looks like a dollar-quote opener with no closer. Kept at
+// the top level on purpose — inside a DO block the dollar branch's own fallback
+// would rescue it and this case would prove nothing.
+r = runHook(`EXECUTE 'INSERT INTO docs (body) VALUES (''costs $5$ each'')';`);
+ok(!isDeny(r), "an unlexable dynamic string payload is masked opaque, not treated as a file-level parse failure");
+
+// isolates the opaque fallback in the DOLLAR branch: a doc literal that trips
+// the content trigger (mentions both CREATE FUNCTION and p_idempotency_key) but
+// is prose, apostrophe and all — recursing into it must not deny the migration
+r = runHook(`INSERT INTO docs (body) VALUES ($doc$Always pass p_idempotency_key when you CREATE FUNCTION — don't skip it$doc$);`);
+ok(!isDeny(r), "prose payload that trips the content trigger but cannot be lexed is masked opaque, not denied");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);
