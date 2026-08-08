@@ -110,16 +110,40 @@ returns `{block: false}` today — verified — even against a table already in
 `BUSINESS_TABLES`. Add `MERGE` coverage plus a regression test before treating
 the guard as mutation-complete.
 
+## 6. The two textual-marker bypasses (same contingency as items 1 and 5)
+
+Both verified against current source this session; both survive items 1 and 5.
+
+- **Smoke-abort marker is matched textually, not structurally.** `classifySql()`
+  gates raw DDL/GRANT on `rolledBack`, and `smokeAbort`
+  (`.claude/hooks/live-testdata-lib.mjs:359`) is a plain regex over the raw query
+  for `raise exception 'SMOKE_PASS_ROLLBACK`. It does not require that match to be
+  inside an actual `DO` block, so
+  `ALTER TABLE public.profiles ADD COLUMN guard_bypass text; -- RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'`
+  returns `{block: false}` — real, committed DDL past the migration gauntlet on the
+  strength of a comment. The 2026-07-05 fix (recorded in the comment at lines
+  350-356) made the *transaction* case structural but left this one textual. Fix:
+  require the marker to sit inside a `DO $$ … $$` body that actually raises, or
+  parse the batch instead of regexing it.
+- **`[E2E]` exempts the whole batch unconditionally.** The marker short-circuits
+  ahead of the DML checks wherever it appears, so
+  `UPDATE public.invoices SET total_cents = 1 WHERE id = '…' /* [E2E] */`
+  returns `{block: false}` — verified against a table already in
+  `BUSINESS_TABLES`, so this is independent of item 5's coverage hole. Fix: bind
+  the exemption to demonstrably synthetic targets (an e2e-prefixed row/tenant
+  predicate), and make it per-statement rather than per-batch so a mixed batch
+  cannot smuggle a real mutation alongside a test one.
+
 ## Context that carries over
 
 - The `execute_sql` auto-allow is **deliberate and settled** (CodeRabbit
   withdrew its objection, learning recorded): `live-testdata-guard` denies
   mutating SQL deterministically, with `REAL-DATA-OK` as the only override —
-  **contingent on closing items 1 and 5**. The settled part is the design
+  **contingent on closing items 1, 5, and 6**. The settled part is the design
   (guard-enforced allow, not an ask entry), not a claim that the guard is
   currently gap-free. Don't re-litigate the design without new evidence.
 - Guard changes are classified risky by `codex-push-lib.mjs` (`.claude/hooks/`
-  path). That means items 1–3 and 5 **cannot** land from a cloud session at all:
+  path). That means items 1–3, 5, and 6 **cannot** land from a cloud session at all:
   a risky diff requires a fresh exact-SHA `gpt-5.6-sol` proof, the cloud
   container has no Codex CLI, and `pr-merge-guard.mjs:213-221` explicitly says
   to park rather than self-certify. Merging through the GitHub UI or auto-merge
