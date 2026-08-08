@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Read-only product pricing audit: added…
+
+Read-only product pricing audit: added docs/audits/2026-08-08-product-pricing-full-audit-and-strategy.md (cost capture, margins, vendor price history, 600-SKU update strategy); pushed branch claude/pricing-audit-strategy-jym8rr, draft PR #350. No code/schema/data changes.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `54b4aa94 Add full product pricing audit and strategy (2026-08-08)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-07 — Governed Software Factory REMOVED
 
 At Mason's direction, the entire Governed Autonomous Software Factory was removed:
