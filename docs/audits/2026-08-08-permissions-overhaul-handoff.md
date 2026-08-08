@@ -45,9 +45,10 @@ regeneration already has a freshness-flag pipeline; this rides it.
 ## 3. Cloud-session tooling gaps found this session (guards misfiring)
 
 - **`pr-merge-guard.mjs` fails closed in cloud containers** because it shells to
-  the `gh` CLI, which isn't installed there. Result: a cloud session can never
-  merge, even a fully green PR (this session had to fall back to Mason clicking
-  merge / GitHub auto-merge). Fix: resolve PR head/base SHAs + checks via the
+  the `gh` CLI, which isn't installed there. Result: a cloud session cannot
+  self-merge *through the guard* when `gh` is unavailable, even for a fully green
+  PR — this session had to fall back to Mason clicking merge / GitHub auto-merge,
+  which is legitimate only because this diff is not risky. Fix: resolve PR head/base SHAs + checks via the
   GitHub MCP tools or REST when `gh` is absent, keeping fail-closed only when
   neither source resolves. Note the guard's Codex-proof requirement also depends
   on the Codex CLI, which is likewise absent in cloud — parking risky merges for
