@@ -25,6 +25,19 @@
 -- function of revenue — deriving it from rounded revenue would silently change
 -- margin figures rather than just their precision.
 --
+-- KNOWN RESIDUAL — header vs. sum-of-lines is NARROWED, NOT CLOSED (Codex P2, PR #354)
+--   trg_recalc_order_totals does not read order_items.profit. It recomputes the
+--   header as ROUND(SUM(total_price) - SUM(cost_per_unit * total_units_needed), 2),
+--   and that COST side is never rounded per line. So with fractional-cent unit
+--   costs the header can still differ by a cent from SUM(order_items.profit) —
+--   e.g. qty 1, price 10.005, cost 5.004 stores profit 5.00 while the header
+--   computes 5.01.
+--   Closing it means changing where the HEADER derives from (summing the rounded
+--   line profits, or allocating the rounding residual across lines). That moves
+--   live money on the order header, so it is Mason's call and is deliberately NOT
+--   bundled here. This migration's claim is narrower than "drift eliminated": it
+--   stops the stored line profit from carrying sub-cent precision at all.
+--
 -- Like 20260808150400 this is FORWARD-LOOKING ONLY. It does not repair existing
 -- fractional rows; that restates live money and needs its own approval. The
 -- fin-money-whole-cents invariant predicate should be extended to cover profit

@@ -209,6 +209,33 @@ Coverage: the three round-26 redirect cases still refuse (the local `pushInstead
 
 Also fixed alongside it: the suite itself read the host's global git config instead of pinning its own, so the ambient rewrites failed it — and since the pre-commit hook runs that suite, it blocked every commit from a web session. It now pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to an empty file and strips inherited `GIT_CONFIG_*` at startup, so it tests the script rather than the machine.
 
+## OPEN — order header profit can still differ a cent from the sum of its own lines
+
+**Found 2026-08-08 (Codex P2, PR #354). Not a regression — it predates the
+rounding work and is unchanged by it.** `trg_recalc_order_totals` does not read
+`order_items.profit`. It recomputes the header as
+`ROUND(SUM(total_price) - SUM(cost_per_unit * total_units_needed), 2)`, and the
+cost side is never rounded per line. So when a unit cost carries fractional
+cents, the header profit and `SUM(order_items.profit)` — which
+`get_sales_detail_report` shows — can disagree by a cent, and by more across
+many lines.
+
+`20260808150400` and `20260808170000` round the stored line columns
+(`total_price`, `profit`, `commission_amount`) at write time. That stops the
+stored money from carrying sub-cent precision, which was the finding they were
+written for; it does **not** make the header agree with its lines.
+
+**Why it is parked, not fixed:** closing it means changing where the header
+derives from — summing the rounded line profits, or allocating the rounding
+residual across lines. Either moves live money on `orders.total_profit`. That is
+a money-semantics decision for Mason, and the two rounding migrations are not
+applied yet, so nothing about it is urgent.
+
+**In plain English:** an order's profit total and the profit numbers on its own
+lines can be off by a penny from each other when a product's cost has more than
+two decimal places. Nothing is lost or double-counted — it is a display/rounding
+mismatch between two places that each do their own math.
+
 ## RESOLVED LIVE — Quote and Customer whole-record saves reject stale editors
 
 **Applied live 2026-07-30.** The frontend-first bundle landed through PR #290, then the governed migration was submitted as `20260730201230_quote_customer_row_version_guard` and Supabase assigned ledger/disk version `20260730235031`. Trigger-maintained `row_version` columns now close the known last-write-wins exposure for whole-record `save_quote` and `save_customer` updates. Immediate catalog, trigger, overload, owner, search-path, grant, and child-table ACL checks passed. The primary Quote/Customer rollback chain plus planned-hold, restore/version, and drawn-booking companion chains all reached exact `SMOKE_PASS_ROLLBACK`; zero fixture rows remained. All 21 standing live invariant predicates returned zero unallowlisted findings. The schema registry was refreshed again through the later live high-water `20260731001654` and retains the assigned row-version migration name and both columns. Cached pre-migration bundles fail closed and must refresh; the already-deployed compatible bundle avoids an all-user outage. No rollout toggle is required.
