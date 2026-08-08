@@ -168,11 +168,28 @@ describe('recordPageVisit', () => {
   });
 
   it('counts a redirect alias pair as one visit, not two', () => {
-    // /field-invoices/unbilled immediately <Navigate>s to /field-invoices?tab=…,
-    // committing two pathnames for one user click. Only one should count.
+    // /field-invoices/unbilled immediately <Navigate replace>s to
+    // /field-invoices?tab=…, committing two pathnames for one user click.
+    // The REPLACE-committed second pathname must not count again.
     recordPageVisit('/field-invoices/unbilled', 'Unbilled Field Invoices');
-    recordPageVisit('/field-invoices', 'Field Invoices');
+    recordPageVisit('/field-invoices', 'Field Invoices', { isRedirect: true });
     const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
     expect(counts[getVisitCountKey('/field-invoices')]).toBe(1);
+  });
+
+  it('counts quick same-key visits from real navigations to different pages', () => {
+    // Two distinct pages sharing one canonical key, visited back-to-back by
+    // user clicks (no redirect flag) — both are genuine visits.
+    recordPageVisit('/invoices/field-app/new', 'Field Invoice');
+    recordPageVisit('/field-invoices', 'Field Invoices');
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    expect(counts[getVisitCountKey('/field-invoices')]).toBe(2);
+  });
+
+  it('does not double-count an effect re-fire on the same pathname', () => {
+    recordPageVisit('/orders', 'Orders');
+    recordPageVisit('/orders', 'Orders Updated Title');
+    const counts = JSON.parse(localStorage.getItem('crx-page-visit-counts') || '{}');
+    expect(counts[getVisitCountKey('/orders')]).toBe(1);
   });
 });

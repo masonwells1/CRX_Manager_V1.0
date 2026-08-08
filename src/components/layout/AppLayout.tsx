@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigationType } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import MobileBottomNav from './MobileBottomNav';
 import TopBar from './TopBar';
@@ -14,14 +14,21 @@ export default function AppLayout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const { title, accent } = usePageMeta();
   const location = useLocation();
+  // REPLACE = a <Navigate replace> redirect alias committed this pathname,
+  // not a user click — lets the visit counter skip the duplicate.
+  const navigationType = useNavigationType();
   const openMobileNav = useCallback(() => setMobileOpen(true), []);
   const closeMobileNav = useCallback(() => setMobileOpen(false), []);
 
   // Record page visits for command palette recent items (full title)
   useEffect(() => {
     if (title) {
-      recordPageVisit(location.pathname, title + (accent ? ' ' + accent : ''));
+      recordPageVisit(location.pathname, title + (accent ? ' ' + accent : ''), {
+        isRedirect: navigationType === 'REPLACE',
+      });
     }
+    // navigationType is read at record time, not a reason to re-record
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname, title, accent]);
 
   // Global Ctrl+K / Cmd+K shortcut

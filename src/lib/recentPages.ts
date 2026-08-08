@@ -66,7 +66,17 @@ export const VISIT_COUNTS_CHANGED_EVENT = 'crx:visit-counts-changed';
 // same canonical key moments apart. Skip the duplicate count.
 const REDIRECT_DEDUPE_MS = 5000;
 
-export function recordPageVisit(path: string, title: string) {
+export interface RecordPageVisitOptions {
+  /**
+   * True when this pathname was committed by a REPLACE navigation (a
+   * `<Navigate replace>` redirect alias), not a user click. Only then may a
+   * same-key visit within the dedupe window be skipped — a genuine PUSH visit
+   * to a sibling page sharing the canonical key always counts.
+   */
+  isRedirect?: boolean;
+}
+
+export function recordPageVisit(path: string, title: string, options?: RecordPageVisitOptions) {
   let previous: RecentItem | undefined;
   try {
     const items = getRecentItems();
@@ -81,6 +91,7 @@ export function recordPageVisit(path: string, title: string) {
     const key = getVisitCountKey(path);
     const isRedirectDuplicate =
       previous !== undefined &&
+      (options?.isRedirect === true || previous.path === path) &&
       getVisitCountKey(previous.path) === key &&
       Date.now() - previous.timestamp < REDIRECT_DEDUPE_MS;
     if (!isRedirectDuplicate) {
