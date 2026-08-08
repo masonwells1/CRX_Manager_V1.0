@@ -32,7 +32,7 @@ Read-only audit of everything that touches product pricing: cost capture, margin
 
 ## 3. Defects and design risks (ranked)
 
-1. **Margin/markup columns are swapped in live data.** Sampled rows show `tierN_margin` actually holds gross margin ((price−cost)/price) and `tierN_gross_margin` holds markup (price/cost−1) — the opposite of what the trigger in `20260206191700_add_gross_margin_display.sql` computes and what the names say (589/594 rows inconsistent with the trigger formula). Any report or decision reading these columns by name may present markup as margin or vice versa. Needs a root-cause pass and either a data fix or a rename.
+1. **Margin/markup column naming is misleading — but NOT a live bug (resolved on investigation, 2026-08-08).** `tierN_margin` holds margin-on-price and `tierN_gross_margin` holds markup-on-cost; the trigger comments in `20260206191700` describe a formula that was deliberately corrected 26 minutes later by `20260206192224_fix_margin_terminology.sql`, and every engine since (currently `20260718190000_supplier_pricing_phase1a_cutover.sql:95`) plus all UI consumers use the live semantics consistently, with definitions shown on-screen. Fix is documentation-only: record the canonical semantics in `docs/reference/gotchas.md` so future audits don't re-flag it. No rename, no data fix.
 2. **Returns reverse revenue but never COGS** (`issue_return_credit`) — known open defect; every return overstates cost and understates margin. This corrupts the exact margin numbers this audit is about. (The sibling partial-delivery cost defect from the June hunt report is already fixed: `20260620220000_complete_delivery_audit_and_partial_cost.sql` recomputes `invoices.total_cost_cents` from delivered lines, preserved in `20260716120104`.)
 3. **Reports disagree on cost source.** Dashboard/report RPCs (`20260308200000`) read mutable `order_items.cost_per_unit`, not the immutable `cost_at_time_cents` snapshot; `Reports.tsx` and `SalesReports.tsx` compute margin in React from raw selects while two other pages use server RPCs. Two report pages can show different margins for the same period.
 4. **Quote costs re-sync live on every save** (`20260730235031:419`): a stored quote's margin silently changes when admin updates product cost. Price overrides are preserved; cost is not.
@@ -51,7 +51,7 @@ Read-only audit of everything that touches product pricing: cost capture, margin
 
 **Phase B — fix the margin-corrupting defects (small, high value):**
 4. Returns-COGS fix (already recommended "yes, soon" in the inventory-costing plan).
-5. Resolve the margin/markup column swap (investigate → data fix or rename + report audit).
+5. ~~Resolve the margin/markup column swap~~ Investigated 2026-08-08: not a bug (see finding 1); document the semantics in `docs/reference/gotchas.md`.
 6. Point margin reports at `cost_at_time_cents` and move `Reports.tsx`/`SalesReports.tsx` margin math server-side so all four report surfaces agree.
 
 **Phase C — guardrails and depth (after A/B):**
