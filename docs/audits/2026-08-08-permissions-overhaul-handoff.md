@@ -67,8 +67,13 @@ regeneration already has a freshness-flag pipeline; this rides it.
   segments that are actually git invocations, not `-m` string contents.
 - **`bash-safety.mjs` self-matching**: the guard matches its own patterns when
   they appear inside test commands or commit messages (heredocs, `git commit -m`
-  text). Same fix direction: exclude quoted `-m`/heredoc payloads from matching,
-  or accept the annoyance (workaround used: write test files via the Write tool).
+  text). Fix direction: skip quoted `-m` message arguments, which are never
+  executed. **Do not** blanket-exclude heredoc bodies — a heredoc piped to
+  `bash`/`sh` *is* executable input, and suppressing it would hide exactly the
+  `git read-tree --reset -u HEAD` class item 1 exists to catch. Only suppress
+  heredocs whose consumer provably does not execute them (e.g. `cat > file`), and
+  recursively scan interpreter-fed bodies. Interim workaround: write test files
+  via the Write tool.
 
 ## 4. Standing items (not code)
 
@@ -150,4 +155,13 @@ Both verified against current source this session; both survive items 1 and 5.
   to park rather than self-certify. Merging through the GitHub UI or auto-merge
   bypasses the local hook but **not** the policy — it is not an alternate
   landing path for these items. Do them in a local session that can mint the
-  proof (this docs-only PR is not risky, which is why it can land from cloud).
+  proof.
+- **This PR is itself risky by the classifier, despite being docs-only.**
+  `riskyFiles()` returns `[]` for it, but `pr-merge-guard.mjs:157-168` then scans
+  the whole diff, and `contentIsRisky()` returns **true** — verified this session —
+  because the prose quotes money/permission tokens such as `total_cents`. The guard
+  denies `--auto` outright for a risky diff (`pr-merge-guard.mjs:176-179`), so the
+  auto-merge armed on this PR was wrong and has been disabled; it now waits for
+  Mason. Worth deciding separately whether content-flagging should apply to
+  `docs/**` at all, or whether documenting a token should be allowed to make a
+  prose file risky.
