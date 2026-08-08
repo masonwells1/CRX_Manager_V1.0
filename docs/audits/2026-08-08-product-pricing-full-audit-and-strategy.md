@@ -33,7 +33,7 @@ Read-only audit of everything that touches product pricing: cost capture, margin
 ## 3. Defects and design risks (ranked)
 
 1. **Margin/markup columns are swapped in live data.** Sampled rows show `tierN_margin` actually holds gross margin ((price−cost)/price) and `tierN_gross_margin` holds markup (price/cost−1) — the opposite of what the trigger in `20260206191700_add_gross_margin_display.sql` computes and what the names say (589/594 rows inconsistent with the trigger formula). Any report or decision reading these columns by name may present markup as margin or vice versa. Needs a root-cause pass and either a data fix or a rename.
-2. **Returns reverse revenue but never COGS** (`issue_return_credit`) — known open defect; every return overstates cost and understates margin. Same family: partial delivery corrects price but not cost (overnight-bug-hunt REPORT.md:334). These corrupt the exact margin numbers this audit is about.
+2. **Returns reverse revenue but never COGS** (`issue_return_credit`) — known open defect; every return overstates cost and understates margin. This corrupts the exact margin numbers this audit is about. (The sibling partial-delivery cost defect from the June hunt report is already fixed: `20260620220000_complete_delivery_audit_and_partial_cost.sql` recomputes `invoices.total_cost_cents` from delivered lines, preserved in `20260716120104`.)
 3. **Reports disagree on cost source.** Dashboard/report RPCs (`20260308200000`) read mutable `order_items.cost_per_unit`, not the immutable `cost_at_time_cents` snapshot; `Reports.tsx` and `SalesReports.tsx` compute margin in React from raw selects while two other pages use server RPCs. Two report pages can show different margins for the same period.
 4. **Quote costs re-sync live on every save** (`20260730235031:419`): a stored quote's margin silently changes when admin updates product cost. Price overrides are preserved; cost is not.
 5. **No active automated cost-update path.** PO receiving stopped writing `current_cost` in March (deliberate — cost is a pricing basis, not a purchase echo), and the governed replacement is feature-flagged off. Cost updates are 100% manual admin action, with `cost_updated_date` effectively writer-less.
@@ -50,7 +50,7 @@ Read-only audit of everything that touches product pricing: cost capture, margin
 3. **Write the pricing strategy doc** (one page, Mason decides): target gross margin by category/tier, floor margin, tier formula, and a refresh cadence (e.g., monthly workbook cycle + event-driven vendor sheet imports). Today 209 distinct tier-1 markups exist with no stated policy.
 
 **Phase B — fix the margin-corrupting defects (small, high value):**
-4. Returns-COGS fix (already recommended "yes, soon" in the inventory-costing plan) and the partial-delivery cost correction.
+4. Returns-COGS fix (already recommended "yes, soon" in the inventory-costing plan).
 5. Resolve the margin/markup column swap (investigate → data fix or rename + report audit).
 6. Point margin reports at `cost_at_time_cents` and move `Reports.tsx`/`SalesReports.tsx` margin math server-side so all four report surfaces agree.
 
