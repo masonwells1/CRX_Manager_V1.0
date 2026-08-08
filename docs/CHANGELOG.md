@@ -66,6 +66,20 @@ delete the unattended-run flag is a guard-bypass risk.
 `migration-apply-guard.test.mjs` gained fixtures for the missing- and stale-snapshot blocks (74
 assertions); `migration-ordering-lib.test.mjs` covers the version-prefixed shape (17 assertions).
 
+**Third review round (CodeRabbit).** One real hole, closed. A snapshot could be present, fresh and
+non-empty yet contain **no parseable timestamps at all** — it satisfied every presence and freshness
+check, the ordering comparison then had nothing to compare, abstained, and returned `ok`. The apply
+sailed through a gate that looked satisfied. Both halves are now fixed: the writer refuses to emit a
+snapshot in which no row carries a timestamp, and the guard blocks both that snapshot shape and any
+abstained verdict on a timestamped candidate — an unknown verdict is not a pass. Also aligned the
+guard's row mapping with the writer's (a `{version, name}` row was losing its timestamp on the read
+path), stopped `findRows` from adopting an unrelated array as ledger rows, and replaced a hardcoded
+project ref with an env lookup. Coverage: apply-guard 79 assertions, ordering-lib 18, including every
+fail-closed branch. Doc fixes: the handoff now lists all four SQL migration paths (`150300` was
+undercounted), and the cancellation verification names the correct field per path —
+`quantity_prebooked` decrements for undelivered order units, `quantity_available` increments only for
+active quote holds.
+
 Skipped with reason: the `next_po_number` zero-caller entry in `.claude/caller-graph.json` is a
 pre-existing limitation of the generator's directory scope (it does not scan `.sql`), not something
 this branch introduced, and the artifact must not be hand-edited. CodeRabbit's `factory-board.test.mjs`

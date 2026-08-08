@@ -150,6 +150,27 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r), "stale (48h) snapshot → apply denied");
     ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "stale-snapshot deny names the ordering guard");
 
+    // Every remaining fail-closed branch. A regression in any of these opens the
+    // guard silently, which is worse than it never having existed.
+    writeAppliedSnapshot(stateDir, { applied: [] });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "empty snapshot → apply denied");
+
+    writeFileSync(path.join(stateDir, "applied-migrations.json"), JSON.stringify({ applied: ["20260808150400_x"] }));
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "snapshot with no captured_at → apply denied");
+
+    writeFileSync(path.join(stateDir, "applied-migrations.json"), "{not json");
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "unparseable snapshot → apply denied");
+
+    // The subtle one: present, fresh, non-empty — but nothing is timestamped, so
+    // no ordering verdict is possible. That must not read as a pass.
+    writeAppliedSnapshot(stateDir, { applied: ["deactivation_revokes_auth_access", "initial_schema"] });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "fresh snapshot with no parseable timestamps → apply denied");
+    ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "timestamp-less snapshot deny names the ordering guard");
+
     // A fresh snapshot from here on: MIG is dated 20990101000000, so it is
     // newer than everything applied and the ordering check passes cleanly.
     writeAppliedSnapshot(stateDir);

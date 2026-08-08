@@ -31,8 +31,18 @@ Everything else — writing the SQL, tests, review — can be done anywhere.
 on the branch. They have NOT been applied to live.** The section below is kept as the rationale for
 each; treat the file list in `docs/CHANGELOG.md` as the authoritative inventory.
 
-Note that only three of the four are SQL migrations. **M-1 is a hook, not a migration** — it does not
-belong in `supabase/migrations/` and must not be looked for there.
+The branch carries **four SQL migrations plus one hook**. **M-1 is the hook, not a migration** — it
+does not belong in `supabase/migrations/` and must not be looked for there. The four SQL files are:
+
+```text
+supabase/migrations/20260808150100_restore_batch_apply_prepayments_actor_guard.sql
+supabase/migrations/20260808150200_cancel_order_zeroes_quantity_remaining.sql
+supabase/migrations/20260808150300_revoke_inventory_truncate_and_mark_payments_dead.sql
+supabase/migrations/20260808150400_round_money_to_whole_cents.sql
+```
+
+All four belong in the backup, approval, and apply sequence. `150300` is easy to miss because it is
+described under "Smaller items" below rather than as a numbered M-item — it is still a real migration.
 
 All SQL here is **forward-only**. Never replay an existing migration file — that is the exact
 mechanism that caused finding #1.
@@ -102,7 +112,15 @@ So M-4 zeroes `quantity_remaining` and nothing else. **Do NOT add a second stock
 would double-release inventory. The residual `quantity_prebooked = 36` is March 2026 historical drift
 (audit L2), not a cancellation defect.
 
-**Verify in the real UI**, not just tests: cancel an order, confirm the stock returns to available and a ledger row is written.
+**Verify in the real UI**, not just tests, and check the RIGHT field — the two paths differ:
+
+* Undelivered order units **decrement `inventory.quantity_prebooked`**. They do not return to
+  `quantity_available`.
+* Active quote holds are what **increment `inventory.quantity_available`**.
+* Either way, confirm an `inventory_transactions` row is written.
+
+Also confirm `order_items.quantity_remaining` is now 0 on the cancelled lines — that is what this
+migration adds.
 
 **Already fixed on this branch** — the related go-live test (`tests/e2e/golive/stream0-db-integrity.spec.ts`) previously counted that stranded 247 as a real discrepancy. It now filters on `orders.status not.in.(cancelled,voided)`. Both status values were verified present in `orders_status_check`.
 
@@ -146,7 +164,12 @@ Two things to know:
 - The branch was **17 commits behind `origin/main`** and has been merged up. One conflict in `docs/CHANGELOG.md` (two entries competing for the top slot) — resolved keeping both in date order, nothing dropped.
 - `src/pages/SupplierPricing.test.tsx` failed once in a full run and passed in isolation on both this branch and `main`, and on a clean full re-run. Treated as a flake. The diff touches no `src/` file, so it cannot be a regression from this work. **If it recurs locally, it is worth a real look** — do not inherit the "known flake" label uncritically.
 
-One unrelated commit is on the branch deliberately: `51582137`, an auto-added permission entry in `.claude/settings.local.json` written by the autopilot tooling, not by hand. It grants `rm -f` of the OVERNIGHT-INTENT flag. Committed standalone so it is visible in history; `git revert 51582137` drops it if Mason prefers.
+Commit `51582137` added an auto-generated permission entry to `.claude/settings.local.json` granting
+`rm -f` of the OVERNIGHT-INTENT flag — written by the autopilot tooling, not by hand. **That grant has
+since been REMOVED** (commit `c352fec6`, after CodeRabbit independently flagged it as a guard-bypass
+risk). Do not revert `51582137` and do not re-add the entry: the current
+`.claude/settings.local.json` deliberately has no `OVERNIGHT-INTENT.flag` permission, so clearing that
+flag now requires an explicit prompt each time.
 
 ---
 
