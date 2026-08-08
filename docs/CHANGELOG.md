@@ -15,6 +15,32 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+## 2026-08-08 — idempotency-body-check round-11: EXECUTE payloads fail CLOSED again
+
+Codex reviewed the merged round-10 commit (`86bf897b`) and returned three P2s;
+all three are fixed here.
+
+1. **Fail-open (the serious one).** Round 10 masked an EXECUTE payload the lexer
+   could not read as opaque data. That ERASED real dynamic DDL, so an unwired
+   mutating function containing something like `DEFAULT 'costs $5$ each'` passed
+   a guard that had blocked it the day before. Executable payloads now fail
+   CLOSED again; only payloads judged to be data are skipped, and those are
+   never handed to the lexer at all, so they cannot reach the fail-closed path.
+2. **False-deny on EXECUTE data arguments.** "Anywhere in an EXECUTE statement"
+   classified `format('INSERT … %L', '…')` data arguments as executable SQL.
+   Classification is now per-literal content, not statement-wide.
+3. **DDL assembled by concatenation was invisible.** `v_ddl := $a$CREATE
+   FUNCTION foo($a$ || $b$…p_idempotency_key…$b$` splits the signature across
+   fragments, so no fragment ever shows a complete parameter list. That shape is
+   now refused outright with instructions to build the DDL as a single literal
+   (the exempt marker remains the escape hatch).
+
+The recursion trigger is now a real `CREATE FUNCTION <name>(` header **and** a
+`p_idempotency_key` mention. Either test alone false-denies documentation, and
+with parse failures fail-closed again a false trigger blocks a valid migration.
+60 assertions; each of the five new guards was individually reverted and the
+suite went red for each.
+
 ## 2026-08-08 — idempotency-body-check round-10: dynamic-DDL fail-open + data-literal false-deny — FIXED
 
 Two Codex P2 findings landed on PR #335 after it merged, both now closed.

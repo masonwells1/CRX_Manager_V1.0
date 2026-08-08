@@ -439,17 +439,48 @@ ok(!isDeny(r), "doc literal mentioning CREATE FUNCTION without p_idempotency_key
 r = runHook(`DO $do$ BEGIN EXECUTE 'CREATE OR REPLACE FUNCTION public.dyn_q(p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN RAISE NOTICE ''starting''; UPDATE invoices SET total_cents = 0; END $fn$;'; END $do$;`);
 ok(isDeny(r), "unwired dynamic DDL containing doubled-quote literals is still detected");
 
-// isolates the opaque fallback in the STRING branch: a money literal like $5$
-// inside dynamic SQL looks like a dollar-quote opener with no closer. Kept at
-// the top level on purpose — inside a DO block the dollar branch's own fallback
-// would rescue it and this case would prove nothing.
+// isolates the STRING-branch content gate: a money literal like $5$ inside
+// dynamic SQL looks like a dollar-quote opener with no closer. The literal
+// carries no CREATE FUNCTION header, so it is never lexed as SQL at all.
 r = runHook(`EXECUTE 'INSERT INTO docs (body) VALUES (''costs $5$ each'')';`);
-ok(!isDeny(r), "an unlexable dynamic string payload is masked opaque, not treated as a file-level parse failure");
+ok(!isDeny(r), "a dynamic string payload with no CREATE FUNCTION header is masked opaque, never lexed");
 
-// isolates the opaque fallback in the DOLLAR branch: a doc literal that trips
-// the content trigger (mentions both CREATE FUNCTION and p_idempotency_key) but
-// is prose, apostrophe and all — recursing into it must not deny the migration
+// isolates the DOLLAR-branch content gate: prose that mentions both
+// CREATE FUNCTION and p_idempotency_key, apostrophe and all, is not a header
 r = runHook(`INSERT INTO docs (body) VALUES ($doc$Always pass p_idempotency_key when you CREATE FUNCTION — don't skip it$doc$);`);
-ok(!isDeny(r), "prose payload that trips the content trigger but cannot be lexed is masked opaque, not denied");
+ok(!isDeny(r), "prose mentioning CREATE FUNCTION is not a header and is never lexed as DDL");
+
+// --- Round 11 (Codex review of the merged round-10 commit) -----------------
+
+// P2-1 fail-open: an EXECUTE payload the lexer cannot read used to be blanked,
+// which ERASED real DDL and let an unwired mutating function through.
+r = runHook(`DO $do$ BEGIN EXECUTE 'CREATE OR REPLACE FUNCTION public.dyn_fo(p_idempotency_key text DEFAULT NULL::text, p_note text DEFAULT ''costs $5$ each'') RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;'; END $do$;`);
+ok(isDeny(r), "an executable EXECUTE payload the lexer cannot read fails CLOSED, never masked away");
+
+// P2-1 counterpart: the same fail-closed rule must not fire on a payload that
+// is data — the content gate keeps it out of the lexer entirely.
+r = runHook(`DO $do$ BEGIN EXECUTE format('INSERT INTO docs (body) VALUES (%L)', 'a note about $5$ prices'); END $do$;`);
+ok(!isDeny(r), "a data argument in an EXECUTE statement is not lexed and cannot fail closed");
+
+// P2-3 false-deny: a %L data argument that happens to contain function-shaped
+// prose must not be scanned as executable SQL.
+r = runHook(`DO $do$ BEGIN EXECUTE format('INSERT INTO docs (body) VALUES (%L)', 'we don''t allow that'); END $do$;`);
+ok(!isDeny(r), "an apostrophe in an EXECUTE data argument does not deny the migration");
+
+// P2-2 fail-open: DDL glued together from fragments is unlexable by
+// construction — no fragment holds a complete parameter list — so it must be
+// refused rather than silently skipped.
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  v_ddl := $a$CREATE OR REPLACE FUNCTION public.dyn_cat(p_amount_cents integer$a$ || $b$, p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;$b$;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "CREATE FUNCTION assembled by concatenating literals is refused, not silently skipped");
+
+// the concat guard is statement-scoped and header-shaped: ordinary string
+// building in a migration must stay allowed.
+r = runHook(`DO $do$ DECLARE v_msg text; BEGIN v_msg := 'total: ' || 'ok'; EXECUTE 'ANALYZE invoices'; END $do$;`);
+ok(!isDeny(r), "ordinary || string building near an EXECUTE is not treated as assembled DDL");
 
 console.log(`idempotency-body-check: ${pass} assertions passed`);

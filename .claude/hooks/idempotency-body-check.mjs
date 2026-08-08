@@ -161,6 +161,24 @@ function inExecuteStatement(out) {
   return /\bEXECUTE\b/i.test(out.slice(out.lastIndexOf(";") + 1));
 }
 
+/** A REAL CREATE FUNCTION header — name plus an opening paren — as opposed to
+ * the words "create function" appearing in prose. Round 10 gated recursion on
+ * the loose word-pair plus a p_idempotency_key mention; the pair matched prose
+ * (false deny) and the conjunction hid DDL split across two literals (Codex P2
+ * round 11). Requiring the header shape is both tighter AND wider: prose no
+ * longer qualifies, and a fragment carrying only the header still does. */
+const CREATE_FN_HEAD_RE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+[\w."]+\s*\(/i;
+
+/** A literal is worth lexing as SQL only when it could carry THIS guard's bug
+ * class: a real function header AND the parameter this guard is about. Either
+ * test alone false-denies documentation — the header shape matches a doc
+ * example, the parameter name matches prose advice — and prose apostrophes now
+ * fail CLOSED, which would block valid migrations. DDL split across fragments
+ * satisfies neither test and is caught by the concatenation check instead. */
+function carriesBugClass(payload) {
+  return CREATE_FN_HEAD_RE.test(payload) && /p_idempotency_key/i.test(payload);
+}
+
 function maskSqlNoise(text) {
   let out = "";
   let i = 0;
@@ -200,19 +218,20 @@ function maskSqlNoise(text) {
         // Everything else is opaque data: mask it wholesale, since lexing a
         // payload like $q$can't$q$ as SQL sees an unterminated quote and
         // falsely denies the whole migration (Codex P2 round 7).
-        // The content trigger additionally requires p_idempotency_key: a prose
-        // literal that merely MENTIONS "CREATE FUNCTION" was lexed as SQL, and
-        // one apostrophe in it ("can't") read as an unterminated string and
-        // denied the whole migration (Codex P2 round 10). Only payloads that
-        // could actually carry this guard's bug class are worth recursing into.
+        // Round 11: the content trigger is the HEADER shape, not the word pair
+        // plus p_idempotency_key. Prose that merely mentions "create function"
+        // no longer qualifies (that was the round-10 false deny), and a payload
+        // is judged on its own content rather than on sitting somewhere in an
+        // EXECUTE statement — so a data argument alongside dynamic DDL stays
+        // opaque instead of being lexed as SQL (Codex P2 round 11).
         const isExecutable = /\b(?:AS|DO|EXECUTE)\s+$/i.test(out) ||
-          inExecuteStatement(out) ||
-          (/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION/i.test(payload) && /p_idempotency_key/i.test(payload));
-        // A payload we chose to recurse into but cannot lex is data, not a
-        // parse failure of THIS file: mask it opaque instead of failing the
-        // whole migration closed. The outer level still fails closed on a
-        // genuinely unterminated construct.
-        const inner = (isExecutable ? maskSqlNoise(payload) : null) ?? " ".repeat(payload.length);
+          carriesBugClass(payload);
+        // FAIL CLOSED on a payload we judged executable: masking it opaque
+        // would erase real DDL and let an unwired function through, which is
+        // exactly this guard's bug class (Codex P2 round 11). Payloads that are
+        // data are never lexed at all, so they cannot reach this.
+        const inner = isExecutable ? maskSqlNoise(payload) : " ".repeat(payload.length);
+        if (inner === null) return null;
         out += tag + inner + tag;
         i = close + tag.length;
         continue;
@@ -234,10 +253,18 @@ function maskSqlNoise(text) {
       // Round 10 widened "EXECUTE-adjacent" to "anywhere in an EXECUTE
       // statement" so `EXECUTE ('CREATE ...')` and the non-first argument of
       // `EXECUTE format('%s', 'CREATE ...')` are inspected too.
-      const isDynamicSql = ch === "'" && inExecuteStatement(out);
+      // Round 11 narrows this again: being inside an EXECUTE statement is not
+      // enough on its own. `format('INSERT ... %L', 'some prose')` passes its
+      // later argument as DATA, and lexing that as SQL false-denied valid
+      // migrations. The literal must also carry a CREATE FUNCTION header —
+      // which is the only thing this guard could find in it anyway.
+      const isDynamicSql = ch === "'" && inExecuteStatement(out) &&
+        carriesBugClass(text.slice(i + 1, end - 1));
       if (isDynamicSql) {
         const payload = text.slice(i + 1, end - 1);
-        const inner = maskSqlNoise(payload) ?? " ".repeat(payload.length);
+        // FAIL CLOSED — see the dollar-quote branch above.
+        const inner = maskSqlNoise(payload);
+        if (inner === null) return null;
         out += ch + inner + ch;
       } else {
         out += ch + " ".repeat(end - i - 2) + ch;
@@ -362,6 +389,30 @@ if (masked === null) {
     "the idempotency guard cannot inspect it. Fix the unterminated construct, or if it is " +
     "genuinely valid SQL the lexer mishandles, add the exempt marker and get a manual review."
   );
+}
+// Dynamic DDL glued together from several literals cannot be lexed: the
+// parameter list is split across fragments, so no single payload ever shows a
+// complete signature and a hidden (or absent) p_idempotency_key is invisible
+// (Codex P2 round 11). Fail CLOSED on that shape — a statement that builds or
+// executes a string carrying a CREATE FUNCTION header via `||` — and tell the
+// author to assemble the DDL as one literal so this guard can read it.
+if (masked !== null) {
+  let stmtStart = 0;
+  for (let idx = 0; idx <= masked.length; idx++) {
+    if (idx !== masked.length && masked[idx] !== ";") continue;
+    const stmtMask = masked.slice(stmtStart, idx);
+    const stmtRaw = content.slice(stmtStart, idx);
+    if (stmtMask.includes("||") && /:=|\bEXECUTE\b/i.test(stmtMask) && CREATE_FN_HEAD_RE.test(stmtRaw)) {
+      violations.push(
+        "This migration assembles a CREATE FUNCTION statement by concatenating (||) several string " +
+        "literals. Split that way, no fragment carries a complete parameter list, so the idempotency " +
+        "guard cannot tell whether p_idempotency_key is declared or wired. Build the dynamic DDL as a " +
+        "single literal, or add the exempt marker and get a manual review."
+      );
+      break;
+    }
+    stmtStart = idx + 1;
+  }
 }
 let head;
 while (masked !== null && (head = fnHeadRe.exec(masked)) !== null) {
