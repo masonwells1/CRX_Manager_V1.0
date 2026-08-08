@@ -111,23 +111,66 @@ const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unkno
 // scripts/refresh-applied-migrations.mjs from
 // supabase_migrations.schema_migrations.
 //
-// If no snapshot exists the check ABSTAINS rather than guessing — a wrong block
-// would stop legitimate forward work, and the proof/Codex gates below still
-// apply in full.
+// MISSING EVIDENCE IS A BLOCK, NOT A PASS. The snapshot is gitignored, so a
+// clean checkout has none — if that abstained, the guard would be absent
+// exactly when it is most needed, recreating the incident it exists to stop
+// (Codex P1, PR #348). A missing, unreadable, or stale snapshot therefore
+// refuses the apply and tells the operator how to produce one. Only the
+// library's internal "this name has no timestamp" case abstains.
+const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 {
+  const snapPath = path.join(stateDir, "applied-migrations.json");
+  const howTo =
+    `Refresh it first (read-only):\n` +
+    `  1. Via Supabase MCP execute_sql on ${'rhyzpcqhnizqbxphqdkr'}:\n` +
+    `       select version, name from supabase_migrations.schema_migrations order by version;\n` +
+    `  2. Pipe that JSON into: node scripts/refresh-applied-migrations.mjs\n` +
+    `The snapshot is gitignored and per-checkout, so a fresh clone or a newer apply elsewhere ` +
+    `means it must be regenerated. Do NOT hand-write it.`;
+
   let appliedNames = [];
+  let snapshotAgeMs = null;
   try {
-    const snapPath = path.join(stateDir, "applied-migrations.json");
-    if (existsSync(snapPath)) {
-      const parsed = JSON.parse(readFileSync(snapPath, "utf8"));
-      const rows = Array.isArray(parsed) ? parsed : parsed?.applied;
-      if (Array.isArray(rows)) {
-        appliedNames = rows
-          .map((r) => (typeof r === "string" ? r : (r?.name ?? r?.version ?? "")))
-          .filter(Boolean);
-      }
+    if (!existsSync(snapPath)) {
+      out("block",
+        `MIGRATION ORDERING GUARD: no applied-migration snapshot at ${snapPath}, so there is no ` +
+        `evidence of what the database has already run and an out-of-order replay could not be ` +
+        `detected. Refusing the apply.\n\n${howTo}`);
     }
-  } catch { appliedNames = []; } // unreadable snapshot → abstain, do not guess
+    const parsed = JSON.parse(readFileSync(snapPath, "utf8"));
+    const rows = Array.isArray(parsed) ? parsed : parsed?.applied;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      out("block",
+        `MIGRATION ORDERING GUARD: the applied-migration snapshot at ${snapPath} contains no rows. ` +
+        `An empty snapshot is indistinguishable from "nothing has ever been applied" and would ` +
+        `silently disable this check. Refusing the apply.\n\n${howTo}`);
+    }
+    appliedNames = rows
+      .map((r) => (typeof r === "string" ? r : (r?.name ?? r?.version ?? "")))
+      .filter(Boolean);
+
+    const capturedAt = Date.parse(parsed?.captured_at ?? "");
+    if (Number.isFinite(capturedAt)) {
+      snapshotAgeMs = Date.now() - capturedAt;
+      if (snapshotAgeMs > SNAPSHOT_MAX_AGE_MS) {
+        out("block",
+          `MIGRATION ORDERING GUARD: the applied-migration snapshot is ` +
+          `${Math.floor(snapshotAgeMs / 3600000)}h old (captured ${parsed.captured_at}). Migrations ` +
+          `applied since then are invisible to this check, so it could pass a replay that is ` +
+          `actually behind the live high-water mark. Refusing the apply.\n\n${howTo}`);
+      }
+    } else {
+      out("block",
+        `MIGRATION ORDERING GUARD: the applied-migration snapshot has no usable captured_at ` +
+        `timestamp, so its freshness cannot be established. Refusing the apply.\n\n${howTo}`);
+    }
+  } catch (err) {
+    // out() exits the process, so a genuine block above never lands here.
+    out("block",
+      `MIGRATION ORDERING GUARD: could not read the applied-migration snapshot at ${snapPath} ` +
+      `(${err?.message || err}). Refusing the apply rather than proceeding without ordering ` +
+      `evidence.\n\n${howTo}`);
+  }
 
   try {
     const ordering = checkMigrationOrdering({ name: migName, sql: migQuery, appliedNames });

@@ -81,9 +81,37 @@ if (!rows) {
   process.exit(1);
 }
 
+// Preserve the timestamp whatever shape the row has.
+//
+// Preferring `name` alone loses it: many real ledger rows carry a name with no
+// timestamp at all — e.g. version `20260727174805`, name
+// `deactivation_revokes_auth_access`. Dropping those rows would leave the guard
+// comparing against an older parseable row and happily permitting a migration
+// that is older than the true high-water mark, which is exactly the reversion
+// this whole mechanism exists to stop. (Codex P1, PR #348.)
+//
+// So: keep `name` when it already embeds a timestamp, otherwise re-attach the
+// version as a `<version>_<name>` prefix. normalizeMigrationName() understands
+// that shape — it is the same one the live ledger produced on 2026-07-15.
+const TS = /\d{14}/;
 const applied = rows
-  .map((r) => (typeof r === "string" ? r : (r?.name ?? r?.version ?? "")))
+  .map((r) => {
+    if (typeof r === "string") return r;
+    const name = (r?.name ?? "").toString().trim();
+    const version = (r?.version ?? "").toString().trim();
+    if (name && TS.test(name)) return name;
+    if (version && name) return `${version}_${name}`;
+    return version || name || "";
+  })
   .filter(Boolean);
+
+const withoutTimestamp = applied.filter((n) => !TS.test(n));
+if (withoutTimestamp.length) {
+  console.warn(
+    `refresh-applied-migrations: ${withoutTimestamp.length} row(s) carry no 14-digit timestamp ` +
+    `and cannot constrain ordering, e.g. ${withoutTimestamp.slice(0, 3).join(", ")}`
+  );
+}
 
 if (!applied.length) {
   console.error(

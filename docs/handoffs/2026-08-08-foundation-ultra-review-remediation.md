@@ -51,7 +51,11 @@ applied-ledger snapshot it compares against.
 timestamp is applied after a newer one **that has already been applied**. It compares against the
 applied ledger, NOT files on disk — comparing against disk was the first draft and it was wrong, as
 both Codex and CodeRabbit caught on PR #348: it would have blocked a correct ascending batch of new
-migrations. With no ledger snapshot available the check abstains rather than guessing.
+migrations. **Missing ledger evidence BLOCKS the apply** — a missing, empty, unreadable, or >24h-stale
+snapshot refuses rather than abstaining, because the snapshot is gitignored and a clean checkout
+would otherwise skip the guard exactly when it matters. Refresh it with
+`node scripts/refresh-applied-migrations.mjs`, fed by
+`select version, name from supabase_migrations.schema_migrations order by version;`.
 
 **Watch out:** live `name` values are inconsistently formatted — some carry the version prefix and `.sql`, some don't. Normalize before comparing. A naive version-vs-version comparison produces false drift; this is the documented "B7 class" trap in the audit.
 

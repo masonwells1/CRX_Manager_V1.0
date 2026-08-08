@@ -64,6 +64,27 @@ check("returns null when there is no timestamp", () => {
   assert.equal(migrationTimestamp("ad_hoc_fix"), null);
 });
 
+check("keeps the version timestamp for a ledger name that has none of its own", () => {
+  // Many real ledger rows carry a timestamp-less name, e.g. version
+  // 20260727174805 / name deactivation_revokes_auth_access. The refresh script
+  // re-attaches the version as a prefix; that shape must NOT be collapsed away
+  // (the collapse rule only fires on <ts>_<ts>_...), or the row silently stops
+  // constraining ordering. Codex P1, PR #348.
+  const joined = "20260727174805_deactivation_revokes_auth_access";
+  assert.equal(migrationTimestamp(joined), "20260727174805");
+  assert.equal(normalizeMigrationName(joined), joined);
+});
+
+check("a timestamp-less applied row still blocks an older migration once versioned", () => {
+  const res = checkMigrationOrdering({
+    name: "20260714185130_gate_batch_prepay_admin",
+    sql: "SELECT 1;",
+    appliedNames: ["20260727174805_deactivation_revokes_auth_access"],
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.newestApplied, "20260727174805");
+});
+
 // ---------------------------------------------------------------------------
 // The replay marker
 // ---------------------------------------------------------------------------

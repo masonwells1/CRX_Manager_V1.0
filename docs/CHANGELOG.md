@@ -50,6 +50,22 @@ auto-added `rm -f OVERNIGHT-INTENT.flag` permission from `.claude/settings.local
 independently reached the same conclusion already flagged in chat: a standing unguarded grant to
 delete the unattended-run flag is a guard-bypass risk.
 
+**Second review round (Codex, two P1s — both valid, both fixed).**
+
+1. *Missing ledger evidence was treated as a pass.* The snapshot is gitignored, so a clean checkout
+   had none, the guard abstained, and the protection was absent exactly when it mattered. A missing,
+   empty, unreadable, or >24h-stale snapshot now **BLOCKS the apply** with instructions to refresh it,
+   rather than waving it through. Fail-closed, matching every other hard gate in this repo.
+2. *The refresh script discarded real timestamps.* It preferred the ledger `name`, but many live rows
+   have a timestamp-less name (e.g. version `20260727174805`, name `deactivation_revokes_auth_access`).
+   Those rows vanished from the comparison set, so the guard could compare against an older parseable
+   row and permit a migration behind the true high-water mark. It now re-attaches the version as a
+   `<version>_<name>` prefix when the name carries no timestamp, and warns about any row it still
+   cannot use.
+
+`migration-apply-guard.test.mjs` gained fixtures for the missing- and stale-snapshot blocks (74
+assertions); `migration-ordering-lib.test.mjs` covers the version-prefixed shape (17 assertions).
+
 Skipped with reason: the `next_po_number` zero-caller entry in `.claude/caller-graph.json` is a
 pre-existing limitation of the generator's directory scope (it does not scan `.sql`), not something
 this branch introduced, and the artifact must not be hand-edited. CodeRabbit's `factory-board.test.mjs`
