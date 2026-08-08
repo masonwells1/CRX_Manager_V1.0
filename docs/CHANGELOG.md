@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — PO-receipt import-era violations accepted and baselined
+
+Mason's disposition on the 22 `fin-po-receipt-identity.sql` findings (15 over_receipt
+lines on PO-2026-0008/0009/0012/0028 + 7 fully_received_incomplete lines on
+PO-2026-0008, all March-2026 import-era data): **accept-and-baseline**. Each of the
+22 rows is allowlisted per-`violation_key` in `allowlist.json` with the live
+ordered/received figures recorded in its justification; no live data was modified.
+The identity stays armed — any new over-receipt or premature close-out surfaces
+under a fresh key and fails the sweep. Verified: 22 live rows − 22 allowlist keys = 0.
+
 ## 2026-08-07 — Both parked migrations APPLIED LIVE + CRM fact cutover
 
 Owner-approved apply session. Both parked migrations went through the full gate
@@ -53,7 +63,8 @@ matching hard guard. All 7 are now covered on branch `claude/crx-self-improving-
    wired on both Claude and Codex sides).
 5. **New financial identities** — `fin-vendor-bill-balance-identity.sql` (0 rows) and
    `fin-po-receipt-identity.sql` (**22 live violations on March-2026 import POs,
-   deliberately not allowlisted — awaiting Mason's disposition**).
+   deliberately not allowlisted — awaiting Mason's disposition**;
+   *baselined later the same day — see entry above*).
 6. **Commission name-reacquisition residual** — found already fixed live 2026-07-22
    (`20260722184744_reuse_guard_covers_invoiced_jobs`); KNOWN_ISSUES entry marked RESOLVED.
 7. **Push-guard hoist regression test** — feature-branch push with `core.sshCommand`

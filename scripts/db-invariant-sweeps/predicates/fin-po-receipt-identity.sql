@@ -35,10 +35,11 @@
 --       received, Gen Liberty 3643 / 4082, Miravis Top 137 / 180).
 --     * 7 fully_received_incomplete lines (identity 2), all on PO-2026-0008,
 --       where the PO was closed out with lines still at 0 received.
---   These are DELIBERATELY NOT ALLOWLISTED. They are a real, unadjudicated data
---   condition from the March 2026 import era and need Mason's disposition
---   (accept-and-baseline vs. correct the rows) before any allowlist entry is
---   written. Identities 3, 4 and 5 return zero rows live.
+--   DISPOSITION (Mason, in-chat 2026-08-07): accept-and-baseline. All 22 rows are
+--   allowlisted per-key in allowlist.json with the live ordered/received figures
+--   recorded in each justification. The identity itself stays armed: any NEW
+--   over-receipt or premature close-out appears under a different violation_key
+--   and fails the sweep. Identities 3, 4 and 5 return zero rows live.
 --
 -- KNOWN FALSE-POSITIVE MODES
 --   * Legitimate vendor overage (a supplier ships a full pallet against a
