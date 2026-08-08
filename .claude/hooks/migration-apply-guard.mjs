@@ -120,9 +120,20 @@ const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unkno
 const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 {
   const snapPath = path.join(stateDir, "applied-migrations.json");
+  // The recapture target must be the project THIS apply is aimed at. Reading it
+  // from the environment printed a literal `<your project ref>` in every normal
+  // hook run — neither manifest exports SUPABASE_PROJECT_REF — and a stray env
+  // value could have pointed the operator at a different project's ledger, which
+  // the snapshot format cannot detect. The apply call itself is authoritative.
+  // (Codex P2, PR #354.)
+  const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
+  const targetRef =
+    (input.project_id || "").toString().trim() ||
+    (process.env.SUPABASE_PROJECT_REF || "").toString().trim() ||
+    CRX_PRODUCTION_REF;
   const howTo =
     `Refresh it first (read-only):\n` +
-    `  1. Via Supabase MCP execute_sql on ${process.env.SUPABASE_PROJECT_REF || '<your project ref>'}:\n` +
+    `  1. Via Supabase MCP execute_sql on ${targetRef}:\n` +
     `       select version, name from supabase_migrations.schema_migrations order by version;\n` +
     `  2. Pipe that JSON into: node scripts/refresh-applied-migrations.mjs\n` +
     `The snapshot is gitignored and per-checkout, so a fresh clone or a newer apply elsewhere ` +

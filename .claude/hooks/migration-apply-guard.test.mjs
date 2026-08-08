@@ -144,6 +144,18 @@ function armAutopilot(stateDir, hoursFromNow) {
     let r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "no applied-migration snapshot → apply denied");
     ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "missing-snapshot deny names the ordering guard");
+    // The recapture instructions must name the project THIS apply targets.
+    // Reading it from the environment printed a literal placeholder in every
+    // normal hook run, and a stray env value could aim the operator at another
+    // project's ledger. (Codex P2, PR #354.)
+    ok(
+      r.stdout.includes("execute_sql on x"),
+      "recapture instructions name the apply's own project_id",
+    );
+    ok(
+      !r.stdout.includes("<your project ref>"),
+      "recapture instructions never print a placeholder ref",
+    );
 
     writeAppliedSnapshot(stateDir, { ageHours: 48 });
     r = runHook(call(BENIGN_SQL), tmp);

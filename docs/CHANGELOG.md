@@ -20,6 +20,12 @@ Three CodeRabbit findings and two Codex findings on `84c7776a`, plus a changelog
   header-vs-lines drift without closing it. The migration now says only what is true, and the residual
   is filed as an OPEN entry in `docs/manual/KNOWN_ISSUES.md`. Closing it moves live money on
   `orders.total_profit` and is Mason's decision, deliberately not bundled into a rounding migration.
+- **Codex P2 — the recapture instructions printed a placeholder.** The guard's "refresh the snapshot
+  first" message read the target from `SUPABASE_PROJECT_REF`, which neither the Claude nor the Codex
+  manifest exports — so every real block printed a literal `<your project ref>`, and a stray env value
+  could have aimed an operator at another project's ledger (which the snapshot format cannot detect).
+  It now takes the target from the apply call's own `project_id`, falling back to env and then the
+  production ref. Two assertions added; apply-guard suite now 81.
 - **Codex P1 — snapshot invalidation only covers the active checkout.** Accurate: a concurrent
   worktree or another machine leaves a stale-but-"fresh" snapshot. The sound fix is querying the live
   ledger at apply time instead of reading a cached file. Answered on the PR and left as the follow-up
