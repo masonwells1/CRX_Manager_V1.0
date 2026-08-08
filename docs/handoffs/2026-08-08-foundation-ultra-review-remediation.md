@@ -31,18 +31,21 @@ Everything else — writing the SQL, tests, review — can be done anywhere.
 on the branch. They have NOT been applied to live.** The section below is kept as the rationale for
 each; treat the file list in `docs/CHANGELOG.md` as the authoritative inventory.
 
-The branch carries **four SQL migrations plus one hook**. **M-1 is the hook, not a migration** — it
-does not belong in `supabase/migrations/` and must not be looked for there. The four SQL files are:
+The branch carries **five SQL migrations plus one hook**. **M-1 is the hook, not a migration** — it
+does not belong in `supabase/migrations/` and must not be looked for there. The five SQL files are:
 
 ```text
 supabase/migrations/20260808150100_restore_batch_apply_prepayments_actor_guard.sql
 supabase/migrations/20260808150200_cancel_order_zeroes_quantity_remaining.sql
 supabase/migrations/20260808150300_revoke_inventory_truncate_and_mark_payments_dead.sql
 supabase/migrations/20260808150400_round_money_to_whole_cents.sql
+supabase/migrations/20260808170000_round_line_profit_with_revenue.sql
 ```
 
-All four belong in the backup, approval, and apply sequence. `150300` is easy to miss because it is
-described under "Smaller items" below rather than as a numbered M-item — it is still a real migration.
+All five belong in the backup, approval, and apply sequence. `20260808170000` was added later, on PR
+#354, and rounds `order_items.profit` alongside revenue — apply it AFTER `150400`, which it builds on.
+`150300` is easy to miss because it is described under "Smaller items" below rather than as a numbered
+M-item — it is still a real migration.
 
 All SQL here is **forward-only**. Never replay an existing migration file — that is the exact
 mechanism that caused finding #1.

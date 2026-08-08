@@ -53,8 +53,10 @@ BEGIN
     IF NEW.total_price IS NOT NULL THEN
       NEW.total_price := ROUND(NEW.total_price, 2);
     END IF;
-    -- Money, so it rounds with revenue. Keeps SUM(line profit) in agreement
-    -- with the rounded header profit instead of drifting a cent per line.
+    -- Money, so round stored line profit to whole cents. This removes sub-cent
+    -- precision from the stored value; it does NOT make SUM(line profit) equal
+    -- the header profit, which derives from unrounded costs. See the residual
+    -- note in the header of this file.
     IF NEW.profit IS NOT NULL THEN
       NEW.profit := ROUND(NEW.profit, 2);
     END IF;

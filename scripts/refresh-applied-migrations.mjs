@@ -60,13 +60,28 @@ try {
 // Accept an array only if it actually looks like ledger rows. Taking the first
 // array reached would happily adopt some unrelated list of strings and turn it
 // into "applied migration names". (CodeRabbit, PR #348.)
+// A bare array of strings is NOT enough. `["note", "20260808170000"]` passed the
+// first version of this predicate and then satisfied the timestamp check below,
+// so findRows could adopt some unrelated list and write it out as ordering
+// evidence. (CodeRabbit, PR #354.) Strings must now look like an actual
+// migration identifier, and objects must carry a real ledger field.
+const LEDGER_NAME = /^(?:.*\/)?\d{14}(?:_[^/]*)?(?:\.sql)?$/;
+
+function looksLikeLedgerRow(r) {
+  if (typeof r === "string") return LEDGER_NAME.test(r.trim());
+  if (!r || typeof r !== "object") return false;
+  if (!("name" in r) && !("version" in r)) return false;
+  // The canonical ledger row is version-keyed; a 14-digit version is the one
+  // field that cannot be mistaken for arbitrary data.
+  const version = (r.version ?? "").toString().trim();
+  if (/^\d{14}$/.test(version)) return true;
+  // Tolerate a version-less row only when its name is itself migration-shaped.
+  return LEDGER_NAME.test((r.name ?? "").toString().trim());
+}
+
 function looksLikeLedgerRows(arr) {
   if (!arr.length) return false;
-  return arr.every(
-    (r) =>
-      typeof r === "string" ||
-      (r && typeof r === "object" && ("name" in r || "version" in r))
-  );
+  return arr.every(looksLikeLedgerRow);
 }
 
 function findRows(node, depth = 0) {

@@ -86,6 +86,11 @@ ok(classifySql("DELETE FROM invoices WHERE id = 5").block, "financial delete blo
 ok(classifySql("UPDATE invoices SET status = 'voided' WHERE id = 5").block, "void real invoice blocked");
 ok(!classifySql("SELECT * FROM invoices").block, "select allowed");
 ok(!classifySql("INSERT INTO some_log_table (x) VALUES (1)").block, "non-business table allowed");
+eq(classifySql("DELETE FROM customers WHERE id = 5").kind, "real-delete", "non-financial business delete blocked (PR #352)");
+eq(classifySql("SELECT setval('invoice_number_seq', 1, false)").kind, "sequence-mutation", "setval via SELECT blocked (PR #352)");
+eq(classifySql("SELECT cancel_order(42)").kind, "rpc-via-select", "mutating RPC via SELECT blocked (PR #352)");
+ok(!classifySql("SELECT currval('invoice_number_seq')").block, "currval read allowed");
+ok(!classifySql("SELECT * FROM orders WHERE status = 'cancelled'").block, "plain filtered select allowed");
 eq(classifySql("INSERT INTO orders (x) VALUES (1)").kind, "real-insert", "kind reported");
 
 // ── live-testdata side-door closures (2026-07-04) ────────────────────────

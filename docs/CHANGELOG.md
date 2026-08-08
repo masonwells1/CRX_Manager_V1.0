@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — PR #354 review round: snapshot input validation + honest scope on the rounding claim
+
+Three CodeRabbit findings and two Codex findings on `84c7776a`, plus a changelog merge with `main`.
+
+- **CodeRabbit Major — `looksLikeLedgerRows` accepted any array of strings.** `["note",
+  "20260808170000"]` satisfied the predicate AND the has-a-timestamp check, so `findRows` could adopt
+  an unrelated array and write it out as applied-migration evidence. Strings must now match a
+  migration-name shape and objects must carry a 14-digit `version` (or a migration-shaped `name`).
+  New `scripts/refresh-applied-migrations.test.mjs` — 9 assertions covering both the rejections and
+  the real ledger shapes that must keep working — wired into `test:correction-guards`.
+- **CodeRabbit Major — the handoff still listed four migrations.** An operator following it would have
+  left `20260808170000` out of the backup, approval, and apply sequence. Now five, with the ordering
+  note that it must follow `150400`.
+- **CodeRabbit Minor + Codex P2 — the rounding claim was too strong.** `trg_recalc_order_totals`
+  derives the header from unrounded per-line cost, so rounding stored line profit narrows the
+  header-vs-lines drift without closing it. The migration now says only what is true, and the residual
+  is filed as an OPEN entry in `docs/manual/KNOWN_ISSUES.md`. Closing it moves live money on
+  `orders.total_profit` and is Mason's decision, deliberately not bundled into a rounding migration.
+- **Codex P1 — snapshot invalidation only covers the active checkout.** Accurate: a concurrent
+  worktree or another machine leaves a stale-but-"fresh" snapshot. The sound fix is querying the live
+  ledger at apply time instead of reading a cached file. Answered on the PR and left as the follow-up
+  rather than shipping a fourth revision of the mechanism mid-review.
+
 ## 2026-08-08 — Post-merge follow-up: ordering-guard hardening + line-profit rounding
 
 PR #348 merged at `18943730`, one commit BEFORE the timestamp-less-snapshot fix. This entry covers
@@ -27,6 +50,39 @@ that fix (rebased onto the new `main`) plus the two Codex findings raised agains
   and the guard blocks both that shape and any abstained verdict on a timestamped candidate.
 
 Coverage: apply-guard 79 assertions, ordering-lib 18, `agent-manifest-parity` clean.
+## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
+
+PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in bash-safety and live-testdata guards (variant git spellings, redirect terminators, plumbing push commands, DELETE catch-all, setval/nextval and RPC-via-SELECT rules), added regression tests, resolved the changelog merge conflict with main.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `9ff94908f Close git plumbing and SELECT-side-effect bypasses; add regression tests`
+  - `8a12ab83f Merge origin/main into cloud-permissions-overhaul (changelog conflict)`
+  - `501839e45 Address CodeRabbit review: redirect terminators and DELETE catch-all`
+  - `cd356c862 Cover split git option forms and capital-S Supabase deploy ask entry`
+  - `78f0b7351 Log session in changelog`
+  - `9dc190bf9 Harden bash-safety guard against variant dangerous-command spellings`
+  - `265378e39 Add changelog entry for permissions overhaul session`
+  - `13c1763a8 Overhaul cloud permissions to stop constant prompts`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-08 — Cloud permissions overhaul (PR #352): set defaultMode dontAsk with…
+
+Cloud permissions overhaul (PR #352): set defaultMode dontAsk with broad allow list in .claude/settings.json to stop constant cloud permission prompts; kept AGENTS.md hard gates (deploys/merges ask, destructive commands and Vercel purchases denied). Fixed Codex P1 by hardening bash-safety guard: variant git spellings now denied, production deploy spellings prompt via new ask tier.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `9dc190bf Harden bash-safety guard against variant dangerous-command spellings`
+  - `265378e3 Add changelog entry for permissions overhaul session`
+  - `13c1763a Overhaul cloud permissions to stop constant prompts`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-08 — Cloud permissions overhaul: set defaultMode dontAsk and broad allow…
+
+Cloud permissions overhaul: set defaultMode dontAsk and broad allow list in .claude/settings.json to stop constant permission prompts; production deploy/merge stay on ask, destructive ops and Vercel purchases denied. Draft PR #352.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `13c1763a Overhaul cloud permissions to stop constant prompts`
 
 ## 2026-08-08 — Forward migrations for the 2026-08-08 audit findings (written, NOT applied)
 
@@ -119,8 +175,6 @@ failure did not reproduce here — it passes with 29 assertions, and `agent-mani
   - `51582137 chore: commit auto-added local permission entry`
   - `c6c45fb5 docs: record Mason's four foundation-ultra-review owner decisions`
   - `f5811338 audit: 2026-08-08 foundation ultra review + bucket-1 doc/test fixes`
-- **Migrations touched** (git diff --name-only origin/main...HEAD):
-  - none
 
 ## 2026-08-07 — Governed Software Factory REMOVED
 
