@@ -1,11 +1,35 @@
 # Decision Log
 
-Last verified: 2026-08-05
+Last verified: 2026-08-08
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-08 — Four foundation-ultra-review owner decisions settled
+
+**Source:** `docs/audits/2026-08-08-foundation-ultra-review.md` §7. Mason answered all four in chat.
+
+1. **Payment visibility (M1) — leave as is.** `payments_select` stays company-wide; it is not
+   scoped down to the invoices a rep can already see. Do not re-open without a new business reason.
+2. **Canonical rounding (M3) — round to two decimals (whole cents), half-up.** The pending
+   $5,245.195 commission resolves to $5,245.20. `order_items.total_price` and
+   `commissions.commission_amount` both round at this point, and a live invariant predicate should
+   assert whole cents on both.
+3. **`cancel_order` semantics (M4) — cancelling releases stock.** Cancelling an order must zero
+   `quantity_remaining` on its lines and release the prebooked quantity back to available. Current
+   behavior strands both and is a bug to fix, not a design choice.
+4. **Negative inventory (L3) — the existing decision stands.** Keep the 19 negative
+   `inventory.quantity_available` rows as they are; reconcile only from physical counts. No re-base
+   scheduled. Revisit when a physical count happens.
+
+**Operative rule:** decisions 2 and 3 imply forward migrations; both are unwritten as of this entry
+and are parked alongside the two migrations named in the audit (restore the `batch_apply_prepayments`
+actor guard, add a migration-ordering preflight guard). Decisions 1 and 4 are "no change" — an agent
+proposing either change must cite a new reason, not re-derive the original one.
 
 ---
 

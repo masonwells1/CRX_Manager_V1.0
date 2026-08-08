@@ -134,14 +134,20 @@ This section is as valuable as the findings.
 
 ---
 
-## 7. Owner decisions required
+## 7. Owner decisions — ANSWERED 2026-08-08
 
-These are business or product choices, not bugs. Combined here so they can be answered in one sitting.
+All four were answered by Mason in chat on 2026-08-08. Canonical record:
+`docs/manual/DECISION_LOG.md` (2026-08-08 entry). Answers inline below.
 
 1. **Payment visibility (M1).** Should every sales rep see every payment company-wide, or should `payments_select` be scoped to the invoices the rep can already see? Scoping it would mirror `invoice_items_select`.
+   **ANSWERED: leave as is.** Payments stay visible company-wide.
 2. **Canonical rounding point (M3).** Where should `order_items.total_price` and `commissions.commission_amount` be rounded to whole cents? A $5,245.195 commission is currently pending payout. Once decided, a live invariant predicate should assert whole cents on both.
+   **ANSWERED: round to two decimals (whole cents).** The pending commission resolves to $5,245.20.
+   Needs a forward migration — not yet written.
 3. **`cancel_order` semantics (M4).** Should cancelling an order zero `quantity_remaining` on its lines and release the prebooked stock? Current behavior leaves both stranded.
+   **ANSWERED: yes, cancelling releases stock.** Current behavior is a bug. Needs a forward migration — not yet written.
 4. **Negative inventory (L3).** The recorded decision is "reconcile only from physical counts". Still 19 rows. Confirm it stands, or schedule the re-base.
+   **ANSWERED: it stands.** No re-base scheduled; reconcile only from physical counts.
 
 ---
 
