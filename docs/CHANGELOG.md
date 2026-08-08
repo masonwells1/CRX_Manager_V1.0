@@ -38,7 +38,15 @@ all three are fixed here.
 The recursion trigger is now a real `CREATE FUNCTION <name>(` header **and** a
 `p_idempotency_key` mention. Either test alone false-denies documentation, and
 with parse failures fail-closed again a false trigger blocks a valid migration.
-60 assertions; each of the five new guards was individually reverted and the
+The Codex push-proof gate BLOCKED the first attempt at this fix and was right
+twice: PostgreSQL also concatenates two literals separated by nothing but a
+newline, so a `||`-only check was bypassed by deleting the operator; and payload
+CONTENT alone was making a literal executable, so a plain INSERT of
+function-shaped documentation was denied. The assembly check now covers both
+joining forms and recurses into DO blocks and function bodies, and a literal is
+lexed only in a dynamic-SQL context (EXECUTE or := assignment) AND on content.
+
+62 assertions; each of the seven new guards was individually reverted and the
 suite went red for each.
 
 ## 2026-08-08 — idempotency-body-check round-10: dynamic-DDL fail-open + data-literal false-deny — FIXED

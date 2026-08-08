@@ -483,4 +483,22 @@ ok(isDeny(r), "CREATE FUNCTION assembled by concatenating literals is refused, n
 r = runHook(`DO $do$ DECLARE v_msg text; BEGIN v_msg := 'total: ' || 'ok'; EXECUTE 'ANALYZE invoices'; END $do$;`);
 ok(!isDeny(r), "ordinary || string building near an EXECUTE is not treated as assembled DDL");
 
+// --- Round 11b (Codex push-proof gate BLOCKED the first round-11 attempt) ---
+
+// PostgreSQL concatenates two literals separated by nothing but a newline, so
+// a ||-only check was bypassed by simply deleting the operator.
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  v_ddl := $a$CREATE OR REPLACE FUNCTION public.dyn_adj(p_amount_cents integer$a$
+$b$, p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;$b$;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "DDL split across ADJACENT literals (no ||) is refused, not just the || form");
+
+// payload content alone must not make a literal executable: a plain INSERT of
+// documentation is not a dynamic-SQL context, whatever the text looks like
+r = runHook(`INSERT INTO docs (body) VALUES ($doc$CREATE OR REPLACE FUNCTION public.example(p_idempotency_key text) — priced at $5$ per call$doc$);`);
+ok(!isDeny(r), "a function-shaped example in a plain INSERT is data, not executable SQL");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

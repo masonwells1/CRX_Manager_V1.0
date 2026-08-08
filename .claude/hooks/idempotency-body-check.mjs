@@ -158,7 +158,17 @@ function dollarTagAt(text, i) {
  * scoped, and comments/string contents are already blanked in `out`, so an
  * EXECUTE in a comment or an earlier statement cannot leak context forward. */
 function inExecuteStatement(out) {
-  return /\bEXECUTE\b/i.test(out.slice(out.lastIndexOf(";") + 1));
+  return isDynamicSqlStatement(out.slice(out.lastIndexOf(";") + 1));
+}
+
+/** A statement that builds or runs dynamic SQL: it EXECUTEs, or it assigns to a
+ * variable (v_ddl := '...') that something later EXECUTEs. Payload CONTENT
+ * alone must not make a literal executable — a plain INSERT of documentation
+ * that happens to contain a function-shaped example was denied on content
+ * alone (Codex blocker review, round 11). Context and content are both
+ * required. */
+function isDynamicSqlStatement(stmt) {
+  return /\bEXECUTE\b/i.test(stmt) || stmt.includes(":=");
 }
 
 /** A REAL CREATE FUNCTION header — name plus an opening paren — as opposed to
@@ -225,7 +235,7 @@ function maskSqlNoise(text) {
         // EXECUTE statement — so a data argument alongside dynamic DDL stays
         // opaque instead of being lexed as SQL (Codex P2 round 11).
         const isExecutable = /\b(?:AS|DO|EXECUTE)\s+$/i.test(out) ||
-          carriesBugClass(payload);
+          (inExecuteStatement(out) && carriesBugClass(payload));
         // FAIL CLOSED on a payload we judged executable: masking it opaque
         // would erase real DDL and let an unwired function through, which is
         // exactly this guard's bug class (Codex P2 round 11). Payloads that are
@@ -393,27 +403,65 @@ if (masked === null) {
 // Dynamic DDL glued together from several literals cannot be lexed: the
 // parameter list is split across fragments, so no single payload ever shows a
 // complete signature and a hidden (or absent) p_idempotency_key is invisible
-// (Codex P2 round 11). Fail CLOSED on that shape — a statement that builds or
-// executes a string carrying a CREATE FUNCTION header via `||` — and tell the
-// author to assemble the DDL as one literal so this guard can read it.
-if (masked !== null) {
-  let stmtStart = 0;
-  for (let idx = 0; idx <= masked.length; idx++) {
-    if (idx !== masked.length && masked[idx] !== ";") continue;
-    const stmtMask = masked.slice(stmtStart, idx);
-    const stmtRaw = content.slice(stmtStart, idx);
-    if (stmtMask.includes("||") && /:=|\bEXECUTE\b/i.test(stmtMask) && CREATE_FN_HEAD_RE.test(stmtRaw)) {
-      violations.push(
-        "This migration assembles a CREATE FUNCTION statement by concatenating (||) several string " +
-        "literals. Split that way, no fragment carries a complete parameter list, so the idempotency " +
-        "guard cannot tell whether p_idempotency_key is declared or wired. Build the dynamic DDL as a " +
-        "single literal, or add the exempt marker and get a manual review."
-      );
-      break;
+// (Codex P2 round 11). Fail CLOSED on that shape.
+// Both joining forms count. `||` is the obvious one; PostgreSQL ALSO
+// concatenates two literals separated by nothing but a newline, so a `||`-only
+// check was trivially bypassed (Codex blocker review, round 11). Any two
+// adjacent literals inside a dynamic-SQL statement whose combined text carries
+// a CREATE FUNCTION header are refused, and the author is told to assemble the
+// DDL as one literal so this guard can read it.
+// Scans one region of the masked text, then recurses into each dollar-quoted
+// payload — the assembly almost always lives INSIDE a DO block or a function
+// body, which a flat scan would skip over as a single literal.
+function findAssembledDdl(from, to) {
+  let prevEnd = -1;
+  let prevStart = -1;
+  let stmtStart = from;
+  let i = from;
+  while (i < to) {
+    const ch = masked[i];
+    if (ch === ";") { stmtStart = i + 1; prevEnd = -1; i++; continue; }
+    let start = -1;
+    let end = -1;
+    let innerFrom = -1;
+    let innerTo = -1;
+    if (ch === "'" || ch === '"') {
+      start = i;
+      end = scanQuoted(masked, i);
+    } else {
+      const tag = ch === "$" ? dollarTagAt(masked, i) : null;
+      if (tag) {
+        const close = masked.indexOf(tag, i + tag.length);
+        if (close !== -1) {
+          start = i;
+          end = close + tag.length;
+          innerFrom = i + tag.length;
+          innerTo = close;
+        }
+      }
     }
-    stmtStart = idx + 1;
+    if (end === -1 || start === -1) { i++; continue; }
+    if (innerFrom !== -1 && findAssembledDdl(innerFrom, innerTo)) return true;
+    // Adjacent = only whitespace, or whitespace around a `||`, in between.
+    if (prevEnd !== -1 && /^\s*(?:\|\|\s*)?$/.test(masked.slice(prevEnd, start)) &&
+        isDynamicSqlStatement(masked.slice(stmtStart, start)) &&
+        CREATE_FN_HEAD_RE.test(content.slice(prevStart, end))) {
+      violations.push(
+        "This migration assembles a CREATE FUNCTION statement from several string literals " +
+        "(joined by || or by simple adjacency). Split that way, no fragment carries a complete " +
+        "parameter list, so the idempotency guard cannot tell whether p_idempotency_key is declared " +
+        "or wired. Build the dynamic DDL as a single literal, or add the exempt marker and get a " +
+        "manual review."
+      );
+      return true;
+    }
+    prevStart = start;
+    prevEnd = end;
+    i = end;
   }
+  return false;
 }
+if (masked !== null) findAssembledDdl(0, masked.length);
 let head;
 while (masked !== null && (head = fnHeadRe.exec(masked)) !== null) {
   const fnName = head[1];
