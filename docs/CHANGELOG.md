@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Cloud permissions overhaul: set defaultMode dontAsk and broad allow…
+
+Cloud permissions overhaul: set defaultMode dontAsk and broad allow list in .claude/settings.json to stop constant permission prompts; production deploy/merge stay on ask, destructive ops and Vercel purchases denied. Draft PR #352.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `13c1763a Overhaul cloud permissions to stop constant prompts`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-07 — Governed Software Factory REMOVED
 
 At Mason's direction, the entire Governed Autonomous Software Factory was removed:
