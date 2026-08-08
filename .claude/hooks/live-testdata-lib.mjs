@@ -267,6 +267,27 @@ export function classifySql(query) {
     };
   }
 
+  // 3b. Side-effecting expressions hidden inside SELECT (Codex P1 round 3,
+  //     PR #352): setval/nextval mutate live sequence state (e.g. invoice
+  //     numbering), and the app's mutating RPCs can be invoked via a plain
+  //     SELECT fn(...). Neither is a read. No [E2E] exemption — these change
+  //     shared state regardless of marker; REAL-DATA-OK (checked by the guard)
+  //     is the override. currval/lastval remain allowed (true reads).
+  if (/\b(?:setval|nextval)\s*\(/i.test(t)) {
+    return {
+      block: true,
+      kind: "sequence-mutation",
+      reason: "setval()/nextval() changes live sequence state (e.g. invoice numbering) even inside a SELECT. Read with currval()/last_value instead, or get Mason's explicit REAL-DATA-OK for a real sequence change.",
+    };
+  }
+  if (/\bselect\b[\s\S]*?\b(?:"?public"?\s*\.\s*)?"?(?:apply|batch|cancel|void|create|post|record|adjust|reserve|release|transfer|pay|write_off|process|generate|allocate|convert|complete|fulfill|receive|issue|reverse|restock)_[a-z0-9_]+"?\s*\(/i.test(t)) {
+    return {
+      block: true,
+      kind: "rpc-via-select",
+      reason: "This SELECT invokes a mutating application function (RPC) — calling it changes live data even though the statement starts with SELECT. Mutating RPCs run through the app or with Mason's explicit REAL-DATA-OK.",
+    };
+  }
+
   // 4. Clearly-fake test data is fine for ordinary data writes.
   if (t.includes("[E2E]")) return { block: false };
 
