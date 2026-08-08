@@ -2,6 +2,73 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — idempotency-body-check blind to parenthesised parameter types — FIXED
+
+`.claude/hooks/idempotency-body-check.mjs` captured SQL function parameter lists
+with `\(([^)]*?)\)`, which stops at the first inner `)`. A parameter list
+containing a parenthesised type — `numeric(12,2)`, `varchar(50)` — truncated
+there, the function failed to parse, and any `p_idempotency_key` declared after
+it was invisible: an unwired mutating RPC sailed through the guard. Ported the
+quote-aware balanced-paren scan and `AS $tag$…$tag$` body reader from
+`actor-binding-check.mjs` (which also now resumes past each body, so nested
+CREATE FUNCTIONs aren't double-parsed). Regression tests with
+`p_amount numeric(12,2)` before `p_idempotency_key` were proven red on the old
+parser and green on the new one; full `test:correction-guards` passes.
+Codex PR-review follow-up (P2, PR #335): the balanced scan now also skips SQL
+`--` and `/* */` comments, since an unmatched `(` inside a parameter comment
+desynced the depth count and made the parse fail open — proven bypassing the
+first version and denied by the fix, with regression tests for both comment
+forms. Round 2 of the same review closed two more fail-open holes: PostgreSQL
+block comments NEST (`/* /* */ */` — a non-nesting skip stopped at the inner
+`*/`), and dollar-quoted DEFAULT literals (`$d$…($d$`) hid an unmatched paren.
+Both proven red on the prior commit and covered by regression tests.
+Round 3 fixed E-string backslash-escaped quotes (`E'can\'t ('`) and — to end
+the lexer whack-a-mole structurally — an unparseable parameter list now FAILS
+CLOSED with an explanatory block instead of silently skipping the function;
+the file-level exempt marker remains the escape hatch.
+Round 4 (Codex ×2 + CodeRabbit Major): a comment-stripping pre-pass now runs
+before any scanning, so a commented-out `CREATE FUNCTION foo(` header no longer
+trips the fail-closed deny on a valid file, and a fake `AS $tag$…$tag$` inside a
+comment can no longer be mistaken for a function body (which could skip a later
+REAL function — a silent-allow hole). The quote scanner also handles doubled
+quotes inside E-strings (`E'it''s \'x'`), and the body reader is quote-aware and
+stops at the next `CREATE`. All three proven red on the prior commit.
+Round 5 (Codex ×2): the dollar-quote tag matcher had a 64-char window, so a
+longer tag made the body reader return null and silently SKIP an unwired RPC
+(fail-open); and `$` inside an identifier (`idx_foo$bar$`) was lexed as a
+dollar-quote opener, denying valid migrations. Both fixed with a shared
+uncapped, token-boundary-aware tag matcher; both proven red on the prior
+commit (after discovering the `/tmp` path in heredoc mutation runs wasn't
+MSYS-converted — the "old" hook wasn't running at all; re-proven properly).
+Round 6 (Codex): `CREATE FUNCTION foo(` inside a STRING literal (top-level or
+a RAISE NOTICE in a DO block) was scanned as live DDL and tripped the
+fail-closed deny on valid migrations. Reworked comment-stripping into full
+MASKING: comments and string contents become spaces (recursing into
+dollar-quoted blocks), header/paren/body structure is scanned on the mask,
+and the body is sliced from the original by index so operation literals
+survive for the FIX 6 checks. Both repro shapes proven red on the prior
+commit; a mismatched-operation case guards against over-masking.
+Round 7 (Codex): the recursive mask lexed ordinary dollar-quoted LITERAL
+payloads as SQL, so `$q$can't$q$` looked like an unterminated quote and
+denied the whole valid migration. Only procedural bodies (`AS $tag$` /
+`DO $tag$`) are recursed now; other dollar-quoted payloads are masked as
+opaque data. Proven red on the prior commit; a DO-block-nested unwired
+function test proves the carve-out doesn't hide nested DDL.
+Round 8 (Codex): the round-7 carve-out over-masked — `EXECUTE
+$ddl$CREATE FUNCTION…$ddl$` payloads were treated as opaque data, hiding an
+unwired dynamically created RPC (fail-open). Payloads now recurse when
+EXECUTE-adjacent or when they themselves contain a CREATE FUNCTION header
+(covers `EXECUTE format($fmt$…$fmt$, …)`). Proven red on the prior commit;
+regression tests for both dynamic-DDL shapes.
+Round 9 (Codex): the same dynamic-DDL hole in ordinary string form —
+`EXECUTE 'CREATE OR REPLACE FUNCTION …'` never reaches the dollar-payload
+carve-out, so the header stayed masked and an unwired dynamically created
+RPC slipped through (fail-open). Single-quoted strings now recurse when
+EXECUTE-adjacent (incl. `EXECUTE format('…')`); all other strings stay
+opaque data, so the round-6 false positive on literals that merely mention
+"CREATE FUNCTION" stays fixed. Proven red on the prior commit; deny and
+allow regression tests added (43 assertions).
+
 ## 2026-08-07 — UI experience improvements: WorkspaceTabs route-preserving tab bars for…
 
 UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/Products/Insights clusters, condensed sidebar (Products & Pricing folded into Inventory & Buying, Insights as one link), FREQUENT sidebar section from visit counts, and large-screen readability via responsive root font-size (16px base; 17/18/20px at 1920/2560/3200px). Verified live in Chrome at 3440px and at 1440/1920/2560 in preview pane. PR #338. Codex review fixes: sidebar workspace entries honor per-user deny lists by falling through to the first accessible sibling page, and the tab bar matches by page key so `/invoices/field-app/*` highlights Field Invoices (verified live; regression tests added). Codex round 3: visit counts keyed by canonical page key, root font-size steps changed to percentages (106.25%/112.5%/125%) so a user-configured browser font size scales instead of being overridden (verified live at 3200/1920px), and Frequent counts sum across a condensed entry's sibling pages (regression test). Round 4 (CodeRabbit + Codex): the Frequent section now refreshes the moment a visit crosses the threshold via a `crx:visit-counts-changed` window event, stored visit counts are validated on read (malformed data resets instead of crashing), and the redirect aliases (`/field-invoices/unbilled` → `?tab=` URLs) no longer double-count one click — all covered by regression tests. Round 5 (CodeRabbit): the redirect dedupe now requires the second pathname to be REPLACE-committed (via `useNavigationType()`) or identical, so a genuine quick visit to a sibling page sharing a canonical key still counts (proven live via module import; regression tests added). Round 6 (Codex): a redirect that changes page keys (`/invoices/:id` REPLACE-navigating to `/field-invoices/:id`) now moves the count to the destination instead of crediting both pages for one click (proven live; regression test added).
