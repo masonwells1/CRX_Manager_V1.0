@@ -2,6 +2,32 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Post-merge follow-up: ordering-guard hardening + line-profit rounding
+
+PR #348 merged at `18943730`, one commit BEFORE the timestamp-less-snapshot fix. This entry covers
+that fix (rebased onto the new `main`) plus the two Codex findings raised against the merged commit.
+
+- **Codex P1 — the 24h freshness window was unsound.** Elapsed time cannot establish that no
+  migration ran in between: capture a snapshot, apply `20260808150400`, then attempt `20260808150100`
+  an hour later and the snapshot is still "fresh" while silently omitting the migration that would
+  reject it. Added `.claude/hooks/applied-snapshot-invalidate.mjs`, a PostToolUse hook that deletes
+  the snapshot after EVERY `apply_migration` call, so the next apply blocks on missing evidence until
+  a fresh capture is taken. The clock is now only a backstop for the case where that hook never ran.
+- **Codex P2 — the rounding trigger rounded revenue but not profit.** Two lines with raw totals of
+  10.005 and costs of 5 gave $20.02 revenue and $10.02 header profit while the stored line profits
+  summed to 10.010, which `get_sales_detail_report` renders as $10.01 — a one-cent disagreement
+  between a header and the sum of its own lines, generated silently. Migration `20260808170000` rounds
+  `order_items.profit` alongside `total_price` and widens the trigger to fire on `profit` changes.
+  `net_margin` is a percentage, not money, and is deliberately left alone. Written as a NEW migration
+  rather than an edit to `20260808150400`, which is already merged. Forward-looking only — it does not
+  repair existing fractional rows.
+- **CodeRabbit — a timestamp-less snapshot passed every gate.** Present, fresh and non-empty but with
+  no parseable timestamps, it satisfied presence and freshness, the ordering check then had nothing to
+  compare, abstained, and returned `ok`. Both halves fixed: the writer refuses to emit such a snapshot,
+  and the guard blocks both that shape and any abstained verdict on a timestamped candidate.
+
+Coverage: apply-guard 79 assertions, ordering-lib 18, `agent-manifest-parity` clean.
+
 ## 2026-08-08 — Forward migrations for the 2026-08-08 audit findings (written, NOT applied)
 
 Wrote the forward migrations for the audit's decided findings. **None has been applied to live** — no
