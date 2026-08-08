@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Read-only audit of the Team Board to-do/delegation feature; added…
+
+Read-only audit of the Team Board to-do/delegation feature; added docs/audits/team-board-todo-audit-2026-08-08.md (branch claude/todo-list-audit-hoxpl5, draft PR #351). Key findings: tnotes_update RLS blocks assignees from completing delegated tasks, task assignment sends no notification, note deep-links broken in TeamBoard and Notifications, escalation column unused; board dormant since 2026-03-20. No code, migration, or live-data changes.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `6bb86d18 docs: add Team Board / to-do list functionality audit (2026-08-08)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-07 — Governed Software Factory REMOVED
 
 At Mason's direction, the entire Governed Autonomous Software Factory was removed:
