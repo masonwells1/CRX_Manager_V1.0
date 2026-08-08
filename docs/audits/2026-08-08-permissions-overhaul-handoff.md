@@ -69,13 +69,17 @@ regeneration already has a freshness-flag pipeline; this rides it.
 
 ## 4. Standing items (not code)
 
-- **The manual `/backup-db` off-site dump has never been run.** Per
-  `docs/manual/CURRENT_STATE.md` an in-database backup (120 tables) and a
-  weekly cron (`20260713050000_weekly_db_backup.sql`) exist, so the project is
-  not entirely without recovery — but both copies live inside the same Supabase
-  project, and Supabase Free has no point-in-time recovery. The
-  session-staleness hook flags the missing `/backup-db` dump every session;
-  Mason says "back up the database" to create the first off-site snapshot.
+- **The `/backup-db` dump is stale, not missing, and it is not off-site.**
+  `/backup-db` has run: `backups/LATEST-OK.json` recorded
+  `completed_at: 2026-07-21` over 150 tables / 7,887 rows
+  (`docs/audits/gauntlet/2026-07-25-section-14-testing-prevention-refresh.md:42`).
+  The "no backup exists yet" warning seen this session is the known
+  linked-worktree false positive from LOW-14.3 — `session-staleness.mjs`
+  resolves the marker under the current worktree. Note `/backup-db` writes a
+  **local gitignored dump** (`.claude/commands/backup-db.md:35-48`); the
+  encrypted GitHub Action in `docs/manual/CURRENT_STATE.md:129-130` is the
+  separate off-site mechanism. Action: re-run `/backup-db` (the dump is weeks
+  old) and fix the LOW-14.3 worktree resolution so the warning stops lying.
   Predates and is unrelated to PR #352.
 - **CodeRabbit free-tier rate limits** blocked its incremental reviews for most
   of this PR's lifetime (its one full review was read and addressed; the
@@ -83,16 +87,28 @@ regeneration already has a freshness-flag pipeline; this rides it.
   volume stays this high, consider the label-based review opt-in its rate-limit
   notice suggests, or usage-based reviews.
 
+## 5. Default-deny DML coverage (execute_sql's second hole)
+
+`classifySql()` matches DML against a hand-maintained `BUSINESS_TABLES` list
+(`.claude/hooks/live-testdata-lib.mjs:11-23`). Any table present in
+`.claude/schema-registry.json` but absent from that list is unguarded —
+`classifySql("UPDATE public.profiles SET role = 'admin' WHERE id = '…'")`
+returns `{block: false}` today, which is a live privilege-escalation path.
+Same whack-a-mole shape as item 1, same durable fix direction: classify
+INSERT/UPDATE/DELETE against **any** table default-deny, with an explicit
+allowlist of throwaway/test tables, rather than enumerating business tables.
+Interim cheap fix: reconcile `BUSINESS_TABLES` against the schema registry and
+add a test that fails when the registry contains a table the list doesn't.
+
 ## Context that carries over
 
 - The `execute_sql` auto-allow is **deliberate and settled** (CodeRabbit
   withdrew its objection, learning recorded): `live-testdata-guard` denies
   mutating SQL deterministically, with `REAL-DATA-OK` as the only override —
-  **contingent on closing item 1**, since the `preview_` prefix exemption is a
-  known hole in that guarantee until fixed. The settled part is the design
+  **contingent on closing items 1 and 5**. The settled part is the design
   (guard-enforced allow, not an ask entry), not a claim that the guard is
   currently gap-free. Don't re-litigate the design without new evidence.
 - Guard changes are classified risky by `codex-push-lib.mjs` (`.claude/hooks/`
-  path), so landing items 1–3 from a cloud session means branch → PR → Vercel
+  path), so landing items 1–3 and 5 from a cloud session means branch → PR → Vercel
   check → Mason merges (or auto-merge); a local session with the Codex CLI can
   use the normal proof path.
