@@ -861,6 +861,8 @@ interface IssueReturnCreditResult {
   credit_invoice_id: string;
   credit_invoice_number: string;
   credit_amount_cents: number;
+  /** Positive magnitude of COGS removed from the books (mig 20260808170000). */
+  cogs_reversed_cents: number;
   customer_id: string;
   credited_at: string;          // ISO timestamp
 }
@@ -1000,6 +1002,7 @@ describe('RPC contract: issue_return_credit', () => {
       credit_invoice_id: 'inv-uuid',
       credit_invoice_number: 'CM-2026-0001',
       credit_amount_cents: 25000,
+      cogs_reversed_cents: 18000,
       customer_id: 'cust-uuid',
       credited_at: '2026-05-07T01:00:00Z',
     };

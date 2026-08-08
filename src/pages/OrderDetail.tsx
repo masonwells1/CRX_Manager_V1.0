@@ -11,6 +11,7 @@ import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -101,6 +102,14 @@ export default function OrderDetail() {
   const [newAllocFieldId, setNewAllocFieldId] = useState('');
   const [newAllocAcres, setNewAllocAcres] = useState('');
   const [savingAlloc, setSavingAlloc] = useState(false);
+
+  // Below-cost guardrail: pending confirmation for an edit-save whose line
+  // price is under cost — holds the flagged lines plus the promise resolver
+  // that resumes (reason) or cancels (null) the in-flight handleSaveEdits.
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
 
   // Edit mode state
   const [editing, setEditing] = useState(false);
@@ -471,6 +480,29 @@ export default function OrderDetail() {
 
   const handleSaveEdits = async () => {
     if (!profile) return;
+
+    // Below-cost guardrail (non-field-staff only): any kept or newly added line
+    // priced strictly under its cost needs an explicit reason before saving.
+    const isFieldStaff = role === 'driver' || role === 'applicator';
+    let belowCostReason: string | null = null;
+    if (!isFieldStaff) {
+      const candidateItems = [
+        ...editItems.map((item) => ({ name: item.product_name, price: item.price_per_unit, cost: item.cost_per_unit })),
+        ...newItems
+          .filter((item) => item.product_id && item.total_units_needed > 0)
+          .map((item) => ({ name: item.product_name, price: item.price_per_unit, cost: item.cost_per_unit })),
+      ];
+      const belowCostLines: BelowCostLine[] = candidateItems
+        .filter((item) => item.cost > 0 && item.price < item.cost)
+        .map((item) => ({ productName: item.name, price: item.price, cost: item.cost }));
+      if (belowCostLines.length > 0) {
+        belowCostReason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: belowCostLines, resolve })
+        );
+        if (belowCostReason === null) return;
+      }
+    }
+
     await runCriticalAction({
       action: async () => {
         // Build payload: existing items (with id) + new items (without id)
@@ -519,6 +551,19 @@ export default function OrderDetail() {
           throw error;
         }
         assertRpcResult(data, 'update_order_items');
+
+        // update_order_items carries no notes (order-level or per-line), so the
+        // below-cost approval reason is recorded on the order's activity trail.
+        if (belowCostReason && order) {
+          logActivity({
+            event: 'order_updated',
+            description: `Order ${order.order_number} below-cost approved: ${belowCostReason}`,
+            performedBy: profile.id,
+            entityType: 'order',
+            entityId: order.id,
+            customerId: order.customer_id,
+          });
+        }
 
         updateOrderIdem.resetKey();
         const addedCount = newPayload.length;
@@ -2112,6 +2157,19 @@ export default function OrderDetail() {
           )}
         </div>
       </Modal>
+
+      <BelowCostConfirmModal
+        open={belowCostPrompt !== null}
+        lines={belowCostPrompt?.lines ?? []}
+        onClose={() => {
+          belowCostPrompt?.resolve(null);
+          setBelowCostPrompt(null);
+        }}
+        onConfirm={(reason) => {
+          belowCostPrompt?.resolve(reason);
+          setBelowCostPrompt(null);
+        }}
+      />
 
       <ConfirmModal
         open={statusConfirmOpen}

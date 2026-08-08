@@ -57,7 +57,11 @@ const LIVE_FUNCTIONS = new Set(LIVE_PG_PROC_NAMES_CSV.split(','));
 // creates it. The test below verifies the function is not live, the migration
 // source is still pending, and the entry must be removed after the migration is
 // live and the pg_proc snapshot has been regenerated.
-const QUEUED_MIGRATION_FUNCTIONS: Record<string, string> = {};
+const QUEUED_MIGRATION_FUNCTIONS: Record<string, string> = {
+  // (empty — the Reports.tsx switch to get_profitability_report is deferred
+  // until migration 20260808170100 is applied live from Mason's machine; the
+  // caller and this bridge entry land together in that follow-up.)
+};
 const QUEUED_FUNCTIONS = new Set(Object.keys(QUEUED_MIGRATION_FUNCTIONS));
 
 // -------------------------------------------------------------------------

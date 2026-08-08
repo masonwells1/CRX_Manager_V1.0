@@ -70,12 +70,16 @@ export function recalcItem(
     product.inventory_unit || product.unit_size,
     conversions
   );
+  // Preserve the line's stored quote-time cost; only fall back to the live
+  // catalog cost when the line has none yet (new or just-changed product).
+  // Mirrors QuoteBuilder.recalcItem and the save_quote snapshot semantics.
+  const currentCost = item.current_cost || product.current_cost || 0;
 
   if (mode === 'units_direct') {
     // User entered total_units_needed directly — skip rate×acres computation
     const totalInventoryUnits = item.total_units_needed || 0;
     const totalPrice = pricePerUnit * totalInventoryUnits;
-    const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
+    const profit = (pricePerUnit - currentCost) * totalInventoryUnits;
     const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
     // Back-calculate rate if acres is also set (informational)
@@ -91,7 +95,7 @@ export function recalcItem(
     return {
       ...item,
       price_per_unit: pricePerUnit,
-      current_cost: product.current_cost || 0,
+      current_cost: currentCost,
       oz_per_acre: ozPerAcre,
       price_per_acre: pricePerAcre,
       total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
@@ -117,13 +121,13 @@ export function recalcItem(
       ? pricePerUnit * (rateInOz / inventoryUnitFactorOz)
       : 0;
   const totalPrice = pricePerUnit * totalInventoryUnits;
-  const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
+  const profit = (pricePerUnit - currentCost) * totalInventoryUnits;
   const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
   return {
     ...item,
     price_per_unit: pricePerUnit,
-    current_cost: product.current_cost || 0,
+    current_cost: currentCost,
     oz_per_acre: Math.round(ozPerAcre * 100) / 100,
     price_per_acre: Math.round(pricePerAcre * 100) / 100,
     total_units_needed: Math.round(totalInventoryUnits * 100) / 100,

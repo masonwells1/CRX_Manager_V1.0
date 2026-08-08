@@ -29,6 +29,7 @@ import WriteOffModal from '../components/invoices/WriteOffModal';
 import WatchdogFlagBanner from '../components/watchdog/WatchdogFlagBanner';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import TransactionThread from '../components/ui/TransactionThread';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
@@ -132,6 +133,13 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     purchase_order_ref: '',
   });
   const [paymentTerms, setPaymentTerms] = useState('Customer default');
+  // Below-cost guardrail: pending confirmation for a save with product lines
+  // priced strictly under cost — holds the flagged lines plus the promise
+  // resolver that resumes (reason) or cancels (null) the in-flight handleSave.
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
   const [customDueDate, setCustomDueDate] = useState('');
   const [customTermsText, setCustomTermsText] = useState('');
   const isOrderlessMiscCharge = !isNew
@@ -704,6 +712,28 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       toast('error', 'Please select a customer');
       return;
     }
+
+    // Below-cost guardrail (non-field-staff only): a product line priced
+    // strictly under its recorded cost needs an explicit reason before saving.
+    // Application-fee lines and lines without a cost are skipped.
+    const isFieldStaff = profile?.role === 'driver' || profile?.role === 'applicator';
+    let belowCostReason: string | null = null;
+    if (!isFieldStaff) {
+      const belowCostLines: BelowCostLine[] = items
+        .filter((it) => !it.is_application_fee && it.cost_cents > 0 && it.unit_price_cents < it.cost_cents)
+        .map((it) => ({
+          productName: it.product_name || it.description,
+          price: it.unit_price_cents / 100,
+          cost: it.cost_cents / 100,
+        }));
+      if (belowCostLines.length > 0) {
+        belowCostReason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: belowCostLines, resolve })
+        );
+        if (belowCostReason === null) return;
+      }
+    }
+
     const outcome = await runCriticalAction<'saved' | 'reconciled' | 'blocked'>({
       action: async () => {
         const payload = {
@@ -741,7 +771,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           rate_per_acre: it.rate_per_acre,
           acres: it.acres,
           unit_size: it.unit_size,
-          notes: it.notes,
+          // The invoice header notes print for the customer, so the below-cost
+          // approval reason is recorded on the affected line's notes instead.
+          notes:
+            belowCostReason && !it.is_application_fee && it.cost_cents > 0 && it.unit_price_cents < it.cost_cents
+              ? `${it.notes ? `${it.notes}\n` : ''}Below-cost approved: ${belowCostReason}`
+              : it.notes,
           // Field-application detail preserved through the edit (#3 edit-path) —
           // null/false on chemical-sale lines, so save_invoice stays a no-op for them.
           is_application_fee: it.is_application_fee,
@@ -2133,6 +2168,19 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       />
 
       {/* Post Invoice Confirm */}
+      <BelowCostConfirmModal
+        open={belowCostPrompt !== null}
+        lines={belowCostPrompt?.lines ?? []}
+        onClose={() => {
+          belowCostPrompt?.resolve(null);
+          setBelowCostPrompt(null);
+        }}
+        onConfirm={(reason) => {
+          belowCostPrompt?.resolve(reason);
+          setBelowCostPrompt(null);
+        }}
+      />
+
       <ConfirmModal
         open={showPostConfirm}
         onClose={() => setShowPostConfirm(false)}

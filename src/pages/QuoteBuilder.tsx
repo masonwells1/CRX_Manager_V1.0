@@ -31,6 +31,7 @@ import Input from '../components/ui/Input';
 import SearchableSelect from '../components/ui/SearchableSelect';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictDialog';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
@@ -460,6 +461,13 @@ export default function QuoteBuilder() {
   // trigger allows: draft/sent/revised → cancelled; sent/revised → declined;
   // accepted/declined/expired/cancelled → sent (admin revert RPC only).
   const isAdmin = profile?.role === 'admin';
+  // Below-cost guardrail: pending confirmation for a save with lines priced
+  // strictly under their stored quote-time cost — holds the flagged lines plus
+  // the promise resolver that resumes (reason) or cancels (null) saveQuote.
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
   const canCancel = isEditing && ['draft', 'sent', 'revised'].includes(currentStatus);
   const canDecline = isEditing && ['sent', 'revised'].includes(currentStatus);
   // "Close — fulfilled by application" is only for a PLANNED open booking (the
@@ -1081,12 +1089,17 @@ export default function QuoteBuilder() {
       const pricePerUnit = item.price_override != null ? item.price_override : tierPrice;
       // Fall back to unit_size if inventory_unit is not set on the product
       const inventoryUnitFactorOz = getConversionFactor(product.inventory_unit || product.unit_size);
+      // Preserve the line's stored quote-time cost; only fall back to the live
+      // catalog cost when the line has none yet. Product add/change sets
+      // current_cost from the catalog, so a new or swapped product still
+      // refreshes — but recalcs no longer drift a saved line's cost.
+      const currentCost = item.current_cost || product.current_cost || 0;
 
       if (item.calc_mode === 'units_direct') {
         // User entered total_units_needed directly — skip rate×acres computation
         const totalInventoryUnits = item.total_units_needed || 0;
         const totalPrice = pricePerUnit * totalInventoryUnits;
-        const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
+        const profit = (pricePerUnit - currentCost) * totalInventoryUnits;
         const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
         // Back-calculate oz/acre and $/acre if acres provided
@@ -1102,7 +1115,7 @@ export default function QuoteBuilder() {
         return {
           ...item,
           price_per_unit: pricePerUnit,
-          current_cost: product.current_cost || 0,
+          current_cost: currentCost,
           oz_per_acre: ozPerAcre,
           price_per_acre: pricePerAcre,
           total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
@@ -1128,13 +1141,13 @@ export default function QuoteBuilder() {
         ? pricePerUnit * (rateInOz / inventoryUnitFactorOz)
         : 0;
       const totalPrice = pricePerUnit * totalInventoryUnits;
-      const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
+      const profit = (pricePerUnit - currentCost) * totalInventoryUnits;
       const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
       return {
         ...item,
         price_per_unit: pricePerUnit,
-        current_cost: product.current_cost || 0,
+        current_cost: currentCost,
         oz_per_acre: Math.round(ozPerAcre * 100) / 100,
         price_per_acre: Math.round(pricePerAcre * 100) / 100,
         total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
@@ -1412,6 +1425,32 @@ export default function QuoteBuilder() {
       return null;
     }
 
+    // Below-cost guardrail (non-field-staff only): a line whose effective price
+    // (recalcItem already folded any override into price_per_unit) is strictly
+    // under the line's stored quote-time cost needs an explicit reason before
+    // the quote can be saved — consistent with what the margin display shows.
+    const isFieldStaff = profile.role === 'driver' || profile.role === 'applicator';
+    let belowCostReason: string | null = null;
+    if (!isFieldStaff) {
+      const belowCostLines: BelowCostLine[] = sections
+        .flatMap((sec) => sec.items)
+        .filter((item) => item.product_id && item.current_cost > 0 && item.price_per_unit < item.current_cost)
+        .map((item) => ({
+          productName:
+            item.product?.product_name
+            || products.find((p) => p.id === item.product_id)?.product_name
+            || 'Unknown product',
+          price: item.price_per_unit,
+          cost: item.current_cost,
+        }));
+      if (belowCostLines.length > 0) {
+        belowCostReason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: belowCostLines, resolve })
+        );
+        if (belowCostReason === null) return null;
+      }
+    }
+
     const quotePayload = {
       quote_number: quoteNumber,
       customer_id: customerId,
@@ -1451,9 +1490,18 @@ export default function QuoteBuilder() {
       items: sec.items
         .filter((item) => item.product_id)
         .map((item) => ({
+          // Existing lines echo their database id so save_quote's strictly
+          // id-keyed preservation can carry cost_at_quote_cents across the
+          // delete+reinsert; genuinely new lines have no id and send none.
+          ...(item.id ? { id: item.id } : {}),
           product_id: item.product_id,
           sort_order: item.sort_order,
-          notes: item.notes || null,
+          // Quote header/footer notes print on the customer PDF, so the
+          // below-cost approval reason is recorded on the affected line.
+          notes:
+            belowCostReason && item.current_cost > 0 && item.price_per_unit < item.current_cost
+              ? `${item.notes ? `${item.notes}\n` : ''}Below-cost approved: ${belowCostReason}`
+              : item.notes || null,
           price_per_unit: item.price_per_unit,
           price_override: item.price_override ?? null,
           current_cost: item.current_cost,
@@ -4361,6 +4409,19 @@ export default function QuoteBuilder() {
         entityLabel="quote"
         onKeepEditing={() => setStaleSaveOpen(false)}
         onReload={reloadAfterStaleSave}
+      />
+
+      <BelowCostConfirmModal
+        open={belowCostPrompt !== null}
+        lines={belowCostPrompt?.lines ?? []}
+        onClose={() => {
+          belowCostPrompt?.resolve(null);
+          setBelowCostPrompt(null);
+        }}
+        onConfirm={(reason) => {
+          belowCostPrompt?.resolve(reason);
+          setBelowCostPrompt(null);
+        }}
       />
 
       <ConfirmModal

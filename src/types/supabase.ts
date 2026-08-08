@@ -8059,6 +8059,7 @@ export type Database = {
           acres: number | null
           actual_rate: number | null
           calc_mode: string | null
+          cost_at_quote_cents: number | null
           current_cost: number
           id: string
           net_margin: number
@@ -8083,6 +8084,7 @@ export type Database = {
           acres?: number | null
           actual_rate?: number | null
           calc_mode?: string | null
+          cost_at_quote_cents?: number | null
           current_cost?: number
           id?: string
           net_margin?: number
@@ -8107,6 +8109,7 @@ export type Database = {
           acres?: number | null
           actual_rate?: number | null
           calc_mode?: string | null
+          cost_at_quote_cents?: number | null
           current_cost?: number
           id?: string
           net_margin?: number
@@ -12676,6 +12679,22 @@ export type Database = {
       get_product_price_history: {
         Args: { p_product_id: string }
         Returns: Json
+      }
+      get_profitability_report: {
+        Args: {
+          p_end_date?: string
+          p_group_by: string
+          p_start_date?: string
+        }
+        Returns: {
+          group_key: string
+          margin_pct: number
+          order_count: number
+          total_cost: number
+          total_profit: number
+          total_revenue: number
+          units_sold: number
+        }[]
       }
       get_program_completion: { Args: { p_season?: number }; Returns: Json }
       get_receiving_log: {

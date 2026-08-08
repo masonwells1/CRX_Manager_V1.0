@@ -718,6 +718,14 @@ export interface QuoteItem {
   price_per_unit: number;
   price_override: number | null;
   current_cost: number;
+  /**
+   * Immutable snapshot of `products.current_cost` (cents, rounded) at the
+   * moment this line was first quoted. Preserved across save_quote's
+   * delete+reinsert; NULL only when the product's current_cost is NULL at
+   * stamp time. Populated by trg_snapshot_quote_item_cost trigger.
+   * See migration 20260808170200 (mirrors order_items.cost_at_time_cents).
+   */
+  cost_at_quote_cents: number | null;
   suggested_rate: string | null;
   actual_rate: number | null;
   rate_unit: string | null;
