@@ -224,7 +224,14 @@ export function stripCommentsQuoteAware(sql) {
 // custom function invoked in the statement is blocked unless its name carries a
 // read-only prefix or is a recognized SQL builtin. A false positive denies —
 // the safe direction — and REAL-DATA-OK (checked by the guard) overrides.
-const READONLY_FN_PREFIX_RE = /^(?:get|check|list|find|search|count|calc|calculate|compute|report|fetch|lookup|has|is|can|validate|verify|preview|estimate|summarize|derive)_/;
+// `check_` is deliberately NOT trusted: check_unpriced_orders() inserts
+// notifications and updates orders (Codex P1 round 5, PR #352) — the prefix is
+// not proof of immutability. Audited read-only functions with untrusted names
+// go in READONLY_FN_NAMES below, one per line, with the audit date.
+const READONLY_FN_PREFIX_RE = /^(?:get|list|find|search|count|calc|calculate|compute|report|fetch|lookup|has|is|can|preview|estimate|summarize|derive)_/;
+export const READONLY_FN_NAMES = new Set([
+  // (none audited yet — add "fn_name", // audited YYYY-MM-DD entries here)
+]);
 const SQL_BUILTIN_FNS = new Set([
   // aggregates / window
   "count", "sum", "avg", "min", "max", "string_agg", "array_agg", "jsonb_agg",
@@ -301,6 +308,7 @@ export function findNonReadFunctionCall(sqlText) {
   while ((m = re.exec(text)) !== null) {
     const name = m[1].toLowerCase();
     if (SQL_KEYWORD_FNS.has(name) || SQL_BUILTIN_FNS.has(name)) continue;
+    if (READONLY_FN_NAMES.has(name)) continue;
     if (READONLY_FN_PREFIX_RE.test(name)) continue;
     // pg_catalog/information_schema internals are reads
     if (name.startsWith("pg_stat") || name.startsWith("pg_ls") || name.startsWith("information_schema")) continue;
