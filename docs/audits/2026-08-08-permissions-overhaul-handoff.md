@@ -54,10 +54,12 @@ regeneration already has a freshness-flag pipeline; this rides it.
   Mason remains correct there.
 - **`hold-latch-prompt.mjs` false positives.** It latched on the phrase
   "non stop" in Mason's own request and again on a Codex bot comment titled
-  "Stop trusting…" arriving as webhook text. Trigger needs word-boundary + 
-  source awareness (only latch on real user prompts, not webhook-delivered bot
-  content), or an explicit-phrase list ("stop", "pause", "hold on" as whole
-  imperative sentences).
+  "Stop trusting…" arriving as webhook text. Note a word boundary does **not**
+  fix the first case: `HOLD_RE` (`.claude/hooks/hold-latch-lib.mjs:10`) already
+  matches `\bstop\b`, and "stop" is a whole word inside "non stop". The fix
+  needs both (a) source awareness — only latch on real user prompts, not
+  webhook-delivered bot content — and (b) imperative-sentence context (or an
+  explicit "non stop"/"nonstop" exclusion) for the user-prompt case.
 - **`codex-push-guard.mjs` false positives on commit-message text.** Twice this
   session it blocked ordinary commits because the message body contained words
   like "push"/"path" alongside punctuation. It should parse only the command
@@ -100,6 +102,14 @@ allowlist of throwaway/test tables, rather than enumerating business tables.
 Interim cheap fix: reconcile `BUSINESS_TABLES` against the schema registry and
 add a test that fails when the registry contains a table the list doesn't.
 
+`MERGE` must be part of this item, not just INSERT/UPDATE/DELETE: `classifySql()`
+has no execute_sql `MERGE` branch at all (the existing `MERGE` rule serves only
+`destructiveMigrationCheck()`), so
+`MERGE INTO public.invoices … WHEN MATCHED THEN UPDATE SET total_cents = 1`
+returns `{block: false}` today — verified — even against a table already in
+`BUSINESS_TABLES`. Add `MERGE` coverage plus a regression test before treating
+the guard as mutation-complete.
+
 ## Context that carries over
 
 - The `execute_sql` auto-allow is **deliberate and settled** (CodeRabbit
@@ -109,6 +119,10 @@ add a test that fails when the registry contains a table the list doesn't.
   (guard-enforced allow, not an ask entry), not a claim that the guard is
   currently gap-free. Don't re-litigate the design without new evidence.
 - Guard changes are classified risky by `codex-push-lib.mjs` (`.claude/hooks/`
-  path), so landing items 1–3 and 5 from a cloud session means branch → PR → Vercel
-  check → Mason merges (or auto-merge); a local session with the Codex CLI can
-  use the normal proof path.
+  path). That means items 1–3 and 5 **cannot** land from a cloud session at all:
+  a risky diff requires a fresh exact-SHA `gpt-5.6-sol` proof, the cloud
+  container has no Codex CLI, and `pr-merge-guard.mjs:213-221` explicitly says
+  to park rather than self-certify. Merging through the GitHub UI or auto-merge
+  bypasses the local hook but **not** the policy — it is not an alternate
+  landing path for these items. Do them in a local session that can mint the
+  proof (this docs-only PR is not risky, which is why it can land from cloud).
