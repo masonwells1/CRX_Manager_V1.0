@@ -1,3 +1,9 @@
+> **REMOVED 2026-08-07.** The Governed Autonomous Software Factory was removed at Mason's direction —
+> it repeatedly locked up ordinary work (fail-closed hooks, a stuck `needs-ticket-ok` job, a 120s prompt hook)
+> and was too complex to operate. All factory code, hooks, and CLI commands are gone. This document is kept
+> as history only; nothing in it is current. The ordinary safety net (branch protection, PR + CodeRabbit review,
+> exact-SHA Codex proofs, money/migration/bash-safety guards) is unchanged and remains in force.
+
 # Governed Autonomous Software Factory
 
 ## What Mason experiences

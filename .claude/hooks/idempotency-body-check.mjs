@@ -93,15 +93,303 @@ if (/--\s*idempotency-body-check:\s*exempt/i.test(content)) {
   out("allow");
 }
 
-const fnRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(([^)]*?)\)[\s\S]*?AS\s+(\$\w*\$)([\s\S]*?)\3/gi;
+// Locate each CREATE [OR REPLACE] FUNCTION header. The parameter list is then
+// read with a BALANCED-paren scan rather than a [^)]* capture, because a real
+// parameter list contains parens — numeric(12,2), varchar(50), timestamp(3).
+// A naive capture stops at the first inner ')' and silently truncates the list,
+// which would hide p_idempotency_key declared after a parenthesised type
+// (same fix as actor-binding-check.mjs).
+const fnHeadRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(/gi;
+
+/** From the index of an opening ' or ", return the index just past the closing
+ * quote, or -1 if unterminated. Handles doubled quotes ('' / "") as literal
+ * characters INSIDE the string, and backslash escapes in E'...' strings —
+ * including the mix E'it''s \'x' where a doubled quote must not clear escape
+ * mode (Codex P2 round 4). */
+function scanQuoted(text, openIdx) {
+  const strCh = text[openIdx];
+  const isEStr = strCh === "'" &&
+    /[eE]/.test(text[openIdx - 1] || "") && !/[\w$]/.test(text[openIdx - 2] || "");
+  for (let i = openIdx + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (isEStr && ch === "\\") { i++; continue; }
+    if (ch === strCh) {
+      if (text[i + 1] === strCh) { i++; continue; } // doubled quote: stay inside
+      return i + 1;
+    }
+  }
+  return -1;
+}
+
+/** Match a dollar-quote opener ($tag$) at index i, or return null. No length
+ * cap — a bounded slice window silently missed long tags and skipped the body
+ * (fail-open). Requires a token boundary before the '$': in an identifier like
+ * foo$bar$, the '$' is part of the name, not a delimiter (Codex P2 round 5). */
+const DOLLAR_TAG_RE = /\$\w*\$/y;
+function dollarTagAt(text, i) {
+  if (/[\w$]/.test(text[i - 1] || "")) return null;
+  DOLLAR_TAG_RE.lastIndex = i;
+  const m = DOLLAR_TAG_RE.exec(text);
+  return m ? m[0] : null;
+}
+
+/** Replace SQL comments (-- to end of line, NESTED block comments) AND the
+ * CONTENTS of quoted strings with spaces, recursing into dollar-quoted blocks
+ * (delimiters kept) so their inner comments and strings are masked the same
+ * way. LENGTH-PRESERVING: every index into the masked text is a valid index
+ * into the original, so callers scan structure here and slice real content
+ * (parameter lists, function bodies) from the original by index.
+ * Returns null when a string, block comment, or dollar-quote never terminates
+ * (caller fails CLOSED).
+ * This is the structural fix for four review findings on PR #335:
+ *  - a commented-out "CREATE FUNCTION foo(" header must not be scanned as live
+ *    DDL (its unmatched paren tripped the fail-closed deny — Codex P2 round 4);
+ *  - a comment containing "AS $fake$...$fake$" must not be mistaken for a
+ *    function body, which could skip a later REAL function (CodeRabbit Major);
+ *  - "CREATE FUNCTION foo(" inside a string literal — top-level or in a
+ *    RAISE NOTICE within a DO block — must not be scanned as live DDL either
+ *    (Codex P2 round 6); masking string contents kills the whole class. */
+/** True when the text emitted so far puts us inside an EXECUTE statement, i.e.
+ * an EXECUTE keyword appears in the current statement (since the last ';').
+ * Round 9 only recognised the two shapes where the literal sits DIRECTLY after
+ * EXECUTE / EXECUTE format( — so `EXECUTE ('CREATE ...')` and
+ * `EXECUTE format('%s', 'CREATE ...')` fell through as opaque data and an
+ * unwired dynamically-created RPC was invisible (Codex P2 round 10). Statement
+ * scoped, and comments/string contents are already blanked in `out`, so an
+ * EXECUTE in a comment or an earlier statement cannot leak context forward. */
+function inExecuteStatement(out) {
+  return /\bEXECUTE\b/i.test(out.slice(out.lastIndexOf(";") + 1));
+}
+
+function maskSqlNoise(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "-" && text[i + 1] === "-") {
+      let nl = text.indexOf("\n", i + 2);
+      if (nl === -1) nl = text.length; // comment to EOF is valid SQL
+      out += " ".repeat(nl - i);
+      i = nl;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { depth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      if (depth > 0) return null;
+      out += " ".repeat(j - i);
+      i = j;
+      continue;
+    }
+    if (ch === "$") {
+      const tag = dollarTagAt(text, i);
+      if (tag) {
+        const close = text.indexOf(tag, i + tag.length);
+        if (close === -1) return null;
+        const payload = text.slice(i + tag.length, close);
+        // Recurse into payloads that hold EXECUTABLE SQL so nested CREATE
+        // FUNCTIONs stay visible: procedural bodies (AS $tag$ / DO $tag$),
+        // dynamic DDL (EXECUTE $ddl$...$ddl$ — Codex P2 round 8), and any
+        // payload that itself contains a CREATE FUNCTION header (covers
+        // EXECUTE format($fmt$...$fmt$, ...) and variable-assigned DDL).
+        // Everything else is opaque data: mask it wholesale, since lexing a
+        // payload like $q$can't$q$ as SQL sees an unterminated quote and
+        // falsely denies the whole migration (Codex P2 round 7).
+        // The content trigger additionally requires p_idempotency_key: a prose
+        // literal that merely MENTIONS "CREATE FUNCTION" was lexed as SQL, and
+        // one apostrophe in it ("can't") read as an unterminated string and
+        // denied the whole migration (Codex P2 round 10). Only payloads that
+        // could actually carry this guard's bug class are worth recursing into.
+        const isExecutable = /\b(?:AS|DO|EXECUTE)\s+$/i.test(out) ||
+          inExecuteStatement(out) ||
+          (/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION/i.test(payload) && /p_idempotency_key/i.test(payload));
+        // A payload we chose to recurse into but cannot lex is data, not a
+        // parse failure of THIS file: mask it opaque instead of failing the
+        // whole migration closed. The outer level still fails closed on a
+        // genuinely unterminated construct.
+        const inner = (isExecutable ? maskSqlNoise(payload) : null) ?? " ".repeat(payload.length);
+        out += tag + inner + tag;
+        i = close + tag.length;
+        continue;
+      }
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return null;
+      // EXECUTE 'CREATE OR REPLACE FUNCTION ...' is dynamic DDL in ordinary
+      // string form and never reaches the dollar-payload carve-out above, so
+      // an unwired RPC created that way was invisible (Codex P2 round 9).
+      // Recurse into EXECUTE-adjacent strings (incl. EXECUTE format('...'))
+      // so the header stays visible; all other strings stay opaque data —
+      // recursing on content would re-open the round-6 false positive on
+      // literals that merely mention "CREATE FUNCTION".
+      // Round 10 widened "EXECUTE-adjacent" to "anywhere in an EXECUTE
+      // statement" so `EXECUTE ('CREATE ...')` and the non-first argument of
+      // `EXECUTE format('%s', 'CREATE ...')` are inspected too.
+      const isDynamicSql = ch === "'" && inExecuteStatement(out);
+      if (isDynamicSql) {
+        const payload = text.slice(i + 1, end - 1);
+        const inner = maskSqlNoise(payload) ?? " ".repeat(payload.length);
+        out += ch + inner + ch;
+      } else {
+        out += ch + " ".repeat(end - i - 2) + ch;
+      }
+      i = end;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/** From the index of a '(' , return {params, end} where end is just past its match.
+ * Skips SQL comments (-- to end of line, block comments) so an unmatched paren
+ * inside a parameter comment cannot desync the depth count (Codex P2, PR #335). */
+function readBalancedParens(text, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "-" && text[i + 1] === "-") {
+      const nl = text.indexOf("\n", i + 2);
+      if (nl === -1) return null;
+      i = nl;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      // PostgreSQL block comments NEST — track depth, don't stop at the first */.
+      let cdepth = 1;
+      let j = i + 2;
+      while (j < text.length && cdepth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { cdepth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { cdepth--; j += 2; continue; }
+        j++;
+      }
+      if (cdepth > 0) return null;
+      i = j - 1;
+      continue;
+    }
+    if (ch === "$") {
+      // Dollar-quoted literal ($tag$...$tag$) in a DEFAULT expression — skip it
+      // whole so a '(' inside the literal isn't counted as syntax.
+      const tag = dollarTagAt(text, i);
+      if (tag) {
+        const close = text.indexOf(tag, i + tag.length);
+        if (close === -1) return null;
+        i = close + tag.length - 1;
+        continue;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i); // doubled-quote + E-string aware (Codex P2 rounds 3–4)
+      if (end === -1) return null;
+      i = end - 1;
+      continue;
+    }
+    if (ch === "(") { depth++; continue; }
+    if (ch === ")") {
+      depth--;
+      if (depth === 0) return { params: text.slice(openIdx + 1, i), end: i + 1 };
+    }
+  }
+  return null;
+}
+
+/** From just past the parameter list, return {bodyStart, bodyEnd, end} for the
+ * AS $tag$...$tag$ block. Walks the MASKED text skipping quoted strings and
+ * non-body dollar-quoted literals, and only accepts a $tag$ directly preceded by
+ * the AS keyword — so "AS $fake$" text inside a quoted option value can never be
+ * mistaken for the body (CodeRabbit Major, PR #335). */
+function readDollarQuotedBody(text, fromIdx) {
+  let i = fromIdx;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return null;
+      i = end;
+      continue;
+    }
+    if (ch === "$") {
+      const tag = dollarTagAt(text, i);
+      if (tag) {
+        if (/\bAS\s+$/i.test(text.slice(fromIdx, i))) {
+          const bodyStart = i + tag.length;
+          const bodyEnd = text.indexOf(tag, bodyStart);
+          if (bodyEnd === -1) return null;
+          // Return INDEXES, not a slice: the caller slices the body from the
+          // ORIGINAL content so string literals (operation names) survive masking.
+          return { bodyStart, bodyEnd, end: bodyEnd + tag.length };
+        }
+        // A dollar-quoted literal that is NOT the body (e.g. a SET option value):
+        // skip it whole.
+        const close = text.indexOf(tag, i + tag.length);
+        if (close === -1) return null;
+        i = close + tag.length;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    // Stop at the next CREATE so one function's missing body can never swallow
+    // the next function's real body.
+    if ((ch === "c" || ch === "C") && /^CREATE\s/i.test(text.slice(i, i + 7)) && !/[\w$]/.test(text[i - 1] || "")) {
+      return null;
+    }
+    i++;
+  }
+  return null;
+}
 
 const violations = [];
 try {
-let match;
-while ((match = fnRe.exec(content)) !== null) {
-  const fnName = match[1];
-  const params = match[2];
-  const body = match[4];
+// Strip comments first so commented-out DDL is invisible to every scan below.
+// Mask comments and string contents so neither can masquerade as DDL; scan
+// structure on the mask, slice real content from `content` by index.
+const masked = maskSqlNoise(content);
+if (masked === null) {
+  violations.push(
+    "This migration could not parse (unterminated string, block comment, or dollar-quote) — " +
+    "the idempotency guard cannot inspect it. Fix the unterminated construct, or if it is " +
+    "genuinely valid SQL the lexer mishandles, add the exempt marker and get a manual review."
+  );
+}
+let head;
+while (masked !== null && (head = fnHeadRe.exec(masked)) !== null) {
+  const fnName = head[1];
+  const parsed = readBalancedParens(masked, fnHeadRe.lastIndex - 1);
+  if (!parsed) {
+    // FAIL CLOSED: a parameter list this lexer cannot close is exactly where a
+    // hidden p_idempotency_key could live (Codex PR #335 found three such lexer
+    // holes in a row). Blocking with an explanation beats silently skipping the
+    // function; the file-level exempt marker remains the escape hatch.
+    violations.push(
+      `Function ${fnName}: could not parse its parameter list (unbalanced parentheses, ` +
+      `unterminated string/comment/dollar-quote?) — the idempotency guard cannot inspect it. ` +
+      `Simplify the signature, or if it is genuinely valid SQL the lexer mishandles, add the ` +
+      `exempt marker and get a manual review.`
+    );
+    break;
+  }
+  const params = parsed.params;
+  const rest = readDollarQuotedBody(masked, parsed.end);
+  if (!rest) continue;
+  // Slice the body from the ORIGINAL content (indexes align — masking is
+  // length-preserving) so operation-name string literals survive for the
+  // wiring and FIX 6 scoping checks below.
+  const body = content.slice(rest.bodyStart, rest.bodyEnd);
+  // Resume scanning after this function so a nested CREATE FUNCTION inside a
+  // body (DO-block style migrations) isn't parsed twice.
+  fnHeadRe.lastIndex = rest.end;
 
   if (!/p_idempotency_key\s+text/i.test(params)) continue;
 

@@ -36,6 +36,25 @@ and are parked alongside the two migrations named in the audit (restore the `bat
 actor guard, add a migration-ordering preflight guard). Decisions 1 and 4 are "no change" — an agent
 proposing either change must cite a new reason, not re-derive the original one.
 
+## 2026-08-07 — Governed Autonomous Software Factory REMOVED
+
+**Decision (Mason, in chat — "release the stranglehold"; chose full removal over a rebuild):** remove
+the factory entirely. It repeatedly locked up ordinary work — three fail-closed hooks ran on every tool
+call and every prompt (one with a 120-second timeout), a job stuck at `needs-ticket-ok` blocked whole
+categories of writes, and casual words like "factory" or "overnight" flipped governed state. Mason could
+not operate it.
+
+**What was removed:** all `scripts/factory*` code, the Factory Board, the three factory hooks on both
+the Claude and Codex sides, the `factory:*` npm scripts, and every factory branch inside the surviving
+guard hooks. The shared state directory `<git-common-dir>/crx-factory/` is archived, not deleted.
+
+**Operative rule:** the ordinary safety net is unchanged and remains authoritative — GitHub `protect-main`
+branch protection, PR + CodeRabbit review, exact-SHA `gpt-5.6-sol` proofs for risky diffs, and the
+money/migration/bash-safety/RLS guards. Do not rebuild factory-style governance without Mason explicitly
+asking; if autonomous batching is wanted later, design it around the existing `/ship` pipeline with
+hooks that fail OPEN for coordination (never fail-closed on ordinary work). All factory entries below
+this one are historical.
+
 ---
 
 ## 2026-08-05 — Factory execution is bounded at three concurrent active lanes

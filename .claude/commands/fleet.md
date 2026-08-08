@@ -2,18 +2,6 @@ Show Mason the status of ALL his parallel work at once — every worktree, every
 
 Use this when Mason asks anything like: "where are we", "status", "progress", "catch me up", "what's going on across everything", "how's the other work going".
 
-## Factory Board
-
-For governed factory jobs, the single owner-facing output is the read-only Factory Board:
-
-```shell
-npm run factory:board
-```
-
-Open the printed loopback URL for Mason. The board reads the hash-verified shared ledger from the Git common directory, so Claude and Codex see the same jobs from every worktree. It shows one row/card per job, its plain-English stage, behavior summary, blocker, and machine-attached proof. It has no buttons, forms, edits, approvals, or rejection controls. Mason makes every decision back in ordinary chat.
-
-The traditional fleet report below remains the engineering-side snapshot for worktrees and processes. Do not build a second owner dashboard.
-
 ## Steps
 
 1. Run the fleet report:
