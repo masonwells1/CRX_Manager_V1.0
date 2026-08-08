@@ -2,6 +2,17 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Cloud permissions overhaul (PR #352): set defaultMode dontAsk with…
+
+Cloud permissions overhaul (PR #352): set defaultMode dontAsk with broad allow list in .claude/settings.json to stop constant cloud permission prompts; kept AGENTS.md hard gates (deploys/merges ask, destructive commands and Vercel purchases denied). Fixed Codex P1 by hardening bash-safety guard: variant git spellings now denied, production deploy spellings prompt via new ask tier.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `9dc190bf Harden bash-safety guard against variant dangerous-command spellings`
+  - `265378e3 Add changelog entry for permissions overhaul session`
+  - `13c1763a Overhaul cloud permissions to stop constant prompts`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-08 — Cloud permissions overhaul: set defaultMode dontAsk and broad allow…
 
 Cloud permissions overhaul: set defaultMode dontAsk and broad allow list in .claude/settings.json to stop constant permission prompts; production deploy/merge stay on ask, destructive ops and Vercel purchases denied. Draft PR #352.
