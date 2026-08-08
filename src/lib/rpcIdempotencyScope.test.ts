@@ -225,6 +225,17 @@ const ALIAS_SCOPED: Record<string, string> = {
  */
 const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   _guard_idempotency_key_insert: ['allocate_payment'],
+  // Direct EXECUTE is revoked. Private middle layer of the full-cancel chain
+  // (cancel_order -> _cancel_order_idem_impl_20260721 ->
+  // _cancel_order_provenance_wrapper_20260719 -> THIS ->
+  // _cancel_order_impl_20260714). It only READS the public cancel_order cache
+  // to short-circuit a replay; the key is recorded by the bracketing wrappers
+  // via _bind_completed_lifecycle_idempotency. Giving this layer its own
+  // operation namespace would create an unreachable cache and let a replay
+  // slip past the shared one. Shape is pre-existing and unchanged; it entered
+  // this test's scope when migration 20260808150200 re-emitted the function to
+  // zero quantity_remaining on cancel.
+  _cancel_order_split_provenance_impl_20260719: ['cancel_order'],
   // Direct EXECUTE is revoked. This delegate is the implementation half of
   // the public save_purchase_order RPC and intentionally shares its one cache
   // namespace rather than creating an unreachable internal-operation cache.

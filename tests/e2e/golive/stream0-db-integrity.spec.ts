@@ -234,7 +234,11 @@ test.describe.serial('Stream 0 — Database Integrity', () => {
     const inventory = asArray<InventoryPrebookRow>(invResult, 'inventory (prebooked)');
 
     const oiResult = await supabaseRest(
-      page, 'GET', 'order_items?select=product_id,quantity_remaining&quantity_remaining=gt.0&limit=5000',
+      // Terminal orders keep a non-zero quantity_remaining today (see the
+      // cancel_order finding in docs/audits/2026-08-08-foundation-ultra-review.md),
+      // so an unfiltered sum reports remainders no open order is actually holding.
+      page, 'GET', 'order_items?select=product_id,quantity_remaining,orders!inner(status)'
+        + '&quantity_remaining=gt.0&orders.status=not.in.(cancelled,voided)&limit=5000',
     );
     const orderItems = asArray<OrderItemRemainingRow>(oiResult, 'order_items (remaining)');
 
