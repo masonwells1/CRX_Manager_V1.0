@@ -24,10 +24,12 @@ un-fixed on `main`:
   (`get_*`, etc.) deny until individually allowlisted. Decide scope with Mason
   if the full removal feels too aggressive; at minimum drop `preview_`,
   `validate_`, and `verify_` (behavior-shaped names, unproven).
-- **`git read-tree --reset -u` discards uncommitted work** and passes
-  `bash-safety.mjs`. Add a `DANGEROUS_CMD_CHECKS` pattern (options tolerated
-  anywhere, per the round-1 lesson); `git checkout-index -f -a` is the sibling
-  plumbing spelling worth covering in the same pattern sweep.
+- **`git read-tree --reset -u HEAD` discards uncommitted work** and passes
+  `bash-safety.mjs`. (The tree-ish argument is required — without `HEAD` the
+  command errors out harmlessly — so the regression test must use the full
+  spelling.) Add a `DANGEROUS_CMD_CHECKS` pattern (options tolerated anywhere,
+  per the round-1 lesson); `git checkout-index -f -a` is the sibling plumbing
+  spelling worth covering in the same pattern sweep.
 
 Both have the same shape as the merged fixes — pattern + spot-check + entry in
 `guards.test.mjs` (`node --test .claude/hooks/*.test.mjs`, 22 passing today).
@@ -67,10 +69,14 @@ regeneration already has a freshness-flag pipeline; this rides it.
 
 ## 4. Standing items (not code)
 
-- **No database backup exists.** Supabase Free tier has no point-in-time
-  recovery; `/backup-db` has never been run. Mason says "back up the database"
-  to create the first snapshot. This predates and is unrelated to PR #352 but
-  the session-staleness hook flags it every session.
+- **The manual `/backup-db` off-site dump has never been run.** Per
+  `docs/manual/CURRENT_STATE.md` an in-database backup (120 tables) and a
+  weekly cron (`20260713050000_weekly_db_backup.sql`) exist, so the project is
+  not entirely without recovery — but both copies live inside the same Supabase
+  project, and Supabase Free has no point-in-time recovery. The
+  session-staleness hook flags the missing `/backup-db` dump every session;
+  Mason says "back up the database" to create the first off-site snapshot.
+  Predates and is unrelated to PR #352.
 - **CodeRabbit free-tier rate limits** blocked its incremental reviews for most
   of this PR's lifetime (its one full review was read and addressed; the
   execute_sql objection was formally withdrawn after verification). If PR
@@ -80,9 +86,12 @@ regeneration already has a freshness-flag pipeline; this rides it.
 ## Context that carries over
 
 - The `execute_sql` auto-allow is **deliberate and settled** (CodeRabbit
-  withdrew its objection, learning recorded): `live-testdata-guard` denies all
-  mutating SQL deterministically; `REAL-DATA-OK` is the only override. Don't
-  re-litigate without new evidence.
+  withdrew its objection, learning recorded): `live-testdata-guard` denies
+  mutating SQL deterministically, with `REAL-DATA-OK` as the only override —
+  **contingent on closing item 1**, since the `preview_` prefix exemption is a
+  known hole in that guarantee until fixed. The settled part is the design
+  (guard-enforced allow, not an ask entry), not a claim that the guard is
+  currently gap-free. Don't re-litigate the design without new evidence.
 - Guard changes are classified risky by `codex-push-lib.mjs` (`.claude/hooks/`
   path), so landing items 1–3 from a cloud session means branch → PR → Vercel
   check → Mason merges (or auto-merge); a local session with the Codex CLI can
