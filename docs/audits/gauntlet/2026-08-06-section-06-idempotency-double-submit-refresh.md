@@ -8,13 +8,13 @@
 
 ## Verdict
 
-**0 BLOCKER / 1 HIGH / 3 MED / 2 LOW**
+**0 BLOCKER / 1 HIGH / 3 MED / 3 LOW**
 
-The server-side idempotency foundation is broad and materially stronger than the caller layer: keyed mutating RPCs generally lock, fingerprint, and replay correctly, and the live receipt ledger showed no partial intent bindings. The open risk is concentrated in frontend sequencing and unstable or omitted keys. The most serious case can finalize a cycle count from stale persisted quantities while item saves are still in flight.
+The server-side idempotency foundation is broad and materially stronger than the caller layer: keyed mutating RPCs generally lock, fingerprint, and replay correctly, and the live receipt ledger showed no partial intent bindings. The open risk is concentrated in frontend sequencing, unstable or omitted keys, and an exception registry that conflicts with the repository's no-exception mutating-RPC rule. The most serious case can finalize a cycle count from stale persisted quantities while item saves are still in flight.
 
 ## Publication refresh — 2026-08-07
 
-Before publication, `origin/main` advanced to `b34b5ddb1968173af169eca36e7fc0496388ef86`. The finding-bearing caller files cited below and the local ESLint rule were unchanged from the audit checkout. The new `log_customer_fact` RPC and its registry entry were reviewed: it requires a nonblank key, fingerprints the request, replays through the shared helpers, and is included in the dynamic contract inventory. Current `test:idempotency` and `test:contracts` proof was rerun for publication. The live counts below remain the dated August 6 packet rather than being relabeled as August 7 evidence.
+Before publication, `origin/main` advanced to checkout `b34b5ddb1968173af169eca36e7fc0496388ef86`. The finding-bearing caller files cited below and the local ESLint rule were unchanged from the audit checkout. The new `log_customer_fact` RPC and its registry entry were reviewed: it requires a nonblank key, fingerprints the request, replays through the shared helpers, and is included in the dynamic contract inventory. On 2026-08-07, publication proof at that checkout passed `npm run test:idempotency` (**3 files / 22 tests**) and `npm run test:contracts` (**3 files / 101 tests**); the idempotency command explicitly did not invoke its live-DB layer. The live counts below remain the dated August 6 packet rather than being relabeled as August 7 evidence.
 
 ## Findings
 
@@ -44,7 +44,7 @@ A double-click or a retry after a lost success response can create duplicate rec
 
 ### MED — Negative-inventory reconciliation can append a second false audit event on retry
 
-`src/components/inventory/IntegrityCleanupPanel.tsx:317-349` creates a fresh UUID for each reconciliation attempt and carries a local lint suppression. `reconcile_negative_inventory` checks only the same supplied key but always performs an update and inserts an inventory transaction for a new key (`supabase/migrations/20260501160000_field_app_workflow_phase22.sql:72-115`).
+`src/components/integrity/IntegrityCleanupPanel.tsx:317-349` creates a fresh UUID for each reconciliation attempt and carries a local lint suppression. `reconcile_negative_inventory` checks only the same supplied key but always performs an update and inserts an inventory transaction for a new key (`supabase/migrations/20260501160000_field_app_workflow_phase22.sql:72-115`).
 
 If the first request commits but its response is lost, retrying with a fresh key adds a second zero-delta “reconciliation” transaction. Quantity does not move twice, but the audit trail falsely records a second business action.
 
@@ -56,16 +56,22 @@ If the first request commits but its response is lost, retrying with a fresh key
 
 Receiving itself remains protected, so the consequence is duplicate alerts rather than duplicate stock. Retain a deterministic key derived from the receipt/damage event or add a notification business-key uniqueness guard.
 
+### LOW — Seven keyless mutators conflict with the repository's hard contract
+
+The dynamic inventory explicitly exempts seven keyless mutators: `check_remainder_reminders`, `check_unpriced_orders`, `reconcile_prepay_balances`, `refresh_watchdog_flags`, `release_expired_quote_holds`, `set_primary_customer_contact`, and `settle_applied_record_acres` (`src/lib/rpcContracts.test.ts:2227-2270`). Their documented mechanisms are persisted sent markers, state-conditional maintenance, convergent recomputation, natural-key flag deduplication, single-primary convergence, or trigger-only execution. Those mechanisms explain why the audit found no compounding replay effect, but they do not satisfy the canonical rule in `AGENTS.md:62` and `docs/manual/DECISION_LOG.md:536-540`: every mutating RPC must accept and actually enforce `p_idempotency_key text DEFAULT NULL`.
+
+This is scored LOW for observed double-submit consequence because the seven bodies were classified as naturally replay-safe and no residue was found. It remains a real contract violation, not an accepted policy exception. Add enforced keys to the externally callable mutators, keep trigger-only helpers non-executable by application roles, and remove the exemptions. If Mason intends natural-idempotency exceptions to be policy, that requires an explicit decision-log and hard-rule change rather than an implicit test allowlist.
+
 ### LOW — Prevention checks are server-strong but caller-blind
 
-The dynamic server inventory in `src/lib/rpcContracts.test.ts:2002-2396` checks that mutating RPC definitions declare and use the shared contract. It does not prove that each frontend call supplies a stable key or blocks concurrent intent. The local lint rule grandfathers known exceptions and only evaluates a `p_idempotency_key` property when that property already exists (`eslint-local-rules/eslint-local-rules.cjs:42-59,210-219`). It therefore cannot catch the Blend Duplicate omission and cannot distinguish a key generated per attempt from a key retained per business intent.
+The dynamic server inventory in `src/lib/rpcContracts.test.ts:2002-2396` checks that mutating RPC definitions are classified and that keyed definitions use the shared contract. It does not prove that each frontend call supplies a stable key or blocks concurrent intent, and its explicit natural-idempotency exemption registry allows the seven hard-rule violations above to stay green. The local lint rule grandfathers known exceptions and only evaluates a `p_idempotency_key` property when that property already exists (`eslint-local-rules/rules/idempotency-key-from-hook.cjs:42-59,210-219`). It therefore cannot catch the Blend Duplicate omission and cannot distinguish a key generated per attempt from a key retained per business intent.
 
 Add AST-based caller coverage for mutating RPC calls, with narrow documented exemptions, plus focused regressions for Bulk Field Import, Blend Duplicate, reconciliation, and Cycle Count completion sequencing.
 
 ## Server and live evidence
 
 - Live migration ledger: **943** rows through `20260806023048`.
-- Direct-DML heuristic: **151** authenticated application-owned mutating signatures; **144** keyed and **7** classified as natural/maintenance operations: `check_remainder_reminders`, `check_unpriced_orders`, `reconcile_prepay_balances`, `refresh_watchdog_flags`, `release_expired_quote_holds`, `set_primary_customer_contact`, and `settle_applied_record_acres`.
+- Direct-DML heuristic: **151** application-owned mutating signatures; **144** keyed and the **7** keyless mutators scored above. Their bodies were classified as naturally replay-safe or trigger-only, but the exemption conflicts with the current hard rule.
 - **170** authenticated RPC names declared `p_idempotency_key` in the audit snapshot.
 - Frontend AST inventory: **221** non-test RPC call sites.
 - Shared helpers lock the key, bind the operation, fingerprint payloads where required, and preserve cross-operation separation.

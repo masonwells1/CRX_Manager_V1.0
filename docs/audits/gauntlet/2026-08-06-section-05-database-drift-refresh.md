@@ -20,7 +20,7 @@ This report preserves the dated August 6 audit snapshot. Before publication, `or
 
 ### LOW — Overload detector can suppress an application collision with an extension-owned function
 
-`scripts/db-invariant-sweeps/predicates/overloads.sql:13-30` filters extension-owned functions out before grouping by schema and function name. If an application-owned function and an extension-owned function share a name, the extension row disappears before the group is formed, so the query may see only one remaining overload and report nothing.
+`scripts/db-invariant-sweeps/predicates/overloads.sql:13-30` filters extension-owned functions out before grouping by function name within the `public` schema. If an application-owned function and an extension-owned function share a name, the extension row disappears before the group is formed, so the query may see only one remaining overload and report nothing.
 
 The fresh live mixed-ownership probe returned **0 rows**. No present collision was found; the defect is that the standing guard would not reliably catch one later.
 
