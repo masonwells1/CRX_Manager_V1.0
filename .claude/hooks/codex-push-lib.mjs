@@ -262,10 +262,8 @@ export function pushTargetsMain(cmd, currentBranch) {
   return mainPushSource(cmd, currentBranch) !== null;
 }
 
-// A factory-approved landing may push only the current checkout's exact HEAD to
-// the matching feature branch on origin. Protected branches land through the
-// ordinary PR merge gate; allowing an arbitrary destination here would let
-// factory approval become new production authority.
+// True when the push sends only the current checkout's HEAD to the matching
+// feature branch on origin. Protected branches land through the PR merge gate.
 export function pushTargetsCurrentHead(cmd, currentBranch) {
   const argsText = String(cmd || "").match(GIT_PUSH_RE)?.[1];
   const normalizedBranch = String(currentBranch || "")
@@ -375,7 +373,6 @@ const RISKY_PATH_RES = [
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
   /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
-  /(^|\/)scripts\/factory(?:-(?:state-lib|board))?\.mjs$/i,
   /(^|\/)package\.json$/i,
   // Reviewer charters are executable review instructions for the migration
   // proof gate (write-apply-proofs runs each .claude/agents/<reviewer>.md as a

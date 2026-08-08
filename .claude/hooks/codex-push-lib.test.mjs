@@ -291,9 +291,9 @@ assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".cla
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
 assert.deepEqual(riskyFiles(["scripts/overnight-codex-gate.mjs"]), ["scripts/overnight-codex-gate.mjs"]);
 assert.deepEqual(
-  riskyFiles(["scripts/factory.mjs", "scripts/factory-state-lib.mjs", "scripts/factory-board.mjs", "package.json"]),
-  ["scripts/factory.mjs", "scripts/factory-state-lib.mjs", "scripts/factory-board.mjs", "package.json"],
-  "authoritative factory brokers, board, and test wiring always require Sol/high review",
+  riskyFiles(["package.json"]),
+  ["package.json"],
+  "package.json test wiring always requires Sol/high review",
 );
 // Codex round-8 (PR #142): the hook-registration surfaces — a PR that
 // de-registers a guard by editing only these must still require the verdict.

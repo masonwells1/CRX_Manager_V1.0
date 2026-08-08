@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-07 — Governed Software Factory REMOVED
+
+At Mason's direction, the entire Governed Autonomous Software Factory was removed:
+factory CLI/state/board scripts, the three factory hooks (state-integrity, lane
+guard, owner-input) on both the Claude and Codex sides, the `factory:*` npm
+scripts, and every factory branch inside the surviving push/merge/production
+guards. Reason: it repeatedly locked up ordinary work and was unusable in
+practice. The pipeline spec is archived at
+`docs/archive/GOVERNED_DELIVERY_PIPELINE-removed-2026-08-07.md`; shared state in
+`<git-common-dir>/crx-factory/` is archived offline. All pre-factory guards
+(branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
+bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
+(2026-08-07).
 ## 2026-08-08 — `scripts/land-pr.mjs`: PRs can no longer stall on BEHIND
 
 New landing helper closing the gap that stalled PR #345 overnight: GitHub branch protection requires the PR branch to be up to date with `main`, so a sibling merge flips a fully green PR to `mergeStateStatus=BEHIND` and armed auto-merge never fires — and our watchers only polled checks, not state. `node scripts/land-pr.mjs <n>` watches state, runs `gh pr update-branch` whenever the PR falls behind (re-running if main moves again mid-wait), and exits 0 only on MERGED. It deliberately never merges anything itself — merging stays with the hook-gated `gh pr merge`, so no new bypass path exists; for risky diffs it waits until green/current, then prints the proof-and-merge steps. Proven live: reported `MERGED c65b431d` for PR #345, and detected + un-stuck Dependabot PR #341 (green, 8/8 checks, BEHIND) on its first real pass. Wired into `/ship` Step 8 and `docs/reference/agent-guardrails.md`. Hardened during its own landing (PR #347): GitHub recomputes mergeStateStatus asynchronously and briefly reported a stale DIRTY right after a push, so the script now requires 3 consecutive DIRTY polls before declaring a real conflict.

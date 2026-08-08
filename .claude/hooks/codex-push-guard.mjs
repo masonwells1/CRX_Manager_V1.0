@@ -58,7 +58,6 @@ import {
   urlIsGuardedApp,
   riskyFiles,
 } from "./codex-push-lib.mjs";
-import { validateApprovedFactoryLanding } from "../../scripts/factory-state-lib.mjs";
 
 function passthrough() { process.exit(0); }               // emit nothing → normal flow (git push is allow-listed)
 function deny(reason) {
@@ -670,52 +669,6 @@ for (const pushCmd of pushCommands) {
     branch = git(["rev-parse", "--abbrev-ref", "HEAD"], pushRepoDir);
   } catch (error) {
     deny(`CODEX GATE: could not determine the repository/branch selected by this push, so it is denied. ${error?.message || error}`);
-  }
-
-  // AUTHORITY-MONOTONIC: factory state can only add exact-byte restrictions;
-  // the ordinary main risk classification and Sol proof checks below still run.
-  let factoryLandingRequired = false;
-  try {
-    const factoryLanding = validateApprovedFactoryLanding(pushRepoDir, { commitish: "HEAD" });
-    factoryLandingRequired = factoryLanding.required;
-    if (factoryLanding.required && !pushTargetsCurrentHead(pushCmd, branch)) {
-      deny("CODEX GATE: a factory-approved landing may push only this checkout's exact current HEAD. Alternate local refs require parking, fresh proof, and a new owner acceptance.");
-    }
-  } catch (error) {
-    deny(`CODEX GATE: factory landing proof no longer matches the pushed bytes (${error.message}). Park the job, rerun evidence and Sol/high review, and re-present Mason's morning decision.`);
-  }
-  if (factoryLandingRequired) {
-    let headSha = "";
-    let baseSha = "";
-    try {
-      headSha = git(["rev-parse", "--verify", "HEAD"], pushRepoDir);
-      baseSha = git(["rev-parse", "--verify", "origin/main"], pushRepoDir);
-    } catch (error) {
-      deny(`CODEX GATE: could not bind the factory feature push to exact HEAD/base commits (${error?.message || error}).`);
-    }
-    const proofPath = path.join(pushRepoDir, ".claude", "session-state", `codex-review-${headSha}.json`);
-    let proof = null;
-    try { proof = JSON.parse(readFileSync(proofPath, "utf8")); } catch { /* missing/unreadable is denied below */ }
-    if (!proofValid(proof, headSha, Date.now(), baseSha)) {
-      deny("CODEX GATE: a factory-approved feature push requires the canonical fresh Sol/high proof bound to this exact HEAD and origin/main. Run node scripts/write-codex-push-proof.mjs, then retry.");
-    }
-    try {
-      const openPullRequests = JSON.parse(execFileSync("gh", [
-        "pr", "list", "--head", branch, "--state", "open",
-        "--json", "headRefOid,baseRefName,autoMergeRequest",
-      ], {
-        cwd: pushRepoDir,
-        encoding: "utf8",
-        timeout: 10_000,
-        stdio: ["ignore", "pipe", "ignore"],
-      }));
-      if (!Array.isArray(openPullRequests)) throw new Error("GitHub returned a non-array PR list");
-      if (openPullRequests.some((pr) => pr?.autoMergeRequest)) {
-        deny("CODEX GATE: this factory feature branch already has auto-merge enabled. Disable auto-merge before pushing so the exact PR head, base, green checks, and Sol proof are verified at an immediate merge gate.");
-      }
-    } catch (error) {
-      deny(`CODEX GATE: could not verify that factory feature-branch auto-merge is disabled, so the push is denied (fail closed). ${error?.message || error}`);
-    }
   }
 
   // Both checks below are deliberately ABOVE the `if (!srcRef) continue` that

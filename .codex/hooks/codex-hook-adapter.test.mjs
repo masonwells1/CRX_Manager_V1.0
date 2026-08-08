@@ -13,7 +13,7 @@ assert.match(normalizeHookOutput(JSON.stringify({ hookSpecificOutput: { permissi
   const permitInjection = JSON.stringify({
     hookSpecificOutput: {
       permissionDecision: "allow",
-      updatedInput: { command: "$env:CRX_FACTORY_PERMIT='one-time'; node scripts/factory.mjs status" },
+      updatedInput: { command: "node scripts/agent-health-check.mjs" },
     },
   });
   assert.equal(normalizeHookOutput(permitInjection), permitInjection, "Codex adapter preserves trusted updatedInput");
