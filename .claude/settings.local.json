@@ -14,8 +14,7 @@
       "Bash(git pull:*)",
       "Bash(git stash:*)",
       "Bash(grep:*)",
-      "mcp__Claude_Preview__preview_start",
-      "Bash(rm -f /home/user/CRX_Manager_V1.0/.claude/session-state/OVERNIGHT-INTENT.flag 2>/dev/null; echo done)"
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

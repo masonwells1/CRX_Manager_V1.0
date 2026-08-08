@@ -14,8 +14,12 @@
 -- caller-analysis: batch_apply_prepayments :: single live callsite
 --   src/components/prepay/PrepayWorkspacePanel.tsx:196 passes
 --   p_performed_by: profile?.id. profiles.id IS auth.uid() (it is the same
---   column is_admin() keys on), so the restored ACTOR_MISMATCH check cannot
---   fire for a legitimate admin using the UI. `authenticated` keeps EXECUTE
+--   column is_admin() keys on), so the restored ACTOR_MISMATCH check does not
+--   fire for a signed-in admin using the UI. It DOES now fire if `profile` is
+--   unloaded and `profile?.id` resolves to undefined/NULL — that is deliberate
+--   fail-closed behavior matching the guard being restored, and it surfaces as
+--   a clear ACTOR_MISMATCH rather than an unattributed money mutation.
+--   `authenticated` keeps EXECUTE
 --   below, so the callsite is unaffected by the REVOKE — the REVOKE only
 --   strips PUBLIC and anon, neither of which held a working grant in practice.
 --
@@ -52,8 +56,11 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
-  -- The caller may name itself, but may not name anyone else.
-  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+  -- The caller must name itself, and may not name anyone else. NULL is
+  -- rejected too: the guard this restores was
+  -- `p_performed_by IS DISTINCT FROM auth.uid()`, which fails closed on NULL,
+  -- and accepting NULL would let a call through with no actor identity at all.
+  IF p_performed_by IS DISTINCT FROM v_actor THEN
     RAISE EXCEPTION 'ACTOR_MISMATCH'
       USING ERRCODE = '42501';
   END IF;
@@ -65,8 +72,12 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
+  -- Forward the canonical authenticated actor, not the caller-supplied value.
+  -- They are provably equal by the check above; passing v_actor means the impl
+  -- can never receive an unvalidated identity even if this guard is later
+  -- loosened.
   RETURN public._batch_apply_prepayments_impl(
-    p_allocations, p_performed_by, p_idempotency_key
+    p_allocations, v_actor, p_idempotency_key
   );
 END;
 $function$;

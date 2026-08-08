@@ -24,6 +24,7 @@ import path from "node:path";
 import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 import { sessionProofDirs } from "./codex-push-lib.mjs";
+import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
 
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 const REQUIRED_CODEX_EFFORT = "high";
@@ -99,6 +100,46 @@ const migName = (input.name || "").toString().trim();
 const migQuery = (input.query || "").toString();
 const currentHash = migQuery ? createHash("sha256").update(migQuery).digest("hex") : "";
 const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unknown";
+
+// ORDERING PREFLIGHT (2026-08-08). Refuse a migration that is OLDER than one
+// already applied — the mechanism that silently reverted the
+// batch_apply_prepayments actor guard on 2026-07-15 with nothing detecting it.
+//
+// The comparison set is the APPLIED ledger, never the files on disk: a file on
+// disk is not proof it ran, and comparing against disk would block a correct
+// ascending batch of new migrations. The snapshot is written by
+// scripts/refresh-applied-migrations.mjs from
+// supabase_migrations.schema_migrations.
+//
+// If no snapshot exists the check ABSTAINS rather than guessing — a wrong block
+// would stop legitimate forward work, and the proof/Codex gates below still
+// apply in full.
+{
+  let appliedNames = [];
+  try {
+    const snapPath = path.join(stateDir, "applied-migrations.json");
+    if (existsSync(snapPath)) {
+      const parsed = JSON.parse(readFileSync(snapPath, "utf8"));
+      const rows = Array.isArray(parsed) ? parsed : parsed?.applied;
+      if (Array.isArray(rows)) {
+        appliedNames = rows
+          .map((r) => (typeof r === "string" ? r : (r?.name ?? r?.version ?? "")))
+          .filter(Boolean);
+      }
+    }
+  } catch { appliedNames = []; } // unreadable snapshot → abstain, do not guess
+
+  try {
+    const ordering = checkMigrationOrdering({ name: migName, sql: migQuery, appliedNames });
+    if (!ordering.ok) out("block", ordering.reason);
+  } catch (err) {
+    // A crash in the ordering check must not silently wave a migration through.
+    out("block",
+      `MIGRATION ORDERING GUARD failed to evaluate "${safeName}": ${err?.message || err}. ` +
+      `Refusing the apply rather than skipping the check. Fix the guard, or state an explicit ` +
+      `intentional replay in the migration SQL if that is genuinely what this is.`);
+  }
+}
 
 // HARD carve-out (Mason's settled 2026-07-13 policy): in a hands-free run, a
 // DESTRUCTIVE migration — apply-time DELETE/TRUNCATE/DROP of data — NEVER

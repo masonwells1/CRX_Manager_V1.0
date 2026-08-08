@@ -12,7 +12,7 @@
 Three things cannot be done from the cloud container:
 
 1. **The database backup.** `/backup-db` installs a credential-proxy rewrite that the push guard refuses in a web/mobile session. This is the single largest unmitigated risk to the business — no off-site dump exists, and Supabase Free has no point-in-time recovery.
-2. **Live migration applies.** All four migrations below are forward-only SQL. Writing them is safe anywhere; applying them needs Mason's in-chat OK in an interactive session.
+2. **Live migration applies.** The SQL below is forward-only. Writing it is safe anywhere; applying it needs Mason's in-chat OK in an interactive session. Nothing here has been applied.
 3. **Real-path UI verification** for the `cancel_order` change.
 
 Everything else — writing the SQL, tests, review — can be done anywhere.
@@ -21,27 +21,45 @@ Everything else — writing the SQL, tests, review — can be done anywhere.
 
 ## Do this first, before any migration
 
-**Run `/backup-db`.** Four migrations are about to touch money, inventory, and an authorization guard. Do not start them without a restorable copy of the database. This is the highest-value item in this document and it is not optional.
+**Run `/backup-db`.** These migrations touch money, inventory, and an authorization guard. Do not start them without a restorable copy of the database. This is the highest-value item in this document and it is not optional.
 
 ---
 
-## The four migrations
+## The four remediation items
 
-All are **forward-only**. Never replay an existing migration file — that is the exact mechanism that caused finding #1.
+**STATUS UPDATE (2026-08-08, after this handoff was first written): all of these are now WRITTEN and
+on the branch. They have NOT been applied to live.** The section below is kept as the rationale for
+each; treat the file list in `docs/CHANGELOG.md` as the authoritative inventory.
 
-### M-1 — Migration ordering preflight guard  ← **highest value, do first**
+Note that only three of the four are SQL migrations. **M-1 is a hook, not a migration** — it does not
+belong in `supabase/migrations/` and must not be looked for there.
+
+All SQL here is **forward-only**. Never replay an existing migration file — that is the exact
+mechanism that caused finding #1.
+
+### M-1 — Migration ordering preflight guard (a HOOK, not a migration)  ← **highest value**
+
+**Now written:** `.claude/hooks/migration-ordering-lib.mjs`, wired into
+`.claude/hooks/migration-apply-guard.mjs`, with `scripts/refresh-applied-migrations.mjs` supplying the
+applied-ledger snapshot it compares against.
 
 **Why it ranks first:** it fixes the *class* of defect, not one instance. Everything else here is a single bug; this one prevents the next silent revert.
 
 **The defect it prevents:** on 2026-07-14, `20260714220000_shared_idempotency_and_hold_hardening` added an actor guard to `batch_apply_prepayments`. Then ledger row `20260715134618 | 20260714185130_gate_batch_prepay_admin` — an **older file, later version** — was applied afterward and re-created the function from its pre-fix body, discarding the guard. No test, hook, or gate caught it. It surfaced only because the audit hash-compared all 566 live functions against disk.
 
-**What to build:** a preflight check that fails when a migration whose recorded *name* embeds an older timestamp is applied after a newer version. Wire it into the existing migration-apply-guard path so it runs before any live apply.
+**What was built:** a preflight check that fails when a migration whose name embeds an older
+timestamp is applied after a newer one **that has already been applied**. It compares against the
+applied ledger, NOT files on disk — comparing against disk was the first draft and it was wrong, as
+both Codex and CodeRabbit caught on PR #348: it would have blocked a correct ascending batch of new
+migrations. With no ledger snapshot available the check abstains rather than guessing.
 
 **Watch out:** live `name` values are inconsistently formatted — some carry the version prefix and `.sql`, some don't. Normalize before comparing. A naive version-vs-version comparison produces false drift; this is the documented "B7 class" trap in the audit.
 
-### M-2 — Restore the `batch_apply_prepayments` actor guard
+### M-2 — Restore the `batch_apply_prepayments` actor guard  *(written: `20260808150100`)*
 
-Re-create `batch_apply_prepayments(jsonb, uuid, text)` with the `AUTH_REQUIRED` / `ACTOR_MISMATCH` / admin block, **delegating to the existing `_batch_apply_prepayments_impl`**, plus:
+Re-create `batch_apply_prepayments(jsonb, uuid, text)` with the `AUTH_REQUIRED` / `ACTOR_MISMATCH` / admin block, delegating to the existing `_batch_apply_prepayments_impl`, plus:
+
+**Critical, and the reason this was nearly wrong:** `_impl` carries **no authorization of its own** — the live function's `is_admin()` check lives in the wrapper. The wrapper must KEEP `is_admin()`; delegating it would silently drop the admin gate on an admin-only money function. The written migration keeps it, and forwards the canonical `auth.uid()` rather than the caller-supplied value.
 
 ```sql
 REVOKE ALL ON FUNCTION public.batch_apply_prepayments(jsonb, uuid, text) FROM PUBLIC, anon;
@@ -54,7 +72,7 @@ GRANT EXECUTE ON FUNCTION public.batch_apply_prepayments(jsonb, uuid, text) TO a
 
 Frontend already passes `p_performed_by: profile?.id` at `src/components/prepay/PrepayWorkspacePanel.tsx:201` — currently ignored, will start being enforced. Verify that call still succeeds for a real admin after the change.
 
-### M-3 — Canonical money rounding  *(Mason decided: two decimals)*
+### M-3 — Canonical money rounding  *(written: `20260808150400`; Mason decided: two decimals)*
 
 **Decision:** round to whole cents, half-up. The pending **$5,245.195 commission resolves to $5,245.20**.
 
@@ -65,11 +83,20 @@ Frontend already passes `p_performed_by: profile?.id` at `src/components/prepay/
 
 **Fixing the 49 existing rows changes live financial data.** That needs Mason's explicit OK, separately from applying the migration. Ask as its own question.
 
-### M-4 — `cancel_order` releases prebooked stock  *(Mason decided: yes)*
+### M-4 — `cancel_order` zeroes `quantity_remaining`  *(written: `20260808150200`)*
 
-Cancelling an order must zero `quantity_remaining` on its lines and release the prebooked quantity back to available. Current behavior strands both — Mason confirmed this is a bug, not a design choice.
+**SCOPE CORRECTED after tracing the live chain.** Mason decided cancelling must release stock, and
+the audit reported that both the quantity and the prebooked stock were stranded. Only the first half
+was true:
 
-Live evidence: one cancelled order line carries `quantity_remaining = 247`, its product holds `quantity_prebooked = 36` with zero open demand. 1 of 117 inventory rows is affected; the other 116 tie exactly.
+* Full cancel (`_cancel_order_impl_20260714`) **already** releases prebooked stock and writes a
+  `released` inventory_transactions row — confirmed live: cancelled order ORD-2026-0330 HAS that row.
+* The `partially_fulfilled` path already handled both halves correctly.
+* Only `order_items.quantity_remaining` was genuinely stranded (247 units on ORD-2026-0330).
+
+So M-4 zeroes `quantity_remaining` and nothing else. **Do NOT add a second stock-release path** — that
+would double-release inventory. The residual `quantity_prebooked = 36` is March 2026 historical drift
+(audit L2), not a cancellation defect.
 
 **Verify in the real UI**, not just tests: cancel an order, confirm the stock returns to available and a ledger row is written.
 
@@ -80,7 +107,7 @@ Live evidence: one cancelled order line carries `quantity_remaining = 247`, its 
 ## Smaller items, no owner decision needed
 
 - **Revoke `TRUNCATE` on `public.inventory` from `authenticated`.** Postgres does **not** apply RLS to TRUNCATE, so the row policies don't constrain it. PostgREST doesn't expose TRUNCATE, so nothing is exploitable and no incident is claimed — the grant is simply unnecessary.
-- **Commit `check_rate_limit` forward.** The live body has no disk file. Live uses a fixed bucket (allows up to 2× `p_max_calls` across a boundary); disk-latest uses a stricter sliding window. **Commit the live body forward — do not replay `20260221200000_rate_limiting.sql`.** The suspected off-by-one does not exist; both block after exactly `p_max_calls`.
+- **Commit `check_rate_limit` forward. NOT DONE — still outstanding.** The live body has no disk file. Live uses a fixed bucket (allows up to 2× `p_max_calls` across a boundary); disk-latest uses a stricter sliding window. **Commit the live body forward — do not replay `20260221200000_rate_limiting.sql`.** The suspected off-by-one does not exist; both block after exactly `p_max_calls`.
 - **`COMMENT ON TABLE public.payments`** marking it superseded by `allocation_sets` / `prepay_credits`. Zero rows, zero writers, zero inbound FKs. It caused a false HIGH-severity alarm during this very audit and will do so again.
 - **`execute_sql_readonly(text)`** string-concatenates into `EXECUTE` behind a `LIKE 'select%'` check, trivially bypassed by a CTE with a data-modifying statement. Already revoked from `anon` and `authenticated`, so not currently exploitable. It should not exist in this shape.
 - **`prebook_reconciliation` transaction type** — already allowed by the CHECK constraint, currently zero rows. Using it for prebooked repairs stops them polluting available-stock reconciliation.
@@ -106,7 +133,9 @@ Do not let the SOLID verdict be read as covering these:
 
 `claude/phone-to-local-sessions-dmqc57`, merged up to `origin/main` at merge commit `76902bbe`.
 
-Contains documentation and one test-file fix only — **no `src/` changes, no migrations**. Full pipeline verified green in the cloud container: typecheck clean, build clean, 322 test files / 4,288 tests passing, pre-commit gate (lint, build, tests, doc check, dependency integrity, containment) all passing.
+Originally contained documentation and one test-file fix only. **It now also carries the four
+remediation items above** — three forward SQL migrations under `supabase/migrations/2026080815*` plus
+the ordering-guard hook. None has been applied to live. Full pipeline verified green in the cloud container: typecheck clean, build clean, 322 test files / 4,288 tests passing, pre-commit gate (lint, build, tests, doc check, dependency integrity, containment) all passing.
 
 Two things to know:
 

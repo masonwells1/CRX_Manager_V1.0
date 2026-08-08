@@ -28,10 +28,32 @@ not be run. Both gates are unmet by environment, not by choice.
 - `scripts/db-invariant-sweeps/predicates/fin-money-whole-cents.sql` is the standing-data half of
   that rule. It will report the 49 rows until they are repaired; that is intended, not a defect.
 - `.claude/hooks/migration-ordering-lib.mjs` is the out-of-order replay guard — the durable
-  prevention for the §2 finding. **It is NOT wired into `migration-apply-guard.mjs`**: that edit was
-  declined. Wiring it is one import plus one check, and it remains the highest-value follow-up.
+  prevention for the §2 finding — now WIRED into `.claude/hooks/migration-apply-guard.mjs`, with
+  `scripts/refresh-applied-migrations.mjs` supplying the applied-ledger snapshot and
+  `.claude/hooks/migration-ordering-lib.test.mjs` covering it (15 assertions).
 
 Migration reviewer subagents were NOT dispatched, since nothing is being applied from here.
+
+**PR #348 review round (Codex + CodeRabbit).** Both reviewers independently caught a real design bug
+in the first draft of the ordering guard: it compared the candidate migration against every filename
+on **disk** rather than against the **applied ledger**. A file on disk is not proof it ran, so that
+version would have blocked its own sibling migrations — applying `20260808150100` would have seen
+`20260808150400` on disk and refused, forcing newest-first application or a bogus escape marker. The
+guard now compares only against migrations recorded as applied, abstains when no ledger snapshot is
+available rather than guessing, and has a regression test pinning the ascending-batch case.
+
+CodeRabbit also correctly flagged that the restored `batch_apply_prepayments` wrapper accepted
+`p_performed_by = NULL` and forwarded it. The guard being restored was
+`p_performed_by IS DISTINCT FROM auth.uid()`, which fails closed on NULL; the wrapper now matches it
+and forwards the canonical `auth.uid()` instead of the caller-supplied value. Also removed the
+auto-added `rm -f OVERNIGHT-INTENT.flag` permission from `.claude/settings.local.json` — CodeRabbit
+independently reached the same conclusion already flagged in chat: a standing unguarded grant to
+delete the unattended-run flag is a guard-bypass risk.
+
+Skipped with reason: the `next_po_number` zero-caller entry in `.claude/caller-graph.json` is a
+pre-existing limitation of the generator's directory scope (it does not scan `.sql`), not something
+this branch introduced, and the artifact must not be hand-edited. CodeRabbit's `factory-board.test.mjs`
+failure did not reproduce here — it passes with 29 assertions, and `agent-manifest-parity` is clean.
 
 ## 2026-08-08 — 2026-08-08 foundation ultra review (cloud, unattended):…
 

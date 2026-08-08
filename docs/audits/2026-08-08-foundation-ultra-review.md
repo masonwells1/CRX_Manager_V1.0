@@ -41,7 +41,7 @@ This is the run's headline, and it is a process defect rather than a single bug.
 
 Then the ledger recorded:
 
-```
+```text
 20260714220000 | shared_idempotency_and_hold_hardening
 20260715134618 | 20260714185130_gate_batch_prepay_admin    <-- OLDER file, LATER version
 ```
@@ -81,7 +81,9 @@ END IF;
 
 **M3 — Sub-cent money in live rows.** 46 `order_items.total_price` and 3 `commissions.commission_amount` values carry fractional cents, including a **$5,245.195 pending commission payout**. These columns are `numeric` dollars — the documented historical exception — but the *values* are unrounded products of price × fractional units. Whoever pays these rounds at an unspecified point, so payout and stored liability can disagree by a cent per row. `purchase_orders.total_cost_cents` is `GENERATED ... round(total_cost*100)`, so the same rounding happens silently on AP. **Owner decision on the canonical rounding point** — see §7.
 
-**M4 — `cancel_order` leaves `quantity_remaining` non-zero, and stock stays prebooked.** One cancelled order line carries `quantity_remaining = 247` and its product holds `quantity_prebooked = 36` with zero open demand. 1 of 117 inventory rows; the other 116 tie exactly.
+**M4 — `cancel_order` leaves `quantity_remaining` non-zero.** One cancelled order line carries `quantity_remaining = 247`. 1 of 117 inventory rows; the other 116 tie exactly.
+
+> **CORRECTION (2026-08-08, post-report).** This finding originally also claimed the stock stays prebooked. That half is WRONG. Tracing the live chain shows `_cancel_order_impl_20260714` already releases prebooked stock and writes a `released` ledger row — ORD-2026-0330 HAS that row — and the `partially_fulfilled` path already zeroed both. Only `quantity_remaining` was stranded. The product's residual `quantity_prebooked = 36` is March 2026 historical drift (L2 below), not a cancellation defect. Fixed by migration `20260808150200`, which zeroes `quantity_remaining` and nothing else — a second release path would double-release inventory.
 
 **M5 — The go-live prebook check produces a false discrepancy.** `checkPrebookedInventory()` (`tests/e2e/golive/utils/reconciliation-checks.ts:355-372`) sums `order_items.quantity_remaining` with no order-status awareness; its caller (`tests/e2e/golive/stream0-db-integrity.spec.ts:237`) fetches `order_items?select=product_id,quantity_remaining&quantity_remaining=gt.0` with no join to `orders`. Confirmed live: exactly one `cancelled` order line carries 247 units. Capped at MED because the check only `console.log`s rather than failing the build — it produces a misleading go-live report, not a red build.
 

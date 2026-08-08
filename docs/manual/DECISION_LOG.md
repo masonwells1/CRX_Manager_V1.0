@@ -19,9 +19,14 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
    $5,245.195 commission resolves to $5,245.20. `order_items.total_price` and
    `commissions.commission_amount` both round at this point, and a live invariant predicate should
    assert whole cents on both.
-3. **`cancel_order` semantics (M4) — cancelling releases stock.** Cancelling an order must zero
-   `quantity_remaining` on its lines and release the prebooked quantity back to available. Current
-   behavior strands both and is a bug to fix, not a design choice.
+3. **`cancel_order` semantics (M4) — cancelling releases stock.** Mason's intent: a cancelled order
+   must not hold stock. **Implementation note added 2026-08-08 after tracing the live chain — the
+   audit overstated this.** Full cancel ALREADY releases prebooked stock and writes its `released`
+   `inventory_transactions` row (confirmed live on ORD-2026-0330), and the `partially_fulfilled` path
+   already handled both halves. Only `order_items.quantity_remaining` was genuinely stranded, and
+   migration `20260808150200` zeroes exactly that. **Do NOT add a second stock-release path** — it
+   would double-release inventory. The residual `quantity_prebooked = 36` on that product is March
+   2026 historical drift (audit L2), not a cancellation defect.
 4. **Negative inventory (L3) — the existing decision stands.** Keep the 19 negative
    `inventory.quantity_available` rows as they are; reconcile only from physical counts. No re-base
    scheduled. Revisit when a physical count happens.
