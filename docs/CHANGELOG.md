@@ -69,6 +69,116 @@ opaque data, so the round-6 false positive on literals that merely mention
 "CREATE FUNCTION" stays fixed. Proven red on the prior commit; deny and
 allow regression tests added (43 assertions).
 
+## 2026-08-07 — UI experience improvements: WorkspaceTabs route-preserving tab bars for…
+
+UI experience improvements: WorkspaceTabs route-preserving tab bars for Billing/Products/Insights clusters, condensed sidebar (Products & Pricing folded into Inventory & Buying, Insights as one link), FREQUENT sidebar section from visit counts, and large-screen readability via responsive root font-size (16px base; 17/18/20px at 1920/2560/3200px). Verified live in Chrome at 3440px and at 1440/1920/2560 in preview pane. PR #338. Codex review fixes: sidebar workspace entries honor per-user deny lists by falling through to the first accessible sibling page, and the tab bar matches by page key so `/invoices/field-app/*` highlights Field Invoices (verified live; regression tests added). Codex round 3: visit counts keyed by canonical page key, root font-size steps changed to percentages (106.25%/112.5%/125%) so a user-configured browser font size scales instead of being overridden (verified live at 3200/1920px), and Frequent counts sum across a condensed entry's sibling pages (regression test). Round 4 (CodeRabbit + Codex): the Frequent section now refreshes the moment a visit crosses the threshold via a `crx:visit-counts-changed` window event, stored visit counts are validated on read (malformed data resets instead of crashing), and the redirect aliases (`/field-invoices/unbilled` → `?tab=` URLs) no longer double-count one click — all covered by regression tests. Round 5 (CodeRabbit): the redirect dedupe now requires the second pathname to be REPLACE-committed (via `useNavigationType()`) or identical, so a genuine quick visit to a sibling page sharing a canonical key still counts (proven live via module import; regression tests added). Round 6 (Codex): a redirect that changes page keys (`/invoices/:id` REPLACE-navigating to `/field-invoices/:id`) now moves the count to the destination instead of crediting both pages for one click (proven live; regression test added).
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `fe7835b6 fix(ui): honor browser font-size preference and aggregate sibling visit counts`
+  - `cf7335e7 fix(nav): key visit counts by canonical page, not raw first segment`
+  - `3de0ba68 docs: record Codex review fixes in session changelog entry`
+  - `23963c0f fix(nav): honor deny-list siblings in sidebar and page-key tab matching`
+  - `96c13bd5 docs: changelog entry for UI improvements session`
+  - `05389e01 feat(ui): scale root font size up on large screens`
+  - `58f0fea5 feat(ui): workspace tab bars, condensed sidebar, and frequent-pages section`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-07 — PO-receipt import-era violations accepted and baselined
+
+Mason's disposition on the 22 `fin-po-receipt-identity.sql` findings (15 over_receipt
+lines on PO-2026-0008/0009/0012/0028 + 7 fully_received_incomplete lines on
+PO-2026-0008, all March-2026 import-era data): **accept-and-baseline**. Each of the
+22 rows is allowlisted per-`violation_key` in `allowlist.json` with the live
+ordered/received figures recorded in its justification; no live data was modified.
+The identity stays armed — any new over-receipt or premature close-out surfaces
+under a fresh key and fails the sweep. Verified: 22 live rows − 22 allowlist keys = 0.
+
+## 2026-08-07 — Both parked migrations APPLIED LIVE + CRM fact cutover
+
+Owner-approved apply session. Both parked migrations went through the full gate
+path (migration-review charters CLEAN, fresh apply proofs, in-transaction pre/postflights)
+and are live:
+
+- **`20260807215532_profile_role_lock_covers_insert`** (authored as 20260807153000) —
+  `_guard_profile_role_lock` now fires `BEFORE INSERT OR UPDATE` (tgtype 23), closing the
+  §0d escalation where a non-admin could re-insert their own `profiles` row as admin.
+  Postflight included a live behavioral probe: an impersonated active non-admin's
+  escalation insert was blocked with the `PROFILE_INSERT_LOCK:` token. Paired predicate
+  `profile-role-lock-insert-arm.sql` verified red→green (2 rows before, 0 after).
+- **`20260807220323_log_customer_fact_rpc`** (authored as 20260807120000, re-stamped
+  20260807221500 pre-apply) — `log_customer_fact` idempotent SECURITY DEFINER RPC live;
+  anon EXECUTE revoked, authenticated granted, single overload verified.
+
+Frontend cutover landed: `CustomerFacts.tsx` saveFact now calls the RPC with an
+idempotency key (retry-safe). `rpcContracts.test.ts` moved `log_customer_fact` to
+`MUTATING_RPCS_WITH_IDEMPOTENCY` (migration-only bucket empty again);
+`rpcFixtureLiveDiff.test.ts` snapshot fully regenerated (558 live functions, md5-verified);
+`src/types/supabase.ts` regenerated. Live migration high-water: `20260807220323`.
+
+## 2026-08-07 — CRM add-fact retry safety — PREPARED (parked; superseded above)
+
+Parked migration `20260807120000_log_customer_fact_rpc.sql` adds `log_customer_fact`, an idempotent SECURITY DEFINER RPC mirroring `log_customer_interaction` (payload-fingerprinted replay, role gate, server-pinned `entered_by`/`source`), closing the retry-unsafe direct insert in `CustomerFacts.tsx` found by the incident-vs-guard audit. NOT applied — awaiting migration-review + apply gates + owner approval; the frontend cutover is staged as a comment and lands post-apply. `rpcContracts.test.ts` registers the RPC under `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`. *(Applied later the same day — see entry above.)*
+
+## 2026-08-07 — Incident-vs-guard audit: 7 gaps closed with new hard guards
+
+An audit mapped ~89 recorded incidents in `docs/manual/KNOWN_ISSUES.md` against the
+guard stack (sweep predicates, hooks, regression suites, CI) and found 7 without a
+matching hard guard. All 7 are now covered on branch `claude/crx-self-improving-harness-04cef9`:
+
+1. **Profile role-lock INSERT arm** — parked migration `20260807153000_profile_role_lock_covers_insert.sql`
+   extends `_guard_profile_role_lock` to `BEFORE INSERT OR UPDATE`, closing the
+   §0d follow-up where a non-admin could re-insert their own `profiles` row as
+   `role = 'admin'`. Paired red/green predicate `profile-role-lock-insert-arm.sql`
+   (2 rows today → 0 after apply). NOT applied — awaiting migration-review + apply gates.
+   *(Applied later the same day as live version 20260807215532 — see entry above.)*
+2. **Transport-key known-hole tripwire** — `codex-push-lib.test.mjs` now pins that
+   `core.hooksPath` and shell-form `credential.helper` are deliberately absent from
+   `EXECUTABLE_TRANSPORT_KEYS` (husky sets `core.hooksPath` legitimately), so any
+   edit to that list forces a deliberate decision.
+3. **Dispatch-sync silent-skip predicate** — `dispatch-sync-nonqualifying-profile.sql`
+   detects open jobs missing dispatch rows because the assignee didn't qualify
+   (0 rows live).
+4. **Parked items 66/67 built** — `audit-log-completeness.sql` predicate (0 rows live,
+   39 money-mutating SECDEF functions all log) and the write-time actor-binding hook
+   `.claude/hooks/actor-binding-check.mjs` (PreToolUse Write|Edit, 24 assertions,
+   wired on both Claude and Codex sides).
+5. **New financial identities** — `fin-vendor-bill-balance-identity.sql` (0 rows) and
+   `fin-po-receipt-identity.sql` (**22 live violations on March-2026 import POs,
+   deliberately not allowlisted — awaiting Mason's disposition**;
+   *baselined later the same day — see entry above*).
+6. **Commission name-reacquisition residual** — found already fixed live 2026-07-22
+   (`20260722184744_reuse_guard_covers_invoiced_jobs`); KNOWN_ISSUES entry marked RESOLVED.
+7. **Push-guard hoist regression test** — feature-branch push with `core.sshCommand`
+   set is asserted denied, locking in the 2026-08-05 fix.
+
+Sweep predicate count 21 → 26. Gates on the branch: typecheck clean,
+`test:correction-guards` 22 files pass, `test:agent-workflows` pass, vitest
+4287 passed / 1 known full-suite workbook flake (passes in isolation).
+
+## 2026-08-07 — Same-chat Factory actor transfer — PREPARED
+
+Factory custody transfer now also handles an explicit tool-surface change
+inside the same chat session. The canonical owner-input hook records the
+transfer, preserves the chat identity, rebinds custody to the destination tool,
+and revokes the prior presentation so the ticket must be presented and approved
+again. Its receipt proves hook origin rather than authenticating the Windows
+user or another same-user process. This prevents a ticket presented through one
+agent adapter from becoming permanently unapprovable in the same owner chat
+through another adapter.
+The append-time origin-main compatibility gate now compares SHA-256 hashes of
+the complete derived Factory snapshot both immediately and after the approval
+expiry horizon, so a schema-valid event is rejected when branch and current main
+would interpret its custody semantics differently without piping the full ledger
+snapshot through the compatibility subprocess.
+
+This entry describes local reviewed work; it does not claim merge or production
+deployment.
+
+The branch reconciliation retains the Git-hook fixture isolation shipped in
+PR #333 and removes the duplicate per-spawn implementation discovered while
+addressing this change's review feedback.
+
 ## 2026-08-07 — `guards.test.mjs` was writing into the real repository — FIXED
 
 The mirror-remote block in `.claude/hooks/guards.test.mjs` builds a throwaway git
@@ -93,7 +203,7 @@ Proven red-to-green: with `GIT_DIR`/`GIT_INDEX_FILE` set the suite previously fa
 at the first mirror assertion and now passes 161/161, and writes nothing to the real
 repo in either environment.
 
-## 2026-08-07 — Expired Factory custody-transfer replay repair — PREPARED
+## 2026-08-07 — Expired Factory custody-transfer replay repair — SHIPPED
 
 Factory custody transfer now treats an expired durable `queued` approval as the
 owner-visible `needs-ticket-ok` stage when validating the authenticated transfer
@@ -488,7 +598,7 @@ every ref *including main* without naming one, which is precisely the case
 `mainPushSource()` returns nothing for. Measured against the shipped guard on a
 repo carrying `remote.origin.mirror`:
 
-```
+```text
 push origin feature   ALLOW      push origin        ALLOW
 push (bare)           ALLOW      push origin HEAD:main   DENY
 ```
@@ -1283,7 +1393,7 @@ PROOF — Ran: `npx vitest run --coverage` (320 files, 4259 tests, 0 failures;
 47.13 lines / 37.91 branches / 34.11 functions / 44.74 statements); `tsc --noEmit`;
 `eslint .`; `vite build`; `test:correction-guards`; `test:agent-workflows`. Saw:
 all green, 21 assertions in the log-session guard suite (20 at #310, plus the
-#317 guard asserting no `--since=` window can return). Separately proved the new
+issue #317 guard asserting no `--since=` window can return). Separately proved the new
 ratchet is enforced — a single-file coverage run fails citing all four new
 thresholds — and mutation-tested the `--help` and `git log -15` guards, both of
 which fail the suite when the fix is reverted. The shallow-checkout fix was proved

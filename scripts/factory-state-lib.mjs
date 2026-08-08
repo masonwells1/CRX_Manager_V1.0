@@ -1816,6 +1816,45 @@ function extractOriginMainReplayModules(cwd, targetRoot, commitSha, env = proces
   }
 }
 
+export function factoryReplaySnapshotHashes(paths, nowMs) {
+  return [nowMs, nowMs + APPROVAL_TTL_MS + 1].map((observationMs) =>
+    sha256(canonicalJson(loadFactorySnapshot(paths, { nowMs: observationMs }))));
+}
+
+export function assertFactoryReplayHashCompatibility(branchHashes, probeStdout, originMainSha = "origin/main") {
+  let originMainHashes;
+  try {
+    originMainHashes = JSON.parse(probeStdout);
+  } catch {
+    throw new Error(`Factory refused to append an event because current origin/main ${String(originMainSha).slice(0, 12)} returned invalid replay hashes.`);
+  }
+  if (!Array.isArray(originMainHashes)
+      || originMainHashes.length !== 2
+      || originMainHashes.some((value) => !/^[a-f0-9]{64}$/i.test(String(value || "")))) {
+    throw new Error(`Factory refused to append an event because current origin/main ${String(originMainSha).slice(0, 12)} returned invalid replay hashes.`);
+  }
+  if (canonicalJson(branchHashes) !== canonicalJson(originMainHashes)) {
+    throw new Error(
+      `Factory refused to append an event because current origin/main ${String(originMainSha).slice(0, 12)}`
+      + " derives different shared-ledger state from the proposed event."
+      + " Land backward-compatible reader support before branch code emits the new event semantics.",
+    );
+  }
+}
+
+export function originMainReplayProbeSource() {
+  return [
+    'import { APPROVAL_TTL_MS, canonicalJson, loadFactorySnapshot, resolveFactoryPaths, sha256 } from "./scripts/factory-state-lib.mjs";',
+    "const [cwd, eventsPath, nowMsText] = process.argv.slice(2);",
+    "const paths = { ...resolveFactoryPaths(cwd), eventsPath };",
+    "const nowMs = Number(nowMsText);",
+    "const hashes = [nowMs, nowMs + APPROVAL_TTL_MS + 1].map((observationMs) =>",
+    "  sha256(canonicalJson(loadFactorySnapshot(paths, { nowMs: observationMs }))));",
+    "process.stdout.write(JSON.stringify(hashes));",
+    "",
+  ].join("\n");
+}
+
 function assertOriginMainReplayCompatible(paths, event, {
   cwd = FACTORY_ROOT,
   compatibilityReplay = null,
@@ -1853,15 +1892,10 @@ function assertOriginMainReplayCompatible(paths, event, {
       "utf8",
     );
     const probePath = path.join(replayRoot, "probe.mjs");
-    writeFileSync(probePath, [
-      'import { loadFactorySnapshot, resolveFactoryPaths } from "./scripts/factory-state-lib.mjs";',
-      "const [cwd, eventsPath] = process.argv.slice(2);",
-      "const paths = { ...resolveFactoryPaths(cwd), eventsPath };",
-      "loadFactorySnapshot(paths);",
-      "",
-    ].join("\n"), "utf8");
+    const replayNowMs = Date.now();
+    writeFileSync(probePath, originMainReplayProbeSource(), "utf8");
     const env = { ...trustedEnv };
-    const result = spawnSync(process.execPath, [probePath, cwd, proposedEventsPath], {
+    const result = spawnSync(process.execPath, [probePath, cwd, proposedEventsPath, String(replayNowMs)], {
       cwd: replayRoot,
       env,
       encoding: "utf8",
@@ -1879,6 +1913,11 @@ function assertOriginMainReplayCompatible(paths, event, {
         + (detail ? ` Probe: ${detail}` : ""),
       );
     }
+    const branchHashes = factoryReplaySnapshotHashes(
+      { ...paths, eventsPath: proposedEventsPath },
+      replayNowMs,
+    );
+    assertFactoryReplayHashCompatibility(branchHashes, result.stdout, originMainSha);
   } finally {
     rmSync(replayRoot, { recursive: true, force: true });
   }
