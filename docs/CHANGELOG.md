@@ -2,6 +2,86 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Forward migrations for the 2026-08-08 audit findings (written, NOT applied)
+
+Wrote the forward migrations for the audit's decided findings. **None has been applied to live** — no
+database backup exists (Supabase Free, no PITR) and the Codex CLI is unavailable in the cloud
+container, so the exact-SHA `gpt-5.6-sol` adversarial gate that risky money/RLS diffs require could
+not be run. Both gates are unmet by environment, not by choice.
+
+- `20260808150100` restores the `batch_apply_prepayments` actor guard. It delegates to
+  `_batch_apply_prepayments_impl` but **keeps `is_admin()` in the wrapper** — live inspection showed
+  `_impl` carries no authorization of its own, so delegating the admin check as the handoff
+  originally suggested would have silently dropped the admin gate.
+- `20260808150200` zeroes `order_items.quantity_remaining` on full cancel. **Scope correction to the
+  audit:** full cancel ALREADY releases prebooked stock and writes its `released` ledger row
+  (verified live on ORD-2026-0330, which has that row). The `partially_fulfilled` path already
+  handled both halves. Only `quantity_remaining` was genuinely stranded, so that is all this changes.
+  The residual `quantity_prebooked = 36` is March 2026 drift (audit L2), not a cancel_order defect.
+- `20260808150300` revokes `TRUNCATE` on `inventory` from `authenticated` (RLS does not constrain
+  TRUNCATE) and comments `payments` as a dead legacy table.
+- `20260808150400` installs a canonical whole-cents rounding trigger on `order_items.total_price`
+  and `commissions.commission_amount`. A trigger rather than editing writers: 9 and 11 live
+  functions respectively assign those columns, and a trigger also covers frontend and future
+  writers. Forward-looking only — the repair of the 49 existing fractional rows (including the
+  $5,245.195 pending payout) restates live money and is left commented out pending separate approval.
+- `scripts/db-invariant-sweeps/predicates/fin-money-whole-cents.sql` is the standing-data half of
+  that rule. It will report the 49 rows until they are repaired; that is intended, not a defect.
+- `.claude/hooks/migration-ordering-lib.mjs` is the out-of-order replay guard — the durable
+  prevention for the §2 finding — now WIRED into `.claude/hooks/migration-apply-guard.mjs`, with
+  `scripts/refresh-applied-migrations.mjs` supplying the applied-ledger snapshot and
+  `.claude/hooks/migration-ordering-lib.test.mjs` covering it (15 assertions).
+
+Migration reviewer subagents were NOT dispatched, since nothing is being applied from here.
+
+**PR #348 review round (Codex + CodeRabbit).** Both reviewers independently caught a real design bug
+in the first draft of the ordering guard: it compared the candidate migration against every filename
+on **disk** rather than against the **applied ledger**. A file on disk is not proof it ran, so that
+version would have blocked its own sibling migrations — applying `20260808150100` would have seen
+`20260808150400` on disk and refused, forcing newest-first application or a bogus escape marker. The
+guard now compares only against migrations recorded as applied, abstains when no ledger snapshot is
+available rather than guessing, and has a regression test pinning the ascending-batch case.
+
+CodeRabbit also correctly flagged that the restored `batch_apply_prepayments` wrapper accepted
+`p_performed_by = NULL` and forwarded it. The guard being restored was
+`p_performed_by IS DISTINCT FROM auth.uid()`, which fails closed on NULL; the wrapper now matches it
+and forwards the canonical `auth.uid()` instead of the caller-supplied value. Also removed the
+auto-added `rm -f OVERNIGHT-INTENT.flag` permission from `.claude/settings.local.json` — CodeRabbit
+independently reached the same conclusion already flagged in chat: a standing unguarded grant to
+delete the unattended-run flag is a guard-bypass risk.
+
+**Second review round (Codex, two P1s — both valid, both fixed).**
+
+1. *Missing ledger evidence was treated as a pass.* The snapshot is gitignored, so a clean checkout
+   had none, the guard abstained, and the protection was absent exactly when it mattered. A missing,
+   empty, unreadable, or >24h-stale snapshot now **BLOCKS the apply** with instructions to refresh it,
+   rather than waving it through. Fail-closed, matching every other hard gate in this repo.
+2. *The refresh script discarded real timestamps.* It preferred the ledger `name`, but many live rows
+   have a timestamp-less name (e.g. version `20260727174805`, name `deactivation_revokes_auth_access`).
+   Those rows vanished from the comparison set, so the guard could compare against an older parseable
+   row and permit a migration behind the true high-water mark. It now re-attaches the version as a
+   `<version>_<name>` prefix when the name carries no timestamp, and warns about any row it still
+   cannot use.
+
+`migration-apply-guard.test.mjs` gained fixtures for the missing- and stale-snapshot blocks (74
+assertions); `migration-ordering-lib.test.mjs` covers the version-prefixed shape (17 assertions).
+
+Skipped with reason: the `next_po_number` zero-caller entry in `.claude/caller-graph.json` is a
+pre-existing limitation of the generator's directory scope (it does not scan `.sql`), not something
+this branch introduced, and the artifact must not be hand-edited. CodeRabbit's `factory-board.test.mjs`
+failure did not reproduce here — it passes with 29 assertions, and `agent-manifest-parity` is clean.
+
+## 2026-08-08 — 2026-08-08 foundation ultra review (cloud, unattended):…
+
+2026-08-08 foundation ultra review (cloud, unattended): SOLID-WITH-FOLLOWUPS, zero blockers, zero surviving HIGH. Recorded Mason's four owner decisions. Four forward migrations parked, unwritten.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `51582137 chore: commit auto-added local permission entry`
+  - `c6c45fb5 docs: record Mason's four foundation-ultra-review owner decisions`
+  - `f5811338 audit: 2026-08-08 foundation ultra review + bucket-1 doc/test fixes`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-07 — Governed Software Factory REMOVED
 
 At Mason's direction, the entire Governed Autonomous Software Factory was removed:
