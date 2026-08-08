@@ -46,7 +46,13 @@ function-shaped documentation was denied. The assembly check now covers both
 joining forms and recurses into DO blocks and function bodies, and a literal is
 lexed only in a dynamic-SQL context (EXECUTE or := assignment) AND on content.
 
-62 assertions; each of the seven new guards was individually reverted and the
+It blocked a second time on the same class: fragments passed as separate
+`format()` ARGUMENTS are comma-separated, which the whitespace/`||` rule missed.
+The assembly check now also treats a comma as a join, and only fires when the
+pieces are genuinely split — a complete signature inside one argument is still
+lexed and judged on its wiring.
+
+64 assertions; each of the nine new guards was individually reverted and the
 suite went red for each.
 
 ## 2026-08-08 — idempotency-body-check round-10: dynamic-DDL fail-open + data-literal false-deny — FIXED

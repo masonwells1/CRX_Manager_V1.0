@@ -442,9 +442,16 @@ function findAssembledDdl(from, to) {
     }
     if (end === -1 || start === -1) { i++; continue; }
     if (innerFrom !== -1 && findAssembledDdl(innerFrom, innerTo)) return true;
-    // Adjacent = only whitespace, or whitespace around a `||`, in between.
-    if (prevEnd !== -1 && /^\s*(?:\|\|\s*)?$/.test(masked.slice(prevEnd, start)) &&
+    // Joined = separated by only whitespace, a `||`, or a `,`. The comma form
+    // is `format('%s%s', 'CREATE FUNCTION foo(', '...p_idempotency_key...')` —
+    // fragments as separate arguments, which the whitespace/|| rule missed
+    // (Codex push-proof gate, second block). Only fires when the pieces are
+    // genuinely SPLIT: if either literal already carries a complete signature
+    // it is lexed normally, so single-literal dynamic DDL still works.
+    if (prevEnd !== -1 && /^\s*(?:\|\||,)?\s*$/.test(masked.slice(prevEnd, start)) &&
         isDynamicSqlStatement(masked.slice(stmtStart, start)) &&
+        !carriesBugClass(content.slice(prevStart, prevEnd)) &&
+        !carriesBugClass(content.slice(start, end)) &&
         CREATE_FN_HEAD_RE.test(content.slice(prevStart, end))) {
       violations.push(
         "This migration assembles a CREATE FUNCTION statement from several string literals " +

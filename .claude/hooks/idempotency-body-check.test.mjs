@@ -501,4 +501,20 @@ ok(isDeny(r), "DDL split across ADJACENT literals (no ||) is refused, not just t
 r = runHook(`INSERT INTO docs (body) VALUES ($doc$CREATE OR REPLACE FUNCTION public.example(p_idempotency_key text) — priced at $5$ per call$doc$);`);
 ok(!isDeny(r), "a function-shaped example in a plain INSERT is data, not executable SQL");
 
+// --- Round 11c (Codex push-proof gate blocked round-11b) -------------------
+
+// the same split trick, with the fragments as separate format() ARGUMENTS —
+// a comma between them, so the whitespace/|| adjacency rule missed it
+r = runHook(`DO $do$ BEGIN
+  EXECUTE format('%s%s', 'CREATE OR REPLACE FUNCTION public.probe(', 'p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;');
+END $do$;`);
+ok(isDeny(r), "DDL split across separate format() arguments is refused");
+
+// ...but a COMPLETE signature in one format() argument is still lexed normally
+// and judged on its wiring, not refused as assembled
+r = runHook(`DO $do$ BEGIN
+  EXECUTE format('%s', 'CREATE OR REPLACE FUNCTION public.wired_fmt(p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN PERFORM check_idempotency(p_idempotency_key, ''wired_fmt''); UPDATE invoices SET total_cents = 0; PERFORM save_idempotency(p_idempotency_key, ''wired_fmt'', NULL); END $fn$;');
+END $do$;`);
+ok(!isDeny(r), "a complete, correctly wired signature in one format() argument is still allowed");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);
