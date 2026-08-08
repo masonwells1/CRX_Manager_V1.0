@@ -157,18 +157,48 @@ function dollarTagAt(text, i) {
  * unwired dynamically-created RPC was invisible (Codex P2 round 10). Statement
  * scoped, and comments/string contents are already blanked in `out`, so an
  * EXECUTE in a comment or an earlier statement cannot leak context forward. */
-function inExecuteStatement(out) {
-  return isDynamicSqlStatement(out.slice(out.lastIndexOf(";") + 1));
+function inExecuteStatement(out, text, afterIdx) {
+  const before = out.slice(out.lastIndexOf(";") + 1);
+  // The assignment target can sit AFTER the literal (`SELECT $ddl$...$ddl$ INTO
+  // v_ddl`), so the prefix alone is not the statement. Read on from just past
+  // the literal to the next `;` — starting past it, because the literal's own
+  // body routinely contains semicolons.
+  const rest = text.slice(afterIdx);
+  const semi = rest.indexOf(";");
+  return isDynamicSqlStatement(
+    before + " " + (semi === -1 ? rest : rest.slice(0, semi))
+  );
 }
 
-/** A statement that builds or runs dynamic SQL: it EXECUTEs, or it assigns to a
- * variable (v_ddl := '...') that something later EXECUTEs. Payload CONTENT
- * alone must not make a literal executable — a plain INSERT of documentation
- * that happens to contain a function-shaped example was denied on content
- * alone (Codex blocker review, round 11). Context and content are both
- * required. */
+/** A statement that builds or runs dynamic SQL: it EXECUTEs, or it assigns the
+ * text to a variable that something later EXECUTEs. Payload CONTENT alone must
+ * not make a literal executable — a plain INSERT of documentation that happens
+ * to contain a function-shaped example was denied on content alone (Codex
+ * blocker review, round 11). Context and content are both required.
+ * Round 12: `:=` is only one of PL/pgSQL's assignment forms. `v_ddl = $ddl$..$`
+ * and `SELECT $ddl$..$ INTO v_ddl` build dynamic DDL just as well, and treating
+ * them as data let an unwired mutating RPC through (Codex H1). */
+const ASSIGN_RE =
+  /(?:^|\bBEGIN\b|\bTHEN\b|\bELSE\b|\bLOOP\b|\bDECLARE\b)\s*(?:"[^"]+"|[\w.]+)\s*(?::=|=(?!=))/i;
 function isDynamicSqlStatement(stmt) {
-  return /\bEXECUTE\b/i.test(stmt) || stmt.includes(":=");
+  return /\bEXECUTE\b/i.test(stmt) ||
+    stmt.includes(":=") ||
+    ASSIGN_RE.test(stmt) ||
+    /\bSELECT\b[\s\S]*\bINTO\b/i.test(stmt);
+}
+
+/** In `format(tmpl, a, b)` the arguments after the template are DATA unless the
+ * template splices them in as code with `%s`; `%L`/`%I` quote them. Lexing a
+ * `%L` argument as SQL false-denied valid migrations (Codex M1, round 12). */
+function isDataArgOfFormat(text, out, litStart) {
+  const stmtStart = out.lastIndexOf(";") + 1;
+  const call = [...text.slice(stmtStart, litStart).matchAll(/\bformat\s*\(/gi)].pop();
+  if (!call) return false;
+  const tmplStart = text.indexOf("'", stmtStart + call.index + call[0].length);
+  if (tmplStart === -1 || tmplStart >= litStart) return false; // this IS the template
+  const tmplEnd = scanQuoted(text, tmplStart);
+  if (tmplEnd === -1 || tmplEnd > litStart) return false;
+  return !/%s/i.test(text.slice(tmplStart + 1, tmplEnd - 1));
 }
 
 /** A REAL CREATE FUNCTION header — name plus an opening paren — as opposed to
@@ -235,7 +265,8 @@ function maskSqlNoise(text) {
         // EXECUTE statement — so a data argument alongside dynamic DDL stays
         // opaque instead of being lexed as SQL (Codex P2 round 11).
         const isExecutable = /\b(?:AS|DO|EXECUTE)\s+$/i.test(out) ||
-          (inExecuteStatement(out) && carriesBugClass(payload));
+          (inExecuteStatement(out, text, close + tag.length) &&
+            carriesBugClass(payload) && !isDataArgOfFormat(text, out, i));
         // FAIL CLOSED on a payload we judged executable: masking it opaque
         // would erase real DDL and let an unwired function through, which is
         // exactly this guard's bug class (Codex P2 round 11). Payloads that are
@@ -268,8 +299,9 @@ function maskSqlNoise(text) {
       // later argument as DATA, and lexing that as SQL false-denied valid
       // migrations. The literal must also carry a CREATE FUNCTION header —
       // which is the only thing this guard could find in it anyway.
-      const isDynamicSql = ch === "'" && inExecuteStatement(out) &&
-        carriesBugClass(text.slice(i + 1, end - 1));
+      const isDynamicSql = ch === "'" && inExecuteStatement(out, text, end) &&
+        carriesBugClass(text.slice(i + 1, end - 1)) &&
+        !isDataArgOfFormat(text, out, i);
       if (isDynamicSql) {
         const payload = text.slice(i + 1, end - 1);
         // FAIL CLOSED — see the dollar-quote branch above.
@@ -414,13 +446,12 @@ if (masked === null) {
 // payload — the assembly almost always lives INSIDE a DO block or a function
 // body, which a flat scan would skip over as a single literal.
 function findAssembledDdl(from, to) {
-  let prevEnd = -1;
-  let prevStart = -1;
+  let chain = [];
   let stmtStart = from;
   let i = from;
   while (i < to) {
     const ch = masked[i];
-    if (ch === ";") { stmtStart = i + 1; prevEnd = -1; i++; continue; }
+    if (ch === ";") { stmtStart = i + 1; chain = []; i++; continue; }
     let start = -1;
     let end = -1;
     let innerFrom = -1;
@@ -448,11 +479,21 @@ function findAssembledDdl(from, to) {
     // (Codex push-proof gate, second block). Only fires when the pieces are
     // genuinely SPLIT: if either literal already carries a complete signature
     // it is lexed normally, so single-literal dynamic DDL still works.
-    if (prevEnd !== -1 && /^\s*(?:\|\||,)?\s*$/.test(masked.slice(prevEnd, start)) &&
-        isDynamicSqlStatement(masked.slice(stmtStart, start)) &&
-        !carriesBugClass(content.slice(prevStart, prevEnd)) &&
-        !carriesBugClass(content.slice(start, end)) &&
-        CREATE_FN_HEAD_RE.test(content.slice(prevStart, end))) {
+    // Round 12: judge what the fragments SPELL, by concatenating their payloads,
+    // instead of testing the raw source slice — which still holds the quote
+    // marks and the `||` between them, so a split INSIDE the header itself
+    // (`'CREATE OR REPLACE ' || 'FUNCTION f('`) read as non-matching (Codex H2).
+    const payload = innerFrom !== -1
+      ? content.slice(innerFrom, innerTo)
+      : content.slice(start + 1, end - 1);
+    const joinedToPrev = chain.length > 0 &&
+      /^\s*(?:\|\||,)?\s*$/.test(masked.slice(chain[chain.length - 1].end, start));
+    chain = (joinedToPrev ? chain : []).concat([{ end, payload }]);
+    const stmtEnd = masked.indexOf(";", end);
+    if (chain.length > 1 &&
+        isDynamicSqlStatement(masked.slice(stmtStart, stmtEnd === -1 ? to : stmtEnd)) &&
+        !chain.some((c) => carriesBugClass(c.payload)) &&
+        CREATE_FN_HEAD_RE.test(chain.map((c) => c.payload).join(""))) {
       violations.push(
         "This migration assembles a CREATE FUNCTION statement from several string literals " +
         "(joined by || or by simple adjacency). Split that way, no fragment carries a complete " +
@@ -462,8 +503,6 @@ function findAssembledDdl(from, to) {
       );
       return true;
     }
-    prevStart = start;
-    prevEnd = end;
     i = end;
   }
   return false;

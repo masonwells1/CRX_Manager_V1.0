@@ -517,4 +517,49 @@ r = runHook(`DO $do$ BEGIN
 END $do$;`);
 ok(!isDeny(r), "a complete, correctly wired signature in one format() argument is still allowed");
 
+// --- Round 12 (Codex push-proof gate blocked round-11c) --------------------
+
+// H1: `:=` is not the only assignment form. SELECT ... INTO builds dynamic DDL
+// just as well, and an unwired mutating RPC written that way slipped through.
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  SELECT $ddl$CREATE OR REPLACE FUNCTION public.dyn_into(p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;$ddl$ INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "an unwired RPC assembled via SELECT ... INTO is refused, not masked as data");
+
+// H1, second form: plain `=` assignment (PL/pgSQL accepts it alongside `:=`)
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  v_ddl = $ddl$CREATE OR REPLACE FUNCTION public.dyn_eq(p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;$ddl$;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "an unwired RPC assigned with plain = is refused, not masked as data");
+
+// ...and the same shape, correctly wired, must still be allowed
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  SELECT $ddl$CREATE OR REPLACE FUNCTION public.wired_into(p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN PERFORM check_idempotency(p_idempotency_key, 'wired_into'); UPDATE invoices SET total_cents = 0; PERFORM save_idempotency(p_idempotency_key, 'wired_into', NULL); END $fn$;$ddl$ INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(!isDeny(r), "a correctly wired RPC built via SELECT ... INTO is still allowed");
+
+// H2: the split can fall INSIDE the header itself, so the fragments must be
+// concatenated before classification — the raw source slice keeps the quotes
+// and the || and never matched.
+r = runHook(`DO $do$ BEGIN
+  EXECUTE 'CREATE OR REPLACE ' || 'FUNCTION public.split_header(' || 'p_idempotency_key text DEFAULT NULL::text) RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;';
+END $do$;`);
+ok(isDeny(r), "DDL split INSIDE the CREATE FUNCTION header is refused");
+
+// M1: a %L argument is data that Postgres quotes — never code. Lexing it as SQL
+// hit its `$5$` and denied a perfectly valid migration.
+r = runHook(`DO $do$ BEGIN
+  EXECUTE format('INSERT INTO docs (body) VALUES (%L)', 'CREATE OR REPLACE FUNCTION public.example(p_idempotency_key text) priced at $5$ per call');
+END $do$;`);
+ok(!isDeny(r), "a %L data argument is never lexed as SQL, even when function-shaped");
+
 console.log(`idempotency-body-check: ${pass} assertions passed`);

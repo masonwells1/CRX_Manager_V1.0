@@ -95,6 +95,27 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+## 2026-08-08 — idempotency-body-check round-12: every dynamic-SQL assignment form, and `%L` is data
+
+Third Codex push-proof gate block on this branch, three findings, all real:
+
+- **H1 — `:=` was not the only assignment form.** Dynamic DDL is also built with `v_ddl = $ddl$…$ddl$`
+  and `SELECT $ddl$…$ddl$ INTO v_ddl`. Both were classed as data and masked away, so a mutating RPC
+  that declares but ignores `p_idempotency_key` passed the guard. Statement classification now covers
+  plain `=` assignment and `SELECT … INTO`, and it reads on past the literal to the next `;` — the
+  assignment target sits *after* the literal in the `INTO` form, so a prefix-only test could never
+  see it.
+- **H2 — the split-DDL detector never concatenated the fragments.** It matched the header regex
+  against the raw source slice, which still contains the quote marks and the `||`, so a split inside
+  the header itself (`'CREATE OR REPLACE ' || 'FUNCTION f('`) read as non-matching. It now
+  reconstructs what the fragments spell and classifies that.
+- **M1 — `%L` arguments were lexed as code.** In `format(tmpl, …)` only `%s` splices an argument in as
+  SQL; `%L`/`%I` quote it as data. Lexing such an argument hit an apostrophe or a `$5$` and
+  fail-closed-denied a valid migration. Arguments to a template with no `%s` are no longer lexed.
+
+69 assertions (was 64). Each of the six new guards was individually reverted and the suite went red
+for each; the sibling `actor-binding-check` suite (24 assertions) is unaffected.
+
 ## 2026-08-08 — idempotency-body-check round-11: EXECUTE payloads fail CLOSED again
 
 Codex reviewed the merged round-10 commit (`86bf897b`) and returned three P2s;
