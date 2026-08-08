@@ -2,6 +2,22 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
+
+PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in bash-safety and live-testdata guards (variant git spellings, redirect terminators, plumbing push commands, DELETE catch-all, setval/nextval and RPC-via-SELECT rules), added regression tests, resolved the changelog merge conflict with main.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `9ff94908f Close git plumbing and SELECT-side-effect bypasses; add regression tests`
+  - `8a12ab83f Merge origin/main into cloud-permissions-overhaul (changelog conflict)`
+  - `501839e45 Address CodeRabbit review: redirect terminators and DELETE catch-all`
+  - `cd356c862 Cover split git option forms and capital-S Supabase deploy ask entry`
+  - `78f0b7351 Log session in changelog`
+  - `9dc190bf9 Harden bash-safety guard against variant dangerous-command spellings`
+  - `265378e39 Add changelog entry for permissions overhaul session`
+  - `13c1763a8 Overhaul cloud permissions to stop constant prompts`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-08 — Cloud permissions overhaul (PR #352): set defaultMode dontAsk with…
 
 Cloud permissions overhaul (PR #352): set defaultMode dontAsk with broad allow list in .claude/settings.json to stop constant cloud permission prompts; kept AGENTS.md hard gates (deploys/merges ask, destructive commands and Vercel purchases denied). Fixed Codex P1 by hardening bash-safety guard: variant git spellings now denied, production deploy spellings prompt via new ask tier.
