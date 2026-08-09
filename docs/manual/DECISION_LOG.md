@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-08-08
+Last verified: 2026-08-09
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -24,17 +24,22 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
    audit overstated this.** Full cancel ALREADY releases prebooked stock and writes its `released`
    `inventory_transactions` row (confirmed live on ORD-2026-0330), and the `partially_fulfilled` path
    already handled both halves. Only `order_items.quantity_remaining` was genuinely stranded, and
-   migration `20260808150200` zeroes exactly that. **Do NOT add a second stock-release path** — it
+   local candidate migration `20260808150200` zeroes exactly that, but was **not applied live as of
+   2026-08-09**. **Do NOT add a second stock-release path** — it
    would double-release inventory. The residual `quantity_prebooked = 36` on that product is March
    2026 historical drift (audit L2), not a cancellation defect.
 4. **Negative inventory (L3) — the existing decision stands.** Keep the 19 negative
    `inventory.quantity_available` rows as they are; reconcile only from physical counts. No re-base
    scheduled. Revisit when a physical count happens.
 
-**Operative rule:** decisions 2 and 3 imply forward migrations; both are unwritten as of this entry
-and are parked alongside the two migrations named in the audit (restore the `batch_apply_prepayments`
-actor guard, add a migration-ordering preflight guard). Decisions 1 and 4 are "no change" — an agent
-proposing either change must cite a new reason, not re-derive the original one.
+**2026-08-09 implementation status:** decisions 2 and 3 are now written as local candidates
+`20260808150400_round_money_to_whole_cents.sql` and
+`20260808150200_cancel_order_zeroes_quantity_remaining.sql`. The actor repair is local candidate
+`20260808150100_restore_batch_apply_prepayments_actor_guard.sql`; the related least-privilege cleanup
+is `20260808150300_revoke_inventory_truncate_and_mark_payments_dead.sql`. None of the four is applied
+live. The separate migration-ordering preflight is implemented in `migration-ordering-lib.mjs` and
+enforced by `migration-apply-guard.mjs`. Decisions 1 and 4 are "no change" — an agent proposing either
+change must cite a new reason, not re-derive the original one.
 
 ## 2026-08-07 — Governed Autonomous Software Factory REMOVED
 
