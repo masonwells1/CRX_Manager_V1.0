@@ -1244,7 +1244,14 @@ BEGIN
     -- reports and a different one through the order header, line profit and
     -- commissions -- all of which follow qi.current_cost. Supplying the value
     -- is honored because that trigger only fills when the caller left it NULL.
-    qi.cost_at_quote_cents
+    --
+    -- COALESCE to 0 for the same reason the restore path does: a quote line
+    -- created while its product had a NULL current_cost carries a NULL
+    -- snapshot, and passing that NULL through would let the order trigger
+    -- stamp whatever the catalog says at conversion time -- a cost that did
+    -- not exist when the quote was written. An explicit zero preserves the
+    -- honest "no quote-time cost" state instead of inventing one.
+    COALESCE(qi.cost_at_quote_cents, 0)
   FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   JOIN products p ON p.id = qi.product_id

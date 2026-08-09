@@ -39,6 +39,15 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 16 (CodeRabbit) — the same NULL hole, one step later:**
+
+The round-15 conversion fix passed `qi.cost_at_quote_cents` straight through, so a quote line created
+while its product had no cost carried a NULL snapshot into the order, and the order-side trigger
+stamped whatever the catalog said at conversion time — a cost that did not exist when the quote was
+written. `COALESCE(..., 0)`, matching how the restore branch was corrected earlier in this branch.
+Third appearance of this exact NULL-passthrough shape here: a nullable snapshot column needs a
+deliberate decision at every write site, not only the one being edited.
+
 **Round 15 (Codex) — a converted quote lost its quote-time cost:**
 
 `convert_quote_to_order` copies `quote_items.current_cost` into `order_items.cost_per_unit` but left
