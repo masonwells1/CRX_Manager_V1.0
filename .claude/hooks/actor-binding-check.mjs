@@ -249,6 +249,17 @@ function carriesFnHeader(payload) {
     CREATE_FN_HEAD_RE.test(blankComments(payload));
 }
 
+/** True when the current literal is executable procedural code rather than
+ * data. PostgreSQL permits DO [LANGUAGE name] code, with code written as a
+ * dollar-quoted or single-quoted string. AS bodies use the same literal forms. */
+function isProceduralContainerPrefix(text, singleQuoted = false) {
+  const stmt = text.slice(text.lastIndexOf(";") + 1);
+  const escapePrefix = singleQuoted ? "(?:[eE]\\s*)?" : "";
+  const language = "(?:[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*|\"[^\"]*\")";
+  return new RegExp(`\\bAS\\s+${escapePrefix}$`, "i").test(stmt) ||
+    new RegExp(`\\bDO(?:\\s+LANGUAGE\\s+${language})?\\s+${escapePrefix}$`, "i").test(stmt);
+}
+
 /** Replace comments and quoted-string contents with spaces, while recursively
  * retaining executable SQL held inside procedural bodies and dynamic DDL.
  * Length-preserving so structural indexes map back to the original content.
@@ -284,7 +295,7 @@ function maskSqlNoise(text, inProceduralCode = false) {
         const close = text.indexOf(tag, i + tag.length);
         if (close === -1) return null;
         const payload = text.slice(i + tag.length, close);
-        const isProceduralContainer = /\b(?:AS|DO)\s+$/i.test(out);
+        const isProceduralContainer = isProceduralContainerPrefix(out);
         const isExecutable = isProceduralContainer || /\bEXECUTE\s+$/i.test(out) ||
           (inProceduralCode && carriesFnHeader(payload)) ||
           (inExecuteStatement(out, text, close + tag.length) && carriesFnHeader(payload));
@@ -304,10 +315,14 @@ function maskSqlNoise(text, inProceduralCode = false) {
       const end = scanQuoted(text, i);
       if (end === -1) return null;
       const payload = text.slice(i + 1, end - 1);
-      const isDynamicSql = ch === "'" && carriesFnHeader(payload) &&
-        (inProceduralCode || inExecuteStatement(out, text, end));
+      const isProceduralContainer = ch === "'" && isProceduralContainerPrefix(out, true);
+      // E'...' procedural bodies need backslash decoding that cannot remain
+      // both exact and length-preserving. Recognize them, then fail closed.
+      if (isProceduralContainer && /[eE]\s*$/.test(out)) return null;
+      const isDynamicSql = ch === "'" && (isProceduralContainer ||
+        (carriesFnHeader(payload) && (inProceduralCode || inExecuteStatement(out, text, end))));
       if (isDynamicSql) {
-        const inner = maskSqlNoise(payload, inProceduralCode);
+        const inner = maskSqlNoise(payload, inProceduralCode || isProceduralContainer);
         if (inner === null) return null;
         out += ch + inner + ch;
       } else {
@@ -495,9 +510,16 @@ try {
       let end = -1;
       let innerFrom = -1;
       let innerTo = -1;
+      let isProceduralContainer = false;
       if (ch === "'" || ch === '"') {
         start = i;
+        isProceduralContainer = ch === "'" &&
+          isProceduralContainerPrefix(masked.slice(stmtStart, start), true);
         end = scanQuoted(masked, i);
+        if (isProceduralContainer && end !== -1) {
+          innerFrom = i + 1;
+          innerTo = end - 1;
+        }
       } else {
         const tag = ch === "$" ? dollarTagAt(masked, i) : null;
         if (tag) {
@@ -507,6 +529,7 @@ try {
             end = close + tag.length;
             innerFrom = i + tag.length;
             innerTo = close;
+            isProceduralContainer = isProceduralContainerPrefix(masked.slice(stmtStart, start));
           }
         }
       }
@@ -516,7 +539,7 @@ try {
       // to a runtime SQL builder. Their contents were just checked recursively;
       // counting the container itself would turn `DO $do$ EXECUTE '...' $do$`
       // into a fake one-literal dynamic statement with skeleton `DO <literal>`.
-      if (innerFrom !== -1 && /\b(?:AS|DO)\s+$/i.test(masked.slice(stmtStart, start))) {
+      if (innerFrom !== -1 && isProceduralContainer) {
         hasProceduralContainer = true;
         i = end;
         continue;

@@ -178,6 +178,23 @@ const BOUND_DDL =
 r = runHook(`DO $do$ BEGIN EXECUTE '${UNBOUND_DDL}'; END $do$;`);
 ok(isDeny(r), "an unbound actor function in one EXECUTE string is lexed and blocked");
 
+r = runHook(`DO LANGUAGE plpgsql $do$ BEGIN EXECUTE '${UNBOUND_DDL}'; END $do$;`);
+ok(isDeny(r), "DO LANGUAGE with a dollar-quoted body cannot hide dynamic actor DDL");
+ok(r.stdout.includes("public.dynamic_actor"), "the DO LANGUAGE dollar probe reaches actor inspection");
+
+const UNBOUND_SINGLE_DO = `BEGIN EXECUTE '${UNBOUND_DDL}'; END`.replaceAll("'", "''");
+r = runHook(`DO LANGUAGE plpgsql '${UNBOUND_SINGLE_DO}';`);
+ok(isDeny(r), "DO LANGUAGE with a single-quoted body cannot hide dynamic actor DDL");
+ok(r.stdout.includes("public.dynamic_actor"), "the single-quoted DO probe reaches actor inspection");
+
+const BOUND_SINGLE_DO = `BEGIN EXECUTE '${BOUND_DDL}'; END`.replaceAll("'", "''");
+r = runHook(`DO LANGUAGE plpgsql '${BOUND_SINGLE_DO}';`);
+ok(!isDeny(r), "a correctly bound function inside a single-quoted DO body remains allowed");
+
+r = runHook(`DO LANGUAGE plpgsql E'${BOUND_SINGLE_DO}';`);
+ok(isDeny(r), "an escape-string DO body the lexer cannot decode fails closed");
+ok(r.stdout.includes("could not parse"), "the escape-string DO denial explains the parse boundary");
+
 r = runHook(`DO $do$ BEGIN EXECUTE '${UNBOUND_DDL.replace("dynamic_actor(", "dynamic_actor /* legal */ (")}'; END $do$;`);
 ok(isDeny(r), "a comment-hidden header inside a dynamic string is still classified and blocked");
 

@@ -371,9 +371,9 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 77 assertions, including comment-hidden headers, nested
+suite grew from 24 to 84 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
-quoted actor parameters. Thirty-three individual clause-removal mutations were run;
+quoted actor parameters. Thirty-eight individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
 idempotency suite remained green at 86 assertions.
 
@@ -413,6 +413,15 @@ now treats every `EXECUTE` as potentially mutating unless it performs the requir
 actor binding. This intentionally refuses opaque dynamic reads too; the exemption
 marker remains the human-review path. Removing that fail-closed clause makes the
 reproduced single-quoted `UPDATE` probe fail its regression test.
+
+The fifth exact-SHA Codex review found that PostgreSQL's optional `LANGUAGE`
+clause and single-quoted code string could hide a `DO` body. The shared container
+reader now recognizes `DO [LANGUAGE name]` for dollar- and single-quoted code,
+recurses into both, and fails closed on `E'...'` bodies whose backslash decoding
+cannot be kept index-safe. Unsafe probes reach the named actor violation, while a
+correctly bound function inside the single-quoted form remains allowed. Five
+retained parser decisions are mutation-proven; two initially added quote-handling
+branches stayed green when removed and were deleted as non-load-bearing.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
