@@ -62,6 +62,9 @@ export function stripInternalNotes(notes: string | null | undefined): string | n
   // nests a quantifier inside a quantified group over overlapping input (`\n`
   // is itself `\s`), which backtracks exponentially on a long run of newlines
   // and em dashes — and `notes` is free-form operator input (CodeQL alert 17).
-  const visible = notes.slice(0, cut).replace(/[\s—]+$/, '');
+  // .trim() as well: the character class only strips the TRAILING separator, so
+  // without it leading whitespace on the operator's own notes would survive into
+  // the customer document. Both passes are linear.
+  const visible = notes.slice(0, cut).replace(/[\s—]+$/, '').trim();
   return visible.length > 0 ? visible : null;
 }

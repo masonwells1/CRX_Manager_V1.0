@@ -37,6 +37,18 @@ describe('stripInternalNotes', () => {
     expect(stripInternalNotes(notes)).toBe('Spring prepay');
   });
 
+  // Codex round 8: swapping the backtracking regex for a character class only
+  // strips the TRAILING separator, so the .trim() has to stay or an operator's
+  // leading whitespace reaches the customer document.
+  it('trims whitespace surrounding the visible notes', () => {
+    const notes = `  Gate code 4412  \n${BELOW_COST_APPROVAL_PREFIX} clearance`;
+    expect(stripInternalNotes(notes)).toBe('Gate code 4412');
+  });
+
+  it('returns null when only whitespace precedes the marker', () => {
+    expect(stripInternalNotes(`   \n\t${BELOW_COST_APPROVAL_PREFIX} clearance`)).toBeNull();
+  });
+
   it('passes ordinary notes through unchanged', () => {
     expect(stripInternalNotes('Call before delivery')).toBe('Call before delivery');
   });
