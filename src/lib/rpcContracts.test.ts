@@ -2155,11 +2155,21 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// The latest approved migration in this checkout applied live 2026-07-29
-// under server-assigned ledger version 20260729222311; it is not pending.
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
+//
+// The five below are history rows 857-861 — the 2026-08-08 foundation ultra
+// review migrations, re-issued forward on 2026-08-09 because live ledger row
+// 20260809130108 lifted the applied high-water above their original 20260808*
+// timestamps. They are written and reviewed but NOT applied live. Empty this
+// set again when they apply and their history rows flip to APPLIED LIVE.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+  '20260809170500', // restore_batch_apply_prepayments_actor_guard
+  '20260809170600', // cancel_order_zeroes_quantity_remaining
+  '20260809170700', // revoke_inventory_truncate_and_mark_payments_dead
+  '20260809170800', // round_money_to_whole_cents
+  '20260809170900', // round_line_profit_with_revenue
+]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even

@@ -1,6 +1,21 @@
+-- REISSUED 2026-08-09 with a forward timestamp.
+--
+-- Originally written as 20260808170000_round_line_profit_with_revenue.sql, which
+-- was merged to main but never applied. Live ledger row 20260809130108
+-- (team_note_completion_rpc_and_assignment_notify) landed afterwards, putting
+-- every 20260808* file BELOW the applied high-water mark, where
+-- .claude/hooks/migration-ordering-lib.mjs correctly refuses it: an older
+-- migration applied after a newer one is exactly the 2026-07-15 reversion that
+-- guard exists to stop.
+--
+-- The executable SQL below is UNCHANGED from the reviewed original -- only the
+-- filename timestamp and this header differ. The stale 20260808* file is deleted
+-- in the same commit so a clean rebuild cannot apply the change twice (the same
+-- remedy as docs/reference/migration-history.md row 808 -> live row 811).
+
 -- Round order_items.profit to whole cents alongside total_price.
 --
--- Follow-up to 20260808150400, which established the canonical rounding point
+-- Follow-up to 20260809170800, which established the canonical rounding point
 -- but rounded REVENUE only. Codex P2 on PR #348 caught the gap:
 --
 --   Two lines with raw totals of 10.005 and costs of 5 round to $10.01 each,
@@ -10,7 +25,7 @@
 --   the header and the sum of its own lines, generated silently.
 --
 -- Forward-only, and written as a NEW migration rather than an edit to
--- 20260808150400: that file is already merged to main, and the project rule is
+-- 20260809170800: that file is already merged to main, and the project rule is
 -- that database changes arrive as new files.
 --
 -- WHY profit AND NOT net_margin
@@ -38,7 +53,7 @@
 --   bundled here. This migration's claim is narrower than "drift eliminated": it
 --   stops the stored line profit from carrying sub-cent precision at all.
 --
--- Like 20260808150400 this is FORWARD-LOOKING ONLY. It does not repair existing
+-- Like 20260809170800 this is FORWARD-LOOKING ONLY. It does not repair existing
 -- fractional rows; that restates live money and needs its own approval. The
 -- fin-money-whole-cents invariant predicate should be extended to cover profit
 -- once the repair is authorised.
@@ -77,7 +92,7 @@ COMMENT ON FUNCTION public._round_money_to_whole_cents() IS
   'the same day after Codex caught header-vs-line drift on PR #348.';
 
 -- The trigger on order_items must now also fire when only `profit` changes;
--- 20260808150400 scoped it to UPDATE OF total_price.
+-- 20260809170800 scoped it to UPDATE OF total_price.
 DROP TRIGGER IF EXISTS trg_order_items_round_money ON public.order_items;
 CREATE TRIGGER trg_order_items_round_money
   BEFORE INSERT OR UPDATE OF total_price, profit ON public.order_items

@@ -1,3 +1,18 @@
+-- REISSUED 2026-08-09 with a forward timestamp.
+--
+-- Originally written as 20260808150400_round_money_to_whole_cents.sql, which
+-- was merged to main but never applied. Live ledger row 20260809130108
+-- (team_note_completion_rpc_and_assignment_notify) landed afterwards, putting
+-- every 20260808* file BELOW the applied high-water mark, where
+-- .claude/hooks/migration-ordering-lib.mjs correctly refuses it: an older
+-- migration applied after a newer one is exactly the 2026-07-15 reversion that
+-- guard exists to stop.
+--
+-- The executable SQL below is UNCHANGED from the reviewed original -- only the
+-- filename timestamp and this header differ. The stale 20260808* file is deleted
+-- in the same commit so a clean rebuild cannot apply the change twice (the same
+-- remedy as docs/reference/migration-history.md row 808 -> live row 811).
+
 -- Establish a single canonical rounding point for order_items.total_price and
 -- commissions.commission_amount: whole cents, two decimal places.
 --

@@ -2,6 +2,48 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-09 — PR #354 local takeover: backup, Codex BLOCK, and the five migrations re-issued forward
+
+The cloud session that opened #354 wrote itself a handoff. A local session executed it, and the
+adversarial gate blocked on the handoff itself.
+
+- **Off-site backup taken first.** `backups/2026-08-09/` — 156 tables, 9,927 rows, 27.7 MB, verified
+  table-by-table against live row counts (OK 156 / MISMATCH 0 / MISSING 0) with full numeric precision
+  intact in the raw text. Supabase Free has no PITR, so this is the only recovery path for the applies
+  that follow. An earlier parallel-subagent attempt was discarded entirely: agents self-reported 41
+  tables written successfully while having truncated 12 of them and writing `[]` for another after a
+  failed fetch — 19 of 156 files were wrong, caught only by deterministic count comparison. Everything
+  was re-dumped through one deterministic script. **Agent self-reports are not verification.**
+- **Codex adversarial review returned BLOCKING on the handoff document**, with three P1 findings, all
+  independently verified as real: a stale head SHA, a snapshot-refresh command that bypassed the
+  wrapper that owns the proof, and Mason's per-migration approval sequenced *after* the apply. A P2
+  noted all five migrations sat below the live applied high-water.
+- **The ordering block was genuine, and was not gamed.** Live ledger row
+  `20260809130108_team_note_completion_rpc_and_assignment_notify` applied at 13:01 UTC on 2026-08-09
+  from a concurrent session — and has **no file anywhere in this repository** (not on disk, not in
+  `origin/main`, not in `git log --all`). It lifted the high-water above all five `20260808*` files
+  and `migration-ordering-lib.mjs` correctly refused them. The obvious escape hatches were checked and
+  declined: `migration-apply-guard.mjs` deliberately re-attaches `<version>_<name>` so a name-mapping
+  gap cannot drop the timestamp, and neither a stale snapshot nor the `intentional-replay` marker was
+  used — these are first-time applies, not replays.
+- **Remedy: re-issued forward, not forced through.** All five renamed with `git mv` to
+  `20260809170500`–`20260809170900`, relative order preserved, executable SQL byte-identical, a
+  provenance header added, and the stale `20260808*` files deleted in the same commit so a clean
+  rebuild cannot apply the same change twice. Same remedy as `migration-history.md` row 808 → live
+  row 811. Indexed as history rows 857–861.
+- **Every migration premise re-verified against live** instead of trusted from the handoff: the actor
+  guard is genuinely missing, `authenticated` genuinely holds TRUNCATE on `inventory`, `payments`
+  genuinely holds zero rows, the rounding function and triggers genuinely do not exist, `cancel_order`
+  genuinely leaves `quantity_remaining` stranded, and `_cancel_order_impl_20260714` exists. Both
+  `CREATE OR REPLACE` migrations reproduce the current live bodies, so no live logic is clobbered.
+- **All 27 live invariant predicates ran:** 26 CLEAN, one violation — `fin-money-whole-cents` at
+  exactly 49 rows (3 `commissions` + 46 `order_items`), matching the documented, deliberately
+  unrepaired set. The repair statement stays commented out; restating live money, including a
+  $5,245.195 pending payout, is its own separate decision.
+- Docs brought back in sync: `migration-history.md` rows 857–861 plus a re-issue note and an
+  undocumented-live-row note, `applied-snapshot-invalidate.mjs` documented in `agent-guardrails.md`,
+  and `CURRENT_STATE.md`/`KNOWN_ISSUES.md` re-read against live and re-stamped. `check:docs` clean.
+
 ## 2026-08-08 — PR #354 review round: snapshot input validation + honest scope on the rounding claim
 
 Three CodeRabbit findings and two Codex findings on `84c7776a`, plus a changelog merge with `main`.
