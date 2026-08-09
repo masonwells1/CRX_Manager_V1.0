@@ -69,7 +69,10 @@ const HIGH_NOTES = {
   },
 };
 
-const highs = rows.filter(r => r.s === 'HIGH');
+// BLOCKER is a severity both workflow schemas allow; a corrected verdict can
+// introduce one, and it must never be rendered as anything lesser.
+const TOP = new Set(['BLOCKER', 'HIGH']);
+const highs = rows.filter(r => TOP.has(r.s));
 const findNote = t => {
   for (const k of Object.keys(HIGH_NOTES)) if (t.startsWith(k)) return HIGH_NOTES[k];
   return null;
@@ -107,7 +110,7 @@ const highHtml = THEMES.map(th => {
     if (!n) throw new Error(`No HIGH_NOTES entry matches HIGH finding: ${h.t}`);
     return `<article class="finding">
       <div class="finding-head">
-        <span class="chip chip-high">High</span>
+        <span class="chip chip-high">${h.s === 'BLOCKER' ? 'Blocker' : 'High'}</span>
         <span class="finding-src">${esc(h.finder ?? h.fi)}</span>
       </div>
       <h4 class="finding-t">${esc(n.plain)}</h4>
@@ -135,7 +138,10 @@ const PHASES = [
 const appendixHtml = PHASES.map(([key, label, lede]) => {
   const inPhase = rows.filter(r => r.ph === key);
   const finders = [...new Set(inPhase.map(r => r.fi))];
-  const counts = ['HIGH', 'MED', 'LOW'].map(s => `${inPhase.filter(r => r.s === s).length} ${s.toLowerCase()}`).join(' · ');
+  const counts = ['BLOCKER', 'HIGH', 'MED', 'LOW']
+    .map(s => [s, inPhase.filter(r => r.s === s).length])
+    .filter(([s, n]) => n > 0 || s !== 'BLOCKER')
+    .map(([s, n]) => `${n} ${s.toLowerCase()}`).join(' · ');
   return `
 <section class="phase">
   <header class="phase-head">
@@ -144,12 +150,13 @@ const appendixHtml = PHASES.map(([key, label, lede]) => {
     <p class="phase-count">${inPhase.length} findings — ${counts}</p>
   </header>
   ${finders.map(f => {
-    const items = inPhase.filter(r => r.fi === f).sort((a, b) => ({ HIGH: 0, MED: 1, LOW: 2 }[a.s] - { HIGH: 0, MED: 1, LOW: 2 }[b.s]));
+    const ORD = { BLOCKER: -1, HIGH: 0, MED: 1, LOW: 2 };
+    const items = inPhase.filter(r => r.fi === f).sort((a, b) => ORD[a.s] - ORD[b.s]);
     return `<div class="finder-block">
       <h4 class="finder-h">${esc(f)}</h4>
       <ul class="rowlist">
         ${items.map(i => `<li class="row row-${i.s.toLowerCase()}">
-          <span class="chip chip-${i.s.toLowerCase()}">${i.s === 'HIGH' ? 'High' : i.s === 'MED' ? 'Med' : 'Low'}</span>
+          <span class="chip chip-${i.s === 'BLOCKER' ? 'high' : i.s.toLowerCase()}">${ { BLOCKER: 'Blocker', HIGH: 'High', MED: 'Med', LOW: 'Low' }[i.s] || i.s }</span>
           <span class="row-t">${esc(i.t)}</span>
           <code class="row-loc">${shortLoc(i.loc)}</code>
         </li>`).join('\n')}
@@ -163,6 +170,7 @@ const appendixHtml = PHASES.map(([key, label, lede]) => {
 
 const counts = {
   total: rows.length,
+  blocker: rows.filter(r => r.s === 'BLOCKER').length,
   high: rows.filter(r => r.s === 'HIGH').length,
   med: rows.filter(r => r.s === 'MED').length,
   low: rows.filter(r => r.s === 'LOW').length,
@@ -338,7 +346,7 @@ const html = `<!DOCTYPE html>
   }
   .row-t { font-size: .95rem; line-height: 1.45; }
   .row-loc { grid-column: 2; font-size: .76rem; color: var(--muted); overflow-wrap: anywhere; }
-  .row-high { box-shadow: inset 3px 0 0 var(--high); }
+  .row-blocker, .row-high { box-shadow: inset 3px 0 0 var(--high); }
   .row-med { box-shadow: inset 3px 0 0 var(--med); }
   .row-low { box-shadow: inset 3px 0 0 var(--rule-strong); }
 
@@ -359,6 +367,7 @@ const html = `<!DOCTYPE html>
 
   <section class="stats">
     <div class="stat"><span class="stat-n">${counts.total}</span><span class="stat-l">Confirmed</span></div>
+    ${counts.blocker ? `<div class="stat stat-high"><span class="stat-n">${counts.blocker}</span><span class="stat-l">Blocker</span></div>` : ''}
     <div class="stat stat-high"><span class="stat-n">${counts.high}</span><span class="stat-l">High</span></div>
     <div class="stat stat-med"><span class="stat-n">${counts.med}</span><span class="stat-l">Medium</span></div>
     <div class="stat"><span class="stat-n">${counts.low}</span><span class="stat-l">Low</span></div>

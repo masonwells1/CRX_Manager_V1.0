@@ -2,10 +2,10 @@
 
 - **Date:** 2026-08-09
 - **Type:** read-only multi-agent review with adversarial verification (112 agents, 3 phases)
-- **Result:** 77 confirmed findings (10 HIGH, 36 MED, 31 LOW), 26 claims refuted and dropped
+- **Result:** 77 confirmed findings (10 HIGH, 36 MED, 31 LOW), 26 claims refuted and dropped. Not deduplicated across finders — six defects are counted twice or more, so this is roughly 69 distinct defects. Merge table in `README.md`.
 - **Scope:** nothing was committed, pushed, migrated, or written to the database.
 
-> **Evidence caveat.** Phases 1–2 read the on-disk migrations only; if a function was ever altered directly in Supabase without a migration, those findings describe the file, not the live database. Phase 3 pulled the live schema and grants. Confirm live function bodies before acting on any Phase 1–2 finding.
+> **Evidence caveat.** **No phase queried the live database.** Phases 1–2 read the on-disk migrations; phase 3 additionally read the 2026-07-27 disaster-recovery baseline (`supabase/baselines/20260727174805_acl_lockdown.sql`) plus later migrations — a point-in-time snapshot, not current state. Where the same defect appears from both sources (e.g. the delivery direct-complete bypass), that is two offline readings agreeing, **not** a live confirmation. If anything was ever altered directly in Supabase without a migration, that drift is invisible here. Confirm live function bodies, grants and policies against the database catalog before acting on **any** finding.
 
 ---
 
