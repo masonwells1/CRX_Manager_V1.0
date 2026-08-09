@@ -226,6 +226,15 @@ export default function QuoteBuilder() {
     getKey: getSaveQuoteIdempotencyKey,
     resetKey: resetSaveQuoteIdempotencyKey,
   } = useIdempotencyKey('save_quote', profile?.id || '');
+  // The below-cost reason belongs to the SAVE ATTEMPT, not to one click of the
+  // button. save_quote's request fingerprint includes the annotated item notes,
+  // so if a committed save's response is lost and the retry re-prompts, any
+  // difference in the retyped text makes the replay a fingerprint conflict --
+  // and for a brand-new quote the page still has no quoteId, so the stale-save
+  // reload cannot recover the quote that actually committed. Held for the life
+  // of the idempotency key and cleared exactly where that key rotates.
+  // (Codex round 30.)
+  const belowCostReasonRef = useRef<string | null>(null);
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   // A committed conversion can be replayed from the idempotency cache with
   // status:'created'. Keep that marker so a lost response can still trigger
@@ -954,6 +963,10 @@ export default function QuoteBuilder() {
         // The rejected key may represent a committed save whose response was
         // lost. Rotate it only after a complete authoritative reload succeeds.
         resetSaveQuoteIdempotencyKey();
+        // New attempt, and the reload just replaced local state with the
+        // server's -- a reason held for the old key no longer describes what
+        // would be sent, so the next below-cost save must prompt again.
+        belowCostReasonRef.current = null;
         if (resetCreateVersionAfterReloadRef.current) {
           resetCreateVersionAttempt();
           resetCreateVersionAfterReloadRef.current = false;
@@ -1462,10 +1475,19 @@ export default function QuoteBuilder() {
           cost: item.current_cost,
         }));
       if (belowCostLines.length > 0) {
-        belowCostReason = await new Promise<string | null>((resolve) =>
-          setBelowCostPrompt({ lines: belowCostLines, resolve })
-        );
-        if (belowCostReason === null) return null;
+        if (belowCostReasonRef.current !== null) {
+          // Retry of an attempt that already carries an approved reason: reuse
+          // the exact text so the payload -- and therefore save_quote's request
+          // fingerprint -- is byte-identical to the attempt that may already
+          // have committed.
+          belowCostReason = belowCostReasonRef.current;
+        } else {
+          belowCostReason = await new Promise<string | null>((resolve) =>
+            setBelowCostPrompt({ lines: belowCostLines, resolve })
+          );
+          if (belowCostReason === null) return null;
+          belowCostReasonRef.current = belowCostReason;
+        }
       }
     }
 
@@ -1584,6 +1606,11 @@ export default function QuoteBuilder() {
       }
 
       resetSaveQuoteIdempotencyKey();
+      // Saved: the reason is recorded on the line and mirrored into local state
+      // below, so the next save resends it from the notes themselves. Holding
+      // it past this point would silently approve a LATER below-cost edit
+      // without asking.
+      belowCostReasonRef.current = null;
       // The approval reason is now in the database. Mirror it into local state
       // so a later save from this same page (which never refetches) resends it
       // instead of reverting the stored notes to the pre-approval text.

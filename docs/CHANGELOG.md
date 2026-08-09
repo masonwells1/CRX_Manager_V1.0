@@ -39,6 +39,22 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 30 (Codex) — the approval reason had to survive a retry:**
+
+`save_quote`'s request fingerprint includes the annotated item notes. If a below-cost save
+committed but its response was lost, the retry re-prompted for the reason, and any difference in
+the retyped text turned the replay into a fingerprint conflict — with no `quoteId` yet on a brand
+new quote, the stale-save reload could not recover the quote that had actually committed. The
+reason is now held for the life of the idempotency key and reused verbatim on a retry, so the
+payload is byte-identical to the attempt that may already have landed. It is cleared on a
+successful save (the reason lives on the line from then on) and on a stale-save reload (local
+state was just replaced, so the old reason no longer describes what would be sent) — holding it
+past either point would silently approve a later below-cost edit without asking.
+
+The round's other finding — `BulkOrderImport` comparing against a catalog cost that may have
+moved since the fetch — is the server-side enforcement gap already recorded for a follow-up PR,
+not a new issue.
+
 **Round 29 (Codex) — unpriced rush lines became a phantom loss (P1):**
 
 `create_rush_order` writes its lines with price *and* `cost_per_unit` at 0 on an order whose
