@@ -371,9 +371,9 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 68 assertions, including comment-hidden headers, nested
+suite grew from 24 to 73 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
-quoted actor parameters. Twenty-five individual clause-removal mutations were run;
+quoted actor parameters. Thirty-two individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
 idempotency suite remained green at 86 assertions.
 
@@ -395,6 +395,16 @@ stored and executed later even when the guard cannot trace that data flow.
 Regression coverage pins both single- and dollar-quoted storage while confirming
 that a normal top-level `UPDATE` remains data. The two builder classifiers and
 both procedural-literal clauses each fail their test when removed alone.
+
+The third exact-SHA Codex review found that comments could still hide the actor
+parameter or mutation after structural parsing, and that function DDL fragments
+could be assigned in separate statements before an indirect `EXECUTE`. Actor
+parameter names, mutation keywords, and the binding marker now use comment-safe
+views. Indirect execution is allowed only when the same variable has exactly one
+earlier supported write containing one complete function-bearing literal; the
+guard never reassembles fragments or guesses through aliases. Seven more
+clause-removal mutations pin these decisions and the accepted direct-literal
+assignment/`SELECT ... INTO` cases.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

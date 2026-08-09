@@ -104,6 +104,18 @@ r = runHook(fn(MUTATION).replace(
 ));
 ok(isDeny(r), "comments at every whitespace position in the function header stay visible through masking");
 
+r = runHook(fn(MUTATION, "/* legal */ p_performed_by uuid"));
+ok(isDeny(r), "a comment before an actor parameter cannot hide its declared name");
+
+r = runHook(fn("UPDATE/* legal */ invoices SET created_by = p_performed_by;"));
+ok(isDeny(r), "a comment between UPDATE and its target cannot hide a mutation");
+
+r = runHook(fn(MUTATION).replace(
+  MUTATION,
+  "/* historical text: ACTOR_MISMATCH */\n" + MUTATION
+));
+ok(isDeny(r), "ACTOR_MISMATCH text inside a comment does not count as actor binding");
+
 // Comments containing fake DDL/body syntax are data and must not redirect the
 // reader away from the real function that follows.
 r = runHook("-- legacy CREATE FUNCTION public.old_rpc(\n" + fn(BOUND));
@@ -181,6 +193,20 @@ r = runHook(`DO $do$ BEGIN
     'p_performed_by uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_performed_by; END $fn$;';
 END $do$;`);
 ok(isDeny(r), "a CREATE FUNCTION header split across literals is refused before it can disappear from the lexer");
+
+r = runHook(`DO $do$
+DECLARE
+  v_head text;
+  v_tail text;
+  v_ddl text;
+BEGIN
+  v_head := 'CREATE OR REPLACE ';
+  v_tail := 'FUNCTION public.cross_statement_actor(p_performed_by uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_performed_by; END $fn$;';
+  v_ddl := v_head || v_tail;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "function DDL assembled across separate statements is refused");
+ok(r.stdout.includes("assembled through variables or multiple statements"), "cross-statement deny explains why indirect assembly is unreadable");
 
 r = runHook(`DO $do$ BEGIN EXECUTE format('%s', '${BOUND_DDL}'); END $do$;`);
 ok(isDeny(r), "even a bound definition wrapped in format() is refused because it uses multiple literals");

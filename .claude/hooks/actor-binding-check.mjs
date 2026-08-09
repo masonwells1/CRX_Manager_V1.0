@@ -400,10 +400,56 @@ try {
     let stmtStart = from;
     let lits = [];
     let i = from;
+    let hasProceduralContainer = false;
+    const ddlVars = new Map();
+
+    const ident = (value) => String(value || "").replace(/^"|"$/g, "").toLowerCase();
+    const writtenTarget = (stmt) => {
+      let match = /^(?:BEGIN\s+|THEN\s+|ELSE\s+|LOOP\s+)?("[^"]+"|[A-Za-z_]\w*)\s*(?::=|=(?!=))/i.exec(stmt);
+      if (match) return ident(match[1]);
+      match = /^(?:DECLARE\s+)?("[^"]+"|[A-Za-z_]\w*)\s+(?:CONSTANT\s+)?[\s\S]*?(?::=|=(?!=)|DEFAULT\b)/i.exec(stmt);
+      if (match && DECLARATION_INIT_RE.test(stmt)) return ident(match[1]);
+      match = /\b(?:SELECT|VALUES)\b[\s\S]*\bINTO\s+("[^"]+"|[A-Za-z_]\w*)\s*$/i.exec(stmt);
+      return match ? ident(match[1]) : null;
+    };
+
+    // An indirect EXECUTE is supported only when the same variable has exactly
+    // one earlier write and that write is one complete, directly assigned
+    // function-bearing literal. We deliberately do not reassemble variables or
+    // fragments across statements: anything more complicated needs exemption.
+    const trackDdlSource = (stmt, stmtEnd) => {
+      const target = writtenTarget(stmt.trim());
+      if (target) {
+        let safe = false;
+        if (lits.length === 1 && carriesFnHeader(lits[0].payload)) {
+          const marker = "__ACTOR_DDL_LITERAL__";
+          const skeleton = (
+            masked.slice(stmtStart, lits[0].start) + marker + masked.slice(lits[0].end, stmtEnd)
+          ).trim();
+          safe = /^(?:BEGIN\s+)?(?:"[^"]+"|[A-Za-z_]\w*)\s*(?::=|=(?!=))\s*__ACTOR_DDL_LITERAL__$/i.test(skeleton) ||
+            /^(?:BEGIN\s+)?SELECT\s+__ACTOR_DDL_LITERAL__\s+INTO\s+(?:"[^"]+"|[A-Za-z_]\w*)$/i.test(skeleton);
+        }
+        const prior = ddlVars.get(target);
+        ddlVars.set(target, { writes: (prior?.writes || 0) + 1, safe: !prior && safe });
+      }
+
+      if (!/\bEXECUTE\b/i.test(stmt) || lits.length > 0) return false;
+      const execute = /^(?:BEGIN\s+)?EXECUTE\s+("[^"]+"|[A-Za-z_]\w*)\s*$/i.exec(stmt.trim());
+      const source = execute ? ddlVars.get(ident(execute[1])) : null;
+      if (source?.writes === 1 && source.safe) return false;
+      violations.push(
+        "This migration executes SQL assembled through variables or multiple statements, and the " +
+        "actor-binding guard cannot read it as one complete string literal. Put the complete CREATE " +
+        "FUNCTION definition in one directly assigned literal, or add the file-level exempt marker " +
+        "(-- actor-binding-check: exempt) and get a manual review."
+      );
+      return true;
+    };
 
     const verdict = (stmtEnd) => {
-      if (lits.length === 0) return false;
       const stmt = masked.slice(stmtStart, stmtEnd);
+      if (!hasProceduralContainer && trackDdlSource(stmt, stmtEnd)) return true;
+      if (lits.length === 0) return false;
       if (!isDynamicSqlStatement(stmt)) return false;
       if (!carriesFnHeader(lits.map((l) => l.payload).join(""))) return false;
 
@@ -441,6 +487,7 @@ try {
         if (verdict(i)) return true;
         stmtStart = i + 1;
         lits = [];
+        hasProceduralContainer = false;
         i++;
         continue;
       }
@@ -470,6 +517,7 @@ try {
       // counting the container itself would turn `DO $do$ EXECUTE '...' $do$`
       // into a fake one-literal dynamic statement with skeleton `DO <literal>`.
       if (innerFrom !== -1 && /\b(?:AS|DO)\s+$/i.test(masked.slice(stmtStart, start))) {
+        hasProceduralContainer = true;
         i = end;
         continue;
       }
@@ -514,6 +562,7 @@ try {
     const maskedParams = parsed.params;
     const attrs = rest.attrs;
     const body = content.slice(rest.bodyStart, rest.bodyEnd);
+    const maskedBody = masked.slice(rest.bodyStart, rest.bodyEnd);
     // Do not jump to rest.end: maskSqlNoise deliberately exposes executable
     // CREATE FUNCTION definitions nested in this body. Continuing from the
     // current regex position lets the next iteration inspect those definitions
@@ -523,14 +572,14 @@ try {
     if (!/SECURITY\s+DEFINER/i.test(attrs)) continue;
 
     // Only mutating bodies attribute anything worth forging.
-    if (!/\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(body)) continue;
+    if (!/\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(maskedBody)) continue;
 
-    const actorParams = splitTopLevelArgs(maskedParams, params)
+    const actorParams = splitTopLevelArgs(maskedParams, blankComments(params))
       .map(paramName)
       .filter((n) => ACTOR_PARAM_RE.test(n));
     if (actorParams.length === 0) continue;
 
-    if (/ACTOR_MISMATCH/i.test(body)) continue;
+    if (/ACTOR_MISMATCH/i.test(blankComments(body))) continue;
 
     violations.push(
       `Function ${fnName}: SECURITY DEFINER, mutates, and declares the forgeable actor parameter(s) ` +
