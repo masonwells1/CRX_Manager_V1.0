@@ -1,6 +1,6 @@
 # Remediation Plan — Ordering Cycle Review
 
-Companion to `FINDINGS.md`. This is the agreed scope and order of work, so the local session (and Codex) start from a settled plan rather than re-litigating 77 findings.
+Companion to `FINDINGS.md`. This is the proposed scope and order of work, so the local session (and Codex) start from a settled plan rather than re-litigating 77 findings.
 
 **Status: proposed. Nothing here is approved for implementation yet — the Codex triage in Step 2 comes first.**
 
@@ -32,7 +32,7 @@ Park the remaining 22 LOW findings. They stay recorded in `FINDINGS.md`; revisit
 
 ## Sequence
 
-Every wave: its own branch, its own PR, CodeRabbit, and a `codex-gauntlet` gate. All three waves touch money, RLS, or migrations, so the exact-SHA `gpt-5.6-sol` high-effort proof is mandatory on each — none of them qualify as "ordinary reversible code".
+Every wave: its own branch, its own PR, CodeRabbit, and a `codex-gauntlet` gate. All four waves touch money, RLS, or migrations, so the exact-SHA `gpt-5.6-sol` high-effort proof is mandatory on each — none of them qualify as "ordinary reversible code".
 
 ### Step 0 — Confirm the backups are fresh
 Two automated weekly backups already run: an encrypted off-site `pg_dump` to the private `CRX_Backups` repo, and an in-database `pg_cron` snapshot (`backup_snapshots`, migration `20260713050000`). Neither is point-in-time recovery, and the in-database copy does not survive a database-level disaster. Verify both ran recently — and that the off-site one is restorable — before starting. Gates everything below.
@@ -54,10 +54,9 @@ Verification: real-path proof on each — run the flow, observe the invoice and 
 ### Wave B — Close the direct-write lane (6 HIGH)
 The six findings that share one root cause: safety logic lives in the RPCs while the tables stay directly writable by the same roles.
 - Quote `accepted → sent` trigger edge (note: `QuoteBuilder.tsx:2686` is a residual consumer — the arm cannot simply be deleted; gate it on admin override or order-existence)
-- Deliveries walkable to `completed` by direct update (found twice, from migrations and from the grants baseline — both offline sources, not a live confirmation)
-- Quote soft delete leaking planned/crop-program holds (four findings, one fix — including the parity check that should have detected it)
+- Deliveries walkable to `completed` by direct update, by any sales rep or the assigned driver — one fix covering both the `state-machines` and `rls-security` findings, which reached it from the migrations and the grants baseline respectively (both offline sources, not a live confirmation)
+- Quote soft delete leaking planned/crop-program holds — one fix covering four findings, including the parity check that should have detected it
 - Sales reps inserting orders and order lines directly
-- Driver completing a delivery by direct update
 
 Highest blast radius in the set. Needs a full test pass and a careful look at every legitimate caller before permissions tighten.
 

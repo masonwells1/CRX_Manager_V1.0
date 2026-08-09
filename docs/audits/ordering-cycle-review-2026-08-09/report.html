@@ -356,12 +356,20 @@
   </section>
 
   <section class="block">
-    <h2>Suggested order of work</h2>
-    <p>Roughly by damage-per-hour-of-work. This is a recommendation, not a decision — the sequencing is yours.</p>
+    <h2>Order of work</h2>
+    <p>Outline only — <code>REMEDIATION-PLAN.md</code> in the same folder is authoritative for sequencing and scope, and nothing here is approved for implementation until its evidence and triage gates are done.</p>
     <ol class="waves">
       <li>
         <h3 class="wave-t">Confirm the backups are fresh</h3>
         <p>Two automated weekly backups run — an encrypted off-site dump to the private <code>CRX_Backups</code> repo, and an in-database <code>pg_cron</code> snapshot. Neither is point-in-time, so check both are recent before touching any of this; the off-site copy is the one that survives a database-level disaster.</p>
+      </li>
+      <li>
+        <h3 class="wave-t">Close the evidence gap, then triage</h3>
+        <p>Check the live function bodies, grants and policies against the database catalog — nothing here was read from the live database — then run the independent Codex triage. Its reconciled list is the thing to approve, not the raw findings.</p>
+      </li>
+      <li>
+        <h3 class="wave-t">Fix the three money bugs</h3>
+        <p>Double-billing on partial quick deliveries, commissions permanently cancelled by a void-and-rebill, and caller-supplied cost driving the commission basis. These need no misuse — they are ordinary workflows producing wrong numbers today, so they are quietly costing you money or trust. Each is a self-contained fix, which makes them good ground to build confidence on.</p>
       </li>
       <li>
         <h3 class="wave-t">Close the direct-write lane</h3>
@@ -842,7 +850,7 @@
   </section>
 
   <footer>
-    <p>Read-only review — nothing was committed, pushed, migrated, or written to the database. Fixes are a separate job, to be scoped and approved after you have read this.</p>
+    <p>Read-only review — no application code, schema, migration, deployment or live data was changed; the only files produced are the audit record this report comes from. Fixes are a separate job, to be scoped and approved after you have read this.</p>
   </footer>
 
 </div>

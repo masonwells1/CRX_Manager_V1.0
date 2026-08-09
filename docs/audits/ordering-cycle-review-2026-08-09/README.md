@@ -4,7 +4,7 @@ Read-only review of the full ordering cycle: quote → planned booking → order
 
 **Result: 77 confirmed findings — 10 HIGH, 36 MED, 31 LOW. 26 further claims were refuted and dropped.** Findings are not deduplicated across finders; see *Duplicates across finders* below — roughly 69 distinct defects.
 
-No code was changed. No migration was written. Nothing was pushed, deployed, or written to the database.
+The review changed no application source, schema, migration, deployment, or live data. The only files it produced are this audit folder itself.
 
 ## Files
 
@@ -19,6 +19,8 @@ No code was changed. No migration was written. Nothing was pushed, deployed, or 
 ## Method
 
 Nine finder agents ran across three phases at high reasoning effort, with no severity cap (per the CLAUDE.md review-prompt rule). **Every** finding was then handed to an independent verifier whose instruction was to refute it, defaulting to refuted when evidence was weak or the issue was already recorded in `KNOWN_ISSUES.md` or the 2026-08-05 gauntlet section-04 baseline. Only findings that survived that pass are recorded here.
+
+**Coverage limitation on any re-run.** `workflow.mjs` treats an agent that dies on a terminal API error the same as one that found nothing, and drops failed verifiers rather than flagging them. A finder killed mid-run therefore reads as clean coverage. In this run every failed agent was re-run to completion before the result was taken (the first two attempts hit session limits), and the final pass reported 112 of 112 agents done with zero errors — but a future re-run must check the agent error count before trusting the totals.
 
 - **Phase 1 — Lifecycle & Holds:** state machines, planned-booking holds, conversion seams.
 - **Phase 2 — Money & Idempotency:** cent maths, commissions, idempotency and concurrency.
@@ -62,13 +64,15 @@ Six of the ten share one root cause: **safety logic lives in the RPCs, but the u
 9. `get_customer_year_end_summary` is an ungated `SECURITY DEFINER` RPC granted to `authenticated` — any role reads any customer's full financial history.
 10. Sales reps can insert orders and order lines directly, bypassing every canonical order-creation effect and the confirmed-only status rule.
 
-## Suggested order of work
+## Order of work
 
-1. **Confirm the backups are fresh.** Two automated weekly backups run (encrypted off-site dump to `CRX_Backups`, plus an in-database `pg_cron` snapshot). Neither is point-in-time, so verify both are recent before starting.
-2. **Close the direct-write lane.** Retires most of findings 1–4, 8 and 10 in one change. Highest blast radius — needs a real test pass.
-3. **Fix the three money bugs** (5, 6, 7). No misuse required; these are ordinary workflows producing wrong numbers today.
-4. **Gate the ungated read RPCs** — `get_customer_year_end_summary`, `check_customer_credit_limit`, `get_customer_summary`, `global_search`. Small, low-risk.
-5. **Work the MED list as maintenance** — missing `deleted_at` filters, reused page-scoped idempotency keys, and the three inconsistent AR derivations.
+**`REMEDIATION-PLAN.md` is authoritative for sequencing and scope.** It is reproduced here in outline only; if the two ever disagree, the plan wins.
+
+Nothing below is approved for implementation. Two gates come first: confirm the backups are fresh, and close the evidence gap with a live-catalog check, then an independent Codex triage whose reconciled list is what gets signed off.
+
+Then, in order: **money fixes first** (double-billing, cancelled commissions, caller-controlled commission basis), **direct-write lockdown second** (the six-finding root cause — largest blast radius, wants a full test pass), **ungated read RPCs third**, **MED maintenance last**. Money leads because those bugs produce wrong numbers today, are self-contained, and are easy to verify.
+
+Full detail, the LOW-findings triage, and the per-wave gates are in `REMEDIATION-PLAN.md`.
 
 ## Reproducing
 
