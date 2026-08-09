@@ -252,12 +252,59 @@ function carriesFnHeader(payload) {
 /** True when the current literal is executable procedural code rather than
  * data. PostgreSQL permits DO [LANGUAGE name] code, with code written as a
  * dollar-quoted or single-quoted string. AS bodies use the same literal forms. */
-function isProceduralContainerPrefix(text, singleQuoted = false) {
+function proceduralSingleQuoteKind(text) {
   const stmt = text.slice(text.lastIndexOf(";") + 1);
-  const escapePrefix = singleQuoted ? "(?:[eE]\\s*)?" : "";
   const language = "(?:[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*|\"[^\"]*\")";
-  return new RegExp(`\\bAS\\s+${escapePrefix}$`, "i").test(stmt) ||
-    new RegExp(`\\bDO(?:\\s+LANGUAGE\\s+${language})?\\s+${escapePrefix}$`, "i").test(stmt);
+  const container = `(?:\\bAS|\\bDO(?:\\s+LANGUAGE\\s+${language})?)`;
+  if (new RegExp(`${container}\\s+$`, "i").test(stmt)) return "plain";
+  if (new RegExp(`${container}\\s+[eE]$`, "i").test(stmt)) return "escape";
+  if (new RegExp(`${container}\\s+(?:[uU]&|[nN])$`, "i").test(stmt)) return "unicode";
+  return null;
+}
+
+function isProceduralContainerPrefix(text, singleQuoted = false) {
+  if (singleQuoted) return proceduralSingleQuoteKind(text) !== null;
+  const stmt = text.slice(text.lastIndexOf(";") + 1);
+  const language = "(?:[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*|\"[^\"]*\")";
+  return /\bAS\s+$/i.test(stmt) ||
+    new RegExp(`\\bDO(?:\\s+LANGUAGE\\s+${language})?\\s+$`, "i").test(stmt);
+}
+
+/** PostgreSQL concatenates adjacent string tokens when their separating SQL
+ * whitespace contains a newline. A procedural body split that way is no
+ * longer one literal this length-preserving reader can safely recurse into. */
+function hasAdjacentNewlineString(text, from) {
+  let i = from;
+  let sawNewline = false;
+  while (i < text.length) {
+    if (/\s/.test(text[i])) {
+      if (text[i] === "\n" || text[i] === "\r") sawNewline = true;
+      i++;
+      continue;
+    }
+    if (text[i] === "-" && text[i + 1] === "-") {
+      const nl = text.indexOf("\n", i + 2);
+      if (nl === -1) return false;
+      sawNewline = true;
+      i = nl + 1;
+      continue;
+    }
+    if (text[i] === "/" && text[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "\n" || text[j] === "\r") sawNewline = true;
+        if (text[j] === "/" && text[j + 1] === "*") { depth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      if (depth > 0) return null;
+      i = j;
+      continue;
+    }
+    break;
+  }
+  return sawNewline && /^(?:[eEnN]|[uU]&)?'/.test(text.slice(i));
 }
 
 /** Replace comments and quoted-string contents with spaces, while recursively
@@ -315,10 +362,13 @@ function maskSqlNoise(text, inProceduralCode = false) {
       const end = scanQuoted(text, i);
       if (end === -1) return null;
       const payload = text.slice(i + 1, end - 1);
-      const isProceduralContainer = ch === "'" && isProceduralContainerPrefix(out, true);
-      // E'...' procedural bodies need backslash decoding that cannot remain
-      // both exact and length-preserving. Recognize them, then fail closed.
-      if (isProceduralContainer && /[eE]\s*$/.test(out)) return null;
+      const proceduralStringKind = ch === "'" ? proceduralSingleQuoteKind(out) : null;
+      const isProceduralContainer = proceduralStringKind !== null;
+      // Escape/Unicode bodies need decoding that cannot remain both exact and
+      // length-preserving. Multi-token bodies are likewise not one readable
+      // literal. Recognize all of them, then fail closed.
+      if (isProceduralContainer && proceduralStringKind !== "plain") return null;
+      if (isProceduralContainer && hasAdjacentNewlineString(text, end) !== false) return null;
       const isDynamicSql = ch === "'" && (isProceduralContainer ||
         (carriesFnHeader(payload) && (inProceduralCode || inExecuteStatement(out, text, end))));
       if (isDynamicSql) {
@@ -401,7 +451,8 @@ try {
   const masked = maskSqlNoise(content);
   if (masked === null) {
     violations.push(
-      "This migration could not parse (unterminated string, block comment, or dollar-quote) — " +
+      "This migration could not parse safely (unterminated SQL construct, encoded procedural body, " +
+      "or newline-concatenated procedural strings) — " +
       "the actor-binding guard cannot inspect it. Fix the unterminated construct, or if it is " +
       "genuinely valid SQL the lexer mishandles, add the exempt marker and get a manual review."
     );

@@ -371,9 +371,9 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 84 assertions, including comment-hidden headers, nested
+suite grew from 24 to 86 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
-quoted actor parameters. Thirty-eight individual clause-removal mutations were run;
+quoted actor parameters. Forty individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
 idempotency suite remained green at 86 assertions.
 
@@ -422,6 +422,15 @@ cannot be kept index-safe. Unsafe probes reach the named actor violation, while 
 correctly bound function inside the single-quoted form remains allowed. Five
 retained parser decisions are mutation-proven; two initially added quote-handling
 branches stayed green when removed and were deleted as non-load-bearing.
+
+The sixth exact-SHA Codex review found one more legal PostgreSQL lexical form:
+ordinary string literals separated by a newline are concatenated automatically.
+Splitting a single-quoted `DO` body that way let the first token establish the
+container while the later token holding dynamic actor DDL was masked as data.
+The reader now refuses multi-token procedural bodies instead of reassembling
+them. The same boundary now recognizes and refuses `U&'...'`/`N'...'` procedural
+bodies whose decoding cannot remain index-safe. Removing either recognition
+clause alone makes its focused regression turn red.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

@@ -195,6 +195,13 @@ r = runHook(`DO LANGUAGE plpgsql E'${BOUND_SINGLE_DO}';`);
 ok(isDeny(r), "an escape-string DO body the lexer cannot decode fails closed");
 ok(r.stdout.includes("could not parse"), "the escape-string DO denial explains the parse boundary");
 
+const SPLIT_SINGLE_DO_TAIL = `EXECUTE '${UNBOUND_DDL}'; END`.replaceAll("'", "''");
+r = runHook(`DO 'BEGIN\n'\n'${SPLIT_SINGLE_DO_TAIL}';`);
+ok(isDeny(r), "newline-concatenated strings cannot split a procedural body past inspection");
+
+r = runHook(`DO U&'${UNBOUND_SINGLE_DO}';`);
+ok(isDeny(r), "a Unicode-escape DO body the lexer cannot decode fails closed");
+
 r = runHook(`DO $do$ BEGIN EXECUTE '${UNBOUND_DDL.replace("dynamic_actor(", "dynamic_actor /* legal */ (")}'; END $do$;`);
 ok(isDeny(r), "a comment-hidden header inside a dynamic string is still classified and blocked");
 
