@@ -43,6 +43,18 @@ adversarial gate blocked on the handoff itself.
 - Docs brought back in sync: `migration-history.md` rows 857–861 plus a re-issue note and an
   undocumented-live-row note, `applied-snapshot-invalidate.mjs` documented in `agent-guardrails.md`,
   and `CURRENT_STATE.md`/`KNOWN_ISSUES.md` re-read against live and re-stamped. `check:docs` clean.
+- **Second Codex pass on the re-issued branch returned CLEAN** (head `13e2e65a`, base `16ca5070`,
+  proof minted by `scripts/write-codex-push-proof.mjs`): no blockers, no CHECK or timestamp
+  collisions, no destructive statements, no unsafe grants, no actor-forgery paths; the four unchanged
+  migrations confirmed byte-identical. It raised one low-severity accuracy issue, since fixed: the
+  header on `20260809170900` claimed its original was merged to `main`, but that original
+  (`20260808170000`, added in `76a6bee4`) only ever existed on this branch — `git ls-tree origin/main`
+  confirms the other four were merged and it was not.
+- **Worktree `node_modules` was missing**, so `verify-deps.mjs` blocked the commit with a
+  not-installed mismatch even though the full vitest suite had just passed moments earlier in the same
+  hook run (Node resolves upward to the main tree; `verify-deps` joins a literal path). Fixed with a
+  directory junction to `C:\CRX_Manager\node_modules` after confirming the three checked versions
+  match this worktree's own lockfile — not with a duplicate `npm ci`.
 
 ## 2026-08-08 — PR #354 review round: snapshot input validation + honest scope on the rounding claim
 

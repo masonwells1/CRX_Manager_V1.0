@@ -1,7 +1,10 @@
 -- REISSUED 2026-08-09 with a forward timestamp.
 --
--- Originally written as 20260808170000_round_line_profit_with_revenue.sql, which
--- was merged to main but never applied. Live ledger row 20260809130108
+-- Originally written as 20260808170000_round_line_profit_with_revenue.sql, added
+-- on this branch in 76a6bee4 and never applied. Unlike the other four re-issued
+-- files, that original was never merged to main -- it exists only in the PR #354
+-- history, so an exact-base review sees this migration as entirely new.
+-- Live ledger row 20260809130108
 -- (team_note_completion_rpc_and_assignment_notify) landed afterwards, putting
 -- every 20260808* file BELOW the applied high-water mark, where
 -- .claude/hooks/migration-ordering-lib.mjs correctly refuses it: an older
