@@ -11,9 +11,9 @@ No code was changed. No migration was written. Nothing was pushed, deployed, or 
 | File | What it is |
 |---|---|
 | `FINDINGS.md` | All 77 findings with full detail, evidence, failure scenario, and verifier reasoning. The canonical record. |
-| `findings.json` | Same data as structured JSON, for tooling. |
+| `findings.json` | Same data as structured JSON — the source the report is generated from. |
 | `report.html` | Plain-English summary report for Mason (published as an artifact). |
-| `build-report.mjs` | Generates `report.html` from `findings.json`. |
+| `build-report.mjs` | Generates `report.html` from `findings.json`. Correct a verdict there and re-run to rebuild. |
 | `workflow.mjs` | The review workflow itself — 9 finder agents across 3 phases, each finding adversarially verified. Re-runnable. |
 
 ## Method
@@ -47,7 +47,7 @@ Six of the ten share one root cause: **safety logic lives in the RPCs, but the u
 
 ## Suggested order of work
 
-1. **Back up the database first.** No backup exists and the Supabase plan has no point-in-time recovery.
+1. **Confirm the backups are fresh.** Two automated weekly backups run (encrypted off-site dump to `CRX_Backups`, plus an in-database `pg_cron` snapshot). Neither is point-in-time, so verify both are recent before starting.
 2. **Close the direct-write lane.** Retires most of findings 1–4, 8 and 10 in one change. Highest blast radius — needs a real test pass.
 3. **Fix the three money bugs** (5, 6, 7). No misuse required; these are ordinary workflows producing wrong numbers today.
 4. **Gate the ungated read RPCs** — `get_customer_year_end_summary`, `check_customer_credit_limit`, `get_customer_summary`, `global_search`. Small, low-risk.

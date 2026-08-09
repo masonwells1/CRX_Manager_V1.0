@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-09 — Ordering cycle review (read-only): 3-phase, 112-agent adversarially…
+## 2026-08-09 — Ordering cycle review (read-only)
 
 Ordering cycle review (read-only): 3-phase, 112-agent adversarially verified review of quote -> planned booking -> order -> delivery -> invoice, incl. inventory holds, commissions, permissions, reporting drift. 77 confirmed findings (10 HIGH, 36 MED, 31 LOW), 26 claims refuted. Record committed to docs/audits/ordering-cycle-review-2026-08-09/; draft PR #356. No code, schema, or live data changed.
 

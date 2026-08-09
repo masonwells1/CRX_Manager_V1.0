@@ -30,8 +30,8 @@ Park the remaining 22 LOW findings. They stay recorded in `FINDINGS.md`; revisit
 
 Every wave: its own branch, its own PR, CodeRabbit, and a `codex-gauntlet` gate. All three waves touch money, RLS, or migrations, so the exact-SHA `gpt-5.6-sol` high-effort proof is mandatory on each — none of them qualify as "ordinary reversible code".
 
-### Step 0 — Back up the database
-No backup exists and the plan has no point-in-time recovery. Gates everything below.
+### Step 0 — Confirm the backups are fresh
+Two automated weekly backups already run: an encrypted off-site `pg_dump` to the private `CRX_Backups` repo, and an in-database `pg_cron` snapshot (`backup_snapshots`, migration `20260713050000`). Neither is point-in-time recovery, and the in-database copy does not survive a database-level disaster. Verify both ran recently — and that the off-site one is restorable — before starting. Gates everything below.
 
 ### Step 1 — Close the evidence gap
 Phases 1–2 read on-disk migrations only. Pull the **live** bodies of `_enforce_quote_status_transition`, `revert_quote_status`, `restore_quote_version`, `convert_quote_to_order`, `create_direct_order`, `complete_delivery`, `void_invoice`, plus live grants and policies on `quotes` / `orders` / `deliveries` / `order_items`. Diff against the repo. Any finding whose live body differs must be re-read before it becomes work.

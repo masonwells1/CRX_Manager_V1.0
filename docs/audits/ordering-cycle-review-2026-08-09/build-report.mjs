@@ -1,7 +1,17 @@
 import fs from 'fs';
 
-const base = new URL('.', import.meta.url).pathname;
-const rows = JSON.parse(fs.readFileSync(`${base}/report-index.json`, 'utf8'));
+// Generated straight from the workflow output, so correcting a verdict in
+// findings.json and re-running is enough to rebuild the report.
+const findings = JSON.parse(fs.readFileSync(new URL('./findings.json', import.meta.url), 'utf8'));
+const severityOf = f => (f.verdict && f.verdict.corrected_severity) || f.severity;
+const rows = findings.confirmed.map(f => ({
+  t: f.title,
+  s: severityOf(f),
+  fi: f.finder,
+  ph: f.phaseName,
+  loc: String(f.location).split(';')[0].trim(),
+}));
+const refutedCount = findings.refutedCount;
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const shortLoc = l => esc(String(l).replace(/^supabase\/migrations\//, '').replace(/^supabase\/baselines\//, '').replace(/\s*\(.*$/, ''));
@@ -93,7 +103,8 @@ const highHtml = THEMES.map(th => {
   <h3 class="theme-h">${esc(th.label)} <span class="theme-count">${items.length}</span></h3>
   <p class="theme-lede">${esc(th.lede)}</p>
   ${items.map(h => {
-    const n = findNote(h.t) || { plain: '', why: '', who: '' };
+    const n = findNote(h.t);
+    if (!n) throw new Error(`No HIGH_NOTES entry matches HIGH finding: ${h.t}`);
     return `<article class="finding">
       <div class="finding-head">
         <span class="chip chip-high">High</span>
@@ -110,6 +121,10 @@ const highHtml = THEMES.map(th => {
   }).join('\n')}
 </section>`;
 }).join('\n');
+
+const themed = new Set(THEMES.flatMap(th => highs.filter(h => th.match(h.t)).map(h => h.t)));
+const unthemed = highs.filter(h => !themed.has(h.t));
+if (unthemed.length) throw new Error(`HIGH findings not covered by any theme: ${unthemed.map(h => h.t).join(' | ')}`);
 
 const PHASES = [
   ['Phase 1: Lifecycle & Holds', 'Lifecycle &amp; holds', 'Quote, order, delivery and invoice status rules; planned bookings and the inventory holds they create.'],
@@ -139,7 +154,9 @@ const appendixHtml = PHASES.map(([key, label, lede]) => {
           <code class="row-loc">${shortLoc(i.loc)}</code>
         </li>`).join('\n')}
       </ul>
-    </div>`;
+    </div>
+</body>
+</html>`;
   }).join('\n')}
 </section>`;
 }).join('\n');
@@ -151,7 +168,12 @@ const counts = {
   low: rows.filter(r => r.s === 'LOW').length,
 };
 
-const html = `<title>Ordering Cycle Review — CRX Manager</title>
+const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ordering Cycle Review — CRX Manager</title>
 <style>
   :root {
     --ground: #FCFCFA;
@@ -323,6 +345,8 @@ const html = `<title>Ordering Cycle Review — CRX Manager</title>
   footer { border-top: 2px solid var(--rule-strong); padding-top: 1.5rem; color: var(--muted); font-size: .9rem; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
+</head>
+<body>
 
 <div class="wrap">
 
@@ -338,12 +362,12 @@ const html = `<title>Ordering Cycle Review — CRX Manager</title>
     <div class="stat stat-high"><span class="stat-n">${counts.high}</span><span class="stat-l">High</span></div>
     <div class="stat stat-med"><span class="stat-n">${counts.med}</span><span class="stat-l">Medium</span></div>
     <div class="stat"><span class="stat-n">${counts.low}</span><span class="stat-l">Low</span></div>
-    <div class="stat"><span class="stat-n">26</span><span class="stat-l">Refuted</span></div>
+    <div class="stat"><span class="stat-n">${refutedCount}</span><span class="stat-l">Refuted</span></div>
   </section>
 
   <section class="block">
     <h2>How to read this</h2>
-    <p>Nine reviewers went through the ordering cycle from three angles. Every single thing they reported was then handed to a separate reviewer whose only job was to prove it wrong, using the actual migration files and source. <strong>26 claims were disproven and thrown out.</strong> The ${counts.total} below are what survived that.</p>
+    <p>Nine reviewers went through the ordering cycle from three angles. Every single thing they reported was then handed to a separate reviewer whose only job was to prove it wrong, using the actual migration files and source. <strong>${refutedCount} claims were disproven and thrown out.</strong> The ${counts.total} below are what survived that.</p>
     <div class="callout">
       <p><strong>One caveat that matters.</strong> Phases 1 and 2 read the migration files in the repository, not the live database. If a function was ever changed directly in Supabase without a migration, those findings describe the file rather than reality. Phase 3 did pull the live schema and grants — which is why the delivery-completion problem appears twice, once from each source. Before fixing anything, it is worth confirming the live function bodies match what is on disk.</p>
     </div>
@@ -360,8 +384,8 @@ const html = `<title>Ordering Cycle Review — CRX Manager</title>
     <p>Roughly by damage-per-hour-of-work. This is a recommendation, not a decision — the sequencing is yours.</p>
     <ol class="waves">
       <li>
-        <h3 class="wave-t">Back up the database first</h3>
-        <p>There is still no backup, and your Supabase plan has no point-in-time recovery. Nothing on this list should be touched until there is a copy to fall back on. Say “back up the database” and I will run it.</p>
+        <h3 class="wave-t">Confirm the backups are fresh</h3>
+        <p>Two automated weekly backups run — an encrypted off-site dump to the private <code>CRX_Backups</code> repo, and an in-database <code>pg_cron</code> snapshot. Neither is point-in-time, so check both are recent before touching any of this; the off-site copy is the one that survives a database-level disaster.</p>
       </li>
       <li>
         <h3 class="wave-t">Close the direct-write lane</h3>
@@ -384,7 +408,7 @@ const html = `<title>Ordering Cycle Review — CRX Manager</title>
 
   <section class="block">
     <h2>Everything found</h2>
-    <p>All ${counts.total} confirmed findings, grouped by review phase and by the reviewer that found them. Full evidence, failure scenarios and verifier reasoning for each are in <code>scratchpad/final-results.json</code>.</p>
+    <p>All ${counts.total} confirmed findings, grouped by review phase and by the reviewer that found them. Full evidence, failure scenarios and verifier reasoning for each are in <code>FINDINGS.md</code> and <code>findings.json</code> alongside this report.</p>
     ${appendixHtml}
   </section>
 
@@ -392,7 +416,9 @@ const html = `<title>Ordering Cycle Review — CRX Manager</title>
     <p>Read-only review — nothing was committed, pushed, migrated, or written to the database. Fixes are a separate job, to be scoped and approved after you have read this.</p>
   </footer>
 
-</div>`;
+</div>
+</body>
+</html>`;
 
-fs.writeFileSync(`${base}/report.html`, html);
-console.log('wrote', html.length, 'bytes');
+fs.writeFileSync(new URL('./report.html', import.meta.url), html);
+console.log('wrote report.html —', html.length, 'bytes,', rows.length, 'findings');

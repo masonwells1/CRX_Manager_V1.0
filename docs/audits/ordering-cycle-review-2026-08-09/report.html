@@ -1,3 +1,8 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ordering Cycle Review — CRX Manager</title>
 <style>
   :root {
@@ -170,6 +175,8 @@
   footer { border-top: 2px solid var(--rule-strong); padding-top: 1.5rem; color: var(--muted); font-size: .9rem; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
+</head>
+<body>
 
 <div class="wrap">
 
@@ -351,8 +358,8 @@
     <p>Roughly by damage-per-hour-of-work. This is a recommendation, not a decision — the sequencing is yours.</p>
     <ol class="waves">
       <li>
-        <h3 class="wave-t">Back up the database first</h3>
-        <p>There is still no backup, and your Supabase plan has no point-in-time recovery. Nothing on this list should be touched until there is a copy to fall back on. Say “back up the database” and I will run it.</p>
+        <h3 class="wave-t">Confirm the backups are fresh</h3>
+        <p>Two automated weekly backups run — an encrypted off-site dump to the private <code>CRX_Backups</code> repo, and an in-database <code>pg_cron</code> snapshot. Neither is point-in-time, so check both are recent before touching any of this; the off-site copy is the one that survives a database-level disaster.</p>
       </li>
       <li>
         <h3 class="wave-t">Close the direct-write lane</h3>
@@ -375,7 +382,7 @@
 
   <section class="block">
     <h2>Everything found</h2>
-    <p>All 77 confirmed findings, grouped by review phase and by the reviewer that found them. Full evidence, failure scenarios and verifier reasoning for each are in <code>scratchpad/final-results.json</code>.</p>
+    <p>All 77 confirmed findings, grouped by review phase and by the reviewer that found them. Full evidence, failure scenarios and verifier reasoning for each are in <code>FINDINGS.md</code> and <code>findings.json</code> alongside this report.</p>
     
 <section class="phase">
   <header class="phase-head">
@@ -453,6 +460,8 @@
         </li>
       </ul>
     </div>
+</body>
+</html>
 <div class="finder-block">
       <h4 class="finder-h">planned-holds</h4>
       <ul class="rowlist">
@@ -498,6 +507,8 @@
         </li>
       </ul>
     </div>
+</body>
+</html>
 <div class="finder-block">
       <h4 class="finder-h">conversion-seams</h4>
       <ul class="rowlist">
@@ -543,6 +554,8 @@
         </li>
       </ul>
     </div>
+</body>
+</html>
 </section>
 
 <section class="phase">
@@ -586,6 +599,8 @@
         </li>
       </ul>
     </div>
+</body>
+</html>
 <div class="finder-block">
       <h4 class="finder-h">commissions</h4>
       <ul class="rowlist">
@@ -631,6 +646,8 @@
         </li>
       </ul>
     </div>
+</body>
+</html>
 <div class="finder-block">
       <h4 class="finder-h">idempotency-concurrency</h4>
       <ul class="rowlist">
@@ -661,6 +678,8 @@
         </li>
       </ul>
     </div>
+</body>
+</html>
 </section>
 
 <section class="phase">
@@ -729,6 +748,8 @@
         </li>
       </ul>
     </div>
+</body>
+</html>
 <div class="finder-block">
       <h4 class="finder-h">frontend-compliance</h4>
       <ul class="rowlist">
@@ -774,6 +795,8 @@
         </li>
       </ul>
     </div>
+</body>
+</html>
 <div class="finder-block">
       <h4 class="finder-h">reporting-drift</h4>
       <ul class="rowlist">
@@ -829,6 +852,8 @@
         </li>
       </ul>
     </div>
+</body>
+</html>
 </section>
   </section>
 
@@ -837,3 +862,5 @@
   </footer>
 
 </div>
+</body>
+</html>
