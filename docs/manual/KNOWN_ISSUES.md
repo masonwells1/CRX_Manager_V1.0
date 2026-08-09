@@ -184,6 +184,19 @@ certainly not from a session that cannot apply migrations at all (see the entry 
 **Fix when taken up:** re-emit the trigger to subtract per-line `ROUND(cost * qty, 2)` from the
 stored line totals, matching the boundary in `save_quote` and the report RPCs.
 
+**Related, same family (found 2026-08-09, Codex PR #350 round 41):** `draw_down_quote` averages the
+snapshots of several quote lines of one product and settles that *per-unit* average to cents before
+extending it. One unit at $1.00 and one at $1.01 average to $1.005, round to $1.01, and a full draw
+books $2.02 of order COGS where the quote carried $2.01. Settling once at the source is what keeps
+the order internally consistent (round 23), so the residual is a ≤1c disagreement between the quote
+and an order drawn from it, only on mixed-cost lines of one product.
+
+Both are the same root limitation: **cost is stored per-unit as integer cents while quantities are
+fractional**, so no per-unit integer can represent an exact extended total. Patching either site in
+isolation moves the inconsistency rather than removing it. The real fix is to decide, once, whether
+a line's authoritative cost is the per-unit stamp or the extended amount, and make every consumer
+read the same one — a deliberate change with a live before/after, not a rider on a pricing PR.
+
 ## OPEN — live migrations cannot be applied from a remote (web) session
 
 **Found 2026-08-09** while trying to apply the three pricing migrations from PR #350.

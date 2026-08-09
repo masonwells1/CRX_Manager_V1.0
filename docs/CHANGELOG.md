@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-09 — Returns migration split out; quote profit settled on the report boundary
+
+**Split (Mason, 2026-08-09).** `20260808170000_return_credit_cogs_reversal.sql` is removed from this
+branch and now lives on `claude/return-credit-cogs-reversal`, off current `main`, with its own
+changelog entry and its `rpcIdempotencyScope` alias registration. Mason approved landing the two
+migrations that have been stable — the report unification and the quote cost snapshot — and holding
+the returns reversal until it can be tested against real partial-invoice and repeat-return data. It
+took six Codex rounds in one day, every one of them a way to reverse more cost than the reports
+counted; that is the migration that wants live evidence, not another review round.
+
+**Round 41 (Codex) — quote profit on screen matched neither the database nor the reports.** The page
+and `quoteCalc` rounded `(price − cost) × qty` as one expression while `save_quote` (round 33) had
+moved to settled revenue minus settled extended cost. On fractional quantities landing on half-cents
+the displayed quote disagreed with the stored one, and since the page ignores `server_totals` the
+difference survived the save and rode into conversion. Both calculators now use the same boundary,
+via a shared `round2` and one documented rule.
+
+**Deferred, recorded in `KNOWN_ISSUES.md`:** `draw_down_quote` settles the *per-unit* weighted
+average before extending it, so a full draw of one product across mixed-cost lines can book a cent
+more than the quote carried. Same root as the order-header rounding item already logged: cost is
+stored per-unit as integer cents while quantities are fractional, so no per-unit integer can carry
+an exact extended total. Fixing either site alone moves the inconsistency instead of removing it.
+
 ## 2026-08-09 — Review rounds 6-8: cost integrity across product swaps and stale clients
 
 Closed the remaining Codex and CodeRabbit findings on the pricing branch.

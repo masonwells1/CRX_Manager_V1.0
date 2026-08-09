@@ -106,6 +106,9 @@ interface LocalSection {
 
 type CalcMode = 'rate_acres' | 'units_direct';
 
+/** Settle a money figure to whole cents — see the boundary note in quoteCalc.ts. */
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
 // Keeps the reason-bearing retry key safely below PostgreSQL B-tree entry limits.
 // The server independently fingerprints the full request, so the exact reason
 // remains bound to the idempotency receipt rather than being trusted from the key.
@@ -1122,8 +1125,11 @@ export default function QuoteBuilder() {
       if (item.calc_mode === 'units_direct') {
         // User entered total_units_needed directly — skip rate×acres computation
         const totalInventoryUnits = item.total_units_needed || 0;
-        const totalPrice = pricePerUnit * totalInventoryUnits;
-        const profit = (pricePerUnit - currentCost) * totalInventoryUnits;
+        // Settled revenue minus settled extended cost -- the SAME boundary
+        // save_quote and the report RPCs use, so the quote on screen matches
+        // the quote that gets stored and converted. (Codex round 41.)
+        const totalPrice = round2(pricePerUnit * totalInventoryUnits);
+        const profit = totalPrice - round2(currentCost * totalInventoryUnits);
         const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
         // Back-calculate oz/acre and $/acre if acres provided
@@ -1143,8 +1149,8 @@ export default function QuoteBuilder() {
           oz_per_acre: ozPerAcre,
           price_per_acre: pricePerAcre,
           total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
-          total_price: Math.round(totalPrice * 100) / 100,
-          profit: Math.round(profit * 100) / 100,
+          total_price: totalPrice,
+          profit: profit,
           net_margin: Math.round(netMargin * 100 * 100) / 100,
         };
       }
@@ -1164,8 +1170,9 @@ export default function QuoteBuilder() {
       const pricePerAcre = inventoryUnitFactorOz > 0
         ? pricePerUnit * (rateInOz / inventoryUnitFactorOz)
         : 0;
-      const totalPrice = pricePerUnit * totalInventoryUnits;
-      const profit = (pricePerUnit - currentCost) * totalInventoryUnits;
+      // Same settled boundary as the units_direct branch above.
+      const totalPrice = round2(pricePerUnit * totalInventoryUnits);
+      const profit = totalPrice - round2(currentCost * totalInventoryUnits);
       const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
       return {
@@ -1175,8 +1182,8 @@ export default function QuoteBuilder() {
         oz_per_acre: Math.round(ozPerAcre * 100) / 100,
         price_per_acre: Math.round(pricePerAcre * 100) / 100,
         total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
-        total_price: Math.round(totalPrice * 100) / 100,
-        profit: Math.round(profit * 100) / 100,
+        total_price: totalPrice,
+        profit: profit,
         net_margin: Math.round(netMargin * 100 * 100) / 100,
       };
     },

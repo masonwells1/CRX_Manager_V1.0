@@ -62,6 +62,14 @@ export function getConversionFactor(
   return conv ? conv.factor_oz : 1;
 }
 
+/**
+ * Settle a money figure to whole cents. The one rounding boundary this module
+ * shares with `save_quote` and the report RPCs: revenue and extended cost are
+ * each rounded, then subtracted. Rounding the difference instead disagrees by a
+ * cent on fractional quantities whose extensions land on a half-cent.
+ */
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
 /** Core pricing recalculation — pure function (no React deps) */
 export function recalcItem(
   item: CalcItem,
@@ -84,8 +92,13 @@ export function recalcItem(
   if (mode === 'units_direct') {
     // User entered total_units_needed directly — skip rate×acres computation
     const totalInventoryUnits = item.total_units_needed || 0;
-    const totalPrice = pricePerUnit * totalInventoryUnits;
-    const profit = (pricePerUnit - currentCost) * totalInventoryUnits;
+    // Settled revenue minus settled extended cost -- the SAME boundary
+    // save_quote and the report RPCs use. Rounding (price - cost) * qty as one
+    // expression disagrees with them by a cent on fractional quantities whose
+    // extensions land on a half-cent, so the quote on screen would differ from
+    // the quote that was stored and converted. (Codex round 41.)
+    const totalPrice = round2(pricePerUnit * totalInventoryUnits);
+    const profit = totalPrice - round2(currentCost * totalInventoryUnits);
     const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
     // Back-calculate rate if acres is also set (informational)
@@ -105,8 +118,8 @@ export function recalcItem(
       oz_per_acre: ozPerAcre,
       price_per_acre: pricePerAcre,
       total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
-      total_price: Math.round(totalPrice * 100) / 100,
-      profit: Math.round(profit * 100) / 100,
+      total_price: totalPrice,
+      profit: profit,
       net_margin: Math.round(netMargin * 100 * 100) / 100,
     };
   }
@@ -126,8 +139,9 @@ export function recalcItem(
     inventoryUnitFactorOz > 0
       ? pricePerUnit * (rateInOz / inventoryUnitFactorOz)
       : 0;
-  const totalPrice = pricePerUnit * totalInventoryUnits;
-  const profit = (pricePerUnit - currentCost) * totalInventoryUnits;
+  // Same settled boundary as the units_direct branch above.
+  const totalPrice = round2(pricePerUnit * totalInventoryUnits);
+  const profit = totalPrice - round2(currentCost * totalInventoryUnits);
   const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
   return {
@@ -137,8 +151,8 @@ export function recalcItem(
     oz_per_acre: Math.round(ozPerAcre * 100) / 100,
     price_per_acre: Math.round(pricePerAcre * 100) / 100,
     total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
-    total_price: Math.round(totalPrice * 100) / 100,
-    profit: Math.round(profit * 100) / 100,
+    total_price: totalPrice,
+    profit: profit,
     net_margin: Math.round(netMargin * 100 * 100) / 100, // stored as percentage
   };
 }
