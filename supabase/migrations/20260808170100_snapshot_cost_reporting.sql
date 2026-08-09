@@ -14,6 +14,21 @@
 --
 --     COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0)
 --
+-- UNPRICED RUSH LINES. Adopting the snapshot has one consequence worth calling
+-- out. create_rush_order writes its lines with price AND cost_per_unit at 0 and
+-- pricing_pending = true, on an order whose ordinary status is already
+-- 'confirmed'; the insert trigger then stamps a real cost_at_time_cents. Under
+-- the OLD cost_per_unit basis such a line contributed 0 revenue and 0 cost, so
+-- it was invisible. Under the snapshot basis it contributes 0 revenue and its
+-- full cost -- a pure phantom loss on the dashboard headline and every
+-- profitability report, for work nobody has quoted yet. Every profit-bearing
+-- aggregation below therefore also filters COALESCE(oi.pricing_pending, false)
+-- = false. It is a LINE filter, not an order filter, so a partly priced rush
+-- order still reports the lines that are done. The one deliberate exception is
+-- committed_orders, which values stock a confirmed order has already claimed:
+-- an unpriced rush line commits real product at a real cost, so it belongs
+-- there. (Codex round 29.)
+--
 -- and derives profit/margin from that same cost (revenue - snapshot cost)
 -- instead of the stored oi.profit / order header columns. The rewritten RPCs
 -- go fully item-level; the stored order header columns are left unchanged.
@@ -179,6 +194,7 @@ BEGIN
   ) inv ON true
   WHERE o.deleted_at IS NULL
     AND o.status NOT IN ('cancelled', 'voided')
+    AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
     AND (p_start_date IS NULL OR o.order_date >= p_start_date)
     AND (p_end_date IS NULL OR o.order_date <= p_end_date)
     AND (p_product_id IS NULL OR oi.product_id = p_product_id)
@@ -253,6 +269,7 @@ BEGIN
     LEFT JOIN public.profiles rep ON rep.id = o.salesman_id
     WHERE o.deleted_at IS NULL
       AND o.status NOT IN ('cancelled', 'voided')
+    AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
       AND (p_start_date IS NULL OR o.order_date >= p_start_date)
       AND (p_end_date IS NULL OR o.order_date <= p_end_date)
       AND (p_product_id IS NULL OR oi.product_id = p_product_id)
@@ -358,6 +375,7 @@ BEGIN
       AND o.order_date <= p_end_date
       AND o.deleted_at IS NULL
       AND o.status NOT IN ('cancelled', 'voided')
+    AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
     GROUP BY oi.product_name
     ORDER BY SUM(oi.total_price) DESC;
   ELSIF p_group_by = 'customer' THEN
@@ -382,6 +400,7 @@ BEGIN
       AND o.order_date <= p_end_date
       AND o.deleted_at IS NULL
       AND o.status NOT IN ('cancelled', 'voided')
+    AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
     GROUP BY c.farm_name
     ORDER BY SUM(oi.total_price) DESC;
   ELSE
@@ -406,6 +425,7 @@ BEGIN
       AND o.order_date <= p_end_date
       AND o.deleted_at IS NULL
       AND o.status NOT IN ('cancelled', 'voided')
+    AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
     GROUP BY p.full_name
     ORDER BY SUM(oi.total_price) DESC;
   END IF;
@@ -455,6 +475,7 @@ BEGIN
     JOIN public.orders o ON o.id = oi.order_id
     WHERE o.deleted_at IS NULL
       AND o.status NOT IN ('cancelled', 'voided', 'draft')
+      AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
   ),
   quote_agg AS (
     SELECT
@@ -482,6 +503,7 @@ BEGIN
       JOIN public.orders o ON o.id = oi.order_id
       WHERE o.deleted_at IS NULL
         AND o.status NOT IN ('cancelled', 'voided', 'draft')
+      AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
       GROUP BY 1
       ORDER BY 1 DESC
       LIMIT 12
@@ -499,6 +521,7 @@ BEGIN
       JOIN public.customers c ON c.id = o.customer_id
       WHERE o.deleted_at IS NULL
         AND o.status NOT IN ('cancelled', 'voided', 'draft')
+      AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
       GROUP BY c.id, c.farm_name
       ORDER BY total DESC
       LIMIT 5
@@ -627,6 +650,7 @@ BEGIN
       JOIN public.products p ON p.id = oi.product_id
       WHERE o.deleted_at IS NULL
         AND o.status NOT IN ('cancelled', 'voided', 'draft')
+      AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
         AND public.compute_season(COALESCE(o.order_date, o.created_at::date)) =
             public.compute_season(CURRENT_DATE)
       GROUP BY p.id, p.product_name
@@ -658,6 +682,7 @@ BEGIN
       JOIN public.customers c ON c.id = o.customer_id
       WHERE o.deleted_at IS NULL
         AND o.status NOT IN ('cancelled', 'voided', 'draft')
+      AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
         AND public.compute_season(COALESCE(o.order_date, o.created_at::date)) =
             public.compute_season(CURRENT_DATE)
       GROUP BY c.id, c.farm_name
@@ -687,6 +712,7 @@ BEGIN
       JOIN public.orders o ON o.id = oi.order_id
       WHERE o.deleted_at IS NULL
         AND o.status NOT IN ('cancelled', 'voided', 'draft')
+      AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
       GROUP BY 1
       ORDER BY 1 DESC
       LIMIT 12
@@ -817,6 +843,7 @@ BEGIN
       -- migration. An allowlist here would silently disagree with the sales
       -- reports and the dashboard whenever a new order status is introduced.
       AND o.status NOT IN ('cancelled', 'voided', 'draft')
+      AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
       -- Same effective date the month grouping uses. Filtering on the raw
       -- o.order_date while grouping on the COALESCE would drop every order with
       -- a NULL order_date the moment a caller supplies a date range, so those
@@ -881,6 +908,11 @@ BEGIN
     WHERE pronamespace = 'public'::regnamespace AND proname = v_name;
     IF v_src NOT LIKE '%cost_at_time_cents / 100.0%' THEN
       RAISE EXCEPTION 'report RPC % does not read the snapshot cost', v_name;
+    END IF;
+    -- Reading the snapshot without excluding unpriced rush lines turns their
+    -- stamped cost into a phantom loss; the two must ship together.
+    IF v_src NOT LIKE '%pricing_pending%' THEN
+      RAISE EXCEPTION 'report RPC % counts unpriced rush lines against profit', v_name;
     END IF;
   END LOOP;
 

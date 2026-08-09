@@ -39,6 +39,23 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 29 (Codex) — unpriced rush lines became a phantom loss (P1):**
+
+`create_rush_order` writes its lines with price *and* `cost_per_unit` at 0 on an order whose
+ordinary status is already `confirmed`, and the insert trigger stamps a real
+`cost_at_time_cents`. Under the old `cost_per_unit` basis such a line contributed nothing to
+either side and was invisible. Moving the reports onto the snapshot made it contribute zero
+revenue and its full cost — a loss on the dashboard headline and every profitability report
+for work nobody has quoted yet. This one was created by this branch: the reporting change is
+what turned a harmless zero into a real number.
+
+All twelve profit-bearing aggregations across the five rewritten RPCs now also filter
+`COALESCE(oi.pricing_pending, false) = false`. It is a *line* filter, not an order filter, so a
+partly priced rush order still reports the lines that are done. `committed_orders` is the one
+deliberate exception — it values stock a confirmed order has already claimed, and an unpriced
+rush line commits real product at a real cost. The postflight block now fails closed if any of
+the five reads the snapshot without the pricing filter, since the two must ship together.
+
 **Round 28 (Codex) — two cost-basis holes around the quote snapshot:**
 
 - **Duplicated quotes carried two costs at once (P1).** `duplicate_quote` copied the source
