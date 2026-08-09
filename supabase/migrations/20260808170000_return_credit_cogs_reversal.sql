@@ -26,12 +26,21 @@
 -- invoices/invoice_items and exclude returns by design; they are unaffected.
 --
 -- PER-UNIT COST SOURCE (best available, in order):
---   1. the cost_cents snapshot on the ORIGINAL sale invoice line
---      (via ri.order_item_id -> invoice_items.order_item_id, non-credit-memo,
---      non-deleted, non-voided invoice),
---   2. ROUND(order_items.cost_per_unit * 100)::bigint,
---   3. 0 — legacy return_items with no order_item link get zero cost
+--   1. the cost_cents snapshot on the ORIGINAL sale invoice line, resolved by
+--      order_item_id AND product_id over POSTED, non-credit-memo, non-deleted
+--      invoices,
+--   2. order_items.cost_at_time_cents — the order line's own immutable snapshot,
+--      the canonical basis of sibling migration 20260808170100,
+--   3. ROUND(order_items.cost_per_unit * 100)::bigint — mutable legacy dollars,
+--   4. 0 — legacy return_items with no order_item link get zero cost
 --      (revenue still reverses; cost reversal is simply unknown).
+--
+-- QUANTITY CAP: the reversal is scaled to LEAST(returned, posted invoiced)
+-- quantity. create_return caps returns against DELIVERED quantity, which on a
+-- part-invoiced order line can exceed what any posted invoice carries; without
+-- the cap the credit memo would subtract more COGS than the reports ever added.
+-- The credit-memo row keeps the full negative returned quantity — the customer
+-- is credited for everything returned — and only the per-unit cost is scaled.
 --
 -- PROSPECTIVE ONLY: no backfill of historically credited returns — explicitly
 -- out of scope per docs/plans/2026-07-16-inventory-costing-plan.md non-goals.
@@ -154,83 +163,72 @@ BEGIN
     -ri.quantity,
     ri.unit_price_cents,
     -ri.extended_cents,
-    -- Reverse COGS only for stock that actually came back to us. restocked,
-    -- not restock: restock is the intent flag, but receive_return sets
-    -- restocked = true only after inventory was really incremented, and leaves
-    -- it false when the item was ineligible OR when no inventory row existed to
-    -- increment. Both of those are cases where we refunded the customer and did
-    -- not get sellable goods back, so the original cost stays on the books.
-    -- Reading the outcome flag is safe here because credit_return refuses to
-    -- run unless the return is already in status 'received' (guard above), so
-    -- receive_return has necessarily finished and restocked is settled.
-    -- ...and only when an ELIGIBLE ORIGINAL SALE LINE EXISTS. This reversal is
-    -- invoice-basis: it subtracts cost that the invoice-basis rollups already
-    -- counted. If the sale invoice was never created, or was deleted, voided or
-    -- cancelled, those rollups excluded it and never counted its COGS — so a
-    -- reversal here would subtract cost that was never added and INFLATE
-    -- profit. Falling back to the order line's cost is right only when the sale
-    -- line is on the books but carries no cost of its own. (Codex round 36.)
-    CASE WHEN ri.restocked AND EXISTS (
-        SELECT 1
-          FROM invoice_items ii
-          JOIN invoices inv ON inv.id = ii.invoice_id
-         WHERE ri.order_item_id IS NOT NULL
-           AND ii.order_item_id = ri.order_item_id
-           AND ii.product_id = ri.product_id
-           AND inv.invoice_type <> 'credit_memo'
-           AND inv.deleted_at IS NULL
-           -- 'posted' ONLY -- deliberately the INTERSECTION of what the two
-           -- invoice-basis reports count, not the union. A draft or unposted
-           -- sale invoice was never included by either, so reversing against it
-           -- subtracts cost that was never added (round 37). But the two
-           -- reports also disagree with EACH OTHER: get_bottom_line_pnl
-           -- (20260216200000:309) counts status = 'posted' alone, while
-           -- get_monthly_summary counts 'posted' and 'overdue'. Admitting
-           -- 'overdue' would mean that for a credited overdue sale the
-           -- bottom line excludes the original COGS but includes this credit
-           -- memo's negative COGS -- inflating profit, the one direction a
-           -- money bug must never fail in.
-           --
-           -- The residual, accepted deliberately: for a credited OVERDUE sale
-           -- no reversal is written, so get_monthly_summary keeps the original
-           -- cost and understates profit. Conservative, and it self-corrects
-           -- once the two reports are unified -- tracked in KNOWN_ISSUES.md.
-           -- Unifying them belongs in its own migration, not here: neither
-           -- report is otherwise touched by this PR. (Codex round 38.)
-           AND inv.status = 'posted'
-           AND ii.quantity > 0
-      ) THEN
-      COALESCE(
-        (SELECT ii.cost_cents
-           FROM invoice_items ii
-           JOIN invoices inv ON inv.id = ii.invoice_id
-          WHERE ri.order_item_id IS NOT NULL
-            AND ii.order_item_id = ri.order_item_id
-            -- Match the PRODUCT too, not just the line id. update_order_items
-            -- may swap an order line's product after it was invoiced (allowed
-            -- while no delivery item exists), which leaves a historical invoice
-            -- line carrying the same order_item_id but the OLD product and its
-            -- cost. Without this, returning the replacement product would
-            -- reverse the previous product's cost and corrupt both the credit
-            -- memo's total_cost_cents and invoice-basis profit. No match falls
-            -- through to the order line's own cost below. (Codex round 35.)
-            AND ii.product_id = ri.product_id
-            AND inv.invoice_type <> 'credit_memo'
-            AND inv.deleted_at IS NULL
-            -- Same predicate as the gate above; the two must agree or the
-            -- gate could admit a line the lookup then misses.
-            AND inv.status = 'posted'
-            AND ii.quantity > 0
-          ORDER BY ii.created_at, ii.id
-          LIMIT 1),
-        ROUND(oi.cost_per_unit * 100)::bigint,
-        0
-      )
+    -- COGS reversal. Four rules, each learned the hard way (Codex rounds 35-39);
+    -- all of them exist to stop the reversal exceeding what the invoice-basis
+    -- rollups actually counted, because that direction INFLATES profit.
+    --
+    --  1. restocked only. restocked, not restock: restock is the intent flag,
+    --     but receive_return sets restocked = true only after inventory was
+    --     really incremented, and leaves it false when the item was ineligible
+    --     or no inventory row existed. Those are cases where we refunded the
+    --     customer and got no sellable goods back, so the cost stays on the
+    --     books. Safe to read here because credit_return refuses to run unless
+    --     the return is already 'received', so receive_return has finished.
+    --  2. An eligible source line must EXIST (src.posted_qty > 0). No sale line
+    --     on the books means no counted cost to reverse.
+    --  3. 'posted' ONLY -- the INTERSECTION of the two invoice-basis reports,
+    --     not the union. get_bottom_line_pnl (20260216200000:309) counts
+    --     'posted' alone while get_monthly_summary counts 'posted' and
+    --     'overdue'; admitting 'overdue' would let the bottom line exclude the
+    --     original COGS while including this credit memo's negative COGS.
+    --     Accepted residual: a credited overdue sale gets no reversal, so
+    --     get_monthly_summary understates profit. Conservative on purpose, and
+    --     it clears once the reports are unified (tracked in KNOWN_ISSUES.md).
+    --  4. CAPPED to the posted quantity. An order line delivered in batches can
+    --     have only part of it on a posted invoice, while create_return caps
+    --     returns against DELIVERED quantity, not invoiced quantity. Returning
+    --     10 delivered units when only 2 are posted must reverse 2 units of
+    --     cost, not 10. The credit-memo row keeps the full -ri.quantity (the
+    --     customer is credited for everything returned); only the per-unit cost
+    --     is scaled, so cost_cents * quantity lands on the capped total.
+    CASE WHEN ri.restocked AND COALESCE(src.posted_qty, 0) > 0 AND ri.quantity > 0 THEN
+      ROUND(
+        COALESCE(
+          src.line_cost_cents,
+          -- The order line's own snapshot before its mutable legacy dollars:
+          -- cost_at_time_cents is the canonical basis the sibling reporting
+          -- migration uses, and the two can differ on an older order.
+          oi.cost_at_time_cents,
+          ROUND(oi.cost_per_unit * 100)::bigint,
+          0
+        )::numeric
+        * LEAST(ri.quantity, src.posted_qty) / ri.quantity
+      )::bigint
     ELSE 0 END,
     ri.unit,
     ri.sort_order
   FROM return_items ri
   LEFT JOIN order_items oi ON oi.id = ri.order_item_id
+  -- One resolution of the original sale line, used for eligibility, for the
+  -- per-unit cost and for the quantity cap -- so those three can never be
+  -- decided from different rows. product_id is matched as well as
+  -- order_item_id: update_order_items may swap an order line's product after
+  -- it was invoiced, leaving a historical invoice line under the same
+  -- order_item_id carrying the OLD product and its cost.
+  LEFT JOIN LATERAL (
+    SELECT
+      SUM(ii.quantity) AS posted_qty,
+      (ARRAY_AGG(ii.cost_cents ORDER BY ii.created_at, ii.id))[1] AS line_cost_cents
+    FROM invoice_items ii
+    JOIN invoices inv ON inv.id = ii.invoice_id
+    WHERE ri.order_item_id IS NOT NULL
+      AND ii.order_item_id = ri.order_item_id
+      AND ii.product_id = ri.product_id
+      AND inv.invoice_type <> 'credit_memo'
+      AND inv.deleted_at IS NULL
+      AND inv.status = 'posted'
+      AND ii.quantity > 0
+  ) src ON true
   WHERE ri.return_id = p_return_id;
 
   -- NEW: stamp the credit memo's cost total from its own lines (negative or

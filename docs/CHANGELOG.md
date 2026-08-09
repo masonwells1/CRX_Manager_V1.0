@@ -39,6 +39,26 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 39 (Codex) — the reversal is now capped to what was actually invoiced:**
+
+- **Quantity cap (P1).** An order line delivered in batches can have only part of it on a posted
+  invoice, and `create_return` caps returns against *delivered* quantity, not invoiced quantity.
+  Returning 10 delivered units when 2 were posted reversed 10 units of COGS against 2 units the
+  reports had counted — inflating profit. The per-unit cost is now scaled by
+  `LEAST(returned, posted invoiced) / returned`, so the reversal lands on the capped total while
+  the credit-memo row keeps the full negative returned quantity (the customer is credited for
+  everything returned).
+- **Fallback order.** A legacy invoice line with `cost_cents = NULL` fell straight through to the
+  mutable `cost_per_unit` dollars; it now tries the order line's own `cost_at_time_cents` snapshot
+  first, which is the basis the sibling reporting migration treats as canonical.
+- **Structure.** Eligibility, per-unit cost and the quantity cap now come from one `LEFT JOIN
+  LATERAL` resolution of the source sale line, so those three can no longer be decided from
+  different rows — the shape that produced rounds 35 through 38 one predicate at a time.
+- **Deferred:** `update_order_items` trusting the browser's `cost_per_unit` on a product swap while
+  the trigger stamps the current catalog cost. Same class as the deferred server-side below-cost
+  enforcement (an RPC trusting a caller-supplied cost); recorded in `KNOWN_ISSUES.md` to be fixed
+  with it rather than editing a third money RPC here.
+
 **Round 38 (Codex) — the reversal gate now takes the intersection, not the union:**
 
 Round 37 gated the COGS reversal on `status IN ('posted','overdue')`, chosen from the report

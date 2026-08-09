@@ -148,6 +148,21 @@ one inclusion rule; then widen the reversal gate to match and the residual disap
 #350 because neither report is otherwise touched by it, and a session that cannot apply migrations
 cannot verify a reporting change against live data.
 
+## OPEN — `update_order_items` trusts a browser-supplied cost on a product swap
+
+**Found 2026-08-09** (Codex, PR #350 round 39). When a product's catalog cost changes after
+`OrderDetail` loads but before a product-swap edit commits, `update_order_items` writes the
+browser's now-stale `cost_per_unit` and derives line profit, header profit and pending commissions
+from it — while the re-snapshot trigger independently stamps the *current* catalog cost into
+`cost_at_time_cents`, which is what the rewritten reports read. The edit commits two conflicting
+cost bases.
+
+**Same class as the deferred server-side below-cost work**: an RPC trusting a cost the caller
+supplied instead of resolving it under its own lock. Fix both together — resolve and lock the
+product cost inside the RPC, then use that one value for the snapshot and every derived figure.
+Doing it here would mean editing a third money RPC in a PR that already cannot apply its
+migrations.
+
 ## OPEN — order headers recompute profit on the unrounded basis
 
 **Found 2026-08-09** (Codex, PR #350 round 36). `after_order_items_change`
