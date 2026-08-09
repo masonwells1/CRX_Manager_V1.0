@@ -22,8 +22,13 @@ un-fixed on `main`:
   explicit `READONLY_FN_NAMES` allowlist (audited entries only). Removing all
   prefix trust ends this whack-a-mole class; the cost is that read-style RPCs
   (`get_*`, etc.) deny until individually allowlisted. Decide scope with Mason
-  if the full removal feels too aggressive; at minimum drop `preview_`,
-  `validate_`, and `verify_` (behavior-shaped names, unproven).
+  if the full removal feels too aggressive; the minimum real fix is dropping
+  `preview_` — it is the only behavior-shaped prefix actually in
+  `READONLY_FN_PREFIX_RE` (`live-testdata-lib.mjs:231`). `validate_`/`verify_`
+  are **not** trusted today and are already rejected, so a "fix" naming them
+  would ship two regression tests that pass before the patch. The full trusted
+  list is: get, list, find, search, count, calc, calculate, compute, report,
+  fetch, lookup, has, is, can, preview, estimate, summarize, derive.
 - **`git read-tree --reset -u HEAD` discards uncommitted work** and passes
   `bash-safety.mjs`. (The tree-ish argument is required — without `HEAD` the
   command errors out harmlessly — so the regression test must use the full
@@ -69,8 +74,11 @@ regeneration already has a freshness-flag pipeline; this rides it.
   segments that are actually git invocations, not `-m` string contents.
 - **`bash-safety.mjs` self-matching**: the guard matches its own patterns when
   they appear inside test commands or commit messages (heredocs, `git commit -m`
-  text). Fix direction: skip quoted `-m` message arguments, which are never
-  executed. **Do not** blanket-exclude heredoc bodies — a heredoc piped to
+  text). Fix direction: skip *inert* `-m` message text only. A `-m` argument is
+  not automatically inert — `git commit -m "$(git read-tree --reset -u HEAD)"`
+  runs the inner command before git is even invoked, so command substitutions
+  (`$(…)`, backticks) inside a double-quoted message must still be scanned.
+  **Do not** blanket-exclude heredoc bodies — a heredoc piped to
   `bash`/`sh` *is* executable input, and suppressing it would hide exactly the
   `git read-tree --reset -u HEAD` class item 1 exists to catch. Only suppress
   heredocs whose consumer provably does not execute them (e.g. `cat > file`), and
@@ -150,6 +158,13 @@ Both verified against current source this session; both survive items 1 and 5.
   `SELECT … INTO` (and the `CREATE TABLE … AS` sibling spelling, already covered)
   to the DDL matcher with a regression test. This one also exfiltrates: it
   copies a whole table's rows into an unguarded new one.
+- **`COMMENT ON` changes the live catalog and is not matched either.**
+  `COMMENT ON TABLE public.profiles IS 'changed outside migration'` returns
+  `{block: false}` — verified. Together with `SELECT … INTO`, this is the
+  argument against patching `DDL_STMT_RE` verb by verb: the allow-by-omission
+  shape means every unenumerated statement class is a hole. Prefer inverting it
+  — treat anything that isn't a recognized read as denied — over adding a
+  fourth, fifth, and sixth verb.
 
 ## Context that carries over
 
