@@ -130,7 +130,7 @@ try {
   execFileSync("git", ["-C", backupRepo, "commit", "-m", "fixture"], { env: isolatedGitEnv, stdio: "ignore" });
   mkdirSync(path.join(backupRepo, "backups"), { recursive: true });
   writeFileSync(path.join(backupRepo, "backups", "LATEST-OK.json"), JSON.stringify({
-    completed_at: new Date().toISOString(),
+    completed_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
     tables: 1,
     total_rows: 1,
   }));
@@ -138,7 +138,9 @@ try {
   execFileSync("git", ["-C", backupRepo, "worktree", "add", "--detach", linkedWorktree], { env: isolatedGitEnv, stdio: "ignore" });
   r = runHook(linkedWorktree);
   eq(r.status, 0, "FIX3: linked-worktree backup check exits 0");
-  ok(!additionalContextOf(r).includes("No database backup exists yet"), "FIX3: canonical backup marker prevents false missing-backup warning");
+  const linkedBackupContext = additionalContextOf(r);
+  ok(linkedBackupContext.includes("Last DB backup is 8 days old"), "FIX3: linked worktree reads canonical marker and computes backup age");
+  ok(!linkedBackupContext.includes("No database backup exists yet"), "FIX3: canonical backup marker prevents false missing-backup warning");
 
   console.log(`session-staleness: ${pass} assertions passed`);
 } finally {

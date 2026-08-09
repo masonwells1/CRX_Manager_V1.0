@@ -500,10 +500,15 @@ eq(proseTimestamp.state, "unknown", "prose filename/timestamp is not accepted as
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const migrationDir = path.join(repoRoot, "supabase", "migrations");
 const repoMigrationPaths = readdirSync(migrationDir).filter((name) => name.endsWith(".sql")).map((name) => `supabase/migrations/${name}`);
+const readHeadBlob = (repoPath) => execFileSync("git", ["show", `HEAD:${repoPath}`], {
+  cwd: repoRoot,
+  encoding: "utf8",
+  maxBuffer: 4 * 1024 * 1024,
+});
 const currentCrossReference = validateParkedMigrationCrossReferences(
   repoMigrationPaths,
   readFileSync(path.join(repoRoot, "docs", "reference", "migration-history.md"), "utf8"),
-  (p) => readFileSync(path.join(repoRoot, ...p.split("/")), "utf8"),
+  readHeadBlob,
   sha256Text,
 );
 eq(currentCrossReference.state, "known", "repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row");
