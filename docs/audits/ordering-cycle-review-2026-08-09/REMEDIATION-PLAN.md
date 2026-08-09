@@ -34,7 +34,7 @@ Every wave: its own branch, its own PR, CodeRabbit, and a `codex-gauntlet` gate.
 Two automated weekly backups already run: an encrypted off-site `pg_dump` to the private `CRX_Backups` repo, and an in-database `pg_cron` snapshot (`backup_snapshots`, migration `20260713050000`). Neither is point-in-time recovery, and the in-database copy does not survive a database-level disaster. Verify both ran recently — and that the off-site one is restorable — before starting. Gates everything below.
 
 ### Step 1 — Close the evidence gap
-Phases 1–2 read on-disk migrations only. Pull the **live** bodies of `_enforce_quote_status_transition`, `revert_quote_status`, `restore_quote_version`, `convert_quote_to_order`, `create_direct_order`, `complete_delivery`, `void_invoice`, plus live grants and policies on `quotes` / `orders` / `deliveries` / `order_items`. Diff against the repo. Any finding whose live body differs must be re-read before it becomes work.
+**No phase queried the live database.** Phases 1–2 read on-disk migrations; phase 3 added the 2026-07-27 grants baseline, which is a snapshot rather than current state. Pull the **live** bodies of `_enforce_quote_status_transition`, `revert_quote_status`, `restore_quote_version`, `convert_quote_to_order`, `create_direct_order`, `complete_delivery`, `void_invoice`, plus live grants and policies on `quotes` / `orders` / `deliveries` / `order_items`. Diff against the repo and the baseline. Any finding whose live body differs must be re-read before it becomes work. This step is what turns the review from file-derived into fact.
 
 ### Step 2 — Codex triage and reconciliation
 Independent `codex-review` (gpt-5.6-sol, high effort) over `FINDINGS.md` + cited files + the Step 1 live evidence. Per-finding verdict: real / not real / already mitigated, with its own severity. Then `agent-pair-review` to surface only the disagreements between Codex and this review. **The reconciled list is the approval artifact** — Mason signs off on that, not on the raw 77.
@@ -50,7 +50,7 @@ Verification: real-path proof on each — run the flow, observe the invoice and 
 ### Wave B — Close the direct-write lane (6 HIGH)
 The six findings that share one root cause: safety logic lives in the RPCs while the tables stay directly writable by the same roles.
 - Quote `accepted → sent` trigger edge (note: `QuoteBuilder.tsx:2686` is a residual consumer — the arm cannot simply be deleted; gate it on admin override or order-existence)
-- Deliveries walkable to `completed` by direct update (found twice: migrations and live grants)
+- Deliveries walkable to `completed` by direct update (found twice, from migrations and from the grants baseline — both offline sources, not a live confirmation)
 - Quote soft delete leaking planned/crop-program holds (two findings, one fix)
 - Sales reps inserting orders and order lines directly
 - Driver completing a delivery by direct update

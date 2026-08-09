@@ -14,7 +14,7 @@ No code was changed. No migration was written. Nothing was pushed, deployed, or 
 | `findings.json` | Same data as structured JSON — the source the report is generated from. |
 | `report.html` | Plain-English summary report for Mason (published as an artifact). |
 | `build-report.mjs` | Generates `report.html` from `findings.json`. Correct a verdict there and re-run to rebuild. |
-| `workflow.mjs` | The review workflow itself — 9 finder agents across 3 phases, each finding adversarially verified. Re-runnable. |
+| `workflow.mjs` | The review workflow itself — 9 finder agents across 3 phases, each finding adversarially verified. Kept verbatim as the record of what ran; its prompt embeds the original session's absolute repo path, so update that before re-running elsewhere. |
 
 ## Method
 
@@ -26,9 +26,11 @@ Nine finder agents ran across three phases at high reasoning effort, with no sev
 
 ## Evidence caveat
 
-Phases 1 and 2 read the on-disk migrations only — no live database access. If a function was ever altered directly in Supabase without a migration, those findings describe the file rather than the live database. **Phase 3 did pull the live schema and grants**, which is why the delivery-completion bypass appears twice, once from each source; that one carries the strongest evidence.
+**No phase queried the live database.** All three worked from committed sources: phases 1 and 2 from the on-disk migrations, phase 3 additionally from the 2026-07-27 disaster-recovery baseline (`supabase/baselines/20260727174805_acl_lockdown.sql`) plus later migrations. That baseline is a point-in-time snapshot, not current state.
 
-Confirm the live function bodies before acting on any Phase 1 or Phase 2 finding.
+So the delivery-completion bypass appearing twice (findings 2 and 8) is **not** an independent live confirmation — both derive from committed files, one from migrations and one from the baseline. Treat it as corroboration between two offline sources, nothing more.
+
+Confirm the live function bodies, grants and policies against the database catalog before acting on **any** finding here. If anything was ever changed directly in Supabase without a migration, that drift is invisible to this review.
 
 ## The ten HIGH findings
 
@@ -41,7 +43,7 @@ Six of the ten share one root cause: **safety logic lives in the RPCs, but the u
 5. Caller-controlled cost/profit still drives the commission basis on `convert_quote_to_order` and `create_direct_order` — the class already hardened out of `bulk_import_order`.
 6. Quick-delivery invoice posted before completion is never adjusted on partial completion; the follow-up delivery then bills the shortfall a second time.
 7. Void-then-rebill of an order invoice permanently cancels the order's commissions, with no path that re-mints them.
-8. Assigned driver can complete a delivery by direct table update (confirmed against **live** grants and policies).
+8. Assigned driver can complete a delivery by direct table update (derived from the 2026-07-27 grants baseline — same defect as 2, reached from a different committed source).
 9. `get_customer_year_end_summary` is an ungated `SECURITY DEFINER` RPC granted to `authenticated` — any role reads any customer's full financial history.
 10. Sales reps can insert orders and order lines directly, bypassing every canonical order-creation effect and the confirmed-only status rule.
 
@@ -56,8 +58,9 @@ Six of the ten share one root cause: **safety logic lives in the RPCs, but the u
 ## Reproducing
 
 ```bash
-# Re-run the review (read-only; ~90 min, high token cost)
-# via the Workflow tool with workflow.mjs
+# Re-run the review (read-only; ~90 min, high token cost) via the Workflow tool
+# with workflow.mjs — first replace the hard-coded repo path in its reviewer
+# prompt with this checkout's path, or every agent reads the wrong tree.
 
 # Regenerate the HTML report from findings.json
 node docs/audits/ordering-cycle-review-2026-08-09/build-report.mjs

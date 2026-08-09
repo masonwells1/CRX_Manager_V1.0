@@ -53,8 +53,8 @@ const HIGH_NOTES = {
     who: 'Normal admin correction workflow — no misuse required.',
   },
   'Assigned driver can complete a delivery': {
-    plain: 'Confirmed a second time against the live database: the driver’s own permissions are enough to mark a delivery complete directly.',
-    why: 'Same consequence as above — no inventory movement, no fulfilment, no invoice, no audit row — but this finding was checked against the live grants and policies rather than the migration files, so it is the strongest evidence in the set.',
+    plain: 'Found a second time, from a different source: the driver’s own permissions are enough to mark a delivery complete directly.',
+    why: 'Same consequence as above — no inventory movement, no fulfilment, no invoice, no audit row. This one was traced through the recorded permissions snapshot rather than the migration history, so two independent readings of your own files agree on it. Both are still offline readings.',
     who: 'The assigned driver, using their own login.',
   },
   'get_customer_year_end_summary is an ungated': {
@@ -369,7 +369,7 @@ const html = `<!DOCTYPE html>
     <h2>How to read this</h2>
     <p>Nine reviewers went through the ordering cycle from three angles. Every single thing they reported was then handed to a separate reviewer whose only job was to prove it wrong, using the actual migration files and source. <strong>${refutedCount} claims were disproven and thrown out.</strong> The ${counts.total} below are what survived that.</p>
     <div class="callout">
-      <p><strong>One caveat that matters.</strong> Phases 1 and 2 read the migration files in the repository, not the live database. If a function was ever changed directly in Supabase without a migration, those findings describe the file rather than reality. Phase 3 did pull the live schema and grants — which is why the delivery-completion problem appears twice, once from each source. Before fixing anything, it is worth confirming the live function bodies match what is on disk.</p>
+      <p><strong>One caveat that matters.</strong> Nothing here was checked against the live database. Every reviewer worked from committed files — the migration history, and for the permissions work a disaster-recovery snapshot taken on 27 July. If anything was ever changed directly in Supabase without a migration, that change is invisible to this review. The delivery-completion problem appearing twice is two offline sources agreeing, not a live confirmation. Confirm the live function bodies and grants before fixing anything.</p>
     </div>
   </section>
 
