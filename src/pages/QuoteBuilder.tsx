@@ -233,8 +233,14 @@ export default function QuoteBuilder() {
   // and for a brand-new quote the page still has no quoteId, so the stale-save
   // reload cannot recover the quote that actually committed. Held for the life
   // of the idempotency key and cleared exactly where that key rotates.
-  // (Codex round 30.)
-  const belowCostReasonRef = useRef<string | null>(null);
+  //
+  // It also carries the TERMS it approved (product, price, cost per below-cost
+  // line). A pre-commit rejection stores no idempotency result but leaves the
+  // key in place, so retention alone would let an operator change a price or
+  // add another below-cost line and have the earlier approval silently cover
+  // the new sale. Reuse requires the terms to match exactly.
+  // (Codex rounds 30 and 32.)
+  const belowCostReasonRef = useRef<{ terms: string; reason: string } | null>(null);
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   // A committed conversion can be replayed from the idempotency cache with
   // status:'created'. Keep that marker so a lost response can still trigger
@@ -1475,18 +1481,28 @@ export default function QuoteBuilder() {
           cost: item.current_cost,
         }));
       if (belowCostLines.length > 0) {
-        if (belowCostReasonRef.current !== null) {
-          // Retry of an attempt that already carries an approved reason: reuse
-          // the exact text so the payload -- and therefore save_quote's request
-          // fingerprint -- is byte-identical to the attempt that may already
-          // have committed.
-          belowCostReason = belowCostReasonRef.current;
+        // What was actually approved: which products, at which price, against
+        // which cost. A retry may reuse the reason only while these are
+        // unchanged. A rejection that stored no idempotency result (say
+        // BOOKING_OVERDRAWN) leaves the key in place, so without this an
+        // operator could cut a price or add another below-cost line and have
+        // the previous approval silently cover the new terms.
+        const approvedTerms = JSON.stringify(
+          belowCostLines
+            .map((l) => `${l.productName}|${l.price}|${l.cost}`)
+            .sort()
+        );
+        if (belowCostReasonRef.current?.terms === approvedTerms) {
+          // Retry of the same sale: reuse the exact text so the payload -- and
+          // therefore save_quote's request fingerprint -- is byte-identical to
+          // the attempt that may already have committed.
+          belowCostReason = belowCostReasonRef.current.reason;
         } else {
           belowCostReason = await new Promise<string | null>((resolve) =>
             setBelowCostPrompt({ lines: belowCostLines, resolve })
           );
           if (belowCostReason === null) return null;
-          belowCostReasonRef.current = belowCostReason;
+          belowCostReasonRef.current = { terms: approvedTerms, reason: belowCostReason };
         }
       }
     }

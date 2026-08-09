@@ -39,6 +39,17 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 32 (Codex) — the retained approval had to be bound to what it approved:**
+
+Round 30's retained reason was held for the life of the idempotency key, but a pre-commit
+rejection (`BOOKING_OVERDRAWN` and friends) stores no idempotency result while leaving the key in
+place. An operator could then cut a price or add another below-cost line and retry, and the
+earlier approval would silently cover the new terms — under the same key, with no prompt. The ref
+now carries the terms it approved (product, price, cost per affected line) and reuse requires an
+exact match; anything else re-prompts. Round 30 fixed a retry hazard and opened this one, which is
+the risk of holding approval state at all: it has to be bound to the thing approved, not to a
+clock or a key.
+
 **Round 31 (Codex) — notes typed after an approval were being hidden:**
 
 The approval marker stays in the raw notes field after a below-cost save, so anything an operator
