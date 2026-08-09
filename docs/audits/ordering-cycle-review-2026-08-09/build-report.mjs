@@ -15,6 +15,7 @@ const rows = stillConfirmed.map(f => ({
   ph: f.phaseName,
   loc: String(f.location).split(';')[0].trim(),
   fs: String(f.failure_scenario || '').trim(),
+  correction: String(f.scope_correction || '').trim(),
 }));
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -89,6 +90,22 @@ const findNote = h => {
   };
 };
 
+// Cross-finder duplicates, declared as matchers so the distinct-defect estimate
+// follows the current verdict set instead of freezing at publication time.
+const DUPLICATE_GROUPS = [
+  /soft.?delet.*hold|bulk-delete leaks inventory holds|orphans its active crop_program|Quote-Hold Parity integrity check/i,
+  /Deliveries can be walked|driver can complete a delivery/i,
+  /NaN\/Infinity|Non-finite numeric/i,
+  /allocation_sets version|allocate_payment computes allocation_sets/i,
+  /deleted_at filter|omits deleted_at/i,
+  /accepted→sent|failed-convert recovery writes/i,
+];
+const collapsed = DUPLICATE_GROUPS.reduce((n, re) => {
+  const hits = rows.filter(r => re.test(r.t)).length;
+  return n + Math.max(0, hits - 1);
+}, 0);
+const distinctDefects = rows.length - collapsed;
+
 const THEMES = [
   {
     id: 'bypass',
@@ -143,6 +160,7 @@ const highHtml = RENDER_THEMES.map(th => {
         <dt>Who can do it</dt><dd>${esc(n.who)}</dd>
         <dt>Where</dt><dd><code>${shortLoc(h.loc)}</code></dd>
         <dt>Technical title</dt><dd class="tech">${esc(h.t)}</dd>
+        ${h.correction ? `<dt>Scope correction</dt><dd class="tech">${esc(h.correction)}</dd>` : ''}
       </dl>
     </article>`;
   }).join('\n')}
@@ -178,7 +196,7 @@ const appendixHtml = PHASES.map(([key, label, lede]) => {
       <ul class="rowlist">
         ${items.map(i => `<li class="row row-${i.s.toLowerCase()}">
           <span class="chip chip-${i.s === 'BLOCKER' ? 'high' : i.s.toLowerCase()}">${ { BLOCKER: 'Blocker', HIGH: 'High', MED: 'Med', LOW: 'Low' }[i.s] || i.s }</span>
-          <span class="row-t">${esc(i.t)}</span>
+          <span class="row-t">${esc(i.t)}${i.correction ? ` <em class="row-fix">${esc(i.correction)}</em>` : ''}</span>
           <code class="row-loc">${shortLoc(i.loc)}</code>
         </li>`).join('\n')}
       </ul>
@@ -365,6 +383,7 @@ const html = `<!DOCTYPE html>
   }
   .row-t { font-size: .95rem; line-height: 1.45; }
   .row-loc { grid-column: 2; font-size: .76rem; color: var(--muted); overflow-wrap: anywhere; }
+  .row-fix { display: block; margin-top: .3rem; font-size: .84rem; color: var(--high); font-style: normal; }
   .row-blocker, .row-high { box-shadow: inset 3px 0 0 var(--high); }
   .row-med { box-shadow: inset 3px 0 0 var(--med); }
   .row-low { box-shadow: inset 3px 0 0 var(--rule-strong); }
@@ -396,7 +415,7 @@ const html = `<!DOCTYPE html>
   <section class="block">
     <h2>How to read this</h2>
     <p>Nine reviewers went through the ordering cycle from three angles. Every single thing they reported was then handed to a separate reviewer whose only job was to prove it wrong, using the actual migration files and source. <strong>${refutedCount} claims were disproven and thrown out.</strong> The ${counts.total} below are what survived that.</p>
-    <p>The reviewers worked independently and were not reconciled against each other, so a defect two of them found is counted twice. Six known overlaps mean the real backlog is closer to <strong>69 distinct defects</strong> — count the work by fix, not by finding. The duplicates are listed in the audit README.</p>
+    <p>The reviewers worked independently and were not reconciled against each other, so a defect two of them found is counted twice.${collapsed ? ` Known overlaps collapse ${collapsed} of these, putting the real backlog at about <strong>${distinctDefects} distinct defects</strong> — count the work by fix, not by finding. The duplicates are listed in the audit README.` : ' No overlaps remain in the current verdict set.'}</p>
     <div class="callout">
       <p><strong>One caveat that matters.</strong> Nothing here was checked against the live database. Every reviewer worked from committed files — the migration history, and for the permissions work a disaster-recovery snapshot taken on 27 July. If anything was ever changed directly in Supabase without a migration, that change is invisible to this review. The delivery-completion problem appearing twice is two offline sources agreeing, not a live confirmation. Confirm the live function bodies and grants before fixing anything.</p>
     </div>
