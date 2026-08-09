@@ -39,6 +39,22 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 8 (Codex), two more:**
+
+- **COGS on non-restockable returns.** The returns credit reversed the full cost of every
+  returned line, including ones marked `restock = false` — damaged, expired, or otherwise
+  unsellable goods. The customer gets their money back but the product never comes back to
+  us, so handing the cost back overstates gross profit on exactly the returns that hurt
+  most. Cost is now reversed only for restock-eligible lines. Residual edge, deliberately
+  not covered: a line marked `restock = true` that `receive_return` skips because no
+  inventory row exists still reverses its cost.
+- **Restoring an old quote version repriced it.** `restore_quote_version` reinserts
+  `quote_items` with the version's historical `current_cost` but no snapshot column, so the
+  new trigger stamped today's catalog cost. Nothing looked wrong immediately, but the next
+  ordinary save preserved that stamp and recomputed the line from it — silently repricing a
+  restored version at today's cost. The RPC now supplies the version's own cost through the
+  same trusted transaction-local passthrough `save_quote` uses.
+
 All three migrations remain **PARKED and never executed against a database**.
 
 ## 2026-08-09 — Codex review round 5: keep below-cost approval reasons off customer documents

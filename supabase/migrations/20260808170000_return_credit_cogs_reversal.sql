@@ -154,21 +154,28 @@ BEGIN
     -ri.quantity,
     ri.unit_price_cents,
     -ri.extended_cents,
-    COALESCE(
-      (SELECT ii.cost_cents
-         FROM invoice_items ii
-         JOIN invoices inv ON inv.id = ii.invoice_id
-        WHERE ri.order_item_id IS NOT NULL
-          AND ii.order_item_id = ri.order_item_id
-          AND inv.invoice_type <> 'credit_memo'
-          AND inv.deleted_at IS NULL
-          AND inv.status NOT IN ('voided', 'cancelled')
-          AND ii.quantity > 0
-        ORDER BY ii.created_at, ii.id
-        LIMIT 1),
-      ROUND(oi.cost_per_unit * 100)::bigint,
-      0
-    ),
+    -- Reverse COGS only for stock that actually comes back to us. A line
+    -- marked restock = false is damaged, expired, or otherwise unsellable:
+    -- the customer gets their money back but we never recover the goods, so
+    -- the original cost stays on the books. Handing the cost back for scrap
+    -- would overstate gross profit on exactly the returns that hurt most.
+    CASE WHEN ri.restock THEN
+      COALESCE(
+        (SELECT ii.cost_cents
+           FROM invoice_items ii
+           JOIN invoices inv ON inv.id = ii.invoice_id
+          WHERE ri.order_item_id IS NOT NULL
+            AND ii.order_item_id = ri.order_item_id
+            AND inv.invoice_type <> 'credit_memo'
+            AND inv.deleted_at IS NULL
+            AND inv.status NOT IN ('voided', 'cancelled')
+            AND ii.quantity > 0
+          ORDER BY ii.created_at, ii.id
+          LIMIT 1),
+        ROUND(oi.cost_per_unit * 100)::bigint,
+        0
+      )
+    ELSE 0 END,
     ri.unit,
     ri.sort_order
   FROM return_items ri

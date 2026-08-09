@@ -743,6 +743,223 @@ $function$;
 REVOKE EXECUTE ON FUNCTION public.save_quote(uuid, jsonb, jsonb, uuid, text) FROM anon, PUBLIC;
 GRANT EXECUTE ON FUNCTION public.save_quote(uuid, jsonb, jsonb, uuid, text) TO authenticated, service_role;
 
+
+-- -----------------------------------------------------------------------------
+-- _restore_quote_version_owner_impl: carry the version's own quote-time cost.
+--
+-- Base: the 4-arg body from 20260703130000, which 20260730235031 RENAMED to
+-- _restore_quote_version_owner_impl and wrapped behind a 5-arg
+-- restore_quote_version. Replicated verbatim except the marked SNAPSHOT blocks;
+-- the public wrapper, its signature, guards, idempotency scoping and grants are
+-- untouched.
+--
+-- The impl reinserts quote_items from the version snapshot with the historical
+-- current_cost but no cost_at_quote_cents, so the trigger added by this
+-- migration would stamp todays catalog cost. Nothing looks wrong immediately --
+-- current_cost, profit and the header totals still read historical -- but the
+-- next ordinary save preserves the stamped value and recomputes current_cost
+-- from it, silently repricing the restored version at todays cost.
+--
+-- caller-analysis: _restore_quote_version_owner_impl :: CREATE OR REPLACE of the existing owner impl; no signature or grant change, and its only caller is the public restore_quote_version wrapper, which is unchanged.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public._restore_quote_version_owner_impl(p_quote_id uuid, p_version_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_snapshot jsonb;
+  v_section jsonb;
+  v_item jsonb;
+  v_section_id uuid;
+  v_version_number integer;
+  v_actor uuid;
+  v_drawn_guard record; -- drawn-version guard (20260611120100)
+BEGIN
+  -- Strict-actor auth (function previously had NO auth check). Before idempotency.
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM profiles WHERE id = v_actor AND is_active = true
+      AND role IN ('admin', 'sales_rep')
+  ) THEN
+    RAISE EXCEPTION 'INSUFFICIENT_ROLE';
+  END IF;
+
+  -- Idempotency check — operation-scoped so a key minted for a different operation
+  -- can't short-circuit a legitimate restore (was: matched idempotency_key alone).
+  IF p_idempotency_key IS NOT NULL THEN
+    PERFORM 1 FROM idempotency_keys
+      WHERE idempotency_key = p_idempotency_key
+        AND operation = 'restore_quote_version';
+    IF FOUND THEN
+      RETURN jsonb_build_object('status', 'duplicate', 'message', 'Already processed');
+    END IF;
+  END IF;
+
+  -- Get snapshot data
+  SELECT snapshot_data, version_number INTO v_snapshot, v_version_number
+  FROM quote_versions
+  WHERE id = p_version_id AND quote_id = p_quote_id;
+
+  IF v_snapshot IS NULL THEN
+    RAISE EXCEPTION 'Version not found: %', p_version_id;
+  END IF;
+
+  -- Delete existing sections (cascades to items via ON DELETE CASCADE)
+  DELETE FROM quote_sections WHERE quote_id = p_quote_id;
+
+  -- Restore quote-level fields. Bracket the status write with the admin override so
+  -- the enforcer permits restore->revised from any source state (accepted/declined/etc.).
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE quotes SET
+    header_notes = v_snapshot->'quote'->>'header_notes',
+    footer_notes = v_snapshot->'quote'->>'footer_notes',
+    total_price = (v_snapshot->'quote'->>'total_price')::numeric,
+    total_cost = (v_snapshot->'quote'->>'total_cost')::numeric,
+    total_profit = (v_snapshot->'quote'->>'total_profit')::numeric,
+    total_margin_pct = (v_snapshot->'quote'->>'total_margin_pct')::numeric,
+    status = 'revised',
+    updated_at = now()
+  WHERE id = p_quote_id;
+  PERFORM set_config('app.admin_override', 'false', true);
+
+  -- SNAPSHOT<<< arm the trusted passthrough for this transaction so the rows
+  -- reinserted below carry the version's own quote-time cost. Same mechanism
+  -- save_quote uses: transaction-local, so a PostgREST caller cannot set it.
+  PERFORM set_config('crx.quote_cost_snapshot_passthrough', '1', true);
+  -- >>>SNAPSHOT
+
+  -- Restore sections and items from snapshot
+  FOR v_section IN SELECT * FROM jsonb_array_elements(v_snapshot->'sections')
+  LOOP
+    INSERT INTO quote_sections (quote_id, section_name, sort_order, section_notes, section_header_notes, needed_by_date)
+    VALUES (
+      p_quote_id,
+      v_section->>'section_name',
+      (v_section->>'sort_order')::integer,
+      v_section->>'section_notes',
+      v_section->>'section_header_notes',
+      (v_section->>'needed_by_date')::date
+    )
+    RETURNING id INTO v_section_id;
+
+    FOR v_item IN SELECT * FROM jsonb_array_elements(v_section->'items')
+    LOOP
+      INSERT INTO quote_items (
+        quote_id, section_id, product_id, sort_order, notes,
+        price_per_unit, current_cost, suggested_rate, actual_rate, rate_unit,
+        oz_per_acre, price_per_acre, acres, total_units_needed, unit_size,
+        profit, total_price, net_margin, calc_mode, price_unit,
+        cost_at_quote_cents -- SNAPSHOT
+      )
+      VALUES (
+        p_quote_id, v_section_id,
+        (v_item->>'product_id')::uuid,
+        (v_item->>'sort_order')::integer,
+        v_item->>'notes',
+        (v_item->>'price_per_unit')::numeric,
+        (v_item->>'current_cost')::numeric,
+        v_item->>'suggested_rate',
+        (v_item->>'actual_rate')::numeric,
+        v_item->>'rate_unit',
+        (v_item->>'oz_per_acre')::numeric,
+        (v_item->>'price_per_acre')::numeric,
+        (v_item->>'acres')::numeric,
+        (v_item->>'total_units_needed')::numeric,
+        v_item->>'unit_size',
+        (v_item->>'profit')::numeric,
+        (v_item->>'total_price')::numeric,
+        (v_item->>'net_margin')::numeric,
+        v_item->>'calc_mode',
+        v_item->>'price_unit',
+        -- SNAPSHOT: the version stored the cost this quote was priced with.
+        -- Without it the BEFORE INSERT trigger stamps todays catalog cost, and
+        -- the next ordinary save preserves that stamp and recomputes the line
+        -- from it, silently repricing the restored version.
+        ROUND((v_item->>'current_cost')::numeric * 100)::bigint
+      );
+    END LOOP;
+  END LOOP;
+
+  -- SNAPSHOT<<< disarm immediately once the reinsert loop closes.
+  PERFORM set_config('crx.quote_cost_snapshot_passthrough', '0', true);
+  -- >>>SNAPSHOT
+
+  -- BEGIN drawn-version guard (20260611120100)
+  -- Codex round-2 MED (2026-06-11): a restore must never under-book the drawn
+  -- ledger (quote_product_draws deliberately survives the section delete +
+  -- re-insert above). Validates the FINAL persisted quote_items — the same
+  -- invariant, token, and block shape as save_quote's drawn-product guard
+  -- (20260610184230). A violation rolls back the entire restore atomically,
+  -- including the section DELETE.
+  -- LAYER2<<< drawn guard counts ORDER + JOB draws (§6.5 / Codex round-2 P1).
+  SELECT
+    COALESCE(p.product_name, d.product_id::text) AS product_name,
+    d.quantity_drawn,
+    COALESCE(b.booked, 0) AS new_booked
+  INTO v_drawn_guard
+  FROM (
+    SELECT product_id, SUM(qty) AS quantity_drawn
+    FROM (
+      SELECT product_id, quantity_drawn AS qty FROM quote_product_draws WHERE quote_id = p_quote_id AND quantity_drawn > 0
+      UNION ALL
+      SELECT product_id, quantity_drawn AS qty FROM job_product_draws WHERE quote_id = p_quote_id AND quantity_drawn > 0
+    ) x
+    GROUP BY product_id
+  ) d
+  LEFT JOIN (
+    SELECT product_id, SUM(COALESCE(total_units_needed, 0)) AS booked
+    FROM quote_items
+    WHERE quote_id = p_quote_id
+    GROUP BY product_id
+  ) b ON b.product_id = d.product_id
+  LEFT JOIN products p ON p.id = d.product_id
+  WHERE d.quantity_drawn > 0
+    AND COALESCE(b.booked, 0) < d.quantity_drawn
+  ORDER BY d.quantity_drawn - COALESCE(b.booked, 0) DESC, d.product_id
+  LIMIT 1;
+  -- >>>LAYER2
+  IF FOUND THEN
+    IF v_drawn_guard.new_booked <= 0 THEN
+      RAISE EXCEPTION 'BOOKING_OVERDRAWN: cannot restore this version — it removes %, which already has % drawn',
+        v_drawn_guard.product_name, v_drawn_guard.quantity_drawn;
+    END IF;
+    RAISE EXCEPTION 'BOOKING_OVERDRAWN: cannot restore this version — % would fall below its already-drawn % (restored total would be %)',
+      v_drawn_guard.product_name, v_drawn_guard.quantity_drawn, v_drawn_guard.new_booked;
+  END IF;
+  -- END drawn-version guard (20260611120100)
+
+  -- BEGIN planned-hold + job-reservation sync (20260611132115 + Layer2 A3.12)
+  -- Codex round-2 #3: restores rewrite quote_items wholesale — rebuild the
+  -- planned reservation (booked − drawn) to match the restored state.
+  -- LAYER2-CHAN (push-gate #C): a restore that changes booked quantity must ALSO
+  -- re-sync the quote's ACTIVE jobs (draws + shed holds), exactly as save_quote now
+  -- does — else a restored-larger booking leaves stale job draws and reopens balance
+  -- the job still needs. _sync_quote_job_reservations rebuilds the jobs THEN calls
+  -- _sync_planned_holds itself (strict superset). Was: PERFORM _sync_planned_holds(...).
+  PERFORM _sync_quote_job_reservations(p_quote_id, v_actor);
+  -- END planned-hold + job-reservation sync
+
+  -- Save idempotency key (result stored as a valid jsonb object — was a bare ::text UUID).
+  IF p_idempotency_key IS NOT NULL THEN
+    INSERT INTO idempotency_keys (idempotency_key, operation, result)
+    VALUES (p_idempotency_key, 'restore_quote_version', jsonb_build_object('quote_id', p_quote_id))
+    ON CONFLICT (idempotency_key) DO NOTHING;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'status', 'restored',
+    'restored_from_version', v_version_number,
+    'quote_id', p_quote_id
+  );
+END;
+$function$;
+
 -- Postflight assertions: partial application is a hard failure.
 DO $$
 DECLARE
@@ -810,5 +1027,21 @@ BEGIN
      OR NOT has_function_privilege('service_role', 'public.save_quote(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE')
      OR has_function_privilege('anon', 'public.save_quote(uuid,jsonb,jsonb,uuid,text)'::regprocedure, 'EXECUTE') THEN
     RAISE EXCEPTION 'verify failed: save_quote ACL drift';
+  END IF;
+
+  -- restore_quote_version must supply the version's own quote-time cost through
+  -- the trusted passthrough; otherwise a restore silently reprices at today.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)'::regprocedure
+      AND p.prosecdef
+      AND position('cost_at_quote_cents' in p.prosrc) > 0
+      AND position('crx.quote_cost_snapshot_passthrough' in p.prosrc) > 0
+  ) THEN
+    RAISE EXCEPTION 'verify failed: restore_quote_version owner impl not snapshot-aware';
+  END IF;
+
+  IF has_function_privilege('anon', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)'::regprocedure, 'EXECUTE') THEN
+    RAISE EXCEPTION 'verify failed: restore_quote_version owner impl ACL drift';
   END IF;
 END$$;

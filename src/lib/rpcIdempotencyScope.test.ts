@@ -224,6 +224,14 @@ const ALIAS_SCOPED: Record<string, string> = {
  * name, so treating the referenced operation as an alias would be misleading.
  */
 const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
+  // 20260730235031 RENAMED restore_quote_version to this owner impl and wrapped
+  // it behind a new 5-arg restore_quote_version. The impl is the same logical
+  // operation as its wrapper, not a second RPC, so it deliberately shares the
+  // 'restore_quote_version' cache namespace. Direct EXECUTE is revoked; the
+  // wrapper is the only caller. Not an ALIAS_SCOPED entry because that map
+  // requires the alias NOT to be an existing function name, and here it is one
+  // — which is exactly the point.
+  _restore_quote_version_owner_impl: ['restore_quote_version'],
   _guard_idempotency_key_insert: ['allocate_payment'],
   // Direct EXECUTE is revoked. Private middle layer of the full-cancel chain
   // (cancel_order -> _cancel_order_idem_impl_20260721 ->
