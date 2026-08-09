@@ -1,60 +1,81 @@
-# Actor-binding guard hardening — review-cycle record
+# Actor-binding SQL reader — parked review-cap handoff
 
-This records why the original exact-SHA review cycle parked and how the next
-cycle resolved its remaining High-severity finding. It is retained so later
-guard work does not repeat the unsafe variable-provenance approach.
+## WHERE
 
-## Scope
+- Repository: `C:\CRX_Manager` / `masonwells1/CRX_Manager_V1.0`
+- Isolated checkout: `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager`
+- Branch: `codex/harden-actor-binding-sql-reader`
+- Last security-reviewed code SHA: `b7f6af4c3c15bcc0ea30c81c251a85974d74a9a1`
+- Verified remote `main` on 2026-08-09: `c43fb92a397694f121157aebfe76a2fc2daaaa4f`
+- No remote branch and no pull request exist.
+- Supabase project `rhyzpcqhnizqbxphqdkr` is context only; no database work occurred.
 
-- Guard: `.claude/hooks/actor-binding-check.mjs`
-- Tests: `.claude/hooks/actor-binding-check.test.mjs`
-- Reference reader: `.claude/hooks/idempotency-body-check.mjs`
-- No database, migration, Edge Function, FarmRx, or live-data work.
+## GOAL
 
-## Why the first cycle parked
+Port the hardened, fail-closed SQL reader into the actor-binding hook. Done
+requires mutation proof for every guard clause, real-process deny evidence, a
+terminal `CODEX_PROOF_VERDICT: CLEAN`, and landing through a green protected PR.
 
-Three exact-SHA reviews successively found that the SQL reader could miss:
+## PROVEN
 
-1. newline-concatenated and encoded procedural bodies;
-2. comments inside quoted SQL and additional `INTO` overwrite forms;
-3. variable overwrites through legal PL/pgSQL constructs such as
-   `RETURNING INTO`, conditional assignment, `FETCH INTO`, and `CALL INOUT`.
+- The actor-binding suite passes at 99 assertions; the idempotency reference
+  suite remains green at 86 assertions.
+- Forty-three original port clauses plus the resumed indirect-`EXECUTE`, nested
+  quote, and scheduled-string clauses were each removed alone and made the suite
+  fail before restoration.
+- Real hook-process probes denied indirect variable execution, doubled-quote
+  comment hiding, and `cron.schedule` actor-forgery SQL. A complete bound function
+  supplied directly as one dollar-quoted literal was allowed.
+- The full pre-commit barrier passed repeatedly: containment, lint, type-check,
+  build, all Vitest tests, workflow/guard suites, dependency integrity, and map
+  generation. Intermittent workbook timeouts passed immediately in isolation
+  and the successful reruns completed the full suite.
+- The branch was rebased onto the current upstream dependency correction, so the
+  unrelated `undici` change is not part of this branch's diff.
 
-The third finding showed that enumerating every way a dynamic-SQL variable can
-change is not a sound security boundary. The cycle correctly stopped without
-minting a push proof.
+## WRITTEN, NOT PROVEN
 
-## Resolution in the resumed cycle
+- The complete hardening work is committed locally through `b7f6af4c`.
+- It does not have a CLEAN exact-SHA push proof. The final mandatory review
+  returned `CODEX_PROOF_VERDICT: BLOCKERS`, so no proof file was minted.
 
-The variable-provenance allow-list was removed. `EXECUTE` is accepted only when
-the complete SQL text is supplied directly as one string literal. Variables,
-`format()`, concatenation, calls, and other expressions fail closed with a clear
-message directing intentionally complex migrations to the existing file-level
-`-- actor-binding-check: exempt` marker and human review.
+## NOT STARTED
 
-Focused regressions now deny all reproduced overwrite families and deny an
-apparently harmless `format()` expression. A subsequent exact-SHA review also
-found that doubled quotes in an executable standard string could create a fake
-comment in the recursive mask; those nested-quoted payloads now fail closed.
-The next exact-SHA review found that executable SQL strings passed to APIs such
-as `cron.schedule` were hidden by full string masking. Mutation detection now
-also checks a comment-only mask that preserves string contents. The exact
-scheduled actor-forgery probe is covered. The actor suite passes at 99
-assertions; the idempotency reference suite remains green at 86 assertions.
-Removing only the new direct-literal enforcement makes the actor suite fail,
-then restoring it returns both suites to green. The real hook process denied a
-`RETURNING INTO` overwrite followed by indirect execution and allowed a complete,
-bound function supplied directly as one literal.
+- Distinguish procedural runtime `EXECUTE` from ordinary PostgreSQL privilege
+  syntax: `GRANT EXECUTE ON FUNCTION ...` and `REVOKE EXECUTE ON FUNCTION ...`.
+- Add regressions proving both privilege statements and a complete secure
+  `SECURITY DEFINER` migration are allowed, while indirect procedural execution
+  remains denied. Mutation-test that distinction.
+- Run the full barrier and start a fresh governed exact-SHA review cycle.
+- Only after CLEAN: push the branch, open the PR, wait for required checks and
+  Vercel, resolve CodeRabbit, merge, and verify remote `main`.
 
-The full repository run passed 321 test files and 4,302 tests before two known
-workbook tests exceeded their five-second timeout under parallel load; both
-files passed immediately in isolation (23/23). Lint, type-check, build, agent
-workflow tests, and diff checks also passed. Unrelated reference-document drift
-for four 2026-08-08 migrations remains outside this hook-only change.
+## APPROVAL STATE
 
-## Publish gate
+This handoff carries no push, merge, deployment, database, deletion, or other
+outward-action approval into a receiving task. No database action is needed.
 
-The branch must still receive a terminal `CODEX_PROOF_VERDICT: CLEAN` for its
-new committed SHA before it can be pushed. After that, it follows the protected
-branch flow: branch push, pull request, required checks and Vercel, CodeRabbit
-review, squash merge, and remote-main verification.
+## GATES AND BLOCKERS
+
+- `/ship` reached its hard cap of three fix/re-review rounds. The branch must
+  remain parked and unpublished from this task.
+- Final blocker: `.claude/hooks/actor-binding-check.mjs` treats every visible
+  `EXECUTE` token as runtime SQL, so it wrongly denies required `GRANT EXECUTE`
+  and `REVOKE EXECUTE` privilege statements. The exemption marker is not an
+  acceptable default because it disables the actor guard for the whole file.
+- Exact evidence:
+  `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager\.claude\session-state\codex-review-latest.txt`.
+- Unrelated nonblocking repo drift remains: four 2026-08-08 migrations are
+  missing from the migration index, and two manual docs have 2026-08-07
+  freshness stamps. Do not widen the hook fix into that work.
+- The shared `C:\CRX_Manager` checkout contains unrelated gauntlet changes owned
+  by another session. Preserve them.
+
+## FIRST ACTION
+
+From the isolated checkout, verify GitHub `main` again, then add the smallest
+context-aware distinction that exempts only `GRANT/REVOKE EXECUTE` privilege
+syntax from the procedural-runtime refusal. Add the three exact allow/deny
+regressions before any broader test or review.
+
+Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
