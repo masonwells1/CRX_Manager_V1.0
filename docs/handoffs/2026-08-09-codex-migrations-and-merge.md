@@ -3,7 +3,9 @@
 **From:** Claude (cloud session, no Codex CLI, no local machine)
 **To:** Codex, running locally with Mason present
 **Date:** 2026-08-09
-**Branch:** `claude/phone-to-local-sessions-dmqc57` @ `01e2f50d`
+**Branch:** `claude/phone-to-local-sessions-dmqc57` — read the CURRENT head off PR #354.
+Do not trust any SHA pinned in this document: it was written at `01e2f50d` and the branch has
+moved several times since (review rounds, a main merge, and the SQL corrections noted below).
 **PR:** https://github.com/masonwells1/CRX_Manager_V1.0/pull/354
 
 ---
@@ -37,8 +39,10 @@ plan was wrong:
   `intentional-replay` marker (these are first-time applies, not replays).
 - **Remedy applied (Mason approved in chat):** all five were re-issued forward
   with `git mv` to `20260809170500`–`20260809170900`, relative order preserved,
-  executable SQL byte-identical, provenance header added, stale `20260808*`
-  files removed in the same commit. Same remedy as `migration-history.md`
+  executable SQL byte-identical **at the moment of the re-issue**, provenance
+  header added, stale `20260808*` files removed in the same commit. That
+  equivalence has since expired — see "SQL has moved since the re-issue" below.
+  Same remedy as `migration-history.md`
   row 808 → live row 811. They are indexed as history rows 857–861.
 - **Every migration premise was re-verified against live** rather than taken on
   trust: the actor guard is genuinely missing, `authenticated` genuinely holds
@@ -56,16 +60,24 @@ plan was wrong:
 
 ## What you are taking over and why
 
-Two things could not be finished from the cloud session:
+Two things could not be finished from the cloud session, **as of when this was
+written**. Item 2 has since been done — see the status block at the top of this
+file, which supersedes it. Item 1 still stands.
 
 1. **The five migrations cannot be applied here.** Money/RLS diffs require a fresh
    exact-SHA `gpt-5.6-sol` high-effort adversarial proof. The Codex CLI is not
    installed in that container, so the gate is unrunnable, not merely unrun.
-2. **No database backup exists.** Supabase Free has no point-in-time recovery and
-   there is no off-site dump. `/backup-db` needs a local session.
+2. ~~**No database backup exists.**~~ **SUPERSEDED — a backup now exists.** The
+   local session ran `/backup-db`: `backups/2026-08-09/`, 156 tables, verified
+   table-by-table against live counts, `backups/LATEST-OK.json` stamped. The
+   original warning below is kept only so the two halves of this document do
+   not appear to disagree. (Supabase Free still has no point-in-time recovery,
+   so that dump remains the only copy.)
 
-Everything else on #354 is done: three review rounds addressed, Vercel green,
-merge conflict resolved, full pre-commit gate passing on every commit.
+Everything else on #354 was done at the time of writing: three review rounds
+addressed, Vercel green, merge conflict resolved, full pre-commit gate passing
+on every commit. **That is no longer the whole picture** — a later exact-SHA
+Codex review returned BLOCKED. See "Open blockers" at the end of this file.
 
 ## Order of operations — do not reorder
 
@@ -86,8 +98,9 @@ the migrations look safe.
 /codex-review            # or /codex-gauntlet for the full loop
 ```
 
-Pin `gpt-5.6-sol`, high reasoning effort, against the **exact SHA** on the branch
-(`01e2f50d` unless you have pushed further). This is the hard gate for the
+Pin `gpt-5.6-sol`, high reasoning effort, against the **exact SHA currently on
+the branch** — read it off PR #354, do not reuse any SHA printed in this file.
+This is the hard gate for the
 money/RLS diffs — it is separate from CodeRabbit, which is the broad every-PR
 pass and does not replace it.
 
@@ -96,8 +109,25 @@ pass and does not replace it.
 The ordering matters: file 5 re-emits the function and trigger that file 4
 creates, so it must apply after it.
 
-**Filenames updated 2026-08-09** — see the status block at the top. The SQL is
-byte-identical to the reviewed originals; only the timestamps moved forward.
+**Filenames updated 2026-08-09** — see the status block at the top.
+
+#### SQL has moved since the re-issue — do not apply from memory
+
+At the moment of the `git mv` re-issue the executable SQL was byte-identical to
+the reviewed originals and only the timestamps moved forward. **That is no
+longer true.** Later review rounds edited the SQL of three of the five:
+
+| File | Executable SQL since the re-issue |
+|---|---|
+| `20260809170500_restore_batch_apply_prepayments_actor_guard.sql` | unchanged |
+| `20260809170600_cancel_order_zeroes_quantity_remaining.sql` | **changed** |
+| `20260809170700_revoke_inventory_truncate_and_mark_payments_dead.sql` | unchanged |
+| `20260809170800_round_money_to_whole_cents.sql` | **changed** |
+| `20260809170900_round_line_profit_with_revenue.sql` | **changed** |
+
+So an adversarial proof taken against the pre-edit SQL does not cover what would
+actually run. Read each file at the branch's current head before applying, and
+bind the proof to that head.
 
 | Order | File | What it does |
 |---|---|---|
@@ -155,9 +185,36 @@ merge deploys production. Vercel one-click rollback is the safety net.
    real fix is querying the live ledger from the hook, which needs DB access in a
    hook. Also filed as OPEN.
 
+## Open blockers — added 2026-08-09 after an exact-SHA Codex review
+
+An exact-SHA `gpt-5.6-sol` review of the branch returned **BLOCKED** with two
+High findings. One is fixed; one is a decision for Mason.
+
+1. **FIXED — the ordering guard was escapable by renaming.** `apply_migration`'s
+   `name` is caller-controlled, and the ordering check abstains on a name it
+   cannot timestamp. The guard converted an abstention into a block only when
+   the name carried a 14-digit timestamp, which is backwards: the untimestamped
+   case is the one the snapshot checks cannot catch. Probe, identical SQL,
+   out-of-order against the snapshot — `20260101000000_old_mig` denied,
+   `old_mig` **allowed**. That is the same replay class that removed the
+   prepayment actor guard. The guard now denies on ANY abstention; regression
+   test added to `.claude/hooks/migration-apply-guard.test.mjs`, and the fix is
+   mutation-tested (restoring the old condition turns the test red).
+
+2. **OPEN — `20260809170900_round_line_profit_with_revenue` must not apply yet.**
+   It rounds `total_price` and `profit` independently, while the header
+   calculation subtracts unrounded costs. For raw revenue `10.005` and cost
+   `5.001` across two lines the header lands on `$10.02` while the stored line
+   profits total `$10.00` — before this migration the report total was `$10.01`.
+   So it can WIDEN the header-vs-lines disagreement it was meant to narrow.
+   This is open question 1 above, and it is the same decision as the unresolved
+   live line-profit discrepancy: **which rounding rule is canonical, and does
+   the header or the line copy win?** Until Mason settles that, this migration
+   stays parked. The other four are unaffected.
+
 ## State you can trust
 
-- Tests at last run: `migration-apply-guard` 81, `migration-ordering-lib` 18,
+- Tests at last run: `migration-apply-guard` 86, `migration-ordering-lib` 18,
   `refresh-applied-migrations` 9, `agent-manifest-parity` 18 — all passing.
 - Full pre-commit gate green on every commit in this branch.
 - The pre-commit gate is slow — give it a **540s+ timeout** or it dies mid-build.

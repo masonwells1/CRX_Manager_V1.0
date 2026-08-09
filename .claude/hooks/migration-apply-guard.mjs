@@ -210,15 +210,32 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
   try {
     const ordering = checkMigrationOrdering({ name: migName, sql: migQuery, appliedNames });
     if (!ordering.ok) out("block", ordering.reason);
-    // Belt-and-braces: if the candidate carries a timestamp but the check still
-    // abstained, no verdict was reached and `ok: true` means "unknown", not
-    // "fine". The snapshot check above should already have caught this; block
-    // rather than rely on that one path staying correct.
-    if (ordering.abstained && /\d{14}/.test(migName || "")) {
+    // Belt-and-braces: an abstention is "no verdict", and `ok: true` there means
+    // "unknown", not "fine".
+    //
+    // This used to fire only when `migName` carried a 14-digit timestamp, which
+    // was exactly backwards: `apply_migration`'s name is CALLER-CONTROLLED, and
+    // an untimestamped name is the one abstention cause the snapshot checks
+    // above cannot catch (they constrain the ledger, not the candidate). So
+    // stripping the timestamp off an out-of-order migration bought an
+    // unconditional pass through this guard — the same replay class that
+    // removed the prepayment actor guard. Verified by probe: identical SQL,
+    // "20260101000000_old_mig" denied, "old_mig" allowed. (Codex High, PR #354.)
+    //
+    // Every repository migration is timestamped, so refusing an untimestamped
+    // candidate costs nothing real and closes the hole. Deny on ANY abstention.
+    if (ordering.abstained) {
+      const untimestamped = !/\d{14}/.test(migName || "");
       out("block",
-        `MIGRATION ORDERING GUARD: "${safeName}" carries a timestamp but the ordering check could ` +
-        `reach no verdict against the applied-migration snapshot. An unknown verdict is not a pass. ` +
-        `Refusing the apply.\n\n${howTo}`);
+        `MIGRATION ORDERING GUARD: the ordering check reached no verdict for "${safeName}", so ` +
+        `whether this is an out-of-order replay is UNKNOWN` +
+        (untimestamped
+          ? `, because the migration name carries no 14-digit timestamp to compare against the ` +
+            `applied-migration snapshot. Every repository migration is timestamped, and this name ` +
+            `is caller-supplied, so an untimestamped name must not skip the ordering comparison. ` +
+            `Re-issue the migration under its real timestamped name.`
+          : `.`) +
+        ` An unknown verdict is not a pass. Refusing the apply.\n\n${howTo}`);
     }
   } catch (err) {
     // A crash in the ordering check must not silently wave a migration through.

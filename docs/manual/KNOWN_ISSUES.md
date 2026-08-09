@@ -235,6 +235,35 @@ apply. What it uniquely catches is an OLDER migration file re-submitted under a
 NEWER version, which lands as a "forward" apply and silently reverts whatever
 the newer one had fixed. That is exactly what happened on 2026-07-15.
 
+## RESOLVED 2026-08-09 — the migration ordering guard was escapable by renaming the migration
+
+**Found by the exact-SHA Codex review of PR #354 (High).** Separate from the
+concurrent-checkout gap above, and worse: this one needed no second checkout.
+
+`apply_migration`'s `name` is supplied by the caller, and the ordering check
+abstains on a name it cannot timestamp. The guard converted an abstention into
+a block **only when the name carried a 14-digit timestamp** — exactly backwards.
+Every other abstention cause is already refused upstream, because those checks
+constrain the *ledger snapshot*; the untimestamped *candidate* was the one case
+nothing caught. So dropping the timestamp from the name bought an unconditional
+pass. Reproduced full-hook, identical SQL, out-of-order against a fresh snapshot:
+
+```
+name="20260101000000_old_mig"   denied=true   by-ordering-guard=true
+name="old_mig"                  denied=false  by-ordering-guard=false
+```
+
+That is the same replay class as the 2026-07-15 revert — an older file
+re-submitted so it lands as a "forward" apply and silently undoes a newer fix.
+
+**Fix:** deny on ANY abstention, and say so when the cause is a missing
+timestamp. Every repository migration is timestamped, so refusing an
+untimestamped candidate costs nothing real. Regression test added to
+`.claude/hooks/migration-apply-guard.test.mjs` covering both directions, and
+mutation-tested — restoring the old `&& /\d{14}/` condition turns it red.
+
+The concurrent-checkout entry above stays OPEN; this fix does not touch it.
+
 ## OPEN — order header profit can still differ a cent from the sum of its own lines
 
 **Found 2026-08-08 (Codex P2, PR #354). Not a regression — it predates the
@@ -262,6 +291,27 @@ applied yet, so nothing about it is urgent.
 lines can be off by a penny from each other when a product's cost has more than
 two decimal places. Nothing is lost or double-counted — it is a display/rounding
 mismatch between two places that each do their own math.
+
+**Escalated 2026-08-09 (exact-SHA Codex review of PR #354, High) — `20260809170900`
+must not apply until the rounding rule is settled.** The migration rounds
+`total_price` and `profit` independently per line, while the header keeps
+subtracting unrounded costs. That can make the disagreement *bigger*, not
+smaller: for two lines with raw revenue `10.005` and cost `5.001`, the header
+lands on `10.02` while the stored line profits total `10.00` — where before the
+profit rounding the report total was `10.01`. So a migration written to narrow
+the gap can widen it.
+
+This is now blocking, not merely parked: the review returns BLOCKED while
+`20260809170900` is in the diff. The other four migrations on that PR are
+unaffected.
+
+**The decision needed from Mason** is the same one behind the unresolved live
+line-profit discrepancy — **which stored copy of profit is canonical, the order
+header or the line items, and which single rounding rule do all writers use?**
+Once that is answered, the invariant gets enforced across every writer with a
+database invariant test, and this entry and the live discrepancy close together.
+Per-order live figures are deliberately not recorded here — this repository is
+public; they live in the access-controlled session record.
 
 ## RESOLVED LIVE — Quote and Customer whole-record saves reject stale editors
 
