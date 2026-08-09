@@ -39,6 +39,20 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 21 (Codex) — partial draws and the rush-pricing screen:**
+
+- **P1: `draw_down_quote` had the same conversion gap.** A partially drawn booking creates
+  `order_items` exactly as a full conversion does, taking `cost_per_unit` from the quote-time cost but
+  leaving `cost_at_time_cents` NULL for the trigger to stamp at today's catalog cost — so the snapshot
+  reports and the order/commission figures disagreed on a partial draw the same way they did on a full
+  one. Now stamps from `v_wavg_cost` (already the quote-time basis), coalesced to zero.
+- **P2: the rush-order Set Pricing screen never prompted.** `handlePriceOrder` sent prices straight to
+  `price_order`, which accepts any non-negative price — so the one path that *exists* to price an
+  unpriced order could finalize it below cost, sweep draft invoices and drive commissions with no
+  reason collected. It now runs the same confirmation as every other money write. `price_order` takes
+  no notes parameter, so the reason is recorded via the activity log; making it a stored field needs
+  the migration tracked with the settled server-side below-cost work.
+
 **Round 20 (Codex) — the ambiguity guard blocked an ordinary edit:**
 
 The round-19 payload-side check refused whenever two id-less rows shared a product, *before* checking

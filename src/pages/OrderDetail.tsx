@@ -1095,6 +1095,29 @@ export default function OrderDetail() {
       .map((i) => ({ order_item_id: i.id, price: parseFloat(priceInputs[i.id]) || 0 }));
     if (priced.length === 0) { toast('warning', 'Enter a price for at least one line.'); return; }
     if (priced.some((x) => x.price < 0)) { toast('error', 'Prices cannot be negative.'); return; }
+
+    // Below-cost guardrail on the rush-order Set Pricing path. Finalizing here
+    // writes the sale price, sweeps draft invoices and drives commissions, so it
+    // is a money write like any other and needs the same approval. Cost comes
+    // from the line's own snapshot (cost_per_unit), which is what price_order
+    // compares against. (Codex round 20.)
+    const isFieldStaffPricing = role === 'driver' || role === 'applicator';
+    let pricingBelowCostReason: string | null = null;
+    if (!isFieldStaffPricing) {
+      const belowCostLines: BelowCostLine[] = priced
+        .map((p) => {
+          const line = items.find((i) => i.id === p.order_item_id);
+          return line ? { productName: line.product_name, price: p.price, cost: line.cost_per_unit ?? 0 } : null;
+        })
+        .filter((l): l is BelowCostLine => l !== null && l.cost > 0 && l.price < l.cost);
+      if (belowCostLines.length > 0) {
+        pricingBelowCostReason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: belowCostLines, resolve })
+        );
+        if (pricingBelowCostReason === null) return;
+      }
+    }
+
     setPricingOrder(true);
     try {
       const idemKey = priceOrderIdem.getKey();
@@ -1107,6 +1130,17 @@ export default function OrderDetail() {
       if (error) throw error;
       const result = assertRpcResult<{ success: boolean; pricing_status: string; remaining_pending: number; invoices_swept: number }>(data, 'price_order');
       priceOrderIdem.resetKey();
+      if (pricingBelowCostReason) {
+        // price_order has no notes/reason parameter, so the activity log is the
+        // durable record here. Making it a stored field on the order needs a
+        // migration adding p_below_cost_reason -- tracked with the settled
+        // server-side below-cost work in docs/manual/DECISION_LOG.md.
+        await logActivity({
+          event: 'order_priced_below_cost',
+          description: `Priced ${order.order_number} below cost — approved: ${pricingBelowCostReason}`,
+          performedBy: profile.id,
+        });
+      }
       toast('success', result.pricing_status === 'priced'
         ? `Order priced${result.invoices_swept ? ` — ${result.invoices_swept} draft invoice(s) updated` : ''}`
         : `Saved — ${result.remaining_pending} line(s) still need a price`);
