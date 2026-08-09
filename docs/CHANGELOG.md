@@ -173,6 +173,42 @@ that fix (rebased onto the new `main`) plus the two Codex findings raised agains
   and the guard blocks both that shape and any abstained verdict on a timestamped candidate.
 
 Coverage: apply-guard 79 assertions, ordering-lib 18, `agent-manifest-parity` clean.
+
+## 2026-08-09 — Phase 3C containment recognizes this repository's own worktrees
+
+Every push was blocked while a parallel session held a worktree under the
+ignored `.claude/worktrees/`. Git reports each such worktree as a single
+ignored directory candidate, and the containment checker classified any
+directory carrying a `.git` marker as an embedded Git repository, so three
+live session worktrees failed the pre-push gate with no way to proceed short
+of deleting another session's uncommitted work.
+
+The checker now exempts a linked worktree of this same repository. The
+exemption requires two independent signals and fails closed on either:
+`git worktree list --porcelain` must report the directory, and its `.git`
+marker must be a regular pointer file holding exactly one `gitdir:` line that
+resolves inside this repository's own `.git/worktrees/` directory. A `.git`
+directory, a symlink, extra lines, or a pointer aimed at another repository's
+administration directory remains an embedded Git repository, so another
+repository's worktree checked out inside this one is still blocked. Exempted
+worktrees are skipped rather than walked: their contents are ignored here and
+cannot be committed from this checkout, and each runs this identical guard on
+its own push.
+
+New fixtures cover the registered worktree passing, a foreign repository at
+the same ignored path failing, a foreign repository's own worktree smuggled
+inside failing, and the pointer-file predicate rejecting a stray target, a
+multi-line body, a missing `gitdir:` prefix, and a `.git` directory. Three
+clause-removal mutations were run: deleting the exemption reproduced the
+original three-worktree failure, trusting the pointer file alone let the
+smuggled foreign worktree through, and forcing the pointer predicate true
+broke its own assertions. Each was restored.
+
+Proven against the real repository rather than fixtures: the pre-push checker
+returned `PHASE3_PRIVATE_ARTIFACT_CONTAINMENT_PASS` at 53,673 paths, 2,307
+commits, and 73,799 candidates with all three session worktrees still in
+place, having failed closed on those same three directories before the change.
+
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
 PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in bash-safety and live-testdata guards (variant git spellings, redirect terminators, plumbing push commands, DELETE catch-all, setval/nextval and RPC-via-SELECT rules), added regression tests, resolved the changelog merge conflict with main.
