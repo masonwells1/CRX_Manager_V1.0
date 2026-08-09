@@ -2,6 +2,45 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-09 — Review rounds 6-8: cost integrity across product swaps and stale clients
+
+Closed the remaining Codex and CodeRabbit findings on the pricing branch.
+
+- **Stale-client quote saves (Codex P1).** A browser tab running the pre-snapshot bundle
+  sends existing quote lines with no id, so every line would be deleted and reinserted with
+  no preserved cost and the trigger would stamp today's catalog cost over the historical
+  quote cost — a note-only save was enough to do it. `save_quote` now raises
+  `QUOTE_STALE_CLIENT` when an existing quote that already had lines receives a payload
+  echoing none of their ids. Known trade-off: this also trips when a user replaces every
+  line in one save, which is rare and recoverable by saving twice.
+- **Order-line product swaps.** The new re-snapshot trigger would have erased a valid
+  snapshot when the incoming product has a NULL `current_cost`; it now COALESCEs to the
+  prior value, and the product-change test moved into a `WHEN` clause so the body no longer
+  runs on every `order_items` UPDATE. The `$verify$` block asserts the trigger is attached.
+- **Quote-line product re-selection.** Re-picking the *same* product on an existing line
+  cleared its id and overwrote its preserved cost, so `save_quote` inserted it as new and
+  the trigger re-stamped it. Only a genuine product change does that now.
+- **Approval reason durability.** The below-cost reason is written back into local state
+  after a successful save, since `QuoteBuilder` never refetches and the next save would
+  otherwise revert the stored notes.
+- **Zero-cost snapshots.** `quoteCalc` used `||`, so a stored cost of 0 was treated as
+  missing and replaced by the live catalog cost. `CalcItem.current_cost` is now
+  `number | null` with null alone meaning "no snapshot"; two fixtures that used 0 to mean
+  absent were corrected and a regression test covers both cases.
+- **Report agreement.** `financial_dashboard_summary`'s top-customers panel moved to
+  item-level revenue so it agrees with the headline and trend beside it.
+  `get_profitability_report` adopted the same order-inclusion rule as every other report
+  here, and now both groups *and* filters on `COALESCE(o.order_date, o.created_at::date)` —
+  filtering on the raw column while grouping on the fallback made orders with no
+  `order_date` appear unfiltered and vanish once a date range was picked.
+- **Other.** `BulkOrderImport` resolves a pending below-cost prompt when the import dialog
+  closes so the awaited save cannot hang; the notes stripper dropped a backtracking regex
+  for a character class (CodeQL alert 17); redaction moved inside the order-summary
+  renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
+  "35 stragglers" claim was corrected to the verified counts of 2 and 3.
+
+All three migrations remain **PARKED and never executed against a database**.
+
 ## 2026-08-09 — Codex review round 5: keep below-cost approval reasons off customer documents
 
 Codex found that the below-cost approval reason, stored in `orders.notes` so it travels

@@ -799,8 +799,13 @@ BEGIN
       -- migration. An allowlist here would silently disagree with the sales
       -- reports and the dashboard whenever a new order status is introduced.
       AND o.status NOT IN ('cancelled', 'voided', 'draft')
-      AND (p_start_date IS NULL OR o.order_date >= p_start_date)
-      AND (p_end_date IS NULL OR o.order_date <= p_end_date)
+      -- Same effective date the month grouping uses. Filtering on the raw
+      -- o.order_date while grouping on the COALESCE would drop every order with
+      -- a NULL order_date the moment a caller supplies a date range, so those
+      -- orders would appear in the unfiltered report and silently vanish from a
+      -- filtered one.
+      AND (p_start_date IS NULL OR COALESCE(o.order_date, o.created_at::date) >= p_start_date)
+      AND (p_end_date IS NULL OR COALESCE(o.order_date, o.created_at::date) <= p_end_date)
   )
   SELECT
     f.grp AS group_key,
