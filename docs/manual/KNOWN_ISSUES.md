@@ -103,6 +103,34 @@ own work in the two largest docs. See
 `docs/audits/2026-08-04-test-coverage-analysis.md` for the session that surfaced
 these.
 
+## OPEN — live migrations cannot be applied from a remote (web) session
+
+**Found 2026-08-09** while trying to apply the three pricing migrations from PR #350.
+
+`migration-apply-guard` requires a proof minted by `scripts/write-apply-proofs.mjs`, which
+resolves the Codex CLI **only** from `/root/.local/share/OpenAI/Codex/bin` and refuses PATH
+shims and env overrides by design — so a fake reviewer cannot mint proof. A Claude-Code-on-the-web
+container has no Codex CLI installed at that path, so the script exits with
+"No proof minted — PARK the migration for Mason rather than self-certifying" and the apply is
+blocked. This is the guard working as intended, not a bug in it; the gap is that a remote session
+can write and review a migration but can never apply one.
+
+**Consequence:** any migration authored in a remote session must be applied from Mason's machine
+(or any environment with the trusted Codex CLI). Plan remote sessions to end at PARKED, and do not
+promise an apply from one.
+
+**Two lesser things found on the same path**, both worth knowing before the next attempt:
+- The applied-migration snapshot (`.claude/session-state/applied-migrations.json`) is gitignored
+  and per-checkout, so a fresh container always lacks it and the ordering guard abstains until it
+  is refreshed. Refresh is read-only: query `supabase_migrations.schema_migrations` via the
+  Supabase MCP and pipe the JSON into `scripts/refresh-applied-migrations.mjs`. The full ledger
+  (946 rows as of this date) exceeds the MCP result limit — request it as a single `json_agg` and
+  pipe the saved tool-result file, rather than paging it through the session.
+- The live-data guard rejects `xpath()` and `pg_get_userbyid()` as "not known read-only", so the
+  usual one-query row-count and ownership introspection tricks fail. Exact per-table counts can
+  still be had with a plain `UNION ALL`/summed-subquery over `count(*)`, and ownership via a join
+  to `pg_roles` instead of `pg_get_userbyid`.
+
 ## OPEN — the push guard AND the memory backup still refuse web/mobile sessions that install a credential-proxy rewrite
 
 **Found 2026-08-05 by Codex on PR #313 (P2), reproduced and confirmed the same day. Needs an owner decision; see "the decision this needs" below. Codex found the second instance (`backup-claude-memory`) on the same PR after the first was parked — see "Second instance" below.**
