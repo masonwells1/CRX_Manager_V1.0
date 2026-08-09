@@ -39,13 +39,13 @@ Read-only audit of everything that touches product pricing: cost capture, margin
 5. **No active automated cost-update path.** PO receiving stopped writing `current_cost` in March (deliberate — cost is a pricing basis, not a purchase echo), and the governed replacement is feature-flagged off. Cost updates are 100% manual admin action, with `cost_updated_date` effectively writer-less.
 6. **No inventory costing method.** On-hand value = quantity × live `current_cost`; no FIFO/average layer, so inventory valuation and COGS drift from actual paid cost.
 7. **`products` money is `numeric` dollars, not bigint cents** — everything newer is cents; ~15 `round(x*100)` conversion boundaries exist. Contained by the cent-scale trigger guard, but `InvoiceDetail.tsx:645-647`'s float `Math.round(price*100)` and `NewPurchaseOrder.tsx`'s `parseFloat` path are the weak boundaries.
-8. **Sale-time margin guardrails are cosmetic.** A rep can save a below-cost line freely; the only signal is text color (`NewOrder.tsx:955`). The catalog is far better protected than the transaction.
+8. **Sale-time margin guardrails were cosmetic; the UI half is now closed.** As originally audited, a rep could save a below-cost line freely with text color as the only signal (`NewOrder.tsx:955`). **Update (this branch):** a below-cost confirmation with a required reason now ships on the manual order, order-edit, invoice, quote, and bulk-import paths, and the reason is recorded on the entity. Two gaps remain and are tracked separately: the confirmation is a UI gate, so a **direct RPC caller still bypasses it** until server-side enforcement lands (settled 2026-08-09 — see `docs/manual/DECISION_LOG.md`), and **below-*floor* selling is still unguarded entirely** — only below-*cost* is checked. The catalog remains better protected than the transaction.
 9. **`products.vendor` is free text**, parallel to the real `vendors`/`product_supplier_links` truth — a second, unvalidated vendor source that has already needed typo-merge migrations.
 
 ## 4. Recommended plan
 
 **Phase A — turn on what's built (biggest payoff, mostly process not code):**
-1. Run the first real **pricing workbook cycle**: export the full catalog, review the 131 sub-10% tier-1 SKUs and the 35 no-cost/no-price stragglers, apply through the governed preview. This also seeds `cost_history` and `cost_updated_date` going forward.
+1. Run the first real **pricing workbook cycle**: export the full catalog, review the 131 sub-10% tier-1 SKUs, and clean up the stragglers missing a cost or a tier-1 price (**2 and 3 products respectively**, per the catalog counts in §1 — an earlier draft of this plan said "35", which does not match any verified query and was wrong). Apply through the governed preview. This also seeds `cost_history` and `cost_updated_date` going forward.
 2. **Scale the supplier-pricing pipeline past the Wells canary**: pick the top 2–3 vendors by spend, run the quote-sheet export → vendor fills → import → approve loop, and expand the `product_cost_basis` rollout gate vendor-by-vendor until `supplier_cost_basis_enabled` can flip on. Target: every A-mover SKU has ≥1 current supplier observation before spring season.
 3. **Write the pricing strategy doc** (one page, Mason decides): target gross margin by category/tier, floor margin, tier formula, and a refresh cadence (e.g., monthly workbook cycle + event-driven vendor sheet imports). Today 209 distinct tier-1 markups exist with no stated policy.
 
@@ -55,7 +55,7 @@ Read-only audit of everything that touches product pricing: cost capture, margin
 6. Point margin report RPCs at `cost_at_time_cents` and move `Reports.tsx`'s client-side margin math server-side so all four report surfaces agree (`SalesReports.tsx` inherits the fix through the RPCs it already calls).
 
 **Phase C — guardrails and depth (after A/B):**
-7. Below-cost / below-floor sale confirmation (a `ConfirmModal` + reason, or office approval) instead of a color hint.
+7. Below-cost / below-floor sale confirmation (a `ConfirmModal` + reason, or office approval) instead of a color hint. **Status: below-cost confirmation shipped on this branch across the order, order-edit, invoice, quote, and bulk-import paths. Below-floor is not implemented, and server-side enforcement is deferred to the follow-up recorded in the decision log.**
 8. Snapshot quote cost at quote time (like invoices already do) so accepted-quote margins are stable.
 9. Longer-term: inventory cost layers (average or FIFO) for true COGS, `vendor_id` FK on products (or retire the text column in favor of links), and price-position analytics (margin by vendor, cost-trend per SKU from observations).
 

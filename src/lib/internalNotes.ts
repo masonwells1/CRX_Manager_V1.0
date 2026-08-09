@@ -57,7 +57,11 @@ export function stripInternalNotes(notes: string | null | undefined): string | n
     if (at !== -1 && at < cut) cut = at;
   }
 
-  // Drop the separator that joined the marker to the preceding notes.
-  const visible = notes.slice(0, cut).replace(/(\n|\s+—\s*)+$/, '').trim();
+  // Drop the separator that joined the marker to the preceding notes. A single
+  // character class, not an alternation of quantified groups: `(\n|\s+—\s*)+`
+  // nests a quantifier inside a quantified group over overlapping input (`\n`
+  // is itself `\s`), which backtracks exponentially on a long run of newlines
+  // and em dashes — and `notes` is free-form operator input (CodeQL alert 17).
+  const visible = notes.slice(0, cut).replace(/[\s—]+$/, '');
   return visible.length > 0 ? visible : null;
 }

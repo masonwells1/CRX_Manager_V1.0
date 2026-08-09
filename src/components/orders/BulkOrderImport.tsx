@@ -605,6 +605,12 @@ export default function BulkOrderImport({
     setFile(null);
     setValidation(null);
     setUploadResults(null);
+    // BelowCostConfirmModal renders as a sibling of this Modal, so its
+    // visibility follows belowCostPrompt rather than `open`. Without this it
+    // would outlive the import dialog, and the promise handleUpload is awaiting
+    // would never settle — leaving the upload parked with uploading stuck true.
+    belowCostPrompt?.resolve(null);
+    setBelowCostPrompt(null);
     onClose();
   };
 

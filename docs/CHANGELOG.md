@@ -46,10 +46,14 @@ Closed three of four round-4 Codex findings on the pricing branch.
   get the note.
 
 **Deferred (owner decision):** Codex's remaining P2 asks that below-cost approval be a
-server-side invariant inside `bulk_import_order` rather than a UI gate, which would also
-close the catalog-cost-changes-mid-import race. That is a real hardening, but it changes
-what the RPC will accept from every caller — it needs Mason's call, and is tracked with
-the other open pricing decisions.
+server-side invariant rather than a UI gate, which would also close the
+catalog-cost-changes-mid-import race. `bulk_import_order` is where Codex raised it, but it
+is only one part: `save_order` and `update_order_items` (and the invoice/quote equivalents)
+write money on the same terms and have the same gap, so it must be decided once and applied
+across the whole money-write surface. That changes what those RPCs will accept from every
+caller — it needs Mason's call, and is tracked with the other open pricing decisions.
+**Settled 2026-08-09:** yes, enforce server-side, with an admin exception — see
+`docs/manual/DECISION_LOG.md`.
 
 ## 2026-08-08 — Codex review round 3: stable quote item ids, dashboard on snapshot cost, below-cost gate on bulk import
 

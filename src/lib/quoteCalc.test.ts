@@ -72,7 +72,9 @@ function makeItem(overrides?: Partial<CalcItem>): CalcItem {
     rate_unit: 'fl oz',
     acres: 100,
     price_per_unit: 0,
-    current_cost: 0,
+    // null = no quote-time snapshot yet, so the live catalog cost is used.
+    // A stored 0 now means a genuinely zero cost and is NOT overridden.
+    current_cost: null,
     oz_per_acre: null,
     price_per_acre: null,
     total_units_needed: null,
@@ -433,6 +435,27 @@ describe('recalcItem', () => {
     expect(result.total_price).toBe(0);
     expect(result.profit).toBe(0);
     expect(result.net_margin).toBe(0);
+  });
+
+  // CodeRabbit: `??` not `||`. A stored snapshot of 0 is a real cost, so it must
+  // not fall back to the live catalog cost the way a missing snapshot does.
+  it('treats a zero cost snapshot as a real cost, not a missing one', () => {
+    const product = makeProduct({ tier1_price: 3, current_cost: 1.5, inventory_unit: 'Lb', product_form: 'dry' });
+    const zeroSnapshot = recalcItem(
+      makeItem({ calc_mode: 'units_direct' as CalcMode, total_units_needed: 100, acres: 50, actual_rate: null, rate_unit: null, current_cost: 0 }),
+      product, 1, conversions
+    );
+    // 100 units x ($3 - $0), NOT $3 - $1.50.
+    expect(zeroSnapshot.profit).toBe(300);
+    expect(zeroSnapshot.current_cost).toBe(0);
+
+    const noSnapshot = recalcItem(
+      makeItem({ calc_mode: 'units_direct' as CalcMode, total_units_needed: 100, acres: 50, actual_rate: null, rate_unit: null, current_cost: null }),
+      product, 1, conversions
+    );
+    // Missing snapshot still falls back to the live catalog cost.
+    expect(noSnapshot.profit).toBe(150);
+    expect(noSnapshot.current_cost).toBe(1.5);
   });
 
   it('units_direct: works for dry products', () => {

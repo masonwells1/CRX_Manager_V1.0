@@ -60,10 +60,16 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
-  IF NEW.product_id IS DISTINCT FROM OLD.product_id
-     AND NEW.cost_at_time_cents IS NOT DISTINCT FROM OLD.cost_at_time_cents
+  IF NEW.cost_at_time_cents IS NOT DISTINCT FROM OLD.cost_at_time_cents
      AND NEW.product_id IS NOT NULL THEN
-    SELECT ROUND(current_cost * 100)::bigint INTO NEW.cost_at_time_cents
+    -- COALESCE, not a bare assignment. A product whose current_cost is NULL
+    -- would otherwise erase a previously valid snapshot, and every report in
+    -- this migration would silently fall back to the mutable cost_per_unit,
+    -- which is the exact drift this migration exists to remove. Keeping the
+    -- prior snapshot is imprecise for the new product but far better than
+    -- destroying the cost basis outright.
+    SELECT COALESCE(ROUND(current_cost * 100)::bigint, OLD.cost_at_time_cents)
+      INTO NEW.cost_at_time_cents
     FROM public.products WHERE id = NEW.product_id;
   END IF;
   RETURN NEW;
@@ -77,6 +83,9 @@ DROP TRIGGER IF EXISTS trg_resnapshot_order_item_cost ON public.order_items;
 CREATE TRIGGER trg_resnapshot_order_item_cost
   BEFORE UPDATE ON public.order_items
   FOR EACH ROW
+  -- WHEN, so the function body does not run on every order_items UPDATE. The
+  -- product-change test lives here rather than inside the function.
+  WHEN (NEW.product_id IS DISTINCT FROM OLD.product_id)
   EXECUTE FUNCTION public._resnapshot_order_item_cost_on_product_change();
 
 -- -----------------------------------------------------------------------------
@@ -481,8 +490,12 @@ BEGIN
   top_cust AS (
     SELECT jsonb_agg(row_to_json(tc)::jsonb ORDER BY tc.total DESC) AS arr
     FROM (
-      SELECT c.farm_name, COALESCE(SUM(o.total_price), 0) AS total
-      FROM public.orders o
+      -- Item-level revenue, matching order_agg and monthly above. Reading
+      -- orders.total_price here would let the top-customers panel disagree with
+      -- the headline and the trend in this same payload.
+      SELECT c.farm_name, COALESCE(SUM(oi.total_price), 0) AS total
+      FROM public.order_items oi
+      JOIN public.orders o ON o.id = oi.order_id
       JOIN public.customers c ON c.id = o.customer_id
       WHERE o.deleted_at IS NULL
         AND o.status NOT IN ('cancelled', 'voided', 'draft')
@@ -772,7 +785,7 @@ BEGIN
       CASE p_group_by
         WHEN 'customer' THEN COALESCE(c.farm_name, 'Unknown')
         WHEN 'product' THEN oi.product_name
-        ELSE TO_CHAR(o.order_date, 'YYYY-MM')
+        ELSE TO_CHAR(COALESCE(o.order_date, o.created_at::date), 'YYYY-MM')
       END AS grp,
       o.id AS order_id,
       oi.total_units_needed AS quantity,
@@ -782,7 +795,10 @@ BEGIN
     JOIN public.orders o ON o.id = oi.order_id
     LEFT JOIN public.customers c ON c.id = o.customer_id
     WHERE o.deleted_at IS NULL
-      AND o.status IN ('confirmed', 'partially_fulfilled', 'fulfilled')
+      -- Same inclusion rule as every other order-basis report in this
+      -- migration. An allowlist here would silently disagree with the sales
+      -- reports and the dashboard whenever a new order status is introduced.
+      AND o.status NOT IN ('cancelled', 'voided', 'draft')
       AND (p_start_date IS NULL OR o.order_date >= p_start_date)
       AND (p_end_date IS NULL OR o.order_date <= p_end_date)
   )
@@ -867,6 +883,18 @@ BEGIN
 
   IF has_function_privilege('anon', 'public.get_profitability_report(text,date,date)', 'EXECUTE') THEN
     RAISE EXCEPTION 'anonymous has profitability report execution';
+  END IF;
+
+  -- Every report above treats cost_at_time_cents as the canonical basis, which
+  -- only holds while the re-snapshot trigger keeps that column correct across a
+  -- product swap. Assert the trigger is actually attached.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger
+     WHERE tgrelid = 'public.order_items'::regclass
+       AND tgname = 'trg_resnapshot_order_item_cost'
+       AND NOT tgisinternal
+  ) THEN
+    RAISE EXCEPTION 'order_items product swap re-snapshot trigger missing';
   END IF;
 END;
 $verify$;

@@ -209,6 +209,7 @@ DECLARE
   v_payload_item_id text;
   v_reuse_item_id uuid;
   v_preserved_cost bigint;
+  v_echoed_prior_count int := 0;
   -- >>>SNAPSHOT
 BEGIN
   v_actor := auth.uid();
@@ -461,6 +462,7 @@ BEGIN
            AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id' THEN
           v_reuse_item_id := v_payload_item_id::uuid;
           v_preserved_cost := (v_prior_item_costs->v_payload_item_id->>'c')::bigint;
+          v_echoed_prior_count := v_echoed_prior_count + 1;
         END IF;
       END IF;
       -- >>>SNAPSHOT
@@ -508,6 +510,24 @@ BEGIN
       );
     END LOOP;
   END LOOP;
+
+  -- SNAPSHOT<<< rollout bridge. A browser tab still running the pre-snapshot
+  -- bundle sends existing quote lines with no id at all. Every line would then
+  -- be deleted and reinserted without a preserved cost, and the BEFORE INSERT
+  -- trigger would stamp todays catalog cost over the historical quote cost,
+  -- silently rewriting quote profit and any order converted from it. A note
+  -- only save from such a tab is enough to do it.
+  --
+  -- A current tab always echoes the id of every line it loaded, so on an
+  -- existing quote that already had lines, zero echoed ids means the caller is
+  -- stale. Fail closed and make the operator refresh. This also trips if a user
+  -- replaces every single line in one save, which is rare and recoverable; a
+  -- silent rewrite of historical cost is neither.
+  IF v_prior_item_costs <> '{}'::jsonb AND v_echoed_prior_count = 0 THEN
+    RAISE EXCEPTION 'QUOTE_STALE_CLIENT: this page is out of date and cannot save without discarding the recorded quote-time costs. Refresh the quote and re-apply your changes.'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- >>>SNAPSHOT
 
   -- Disarm the passthrough the moment the reinsert loop closes (defense in
   -- depth: txn-local anyway, but nothing after this point may pass a supplied
@@ -780,6 +800,7 @@ BEGIN
       -- P1-B: each prior id is consumable once, and the duplicate is a clear
       -- domain error raised before the INSERT (not a PK violation).
       AND position('v_consumed_item_ids' in p.prosrc) > 0
+      AND position('QUOTE_STALE_CLIENT' in p.prosrc) > 0
       AND position('QUOTE_ITEM_ID_DUPLICATE' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: save_quote not snapshot-aware or security posture wrong';

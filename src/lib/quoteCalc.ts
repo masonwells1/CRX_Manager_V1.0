@@ -21,7 +21,13 @@ export interface CalcItem {
   rate_unit: string | null;
   acres: number | null;
   price_per_unit: number;
-  current_cost: number;
+  /**
+   * Quote-time cost snapshot. `null` means the line has no snapshot yet (new
+   * line, or one whose product just changed) and the live catalog cost should
+   * be used. A stored `0` is a real cost, not a missing one, so this is read
+   * with `??` rather than `||`.
+   */
+  current_cost: number | null;
   oz_per_acre: number | null;
   price_per_acre: number | null;
   total_units_needed: number | null;
@@ -73,7 +79,7 @@ export function recalcItem(
   // Preserve the line's stored quote-time cost; only fall back to the live
   // catalog cost when the line has none yet (new or just-changed product).
   // Mirrors QuoteBuilder.recalcItem and the save_quote snapshot semantics.
-  const currentCost = item.current_cost || product.current_cost || 0;
+  const currentCost = item.current_cost ?? product.current_cost ?? 0;
 
   if (mode === 'units_direct') {
     // User entered total_units_needed directly — skip rate×acres computation

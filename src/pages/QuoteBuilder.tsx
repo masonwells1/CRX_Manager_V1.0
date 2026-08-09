@@ -1225,6 +1225,13 @@ export default function QuoteBuilder() {
           ...sec,
           items: sec.items.map((item) => {
             if (item._key !== itemKey) return item;
+            // Re-opening the picker on an existing line and choosing the SAME
+            // product is not a swap. Falling through would clear the line's id
+            // and overwrite its preserved quote-time cost with today's catalog
+            // cost, so save_quote would insert it as a new line and the trigger
+            // would re-stamp the snapshot — losing the historical cost with no
+            // visible signal. Only a genuine product change may do that.
+            if (item.product_id === product.id) return item;
             const updated: LocalItem = {
               ...item,
               // Swapping the product makes this a different quoted line. save_quote
@@ -1490,6 +1497,24 @@ export default function QuoteBuilder() {
       ...(newStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
     };
 
+    // Compute the approval-annotated notes ONCE, keyed by line, so the payload
+    // and the local state cannot disagree. saveQuote never refetches, so if the
+    // marker only went into the payload copy, the next save from this same page
+    // would send the original notes and save_quote's delete+reinsert would drop
+    // the approval reason the first save recorded.
+    const annotatedNotes = new Map<string, string | null>();
+    if (belowCostReason) {
+      for (const sec of sections) {
+        for (const item of sec.items) {
+          if (!item.product_id) continue;
+          const cost = item.current_cost ?? 0;
+          if (cost > 0 && item.price_per_unit < cost) {
+            annotatedNotes.set(item._key, appendBelowCostApproval(item.notes, belowCostReason));
+          }
+        }
+      }
+    }
+
     // Build sections JSON for the atomic RPC
     const sectionsPayload = sections.map((sec) => ({
       section_name: sec.section_name,
@@ -1511,10 +1536,7 @@ export default function QuoteBuilder() {
           // quote header/footer notes, which always print. A PDF template can
           // still opt the line-notes column in, so quotePdf strips the marker
           // before rendering; see src/lib/internalNotes.ts.
-          notes:
-            belowCostReason && item.current_cost > 0 && item.price_per_unit < item.current_cost
-              ? appendBelowCostApproval(item.notes, belowCostReason)
-              : item.notes || null,
+          notes: annotatedNotes.get(item._key) ?? (item.notes || null),
           price_per_unit: item.price_per_unit,
           price_override: item.price_override ?? null,
           current_cost: item.current_cost,
@@ -1557,6 +1579,21 @@ export default function QuoteBuilder() {
       }
 
       resetSaveQuoteIdempotencyKey();
+      // The approval reason is now in the database. Mirror it into local state
+      // so a later save from this same page (which never refetches) resends it
+      // instead of reverting the stored notes to the pre-approval text.
+      if (annotatedNotes.size > 0) {
+        setSections((prev) =>
+          prev.map((sec) => ({
+            ...sec,
+            items: sec.items.map((item) =>
+              annotatedNotes.has(item._key)
+                ? { ...item, notes: annotatedNotes.get(item._key) ?? item.notes }
+                : item
+            ),
+          }))
+        );
+      }
       const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown }>(data, 'save_quote');
       const savedQuoteId = result.quote_id || quoteId;
       if (!savedQuoteId) {

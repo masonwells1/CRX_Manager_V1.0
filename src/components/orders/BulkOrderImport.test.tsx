@@ -353,6 +353,42 @@ describe('BulkOrderImport', () => {
     expect(args.p_notes).toContain('Below-cost approved: price match approved by Mason');
   });
 
+  it('attaches the approval reason only to the orders that are actually below cost', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    // SKU-B costs 7.00 in the fixture: O-BELOW is under it, O-OK is well over.
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit,notes',
+      'O-BELOW,North Farm,SKU-B,2,3,Below batch',
+      'O-OK,North Farm,SKU-B,2,20,Normal batch',
+    ].join('\n');
+    const file = new File([csv], 'mixed-cost.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/mixed-cost\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-BELOW/);
+    fireEvent.click(screen.getByRole('button', { name: /import 2 orders/i }));
+
+    expect(await screen.findByText(/selling below cost/i)).toBeInTheDocument();
+    await approveBelowCost('clearance');
+
+    await waitFor(() =>
+      expect(mocks.rpc.mock.calls.filter(([name]) => name === 'bulk_import_order')).toHaveLength(2)
+    );
+    const calls = mocks.rpc.mock.calls
+      .filter(([name]) => name === 'bulk_import_order')
+      .map(([, args]) => args as { p_order_number: string; p_notes: string });
+
+    const below = calls.find((c) => c.p_order_number === 'O-BELOW');
+    const ok = calls.find((c) => c.p_order_number === 'O-OK');
+    expect(below?.p_notes).toContain('Below-cost approved: clearance');
+    // The ordinary order must NOT be stamped with an approval it never needed.
+    expect(ok?.p_notes).toBe('Normal batch');
+    expect(ok?.p_notes).not.toContain('Below-cost approved');
+  });
+
   it('cancels a below-cost import without calling bulk_import_order', async () => {
     const { container } = render(<BulkOrderImport {...defaultProps} />);
     const csv = [
