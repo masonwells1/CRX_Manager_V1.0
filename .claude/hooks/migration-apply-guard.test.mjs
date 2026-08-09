@@ -114,6 +114,18 @@ function writeProof(stateDir, query, extra = {}) {
     ...extra,
   }));
 }
+// The ordering preflight (2026-08-08) requires evidence of what the database
+// has already applied, and treats missing/stale evidence as a BLOCK rather than
+// a pass — a gitignored snapshot means a clean checkout would otherwise skip the
+// check exactly when it matters (Codex P1, PR #348). Every fixture that expects
+// to reach the proof gate must therefore supply a fresh snapshot first.
+function writeAppliedSnapshot(stateDir, { applied = ["20260808150400_round_money_to_whole_cents"], ageHours = 0 } = {}) {
+  writeFileSync(path.join(stateDir, "applied-migrations.json"), JSON.stringify({
+    captured_at: new Date(Date.now() - ageHours * 3600_000).toISOString(),
+    count: applied.length,
+    applied,
+  }));
+}
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
     expires: new Date(Date.now() + hoursFromNow * 3600_000).toISOString(),
@@ -127,8 +139,23 @@ function armAutopilot(stateDir, hoursFromNow) {
   try {
     const call = (query) => ({ tool_name: "mcp__supabase__apply_migration", tool_input: { project_id: "x", name: MIG, query } });
 
-    // 1. No proof → deny (existing behavior).
+    // 0. Ordering evidence is required BEFORE anything else is considered.
+    //    Missing evidence must not be read as "ordering is fine".
     let r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "no applied-migration snapshot → apply denied");
+    ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "missing-snapshot deny names the ordering guard");
+
+    writeAppliedSnapshot(stateDir, { ageHours: 48 });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "stale (48h) snapshot → apply denied");
+    ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "stale-snapshot deny names the ordering guard");
+
+    // A fresh snapshot from here on: MIG is dated 20990101000000, so it is
+    // newer than everything applied and the ordering check passes cleanly.
+    writeAppliedSnapshot(stateDir);
+
+    // 1. No proof → deny (existing behavior).
+    r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "no proof file → apply denied");
     ok(r.stdout.includes("MIGRATION APPLY GUARD"), "deny message names the guard");
 
@@ -317,6 +344,13 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     const linkedState = path.join(linked, ".claude", "session-state");
     mkdirSync(linkedState, { recursive: true });
+    writeAppliedSnapshot(linkedState);
+    // The ordering snapshot is read from CLAUDE_PROJECT_DIR, which the harness
+    // pins to `primary` throughout this fixture even when the session's cwd is
+    // the linked worktree. Seed it there too, or the ordering guard blocks
+    // before the proof-scoping behaviour under test is ever reached.
+    mkdirSync(path.join(primary, ".claude", "session-state"), { recursive: true });
+    writeAppliedSnapshot(path.join(primary, ".claude", "session-state"));
     // Proof exists ONLY in the linked worktree; the primary has none.
     writeProof(linkedState, BENIGN_SQL);
     // CLAUDE_PROJECT_DIR stays pinned to `primary` in every call below — that is
@@ -348,6 +382,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(addedNested.status === 0, `nested git worktree add succeeded (status=${addedNested.status}): ${(addedNested.stderr || "").trim()}`);
     const nestedState = path.join(nested, ".claude", "session-state");
     mkdirSync(nestedState, { recursive: true });
+    writeAppliedSnapshot(nestedState);
     writeProof(nestedState, BENIGN_SQL);
     r = runHook(callFrom(nested, BENIGN_SQL), primary);
     ok(!isDeny(r), "a worktree nested inside the primary checkout resolves to itself, not to its parent");
@@ -368,6 +403,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // first is not passing vacuously.
     const primaryState = path.join(primary, ".claude", "session-state");
     mkdirSync(primaryState, { recursive: true });
+    writeAppliedSnapshot(primaryState);
     writeFileSync(path.join(linkedState, "AUTOPILOT.on"), "not json at all");
     r = runHook(callFrom(linked, BENIGN_SQL), primary);
     ok(!isDeny(r), "a flag Mason never armed here, sitting in the session's worktree, does not change the rule-set");

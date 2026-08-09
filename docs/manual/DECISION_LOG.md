@@ -1,11 +1,59 @@
 # Decision Log
 
-Last verified: 2026-08-05
+Last verified: 2026-08-08
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-08 — Four foundation-ultra-review owner decisions settled
+
+**Source:** `docs/audits/2026-08-08-foundation-ultra-review.md` §7. Mason answered all four in chat.
+
+1. **Payment visibility (M1) — leave as is.** `payments_select` stays company-wide; it is not
+   scoped down to the invoices a rep can already see. Do not re-open without a new business reason.
+2. **Canonical rounding (M3) — round to two decimals (whole cents), half-up.** The pending
+   $5,245.195 commission resolves to $5,245.20. `order_items.total_price` and
+   `commissions.commission_amount` both round at this point, and a live invariant predicate should
+   assert whole cents on both.
+3. **`cancel_order` semantics (M4) — cancelling releases stock.** Mason's intent: a cancelled order
+   must not hold stock. **Implementation note added 2026-08-08 after tracing the live chain — the
+   audit overstated this.** Full cancel ALREADY releases prebooked stock and writes its `released`
+   `inventory_transactions` row (confirmed live on ORD-2026-0330), and the `partially_fulfilled` path
+   already handled both halves. Only `order_items.quantity_remaining` was genuinely stranded, and
+   migration `20260808150200` zeroes exactly that. **Do NOT add a second stock-release path** — it
+   would double-release inventory. The residual `quantity_prebooked = 36` on that product is March
+   2026 historical drift (audit L2), not a cancellation defect.
+4. **Negative inventory (L3) — the existing decision stands.** Keep the 19 negative
+   `inventory.quantity_available` rows as they are; reconcile only from physical counts. No re-base
+   scheduled. Revisit when a physical count happens.
+
+**Operative rule:** decisions 2 and 3 imply forward migrations; both are unwritten as of this entry
+and are parked alongside the two migrations named in the audit (restore the `batch_apply_prepayments`
+actor guard, add a migration-ordering preflight guard). Decisions 1 and 4 are "no change" — an agent
+proposing either change must cite a new reason, not re-derive the original one.
+
+## 2026-08-07 — Governed Autonomous Software Factory REMOVED
+
+**Decision (Mason, in chat — "release the stranglehold"; chose full removal over a rebuild):** remove
+the factory entirely. It repeatedly locked up ordinary work — three fail-closed hooks ran on every tool
+call and every prompt (one with a 120-second timeout), a job stuck at `needs-ticket-ok` blocked whole
+categories of writes, and casual words like "factory" or "overnight" flipped governed state. Mason could
+not operate it.
+
+**What was removed:** all `scripts/factory*` code, the Factory Board, the three factory hooks on both
+the Claude and Codex sides, the `factory:*` npm scripts, and every factory branch inside the surviving
+guard hooks. The shared state directory `<git-common-dir>/crx-factory/` is archived, not deleted.
+
+**Operative rule:** the ordinary safety net is unchanged and remains authoritative — GitHub `protect-main`
+branch protection, PR + CodeRabbit review, exact-SHA `gpt-5.6-sol` proofs for risky diffs, and the
+money/migration/bash-safety/RLS guards. Do not rebuild factory-style governance without Mason explicitly
+asking; if autonomous batching is wanted later, design it around the existing `/ship` pipeline with
+hooks that fail OPEN for coordination (never fail-closed on ordinary work). All factory entries below
+this one are historical.
 
 ---
 

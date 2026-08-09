@@ -2,21 +2,6 @@ Drive a coding job from "implement" all the way to "reviewed, committed, and shi
 
 **The job** is everything after `/ship` (e.g. `/ship add a CSV export button to the AR aging report`). If no job text was given, ask Mason what the job is, then proceed.
 
-## Governed Factory entry (plain-English autonomous requests)
-
-When Mason asks conversationally for the factory, autonomous work, overnight work, or a batch of jobs, this `/ship` pipeline remains the delivery engine. Do not create a parallel workflow.
-
-Before any implementation:
-
-1. Draft one plain-English mission ticket, including the exact repository harness name that will prove it, and register it through `node scripts/factory.mjs ticket draft`.
-2. Present it through `node scripts/factory.mjs ticket present`, then send the exact recorded approval question as the final assistant message. Ask nothing else until Mason replies.
-3. Mason's ordinary chat reply is captured by the shared owner-input hook. Start the lane only through `node scripts/factory.mjs lane start`; direct build writes fail closed before that check passes.
-4. Run the existing `/ship` implementation, proof, and independent-review gates. Capture the ticket-approved, fixed-allowlist repository harness through `node scripts/factory.mjs evidence run`; its resolved `origin/main` script body and output are hashed, and copied or self-labeled files alone do not satisfy the proof gate.
-5. Move through `verifying` and `in-review`, then to `awaiting-morning-review` only with a behavior summary and CLI-executed harness proof. Present the morning decision through `node scripts/factory.mjs review present`.
-6. A chat acceptance means `approved-to-land`, not `live`. It binds the exact reviewed repository fingerprint and retains factory custody through commit, feature push, PR, merge, and the broker-hashed closeout packet. Only the narrow landing commands are available; any drift requires parking, fresh proof, and a newly presented owner decision. All ordinary `/ship` production, migration, and destructive-action gates still apply.
-
-The owner sees only the chat and the read-only Factory Board described in `/fleet`. Commands and state files are agent-facing implementation details.
-
 Autonomy boundary (Mason's standing choices — do not exceed without asking):
 - **Migrations:** in an ordinary interactive session, NEVER apply a migration to the live DB without Mason's explicit approval in the current conversation. Settled exception (Mason, 2026-07-13): in a pre-authorized hands-free run — Mason explicitly asked for the run AND autopilot is armed (`node .claude/hooks/autopilot-arm.mjs --hours N`) — a migration may apply without a per-migration in-chat OK once the hard proof gate passes (fresh same-session apply-guard proof + Codex verdict for SQL/RLS/money changes). Migrations that DELETE/TRUNCATE business rows or DROP data-bearing tables/columns are NEVER autonomous, armed or not.
 - **Edge functions:** NEVER deploy an edge function without Mason's explicit approval.
@@ -153,7 +138,7 @@ Re-verify the branch (`git branch --show-current`), then commit **on the branch*
 
 Once Step 4 is clean and Step 2/2.5 are green, present the branch, commit, verification evidence, migration/deploy state, and the exact production action. Then:
 
-- **Regular, reversible code only** (no live migration in this job, no Edge Function deploy, no data deletion, every gate ran and came back green — including the Codex verdict when the change was Codex-worthy): land under Mason's standing authorization (2026-06-16, mechanics 2026-07-14) — `git push -u origin <branch>` → `gh pr create` → wait for the required Vercel check → `gh pr merge --squash` → verify the deploy, and report the merge and evidence explicitly. Do not ask for a fresh yes — the green pipeline IS the authorization for this class of change. (Direct pushes to `main` are impossible: the `protect-main` ruleset rejects them for everyone.)
+- **Regular, reversible code only** (no live migration in this job, no Edge Function deploy, no data deletion, every gate ran and came back green — including the Codex verdict when the change was Codex-worthy): land under Mason's standing authorization (2026-06-16, mechanics 2026-07-14) — `git push -u origin <branch>` → `gh pr create` → wait for the required Vercel check → `gh pr merge --squash` → verify the deploy, and report the merge and evidence explicitly. Do not ask for a fresh yes — the green pipeline IS the authorization for this class of change. (Direct pushes to `main` are impossible: the `protect-main` ruleset rejects them for everyone.) **Then run `node scripts/land-pr.mjs <n>` to babysit the merge to completion** — branch protection requires the PR to be up to date with `main`, so a sibling merge flips the PR to `mergeStateStatus=BEHIND` and it stalls forever with every check green (PR #345 sat overnight this way, 2026-08-08). `land-pr.mjs` watches STATE, not just checks: it runs `gh pr update-branch` whenever the PR falls behind (re-running if main moves again), and exits 0 only on MERGED. It never merges anything itself — merging stays with the gated `gh pr merge`. For a risky diff (where `--auto` is denied), use it to get the branch current and green first; it then prints the proof-and-merge steps.
 - **Anything else** (a live migration was part of the job, an Edge Function deploy is proposed, data would be deleted, or any required gate ran degraded/unavailable): stop and ask Mason for explicit approval of that specific action. Do not treat the push authorization — or any older approval — as covering these. (Exception: a live migration inside a pre-authorized hands-free run with autopilot armed follows the 2026-07-13 policy in the autonomy boundary — proof gate instead of a per-migration ask; destructive migrations still stop.)
 
 ```
