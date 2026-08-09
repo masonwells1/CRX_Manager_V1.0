@@ -2277,6 +2277,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  trg_recalc_order_totals:
+    'RETURNS trigger, so PostgreSQL refuses any direct call and it can only run from its order_items trigger inside the parent transaction; convergent recomputation of the order header from the current lines, so a replay settles on the same totals',
 };
 
 

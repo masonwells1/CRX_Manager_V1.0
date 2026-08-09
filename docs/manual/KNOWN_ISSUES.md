@@ -264,7 +264,7 @@ mutation-tested — restoring the old `&& /\d{14}/` condition turns it red.
 
 The concurrent-checkout entry above stays OPEN; this fix does not touch it.
 
-## OPEN — order header profit can still differ a cent from the sum of its own lines
+## DECIDED 2026-08-09 — order header profit vs the sum of its own lines (fix written, NOT yet applied)
 
 **Found 2026-08-08 (Codex P2, PR #354). Not a regression — it predates the
 rounding work and is unchanged by it.** `trg_recalc_order_totals` does not read
@@ -329,6 +329,40 @@ Once that is answered, the invariant gets enforced across every writer with a
 database invariant test, and this entry and the live discrepancy close together.
 Per-order live figures are deliberately not recorded here — this repository is
 public; they live in the access-controlled session record.
+
+### Answered 2026-08-09 — the order header is canonical; lines are derived to match it
+
+Measuring live before deciding changed the shape of the problem. The gap is
+**not** a rounding artefact. `orders.total_profit` is recomputed by a trigger on
+every write and is right. `order_items.profit` is a **stored cache that nothing
+refreshes** — edit a product's cost or a line's quantity and the line keeps its
+old profit forever. 37 of 288 line rows across 17 orders currently hold a stale
+value, and most of the 11 visible order-level gaps are orders of magnitude
+larger than any rounding rule could produce.
+
+**Mason's decision:** the order header is canonical. Line profit is derived from
+it, using one rule everywhere — round each line's revenue and each line's cost
+to whole cents, then subtract. Rounding per line (rather than rounding the sum)
+is what makes `SUM(line profit) = header total_profit` hold **exactly**, by
+algebra rather than by luck. That also disposes of the escalated blocking
+finding above: the header now subtracts per-line **rounded** cost, so the
+two-line `10.005 / 5.001` case that widened the gap cannot arise.
+
+**The fix:** `20260809230500_single_canonical_line_profit.sql` (history row 862).
+Written and reviewed 2026-08-09 — `rls-security-reviewer` and
+`migration-drift-reviewer` both returned zero blockers. **Not yet applied.**
+It is forward-only: applying it moves no live money. The one-time repair of the
+37 stale lines is written but fully commented out and is a **separate** decision,
+because writing those rows would also round 11 of the 46 fractional-cent
+`order_items` rows that `20260809170800` is deliberately holding back.
+
+**Still open after this lands, deliberately:** `_update_order_items_impl`
+(`20260617123503`, lines 274–275) overwrites `orders.total_price` with the raw
+un-rounded line sum immediately after the trigger set the rounded one. That is
+pre-existing and unrelated to profit — the exactness guarantee above is scoped
+to `total_profit` only, and `total_price` can still sit a fraction of a cent off
+its own lines until that RPC is fixed. Recorded so nobody reads the new
+guarantee as broader than it is.
 
 ## RESOLVED LIVE — Quote and Customer whole-record saves reject stale editors
 
