@@ -153,6 +153,31 @@ BEGIN
     RAISE EXCEPTION 'QUOTE_ITEM_PRODUCT_IMMUTABLE: product_id cannot be changed on an existing quote line; save the quote to replace the line instead'
       USING ERRCODE = 'P0001';
   END IF;
+  -- Re-parenting a line is the same attack as editing the snapshot, one step
+  -- removed. A rep who owns an old quote with a cheap snapshot and a newer
+  -- quote holding the same product could move the old row across via the
+  -- qitems_update RLS policy; save_quote would then see a known id on the
+  -- target quote with a matching product and faithfully preserve the stale
+  -- cost, inflating quote, order and commission profit. save_quote never
+  -- UPDATEs quote_id or section_id -- it delete+reinserts -- so any direct
+  -- UPDATE that moves a line is illegitimate.
+  IF NEW.quote_id IS DISTINCT FROM OLD.quote_id THEN
+    RAISE EXCEPTION 'QUOTE_ITEM_QUOTE_IMMUTABLE: a quote line cannot be moved to a different quote'
+      USING ERRCODE = 'P0001';
+  END IF;
+  -- section_id may move between sections of the SAME quote (a legitimate
+  -- reorder), but never into a section belonging to another quote, which would
+  -- carry the line across by the back door.
+  IF NEW.section_id IS DISTINCT FROM OLD.section_id
+     AND NEW.section_id IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM public.quote_sections qs
+        WHERE qs.id = NEW.section_id
+          AND qs.quote_id = NEW.quote_id
+     ) THEN
+    RAISE EXCEPTION 'QUOTE_ITEM_SECTION_FOREIGN: section_id must belong to the same quote as the line'
+      USING ERRCODE = 'P0001';
+  END IF;
   RETURN NEW;
 END;
 $$;
@@ -881,7 +906,13 @@ BEGIN
         -- Without it the BEFORE INSERT trigger stamps todays catalog cost, and
         -- the next ordinary save preserves that stamp and recomputes the line
         -- from it, silently repricing the restored version.
-        ROUND((v_item->>'current_cost')::numeric * 100)::bigint
+        --
+        -- COALESCE to 0: a version whose item carries a missing or JSON-null
+        -- current_cost would otherwise insert NULL here, the trigger would fall
+        -- through to todays catalog cost, and the restore would reprice after
+        -- all. An explicit zero is the honest record for a line the version
+        -- itself had no cost for, and unlike NULL it is preserved by later saves.
+        COALESCE(ROUND((v_item->>'current_cost')::numeric * 100)::bigint, 0)
       );
     END LOOP;
   END LOOP;

@@ -154,12 +154,16 @@ BEGIN
     -ri.quantity,
     ri.unit_price_cents,
     -ri.extended_cents,
-    -- Reverse COGS only for stock that actually comes back to us. A line
-    -- marked restock = false is damaged, expired, or otherwise unsellable:
-    -- the customer gets their money back but we never recover the goods, so
-    -- the original cost stays on the books. Handing the cost back for scrap
-    -- would overstate gross profit on exactly the returns that hurt most.
-    CASE WHEN ri.restock THEN
+    -- Reverse COGS only for stock that actually came back to us. restocked,
+    -- not restock: restock is the intent flag, but receive_return sets
+    -- restocked = true only after inventory was really incremented, and leaves
+    -- it false when the item was ineligible OR when no inventory row existed to
+    -- increment. Both of those are cases where we refunded the customer and did
+    -- not get sellable goods back, so the original cost stays on the books.
+    -- Reading the outcome flag is safe here because credit_return refuses to
+    -- run unless the return is already in status 'received' (guard above), so
+    -- receive_return has necessarily finished and restocked is settled.
+    CASE WHEN ri.restocked THEN
       COALESCE(
         (SELECT ii.cost_cents
            FROM invoice_items ii

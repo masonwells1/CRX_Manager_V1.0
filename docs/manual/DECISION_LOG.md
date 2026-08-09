@@ -26,9 +26,12 @@ debit carried into the next commission period.
 **2. No historical backfill.** The returns-COGS reversal corrects cost handling going forward, and
 the earlier question was whether to correct returns already in the database. **Decision: leave
 history as-is.** Reason: the app is not in production use for this functionality until next year,
-so the historical rows are test and transitional data, not real financial history worth correcting.
-Operative rule: do not write backfill migrations for pre-2026-08 returns COGS; if real data is
-entered before the cutover, revisit this.
+so the existing rows are test and transitional data, not real financial history worth correcting.
+Operative rule: the boundary is **the moment `20260808170000_return_credit_cogs_reversal.sql` is
+applied to the live database**, not a calendar date — credit memos issued before that apply are out
+of scope for backfill regardless of when they were created, and everything issued after it follows
+the new behavior automatically. Do not write a backfill migration for the pre-apply rows. If real
+customer returns are entered before the cutover, revisit this.
 
 **3. Margin targets are per-product, not global.** **Decision: targets vary product by product** —
 there is no single company-wide margin number to price against. Operative rule: the pricing workbook
@@ -40,13 +43,20 @@ seeding strategy for the ~600 SKUs is part of that work.
 
 **4. Below-cost selling becomes a hard rule, with an admin exception.** The 2026-08-08 work shipped
 below-cost approval as a UI confirmation, which a direct RPC caller bypasses and which a catalog-cost
-increase mid-transaction can defeat (Codex round 4, PR #350). **Decision: make it a wall — enforce it
-server-side — but admins can still sell under cost.** Operative rule: the money-write RPCs must
-reject a below-cost line unless an approval reason is supplied, with the check performed against the
-locked product cost inside the same transaction; the admin role retains the ability to proceed. This
-is deliberately a cross-cutting change to the money-write surface (`bulk_import_order`, `save_order`,
-`update_order_items`, and the invoice/quote equivalents), to be decided once and applied
-consistently rather than patched into one RPC.
+increase mid-transaction can defeat (Codex round 4, PR #350). **The policy is settled: make it a
+wall — enforce it server-side — but admins can still sell under cost.**
+
+**Status: NOT IMPLEMENTED.** PR #350 ships the UI confirmation only; the server-side invariant is
+deferred follow-up work and no migration for it exists yet. Do not read this entry as describing
+current behavior.
+
+When built, the operative rule is: the money-write RPCs must reject a below-cost line unless an
+approval reason is supplied, with the check performed against the locked product cost inside the
+same transaction, and the admin role retains the ability to proceed. It must land across the whole
+money-write surface at once rather than being patched into one RPC. The RPCs that actually exist and
+would need it: `create_direct_order`, `create_rush_order`, `bulk_import_order`, `update_order_items`,
+`price_order`, `save_invoice`, and `save_quote`. (An earlier draft of this entry listed a
+`save_order` RPC — no such function exists; that was an error.)
 
 ---
 ## 2026-08-08 — Four foundation-ultra-review owner decisions settled

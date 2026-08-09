@@ -39,6 +39,30 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Rounds 9-10 (Codex + CodeRabbit):**
+
+- **Moving a quote line to another quote (Codex P1).** The snapshot guard blocked editing the cost
+  and swapping the product, but not re-parenting the row. A rep owning both an old quote with a
+  cheap snapshot and a newer quote holding the same product could move the old line across via the
+  RLS update policy; `save_quote` would then see a known id with a matching product and faithfully
+  preserve the stale cost. `quote_id` is now immutable, and `section_id` may only move between
+  sections of the same quote.
+- **COGS gated on the wrong flag.** The previous round gated the reversal on `restock` (eligibility).
+  Codex pointed out `receive_return` sets `restocked` only after inventory is actually incremented,
+  and leaves it false when no inventory row exists — so an eligible-but-skipped line still got its
+  cost reversed. Now gated on `restocked`, which also closes the edge the previous round documented
+  as open. Safe to read the outcome flag because `credit_return` refuses to run unless the return is
+  already in status `received`.
+- **NULL cost in a restored version.** A `quote_versions` item with a missing or JSON-null
+  `current_cost` restored as NULL, the trigger fell through to today's catalog cost, and the restore
+  repriced after all. Now coalesced to an explicit zero, which later saves preserve.
+- **Doc corrections.** The no-backfill boundary is now the moment the returns migration is applied
+  rather than an ambiguous calendar date; the below-cost decision is explicitly marked NOT
+  IMPLEMENTED so it is not misread as current behavior; and a `save_order` RPC cited in both this
+  changelog and the decision log **does not exist** — the real money-write surface is
+  `create_direct_order`, `create_rush_order`, `bulk_import_order`, `update_order_items`,
+  `price_order`, `save_invoice` and `save_quote`.
+
 **Round 8 (Codex), two more:**
 
 - **COGS on non-restockable returns.** The returns credit reversed the full cost of every
@@ -103,9 +127,10 @@ Closed three of four round-4 Codex findings on the pricing branch.
 **Deferred (owner decision):** Codex's remaining P2 asks that below-cost approval be a
 server-side invariant rather than a UI gate, which would also close the
 catalog-cost-changes-mid-import race. `bulk_import_order` is where Codex raised it, but it
-is only one part: `save_order` and `update_order_items` (and the invoice/quote equivalents)
-write money on the same terms and have the same gap, so it must be decided once and applied
-across the whole money-write surface. That changes what those RPCs will accept from every
+is only one part: `create_direct_order`, `create_rush_order`, `update_order_items`, `price_order`,
+`save_invoice` and `save_quote` write money on the same terms and have the same gap, so it must be
+decided once and applied across the whole money-write surface. (An earlier draft named a
+`save_order` RPC; no such function exists.) That changes what those RPCs will accept from every
 caller — it needs Mason's call, and is tracked with the other open pricing decisions.
 **Settled 2026-08-09:** yes, enforce server-side, with an admin exception — see
 `docs/manual/DECISION_LOG.md`.
