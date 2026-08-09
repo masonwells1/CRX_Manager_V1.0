@@ -151,10 +151,10 @@ BEGIN
     oi.price_per_unit AS unit_price,
     oi.total_price,
     ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS cost,
-    ROUND(oi.total_price - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS profit,
+    oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS profit,
     CASE
       WHEN oi.total_price > 0 THEN ROUND(
-        ((oi.total_price - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)
+        ((oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
           / oi.total_price) * 100, 1)
       ELSE 0::numeric
     END AS margin_pct,
@@ -245,7 +245,7 @@ BEGIN
       oi.total_units_needed AS quantity,
       oi.total_price AS revenue,
       ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS cost,
-      ROUND(oi.total_price - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS profit
+      oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS profit
     FROM public.order_items oi
     JOIN public.orders o ON o.id = oi.order_id
     JOIN public.customers c ON c.id = o.customer_id
@@ -449,7 +449,7 @@ BEGIN
       COALESCE(SUM(oi.total_price), 0) AS total_revenue,
       COALESCE(SUM(
         oi.total_price
-        - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed
+        - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2)
       ), 0) AS total_profit
     FROM public.order_items oi
     JOIN public.orders o ON o.id = oi.order_id
@@ -476,7 +476,7 @@ BEGIN
         COALESCE(SUM(oi.total_price), 0) AS revenue,
         COALESCE(SUM(
           oi.total_price
-          - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed
+          - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2)
         ), 0) AS profit
       FROM public.order_items oi
       JOIN public.orders o ON o.id = oi.order_id

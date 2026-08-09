@@ -39,6 +39,14 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 17 (Codex) — revenue, COGS and profit now reconcile at one cents boundary:**
+
+The detail and summary reports rounded the displayed COGS but derived profit from the *unrounded*
+cost, so a line could report $0.01 revenue, $0.01 cost and $0.01 profit at once. Profit and margin
+are now derived from the same `ROUND(cost * quantity, 2)` the cost column shows. Swept the whole
+migration rather than the two sites reported: the dashboard headline and its monthly trend had the
+same shape. **All 21 cost expressions in the file now round at one boundary; zero unrounded remain.**
+
 **Round 16 (CodeRabbit) — the same NULL hole, one step later:**
 
 The round-15 conversion fix passed `qi.cost_at_quote_cents` straight through, so a quote line created
