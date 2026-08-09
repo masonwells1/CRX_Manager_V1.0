@@ -352,14 +352,17 @@ export function parkedMainlinePathsFrom(paths) {
 // `migration-history.md` is the canonical B7 state record after a migration has
 // landed. A parked forward migration on origin/main therefore needs two facts from
 // the SAME immutable tree: an exact LOCAL CANDIDATE / NOT APPLIED history row and
-// an explicit leading status header in that exact SQL blob. Parsing the timestamp
-// column and a full backticked basename avoids fuzzy prose/timestamp matches.
+// either an explicit leading status header or a matching SQL sha256 pin in that row.
+// The hash form classifies an already-reviewed candidate without creating a
+// comment-only migration diff. Parsing the timestamp column and a full backticked
+// basename avoids fuzzy prose/timestamp matches.
 export function localCandidateMigrationPathsFromHistory(historyText) {
   if (typeof historyText !== "string" || !historyText.trim()) {
     return { state: "unknown", paths: new Set(), reason: "migration history is unreadable" };
   }
 
   const paths = new Set();
+  const sha256ByPath = new Map();
   for (const raw of historyText.split("\n")) {
     const line = raw.replace(/\r/g, "").trim();
     if (!/^\|/.test(line)) continue;
@@ -380,9 +383,15 @@ export function localCandidateMigrationPathsFromHistory(historyText) {
     if (paths.has(repoPath)) {
       return { state: "unknown", paths: new Set(), reason: "duplicate LOCAL CANDIDATE history rows name the same migration" };
     }
+    const sha256Pins = [...detail.matchAll(/\bSQL\s+sha256\s*:?\s*`([a-f0-9]{64})`/gi)]
+      .map((match) => match[1].toLowerCase());
+    if (sha256Pins.length > 1) {
+      return { state: "unknown", paths: new Set(), reason: "LOCAL CANDIDATE history row has multiple SQL sha256 pins" };
+    }
     paths.add(repoPath);
+    if (sha256Pins.length === 1) sha256ByPath.set(repoPath, sha256Pins[0]);
   }
-  return { state: "known", paths, reason: "" };
+  return { state: "known", paths, sha256ByPath, reason: "" };
 }
 
 function historyRowsByMigrationBasename(historyText) {
@@ -410,7 +419,13 @@ function historyRowsByMigrationBasename(historyText) {
 // makes an orphaned explicit parked header fail loud without opening every migration.
 // A stale header with an exact APPLIED/RETIRED/SUPERSEDED history row still self-clears;
 // staging/audit name-based drafts remain visible in every partial result.
-export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () => null, possibleParkedMigrationPaths = null) {
+export function parkedMainlineDiscoveryFrom(
+  paths,
+  historyText,
+  loadText = () => null,
+  possibleParkedMigrationPaths = null,
+  sha256Text = null,
+) {
   const mainlinePaths = [...(paths || [])].map((p) => String(p || "").trim()).filter(Boolean);
   const discovered = parkedMainlinePathsFrom(mainlinePaths);
   const history = localCandidateMigrationPathsFromHistory(historyText);
@@ -432,8 +447,16 @@ export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () =>
     if (typeof sqlText !== "string") {
       return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL blob is unreadable from origin/main" };
     }
-    if (!hasExplicitParkedMigrationHeader(sqlText)) {
-      return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL lacks an explicit parked status header" };
+    const expectedSha256 = history.sha256ByPath?.get(candidate);
+    if (expectedSha256) {
+      if (typeof sha256Text !== "function") {
+        return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL sha256 pin cannot be verified" };
+      }
+      if (sha256Text(sqlText) !== expectedSha256) {
+        return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL sha256 does not match migration history" };
+      }
+    } else if (!hasExplicitParkedMigrationHeader(sqlText)) {
+      return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL lacks an explicit parked status header or SQL sha256 pin" };
     }
     discovered.push(matches[0]);
   }
@@ -474,30 +497,41 @@ export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () =>
 // candidate registry is one-to-one in both directions. Runtime deliberately avoids
 // that broad blob scan so 76 historical headers cannot become a latency or false-list
 // regression.
-export function validateParkedMigrationCrossReferences(paths, historyText, loadText = () => null) {
+export function validateParkedMigrationCrossReferences(paths, historyText, loadText = () => null, sha256Text = null) {
   const history = localCandidateMigrationPathsFromHistory(historyText);
   if (history.state !== "known") return history;
   const historyRowsByBasename = historyRowsByMigrationBasename(historyText);
-  const headers = new Set();
+  const verifiedCandidates = new Set();
   for (const raw of paths || []) {
     const p = String(raw || "").trim();
     const normalized = normRepoPath(p);
     if (!normalized.startsWith("supabase/migrations/") || !isParkedMigrationFile(p.slice(p.lastIndexOf("/") + 1))) continue;
     const sqlText = loadText(p);
     if (typeof sqlText !== "string") return { state: "unknown", paths: new Set(), reason: "forward migration SQL blob is unreadable" };
-    if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     if (history.paths.has(normalized)) {
-      headers.add(normalized);
+      const expectedSha256 = history.sha256ByPath?.get(normalized);
+      if (expectedSha256) {
+        if (typeof sha256Text !== "function") {
+          return { state: "unknown", paths: new Set(), reason: "LOCAL CANDIDATE SQL sha256 pin cannot be verified" };
+        }
+        if (sha256Text(sqlText) !== expectedSha256) {
+          return { state: "unknown", paths: new Set(), reason: "LOCAL CANDIDATE SQL sha256 does not match migration history" };
+        }
+        verifiedCandidates.add(normalized);
+      } else if (hasExplicitParkedMigrationHeader(sqlText)) {
+        verifiedCandidates.add(normalized);
+      }
       continue;
     }
+    if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     const basename = p.slice(p.lastIndexOf("/") + 1).toLowerCase();
     const rows = historyRowsByBasename.get(basename) || [];
     if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
       return { state: "unknown", paths: new Set(), reason: "parked header has no applied/retired history record for its migration version" };
     }
   }
-  if (headers.size !== history.paths.size || [...headers].some((p) => !history.paths.has(p))) {
-    return { state: "unknown", paths: new Set(), reason: "parked header and LOCAL CANDIDATE history registry are not one-to-one" };
+  if (verifiedCandidates.size !== history.paths.size || [...verifiedCandidates].some((p) => !history.paths.has(p))) {
+    return { state: "unknown", paths: new Set(), reason: "parked marker and LOCAL CANDIDATE history registry are not one-to-one" };
   }
   return { state: "known", paths: history.paths, reason: "" };
 }

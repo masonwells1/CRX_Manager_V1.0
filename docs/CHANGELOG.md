@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — CRX harness and Codex maximum-permissions audit
+
+Verified the current CRX agent harness against `origin/main`, the synced Claude/Codex workflow
+manifests, current OpenAI Codex permission guidance, and fresh local execution. Codex is confirmed
+at `approval_policy = "never"` plus `sandbox_mode = "danger-full-access"`; a fresh nested session
+reported approval Never, unrestricted filesystem access, enabled network access, and loaded both
+global and repository hooks. Updated the npm Codex CLI from 0.145.0 to 0.147.0 and hardened the
+machine-wide command guard with regression coverage for destructive Git plumbing and variant
+spellings while preserving ordinary commands such as `node --test`.
+
+Fixed `session-staleness.mjs` so linked worktrees resolve the gitignored database-backup marker
+through Git's common directory. The current canonical marker is now correctly reported as 10 days
+old instead of nonexistent. Added a real linked-worktree regression fixture; the focused suite now
+passes 15 assertions. The full audit and protected-harness follow-ups are recorded in
+`docs/audits/2026-08-08-crx-harness-permissions-audit.md`. No production deploy, live migration,
+live-data mutation, or database backup ran in this audit.
+
+Repaired parked-migration fleet visibility without changing the four candidate SQL files: an exact
+`LOCAL CANDIDATE / NOT APPLIED` history row may now pin the full SQL sha256 as the second immutable
+fact instead of requiring a comment-only migration edit. The shared fleet/SessionStart reader fails
+closed on missing or mismatched pins, and the repository regression proves all four candidates remain
+visible after merge.
+
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
 PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in bash-safety and live-testdata guards (variant git spellings, redirect terminators, plumbing push commands, DELETE catch-all, setval/nextval and RPC-via-SELECT rules), added regression tests, resolved the changelog merge conflict with main.

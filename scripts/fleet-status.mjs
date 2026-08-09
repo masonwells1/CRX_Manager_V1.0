@@ -16,6 +16,7 @@
 
 import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -306,7 +307,13 @@ if (hasOriginMain) {
       historyCandidates.state === "known" ? historyCandidates.paths : [],
     ));
     for (const [key, text] of blobs || []) mainlineBlobCache.set(key, text);
-    const discovery = parkedMainlineDiscoveryFrom(mainlinePaths, history, (p) => blobs?.get(normRepoPath(p)) ?? null, parkedPrefilter.paths);
+    const discovery = parkedMainlineDiscoveryFrom(
+      mainlinePaths,
+      history,
+      (p) => blobs?.get(normRepoPath(p)) ?? null,
+      parkedPrefilter.paths,
+      (text) => createHash("sha256").update(text, "utf8").digest("hex"),
+    );
     mainlineParkedState = discovery.state;
     mainlineParkedReason = discovery.reason;
     for (const p of discovery.paths) {

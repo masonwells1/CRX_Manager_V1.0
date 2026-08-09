@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +25,7 @@ import {
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); pass++; }
 function eq(a, b, msg) { assert.deepEqual(a, b, msg); pass++; }
+function sha256Text(text) { return createHash("sha256").update(text, "utf8").digest("hex"); }
 
 const sample = [
   "worktree C:/CRX_Manager",
@@ -272,7 +274,30 @@ const exactCandidateFailure = parkedMainlineDiscoveryFrom(
   (p) => exactCandidateBatch.get(normRepoPath(p)) ?? null,
   possibleParkedMigrationPaths,
 );
-eq(exactCandidateFailure.reason, "LOCAL CANDIDATE SQL lacks an explicit parked status header", "a batched readable candidate without its header reports the explicit status failure, not an unreadable blob");
+eq(exactCandidateFailure.reason, "LOCAL CANDIDATE SQL lacks an explicit parked status header or SQL sha256 pin", "a batched readable candidate without either marker reports the explicit status failure, not an unreadable blob");
+
+const candidateWithoutHeaderText = mainlineTexts.get(CANDIDATE_NO_HEADER);
+const pinnedCandidateHistory = mainlineHistory.replace(
+  "File: `20260730235959_candidate_without_header.sql`.",
+  `File: \`20260730235959_candidate_without_header.sql\`. SQL sha256: \`${sha256Text(candidateWithoutHeaderText)}\`.`,
+);
+const pinnedCandidate = parkedMainlineDiscoveryFrom(
+  mainlinePaths,
+  pinnedCandidateHistory,
+  (p) => mainlineTexts.get(p),
+  possibleParkedMigrationPaths,
+  sha256Text,
+);
+eq(pinnedCandidate.state, "known", "a matching SQL sha256 pin is a deterministic alternative to a comment-only migration edit");
+ok(pinnedCandidate.paths.has(CANDIDATE_NO_HEADER), "a hash-pinned headerless candidate remains visible as parked");
+const mismatchedPinnedCandidate = parkedMainlineDiscoveryFrom(
+  mainlinePaths,
+  pinnedCandidateHistory.replace(/[a-f0-9]{64}(?=`\.)/, "0".repeat(64)),
+  (p) => mainlineTexts.get(p),
+  possibleParkedMigrationPaths,
+  sha256Text,
+);
+eq(mismatchedPinnedCandidate.state, "unknown", "a stale SQL sha256 pin fails closed instead of hiding candidate drift");
 
 const mergedHistory = mainlineHistory.replace("**LOCAL CANDIDATE — NOT APPLIED.** File: `20260730235959_candidate_without_header.sql`.", "**APPLIED LIVE.** File: `20260730235959_candidate_without_header.sql`.");
 const mergedReads = [];
@@ -479,8 +504,10 @@ const currentCrossReference = validateParkedMigrationCrossReferences(
   repoMigrationPaths,
   readFileSync(path.join(repoRoot, "docs", "reference", "migration-history.md"), "utf8"),
   (p) => readFileSync(path.join(repoRoot, ...p.split("/")), "utf8"),
+  sha256Text,
 );
 eq(currentCrossReference.state, "known", "repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row");
+eq(currentCrossReference.paths.size, 4, "repository correction guard keeps all four hash-pinned local candidates visible");
 const periodCloseMatches = repoMigrationPaths.filter((p) => p.endsWith("_vendor_bill_period_close_lock.sql"));
 eq(periodCloseMatches.length, 1, "period-close migration has one stable-suffix match");
 const periodCloseCandidate = readFileSync(path.join(repoRoot, ...periodCloseMatches[0].split("/")), "utf8");

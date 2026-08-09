@@ -26,6 +26,31 @@ function emit(extra) {
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const warnings = [];
 
+function backupMarkerPath() {
+  const localPath = path.join(projectDir, "backups", "LATEST-OK.json");
+  if (existsSync(localPath)) return localPath;
+
+  // Linked worktrees share the main checkout's Git common directory, but they
+  // do not share gitignored backup files. Resolve the canonical checkout root
+  // from that common directory so every worktree sees the same backup marker.
+  try {
+    const commonDir = execFileSync(
+      "git",
+      ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+      {
+        cwd: projectDir,
+        encoding: "utf8",
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    ).trim();
+    const canonicalPath = path.join(path.dirname(commonDir), "backups", "LATEST-OK.json");
+    if (existsSync(canonicalPath)) return canonicalPath;
+  } catch { /* fall back to the worktree-local path */ }
+
+  return localPath;
+}
+
 function migrationMayAffectSchemaRegistry(sql) {
   const withoutComments = String(sql)
     .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -175,7 +200,7 @@ try {
 
 // ─── CHECK 4 — weekly DB backup freshness (backups/LATEST-OK.json) ───────
 try {
-  const latestOkPath = path.join(projectDir, "backups", "LATEST-OK.json");
+  const latestOkPath = backupMarkerPath();
   if (!existsSync(latestOkPath)) {
     warnings.push(
       `💾 No database backup exists yet — say "back up the database" to create the first one.\n` +

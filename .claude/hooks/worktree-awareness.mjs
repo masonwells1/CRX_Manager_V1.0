@@ -13,6 +13,7 @@
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
@@ -176,7 +177,13 @@ function mainlineParkedDiscovery() {
       parkedPrefilter.paths,
       historyCandidates.state === "known" ? historyCandidates.paths : [],
     ));
-    return parkedMainlineDiscoveryFrom(mainlinePaths, history, (p) => blobs?.get(normRepoPath(p)) ?? null, parkedPrefilter.paths);
+    return parkedMainlineDiscoveryFrom(
+      mainlinePaths,
+      history,
+      (p) => blobs?.get(normRepoPath(p)) ?? null,
+      parkedPrefilter.paths,
+      (text) => createHash("sha256").update(text, "utf8").digest("hex"),
+    );
   } catch {
     return { state: "unknown", paths: new Set(), reason: "origin/main parked-state metadata is unreadable" };
   }

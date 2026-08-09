@@ -5,7 +5,7 @@
 // Run: node .claude/hooks/session-staleness.test.mjs
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -15,12 +15,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
+const isolatedGitEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+);
 
 function runHook(projectDir) {
   return spawnSync(process.execPath, [path.join(__dirname, "session-staleness.mjs")], {
     input: "",
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+    env: { ...isolatedGitEnv, CLAUDE_PROJECT_DIR: projectDir },
   });
 }
 
@@ -113,6 +116,29 @@ try {
   ok(ctxG.includes("session-staleness"), "FIX2: warning names the hook");
   ok(ctxG.includes("unreadable/unparseable"), "FIX2: warning text matches the SKIPPED-check pattern");
   ok(ctxG.includes("/regen-schema-registry") || ctxG.includes("regen-schema-registry"), "FIX2: warning points at the fix");
+
+  // ── FIX 3: linked worktrees see the canonical checkout's gitignored backup
+  // marker instead of falsely claiming that no backup exists. ──────────────
+  const backupRepo = path.join(tmpRoot, "backup-repo");
+  scaffold(backupRepo, {
+    _meta: { migrations_high_water: "20260101000000", applied_migration_names: [] },
+  }, {});
+  execFileSync("git", ["init", "-b", "main", backupRepo], { env: isolatedGitEnv, stdio: "ignore" });
+  execFileSync("git", ["-C", backupRepo, "config", "user.email", "session-staleness@example.com"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", backupRepo, "config", "user.name", "Session Staleness Test"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", backupRepo, "add", ".claude", "supabase"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", backupRepo, "commit", "-m", "fixture"], { env: isolatedGitEnv, stdio: "ignore" });
+  mkdirSync(path.join(backupRepo, "backups"), { recursive: true });
+  writeFileSync(path.join(backupRepo, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date().toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  const linkedWorktree = path.join(tmpRoot, "backup-linked");
+  execFileSync("git", ["-C", backupRepo, "worktree", "add", "--detach", linkedWorktree], { env: isolatedGitEnv, stdio: "ignore" });
+  r = runHook(linkedWorktree);
+  eq(r.status, 0, "FIX3: linked-worktree backup check exits 0");
+  ok(!additionalContextOf(r).includes("No database backup exists yet"), "FIX3: canonical backup marker prevents false missing-backup warning");
 
   console.log(`session-staleness: ${pass} assertions passed`);
 } finally {
