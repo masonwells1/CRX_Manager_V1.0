@@ -39,6 +39,23 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 33 (Codex) + the approved policy change — closing out the branch:**
+
+- **One profit boundary (Codex P2).** `save_quote` rounded `(price - cost) * qty` as a single
+  expression while the reports compute settled revenue minus settled extended cost. On fractional
+  quantities whose extensions land on a half-cent the two disagree by a cent, and that cent rides
+  into the converted order and the commission. Profit and margin are now
+  `ROUND(price*qty) - ROUND(cost*qty)` in both `save_quote` and `duplicate_quote`.
+- **Direct writes to quote lines are gone (Mason approved 2026-08-09).** The UPDATE guard made
+  `cost_at_quote_cents` immutable, but `qitems_insert`/`qitems_update`/`qitems_delete` let a rep
+  delete a historical line and reinsert the same product; nothing was updated, so the guard never
+  fired and the trigger stamped today's cost. Those three policies are dropped — quote lines are
+  writable only through the SECURITY DEFINER RPCs. Verified first that the table does **not** force
+  row security and is owned by `postgres`, and that all five quote RPCs are `postgres`-owned, so
+  they bypass RLS and keep working; and that all three frontend touches of `quote_items` are reads.
+  SELECT is untouched. Postflight asserts no write policy remains, that RLS is still enabled and
+  unforced, and that the read policy survives.
+
 **Round 32 (Codex) — the retained approval had to be bound to what it approved:**
 
 Round 30's retained reason was held for the life of the idempotency key, but a pre-commit

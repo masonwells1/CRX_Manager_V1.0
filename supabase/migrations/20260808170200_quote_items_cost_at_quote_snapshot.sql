@@ -757,12 +757,20 @@ BEGIN
       total_units,
       price_per_acre,
       ROUND(ppu * total_units, 2) AS total_price,
-      ROUND((ppu - cc) * total_units, 2) AS profit,
+      -- SNAPSHOT<<< profit is settled revenue MINUS settled extended cost, not
+      -- a rounding of the margin per unit. The reports compute it the first
+      -- way; rounding (price - cost) * qty as one expression disagrees with
+      -- them by a cent on fractional quantities whose extensions land on a
+      -- half-cent, and that cent then rides into the converted order and the
+      -- commission. One boundary, applied to each side. (Codex round 33.)
+      ROUND(ppu * total_units, 2) - ROUND(cc * total_units, 2) AS profit,
       CASE
-        WHEN ppu * total_units > 0
-          THEN ROUND(((ppu - cc) * total_units) / (ppu * total_units) * 100, 2)
+        WHEN ROUND(ppu * total_units, 2) > 0
+          THEN ROUND((ROUND(ppu * total_units, 2) - ROUND(cc * total_units, 2))
+                     / ROUND(ppu * total_units, 2) * 100, 2)
         ELSE 0
       END AS net_margin
+      -- >>>SNAPSHOT
     FROM calc
   )
   UPDATE quote_items qi SET
@@ -1843,11 +1851,15 @@ BEGIN
       qi.suggested_rate, qi.actual_rate,
       qi.rate_unit, qi.oz_per_acre, qi.price_per_acre, qi.acres,
       qi.total_units_needed, qi.unit_size,
-      ROUND((qi.price_per_unit - COALESCE(p.current_cost, 0)) * COALESCE(qi.total_units_needed, 0), 2),
+      -- Same boundary as save_quote: the copied (already settled) line total
+      -- minus the settled extended cost, so a duplicate reconciles with the
+      -- reports and with what save_quote would write. (Codex round 33.)
+      COALESCE(qi.total_price, 0) - ROUND(COALESCE(p.current_cost, 0) * COALESCE(qi.total_units_needed, 0), 2),
       qi.total_price,
       CASE
         WHEN COALESCE(qi.total_price, 0) > 0
-          THEN ROUND(((qi.price_per_unit - COALESCE(p.current_cost, 0)) * COALESCE(qi.total_units_needed, 0))
+          THEN ROUND((COALESCE(qi.total_price, 0)
+                      - ROUND(COALESCE(p.current_cost, 0) * COALESCE(qi.total_units_needed, 0), 2))
                      / qi.total_price * 100, 2)
         ELSE 0
       END,
@@ -1912,6 +1924,32 @@ $function$;
 REVOKE ALL ON FUNCTION public.duplicate_quote(uuid, uuid, text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.duplicate_quote(uuid, uuid, text) FROM anon;
 GRANT EXECUTE ON FUNCTION public.duplicate_quote(uuid, uuid, text) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Close the delete+reinsert bypass. (Codex round 31 P1; Mason approved
+-- 2026-08-09.)
+--
+-- The UPDATE guard makes cost_at_quote_cents immutable, but the qitems_insert /
+-- qitems_update / qitems_delete policies from 20260206174345 let an
+-- authenticated rep DELETE a historical line and INSERT the same product back.
+-- Nothing is updated, so the guard never fires; the insert trigger stamps
+-- today's catalog cost, and if cost has fallen the next ordinary save_quote
+-- treats the new row as authoritative and recalculates the quote, the converted
+-- order, profit and commissions on the lower basis. An immutability rule that
+-- delete+reinsert can walk around is not an immutability rule.
+--
+-- Quote lines are therefore writable only through the SECURITY DEFINER RPCs
+-- (save_quote, restore_quote_version, convert_quote_to_order, draw_down_quote,
+-- duplicate_quote), which run as owner and are unaffected by these policies.
+-- SELECT is untouched.
+--
+-- Verified before dropping: every frontend touch of quote_items is a read --
+-- QuoteBuilder.tsx:818 and :2477, Quotes.tsx:278 -- so no app path loses a
+-- write it was using.
+-- ---------------------------------------------------------------------------
+DROP POLICY IF EXISTS "qitems_insert" ON public.quote_items;
+DROP POLICY IF EXISTS "qitems_update" ON public.quote_items;
+DROP POLICY IF EXISTS "qitems_delete" ON public.quote_items;
 
 -- Postflight assertions: partial application is a hard failure.
 DO $$
@@ -2065,5 +2103,33 @@ BEGIN
   IF NOT has_function_privilege('authenticated', 'public.duplicate_quote(uuid,uuid,text)'::regprocedure, 'EXECUTE')
      OR has_function_privilege('anon', 'public.duplicate_quote(uuid,uuid,text)'::regprocedure, 'EXECUTE') THEN
     RAISE EXCEPTION 'verify failed: duplicate_quote ACL drift';
+  END IF;
+
+  -- The snapshot is only immutable if direct writes are gone: no rep-facing
+  -- INSERT/UPDATE/DELETE policy may remain on quote_items, while RLS stays on
+  -- and reads keep working. The SECDEF RPCs are postgres-owned and the table
+  -- does not FORCE row security, so they are unaffected.
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'quote_items'
+      AND cmd IN ('INSERT', 'UPDATE', 'DELETE')
+  ) THEN
+    RAISE EXCEPTION 'verify failed: a direct-write policy still exists on quote_items';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = 'quote_items'
+      AND c.relrowsecurity AND NOT c.relforcerowsecurity
+  ) THEN
+    RAISE EXCEPTION 'verify failed: quote_items row-security posture changed';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'quote_items' AND cmd = 'SELECT'
+  ) THEN
+    RAISE EXCEPTION 'verify failed: quote_items lost its read policy';
   END IF;
 END$$;
