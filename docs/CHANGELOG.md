@@ -39,6 +39,23 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 19 (Codex) — a NULL basis could still be refilled, and payload-side ambiguity:**
+
+- **Fourth appearance of the NULL-passthrough shape**, this time in the ordinary save path. A prior
+  line created while its product had no cost carries a JSON-null snapshot; passing that through left
+  `v_preserved_cost` NULL, so once the product finally got a price an ordinary save silently replaced
+  the unknown historical basis with the current one. Now normalized to an explicit zero, matching the
+  restore and conversion paths.
+- **Ambiguity is now judged on both sides.** Round 14 refused when several *prior* lines of a product
+  carried different costs, but not when several *payload* rows compete for the same product's history
+  — a pre-snapshot tab that also swaps A→B on a quote already holding B sends two id-less B rows, and
+  iteration order decided which kept the historical cost. The reservation pass now counts id-less
+  rows per product and refuses when more than one competes.
+
+Recorded plainly: this mechanism has now taken **six** corrections in one session. Each fix has been
+sound in isolation and each has exposed a new edge. That pattern is itself the finding — the design
+needs live exercise more than further static iteration.
+
 **Round 18 (CodeRabbit) — the rounding sweep missed a reversed operand order:**
 
 `financial_dashboard_summary.bottom_products` writes the cost as `quantity * cost` where every other

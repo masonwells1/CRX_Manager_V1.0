@@ -258,6 +258,8 @@ DECLARE
   v_consumed_prior_ids jsonb := '{}'::jsonb;
   v_fallback_prior_id text;
   v_fallback_distinct_costs int;
+  v_idless_by_product jsonb := '{}'::jsonb;
+  v_idless_count int;
   -- >>>SNAPSHOT
 BEGIN
   v_actor := auth.uid();
@@ -451,6 +453,14 @@ BEGIN
            AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id'
            AND NOT (v_consumed_prior_ids ? v_payload_item_id) THEN
           v_consumed_prior_ids := v_consumed_prior_ids || jsonb_build_object(v_payload_item_id, true);
+        ELSIF (v_item->>'product_id') IS NOT NULL THEN
+          -- Count the rows that will need a fallback, keyed by product. Two or
+          -- more competing for the same product is unresolvable (below).
+          v_idless_by_product := jsonb_set(
+            v_idless_by_product,
+            ARRAY[v_item->>'product_id'],
+            to_jsonb(COALESCE((v_idless_by_product->>(v_item->>'product_id'))::int, 0) + 1),
+            true);
         END IF;
       END LOOP;
     END LOOP;
@@ -536,7 +546,14 @@ BEGIN
         IF v_prior_item_costs ? v_payload_item_id
            AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id' THEN
           v_reuse_item_id := v_payload_item_id::uuid;
-          v_preserved_cost := (v_prior_item_costs->v_payload_item_id->>'c')::bigint;
+          -- COALESCE to 0: a prior line created while its product had no cost
+          -- carries a JSON-null 'c'. Passing that through as NULL lets the
+          -- INSERT trigger stamp today's catalog cost, so an ordinary save made
+          -- after the product finally gets a price would silently replace an
+          -- unknown historical basis with a current one -- exactly the drift
+          -- this migration exists to stop, and inconsistent with the restore
+          -- and conversion paths, which both record this state as zero.
+          v_preserved_cost := COALESCE((v_prior_item_costs->v_payload_item_id->>'c')::bigint, 0);
         END IF;
       END IF;
 
@@ -568,6 +585,17 @@ BEGIN
         -- Deliberately scoped to differing costs: several prior lines of the
         -- same product at the SAME cost are interchangeable, any pick gives an
         -- identical result, and blocking there would be a lock-out for no gain.
+        -- More than one row needing a fallback for the SAME product is
+        -- unresolvable no matter how many prior rows exist: nothing in the
+        -- payload says which is the pre-existing line and which is the one just
+        -- swapped onto that product, so iteration order would decide who keeps
+        -- the historical cost. Refuse. (Codex round 18.)
+        v_idless_count := COALESCE((v_idless_by_product->>(v_item->>'product_id'))::int, 0);
+        IF v_idless_count > 1 THEN
+          RAISE EXCEPTION 'QUOTE_ITEM_AMBIGUOUS_COST: this save sent more than one line of the same product without identifying which existing line each one is. Reload the quote and re-apply your changes so every line keeps its own recorded cost.'
+            USING ERRCODE = 'P0001';
+        END IF;
+
         SELECT COUNT(DISTINCT COALESCE(val->>'c', '~')) INTO v_fallback_distinct_costs
         FROM jsonb_each(v_prior_item_costs) AS e(k, val)
         WHERE val->>'p' = v_item->>'product_id'
@@ -587,7 +615,7 @@ BEGIN
 
         IF v_fallback_prior_id IS NOT NULL THEN
           v_reuse_item_id := v_fallback_prior_id::uuid;
-          v_preserved_cost := (v_prior_item_costs->v_fallback_prior_id->>'c')::bigint;
+          v_preserved_cost := COALESCE((v_prior_item_costs->v_fallback_prior_id->>'c')::bigint, 0);
           v_consumed_prior_ids := v_consumed_prior_ids || jsonb_build_object(v_fallback_prior_id, true);
           v_fallback_prior_id := NULL;
         END IF;
@@ -1398,6 +1426,9 @@ BEGIN
       -- A product fallback across prior lines of differing cost must refuse
       -- rather than let key order pick the stored basis.
       AND position('QUOTE_ITEM_AMBIGUOUS_COST' in p.prosrc) > 0
+      -- Ambiguity is judged on BOTH sides: differing prior costs, and more than
+      -- one id-less payload row competing for the same product.
+      AND position('v_idless_by_product' in p.prosrc) > 0
       AND position('QUOTE_STALE_CLIENT' in p.prosrc) = 0
       AND position('client_sends_item_ids' in p.prosrc) = 0
       AND position('QUOTE_ITEM_ID_DUPLICATE' in p.prosrc) > 0
