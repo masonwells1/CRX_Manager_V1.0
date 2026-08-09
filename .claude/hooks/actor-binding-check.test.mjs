@@ -245,6 +245,34 @@ ok(isDeny(r), "a nested-quoted EXECUTE string fails closed even when its current
 r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${BOUND_DDL}$ddl$; END $do$;`);
 ok(!isDeny(r), "a bound actor function in one complete dollar-quoted EXECUTE literal remains allowed");
 
+r = runHook("GRANT EXECUTE ON FUNCTION public.bound_actor(uuid) TO authenticated, service_role;");
+ok(!isDeny(r), "GRANT EXECUTE privilege syntax is not mistaken for runtime dynamic SQL");
+
+r = runHook("REVOKE EXECUTE ON FUNCTION public.bound_actor(uuid) FROM PUBLIC, anon;");
+ok(!isDeny(r), "REVOKE EXECUTE privilege syntax is not mistaken for runtime dynamic SQL");
+
+const SECURE_GRANTED_FUNCTION = `CREATE OR REPLACE FUNCTION public.bound_actor(p_performed_by uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  UPDATE invoices SET created_by = auth.uid();
+END
+$fn$;
+REVOKE EXECUTE ON FUNCTION public.bound_actor(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.bound_actor(uuid) TO authenticated, service_role;`;
+r = runHook(SECURE_GRANTED_FUNCTION);
+ok(!isDeny(r), "a complete bound SECURITY DEFINER migration with deliberate grants remains allowed");
+
+r = runHook(`DO $do$ DECLARE v_ddl text := $ddl$SELECT 1$ddl$; BEGIN EXECUTE v_ddl; END $do$;`);
+ok(isDeny(r), "the privilege exception does not allow indirect procedural EXECUTE");
+
+r = runHook("GRANT EXECUTE ON FUNCTION public.bound_actor(uuid) TO authenticated EXECUTE v_ddl;");
+ok(isDeny(r), "a privilege-headed statement containing a second EXECUTE token still fails closed");
+
 r = runHook(`DO $do$ BEGIN
   EXECUTE 'CREATE OR REPLACE FUNCTION public.split_actor(p_performed_by uuid) RETURNS void '
     || 'LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_performed_by; END $fn$;';

@@ -204,6 +204,19 @@ function isDynamicSqlStatement(stmt) {
     /\bVALUES\b[\s\S]*\bINTO\b/i.test(stmt);
 }
 
+// EXECUTE is also a PostgreSQL privilege keyword. These two complete statement
+// heads grant/revoke permission to call an already-readable function; they do
+// not run SQL dynamically. Keep the exception deliberately narrow and refuse
+// any statement containing another EXECUTE token after the privilege keyword.
+function isExecutePrivilegeStatement(stmt) {
+  const sql = String(stmt || "").trim();
+  const isPrivilegeHead =
+    /^GRANT\s+EXECUTE\s+ON\s+FUNCTION\b/i.test(sql) ||
+    /^REVOKE\s+EXECUTE\s+ON\s+FUNCTION\b/i.test(sql);
+  if (!isPrivilegeHead) return false;
+  return (sql.match(/\bEXECUTE\b/gi) || []).length === 1;
+}
+
 function inExecuteStatement(out, text, afterIdx) {
   const before = out.slice(out.lastIndexOf(";") + 1);
   const semi = firstTopLevelSemicolon(text, afterIdx);
@@ -499,7 +512,8 @@ try {
         : null;
       const directExecute = singleLiteralSkeleton !== null &&
         /^(?:BEGIN\s+)?EXECUTE\s*\(?\s*__ACTOR_DDL_LITERAL__\s*\)?$/i.test(singleLiteralSkeleton);
-      if (!hasProceduralContainer && /\bEXECUTE\b/i.test(stmt) && !directExecute) {
+      if (!hasProceduralContainer && /\bEXECUTE\b/i.test(stmt) &&
+          !directExecute && !isExecutePrivilegeStatement(stmt)) {
         violations.push(
           "This migration executes SQL assembled through variables or multiple statements, and the " +
           "actor-binding guard cannot read it as one complete literal supplied directly to EXECUTE. Put the complete " +
