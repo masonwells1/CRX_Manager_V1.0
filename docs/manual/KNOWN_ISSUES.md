@@ -103,6 +103,30 @@ own work in the two largest docs. See
 `docs/audits/2026-08-04-test-coverage-analysis.md` for the session that surfaced
 these.
 
+## OPEN — the Profitability tabs still read stored profit; wire them AFTER the migration applies
+
+**Found 2026-08-09** (Codex, PR #350 round 39). `20260808170100` rewrites
+`get_profitability_report` onto the `cost_at_time_cents` basis, but nothing calls it:
+`Reports.tsx` still computes the customer, product and monthly Profitability tabs from direct
+queries over `orders.total_profit` / `order_items.profit` (`fetchCustomerProfitability` and
+siblings, ~lines 161-239). Until the caller is switched, **those tabs keep showing the stale
+margins the migration exists to replace** — the server-side fix is real but unreached.
+
+**The ordering is deliberate, and it matters.** The caller must land only *after* the migration is
+applied. Wired first, the tabs would call an RPC the live database does not have and break
+outright. That is why the switch was cut from #350 — a PR that ships the migration PARKED cannot
+also ship its caller.
+
+**Do this once `20260808170100` is applied live** (one small follow-up PR):
+1. Switch the three Profitability sub-fetchers in `Reports.tsx` to `get_profitability_report`.
+2. Re-add its `QUEUED_MIGRATION_FUNCTIONS` entry (removed for the same reason) and the
+   `rpcFixtureLiveDiff.test.ts` fixture — that test file currently carries an empty list with a
+   comment pointing here.
+3. Verify a real range in the UI against the same range from the RPC before calling it done.
+
+Until step 1 lands, treat the Profitability tabs as **not yet fixed**, whatever the changelog says
+about the report unification.
+
 ## OPEN — the two invoice-basis profit reports disagree on which invoices count
 
 **Found 2026-08-09** (Codex, PR #350 round 38). `get_bottom_line_pnl`
