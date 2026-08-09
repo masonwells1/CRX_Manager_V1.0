@@ -39,6 +39,19 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 15 (Codex) — a converted quote lost its quote-time cost:**
+
+`convert_quote_to_order` copies `quote_items.current_cost` into `order_items.cost_per_unit` but left
+`cost_at_time_cents` NULL, so the order-side trigger stamped **today's** catalog cost. A quote
+converted after a cost change then reported one profit through the snapshot reports in this branch
+and a different one through the order header, line profit and commissions — all of which follow the
+quote cost. The owner impl now carries `qi.cost_at_quote_cents` into the order snapshot; the INSERT
+trigger honors it because it only fills when the caller left the column NULL. Postflight asserts it.
+
+`get_gross_sales_report` also still summed unrounded extended costs while its siblings round each
+line first, so two 0.5-unit lines at a one-cent cost reported one cent here and two cents there. All
+seven cost aggregations and six profit aggregations in that RPC now round per line.
+
 **Round 14 (CodeRabbit) — refuse an unresolvable cost match instead of guessing:**
 
 Even with the reservation pass, a quote holding two lines of the *same product at different costs*

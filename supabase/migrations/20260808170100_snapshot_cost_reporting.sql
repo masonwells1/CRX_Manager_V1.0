@@ -342,11 +342,11 @@ BEGIN
     SELECT
       oi.product_name,
       ROUND(SUM(oi.total_price)::numeric, 2),
-      ROUND(SUM(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)::numeric, 2),
-      ROUND(SUM(oi.total_price - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)::numeric, 2),
+      ROUND(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
+      ROUND(SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
       CASE
         WHEN SUM(oi.total_price) > 0
-          THEN ROUND((SUM(oi.total_price - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)
+          THEN ROUND((SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
                       / SUM(oi.total_price) * 100)::numeric, 1)
         ELSE 0
       END,
@@ -365,11 +365,11 @@ BEGIN
     SELECT
       c.farm_name,
       ROUND(SUM(oi.total_price)::numeric, 2),
-      ROUND(SUM(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)::numeric, 2),
-      ROUND(SUM(oi.total_price - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)::numeric, 2),
+      ROUND(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
+      ROUND(SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
       CASE
         WHEN SUM(oi.total_price) > 0
-          THEN ROUND((SUM(oi.total_price - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)
+          THEN ROUND((SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
                       / SUM(oi.total_price) * 100)::numeric, 1)
         ELSE 0
       END,
@@ -389,11 +389,11 @@ BEGIN
     SELECT
       COALESCE(p.full_name, 'Unassigned'),
       ROUND(SUM(oi.total_price)::numeric, 2),
-      ROUND(SUM(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)::numeric, 2),
-      ROUND(SUM(oi.total_price - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)::numeric, 2),
+      ROUND(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
+      ROUND(SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
       CASE
         WHEN SUM(oi.total_price) > 0
-          THEN ROUND((SUM(oi.total_price - COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)
+          THEN ROUND((SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
                       / SUM(oi.total_price) * 100)::numeric, 1)
         ELSE 0
       END,
@@ -629,12 +629,12 @@ BEGIN
       SELECT
         c.farm_name,
         COALESCE(SUM(oi.total_price), 0) AS total_revenue,
-        COALESCE(SUM(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed), 0) AS total_cost,
+        COALESCE(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2)), 0) AS total_cost,
         ROUND(
           CASE
             WHEN SUM(oi.total_price) > 0 THEN
               ((SUM(oi.total_price) -
-                SUM(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)) /
+                SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))) /
                 NULLIF(SUM(oi.total_price), 0)) * 100
             ELSE 0
           END,
@@ -660,12 +660,12 @@ BEGIN
       SELECT
         TO_CHAR(COALESCE(o.order_date, o.created_at::date), 'YYYY-MM') AS month,
         COALESCE(SUM(oi.total_price), 0) AS revenue,
-        COALESCE(SUM(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed), 0) AS cost,
+        COALESCE(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2)), 0) AS cost,
         ROUND(
           CASE
             WHEN SUM(oi.total_price) > 0 THEN
               ((SUM(oi.total_price) -
-                SUM(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed)) /
+                SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))) /
                 NULLIF(SUM(oi.total_price), 0)) * 100
             ELSE 0
           END,

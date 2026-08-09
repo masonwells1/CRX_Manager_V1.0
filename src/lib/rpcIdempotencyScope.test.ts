@@ -232,6 +232,11 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // requires the alias NOT to be an existing function name, and here it is one
   // — which is exactly the point.
   _restore_quote_version_owner_impl: ['restore_quote_version'],
+  // Same wrapper/impl split as above: 20260730235031 renamed the 3-arg
+  // convert_quote_to_order to this owner impl behind a 4-arg wrapper, so the
+  // impl deliberately shares its wrapper's cache namespace. Direct EXECUTE is
+  // revoked; the wrapper is the only caller.
+  _convert_quote_to_order_owner_impl: ['convert_quote_to_order'],
   _guard_idempotency_key_insert: ['allocate_payment'],
   // Direct EXECUTE is revoked. Private middle layer of the full-cancel chain
   // (cancel_order -> _cancel_order_idem_impl_20260721 ->
