@@ -55,6 +55,64 @@ adversarial gate blocked on the handoff itself.
   hook run (Node resolves upward to the main tree; `verify-deps` joins a literal path). Fixed with a
   directory junction to `C:\CRX_Manager\node_modules` after confirming the three checked versions
   match this worktree's own lockfile — not with a duplicate `npm ci`.
+- **Two content fixes that the byte-identical re-issue could not have caught**, each raised
+  independently by both the RLS reviewer and the drift reviewer, and each verified against the live
+  function bodies before being written:
+  - `20260809170600` zeroed `order_items.quantity_remaining` on *every* return from
+    `_cancel_order_impl_20260714`, including the `already_cancelled` early return. Re-cancelling an
+    already-cancelled order (a double-click, or an offline replay with a fresh idempotency key) would
+    therefore have reached that UPDATE and silently zeroed the historical remainders the migration
+    explicitly promises not to touch, ORD-2026-0330 among them. The UPDATE is now gated on the impl
+    having actually cancelled something.
+  - `20260809170800`/`20260809170900` created `_round_money_to_whole_cents()` with no `REVOKE`. This
+    database carries `ALTER DEFAULT PRIVILEGES` granting `anon` EXECUTE on every new public function,
+    and PostgreSQL grants `PUBLIC` EXECUTE by default, so a bare `CREATE FUNCTION` would have added a
+    21st anon-executable trigger function to exactly the class `20260728231350` was written to revoke.
+    Both files now `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role`, mirroring
+    `_guard_order_item_delivery_lineage()` whose live ACL is `postgres=X/postgres` — proof that a
+    trigger still fires for ordinary writers with EXECUTE revoked from every API role.
+- `fin-money-whole-cents.sql` still pointed at the deleted `20260808150400` in two places; retargeted
+  to `20260809170800`, with an explicit note that `order_items.profit` is deliberately **not** covered
+  yet — adding it would report a second, larger set of historical rows before the repair of the first
+  set has been authorised.
+- **The "it's just a rename" claim was itself wrong, and was the reviewers' highest-priority shared
+  finding.** All three edited files still carried the header "The executable SQL below is UNCHANGED
+  from the reviewed original" *after* the gate and the REVOKEs were added — a header that tells the
+  next reviewer to skip the diff, on a money path. Each now carries an explicit numbered delta list
+  instead, and the same correction was pushed into `migration-history.md`'s re-issue note, which
+  claimed "no executable SQL changed".
+- **A safety argument that was wrong in my favour, caught by both reviewers and then verified live.**
+  The original `20260809170600` justified its UPDATE by claiming `_cancel_order_impl_20260714`'s
+  `SET LOCAL app.admin_override` was still in effect on return. It is not: that function carries a
+  `SET search_path` clause, so PostgreSQL brackets it in its own GUC nest level and discards every
+  `SET LOCAL` it made at function exit. There is also no `order_items` immutability guard to bypass —
+  live triggers on the table are exactly three, and a `quantity_remaining`-only UPDATE trips none of
+  them. The UPDATE does succeed, for a different reason than stated; the status gate is the only real
+  protection, and that is now what the file says.
+- **Newly documented side effect of the same UPDATE:** `after_order_items_change` is `AFTER INSERT OR
+  UPDATE OR DELETE` with no column scope, so zeroing `quantity_remaining` now fires
+  `trg_recalc_order_totals` on a full cancel, which `_cancel_order_impl_20260714` never did. The
+  recalc derives the header from line prices and costs — inputs this UPDATE does not touch — so it is
+  value-preserving on any order whose header already agreed with its lines, and forward-only means no
+  already-cancelled order is restated by applying it.
+- **`20260809170900`'s trigger widening narrows the "forward-looking only" promise**, now stated in
+  the file. Scoping the trigger to `UPDATE OF total_price, profit` means a profit-only write on a
+  historical row also rounds that row's fractional `total_price` as a side effect — one of the 46 rows
+  the repair statement is deliberately holding back. Accepted: the value it lands on is the one Mason
+  already decided, and the alternative (two triggers with disjoint column scopes) reintroduces the
+  second rounding point `20260809170800` exists to remove. `commissions` is unaffected —
+  `trg_commissions_round_money` stays scoped to `UPDATE OF commission_amount`, so an ordinary
+  `status='paid'` write will **not** restate the pending $5,245.195 payout.
+- `20260809170900`'s REVOKE no longer claims to make the file standalone-correct. It does not: applied
+  without `20260809170800`, it would create the function and the `order_items` trigger but not
+  `trg_commissions_round_money`, leaving `commissions.commission_amount` unrounded. Apply them in
+  order.
+- Stale `20260808*` filenames retargeted in `DECISION_LOG.md`, `rpcContracts.test.ts`,
+  `rpcIdempotencyScope.test.ts`, and the remediation handoff (which now leads with a rename table and
+  a warning that the SQL is not byte-identical). Hook and script test fixtures that use `20260808*` as
+  synthetic data are deliberately left alone. `fin-money-whole-cents.sql`'s SCHEMA FACTS block was
+  stale in its own right — stamped 2026-08-08, listing five columns while claiming "all four", and
+  omitting `profit` entirely; re-verified live against `information_schema.columns` and rewritten.
 
 ## 2026-08-08 — PR #354 review round: snapshot input validation + honest scope on the rounding claim
 

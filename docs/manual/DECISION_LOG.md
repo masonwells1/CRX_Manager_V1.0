@@ -24,7 +24,8 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
    audit overstated this.** Full cancel ALREADY releases prebooked stock and writes its `released`
    `inventory_transactions` row (confirmed live on ORD-2026-0330), and the `partially_fulfilled` path
    already handled both halves. Only `order_items.quantity_remaining` was genuinely stranded, and
-   migration `20260808150200` zeroes exactly that. **Do NOT add a second stock-release path** — it
+   migration `20260809170600` zeroes exactly that (written as `20260808150200`; re-issued forward on
+   2026-08-09 to clear the applied high-water mark). **Do NOT add a second stock-release path** — it
    would double-release inventory. The residual `quantity_prebooked = 36` on that product is March
    2026 historical drift (audit L2), not a cancellation defect.
 4. **Negative inventory (L3) — the existing decision stands.** Keep the 19 negative

@@ -8,10 +8,14 @@
 -- migration applied after a newer one is exactly the 2026-07-15 reversion that
 -- guard exists to stop.
 --
--- The executable SQL below is UNCHANGED from the reviewed original -- only the
--- filename timestamp and this header differ. The stale 20260808* file is deleted
--- in the same commit so a clean rebuild cannot apply the change twice (the same
--- remedy as docs/reference/migration-history.md row 808 -> live row 811).
+-- THE EXECUTABLE SQL HAS CHANGED SINCE THE RE-ISSUE. Do not skip the diff.
+-- Delta vs 20260808150400 (2026-08-09, after the RLS and drift reviewers): one
+-- added REVOKE statement, below. The function body and both triggers are
+-- byte-identical to the reviewed original.
+--
+-- The stale 20260808* file is deleted in the same commit so a clean rebuild cannot
+-- apply the change twice (the same remedy as docs/reference/migration-history.md
+-- row 808 -> live row 811).
 
 -- Establish a single canonical rounding point for order_items.total_price and
 -- commissions.commission_amount: whole cents, two decimal places.
@@ -79,6 +83,22 @@ COMMENT ON FUNCTION public._round_money_to_whole_cents() IS
   'Canonical rounding point for the numeric-dollar money columns: rounds to '
   'whole cents (2dp, half-up) on every write. Added 2026-08-08 per Mason''s '
   'decision; see the 2026-08-08 foundation ultra review §3 M3.';
+
+-- Verified live 2026-08-09 (pg_default_acl): postgres's default function ACL in
+-- schema public grants EXECUTE to anon, authenticated AND service_role, and
+-- PostgreSQL grants PUBLIC EXECUTE on top of that. A bare CREATE FUNCTION here
+-- would therefore add another anon-executable function to exactly the class
+-- 20260728231350_revoke_anon_execute_non_policy_functions.sql was written to
+-- revoke. Mirrors the peer convention at 20260721014858 for
+-- _guard_order_item_delivery_lineage(), whose live ACL is postgres=X/postgres.
+--
+-- Why revoking EXECUTE cannot stop the trigger firing: PostgreSQL checks EXECUTE
+-- on a trigger function once, at CREATE TRIGGER time, against the creating role
+-- (postgres, the owner, who is not revoked) -- never again when the trigger fires.
+-- Note the 20260721014858 precedent is a SECURITY DEFINER function while this one
+-- is SECURITY INVOKER, so it is a convention precedent, not a proof for this case;
+-- the CREATE-TRIGGER-time check is what makes it safe here, and it holds for both.
+REVOKE ALL ON FUNCTION public._round_money_to_whole_cents() FROM PUBLIC, anon, authenticated, service_role;
 
 DROP TRIGGER IF EXISTS trg_order_items_round_money ON public.order_items;
 CREATE TRIGGER trg_order_items_round_money

@@ -1646,7 +1646,7 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The terminal-provenance wrapper binds actor + order before issuing exact
   // governed cancellation claims and invoking the private implementation.
   cancel_order: 'delegated',
-  // The restored actor guard (migration 20260808150100) authorizes —
+  // The restored actor guard (migration 20260809170500) authorizes —
   // AUTH_REQUIRED, ACTOR_MISMATCH, is_admin() — and then delegates to
   // _batch_apply_prepayments_impl, which owns the canonical
   // check_idempotency/save_idempotency pair. The wrapper deliberately holds no

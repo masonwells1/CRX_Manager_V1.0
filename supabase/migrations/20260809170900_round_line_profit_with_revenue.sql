@@ -11,10 +11,14 @@
 -- migration applied after a newer one is exactly the 2026-07-15 reversion that
 -- guard exists to stop.
 --
--- The executable SQL below is UNCHANGED from the reviewed original -- only the
--- filename timestamp and this header differ. The stale 20260808* file is deleted
--- in the same commit so a clean rebuild cannot apply the change twice (the same
--- remedy as docs/reference/migration-history.md row 808 -> live row 811).
+-- THE EXECUTABLE SQL HAS CHANGED SINCE THE RE-ISSUE. Do not skip the diff.
+-- Delta vs 20260808170000 (2026-08-09, after the RLS and drift reviewers): one
+-- added REVOKE statement, below, plus a rewritten inline comment. The function body
+-- and the trigger are byte-identical to the reviewed original.
+--
+-- The stale 20260808* file is deleted in the same commit so a clean rebuild cannot
+-- apply the change twice (the same remedy as docs/reference/migration-history.md
+-- row 808 -> live row 811).
 
 -- Round order_items.profit to whole cents alongside total_price.
 --
@@ -28,8 +32,11 @@
 --   the header and the sum of its own lines, generated silently.
 --
 -- Forward-only, and written as a NEW migration rather than an edit to
--- 20260809170800: that file is already merged to main, and the project rule is
--- that database changes arrive as new files.
+-- 20260809170800, because the project rule is that database changes arrive as new
+-- files. (The original wording said 170800 "is already merged to main". That is
+-- false for the re-issued filename -- git ls-tree origin/main shows 20260808150100
+-- through 150400 and no 2026080917* file at all. What was merged is 170800's
+-- predecessor, 20260808150400.)
 --
 -- WHY profit AND NOT net_margin
 --   profit is money and must be whole cents. net_margin is a PERCENTAGE, not
@@ -94,8 +101,36 @@ COMMENT ON FUNCTION public._round_money_to_whole_cents() IS
   'is deliberately excluded. Added 2026-08-08 per Mason''s decision; profit added '
   'the same day after Codex caught header-vs-line drift on PR #348.';
 
+-- Re-asserted defensively. CREATE OR REPLACE preserves the ACL 20260809170800 set,
+-- so on the normal path this is a genuine no-op. It is here so that the REVOKE can
+-- never be separated from the CREATE by a future edit to either file.
+--
+-- It is deliberately NOT justified as "makes this file standalone-correct". It does
+-- not: applied against a database that never ran 170800, this file would create the
+-- function and the order_items trigger but NOT trg_commissions_round_money, so
+-- commissions.commission_amount would silently go unrounded. 170900 is a follow-up
+-- to 170800, not a replacement for it -- apply them in order. (Flagged by both
+-- reviewers, 2026-08-09.)
+REVOKE ALL ON FUNCTION public._round_money_to_whole_cents() FROM PUBLIC, anon, authenticated, service_role;
+
 -- The trigger on order_items must now also fire when only `profit` changes;
 -- 20260809170800 scoped it to UPDATE OF total_price.
+--
+-- NARROWS THE "FORWARD-LOOKING ONLY" PROMISE, deliberately (drift reviewer M4,
+-- 2026-08-09). Widening the column scope means an UPDATE that touches only
+-- `profit` now also fires the trigger, and the trigger rounds total_price too --
+-- so on a historical row carrying a fractional total_price, an unrelated profit
+-- write will now silently repair that total_price as a side effect. That is one
+-- of the 46 rows the repair statement in 20260809170800 is deliberately holding
+-- back. The rounding is the value Mason already decided on, so a row repaired
+-- this way lands on the correct number; what is lost is the guarantee that ALL
+-- 46 are repaired together in one authorised, auditable act. Accepted because
+-- the alternative -- two separate triggers with disjoint column scopes -- adds a
+-- second rounding point, which is the exact thing 170800 was written to remove.
+--
+-- commissions is NOT affected: trg_commissions_round_money is untouched below and
+-- stays scoped to UPDATE OF commission_amount, so an ordinary status='paid' write
+-- does not fire it and will NOT restate the pending $5,245.195 payout.
 DROP TRIGGER IF EXISTS trg_order_items_round_money ON public.order_items;
 CREATE TRIGGER trg_order_items_round_money
   BEFORE INSERT OR UPDATE OF total_price, profit ON public.order_items
