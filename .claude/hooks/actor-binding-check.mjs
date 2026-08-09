@@ -634,12 +634,14 @@ try {
     // Only SECURITY DEFINER functions can forge an actor with the owner's rights.
     if (!/SECURITY\s+DEFINER/i.test(attrs)) continue;
 
-    // Static mutation keywords are readable after comment masking. Dynamic SQL
-    // is not: EXECUTE may obtain or transform its statement through variables,
-    // format(), concatenation, or USING parameters. Treat every EXECUTE as
-    // potentially mutating rather than letting an opaque actor-stamping write
-    // disappear inside a string literal.
+    // Static mutation keywords are readable after full noise masking. Also scan
+    // the comment-only mask so executable strings passed to APIs such as
+    // cron.schedule remain visible. This intentionally accepts false positives:
+    // if a definer function with a forgeable actor parameter contains mutation
+    // text anywhere outside a comment, it must bind the actor or use exemption.
+    const commentBlankedBody = blankComments(body);
     const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(maskedBody) ||
+      /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody);
     if (!hasMutation) continue;
 
@@ -648,7 +650,7 @@ try {
       .filter((n) => ACTOR_PARAM_RE.test(n));
     if (actorParams.length === 0) continue;
 
-    if (/ACTOR_MISMATCH/i.test(blankComments(body))) continue;
+    if (/ACTOR_MISMATCH/i.test(commentBlankedBody)) continue;
 
     violations.push(
       `Function ${fnName}: SECURITY DEFINER, mutates or executes dynamic SQL, and declares the forgeable actor parameter(s) ` +

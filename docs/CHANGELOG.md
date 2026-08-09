@@ -371,7 +371,7 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 98 assertions, including comment-hidden headers, nested
+suite grew from 24 to 99 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
 quoted actor parameters. Forty-three individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
@@ -462,6 +462,14 @@ single-quoted payloads containing doubled quotes now fail closed and use the
 existing exemption/human-review path instead of attempting lossy decoding. The
 exact comment-hiding probe is covered, and removing this refusal alone turns
 that regression red.
+
+The tenth exact-SHA Codex review found that executable SQL passed to APIs other
+than `EXECUTE`, including the repository's `cron.schedule` command strings,
+could be hidden by full string masking. Mutation keywords are now checked in a
+second, comment-only mask that preserves string contents. This deliberately
+fails closed on mutation text anywhere outside comments in a definer body with
+a forgeable actor parameter. The exact scheduled actor-forgery probe is covered,
+and removing this second scan alone turns the regression red.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

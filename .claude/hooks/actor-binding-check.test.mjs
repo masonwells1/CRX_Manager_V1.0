@@ -116,6 +116,13 @@ ok(isDeny(r), "a single-quoted dynamic UPDATE cannot disappear during string mas
 r = runHook(fn("EXECUTE format('INSERT INTO financial_audit_log (actor_user_id) VALUES (%L)', p_performed_by);"));
 ok(isDeny(r), "an EXECUTE format() dynamic INSERT is treated as potentially mutating");
 
+r = runHook(fn(`PERFORM cron.schedule(
+  'actor-forgery-job',
+  '* * * * *',
+  format('INSERT INTO financial_audit_log (actor_user_id) VALUES (%L)', p_user_id)
+);`, "p_user_id uuid"));
+ok(isDeny(r), "mutation text passed to cron.schedule cannot disappear inside an executable string");
+
 r = runHook(fn("EXECUTE 'SELECT 1';"));
 ok(isDeny(r), "opaque dynamic SQL with an unbound actor parameter fails closed");
 

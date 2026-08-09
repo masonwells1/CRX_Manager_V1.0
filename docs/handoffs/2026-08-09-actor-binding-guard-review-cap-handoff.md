@@ -36,7 +36,10 @@ Focused regressions now deny all reproduced overwrite families and deny an
 apparently harmless `format()` expression. A subsequent exact-SHA review also
 found that doubled quotes in an executable standard string could create a fake
 comment in the recursive mask; those nested-quoted payloads now fail closed.
-The actor suite passes at 98
+The next exact-SHA review found that executable SQL strings passed to APIs such
+as `cron.schedule` were hidden by full string masking. Mutation detection now
+also checks a comment-only mask that preserves string contents. The exact
+scheduled actor-forgery probe is covered. The actor suite passes at 99
 assertions; the idempotency reference suite remains green at 86 assertions.
 Removing only the new direct-literal enforcement makes the actor suite fail,
 then restoring it returns both suites to green. The real hook process denied a
