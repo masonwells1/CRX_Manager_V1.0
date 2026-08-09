@@ -2,6 +2,59 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-09 — Live sub-cent profit repair on order_items, and 18 dependency updates landed
+
+Orchestration session. No code was authored here; the durable changes were one live-data
+repair and a set of dependency merges, so this entry is the repo-side record of both.
+
+**Live data change (production).** 54 of 288 `order_items` rows stored `profit` at finer
+than whole-cent precision. On Mason's explicit approval ("1 yes fix"), applied
+`UPDATE public.order_items SET profit = round(profit, 2) WHERE profit <> round(profit, 2)`
+— 54 rows, $0.20 of total movement. Authorization recorded in
+`.claude/session-state/REAL-DATA-OK` per the live-data guard.
+
+`order_items.total_price` was deliberately NOT touched (46 rows remain sub-cent). It is
+customer-billed revenue and carries higher stakes than an internal reporting figure;
+restating it is a separate decision.
+
+The repair provably cannot move header money: `trg_recalc_order_totals` derives header
+profit from `SUM(total_price) - SUM(cost_per_unit * total_units_needed)` and never reads
+`order_items.profit`. Measured across all 24 affected orders beforehand — $0.00 header
+profit shift — and confirmed afterwards. The only header change anywhere was
+ORD-2026-0173's price settling from 6652.1250 to 6652.13.
+
+**Known issue, NOT fixed, held at Mason's direction ("hold this for later diagnoses").**
+Five live non-deleted orders have header profit disagreeing with the sum of their line
+profits by $3,479 net: ORD-2026-0153 (+$2,804.52), ORD-2026-0162 (−$486.30),
+ORD-2026-0189 (+$173.78), ORD-2026-0186 (+$14.31), ORD-2026-0331 (−$0.09). Root cause
+confirmed on 0153: `cost_at_time_cents` matches `cost_per_unit` exactly, but the cost
+implied by the stored `profit` differs — the stored line profit is stale, frozen against
+costs later corrected. Headers recalculate on a cost edit; stored line profit does not.
+Gaps run in both directions, so each order needs individual review. The underlying
+question is a business one: when a cost is corrected after a sale, should that order's
+profit follow the corrected cost or the cost at time of sale?
+
+**Dependencies.** Merged #343 (minor-and-patch group, 16 updates including
+@supabase/supabase-js 2.110.9→2.112.2, @sentry/react, mapbox-gl, pdfjs-dist,
+react-router-dom, lucide-react) and #340 (dompurify 3.4.12→3.4.13). Both passed an
+independent Codex verdict at the exact head+base the merge gate demanded. Closed #339 as
+superseded by #343; dependabot auto-closed #342. Production verified after each merge by
+loading croprxsolutions.app and confirming the app boots with no app-level console errors
+— authenticated screens were not reachable and remain unverified.
+
+**Still failing, needs a decision.** #301 (React major), #302 (ESLint 10) and #303
+(@vitejs/plugin-react 6) all fail Lint/Type Check/Test/Build. These are breaking
+major-version upgrades requiring code migration, not routine cleanup.
+
+**Correction to an earlier finding.** CodeRabbit was previously recorded here as
+rate-limited across the whole board. It is not: it has reviewed every human/agent PR and
+zero of the 8 dependabot PRs, past and present. It structurally skips bot-authored PRs.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - (none — work landed via GitHub PR merges and a live database statement)
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
 PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in bash-safety and live-testdata guards (variant git spellings, redirect terminators, plumbing push commands, DELETE catch-all, setval/nextval and RPC-via-SELECT rules), added regression tests, resolved the changelog merge conflict with main.
