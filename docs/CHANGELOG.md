@@ -39,6 +39,22 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 37 (Codex) — both fixes were the same class as earlier rounds, missed by not sweeping:**
+
+- **Order edits compared against the mutable legacy cost.** Round 26 fixed exactly this on the
+  rush-pricing path and I fixed only that instance. `handleSaveEdits` still read `cost_per_unit`,
+  so on an older order whose snapshot and legacy cost differ — an order converted before this
+  branch fixed quote-cost propagation is the common case — a price *between* the two slipped past
+  the prompt while the reports booked the higher snapshot as cost. Both call sites now go through
+  one `belowCostBasis()` helper, so there is no third place for this to diverge. New lines added
+  during an edit have no snapshot yet and keep their caller-supplied cost.
+- **COGS reversal now requires a report-visible sale invoice.** Round 36 gated the reversal on an
+  eligible invoice existing, but "eligible" still meant merely not voided — which admits `draft`
+  and unposted invoices the invoice-basis rollups never counted. Goods delivered and returned
+  before the auto-created draft invoice is posted is the ordinary shape of that, and it inflated
+  profit. Both the gate and the cost lookup now require `status IN ('posted','overdue')`, matching
+  what the reports include.
+
 **Round 36 (Codex) — three findings, two fixed and one deliberately deferred:**
 
 - **No COGS reversal without an included sale invoice.** If the original sale invoice was never

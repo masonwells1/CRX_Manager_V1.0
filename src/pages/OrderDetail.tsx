@@ -54,6 +54,23 @@ interface NewOrderItem {
 let _editKeyCounter = 0;
 function nextEditKey() { return `_new_${++_editKeyCounter}`; }
 
+/**
+ * The cost a below-cost check must judge a line against: the immutable
+ * as-of-sale snapshot the reports treat as COGS, in dollars.
+ *
+ * `cost_per_unit` is the mutable legacy column and is only a fallback for rows
+ * written before the snapshot trigger existed. On an older order the two can
+ * differ — an order converted before this branch fixed quote-cost propagation
+ * is the common case — and a price BETWEEN them would slip past a guard reading
+ * the lower legacy value while the reports still book the higher snapshot as
+ * cost. One helper for every below-cost check on this page, because this exact
+ * bug has now been found twice on two different code paths.
+ * (Codex rounds 26 and 37.)
+ */
+function belowCostBasis(line: { cost_at_time_cents?: number | null; cost_per_unit?: number | null }): number {
+  return line.cost_at_time_cents != null ? line.cost_at_time_cents / 100 : (line.cost_per_unit ?? 0);
+}
+
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -489,7 +506,13 @@ export default function OrderDetail() {
     let belowCostReason: string | null = null;
     if (!isFieldStaff) {
       const candidateItems = [
-        ...editItems.map((item) => ({ name: item.product_name, price: item.price_per_unit, cost: item.cost_per_unit })),
+        // Existing lines judge against their snapshot; a line added in this
+        // edit has none yet, so its caller-supplied cost is all there is.
+        ...editItems.map((item) => ({
+          name: item.product_name,
+          price: item.price_per_unit,
+          cost: belowCostBasis(item),
+        })),
         ...newItems
           .filter((item) => item.product_id && item.total_units_needed > 0)
           .map((item) => ({ name: item.product_name, price: item.price_per_unit, cost: item.cost_per_unit })),
@@ -1113,9 +1136,7 @@ export default function OrderDetail() {
         .map((p) => {
           const line = items.find((i) => i.id === p.order_item_id);
           if (!line) return null;
-          const snapshotCost =
-            line.cost_at_time_cents != null ? line.cost_at_time_cents / 100 : (line.cost_per_unit ?? 0);
-          return { productName: line.product_name, price: p.price, cost: snapshotCost };
+          return { productName: line.product_name, price: p.price, cost: belowCostBasis(line) };
         })
         .filter((l): l is BelowCostLine => l !== null && l.cost > 0 && l.price < l.cost);
       if (belowCostLines.length > 0) {

@@ -179,7 +179,13 @@ BEGIN
            AND ii.product_id = ri.product_id
            AND inv.invoice_type <> 'credit_memo'
            AND inv.deleted_at IS NULL
-           AND inv.status NOT IN ('voided', 'cancelled')
+           -- REPORT-VISIBLE states only, not merely "not voided". The
+           -- invoice-basis rollups count 'posted'/'overdue'; a draft or
+           -- unposted sale invoice was never included, so reversing against it
+           -- subtracts cost that was never added. This is the common shape for
+           -- goods delivered and returned before the auto-created draft invoice
+           -- is posted. (Codex round 37.)
+           AND inv.status IN ('posted', 'overdue')
            AND ii.quantity > 0
       ) THEN
       COALESCE(
@@ -199,7 +205,9 @@ BEGIN
             AND ii.product_id = ri.product_id
             AND inv.invoice_type <> 'credit_memo'
             AND inv.deleted_at IS NULL
-            AND inv.status NOT IN ('voided', 'cancelled')
+            -- Same report-visible predicate as the gate above; the two must
+            -- agree or the gate could admit a line the lookup then misses.
+            AND inv.status IN ('posted', 'overdue')
             AND ii.quantity > 0
           ORDER BY ii.created_at, ii.id
           LIMIT 1),
