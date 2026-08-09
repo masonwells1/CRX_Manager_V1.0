@@ -74,6 +74,9 @@ ok(isDeny(r), "actor param found among multiple params incl. a parenthesised typ
 r = runHook(fn(MUTATION, "IN p_performed_by uuid"));
 ok(isDeny(r), "leading IN mode keyword does not hide the actor parameter");
 
+r = runHook(fn(MUTATION, '"p_performed_by" uuid'));
+ok(isDeny(r), "a quoted actor parameter name remains visible after structural masking");
+
 // two functions in one migration: the second one is the offender
 r = runHook(
   fn(BOUND, "p_performed_by uuid").replace("test_fn", "good_fn") +
@@ -82,6 +85,132 @@ r = runHook(
 );
 ok(isDeny(r), "a later offending function in the same file is still caught");
 ok(r.stdout.includes("bad_fn"), "the offending function is the one named");
+
+// ── hardened SQL reader: comments, quotes, and fail-closed parsing ─────────
+// PostgreSQL allows comments anywhere whitespace is allowed. Matching raw text
+// missed a function when a comment sat between its name and parameter list.
+r = runHook(fn(MUTATION).replace("public.test_fn(", "public.test_fn /* legal */ ("));
+ok(isDeny(r), "a block comment between the function name and ( cannot hide the actor parameter");
+
+r = runHook(fn(MUTATION).replace("public.test_fn(", "public.test_fn -- legal\n("));
+ok(isDeny(r), "a line comment between the function name and ( cannot hide the actor parameter");
+
+r = runHook(fn(MUTATION).replace("public.test_fn(", "public.test_fn /* outer /* inner */ still open */ ("));
+ok(isDeny(r), "a nested block comment between the function name and ( is skipped to the right depth");
+
+r = runHook(fn(MUTATION).replace(
+  "CREATE OR REPLACE FUNCTION public.test_fn(",
+  "CREATE /* c1 */ OR REPLACE FUNCTION /* c2 */ public.test_fn /* c3 */ ("
+));
+ok(isDeny(r), "comments at every whitespace position in the function header stay visible through masking");
+
+// Comments containing fake DDL/body syntax are data and must not redirect the
+// reader away from the real function that follows.
+r = runHook("-- legacy CREATE FUNCTION public.old_rpc(\n" + fn(BOUND));
+ok(!isDeny(r), "a commented-out unmatched function header does not false-deny a bound function");
+
+r = runHook(fn(MUTATION).replace(
+  "SECURITY DEFINER",
+  "SECURITY DEFINER /* legacy shim: AS $fake$ SELECT 1; $fake$ */"
+));
+ok(isDeny(r), "a fake AS $tag$ body inside a comment cannot hide the real unbound body");
+
+// Dollar-quoted defaults are string data. A paren inside one must not change
+// the parameter-list nesting depth.
+r = runHook(fn(
+  MUTATION,
+  "p_note text DEFAULT $d$normalize ($d$, p_performed_by uuid"
+));
+ok(isDeny(r), "a paren inside a dollar-quoted default cannot hide a later actor parameter");
+ok(
+  r.stdout.includes("forgeable actor parameter(s) [p_performed_by]"),
+  "the dollar-default probe reaches the actor check, not only a parse backstop"
+);
+
+// Anything the structural reader cannot safely close is denied, not skipped.
+r = runHook(fn(MUTATION, "p_note numeric((, p_performed_by uuid"));
+ok(isDeny(r), "an unparseable parameter list fails CLOSED");
+ok(r.stdout.includes("could not parse its parameter list"), "parameter parse failure explains the deny");
+
+r = runHook(
+  "CREATE FUNCTION public.no_body(p_performed_by uuid) RETURNS void " +
+  "LANGUAGE plpgsql SECURITY DEFINER;"
+);
+ok(isDeny(r), "a function definition whose body cannot be read fails CLOSED");
+ok(r.stdout.includes("could not parse its AS"), "body parse failure explains the deny");
+
+r = runHook("CREATE FUNCTION public.unterminated(p_performed_by uuid) RETURNS void AS $fn$ BEGIN");
+ok(isDeny(r), "an unterminated dollar-quote fails CLOSED at the file level");
+ok(r.stdout.includes("This migration could not parse"), "file-level parse failure explains the deny");
+
+// ── runtime-built DDL: one complete literal or refuse it ───────────────────
+const UNBOUND_DDL =
+  "CREATE OR REPLACE FUNCTION public.dynamic_actor(p_performed_by uuid) " +
+  "RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN " +
+  "UPDATE invoices SET created_by = p_performed_by; END $fn$;";
+const BOUND_DDL =
+  "CREATE OR REPLACE FUNCTION public.dynamic_bound(p_performed_by uuid) " +
+  "RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN " +
+  "IF p_performed_by IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION ''ACTOR_MISMATCH''; END IF; " +
+  "UPDATE invoices SET created_by = auth.uid(); END $fn$;";
+
+r = runHook(`DO $do$ BEGIN EXECUTE '${UNBOUND_DDL}'; END $do$;`);
+ok(isDeny(r), "an unbound actor function in one EXECUTE string is lexed and blocked");
+
+r = runHook(`DO $do$ BEGIN EXECUTE '${UNBOUND_DDL.replace("dynamic_actor(", "dynamic_actor /* legal */ (")}'; END $do$;`);
+ok(isDeny(r), "a comment-hidden header inside a dynamic string is still classified and blocked");
+
+r = runHook(`DO $do$ BEGIN EXECUTE '${UNBOUND_DDL.replace("dynamic_actor(", "dynamic_actor /* outer /* inner */ open */ (")}'; END $do$;`);
+ok(isDeny(r), "a nested comment cannot hide a function header inside a dynamic string");
+
+r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${UNBOUND_DDL.replace("dynamic_actor(", "dynamic_actor /* outer /* inner */ open */ (")}$ddl$; END $do$;`);
+ok(isDeny(r), "a nested comment cannot hide a dynamic dollar-quoted function header");
+
+r = runHook(`DO $do$ BEGIN EXECUTE '${BOUND_DDL}'; END $do$;`);
+ok(!isDeny(r), "a bound actor function in one complete EXECUTE string remains allowed");
+
+r = runHook(`DO $do$ BEGIN
+  EXECUTE 'CREATE OR REPLACE FUNCTION public.split_actor(p_performed_by uuid) RETURNS void '
+    || 'LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_performed_by; END $fn$;';
+END $do$;`);
+ok(isDeny(r), "a CREATE FUNCTION definition split across concatenated literals is refused");
+ok(r.stdout.includes("one complete literal"), "split dynamic DDL deny explains the supported shape");
+
+r = runHook(`DO $do$ BEGIN
+  EXECUTE 'CREATE OR REPLACE ' || 'FUNCTION public.split_header(' ||
+    'p_performed_by uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_performed_by; END $fn$;';
+END $do$;`);
+ok(isDeny(r), "a CREATE FUNCTION header split across literals is refused before it can disappear from the lexer");
+
+r = runHook(`DO $do$ BEGIN EXECUTE format('%s', '${BOUND_DDL}'); END $do$;`);
+ok(isDeny(r), "even a bound definition wrapped in format() is refused because it uses multiple literals");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  v_ddl := $ddl$${UNBOUND_DDL}$ddl$;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "an unbound actor function assigned to a DDL variable is still inspected");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  v_ddl = $ddl$${UNBOUND_DDL}$ddl$;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "plain = assignment of runtime DDL is still inspected");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  SELECT $ddl$${UNBOUND_DDL}$ddl$ /* outer /* inner */ still open ; */ INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "a nested-comment semicolon cannot hide SELECT ... INTO runtime DDL");
+
+r = runHook(`INSERT INTO docs (body) VALUES ('CREATE OR REPLACE ' || 'FUNCTION public.example(p_performed_by uuid)');`);
+ok(!isDeny(r), "function-shaped fragments in a plain INSERT are data, not runtime DDL");
 
 // ── NEGATIVE: correctly bound / out of scope / exempt ──────────────────────
 r = runHook(fn(BOUND));

@@ -61,25 +61,22 @@ function out(decision, reason) {
 // Split a parameter list on top-level commas (ignoring commas inside nested
 // parens like numeric(10,2) or inside quoted defaults) so each entry is one
 // parameter declaration we can read a name off of.
-function splitTopLevelArgs(argsText) {
+function splitTopLevelArgs(argsText, sourceText = argsText) {
   const args = [];
   let depth = 0;
-  let cur = "";
-  let inStr = false;
-  let strCh = "";
-  for (const ch of String(argsText || "")) {
-    if (inStr) {
-      cur += ch;
-      if (ch === strCh) inStr = false;
-      continue;
+  let start = 0;
+  const structural = String(argsText || "");
+  const source = String(sourceText || "");
+  for (let i = 0; i < structural.length; i++) {
+    const ch = structural[i];
+    if (ch === "(") { depth++; continue; }
+    if (ch === ")") { depth--; continue; }
+    if (ch === "," && depth === 0) {
+      args.push(source.slice(start, i));
+      start = i + 1;
     }
-    if (ch === "'" || ch === '"') { inStr = true; strCh = ch; cur += ch; continue; }
-    if (ch === "(") { depth++; cur += ch; continue; }
-    if (ch === ")") { depth--; cur += ch; continue; }
-    if (ch === "," && depth === 0) { args.push(cur); cur = ""; continue; }
-    cur += ch;
   }
-  args.push(cur);
+  args.push(source.slice(start));
   return args.map((a) => a.trim()).filter((a) => a !== "");
 }
 
@@ -122,18 +119,203 @@ if (/--\s*actor-binding-check:\s*exempt/i.test(content)) {
 // which would hide an actor parameter declared after a parenthesised type.
 const fnHeadRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(/gi;
 
-/** From the index of a '(' , return {params, end} where end is just past its match. */
-function readBalancedParens(text, openIdx) {
-  let depth = 0;
-  let inStr = false;
-  let strCh = "";
-  for (let i = openIdx; i < text.length; i++) {
+/** From the index of an opening ' or ", return the index just past the closing
+ * quote, or -1 if unterminated. Handles doubled quotes ('' / "") and
+ * backslash escapes in E'...' strings. */
+function scanQuoted(text, openIdx) {
+  const strCh = text[openIdx];
+  const isEStr = strCh === "'" &&
+    /[eE]/.test(text[openIdx - 1] || "") && !/[\w$]/.test(text[openIdx - 2] || "");
+  for (let i = openIdx + 1; i < text.length; i++) {
     const ch = text[i];
-    if (inStr) {
-      if (ch === strCh) inStr = false;
+    if (isEStr && ch === "\\") { i++; continue; }
+    if (ch === strCh) {
+      if (text[i + 1] === strCh) { i++; continue; }
+      return i + 1;
+    }
+  }
+  return -1;
+}
+
+/** Match a dollar-quote opener ($tag$) at index i, or return null. */
+const DOLLAR_TAG_RE = /\$\w*\$/y;
+function dollarTagAt(text, i) {
+  if (/[\w$]/.test(text[i - 1] || "")) return null;
+  DOLLAR_TAG_RE.lastIndex = i;
+  const m = DOLLAR_TAG_RE.exec(text);
+  return m ? m[0] : null;
+}
+
+/** The first semicolon that actually ends a statement, skipping SQL noise. */
+function firstTopLevelSemicolon(text, from) {
+  let i = from;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === ";") return i;
+    if (ch === "-" && text[i + 1] === "-") {
+      const nl = text.indexOf("\n", i + 2);
+      if (nl === -1) return -1;
+      i = nl + 1;
       continue;
     }
-    if (ch === "'" || ch === '"') { inStr = true; strCh = ch; continue; }
+    if (ch === "/" && text[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { depth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      if (depth > 0) return -1;
+      i = j;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return -1;
+      i = end;
+      continue;
+    }
+    const tag = ch === "$" ? dollarTagAt(text, i) : null;
+    if (tag) {
+      const close = text.indexOf(tag, i + tag.length);
+      if (close === -1) return -1;
+      i = close + tag.length;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+const ASSIGN_RE =
+  /(?:^|\bBEGIN\b|\bTHEN\b|\bELSE\b|\bLOOP\b|\bDECLARE\b)\s*(?:"[^"]+"|[\w.]+)\s*(?::=|=(?!=))/i;
+function isDynamicSqlStatement(stmt) {
+  return /\bEXECUTE\b/i.test(stmt) ||
+    ASSIGN_RE.test(stmt) ||
+    /\bSELECT\b[\s\S]*\bINTO\b/i.test(stmt);
+}
+
+function inExecuteStatement(out, text, afterIdx) {
+  const before = out.slice(out.lastIndexOf(";") + 1);
+  const semi = firstTopLevelSemicolon(text, afterIdx);
+  return isDynamicSqlStatement(
+    before + " " + text.slice(afterIdx, semi === -1 ? text.length : semi)
+  );
+}
+
+const CREATE_FN_HEAD_RE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+[\w."]+\s*\(/i;
+
+/** Blank comments length-preservingly without touching string literals. */
+function blankComments(s) {
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "-" && s[i + 1] === "-") {
+      const nl = s.indexOf("\n", i + 2);
+      const stop = nl === -1 ? s.length : nl;
+      out += " ".repeat(stop - i);
+      i = stop;
+      continue;
+    }
+    if (s[i] === "/" && s[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < s.length && depth > 0) {
+        if (s[j] === "/" && s[j + 1] === "*") { depth++; j += 2; continue; }
+        if (s[j] === "*" && s[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      out += " ".repeat(j - i);
+      i = j;
+      continue;
+    }
+    out += s[i];
+    i++;
+  }
+  return out;
+}
+
+function carriesFnHeader(payload) {
+  return CREATE_FN_HEAD_RE.test(payload) ||
+    CREATE_FN_HEAD_RE.test(blankComments(payload));
+}
+
+/** Replace comments and quoted-string contents with spaces, while recursively
+ * retaining executable SQL held inside procedural bodies and dynamic DDL.
+ * Length-preserving so structural indexes map back to the original content.
+ * Returns null for any unterminated construct; callers fail closed. */
+function maskSqlNoise(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "-" && text[i + 1] === "-") {
+      let nl = text.indexOf("\n", i + 2);
+      if (nl === -1) nl = text.length;
+      out += " ".repeat(nl - i);
+      i = nl;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { depth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      if (depth > 0) return null;
+      out += " ".repeat(j - i);
+      i = j;
+      continue;
+    }
+    if (ch === "$") {
+      const tag = dollarTagAt(text, i);
+      if (tag) {
+        const close = text.indexOf(tag, i + tag.length);
+        if (close === -1) return null;
+        const payload = text.slice(i + tag.length, close);
+        const isExecutable = /\b(?:AS|DO|EXECUTE)\s+$/i.test(out) ||
+          (inExecuteStatement(out, text, close + tag.length) && carriesFnHeader(payload));
+        const inner = isExecutable ? maskSqlNoise(payload) : " ".repeat(payload.length);
+        if (inner === null) return null;
+        out += tag + inner + tag;
+        i = close + tag.length;
+        continue;
+      }
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return null;
+      const isDynamicSql = ch === "'" && inExecuteStatement(out, text, end) &&
+        carriesFnHeader(text.slice(i + 1, end - 1));
+      if (isDynamicSql) {
+        const inner = maskSqlNoise(text.slice(i + 1, end - 1));
+        if (inner === null) return null;
+        out += ch + inner + ch;
+      } else {
+        out += ch + " ".repeat(end - i - 2) + ch;
+      }
+      i = end;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/** Read balanced parentheses from the length-preserving SQL-noise mask. String,
+ * comment, and dollar-quote contents have already been blanked, so only real
+ * structural parentheses remain. */
+function readBalancedParens(text, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < text.length; i++) {
+    const ch = text[i];
     if (ch === "(") { depth++; continue; }
     if (ch === ")") {
       depth--;
@@ -143,30 +325,154 @@ function readBalancedParens(text, openIdx) {
   return null;
 }
 
-/** From just past the parameter list, return {attrs, body} for the AS $tag$...$tag$ block. */
+/** From just past the parameter list, return the attributes and exact indexes
+ * for the AS $tag$...$tag$ body. The caller scans the mask but slices the real
+ * body so ACTOR_MISMATCH string literals remain visible. */
 function readAttrsAndBody(text, fromIdx) {
-  const tagMatch = /\bAS\s+(\$\w*\$)/i.exec(text.slice(fromIdx));
-  if (!tagMatch) return null;
-  const attrs = text.slice(fromIdx, fromIdx + tagMatch.index);
-  const tag = tagMatch[1];
-  const bodyStart = fromIdx + tagMatch.index + tagMatch[0].length;
-  const bodyEnd = text.indexOf(tag, bodyStart);
-  if (bodyEnd === -1) return null;
-  return { attrs, body: text.slice(bodyStart, bodyEnd), end: bodyEnd + tag.length };
+  let i = fromIdx;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return null;
+      i = end;
+      continue;
+    }
+    if (ch === "$") {
+      const tag = dollarTagAt(text, i);
+      if (tag) {
+        if (/\bAS\s+$/i.test(text.slice(fromIdx, i))) {
+          const bodyStart = i + tag.length;
+          const bodyEnd = text.indexOf(tag, bodyStart);
+          if (bodyEnd === -1) return null;
+          return {
+            attrs: text.slice(fromIdx, i),
+            bodyStart,
+            bodyEnd,
+            end: bodyEnd + tag.length,
+          };
+        }
+        const close = text.indexOf(tag, i + tag.length);
+        if (close === -1) return null;
+        i = close + tag.length;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    if ((ch === "c" || ch === "C") && /^CREATE\s/i.test(text.slice(i, i + 7)) && !/[\w$]/.test(text[i - 1] || "")) {
+      return null;
+    }
+    i++;
+  }
+  return null;
 }
 
 const violations = [];
 try {
+  const masked = maskSqlNoise(content);
+  if (masked === null) {
+    violations.push(
+      "This migration could not parse (unterminated string, block comment, or dollar-quote) — " +
+      "the actor-binding guard cannot inspect it. Fix the unterminated construct, or if it is " +
+      "genuinely valid SQL the lexer mishandles, add the exempt marker and get a manual review."
+    );
+  }
+
+  // Fail closed on runtime-built CREATE FUNCTION statements. If all literals
+  // in a dynamic-SQL statement together spell a function header, exactly one
+  // literal must contain the whole readable definition. Multiple literals mean
+  // the signature or body may be hidden in fragments this guard cannot follow.
+  function checkDynamicDdl(from, to) {
+    let stmtStart = from;
+    let lits = [];
+    let i = from;
+
+    const verdict = (stmtEnd) => {
+      if (lits.length === 0) return false;
+      if (!isDynamicSqlStatement(masked.slice(stmtStart, stmtEnd))) return false;
+      if (!carriesFnHeader(lits.map((l) => l.payload).join(""))) return false;
+      if (lits.length === 1 && carriesFnHeader(lits[0].payload)) return false;
+      violations.push(
+        "This migration builds a CREATE FUNCTION statement at runtime, and the actor-binding guard " +
+        "cannot read it as one complete literal — the definition is split across fragments, or a " +
+        "fragment is not parseable on its own. Split that way, the guard cannot tell whether the " +
+        "function is SECURITY DEFINER, mutates, accepts a caller-supplied actor, and raises " +
+        "ACTOR_MISMATCH. Build the dynamic DDL as a single string literal, or add the file-level " +
+        "exempt marker (-- actor-binding-check: exempt) and get a manual review."
+      );
+      return true;
+    };
+
+    while (i < to) {
+      const ch = masked[i];
+      if (ch === ";") {
+        if (verdict(i)) return true;
+        stmtStart = i + 1;
+        lits = [];
+        i++;
+        continue;
+      }
+      let start = -1;
+      let end = -1;
+      let innerFrom = -1;
+      let innerTo = -1;
+      if (ch === "'" || ch === '"') {
+        start = i;
+        end = scanQuoted(masked, i);
+      } else {
+        const tag = ch === "$" ? dollarTagAt(masked, i) : null;
+        if (tag) {
+          const close = masked.indexOf(tag, i + tag.length);
+          if (close !== -1) {
+            start = i;
+            end = close + tag.length;
+            innerFrom = i + tag.length;
+            innerTo = close;
+          }
+        }
+      }
+      if (end === -1 || start === -1) { i++; continue; }
+      if (innerFrom !== -1 && checkDynamicDdl(innerFrom, innerTo)) return true;
+      lits.push({
+        payload: innerFrom !== -1
+          ? content.slice(innerFrom, innerTo)
+          : content.slice(start + 1, end - 1),
+      });
+      i = end;
+    }
+    return verdict(to);
+  }
+
+  if (masked !== null) checkDynamicDdl(0, masked.length);
   let head;
-  while ((head = fnHeadRe.exec(content)) !== null) {
+  while (masked !== null && (head = fnHeadRe.exec(masked)) !== null) {
     const fnName = head[1];
-    const parsed = readBalancedParens(content, fnHeadRe.lastIndex - 1);
-    if (!parsed) continue;
-    const rest = readAttrsAndBody(content, parsed.end);
-    if (!rest) continue;
-    const params = parsed.params;
+    const paramsOpen = fnHeadRe.lastIndex - 1;
+    const parsed = readBalancedParens(masked, paramsOpen);
+    if (!parsed) {
+      violations.push(
+        `Function ${fnName}: could not parse its parameter list (unbalanced parentheses, ` +
+        `unterminated string/comment/dollar-quote?) — the actor-binding guard cannot inspect it. ` +
+        `Simplify the signature, or if it is genuinely valid SQL the lexer mishandles, add the ` +
+        `exempt marker and get a manual review.`
+      );
+      break;
+    }
+    const rest = readAttrsAndBody(masked, parsed.end);
+    if (!rest) {
+      violations.push(
+        `Function ${fnName}: could not parse its AS $tag$...$tag$ body — the actor-binding guard ` +
+        `cannot verify its SECURITY DEFINER attributes or actor binding. Simplify the definition, ` +
+        `or if it is genuinely valid SQL the lexer mishandles, add the exempt marker and get a ` +
+        `manual review.`
+      );
+      break;
+    }
+    const params = content.slice(paramsOpen + 1, parsed.end - 1);
+    const maskedParams = parsed.params;
     const attrs = rest.attrs;
-    const body = rest.body;
+    const body = content.slice(rest.bodyStart, rest.bodyEnd);
     // Resume scanning after this function so a nested CREATE FUNCTION inside a
     // body (DO-block style migrations) isn't parsed twice.
     fnHeadRe.lastIndex = rest.end;
@@ -177,7 +483,7 @@ try {
     // Only mutating bodies attribute anything worth forging.
     if (!/\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(body)) continue;
 
-    const actorParams = splitTopLevelArgs(params)
+    const actorParams = splitTopLevelArgs(maskedParams, params)
       .map(paramName)
       .filter((n) => ACTOR_PARAM_RE.test(n));
     if (actorParams.length === 0) continue;

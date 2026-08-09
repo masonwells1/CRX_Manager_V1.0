@@ -357,6 +357,25 @@ Wave D (MED maintenance). No remediation has started.
 
 - **Landed via** PR #356.
 - **Migrations touched:** none.
+## 2026-08-08 — Actor-binding guard hardened SQL reader
+
+Ported the proven fail-closed SQL reader from `idempotency-body-check.mjs` into
+`actor-binding-check.mjs`. The write-time actor-forgery guard now masks comments
+and quoted data length-preservingly, counts nested PostgreSQL block comments,
+handles dollar-quoted defaults, scans function structure on the mask while
+recovering real parameter/body text, and denies unreadable parameter lists or
+function bodies instead of silently skipping them.
+
+Runtime-built `CREATE FUNCTION` statements are now accepted only when the whole
+definition is one readable string literal. Split/concatenated definitions,
+`format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
+assembly fail closed with an explanation and the existing
+`-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
+suite grew from 24 to 52 assertions, including comment-hidden headers, nested
+comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
+quoted actor parameters. Eighteen individual clause-removal mutations were run;
+each made the real suite fail before the clause was restored. The reference
+idempotency suite remained green at 86 assertions.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
