@@ -79,7 +79,9 @@ describe('supplier quote workbook', () => {
       package_quantity: '1',
       has_formula: false,
     });
-  });
+    // Same ExcelJS generate-and-reparse cost as the product workbook test:
+    // fast alone, over the 5s default under full-suite load.
+  }, 20000);
 
   it.each([
     ['.39', '0.39'],
