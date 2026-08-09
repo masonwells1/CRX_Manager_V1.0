@@ -186,6 +186,14 @@ r = runHook(`DO $do$ BEGIN EXECUTE format('%s', '${BOUND_DDL}'); END $do$;`);
 ok(isDeny(r), "even a bound definition wrapped in format() is refused because it uses multiple literals");
 
 r = runHook(`DO $do$
+DECLARE v_suffix text := 'performed_by';
+BEGIN
+  EXECUTE format($fmt$CREATE FUNCTION public.templated_actor(p_%1$s uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_%1$s; END $fn$;$fmt$, v_suffix);
+END $do$;`);
+ok(isDeny(r), "a one-literal format() template cannot substitute an actor parameter at runtime");
+ok(r.stdout.includes("transformed through format"), "the template deny explains why one template literal is incomplete");
+
+r = runHook(`DO $do$
 DECLARE v_ddl text;
 BEGIN
   v_ddl := $ddl$${UNBOUND_DDL}$ddl$;
@@ -204,10 +212,43 @@ ok(isDeny(r), "plain = assignment of runtime DDL is still inspected");
 r = runHook(`DO $do$
 DECLARE v_ddl text;
 BEGIN
+  v_ddl := $ddl$${BOUND_DDL}$ddl$;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(!isDeny(r), "a bound definition assigned as one complete literal remains supported");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  SELECT $ddl$${BOUND_DDL}$ddl$ INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(!isDeny(r), "a bound definition selected as one complete literal remains supported");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
   SELECT $ddl$${UNBOUND_DDL}$ddl$ /* outer /* inner */ still open ; */ INTO v_ddl;
   EXECUTE v_ddl;
 END $do$;`);
 ok(isDeny(r), "a nested-comment semicolon cannot hide SELECT ... INTO runtime DDL");
+
+r = runHook(`CREATE FUNCTION public.outer_builder() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $outer$
+BEGIN
+  EXECUTE '${UNBOUND_DDL.replaceAll("dynamic_actor", "nested_actor")}';
+END
+$outer$;`);
+ok(isDeny(r), "an unbound dynamic function nested inside another function body is independently inspected");
+ok(r.stdout.includes("public.nested_actor"), "the nested actor function is the offender named in the deny");
+
+r = runHook(`CREATE FUNCTION public.outer_bound_builder() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER AS $outer$
+BEGIN
+  EXECUTE '${BOUND_DDL.replaceAll("dynamic_bound", "nested_bound")}';
+END
+$outer$;`);
+ok(!isDeny(r), "a correctly bound nested dynamic function remains allowed");
 
 r = runHook(`INSERT INTO docs (body) VALUES ('CREATE OR REPLACE ' || 'FUNCTION public.example(p_performed_by uuid)');`);
 ok(!isDeny(r), "function-shaped fragments in a plain INSERT are data, not runtime DDL");

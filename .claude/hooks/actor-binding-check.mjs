@@ -390,13 +390,31 @@ try {
 
     const verdict = (stmtEnd) => {
       if (lits.length === 0) return false;
-      if (!isDynamicSqlStatement(masked.slice(stmtStart, stmtEnd))) return false;
+      const stmt = masked.slice(stmtStart, stmtEnd);
+      if (!isDynamicSqlStatement(stmt)) return false;
       if (!carriesFnHeader(lits.map((l) => l.payload).join(""))) return false;
-      if (lits.length === 1 && carriesFnHeader(lits[0].payload)) return false;
+
+      // "One literal" is safe only when the dynamic-SQL expression is exactly
+      // that literal. A format()/concat()/CASE template can keep the header in
+      // one literal while substituting the actor parameter or body at runtime.
+      // Replace the literal with a marker and accept only the three deliberately
+      // supported direct shapes. Fancy but valid builders use the exemption.
+      if (lits.length === 1 && carriesFnHeader(lits[0].payload)) {
+        const lit = lits[0];
+        const marker = "__ACTOR_DDL_LITERAL__";
+        const skeleton = (
+          masked.slice(stmtStart, lit.start) + marker + masked.slice(lit.end, stmtEnd)
+        ).trim();
+        const directExecute = /^(?:BEGIN\s+)?EXECUTE\s*\(?\s*__ACTOR_DDL_LITERAL__\s*\)?$/i.test(skeleton);
+        const directAssign = /^(?:BEGIN\s+)?(?:"[^"]+"|[\w.]+)\s*(?::=|=(?!=))\s*__ACTOR_DDL_LITERAL__$/i.test(skeleton);
+        const directSelectInto = /^(?:BEGIN\s+)?SELECT\s+__ACTOR_DDL_LITERAL__\s+INTO\s+(?:"[^"]+"|[\w.]+)$/i.test(skeleton);
+        if (directExecute || directAssign || directSelectInto) return false;
+      }
       violations.push(
         "This migration builds a CREATE FUNCTION statement at runtime, and the actor-binding guard " +
-        "cannot read it as one complete literal — the definition is split across fragments, or a " +
-        "fragment is not parseable on its own. Split that way, the guard cannot tell whether the " +
+        "cannot read it as one complete literal — the definition is split across fragments, transformed " +
+        "through format/concatenation/conditional logic, or not parseable on its own. Built that way, " +
+        "the guard cannot tell whether the " +
         "function is SECURITY DEFINER, mutates, accepts a caller-supplied actor, and raises " +
         "ACTOR_MISMATCH. Build the dynamic DDL as a single string literal, or add the file-level " +
         "exempt marker (-- actor-binding-check: exempt) and get a manual review."
@@ -434,7 +452,17 @@ try {
       }
       if (end === -1 || start === -1) { i++; continue; }
       if (innerFrom !== -1 && checkDynamicDdl(innerFrom, innerTo)) return true;
+      // DO/AS dollar bodies are procedural containers, not literals supplied
+      // to a runtime SQL builder. Their contents were just checked recursively;
+      // counting the container itself would turn `DO $do$ EXECUTE '...' $do$`
+      // into a fake one-literal dynamic statement with skeleton `DO <literal>`.
+      if (innerFrom !== -1 && /\b(?:AS|DO)\s+$/i.test(masked.slice(stmtStart, start))) {
+        i = end;
+        continue;
+      }
       lits.push({
+        start,
+        end,
         payload: innerFrom !== -1
           ? content.slice(innerFrom, innerTo)
           : content.slice(start + 1, end - 1),
@@ -473,9 +501,10 @@ try {
     const maskedParams = parsed.params;
     const attrs = rest.attrs;
     const body = content.slice(rest.bodyStart, rest.bodyEnd);
-    // Resume scanning after this function so a nested CREATE FUNCTION inside a
-    // body (DO-block style migrations) isn't parsed twice.
-    fnHeadRe.lastIndex = rest.end;
+    // Do not jump to rest.end: maskSqlNoise deliberately exposes executable
+    // CREATE FUNCTION definitions nested in this body. Continuing from the
+    // current regex position lets the next iteration inspect those definitions
+    // independently instead of trusting the outer function's result.
 
     // Only SECURITY DEFINER functions can forge an actor with the owner's rights.
     if (!/SECURITY\s+DEFINER/i.test(attrs)) continue;

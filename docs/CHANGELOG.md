@@ -371,11 +371,20 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 52 assertions, including comment-hidden headers, nested
+suite grew from 24 to 59 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
-quoted actor parameters. Eighteen individual clause-removal mutations were run;
+quoted actor parameters. Twenty-one individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
 idempotency suite remained green at 86 assertions.
+
+The first exact-SHA Codex push-proof review blocked the implementation on two
+additional fail-open cases. A one-literal `format()` template could substitute
+the actor parameter name from a variable at runtime, and the main scanner
+skipped a complete dynamic definition nested inside an outer function body.
+The guard now accepts a single literal only when it is the entire direct
+`EXECUTE`, assignment, or `SELECT ... INTO` expression, and it continues
+scanning readable nested definitions. Three new clause-removal mutations pin
+those fixes.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
