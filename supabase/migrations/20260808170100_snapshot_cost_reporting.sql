@@ -583,6 +583,13 @@ BEGIN
     WHERE inv.quantity_available > 0
   ),
   committed_orders AS (
+    -- Deliberately NOT rounded per line, unlike every COGS expression in this
+    -- migration. This is a stock VALUATION -- what the units still owed on open
+    -- orders are worth -- not a cost that has to reconcile against revenue and
+    -- profit at a cents boundary. Rounding each line here would add error to a
+    -- valuation for the sake of a consistency that does not apply to it. Left
+    -- explicit so it is not mistaken for one of the sites the rounding sweep
+    -- missed.
     SELECT COALESCE(SUM(
       oi.quantity_remaining * COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0)
     ), 0) AS value
@@ -598,12 +605,12 @@ BEGIN
       SELECT
         p.product_name,
         COALESCE(SUM(oi.total_units_needed * oi.price_per_unit), 0) AS total_revenue,
-        COALESCE(SUM(oi.total_units_needed * COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0)), 0) AS total_cost,
+        COALESCE(SUM(ROUND(oi.total_units_needed * COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0), 2)), 0) AS total_cost,
         ROUND(
           CASE
             WHEN SUM(oi.total_units_needed * oi.price_per_unit) > 0 THEN
               ((SUM(oi.total_units_needed * oi.price_per_unit) -
-                SUM(oi.total_units_needed * COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0))) /
+                SUM(ROUND(oi.total_units_needed * COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0), 2))) /
                 NULLIF(SUM(oi.total_units_needed * oi.price_per_unit), 0)) * 100
             ELSE 0
           END,

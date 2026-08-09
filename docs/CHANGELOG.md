@@ -39,6 +39,18 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 18 (CodeRabbit) — the rounding sweep missed a reversed operand order:**
+
+`financial_dashboard_summary.bottom_products` writes the cost as `quantity * cost` where every other
+site writes `cost * quantity`, so the round-17 grep — which matched one operand order — reported zero
+unrounded sites while two remained. The claim "all 21, zero remain" in the previous entry was wrong;
+it was 21 of 23. Both are now rounded, and a re-audit keyed on `cost_at_time_cents / 100.0` alone
+(operand-order independent) finds nothing left.
+
+One site is **deliberately not rounded** and now says so in the SQL: `committed_orders` values the
+stock still owed on open orders. That is a valuation, not a cost that reconciles against revenue and
+profit, so per-line rounding would add error for a consistency that does not apply to it.
+
 **Round 17 (Codex) — revenue, COGS and profit now reconcile at one cents boundary:**
 
 The detail and summary reports rounded the displayed COGS but derived profit from the *unrounded*
