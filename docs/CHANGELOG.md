@@ -39,6 +39,19 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 13 (Codex) — payload order could decide which line keeps its cost:**
+
+The round-12 fallback resolved each line in a single pass, so the outcome depended on the order the
+payload happened to arrive in. Changing a line from product A to product B on a quote that already
+contains B clears the changed line's id; if that row was processed first it claimed the **existing**
+B row's uuid and historical snapshot, and the real B row — whose echoed id was now already consumed —
+fell through to a fresh stamp at today's catalog cost. With different quantities on the two lines
+that silently changes the quote's cost, profit, the order converted from it, and commissions.
+
+`save_quote` now runs a **reservation pass** over the whole payload first, claiming every valid
+echoed id before any id-less row is allowed to take a product fallback. The result no longer depends
+on payload order. The postflight block asserts the reservation pass is present.
+
 **Round 12 (Codex) — the stale-client guard was wrong twice; replaced with a real one:**
 
 Codex rejected the round-11 fix: `client_sends_item_ids` was set by the caller, so a rep could

@@ -31,9 +31,14 @@
 --      prior item's product_id equals the payload row's product_id (an id echo
 --      cannot attach another line's snapshot to a different product).
 --
---      PRODUCT FALLBACK (Codex round 11-12). When the id does NOT resolve, the
+--      PRODUCT FALLBACK (Codex round 11-13). When the id does NOT resolve, the
 --      row falls back to the first unconsumed prior line of the SAME quote and
---      SAME product, consuming each prior row at most once. This covers a
+--      SAME product, consuming each prior row at most once. Every valid echoed
+--      id is RESERVED in a pass over the whole payload FIRST, so payload order
+--      cannot decide which line keeps its snapshot: without that, changing a
+--      line from product A to B on a quote that already holds B let the changed
+--      row claim the existing B row's id and cost whenever it happened to be
+--      processed first, leaving the real B row with a fresh stamp. This covers a
 --      pre-snapshot browser bundle (sends no ids at all) and a current page that
 --      cleared the id of a product-swapped line. Two earlier attempts to detect
 --      a stale caller instead were both wrong and are recorded here so they are
@@ -424,6 +429,30 @@ BEGIN
       INTO v_prior_item_costs
     FROM quote_items
     WHERE quote_id = v_quote_id;
+
+    -- RESERVATION PASS (Codex round 13). Every valid echoed id must be claimed
+    -- BEFORE any id-less row is allowed to take a product fallback, because the
+    -- payload order is not controlled by us. Changing a line from product A to
+    -- product B on a quote that already contains B clears that line's id; if the
+    -- changed row happens to be processed first, a single pass would let it
+    -- claim the EXISTING B row's uuid and snapshot, and the real B row -- whose
+    -- echoed id is now already consumed -- would fall through to a fresh stamp
+    -- at today's catalog cost. With different quantities on the two lines that
+    -- silently changes stored cost, profit, the converted order and commissions.
+    -- Reserving first makes the outcome independent of payload order.
+    FOR v_section IN SELECT * FROM jsonb_array_elements(p_sections)
+    LOOP
+      FOR v_item IN SELECT * FROM jsonb_array_elements(v_section->'items')
+      LOOP
+        v_payload_item_id := NULLIF(v_item->>'id', '');
+        IF v_payload_item_id IS NOT NULL
+           AND v_prior_item_costs ? v_payload_item_id
+           AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id'
+           AND NOT (v_consumed_prior_ids ? v_payload_item_id) THEN
+          v_consumed_prior_ids := v_consumed_prior_ids || jsonb_build_object(v_payload_item_id, true);
+        END IF;
+      END LOOP;
+    END LOOP;
     -- >>>SNAPSHOT
 
     DELETE FROM quote_sections WHERE quote_id = v_quote_id;
@@ -500,12 +529,13 @@ BEGIN
             USING ERRCODE = 'P0001';
         END IF;
         v_consumed_item_ids := v_consumed_item_ids || jsonb_build_object(v_payload_item_id, true);
+        -- No not-consumed test here: the reservation pass above already claimed
+        -- this id for this payload row, and the duplicate check immediately
+        -- above guarantees no second row can present the same id.
         IF v_prior_item_costs ? v_payload_item_id
-           AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id'
-           AND NOT (v_consumed_prior_ids ? v_payload_item_id) THEN
+           AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id' THEN
           v_reuse_item_id := v_payload_item_id::uuid;
           v_preserved_cost := (v_prior_item_costs->v_payload_item_id->>'c')::bigint;
-          v_consumed_prior_ids := v_consumed_prior_ids || jsonb_build_object(v_payload_item_id, true);
         END IF;
       END IF;
 
@@ -1088,6 +1118,10 @@ BEGIN
       -- capability flag may gate it: the first locked users out of a legitimate
       -- replace-every-line save, the second was forgeable by the caller.
       AND position('v_consumed_prior_ids' in p.prosrc) > 0
+      -- Echoed ids must be RESERVED in a pass over the whole payload before any
+      -- id-less row takes a product fallback, or payload order decides which
+      -- line keeps its snapshot.
+      AND position('RESERVATION PASS' in p.prosrc) > 0
       AND position('QUOTE_STALE_CLIENT' in p.prosrc) = 0
       AND position('client_sends_item_ids' in p.prosrc) = 0
       AND position('QUOTE_ITEM_ID_DUPLICATE' in p.prosrc) > 0
