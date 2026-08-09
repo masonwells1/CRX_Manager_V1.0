@@ -2,6 +2,118 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
+
+PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in bash-safety and live-testdata guards (variant git spellings, redirect terminators, plumbing push commands, DELETE catch-all, setval/nextval and RPC-via-SELECT rules), added regression tests, resolved the changelog merge conflict with main.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `9ff94908f Close git plumbing and SELECT-side-effect bypasses; add regression tests`
+  - `8a12ab83f Merge origin/main into cloud-permissions-overhaul (changelog conflict)`
+  - `501839e45 Address CodeRabbit review: redirect terminators and DELETE catch-all`
+  - `cd356c862 Cover split git option forms and capital-S Supabase deploy ask entry`
+  - `78f0b7351 Log session in changelog`
+  - `9dc190bf9 Harden bash-safety guard against variant dangerous-command spellings`
+  - `265378e39 Add changelog entry for permissions overhaul session`
+  - `13c1763a8 Overhaul cloud permissions to stop constant prompts`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-08 — Cloud permissions overhaul (PR #352): set defaultMode dontAsk with…
+
+Cloud permissions overhaul (PR #352): set defaultMode dontAsk with broad allow list in .claude/settings.json to stop constant cloud permission prompts; kept AGENTS.md hard gates (deploys/merges ask, destructive commands and Vercel purchases denied). Fixed Codex P1 by hardening bash-safety guard: variant git spellings now denied, production deploy spellings prompt via new ask tier.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `9dc190bf Harden bash-safety guard against variant dangerous-command spellings`
+  - `265378e3 Add changelog entry for permissions overhaul session`
+  - `13c1763a Overhaul cloud permissions to stop constant prompts`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-08 — Cloud permissions overhaul: set defaultMode dontAsk and broad allow…
+
+Cloud permissions overhaul: set defaultMode dontAsk and broad allow list in .claude/settings.json to stop constant permission prompts; production deploy/merge stay on ask, destructive ops and Vercel purchases denied. Draft PR #352.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `13c1763a Overhaul cloud permissions to stop constant prompts`
+
+## 2026-08-08 — Forward migrations for the 2026-08-08 audit findings (written, NOT applied)
+
+Wrote the forward migrations for the audit's decided findings. **None has been applied to live** — no
+database backup exists (Supabase Free, no PITR) and the Codex CLI is unavailable in the cloud
+container, so the exact-SHA `gpt-5.6-sol` adversarial gate that risky money/RLS diffs require could
+not be run. Both gates are unmet by environment, not by choice.
+
+- `20260808150100` restores the `batch_apply_prepayments` actor guard. It delegates to
+  `_batch_apply_prepayments_impl` but **keeps `is_admin()` in the wrapper** — live inspection showed
+  `_impl` carries no authorization of its own, so delegating the admin check as the handoff
+  originally suggested would have silently dropped the admin gate.
+- `20260808150200` zeroes `order_items.quantity_remaining` on full cancel. **Scope correction to the
+  audit:** full cancel ALREADY releases prebooked stock and writes its `released` ledger row
+  (verified live on ORD-2026-0330, which has that row). The `partially_fulfilled` path already
+  handled both halves. Only `quantity_remaining` was genuinely stranded, so that is all this changes.
+  The residual `quantity_prebooked = 36` is March 2026 drift (audit L2), not a cancel_order defect.
+- `20260808150300` revokes `TRUNCATE` on `inventory` from `authenticated` (RLS does not constrain
+  TRUNCATE) and comments `payments` as a dead legacy table.
+- `20260808150400` installs a canonical whole-cents rounding trigger on `order_items.total_price`
+  and `commissions.commission_amount`. A trigger rather than editing writers: 9 and 11 live
+  functions respectively assign those columns, and a trigger also covers frontend and future
+  writers. Forward-looking only — the repair of the 49 existing fractional rows (including the
+  $5,245.195 pending payout) restates live money and is left commented out pending separate approval.
+- `scripts/db-invariant-sweeps/predicates/fin-money-whole-cents.sql` is the standing-data half of
+  that rule. It will report the 49 rows until they are repaired; that is intended, not a defect.
+- `.claude/hooks/migration-ordering-lib.mjs` is the out-of-order replay guard — the durable
+  prevention for the §2 finding — now WIRED into `.claude/hooks/migration-apply-guard.mjs`, with
+  `scripts/refresh-applied-migrations.mjs` supplying the applied-ledger snapshot and
+  `.claude/hooks/migration-ordering-lib.test.mjs` covering it (15 assertions).
+
+Migration reviewer subagents were NOT dispatched, since nothing is being applied from here.
+
+**PR #348 review round (Codex + CodeRabbit).** Both reviewers independently caught a real design bug
+in the first draft of the ordering guard: it compared the candidate migration against every filename
+on **disk** rather than against the **applied ledger**. A file on disk is not proof it ran, so that
+version would have blocked its own sibling migrations — applying `20260808150100` would have seen
+`20260808150400` on disk and refused, forcing newest-first application or a bogus escape marker. The
+guard now compares only against migrations recorded as applied, abstains when no ledger snapshot is
+available rather than guessing, and has a regression test pinning the ascending-batch case.
+
+CodeRabbit also correctly flagged that the restored `batch_apply_prepayments` wrapper accepted
+`p_performed_by = NULL` and forwarded it. The guard being restored was
+`p_performed_by IS DISTINCT FROM auth.uid()`, which fails closed on NULL; the wrapper now matches it
+and forwards the canonical `auth.uid()` instead of the caller-supplied value. Also removed the
+auto-added `rm -f OVERNIGHT-INTENT.flag` permission from `.claude/settings.local.json` — CodeRabbit
+independently reached the same conclusion already flagged in chat: a standing unguarded grant to
+delete the unattended-run flag is a guard-bypass risk.
+
+**Second review round (Codex, two P1s — both valid, both fixed).**
+
+1. *Missing ledger evidence was treated as a pass.* The snapshot is gitignored, so a clean checkout
+   had none, the guard abstained, and the protection was absent exactly when it mattered. A missing,
+   empty, unreadable, or >24h-stale snapshot now **BLOCKS the apply** with instructions to refresh it,
+   rather than waving it through. Fail-closed, matching every other hard gate in this repo.
+2. *The refresh script discarded real timestamps.* It preferred the ledger `name`, but many live rows
+   have a timestamp-less name (e.g. version `20260727174805`, name `deactivation_revokes_auth_access`).
+   Those rows vanished from the comparison set, so the guard could compare against an older parseable
+   row and permit a migration behind the true high-water mark. It now re-attaches the version as a
+   `<version>_<name>` prefix when the name carries no timestamp, and warns about any row it still
+   cannot use.
+
+`migration-apply-guard.test.mjs` gained fixtures for the missing- and stale-snapshot blocks (74
+assertions); `migration-ordering-lib.test.mjs` covers the version-prefixed shape (17 assertions).
+
+Skipped with reason: the `next_po_number` zero-caller entry in `.claude/caller-graph.json` is a
+pre-existing limitation of the generator's directory scope (it does not scan `.sql`), not something
+this branch introduced, and the artifact must not be hand-edited. CodeRabbit's `factory-board.test.mjs`
+failure did not reproduce here — it passes with 29 assertions, and `agent-manifest-parity` is clean.
+
+## 2026-08-08 — 2026-08-08 foundation ultra review (cloud, unattended):…
+
+2026-08-08 foundation ultra review (cloud, unattended): SOLID-WITH-FOLLOWUPS, zero blockers, zero surviving HIGH. Recorded Mason's four owner decisions. Four forward migrations parked, unwritten.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `51582137 chore: commit auto-added local permission entry`
+  - `c6c45fb5 docs: record Mason's four foundation-ultra-review owner decisions`
+  - `f5811338 audit: 2026-08-08 foundation ultra review + bucket-1 doc/test fixes`
+
 ## 2026-08-07 — Governed Software Factory REMOVED
 
 At Mason's direction, the entire Governed Autonomous Software Factory was removed:
@@ -15,6 +127,188 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+## 2026-08-08 — idempotency-body-check round-17: comments are separators
+
+Codex H1 against round 16, and the same root cause as round 15 in a different place: matching RAW
+text where the file already has a lexer. PostgreSQL allows a comment anywhere whitespace is allowed,
+including between a function's name and its parameter list —
+
+    CREATE FUNCTION public.f /* legal comment */ ( p_idempotency_key text DEFAULT NULL )
+
+`CREATE_FN_HEAD_RE` ran against the raw literal, so that did not look like a header. The literal was
+classified as data, never lexed, and an unwired invoice-mutating RPC was allowed. Codex verified it
+against the base: base denied, candidate allowed.
+
+Fixed with `blankComments()` — a comment-only, length-preserving blanker that leaves string literals
+alone. Deliberately NOT `maskSqlNoise()`: that function calls `carriesFnHeader()`, so reusing it
+would recurse forever. The header test now accepts a match on either the raw or the comment-blanked
+text; blanking can only remove text, and keeping the raw test stops a comment marker living inside a
+string from blanking a real header away.
+
+86 assertions. Five new probes (block comment, line comment, dollar-quoted, every separator position,
+nested); both the comment-aware match and the nesting depth are individually mutation-killed.
+
+## 2026-08-08 — idempotency-body-check round-16: a header is not a definition
+
+Codex HIGH against round 15. The fail-closed rule handed the statement to the normal scan as soon as
+SOME literal carried the whole `CREATE FUNCTION` header. But a header is not a definition — the body
+can sit entirely in a second, perfectly well-formed fragment:
+
+    EXECUTE 'CREATE FUNCTION public.f(p_idempotency_key text DEFAULT NULL) RETURNS void
+             LANGUAGE plpgsql AS ' || '$fn$ BEGIN UPDATE invoices SET total_cents = 0; END $fn$;'
+
+Both fragments parse, so round 14's parse-error path never fired, and the normal scan only ever saw
+the header literal. The mutating body was invisible and the unwired RPC was allowed. Verified
+directly: ALLOW on the old rule, deny on the fix.
+
+Now a dynamic statement is handed on only when it has EXACTLY ONE literal and that literal carries
+the header. Any additional literal means some part of the definition is somewhere the guard cannot
+follow, so it is refused.
+
+**Behaviour change:** a complete, correctly wired definition wrapped in `format('%s', …)` is now
+refused, where rounds 12–15 allowed it — the wrapper is a second literal. Deliberately not
+special-cased: deciding which literals "really" contribute is the same code-vs-data judgement that
+failed six consecutive Codex rounds. The author `EXECUTE`s the literal directly, which is simpler,
+and the exempt marker remains for genuine cases. Both spellings are now tested.
+
+81 assertions; the one-literal rule is mutation-killed on Codex's exact probe.
+
+## 2026-08-08 — idempotency-body-check round-15: nested block comments
+
+Codex HIGH against round 14, and a real regression rather than another carve-out.
+`firstTopLevelSemicolon()` — the round-13 helper that finds where a statement ends — stopped at the
+first `*/`. PostgreSQL block comments nest, so with `/* outer /* inner */ still open ; */` the scanner
+was still inside the comment, read the `;` as the end of the statement, and missed the `INTO`
+assignment after it. The dynamic DDL then looked like inert data and an unwired invoice-mutating RPC
+was allowed through. Codex demonstrated it: denied on the base snapshot, allowed on the candidate.
+
+The cause was writing a second comment scanner by hand when `maskSqlNoise()` already tracks nesting
+correctly. Fixed by counting depth the same way. 78 assertions; the new nested-comment probe is
+mutation-killed (reverting to the naive scan fails exactly that assertion).
+
+## 2026-08-08 — idempotency-body-check round-14: fail-closed redesign (Mason's call)
+
+Rounds 10–13 all failed the same way. Each one asked, literal by literal, "is this text code or is it
+data?", and each time PostgreSQL had another spelling that the answer missed: `%1$10s`, a
+dollar-quoted `format()` template, a literal in a `CASE` arm, a header split mid-word, a body
+continued in a second fragment. Five straight gate blocks. After the fifth, Mason chose the redesign
+over another patch round.
+
+**The default is inverted.** Inside a statement that builds SQL at runtime, if the literals *together*
+spell a `CREATE FUNCTION` header, then some single literal must carry that header. Anything else is
+refused, and the author either writes the dynamic DDL as one string literal or uses the file-level
+`-- idempotency-body-check: exempt` marker and gets a human review. The guard no longer enumerates
+syntax variants, so there is no next variant to discover.
+
+Deleted: `isDataArgOfFormat`, `formatTemplate`, and the `p_idempotency_key` half of the lexing
+trigger — every rule whose job was to decide code-vs-data. Net less code than round 13.
+
+**Accepted trade-off, deliberately:** function-shaped *prose* passed as a `%L` argument inside a
+runtime-built statement is now refused rather than allowed. Round 12 had special-cased it; that
+special case is what rounds 12 and 13 were blocked on. For a guard against duplicate customer
+charges, refusing too much is the safe side, and the exempt marker is a tested escape hatch.
+
+77 assertions. Every clause of the new rule was individually reverted and the suite went red for each
+— including two clauses that SURVIVED their mutation and turned out to be redundant with the masker's
+existing fail-closed path; those were deleted rather than kept as decoration.
+
+## 2026-08-08 — idempotency-body-check round-13: both round-12 carve-outs were too literal
+
+Fourth gate block, two findings — both in the *narrowing* rules round 12 added, which is where a
+guard gets dangerous: a carve-out that is too broad is a fail-open.
+
+- **Positional and dollar-quoted `format()` templates.** The `%s`-means-code test read only a bare
+  `%s` in a single-quoted template. PostgreSQL also writes `%1$s`, and the template may be
+  dollar-quoted — in which case the old scan grabbed the *first argument* as the template, found no
+  `%s` in it, and called the real DDL data. Templates are now located properly (single- or
+  dollar-quoted), and `%1$s` counts as code.
+- **Statement end was found with a raw `indexOf(";")`.** A semicolon inside a following string ended
+  the scan early, hiding the `INTO` and masking a function-bearing literal as data. Statement ends
+  are now found the same way the masker finds them, skipping comments, strings and dollar bodies.
+
+72 assertions. All three new guards individually mutation-killed — including a first attempt at the
+dollar-quoted-template test that SURVIVED its mutation because it used only one `format()` argument;
+the probe was rewritten until it genuinely failed against the old code.
+
+## 2026-08-08 — idempotency-body-check round-12: every dynamic-SQL assignment form, and `%L` is data
+
+Third Codex push-proof gate block on this branch, three findings, all real:
+
+- **H1 — `:=` was not the only assignment form.** Dynamic DDL is also built with `v_ddl = $ddl$…$ddl$`
+  and `SELECT $ddl$…$ddl$ INTO v_ddl`. Both were classed as data and masked away, so a mutating RPC
+  that declares but ignores `p_idempotency_key` passed the guard. Statement classification now covers
+  plain `=` assignment and `SELECT … INTO`, and it reads on past the literal to the next `;` — the
+  assignment target sits *after* the literal in the `INTO` form, so a prefix-only test could never
+  see it.
+- **H2 — the split-DDL detector never concatenated the fragments.** It matched the header regex
+  against the raw source slice, which still contains the quote marks and the `||`, so a split inside
+  the header itself (`'CREATE OR REPLACE ' || 'FUNCTION f('`) read as non-matching. It now
+  reconstructs what the fragments spell and classifies that.
+- **M1 — `%L` arguments were lexed as code.** In `format(tmpl, …)` only `%s` splices an argument in as
+  SQL; `%L`/`%I` quote it as data. Lexing such an argument hit an apostrophe or a `$5$` and
+  fail-closed-denied a valid migration. Arguments to a template with no `%s` are no longer lexed.
+
+69 assertions (was 64). Each of the six new guards was individually reverted and the suite went red
+for each; the sibling `actor-binding-check` suite (24 assertions) is unaffected.
+
+## 2026-08-08 — idempotency-body-check round-11: EXECUTE payloads fail CLOSED again
+
+Codex reviewed the merged round-10 commit (`86bf897b`) and returned three P2s;
+all three are fixed here.
+
+1. **Fail-open (the serious one).** Round 10 masked an EXECUTE payload the lexer
+   could not read as opaque data. That ERASED real dynamic DDL, so an unwired
+   mutating function containing something like `DEFAULT 'costs $5$ each'` passed
+   a guard that had blocked it the day before. Executable payloads now fail
+   CLOSED again; only payloads judged to be data are skipped, and those are
+   never handed to the lexer at all, so they cannot reach the fail-closed path.
+2. **False-deny on EXECUTE data arguments.** "Anywhere in an EXECUTE statement"
+   classified `format('INSERT … %L', '…')` data arguments as executable SQL.
+   Classification is now per-literal content, not statement-wide.
+3. **DDL assembled by concatenation was invisible.** `v_ddl := $a$CREATE
+   FUNCTION foo($a$ || $b$…p_idempotency_key…$b$` splits the signature across
+   fragments, so no fragment ever shows a complete parameter list. That shape is
+   now refused outright with instructions to build the DDL as a single literal
+   (the exempt marker remains the escape hatch).
+
+The recursion trigger is now a real `CREATE FUNCTION <name>(` header **and** a
+`p_idempotency_key` mention. Either test alone false-denies documentation, and
+with parse failures fail-closed again a false trigger blocks a valid migration.
+The Codex push-proof gate BLOCKED the first attempt at this fix and was right
+twice: PostgreSQL also concatenates two literals separated by nothing but a
+newline, so a `||`-only check was bypassed by deleting the operator; and payload
+CONTENT alone was making a literal executable, so a plain INSERT of
+function-shaped documentation was denied. The assembly check now covers both
+joining forms and recurses into DO blocks and function bodies, and a literal is
+lexed only in a dynamic-SQL context (EXECUTE or := assignment) AND on content.
+
+It blocked a second time on the same class: fragments passed as separate
+`format()` ARGUMENTS are comma-separated, which the whitespace/`||` rule missed.
+The assembly check now also treats a comma as a join, and only fires when the
+pieces are genuinely split — a complete signature inside one argument is still
+lexed and judged on its wiring.
+
+64 assertions; each of the nine new guards was individually reverted and the
+suite went red for each.
+
+## 2026-08-08 — idempotency-body-check round-10: dynamic-DDL fail-open + data-literal false-deny — FIXED
+
+Two Codex P2 findings landed on PR #335 after it merged, both now closed.
+(1) **Fail-open.** Round 9 only recognised dynamic DDL whose literal sat
+DIRECTLY after `EXECUTE` or `EXECUTE format(`, so `EXECUTE ('CREATE …')` and the
+non-first argument of `EXECUTE format('%s', 'CREATE …')` stayed opaque data — an
+unwired dynamically created RPC was invisible. The lexer now treats any literal
+inside an `EXECUTE` statement (statement-scoped, since the last `;`) as dynamic
+SQL. (2) **False-deny.** The content trigger recursed into any dollar-quoted
+payload merely MENTIONING "CREATE FUNCTION", so a prose literal with one
+apostrophe (`can't`) read as an unterminated string and denied the whole
+migration; the trigger now also requires `p_idempotency_key` — the only payloads
+this guard can act on — and a payload we chose to recurse into but cannot lex is
+masked opaque rather than failing the file closed. Top-level fail-closed
+behavior on genuinely unterminated SQL is unchanged. 12 new regression
+assertions (55 total); each of the four new guards was mutation-tested — reverted
+individually, every one turns the suite red.
+
 ## 2026-08-08 — `scripts/land-pr.mjs`: PRs can no longer stall on BEHIND
 
 New landing helper closing the gap that stalled PR #345 overnight: GitHub branch protection requires the PR branch to be up to date with `main`, so a sibling merge flips a fully green PR to `mergeStateStatus=BEHIND` and armed auto-merge never fires — and our watchers only polled checks, not state. `node scripts/land-pr.mjs <n>` watches state, runs `gh pr update-branch` whenever the PR falls behind (re-running if main moves again mid-wait), and exits 0 only on MERGED. It deliberately never merges anything itself — merging stays with the hook-gated `gh pr merge`, so no new bypass path exists; for risky diffs it waits until green/current, then prints the proof-and-merge steps. Proven live: reported `MERGED c65b431d` for PR #345, and detected + un-stuck Dependabot PR #341 (green, 8/8 checks, BEHIND) on its first real pass. Wired into `/ship` Step 8 and `docs/reference/agent-guardrails.md`. Hardened during its own landing (PR #347): GitHub recomputes mergeStateStatus asynchronously and briefly reported a stale DIRTY right after a push, so the script now requires 3 consecutive DIRTY polls before declaring a real conflict.
