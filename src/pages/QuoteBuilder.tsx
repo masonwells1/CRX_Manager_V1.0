@@ -1530,6 +1530,11 @@ export default function QuoteBuilder() {
           // id-keyed preservation can carry cost_at_quote_cents across the
           // delete+reinsert; genuinely new lines have no id and send none.
           ...(item.id ? { id: item.id } : {}),
+          // Opaque local key. save_quote echoes it back with the id it wrote,
+          // so a new line learns its database id without a refetch. Without it
+          // a new line stays id-less forever and a second save of two new lines
+          // of the same product trips QUOTE_ITEM_AMBIGUOUS_COST.
+          client_key: item._key,
           product_id: item.product_id,
           sort_order: item.sort_order,
           // The approval reason is recorded on the affected line rather than the
@@ -1594,7 +1599,27 @@ export default function QuoteBuilder() {
           }))
         );
       }
-      const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown }>(data, 'save_quote');
+      const result = assertRpcResult<{
+        quote_id: string;
+        commission_split?: CommissionSplit | null;
+        row_version?: unknown;
+        item_ids?: Record<string, string> | null;
+      }>(data, 'save_quote');
+      // Install the ids save_quote just wrote. This page never refetches, so
+      // without this a line added in this session stays id-less and every later
+      // save re-sends it as new -- which, for two new lines of one product,
+      // becomes an unresolvable cost ambiguity the server has to refuse.
+      if (result.item_ids && Object.keys(result.item_ids).length > 0) {
+        const assignedIds = result.item_ids;
+        setSections((prev) =>
+          prev.map((sec) => ({
+            ...sec,
+            items: sec.items.map((item) =>
+              assignedIds[item._key] ? { ...item, id: assignedIds[item._key] } : item
+            ),
+          }))
+        );
+      }
       const savedQuoteId = result.quote_id || quoteId;
       if (!savedQuoteId) {
         toast('error', 'Quote save completed without an ID. Refresh before making further changes.');

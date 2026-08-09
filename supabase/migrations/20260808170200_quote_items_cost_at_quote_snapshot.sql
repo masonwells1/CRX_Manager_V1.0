@@ -261,6 +261,16 @@ DECLARE
   v_idless_by_product jsonb := '{}'::jsonb;
   v_idless_count int;
   v_fallback_candidates int;
+  -- The id actually written for this row, and the client-key -> id map returned
+  -- to the caller. save_quote deletes and reinserts every line, so a browser
+  -- that added new lines has no way to learn their ids; without this it keeps
+  -- sending them id-less forever and the second save trips the ambiguity guard
+  -- (two new lines of one product). client_key is an opaque caller-supplied
+  -- string used only to address the response -- it is never an id and never
+  -- influences which snapshot a row receives. (Codex round 28.)
+  v_new_item_id uuid;
+  v_client_key text;
+  v_item_ids jsonb := '{}'::jsonb;
   -- >>>SNAPSHOT
 BEGIN
   v_actor := auth.uid();
@@ -625,6 +635,13 @@ BEGIN
           v_fallback_prior_id := NULL;
         END IF;
       END IF;
+      -- SNAPSHOT<<< settle this row's id once, so the same value can be both
+      -- written and reported back to the caller under its client key.
+      v_new_item_id := COALESCE(v_reuse_item_id, gen_random_uuid());
+      v_client_key := NULLIF(v_item->>'client_key', '');
+      IF v_client_key IS NOT NULL THEN
+        v_item_ids := v_item_ids || jsonb_build_object(v_client_key, v_new_item_id::text);
+      END IF;
       -- >>>SNAPSHOT
       INSERT INTO quote_items (
         id, quote_id, section_id, product_id, sort_order, notes,
@@ -636,7 +653,7 @@ BEGIN
       ) VALUES (
         -- SNAPSHOT: reuse the echoed id when it matched a prior line of this
         -- quote (same product); otherwise mint a fresh one as before.
-        COALESCE(v_reuse_item_id, gen_random_uuid()),
+        v_new_item_id,
         v_quote_id,
         v_section_id,
         (v_item->>'product_id')::uuid,
@@ -864,6 +881,12 @@ BEGIN
     '_request_fingerprint', v_request_fingerprint,
     'commission_split', (SELECT commission_split FROM quotes WHERE id = v_quote_id),
     'row_version', (SELECT row_version FROM quotes WHERE id = v_quote_id),
+    -- SNAPSHOT<<< client_key -> quote_items.id for every line written by this
+    -- save, so the caller can install real ids without a refetch. Included in
+    -- the idempotency-stored result, so a replayed save returns the same map
+    -- rather than leaving a retrying client id-less. (Codex round 28.)
+    'item_ids', v_item_ids,
+    -- >>>SNAPSHOT
     'server_totals', jsonb_build_object(
       'total_price', (SELECT total_price FROM quotes WHERE id = v_quote_id),
       'total_cost', (SELECT total_cost FROM quotes WHERE id = v_quote_id),
@@ -1703,6 +1726,193 @@ BEGIN
 END;
 $function$;
 
+-- ---------------------------------------------------------------------------
+-- duplicate_quote: one cost basis for the copy. (Codex round 28, P1.)
+--
+-- The copy previously inherited the SOURCE quote's current_cost, profit and
+-- header totals, while the new snapshot trigger stamps cost_at_quote_cents from
+-- today's products.current_cost. Once a product's cost moved, the duplicate
+-- carried two conflicting costs at once: it could be frozen, sent and converted
+-- without ever passing through save_quote, leaving its header and the resulting
+-- commissions on the old cost while every snapshot-based report used the new
+-- one.
+--
+-- Resolved toward TODAY's cost, not the source's. A duplicate is a fresh quote
+-- being sent now, so its margin should reflect what the product costs now --
+-- and it is the basis the trigger, save_quote and the reports all already use.
+-- Preserving the source snapshot instead would have frozen a stale cost that
+-- no later ordinary save would ever correct, because save_quote deliberately
+-- carries a snapshot across its delete+reinsert.
+--
+-- Prices are copied unchanged; only cost, profit, margin and the derived
+-- totals are recomputed. Base: 20260526151856 (the current definition).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.duplicate_quote(
+  p_source_quote_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid;
+  v_orig record;
+  v_new_quote_id uuid;
+  v_new_quote_number text;
+  v_section record;
+  v_new_section_id uuid;
+  v_existing jsonb;
+  v_result jsonb;
+  v_totals record;
+BEGIN
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM profiles
+    WHERE id = v_actor AND is_active = true AND role IN ('admin', 'sales_rep')
+  ) THEN
+    RAISE EXCEPTION 'INSUFFICIENT_ROLE';
+  END IF;
+
+  IF p_idempotency_key IS NOT NULL THEN
+    v_existing := check_idempotency(p_idempotency_key, 'duplicate_quote');
+    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
+  END IF;
+
+  SELECT * INTO v_orig FROM quotes WHERE id = p_source_quote_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'QUOTE_NOT_FOUND'; END IF;
+
+  SELECT generate_quote_number() INTO v_new_quote_number;
+
+  -- Header totals are written as 0 and settled from the copied lines below,
+  -- once those lines carry today's cost.
+  INSERT INTO quotes (
+    quote_number, customer_id, created_by, tier, status,
+    commission_split, total_price, total_cost, total_profit,
+    total_margin_pct, valid_days, expires_at,
+    header_notes, footer_notes
+  ) VALUES (
+    v_new_quote_number,
+    v_orig.customer_id,
+    v_actor,
+    v_orig.tier,
+    'draft',
+    v_orig.commission_split,
+    0, 0, 0, 0,
+    COALESCE(v_orig.valid_days, 15),
+    now() + (COALESCE(v_orig.valid_days, 15) || ' days')::interval,
+    v_orig.header_notes,
+    v_orig.footer_notes
+  ) RETURNING id INTO v_new_quote_id;
+
+  FOR v_section IN
+    SELECT * FROM quote_sections WHERE quote_id = p_source_quote_id ORDER BY sort_order
+  LOOP
+    INSERT INTO quote_sections (
+      quote_id, section_name, sort_order, section_notes
+    ) VALUES (
+      v_new_quote_id,
+      v_section.section_name,
+      v_section.sort_order,
+      v_section.section_notes
+    ) RETURNING id INTO v_new_section_id;
+
+    -- cost_at_quote_cents is deliberately NOT supplied: the BEFORE INSERT
+    -- trigger stamps today's catalog cost, and current_cost/profit/net_margin
+    -- below are derived from that same number so the row cannot disagree with
+    -- its own snapshot. The passthrough GUC is never armed here.
+    INSERT INTO quote_items (
+      quote_id, section_id, product_id, sort_order, notes,
+      price_per_unit, price_override, current_cost, suggested_rate, actual_rate,
+      rate_unit, oz_per_acre, price_per_acre, acres,
+      total_units_needed, unit_size, profit, total_price, net_margin,
+      calc_mode, price_unit
+    )
+    SELECT
+      v_new_quote_id,
+      v_new_section_id,
+      qi.product_id, qi.sort_order, qi.notes,
+      qi.price_per_unit, qi.price_override,
+      COALESCE(p.current_cost, 0),
+      qi.suggested_rate, qi.actual_rate,
+      qi.rate_unit, qi.oz_per_acre, qi.price_per_acre, qi.acres,
+      qi.total_units_needed, qi.unit_size,
+      ROUND((qi.price_per_unit - COALESCE(p.current_cost, 0)) * COALESCE(qi.total_units_needed, 0), 2),
+      qi.total_price,
+      CASE
+        WHEN COALESCE(qi.total_price, 0) > 0
+          THEN ROUND(((qi.price_per_unit - COALESCE(p.current_cost, 0)) * COALESCE(qi.total_units_needed, 0))
+                     / qi.total_price * 100, 2)
+        ELSE 0
+      END,
+      qi.calc_mode, qi.price_unit
+    FROM quote_items qi
+    JOIN products p ON p.id = qi.product_id
+    WHERE qi.quote_id = p_source_quote_id AND qi.section_id = v_section.id
+    ORDER BY qi.sort_order;
+  END LOOP;
+
+  -- Settle the header from the rows just written, the same way save_quote does.
+  SELECT
+    COALESCE(SUM(total_price), 0) AS total_price,
+    COALESCE(SUM(current_cost * total_units_needed), 0) AS total_cost,
+    COALESCE(SUM(profit), 0) AS total_profit
+  INTO v_totals
+  FROM quote_items
+  WHERE quote_id = v_new_quote_id;
+
+  UPDATE quotes SET
+    total_price = v_totals.total_price,
+    total_cost = v_totals.total_cost,
+    total_profit = v_totals.total_profit,
+    total_margin_pct = CASE
+      WHEN v_totals.total_price > 0
+        THEN ROUND(v_totals.total_profit / v_totals.total_price * 100, 2)
+      ELSE 0
+    END
+  WHERE id = v_new_quote_id;
+
+  INSERT INTO activity_feed (
+    event_type, description, performed_by,
+    related_entity_type,
+    related_entity_id,
+    customer_id
+  ) VALUES (
+    'quote_created',
+    'Quote ' || v_new_quote_number || ' duplicated from ' || v_orig.quote_number,
+    v_actor, 'quote', v_new_quote_id, v_orig.customer_id
+  );
+
+  v_result := jsonb_build_object(
+    'status', 'duplicated',
+    'quote_id', v_new_quote_id,
+    'quote_number', v_new_quote_number
+  );
+
+  IF p_idempotency_key IS NOT NULL THEN
+    PERFORM save_idempotency(p_idempotency_key, 'duplicate_quote', v_result);
+  END IF;
+
+  RETURN v_result;
+END;
+$function$;
+
+-- caller-analysis: duplicate_quote :: unchanged ACL restatement, not a
+-- revocation of live access. Both UI callers (src/pages/Quotes.tsx:112 and
+-- src/pages/CustomerDetail.tsx:1418) invoke it as a signed-in admin/sales_rep,
+-- which is exactly the `authenticated` grant re-issued below; the signature
+-- (uuid, uuid, text) is identical to 20260526151856, so no second overload is
+-- created and no caller loses EXECUTE.
+REVOKE ALL ON FUNCTION public.duplicate_quote(uuid, uuid, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.duplicate_quote(uuid, uuid, text) FROM anon;
+GRANT EXECUTE ON FUNCTION public.duplicate_quote(uuid, uuid, text) TO authenticated;
+
 -- Postflight assertions: partial application is a hard failure.
 DO $$
 DECLARE
@@ -1778,6 +1988,10 @@ BEGIN
       AND position('QUOTE_STALE_CLIENT' in p.prosrc) = 0
       AND position('client_sends_item_ids' in p.prosrc) = 0
       AND position('QUOTE_ITEM_ID_DUPLICATE' in p.prosrc) > 0
+      -- New lines must learn their ids from the save itself; a client that
+      -- cannot install them re-sends them id-less forever and eventually
+      -- deadlocks on the ambiguity guard above.
+      AND position('v_item_ids' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: save_quote not snapshot-aware or security posture wrong';
   END IF;
@@ -1828,5 +2042,28 @@ BEGIN
       AND position('cost_at_time_cents' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: draw_down_quote does not carry the quote cost snapshot';
+  END IF;
+
+  -- A duplicated quote must be costed on ONE basis. The re-emitted body derives
+  -- cost, profit and margin from products.current_cost -- the same number the
+  -- insert trigger stamps -- instead of copying the source quote's figures.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    WHERE p.oid = 'public.duplicate_quote(uuid,uuid,text)'::regprocedure
+      AND p.prosecdef
+      AND EXISTS (
+        SELECT 1 FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS setting
+        WHERE regexp_replace(setting, '\s+', '', 'g') = 'search_path=public,pg_temp'
+      )
+      AND position('JOIN products p ON p.id = qi.product_id' in p.prosrc) > 0
+      -- must NOT arm the passthrough: the copy is stamped, never carried over
+      AND position('crx.quote_cost_snapshot_passthrough' in p.prosrc) = 0
+  ) THEN
+    RAISE EXCEPTION 'verify failed: duplicate_quote not re-costed on the stamped basis';
+  END IF;
+
+  IF NOT has_function_privilege('authenticated', 'public.duplicate_quote(uuid,uuid,text)'::regprocedure, 'EXECUTE')
+     OR has_function_privilege('anon', 'public.duplicate_quote(uuid,uuid,text)'::regprocedure, 'EXECUTE') THEN
+    RAISE EXCEPTION 'verify failed: duplicate_quote ACL drift';
   END IF;
 END$$;

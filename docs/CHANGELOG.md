@@ -39,6 +39,29 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 28 (Codex) — two cost-basis holes around the quote snapshot:**
+
+- **Duplicated quotes carried two costs at once (P1).** `duplicate_quote` copied the source
+  quote's `current_cost`, profit and header totals while the new trigger stamped
+  `cost_at_quote_cents` from today's catalog cost. Once a product's cost moved, the copy could
+  be frozen, sent and converted without ever passing through `save_quote` — header and
+  commissions on the old cost, reports on the new one. The function is re-emitted to derive
+  cost, profit, margin and the header totals from today's cost, the same basis the trigger and
+  every report use. Prices are still copied unchanged. Resolving the other way — preserving the
+  source snapshot — would have frozen a stale cost that no ordinary later save would correct,
+  since `save_quote` deliberately carries a snapshot across its delete+reinsert.
+- **New quote lines never learned their ids.** `save_quote` deletes and reinserts every line and
+  returned no id mapping, and `QuoteBuilder` never refetches — so a line added in this session
+  stayed id-less forever. Two new lines of the same product were then unresolvable on the *next*
+  save and hit `QUOTE_ITEM_AMBIGUOUS_COST`, costing the user their pending edits. Each payload
+  line now carries an opaque `client_key`; `save_quote` returns `client_key → id` for every line
+  it writes (inside the idempotency-stored result, so a replay returns the same map) and the page
+  installs them. `client_key` never influences which snapshot a row receives.
+
+This is the third lock-out this guard has produced. The pattern each time: the ambiguity check is
+correct about the *data* and wrong about the *client*, because the client had no way to supply
+what the check demands. Returning the ids removes the cause rather than widening the guard again.
+
 **Round 27 (Codex) — Customer View showed the approval reason:**
 
 The quote PDF redacts the below-cost approval marker, but `QuoteBuilder`'s Customer View —
