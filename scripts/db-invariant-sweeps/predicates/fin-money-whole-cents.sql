@@ -25,7 +25,10 @@
 --   new write, so this predicate is the standing-data half of the same rule:
 --   the trigger fixes the future, this sweep proves the past was repaired.
 --   (That migration was re-issued from 20260808150400 on 2026-08-09 to clear the
---   applied-migration high-water mark; the SQL is unchanged.)
+--   applied-migration high-water mark. The trigger body is unchanged, but the
+--   re-issued file also gained a closing REVOKE on the trigger function — read
+--   the current file's provenance header for its full delta list rather than
+--   assuming it matches the reviewed original.)
 --
 -- NOT COVERED YET — order_items.profit
 --   20260809170900 extends the same trigger to round order_items.profit, but

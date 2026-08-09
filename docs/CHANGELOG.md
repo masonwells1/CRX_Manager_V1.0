@@ -27,10 +27,15 @@ adversarial gate blocked on the handoff itself.
   gap cannot drop the timestamp, and neither a stale snapshot nor the `intentional-replay` marker was
   used — these are first-time applies, not replays.
 - **Remedy: re-issued forward, not forced through.** All five renamed with `git mv` to
-  `20260809170500`–`20260809170900`, relative order preserved, executable SQL byte-identical, a
+  `20260809170500`–`20260809170900`, relative order preserved, executable SQL byte-identical *at the
+  moment of the rename*, a
   provenance header added, and the stale `20260808*` files deleted in the same commit so a clean
   rebuild cannot apply the same change twice. Same remedy as `migration-history.md` row 808 → live
-  row 811. Indexed as history rows 857–861.
+  row 811. Indexed as history rows 857–861. **Three of the five did not stay byte-identical** — later
+  in the same review cycle `170600` gained an `already_cancelled` status gate and `170600`/`170800`/
+  `170900` each gained a closing `REVOKE`, as recorded further down this entry. Read each file's own
+  provenance header for its delta list rather than assuming the SQL still matches the reviewed
+  original.
 - **Every migration premise re-verified against live** instead of trusted from the handoff: the actor
   guard is genuinely missing, `authenticated` genuinely holds TRUNCATE on `inventory`, `payments`
   genuinely holds zero rows, the rounding function and triggers genuinely do not exist, `cancel_order`

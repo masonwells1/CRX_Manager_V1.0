@@ -248,7 +248,7 @@ constrain the *ledger snapshot*; the untimestamped *candidate* was the one case
 nothing caught. So dropping the timestamp from the name bought an unconditional
 pass. Reproduced full-hook, identical SQL, out-of-order against a fresh snapshot:
 
-```
+```text
 name="20260101000000_old_mig"   denied=true   by-ordering-guard=true
 name="old_mig"                  denied=false  by-ordering-guard=false
 ```

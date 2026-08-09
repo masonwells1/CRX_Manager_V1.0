@@ -52,8 +52,14 @@ The re-issue was NOT byte-identical everywhere: `170600` gained an `already_canc
 its terminal UPDATE, and `170600`/`170800`/`170900` each gained a closing `REVOKE`. Each file's header
 carries its own delta list — read it, do not assume the SQL matches the reviewed original.
 
-All five belong in the backup, approval, and apply sequence. `170900` was added later, on PR
-#354, and rounds `order_items.profit` alongside revenue — apply it AFTER `170800`, which it builds on.
+**All five APPLIED LIVE on 2026-08-09, 20:32–20:54 UTC — this apply sequence is now history, not a
+plan.** Ledger versions assigned in file order: `20260809203222`, `20260809204044`, `20260809204435`,
+`20260809204855`, `20260809205423`. `20260809170900` applied against a finding recorded as blocking in
+`docs/manual/KNOWN_ISSUES.md`; that entry carries the full account and the decision still owed to
+Mason. Do not re-run any of these — the files are forward-only and already in the live ledger.
+
+All five belonged in the backup, approval, and apply sequence. `170900` was added later, on PR
+#354, and rounds `order_items.profit` alongside revenue — it was applied AFTER `170800`, which it builds on.
 `170700` is easy to miss because it is described under "Smaller items" below rather than as a numbered
 M-item — it is still a real migration.
 
