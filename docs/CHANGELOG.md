@@ -2,56 +2,58 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-09 — Live sub-cent profit repair on order_items, and 18 dependency updates landed
+## 2026-08-09 — Line-profit precision repair (live), dependency updates, and a public-repo disclosure guard
 
-Orchestration session. No code was authored here; the durable changes were one live-data
-repair and a set of dependency merges, so this entry is the repo-side record of both.
+Orchestration session. No application code was authored here. Two durable outcomes: one
+owner-approved live-data precision repair, and a batch of dependency merges.
 
-**Live data change (production).** 54 of 288 `order_items` rows stored `profit` at finer
-than whole-cent precision. On Mason's explicit approval ("1 yes fix"), applied
-`UPDATE public.order_items SET profit = round(profit, 2) WHERE profit <> round(profit, 2)`
-— 54 rows, $0.20 of total movement. Authorization recorded in
-`.claude/session-state/REAL-DATA-OK` per the live-data guard.
+**Live data change (production), owner-approved.** A subset of `order_items` rows stored
+`profit` at finer than whole-cent precision. On Mason's explicit in-conversation approval,
+those values were rounded to whole cents via a single scoped `UPDATE`. Authorization was
+recorded through the live-data guard's sanctioned override file before the statement ran,
+and the override was retired immediately afterwards once the repair was verified.
 
-`order_items.total_price` was deliberately NOT touched (46 rows remain sub-cent). It is
-customer-billed revenue and carries higher stakes than an internal reporting figure;
-restating it is a separate decision.
+`order_items.total_price` was deliberately left untouched. It is customer-billed revenue
+and carries higher stakes than an internal reporting figure; restating it is a separate
+decision that has not been made.
 
-The repair provably cannot move header money: `trg_recalc_order_totals` derives header
-profit from `SUM(total_price) - SUM(cost_per_unit * total_units_needed)` and never reads
-`order_items.profit`. Measured across all 24 affected orders beforehand — $0.00 header
-profit shift — and confirmed afterwards. The only header change anywhere was
-ORD-2026-0173's price settling from 6652.1250 to 6652.13.
+The repair provably cannot move order-header money: `trg_recalc_order_totals` derives the
+header from `SUM(total_price) - SUM(cost_per_unit * total_units_needed)` and never reads
+`order_items.profit`. Header figures were measured before and re-measured after; the
+observed shift matched the prediction.
 
-**Known issue, NOT fixed, held at Mason's direction ("hold this for later diagnoses").**
-Five live non-deleted orders have header profit disagreeing with the sum of their line
-profits by $3,479 net: ORD-2026-0153 (+$2,804.52), ORD-2026-0162 (−$486.30),
-ORD-2026-0189 (+$173.78), ORD-2026-0186 (+$14.31), ORD-2026-0331 (−$0.09). Root cause
-confirmed on 0153: `cost_at_time_cents` matches `cost_per_unit` exactly, but the cost
-implied by the stored `profit` differs — the stored line profit is stale, frozen against
-costs later corrected. Headers recalculate on a cost edit; stored line profit does not.
-Gaps run in both directions, so each order needs individual review. The underlying
-question is a business one: when a cost is corrected after a sale, should that order's
-profit follow the corrected cost or the cost at time of sale?
+**Known issue, NOT fixed, held at the owner's direction.** A small number of orders show
+the header profit disagreeing with the sum of their line profits, because the header
+recalculates when a cost changes and the stored line profit does not. Sales reporting reads
+the line copy while the order screen reads the header copy, so the two can disagree. The
+resolution depends on a business decision — whether a past order's profit should follow a
+later cost correction or stay fixed at the cost recorded at sale — and is unresolved.
+Per-order figures and identifiers are deliberately kept out of this public repository; they
+live in the access-controlled session record.
 
-**Dependencies.** Merged #343 (minor-and-patch group, 16 updates including
-@supabase/supabase-js 2.110.9→2.112.2, @sentry/react, mapbox-gl, pdfjs-dist,
-react-router-dom, lucide-react) and #340 (dompurify 3.4.12→3.4.13). Both passed an
-independent Codex verdict at the exact head+base the merge gate demanded. Closed #339 as
-superseded by #343; dependabot auto-closed #342. Production verified after each merge by
-loading croprxsolutions.app and confirming the app boots with no app-level console errors
-— authenticated screens were not reachable and remain unverified.
+**Dependencies.** Merged the minor-and-patch group (16 updates, including
+`@supabase/supabase-js`, `@sentry/react`, `mapbox-gl`, `pdfjs-dist`, `react-router-dom`,
+`lucide-react`), plus `dompurify`, `js-yaml`, and `fast-uri`. Each passed an independent
+Codex verdict bound to the exact head and base the merge gate demanded. One superseded
+dependabot PR was closed; another closed itself. Production was verified after each merge
+by loading the live site and confirming a clean boot with no app-level console errors.
+Authenticated screens were not reachable from this environment and remain unverified.
 
-**Still failing, needs a decision.** #301 (React major), #302 (ESLint 10) and #303
-(@vitejs/plugin-react 6) all fail Lint/Type Check/Test/Build. These are breaking
-major-version upgrades requiring code migration, not routine cleanup.
+**Held, needs an owner decision.** The React major, ESLint 10, and `@vitejs/plugin-react` 6
+upgrades all fail Lint/Type Check/Test/Build. These are breaking major-version upgrades
+requiring code migration, not routine cleanup. Mason directed that they not be merged.
 
-**Correction to an earlier finding.** CodeRabbit was previously recorded here as
-rate-limited across the whole board. It is not: it has reviewed every human/agent PR and
-zero of the 8 dependabot PRs, past and present. It structurally skips bot-authored PRs.
+**Correction to an earlier finding.** CodeRabbit was previously recorded as rate-limited
+across the whole PR board. It is not: it reviews human- and agent-authored PRs and
+structurally skips bot-authored ones, which is why dependabot PRs carry no review.
+
+**Process note.** The first draft of this entry was blocked by the pre-merge Codex gate for
+publishing live order identifiers and exact per-order financial figures into a public
+repository. That was a real disclosure risk and the entry was rewritten. Treat
+`docs/CHANGELOG.md` as public: describe what changed and why, not the production values.
 
 - **Commits this session** (git log origin/main..HEAD):
-  - (none — work landed via GitHub PR merges and a live database statement)
+  - documentation only — the work landed via GitHub PR merges and one live database statement
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
 
