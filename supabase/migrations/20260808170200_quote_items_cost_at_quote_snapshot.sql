@@ -257,6 +257,7 @@ DECLARE
   v_preserved_cost bigint;
   v_consumed_prior_ids jsonb := '{}'::jsonb;
   v_fallback_prior_id text;
+  v_fallback_distinct_costs int;
   -- >>>SNAPSHOT
 BEGIN
   v_actor := auth.uid();
@@ -557,6 +558,26 @@ BEGIN
       -- for that same product. Omitting an id can therefore no longer lower a
       -- cost basis -- at worst it preserves the honest historical value.
       IF v_reuse_item_id IS NULL AND (v_item->>'product_id') IS NOT NULL THEN
+        -- AMBIGUITY CHECK. If several unconsumed prior lines share this product
+        -- but carry DIFFERENT costs, there is no information in the payload that
+        -- says which one this row is, and picking by key order would let the
+        -- arrival order decide the stored cost basis. When the candidates differ
+        -- in quantity that changes COGS, margin and commission silently, so
+        -- refuse rather than guess.
+        --
+        -- Deliberately scoped to differing costs: several prior lines of the
+        -- same product at the SAME cost are interchangeable, any pick gives an
+        -- identical result, and blocking there would be a lock-out for no gain.
+        SELECT COUNT(DISTINCT COALESCE(val->>'c', '~')) INTO v_fallback_distinct_costs
+        FROM jsonb_each(v_prior_item_costs) AS e(k, val)
+        WHERE val->>'p' = v_item->>'product_id'
+          AND NOT (v_consumed_prior_ids ? e.k);
+
+        IF v_fallback_distinct_costs > 1 THEN
+          RAISE EXCEPTION 'QUOTE_ITEM_AMBIGUOUS_COST: this quote has more than one line of the same product recorded at different costs, and this save did not identify which line is which. Reload the quote and re-apply your changes so each line keeps its own recorded cost.'
+            USING ERRCODE = 'P0001';
+        END IF;
+
         SELECT k INTO v_fallback_prior_id
         FROM jsonb_each(v_prior_item_costs) AS e(k, val)
         WHERE val->>'p' = v_item->>'product_id'
@@ -571,7 +592,6 @@ BEGIN
           v_fallback_prior_id := NULL;
         END IF;
       END IF;
-      -- >>>SNAPSHOT
       -- >>>SNAPSHOT
       INSERT INTO quote_items (
         id, quote_id, section_id, product_id, sort_order, notes,
@@ -1122,6 +1142,9 @@ BEGIN
       -- id-less row takes a product fallback, or payload order decides which
       -- line keeps its snapshot.
       AND position('RESERVATION PASS' in p.prosrc) > 0
+      -- A product fallback across prior lines of differing cost must refuse
+      -- rather than let key order pick the stored basis.
+      AND position('QUOTE_ITEM_AMBIGUOUS_COST' in p.prosrc) > 0
       AND position('QUOTE_STALE_CLIENT' in p.prosrc) = 0
       AND position('client_sends_item_ids' in p.prosrc) = 0
       AND position('QUOTE_ITEM_ID_DUPLICATE' in p.prosrc) > 0

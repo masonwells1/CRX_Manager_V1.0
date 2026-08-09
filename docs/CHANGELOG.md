@@ -39,6 +39,17 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 14 (CodeRabbit) — refuse an unresolvable cost match instead of guessing:**
+
+Even with the reservation pass, a quote holding two lines of the *same product at different costs*
+left the fallback with nothing to distinguish them: which id-less row inherited which cost came down
+to key order. When those lines carry different quantities that silently changes COGS, margin and
+commission. `save_quote` now raises `QUOTE_ITEM_AMBIGUOUS_COST` rather than guess.
+
+Scoped deliberately to *differing* costs — several prior lines of the same product at the same cost
+are interchangeable and any pick gives an identical answer, so blocking there would be a lock-out
+for no gain. That distinction matters given round 11 was exactly such a lock-out.
+
 **Round 13 (Codex) — payload order could decide which line keeps its cost:**
 
 The round-12 fallback resolved each line in a single pass, so the outcome depended on the order the
