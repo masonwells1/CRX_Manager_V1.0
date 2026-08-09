@@ -413,6 +413,11 @@ export default function BulkOrderImport({
     // orders in the same upload — a false audit trail, and one that survives
     // even if the order that triggered the prompt fails validation downstream.
     const belowCostOrderNumbers = new Set<string>();
+    // Whether a below-cost order actually made it in. The batch reason existing
+    // is not the same thing: if every below-cost order fails validation while an
+    // ordinary one succeeds, logging "below-cost approved" would record an
+    // approval for a sale that was never created.
+    let belowCostSucceeded = false;
     if (!isFieldStaff) {
       const belowCostLines: BelowCostLine[] = [];
       for (const order of validation.valid) {
@@ -569,6 +574,7 @@ export default function BulkOrderImport({
         }
 
         successCount++;
+        if (belowCostOrderNumbers.has(order.order_number)) belowCostSucceeded = true;
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing order' } });
         failedCount++;
@@ -586,7 +592,7 @@ export default function BulkOrderImport({
       if (profile) {
         await logActivity({
           event: 'orders_bulk_imported',
-          description: belowCostReason
+          description: belowCostReason && belowCostSucceeded
             ? `Bulk imported ${successCount} order(s) — below-cost approved: ${belowCostReason}`
             : `Bulk imported ${successCount} order(s)`,
           performedBy: profile.id,
@@ -616,7 +622,11 @@ export default function BulkOrderImport({
 
   return (
     <>
-    <Modal open={open} onClose={handleClose} title="Import Orders" size="large">
+    {/* While the below-cost prompt is up, this dialog must ignore Escape. Both
+        modals register document-level Escape handlers, so a single press would
+        otherwise cancel the approval AND tear down the whole import, discarding
+        the parsed file and validation results. (Codex round 24.) */}
+    <Modal open={open} onClose={belowCostPrompt ? () => {} : handleClose} title="Import Orders" size="large">
       <div className="space-y-4">
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex items-start gap-3">

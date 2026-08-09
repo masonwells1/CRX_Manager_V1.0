@@ -39,6 +39,17 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 24 (Codex) — two bulk-import details:**
+
+- **Escape closed both dialogs.** The below-cost prompt renders as a sibling of the still-open import
+  `Modal`, and both register document-level Escape handlers, so one press cancelled the approval *and*
+  tore down the whole import — discarding the parsed file and validation results. The import dialog
+  now ignores Escape while the prompt is up.
+- **The batch activity line could claim an approval that never happened.** It branched on the batch
+  reason existing, not on whether a below-cost order actually imported; if every below-cost order
+  failed validation while an ordinary one succeeded, the feed still recorded "below-cost approved".
+  Now tracks whether an affected order really succeeded.
+
 **Round 23 (Codex) — one cost basis for partial draws:**
 
 The round-21 partial-draw fix rounded the weighted cost only at the `cost_at_time_cents` stamp, while
