@@ -159,6 +159,14 @@ const ownDraftPaths = createOwnDraftPathsReader({
   dirtyCount,
   exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
   readText: (wtPath, rel) => readTextSafe(path.join(wtPath, ...rel.split("/"))),
+  readHistory: (wtPath) => {
+    const text = readTextSafe(path.join(wtPath, "docs", "reference", "migration-history.md"));
+    return text || null;
+  },
+  // Git's default text clean-filter stores LF blobs even when a Windows checkout
+  // materializes CRLF. Hash the bytes the candidate will have in Git, matching the
+  // immutable origin/main verification path.
+  sha256Text: (text) => createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex"),
   run: (args, cwd) => {
     const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
     return r.status === 0 ? String(r.stdout || "").split("\n") : null;
@@ -241,6 +249,10 @@ for (const e of entries) {
   if (own) {
     for (const rel of own.values()) addParked(rel, path.join(e.path, ...rel.split("/")), label);
     for (const rel of own.supersededPaths?.values() || []) supersededSkipped.add(normRepoPath(rel));
+    if (own.unknownReason) {
+      degradedFallbackUnknown = true;
+      notes.push(`PARKED STATE UNKNOWN: ${label}: ${own.unknownReason}.`);
+    }
   } else {
     // Branch point unreadable (no origin/main, or the checkout is mid-delete by another
     // session) — scan the whole checkout rather than risk reporting nothing. That can

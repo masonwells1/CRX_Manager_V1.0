@@ -272,16 +272,50 @@ export function isParkedFallbackFile(repoRelPath, name, loadText = () => "") {
 //
 // Returns a Map of normalized path → the path as git spelled it, so the count dedupes
 // case-insensitively while /fleet still shows Mason the real filename.
-export function parkedDraftPathsFrom(changedPaths, existsOnDisk = () => true, readText = () => "") {
+export function parkedDraftPathsFrom(
+  changedPaths,
+  existsOnDisk = () => true,
+  readText = () => "",
+  historyText = null,
+  sha256Text = null,
+) {
   const out = new Map();
+  const history = historyText === null ? null : localCandidateMigrationPathsFromHistory(historyText);
+  let unknownReason = "";
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();
     if (!existsOnDisk(p)) continue;
     const normalized = normRepoPath(p);
-    if (!isParkedDraftPath(p, normalized.startsWith("supabase/migrations/") ? readText(p) : "")) continue;
+    const isForwardMigration = normalized.startsWith("supabase/migrations/");
+    const sqlText = isForwardMigration ? readText(p) : "";
+    let isParked = isParkedDraftPath(p, sqlText);
+
+    // A branch can deliberately park an ordinary forward migration without adding a
+    // comment-only SQL diff. In that case its own migration-history row is the second
+    // signal, exactly as it is after the branch lands on origin/main. Verify the pin
+    // before surfacing it; an unreadable or mismatched candidate makes the branch state
+    // UNKNOWN instead of silently disappearing from /fleet.
+    if (!isParked && isForwardMigration && historyText !== null) {
+      if (history?.state !== "known") {
+        unknownReason ||= history?.reason || "worktree migration history is unreadable";
+      } else if (history.paths.has(normalized)) {
+        const expectedSha256 = history.sha256ByPath?.get(normalized);
+        if (!expectedSha256) {
+          unknownReason ||= "branch-owned LOCAL CANDIDATE SQL lacks an explicit parked status header or SQL sha256 pin";
+        } else if (typeof sha256Text !== "function") {
+          unknownReason ||= "branch-owned LOCAL CANDIDATE SQL sha256 pin cannot be verified";
+        } else if (sha256Text(sqlText) !== expectedSha256) {
+          unknownReason ||= "branch-owned LOCAL CANDIDATE SQL sha256 does not match migration history";
+        } else {
+          isParked = true;
+        }
+      }
+    }
+    if (!isParked) continue;
     const key = normRepoPath(p);
     if (!out.has(key)) out.set(key, p);
   }
+  Object.defineProperty(out, "unknownReason", { value: unknownReason, enumerable: false });
   return out;
 }
 
@@ -553,7 +587,16 @@ export function validateParkedMigrationCrossReferences(paths, historyText, loadT
 // `supersededPaths` Map for the fleet's ignored-draft diagnostic. null means "I don't know",
 // and every caller must then scan the whole checkout rather than report nothing —
 // under-reporting hides real pending work.
-export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, readText = () => "", hasOriginMain = true }) {
+export function createOwnDraftPathsReader({
+  run,
+  repoRoot,
+  dirtyCount,
+  exists,
+  readText = () => "",
+  readHistory = () => null,
+  sha256Text = null,
+  hasOriginMain = true,
+}) {
   // Where a worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
   // snapshots share a handful of shas between them.
   const baseCache = new Map(); // sha → base sha | null
@@ -569,8 +612,8 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, r
 
   const cleanCache = new Map(); // head sha → changed paths | null
 
-  function resultFrom(changed, onDisk, textOnDisk) {
-    const parked = parkedDraftPathsFrom(changed, onDisk, textOnDisk);
+  function resultFrom(changed, onDisk, textOnDisk, historyText) {
+    const parked = parkedDraftPathsFrom(changed, onDisk, textOnDisk, historyText, sha256Text);
     Object.defineProperty(parked, "supersededPaths", {
       value: supersededDraftPathsFrom(changed, onDisk),
       enumerable: false,
@@ -584,6 +627,7 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, r
     const spec = draftPathspec();
     const onDisk = (p) => exists(entry.path, p);
     const textOnDisk = (p) => readText(entry.path, p);
+    const historyText = readHistory(entry.path);
 
     // A CLEAN checkout holds nothing but its commits, so its pending set is fully
     // determined by base..HEAD — computable once per sha in the MAIN repo instead of
@@ -593,13 +637,13 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, r
         cleanCache.set(entry.head, run(["diff", "--name-only", base, entry.head, "--", ...spec], repoRoot));
       }
       const changed = cleanCache.get(entry.head);
-      return changed === null ? null : resultFrom(changed, onDisk, textOnDisk);
+      return changed === null ? null : resultFrom(changed, onDisk, textOnDisk, historyText);
     }
 
     const changed = run(["diff", "--name-only", base, "--", ...spec], entry.path);
     const untracked = run(["ls-files", "--others", "--exclude-standard", "--", ...spec], entry.path);
     if (changed === null || untracked === null) return null;
-    return resultFrom([...changed, ...untracked], onDisk, textOnDisk);
+    return resultFrom([...changed, ...untracked], onDisk, textOnDisk, historyText);
   };
 }
 

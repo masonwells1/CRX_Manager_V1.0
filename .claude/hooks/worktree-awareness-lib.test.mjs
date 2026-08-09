@@ -559,6 +559,8 @@ eq(
 const DRAFT_A = "scripts/.staging-migrations/PARKED-a.sql";
 const DRAFT_B = "docs/audits/hunt/PARKED-b.sql";
 const SUPERSEDED_A = "scripts/.staging-migrations/SUPERSEDED-a.sql";
+const BRANCH_CANDIDATE_SQL = "-- ordinary reviewed candidate\nSELECT 42;\n";
+const BRANCH_CANDIDATE_HISTORY = `| Entry | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${sha256Text(BRANCH_CANDIDATE_SQL)}\`. |`;
 
 // Builds a reader over a fake git. `responses` maps a git subcommand to its output lines;
 // a value of null means that git call failed. Records every call for assertions.
@@ -570,6 +572,8 @@ function fakeReader(responses, opts = {}) {
     dirtyCount: opts.dirtyCount || (() => 0),
     exists: opts.exists || (() => true),
     readText: opts.readText || (() => ""),
+    readHistory: opts.readHistory || (() => null),
+    sha256Text: opts.sha256Text || sha256Text,
     run: (args, cwd) => {
       calls.push({ cmd: args[0], args, cwd });
       const hit = responses[args[0]];
@@ -602,6 +606,49 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
     { readText: () => PARKED_FORWARD_HEADER },
   );
   eq([...reader(CLEAN_ENTRY).values()], [PARKED_FORWARD], "clean branch surfaces explicitly parked forward migration");
+}
+
+// A branch-owned candidate may use the same exact history pin that mainline discovery
+// accepts, so it remains visible before merge without a comment-only SQL edit.
+{
+  const branchCandidate = "supabase/migrations/20260101000000_real.sql";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [branchCandidate] },
+    {
+      readText: () => BRANCH_CANDIDATE_SQL,
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+    },
+  );
+  eq([...reader(CLEAN_ENTRY).values()], [branchCandidate], "clean branch surfaces a hash-pinned forward migration");
+}
+
+{
+  const branchCandidate = "supabase/migrations/20260101000000_real.sql";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [branchCandidate] },
+    {
+      readText: () => `${BRANCH_CANDIDATE_SQL}-- drift\n`,
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+    },
+  );
+  const result = reader(CLEAN_ENTRY);
+  eq([...result.values()], [], "mismatched branch candidate is not counted as verified");
+  ok(result.unknownReason.includes("does not match"), "mismatched branch candidate fails closed as unknown");
+}
+
+// Windows may materialize a normal text migration with CRLF even though Git stores and
+// pins its LF blob. The worktree verifier must compare the bytes Git will commit.
+{
+  const branchCandidate = "supabase/migrations/20260101000000_real.sql";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [branchCandidate] },
+    {
+      readText: () => BRANCH_CANDIDATE_SQL.replace(/\n/g, "\r\n"),
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      sha256Text: (text) => sha256Text(text.replace(/\r\n/g, "\n")),
+    },
+  );
+  eq([...reader(CLEAN_ENTRY).values()], [branchCandidate], "CRLF checkout verifies against the pinned LF Git blob");
 }
 
 // A dirty checkout must be asked in place, and its untracked files count too — that is
