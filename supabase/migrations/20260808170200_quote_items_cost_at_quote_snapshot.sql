@@ -29,12 +29,28 @@
 --      by quote_item id, each carrying its product_id; a reinserted row keeps a
 --      preserved snapshot only when the payload echoes a prior item id AND that
 --      prior item's product_id equals the payload row's product_id (an id echo
---      cannot attach another line's snapshot to a different product). There is
---      deliberately NO product_id fallback: a genuinely new line for a product
---      already on the quote must NOT inherit an old snapshot. Non-matching /
---      new / changed-product lines insert NULL and the trigger stamps today's
---      cost. (QuoteBuilder sends each loaded line's database id in the payload
---      as of this branch — see src/pages/QuoteBuilder.tsx.)
+--      cannot attach another line's snapshot to a different product).
+--
+--      PRODUCT FALLBACK (Codex round 11-12). When the id does NOT resolve, the
+--      row falls back to the first unconsumed prior line of the SAME quote and
+--      SAME product, consuming each prior row at most once. This covers a
+--      pre-snapshot browser bundle (sends no ids at all) and a current page that
+--      cleared the id of a product-swapped line. Two earlier attempts to detect
+--      a stale caller instead were both wrong and are recorded here so they are
+--      not retried: counting echoed ids refused a legitimate replace-every-line
+--      save with no way for the operator to recover, and a caller-declared
+--      capability flag was forgeable — a rep could set it, omit every id, and
+--      have unchanged lines re-stamped at today's (possibly lower) catalog cost.
+--      The fallback is not forgeable: the map is built only inside the
+--      owner-checked existing-quote branch and scoped to this quote, so the only
+--      cost a caller can inherit is one this quote already recorded for that
+--      product. Trade-off accepted: when a payload adds a genuinely new line for
+--      a product already on the quote, one of the two lines inherits the prior
+--      snapshot rather than getting a fresh stamp. Both are the same product on
+--      the same quote, so the value is honest; the alternative designs were a
+--      lock-out and a forgery vector. Lines with no prior match still insert
+--      NULL and the trigger stamps today's cost.
+--      (QuoteBuilder sends each loaded line's database id — see QuoteBuilder.tsx.)
 --
 --      ID REUSE (Codex P1-A). The reinserted row REUSES the echoed quote_item
 --      uuid whenever that id+product match holds, instead of generating a fresh
@@ -234,6 +250,8 @@ DECLARE
   v_payload_item_id text;
   v_reuse_item_id uuid;
   v_preserved_cost bigint;
+  v_consumed_prior_ids jsonb := '{}'::jsonb;
+  v_fallback_prior_id text;
   -- >>>SNAPSHOT
 BEGIN
   v_actor := auth.uid();
@@ -483,11 +501,47 @@ BEGIN
         END IF;
         v_consumed_item_ids := v_consumed_item_ids || jsonb_build_object(v_payload_item_id, true);
         IF v_prior_item_costs ? v_payload_item_id
-           AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id' THEN
+           AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id'
+           AND NOT (v_consumed_prior_ids ? v_payload_item_id) THEN
           v_reuse_item_id := v_payload_item_id::uuid;
           v_preserved_cost := (v_prior_item_costs->v_payload_item_id->>'c')::bigint;
+          v_consumed_prior_ids := v_consumed_prior_ids || jsonb_build_object(v_payload_item_id, true);
         END IF;
       END IF;
+
+      -- SNAPSHOT<<< product fallback when the id did not resolve.
+      --
+      -- A browser running the pre-snapshot bundle sends no ids at all, and even
+      -- a current page clears the id of a line whose product changed. Earlier
+      -- attempts to detect that (counting echoed ids, then a caller-declared
+      -- capability flag) were both wrong: the count locked users out of a
+      -- legitimate replace-every-line save, and the flag was caller-controlled,
+      -- so a rep could set it, omit every id, and have unchanged lines
+      -- re-stamped at today's catalog cost -- lowering the recorded basis and
+      -- inflating profit and commission whenever a product got cheaper.
+      --
+      -- Match on the line's OWN quote and product instead, consuming each prior
+      -- row at most once. This is not forgeable: the map is built only inside
+      -- the owner-checked existing-quote branch and scoped to this quote, so the
+      -- only cost a caller can inherit is one this very quote already recorded
+      -- for that same product. Omitting an id can therefore no longer lower a
+      -- cost basis -- at worst it preserves the honest historical value.
+      IF v_reuse_item_id IS NULL AND (v_item->>'product_id') IS NOT NULL THEN
+        SELECT k INTO v_fallback_prior_id
+        FROM jsonb_each(v_prior_item_costs) AS e(k, val)
+        WHERE val->>'p' = v_item->>'product_id'
+          AND NOT (v_consumed_prior_ids ? e.k)
+        ORDER BY e.k
+        LIMIT 1;
+
+        IF v_fallback_prior_id IS NOT NULL THEN
+          v_reuse_item_id := v_fallback_prior_id::uuid;
+          v_preserved_cost := (v_prior_item_costs->v_fallback_prior_id->>'c')::bigint;
+          v_consumed_prior_ids := v_consumed_prior_ids || jsonb_build_object(v_fallback_prior_id, true);
+          v_fallback_prior_id := NULL;
+        END IF;
+      END IF;
+      -- >>>SNAPSHOT
       -- >>>SNAPSHOT
       INSERT INTO quote_items (
         id, quote_id, section_id, product_id, sort_order, notes,
@@ -534,26 +588,6 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  -- SNAPSHOT<<< rollout bridge. A browser tab still running the pre-snapshot
-  -- bundle sends existing quote lines with no id at all. Every line would then
-  -- be deleted and reinserted without a preserved cost, and the BEFORE INSERT
-  -- trigger would stamp todays catalog cost over the historical quote cost,
-  -- silently rewriting quote profit and any order converted from it. A note
-  -- only save from such a tab is enough to do it.
-  --
-  -- The test is an EXPLICIT capability marker the current bundle sets, not a
-  -- count of echoed ids. Counting echoes was wrong: QuoteBuilder deliberately
-  -- clears the id of a line whose product changed, so a user who changes the
-  -- product on every line -- trivially, on a one-line quote -- echoes nothing
-  -- and would be refused. Refreshing could not clear it either, because
-  -- repeating the same legitimate edit reproduces the same payload, so the
-  -- operator was locked out of an ordinary edit with no way forward.
-  IF v_prior_item_costs <> '{}'::jsonb
-     AND COALESCE((p_quote_payload->>'client_sends_item_ids')::boolean, false) IS NOT TRUE THEN
-    RAISE EXCEPTION 'QUOTE_STALE_CLIENT: this page is running an out-of-date version and cannot save without discarding the recorded quote-time costs. Reload the page and re-apply your changes.'
-      USING ERRCODE = 'P0001';
-  END IF;
-  -- >>>SNAPSHOT
 
   -- Disarm the passthrough the moment the reinsert loop closes (defense in
   -- depth: txn-local anyway, but nothing after this point may pass a supplied
@@ -1049,10 +1083,13 @@ BEGIN
       -- P1-B: each prior id is consumable once, and the duplicate is a clear
       -- domain error raised before the INSERT (not a PK violation).
       AND position('v_consumed_item_ids' in p.prosrc) > 0
-      AND position('QUOTE_STALE_CLIENT' in p.prosrc) > 0
-      -- The stale-client test must be the explicit capability marker, never a
-      -- count of echoed ids (that locked out a legitimate replace-every-line save).
-      AND position('client_sends_item_ids' in p.prosrc) > 0
+      -- Cost preservation must fall back to the line's own quote+product when
+      -- the id does not resolve. Neither an echoed-id count nor a caller-declared
+      -- capability flag may gate it: the first locked users out of a legitimate
+      -- replace-every-line save, the second was forgeable by the caller.
+      AND position('v_consumed_prior_ids' in p.prosrc) > 0
+      AND position('QUOTE_STALE_CLIENT' in p.prosrc) = 0
+      AND position('client_sends_item_ids' in p.prosrc) = 0
       AND position('QUOTE_ITEM_ID_DUPLICATE' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: save_quote not snapshot-aware or security posture wrong';

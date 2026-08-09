@@ -39,6 +39,27 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 12 (Codex) — the stale-client guard was wrong twice; replaced with a real one:**
+
+Codex rejected the round-11 fix: `client_sends_item_ids` was set by the caller, so a rep could
+send it while omitting every line id, and unchanged lines would be re-stamped at today's catalog
+cost — lowering the recorded basis and inflating profit and commission whenever a product got
+cheaper. Reverting to the round-7 echo count was not an option either, since that locked users out
+of a legitimate replace-every-line save.
+
+Both designs were attempts to *detect a stale caller*. The actual requirement is narrower: an
+unresolved line must not lose its cost. `save_quote` now falls back to the first unconsumed prior
+line of the **same quote and same product**, consuming each prior row at most once. That covers the
+old browser bundle and the product-swap case alike, and it is not forgeable — the map is built only
+inside the owner-checked existing-quote branch and scoped to this quote, so the only cost a caller
+can inherit is one this quote already recorded for that product. Omitting an id can no longer lower
+a cost basis; at worst it preserves the honest historical value. `QUOTE_STALE_CLIENT` and the client
+marker are both gone, and the postflight block now asserts their **absence** so neither is retried.
+
+Accepted trade-off: if a save adds a genuinely new line for a product already on the quote, one of
+those lines inherits the prior snapshot instead of a fresh stamp. Same product, same quote, so the
+value is honest — and the alternatives were a lock-out and a forgery vector.
+
 **Round 11 (Codex) — a lock-out I shipped, plus two consistency fixes:**
 
 - **`QUOTE_STALE_CLIENT` refused a legitimate edit.** The round-7 stale-client guard inferred a

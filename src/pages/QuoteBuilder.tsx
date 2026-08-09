@@ -1474,12 +1474,6 @@ export default function QuoteBuilder() {
       customer_id: customerId,
       created_by: profile.id,
       tier,
-      // Capability marker, not a preference. save_quote refuses to save an
-      // existing quote without it, because a browser tab running the
-      // pre-snapshot bundle sends no line ids at all and every line would be
-      // re-stamped with today's catalog cost. Do not remove this: dropping it
-      // makes every edit of an existing quote fail with QUOTE_STALE_CLIENT.
-      client_sends_item_ids: true,
       status: newStatus || status,
       ...buildCommissionSplitPatch({
         isUpdate: Boolean(quoteId && isEditing),
