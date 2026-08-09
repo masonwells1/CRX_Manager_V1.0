@@ -441,9 +441,12 @@ function readBalancedParens(text, openIdx) {
   return null;
 }
 
-/** From just past the parameter list, return the attributes and exact indexes
- * for the AS $tag$...$tag$ body. The caller scans the mask but slices the real
- * body so ACTOR_MISMATCH string literals remain visible. */
+/** From just past the parameter list, return every function attribute and the
+ * exact indexes for the AS $tag$...$tag$ body. PostgreSQL permits attributes
+ * such as SECURITY DEFINER both before and after the body, so the post-body
+ * region is included through the statement's terminating semicolon. The caller
+ * scans the length-preserving mask but slices the real body so ACTOR_MISMATCH
+ * string literals remain visible. */
 function readAttrsAndBody(text, fromIdx) {
   let i = fromIdx;
   while (i < text.length) {
@@ -461,11 +464,17 @@ function readAttrsAndBody(text, fromIdx) {
           const bodyStart = i + tag.length;
           const bodyEnd = text.indexOf(tag, bodyStart);
           if (bodyEnd === -1) return null;
+          // `text` is the SQL-noise mask: semicolons inside comments and quoted
+          // data are already spaces, while executable nested DDL stays visible.
+          // The next visible semicolon is therefore this function statement's
+          // terminator. Missing terminator is unreadable and must fail closed.
+          const statementEnd = text.indexOf(";", bodyEnd + tag.length);
+          if (statementEnd === -1) return null;
           return {
-            attrs: text.slice(fromIdx, i),
+            attrs: text.slice(fromIdx, i) + " " +
+              text.slice(bodyEnd + tag.length, statementEnd),
             bodyStart,
             bodyEnd,
-            end: bodyEnd + tag.length,
           };
         }
         const close = text.indexOf(tag, i + tag.length);
@@ -640,10 +649,10 @@ try {
     const attrs = rest.attrs;
     const body = content.slice(rest.bodyStart, rest.bodyEnd);
     const maskedBody = masked.slice(rest.bodyStart, rest.bodyEnd);
-    // Do not jump to rest.end: maskSqlNoise deliberately exposes executable
-    // CREATE FUNCTION definitions nested in this body. Continuing from the
-    // current regex position lets the next iteration inspect those definitions
-    // independently instead of trusting the outer function's result.
+    // Do not jump past this definition: maskSqlNoise deliberately exposes
+    // executable CREATE FUNCTION definitions nested in this body. Continuing
+    // from the current regex position lets the next iteration inspect those
+    // definitions independently instead of trusting the outer function's result.
 
     // Only SECURITY DEFINER functions can forge an actor with the owner's rights.
     if (!/SECURITY\s+DEFINER/i.test(attrs)) continue;

@@ -23,8 +23,8 @@ function runHook(content, filePath = "supabase/migrations/20260807000000_test.sq
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
 
-// fn(body, params, security) — `security` goes in the attribute region between
-// the closing paren and AS, exactly where SECURITY DEFINER really sits.
+// fn(body, params, security) — `security` goes in the common pre-body attribute
+// region. Separate probes below cover PostgreSQL's legal post-body form too.
 function fn(body, params = "p_performed_by uuid", security = "SECURITY DEFINER") {
   return `CREATE OR REPLACE FUNCTION public.test_fn(${params}) RETURNS jsonb LANGUAGE plpgsql ${security} SET search_path TO 'public', 'pg_temp' AS $function$\n${body}\n$function$;`;
 }
@@ -55,6 +55,38 @@ ok(isDeny(r), "SECDEF + mutation + p_performed_by with no ACTOR_MISMATCH is BLOC
 ok(r.stdout.includes("ACTOR BINDING VIOLATION"), "block message is labelled");
 ok(r.stdout.includes("p_performed_by"), "block message names the forgeable parameter");
 ok(r.stdout.includes("20260617171500"), "block message cites the link_blend_ticket_to_order fix");
+
+const POST_BODY_UNBOUND = `CREATE OR REPLACE FUNCTION public.post_body_actor(p_performed_by uuid)
+RETURNS void AS $function$
+BEGIN
+  UPDATE invoices SET created_by = p_performed_by;
+END
+$function$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;`;
+r = runHook(POST_BODY_UNBOUND);
+ok(isDeny(r), "post-body LANGUAGE ... SECURITY DEFINER cannot bypass actor binding");
+
+r = runHook(POST_BODY_UNBOUND.replace(
+  "$function$ LANGUAGE",
+  "$function$ /* legal trailing comment; still attributes */ LANGUAGE"
+));
+ok(isDeny(r), "a semicolon inside a trailing comment cannot truncate post-body attributes");
+
+r = runHook(POST_BODY_UNBOUND.replace(
+  "UPDATE invoices SET created_by = p_performed_by;",
+  "IF p_performed_by IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION 'ACTOR_MISMATCH'; END IF; " +
+    "UPDATE invoices SET created_by = auth.uid();"
+));
+ok(!isDeny(r), "a correctly bound post-body SECURITY DEFINER function remains allowed");
+
+r = runHook(POST_BODY_UNBOUND.replace(/;$/, ""));
+ok(isDeny(r), "a function body without a readable terminating semicolon fails closed");
+ok(r.stdout.includes("could not parse its AS"), "missing function terminator explains the deny");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY INVOKER").replace("test_fn", "first_invoker") +
+  "\n" + fn("RETURN '{}'::jsonb;", "", "SECURITY DEFINER").replace("test_fn", "later_definer")
+);
+ok(!isDeny(r), "SECURITY DEFINER in a later statement does not contaminate an earlier function");
 
 // the other two actor-parameter shapes the live predicates key on
 r = runHook(fn("UPDATE invoices SET paid_amount_cents = 0 WHERE created_by = p_actor_id;", "p_actor_id uuid"));

@@ -371,9 +371,9 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 104 assertions, including comment-hidden headers, nested
+suite grew from 24 to 110 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
-quoted actor parameters. Fifty individual clause-removal mutations were run;
+quoted actor parameters. Fifty-three individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
 idempotency suite remained green at 86 assertions.
 
@@ -479,6 +479,17 @@ second `EXECUTE` token exists. Exact regressions cover both privilege statements
 a complete bound `SECURITY DEFINER` migration with fixed `search_path` and
 deliberate grants, and an indirect procedural `EXECUTE` that must remain denied.
 Removing only the privilege distinction turns the allow regressions red.
+
+The twelfth exact-SHA Codex review found that PostgreSQL also permits function
+attributes after the closing body delimiter. Because the reader inspected only
+the pre-body attributes, a mutating actor-bearing function with post-body
+`SECURITY DEFINER` was allowed. The reader now includes post-body attributes
+through the function statement's real terminating semicolon and fails closed
+when that terminator is missing. Regressions cover an unsafe post-body definer,
+a semicolon hidden in a trailing comment, a correctly bound post-body definer,
+the missing-terminator denial, and statement-boundary isolation.
+Removing the post-body attribute slice, the missing-terminator refusal, or the
+statement-bounded slice alone makes its exact regression turn red.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
