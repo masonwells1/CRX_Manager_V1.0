@@ -39,6 +39,18 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 38 (Codex) — the reversal gate now takes the intersection, not the union:**
+
+Round 37 gated the COGS reversal on `status IN ('posted','overdue')`, chosen from the report
+predicates — but the two invoice-basis reports disagree with *each other*: `get_bottom_line_pnl`
+counts `'posted'` alone while `get_monthly_summary` counts both. For a credited overdue sale that
+meant the bottom line excluded the original COGS and included the credit memo's negative COGS,
+**inflating profit**. The gate is now `'posted'` alone — the intersection — so the reversal can
+never outrun what a report counted. Accepted residual: a credited overdue sale gets no reversal, so
+`get_monthly_summary` understates profit. Of the two possible errors, the conservative one is the
+right default. The underlying report disagreement is pre-existing and is recorded in
+`KNOWN_ISSUES.md` with the fix (include `'overdue'` in `get_bottom_line_pnl`, then widen this gate).
+
 **Round 37 (Codex) — both fixes were the same class as earlier rounds, missed by not sweeping:**
 
 - **Order edits compared against the mutable legacy cost.** Round 26 fixed exactly this on the

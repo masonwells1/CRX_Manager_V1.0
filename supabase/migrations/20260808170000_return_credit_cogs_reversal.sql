@@ -179,13 +179,25 @@ BEGIN
            AND ii.product_id = ri.product_id
            AND inv.invoice_type <> 'credit_memo'
            AND inv.deleted_at IS NULL
-           -- REPORT-VISIBLE states only, not merely "not voided". The
-           -- invoice-basis rollups count 'posted'/'overdue'; a draft or
-           -- unposted sale invoice was never included, so reversing against it
-           -- subtracts cost that was never added. This is the common shape for
-           -- goods delivered and returned before the auto-created draft invoice
-           -- is posted. (Codex round 37.)
-           AND inv.status IN ('posted', 'overdue')
+           -- 'posted' ONLY -- deliberately the INTERSECTION of what the two
+           -- invoice-basis reports count, not the union. A draft or unposted
+           -- sale invoice was never included by either, so reversing against it
+           -- subtracts cost that was never added (round 37). But the two
+           -- reports also disagree with EACH OTHER: get_bottom_line_pnl
+           -- (20260216200000:309) counts status = 'posted' alone, while
+           -- get_monthly_summary counts 'posted' and 'overdue'. Admitting
+           -- 'overdue' would mean that for a credited overdue sale the
+           -- bottom line excludes the original COGS but includes this credit
+           -- memo's negative COGS -- inflating profit, the one direction a
+           -- money bug must never fail in.
+           --
+           -- The residual, accepted deliberately: for a credited OVERDUE sale
+           -- no reversal is written, so get_monthly_summary keeps the original
+           -- cost and understates profit. Conservative, and it self-corrects
+           -- once the two reports are unified -- tracked in KNOWN_ISSUES.md.
+           -- Unifying them belongs in its own migration, not here: neither
+           -- report is otherwise touched by this PR. (Codex round 38.)
+           AND inv.status = 'posted'
            AND ii.quantity > 0
       ) THEN
       COALESCE(
@@ -205,9 +217,9 @@ BEGIN
             AND ii.product_id = ri.product_id
             AND inv.invoice_type <> 'credit_memo'
             AND inv.deleted_at IS NULL
-            -- Same report-visible predicate as the gate above; the two must
-            -- agree or the gate could admit a line the lookup then misses.
-            AND inv.status IN ('posted', 'overdue')
+            -- Same predicate as the gate above; the two must agree or the
+            -- gate could admit a line the lookup then misses.
+            AND inv.status = 'posted'
             AND ii.quantity > 0
           ORDER BY ii.created_at, ii.id
           LIMIT 1),

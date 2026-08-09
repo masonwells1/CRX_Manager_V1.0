@@ -103,6 +103,27 @@ own work in the two largest docs. See
 `docs/audits/2026-08-04-test-coverage-analysis.md` for the session that surfaced
 these.
 
+## OPEN — the two invoice-basis profit reports disagree on which invoices count
+
+**Found 2026-08-09** (Codex, PR #350 round 38). `get_bottom_line_pnl`
+(`20260216200000_reporting_rpcs.sql:309`) counts `i.status = 'posted'` alone, while
+`get_monthly_summary` counts `'posted'` and `'overdue'`. An overdue invoice is a posted sale that
+went past due, so the bottom line silently drops those sales' revenue *and* cost. Pre-existing and
+independent of returns.
+
+**What it forced in #350.** The return-COGS reversal has to write against a sale the reports
+actually counted. Admitting `'overdue'` would mean that for a credited overdue sale the bottom line
+excludes the original COGS but includes the credit memo's negative COGS — **inflating profit**. So
+the reversal is gated on `'posted'` alone, the intersection of the two predicates. The accepted
+residual: for a credited overdue sale no reversal is written, so `get_monthly_summary` keeps the
+original cost and *understates* profit. Conservative on purpose — of the two available errors, the
+one that flatters the books is the one to avoid.
+
+**Fix when taken up:** re-emit `get_bottom_line_pnl` to include `'overdue'`, so both reports share
+one inclusion rule; then widen the reversal gate to match and the residual disappears. Not done in
+#350 because neither report is otherwise touched by it, and a session that cannot apply migrations
+cannot verify a reporting change against live data.
+
 ## OPEN — order headers recompute profit on the unrounded basis
 
 **Found 2026-08-09** (Codex, PR #350 round 36). `after_order_items_change`
