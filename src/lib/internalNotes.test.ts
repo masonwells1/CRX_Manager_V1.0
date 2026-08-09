@@ -82,6 +82,30 @@ describe('stripInternalNotes', () => {
     expect(stripInternalNotes(notes)).not.toContain('moving old stock');
   });
 
+  // Codex round 31: the marker stays in the raw notes after an approval is
+  // recorded, so anything the operator types on a LATER edit lands below it.
+  // Truncating from the marker hid that text from the customer while it still
+  // looked present in the editor.
+  it('keeps customer notes added after the marker', () => {
+    const notes = `${BELOW_COST_APPROVAL_PREFIX} matched Helena\nDeliver to the south shed`;
+    expect(stripInternalNotes(notes)).toBe('Deliver to the south shed');
+    expect(stripInternalNotes(notes)).not.toContain('Helena');
+  });
+
+  it('keeps customer notes on both sides of the marker', () => {
+    const notes = `Gate code 4412\n${BELOW_COST_APPROVAL_PREFIX} clearance\nDeliver Tuesday`;
+    expect(stripInternalNotes(notes)).toBe('Gate code 4412\nDeliver Tuesday');
+    expect(stripInternalNotes(notes)).not.toContain('clearance');
+  });
+
+  // Line-scoped stripping is only safe because the writer collapses the reason
+  // to one line -- otherwise its second line would print as a customer note.
+  it('collapses a multi-line reason to a single line when writing', () => {
+    expect(appendBelowCostApproval('Deliver Tuesday', 'price match\nmoving to Helena')).toBe(
+      'Deliver Tuesday\nBelow-cost approved: price match moving to Helena'
+    );
+  });
+
   it('removes a multi-line reason appended by the bulk import path', () => {
     const notes = appendBelowCostApproval('Spring prepay', 'goodwill\nsee Mason');
     expect(stripInternalNotes(notes)).toBe('Spring prepay');

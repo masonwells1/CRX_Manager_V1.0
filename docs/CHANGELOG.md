@@ -39,6 +39,16 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 31 (Codex) — notes typed after an approval were being hidden:**
+
+The approval marker stays in the raw notes field after a below-cost save, so anything an operator
+types on a *later* edit lands below it — and `stripInternalNotes` truncated from the marker
+onward, so that text vanished from the customer's copy while still looking present in the editor.
+Stripping is now line-scoped. That is only safe because `appendBelowCostApproval` collapses the
+reason to a single line at the one point it is written, so a free-form reason can never continue
+onto the next line and print as a customer note. Fixing it at the writer rather than teaching the
+stripper to guess where a reason ends is what makes the two halves consistent.
+
 **Round 30 (Codex) — the approval reason had to survive a retry:**
 
 `save_quote`'s request fingerprint includes the annotated item notes. If a below-cost save

@@ -29,9 +29,17 @@ const INTERNAL_PREFIXES = [BELOW_COST_APPROVAL_PREFIX];
  */
 export function appendBelowCostApproval(notes: string | null | undefined, reason: string): string {
   const base = notes?.trim();
+  // The reason is collapsed to ONE line, and that is what makes line-scoped
+  // stripping safe. It is free-form textarea input, so an operator can press
+  // Enter inside it; if the marker could span lines, the stripper would have to
+  // either truncate everything after it (hiding customer notes typed later) or
+  // risk printing the tail of a reason. Collapsing at the single point of
+  // writing removes the dilemma instead of trading one leak for the other.
+  // (Codex round 31.)
+  const oneLine = reason.replace(/\s+/g, ' ').trim();
   return base
-    ? `${base}\n${BELOW_COST_APPROVAL_PREFIX} ${reason}`
-    : `${BELOW_COST_APPROVAL_PREFIX} ${reason}`;
+    ? `${base}\n${BELOW_COST_APPROVAL_PREFIX} ${oneLine}`
+    : `${BELOW_COST_APPROVAL_PREFIX} ${oneLine}`;
 }
 
 /**
@@ -39,32 +47,37 @@ export function appendBelowCostApproval(notes: string | null | undefined, reason
  * document. Returns null when nothing customer-visible remains, so callers can
  * skip the notes block entirely rather than printing an empty heading.
  *
- * The reason is collected in a free-form textarea, so it can itself contain
- * newlines or an em dash. Splitting the value into segments and dropping the
- * one that starts with the marker would therefore keep the rest of a multi-line
- * reason ("Below-cost approved: price match\ncustomer threatened to leave"
- * would print the second line). Because `appendBelowCostApproval` always puts
- * the marker last, everything from the first marker onward is internal — so we
- * truncate there rather than filter segments, and the reason's own formatting
- * cannot leak any part of itself.
+ * Removal is LINE-SCOPED, not truncate-from-the-marker. Truncating hid anything
+ * an operator typed after an approval was already recorded — the marker stays
+ * in the raw notes field, so a delivery instruction added on a later edit lands
+ * below it and would silently vanish from the customer's copy while still
+ * looking present in the editor. Line-scoping is only safe because
+ * `appendBelowCostApproval` collapses the reason to a single line; a reason can
+ * therefore never continue onto the following line and leak.
+ *
+ * An em-dash-separated marker (the bulk-import form, `notes — marker: reason`)
+ * has no newline of its own, so within a line the text from the marker onward
+ * is dropped and the separator trimmed off what remains.
  */
 export function stripInternalNotes(notes: string | null | undefined): string | null {
   if (!notes) return null;
 
-  let cut = notes.length;
-  for (const prefix of INTERNAL_PREFIXES) {
-    const at = notes.indexOf(prefix);
-    if (at !== -1 && at < cut) cut = at;
+  const visibleLines: string[] = [];
+  for (const line of notes.split('\n')) {
+    let cut = line.length;
+    for (const prefix of INTERNAL_PREFIXES) {
+      const at = line.indexOf(prefix);
+      if (at !== -1 && at < cut) cut = at;
+    }
+    // Drop the separator that joined the marker to the notes before it on this
+    // line. A single character class, not an alternation of quantified groups:
+    // `(\n|\s+—\s*)+` nests a quantifier inside a quantified group over
+    // overlapping input, which backtracks exponentially on a long run of
+    // separators — and `notes` is free-form operator input (CodeQL alert 17).
+    const visible = line.slice(0, cut).replace(/[\s—]+$/, '');
+    if (cut === line.length || visible.length > 0) visibleLines.push(visible);
   }
 
-  // Drop the separator that joined the marker to the preceding notes. A single
-  // character class, not an alternation of quantified groups: `(\n|\s+—\s*)+`
-  // nests a quantifier inside a quantified group over overlapping input (`\n`
-  // is itself `\s`), which backtracks exponentially on a long run of newlines
-  // and em dashes — and `notes` is free-form operator input (CodeQL alert 17).
-  // .trim() as well: the character class only strips the TRAILING separator, so
-  // without it leading whitespace on the operator's own notes would survive into
-  // the customer document. Both passes are linear.
-  const visible = notes.slice(0, cut).replace(/[\s—]+$/, '').trim();
-  return visible.length > 0 ? visible : null;
+  const result = visibleLines.join('\n').trim();
+  return result.length > 0 ? result : null;
 }
