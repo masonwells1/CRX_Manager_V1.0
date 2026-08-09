@@ -12,6 +12,7 @@ The review changed no application source, schema, migration, deployment, or live
 |---|---|
 | `FINDINGS.md` | All 77 findings with full detail, evidence, failure scenario, and verifier reasoning. The canonical record. |
 | `findings.json` | Same data as structured JSON — the source the report is generated from. |
+| `REFUTED.md` / `refuted.json` | The 26 disproven claims, in full. Not defects — kept so a later live check can overturn a refutation on stronger evidence, which the titles alone would not support. |
 | `report.html` | Plain-English summary report for Mason (published as an artifact). |
 | `build-report.mjs` | Generates `report.html` from `findings.json`. Correct a verdict there and re-run to rebuild. |
 | `workflow.mjs` | The review workflow itself — 9 finder agents across 3 phases, each finding adversarially verified. Kept verbatim as the record of what ran; its prompt embeds the original session's absolute repo path, so update that before re-running elsewhere. |
@@ -19,6 +20,8 @@ The review changed no application source, schema, migration, deployment, or live
 ## Method
 
 Nine finder agents ran across three phases at high reasoning effort, with no severity cap (per the CLAUDE.md review-prompt rule). **Every** finding was then handed to an independent verifier whose instruction was to refute it, defaulting to refuted when evidence was weak or the issue was already recorded in `KNOWN_ISSUES.md` or the 2026-08-05 gauntlet section-04 baseline. Only findings that survived that pass are recorded here.
+
+**Refuted claims are kept, not discarded.** The workflow returned only the titles of refuted claims, which would have made a refutation impossible to revisit. The full records were recovered from the run journal into `REFUTED.md` / `refuted.json`. If the live-catalog check contradicts a refutation, the original claim and its evidence are there to promote.
 
 **Coverage limitation on any re-run.** `workflow.mjs` treats an agent that dies on a terminal API error the same as one that found nothing, and drops failed verifiers rather than flagging them. A finder killed mid-run therefore reads as clean coverage. In this run every failed agent was re-run to completion before the result was taken (the first two attempts hit session limits), and the final pass reported 112 of 112 agents done with zero errors — but a future re-run must check the agent error count before trusting the totals.
 
