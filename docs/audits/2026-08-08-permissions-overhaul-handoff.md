@@ -47,8 +47,10 @@ regeneration already has a freshness-flag pipeline; this rides it.
 - **`pr-merge-guard.mjs` fails closed in cloud containers** because it shells to
   the `gh` CLI, which isn't installed there. Result: a cloud session cannot
   self-merge *through the guard* when `gh` is unavailable, even for a fully green
-  PR — this session had to fall back to Mason clicking merge / GitHub auto-merge,
-  which is legitimate only because this diff is not risky. Fix: resolve PR head/base SHAs + checks via the
+  PR. Falling back to a human merge / GitHub auto-merge routes around the local
+  hook, which is only acceptable when the diff is genuinely not risky — and this
+  PR turned out not to qualify (see the last bullet of "Context that carries
+  over"). Fix: resolve PR head/base SHAs + checks via the
   GitHub MCP tools or REST when `gh` is absent, keeping fail-closed only when
   neither source resolves. Note the guard's Codex-proof requirement also depends
   on the Codex CLI, which is likewise absent in cloud — parking risky merges for
@@ -170,7 +172,8 @@ Both verified against current source this session; both survive items 1 and 5.
   the whole diff, and `contentIsRisky()` returns **true** — verified this session —
   because the prose quotes money/permission tokens such as `total_cents`. The guard
   denies `--auto` outright for a risky diff (`pr-merge-guard.mjs:176-179`), so the
-  auto-merge armed on this PR was wrong and has been disabled; it now waits for
-  Mason. Worth deciding separately whether content-flagging should apply to
+  auto-merge armed on this PR was wrong and was disabled from the cloud session;
+  it was subsequently re-enabled from outside that session, which is Mason's call
+  to make. Worth deciding separately whether content-flagging should apply to
   `docs/**` at all, or whether documenting a token should be allowed to make a
   prose file risky.
