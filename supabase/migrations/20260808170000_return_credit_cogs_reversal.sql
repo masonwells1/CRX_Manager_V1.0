@@ -170,6 +170,15 @@ BEGIN
            JOIN invoices inv ON inv.id = ii.invoice_id
           WHERE ri.order_item_id IS NOT NULL
             AND ii.order_item_id = ri.order_item_id
+            -- Match the PRODUCT too, not just the line id. update_order_items
+            -- may swap an order line's product after it was invoiced (allowed
+            -- while no delivery item exists), which leaves a historical invoice
+            -- line carrying the same order_item_id but the OLD product and its
+            -- cost. Without this, returning the replacement product would
+            -- reverse the previous product's cost and corrupt both the credit
+            -- memo's total_cost_cents and invoice-basis profit. No match falls
+            -- through to the order line's own cost below. (Codex round 35.)
+            AND ii.product_id = ri.product_id
             AND inv.invoice_type <> 'credit_memo'
             AND inv.deleted_at IS NULL
             AND inv.status NOT IN ('voided', 'cancelled')

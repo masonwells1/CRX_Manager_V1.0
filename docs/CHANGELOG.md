@@ -39,6 +39,15 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 35 (Codex) — return COGS could reverse the wrong product's cost:**
+
+The credit-memo cost lookup matched only `order_item_id` and took the earliest invoice line.
+`update_order_items` can swap an order line's product after it was invoiced (allowed while no
+delivery item exists), leaving a historical invoice line with the same `order_item_id` but the old
+product and cost — so returning the replacement product would have reversed the previous product's
+cost, corrupting the credit memo's `total_cost_cents` and invoice-basis profit. The lookup now also
+matches `product_id`; no match falls through to the order line's own cost, as before.
+
 **Round 34 (Codex) — quantity belongs in the approved terms:**
 
 Round 32's fingerprint covered product, price and cost but not quantity, so after a pre-commit
