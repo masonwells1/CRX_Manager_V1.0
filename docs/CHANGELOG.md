@@ -371,7 +371,7 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 90 assertions, including comment-hidden headers, nested
+suite grew from 24 to 95 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
 quoted actor parameters. Forty-three individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
@@ -443,6 +443,16 @@ simple target of `SELECT`, `VALUES`, or `EXECUTE INTO`, including `STRICT`, and
 multiple targets are never treated as one safe direct source. Removing the
 ordinary-quote skip, dollar-quote skip, or expanded target classifier alone
 turns its exact regression red.
+
+The eighth exact-SHA Codex review proved that the provenance allow-list itself
+was the wrong abstraction: PL/pgSQL values can also be overwritten through
+`RETURNING INTO`, conditional assignments, `FETCH INTO`, and `CALL INOUT`, with
+more writers always possible. The tracker was removed. `EXECUTE` is now accepted
+only when its complete SQL is one direct string literal; every variable,
+`format()`, concatenation, function call, or other expression fails closed and
+uses the existing exemption path for human review. Exact regressions cover all
+four reproduced overwrite families plus a harmless-looking `format()` call.
+Removing the single direct-literal gate alone turns the suite red.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

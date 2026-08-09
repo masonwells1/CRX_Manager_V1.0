@@ -262,7 +262,7 @@ BEGIN
   EXECUTE format($fmt$CREATE FUNCTION public.templated_actor(p_%1$s uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_%1$s; END $fn$;$fmt$, v_suffix);
 END $do$;`);
 ok(isDeny(r), "a one-literal format() template cannot substitute an actor parameter at runtime");
-ok(r.stdout.includes("transformed through format"), "the template deny explains why one template literal is incomplete");
+ok(r.stdout.includes("supplied directly to EXECUTE"), "the template deny explains why one template literal is incomplete");
 
 r = runHook(`DO $do$
 DECLARE v_ddl text;
@@ -312,7 +312,7 @@ BEGIN
   v_ddl := $ddl$${BOUND_DDL}$ddl$;
   EXECUTE v_ddl;
 END $do$;`);
-ok(!isDeny(r), "a bound definition assigned as one complete literal remains supported");
+ok(isDeny(r), "even a previously bound assignment cannot make indirect EXECUTE readable");
 
 r = runHook(`DO $do$
 DECLARE v_ddl text;
@@ -320,7 +320,7 @@ BEGIN
   SELECT $ddl$${BOUND_DDL}$ddl$ INTO v_ddl;
   EXECUTE v_ddl;
 END $do$;`);
-ok(!isDeny(r), "a bound definition selected as one complete literal remains supported");
+ok(isDeny(r), "even a previously bound SELECT cannot make indirect EXECUTE readable");
 
 r = runHook(`DO $do$
 DECLARE v_ddl text;
@@ -339,6 +339,46 @@ BEGIN
   EXECUTE v_ddl;
 END $do$;`);
 ok(isDeny(r), "EXECUTE INTO cannot overwrite a proven DDL variable without invalidating it");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  v_ddl := $ddl$${BOUND_DDL}$ddl$;
+  UPDATE ddl_staging SET body = current_setting('app.dynamic_ddl') RETURNING body INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "RETURNING INTO cannot make an indirect EXECUTE trustworthy");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  v_ddl := $ddl$${BOUND_DDL}$ddl$;
+  IF true THEN v_ddl := current_setting('app.dynamic_ddl'); END IF;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "an assignment inside IF cannot make an indirect EXECUTE trustworthy");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+DECLARE c CURSOR FOR SELECT body FROM ddl_staging;
+BEGIN
+  v_ddl := $ddl$${BOUND_DDL}$ddl$;
+  OPEN c;
+  FETCH c INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "FETCH INTO cannot make an indirect EXECUTE trustworthy");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text := $ddl$${BOUND_DDL}$ddl$;
+BEGIN
+  CALL replace_dynamic_ddl(v_ddl);
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "CALL INOUT cannot make an indirect EXECUTE trustworthy");
+
+r = runHook(`DO $do$ BEGIN EXECUTE format('%s', 'SELECT 1'); END $do$;`);
+ok(isDeny(r), "an EXECUTE expression is refused even when its current literals look harmless");
 
 r = runHook(`DO $do$
 DECLARE v_ddl text;

@@ -476,66 +476,31 @@ try {
     );
   }
 
-  // Fail closed on runtime-built CREATE FUNCTION statements. If all literals
-  // in a dynamic-SQL statement together spell a function header, exactly one
-  // literal must contain the whole readable definition. Multiple literals mean
-  // the signature or body may be hidden in fragments this guard cannot follow.
+  // Fail closed on runtime SQL unless EXECUTE receives exactly one complete,
+  // direct string literal. Any variable/expression can be overwritten or can
+  // assemble DDL through writers this lexer cannot enumerate safely.
   function checkDynamicDdl(from, to) {
     let stmtStart = from;
     let lits = [];
     let i = from;
     let hasProceduralContainer = false;
-    const ddlVars = new Map();
-
-    const ident = (value) => String(value || "").replace(/^"|"$/g, "").toLowerCase();
-    const writtenTargets = (stmt) => {
-      let match = /^(?:BEGIN\s+|THEN\s+|ELSE\s+|LOOP\s+)?("[^"]+"|[A-Za-z_]\w*)\s*(?::=|=(?!=))/i.exec(stmt);
-      if (match) return [ident(match[1])];
-      match = /^(?:DECLARE\s+)?("[^"]+"|[A-Za-z_]\w*)\s+(?:CONSTANT\s+)?[\s\S]*?(?::=|=(?!=)|DEFAULT\b)/i.exec(stmt);
-      if (match && DECLARATION_INIT_RE.test(stmt)) return [ident(match[1])];
-      match = /\b(?:SELECT|VALUES|EXECUTE)\b[\s\S]*?\bINTO\s+(?:STRICT\s+)?([\s\S]*?)(?=\b(?:FROM|WHERE|GROUP|HAVING|ORDER|LIMIT|OFFSET|FETCH|FOR|UNION|INTERSECT|EXCEPT|USING)\b|$)/i.exec(stmt);
-      if (!match) return [];
-      return [...match[1].matchAll(/"[^"]+"|[A-Za-z_]\w*/g)].map(token => ident(token[0]));
-    };
-
-    // An indirect EXECUTE is supported only when the same variable has exactly
-    // one earlier write and that write is one complete, directly assigned
-    // function-bearing literal. We deliberately do not reassemble variables or
-    // fragments across statements: anything more complicated needs exemption.
-    const trackDdlSource = (stmt, stmtEnd) => {
-      const targets = writtenTargets(stmt.trim());
-      if (targets.length) {
-        let safe = false;
-        if (targets.length === 1 && lits.length === 1 && carriesFnHeader(lits[0].payload)) {
-          const marker = "__ACTOR_DDL_LITERAL__";
-          const skeleton = (
-            masked.slice(stmtStart, lits[0].start) + marker + masked.slice(lits[0].end, stmtEnd)
-          ).trim();
-          safe = /^(?:BEGIN\s+)?(?:"[^"]+"|[A-Za-z_]\w*)\s*(?::=|=(?!=))\s*__ACTOR_DDL_LITERAL__$/i.test(skeleton) ||
-            /^(?:BEGIN\s+)?SELECT\s+__ACTOR_DDL_LITERAL__\s+INTO\s+(?:"[^"]+"|[A-Za-z_]\w*)$/i.test(skeleton);
-        }
-        for (const target of targets) {
-          const prior = ddlVars.get(target);
-          ddlVars.set(target, { writes: (prior?.writes || 0) + 1, safe: !prior && safe });
-        }
-      }
-
-      if (!/\bEXECUTE\b/i.test(stmt) || lits.length > 0) return false;
-      const execute = /^(?:BEGIN\s+)?EXECUTE\s+("[^"]+"|[A-Za-z_]\w*)\s*$/i.exec(stmt.trim());
-      const source = execute ? ddlVars.get(ident(execute[1])) : null;
-      if (source?.writes === 1 && source.safe) return false;
-      violations.push(
-        "This migration executes SQL assembled through variables or multiple statements, and the " +
-        "actor-binding guard cannot read it as one complete string literal. Put the complete CREATE " +
-        "FUNCTION definition in one directly assigned literal, or add the file-level exempt marker " +
-        "(-- actor-binding-check: exempt) and get a manual review."
-      );
-      return true;
-    };
-
     const verdict = (stmtEnd) => {
       const stmt = masked.slice(stmtStart, stmtEnd);
-      if (!hasProceduralContainer && trackDdlSource(stmt, stmtEnd)) return true;
+      const marker = "__ACTOR_DDL_LITERAL__";
+      const singleLiteralSkeleton = lits.length === 1
+        ? (masked.slice(stmtStart, lits[0].start) + marker + masked.slice(lits[0].end, stmtEnd)).trim()
+        : null;
+      const directExecute = singleLiteralSkeleton !== null &&
+        /^(?:BEGIN\s+)?EXECUTE\s*\(?\s*__ACTOR_DDL_LITERAL__\s*\)?$/i.test(singleLiteralSkeleton);
+      if (!hasProceduralContainer && /\bEXECUTE\b/i.test(stmt) && !directExecute) {
+        violations.push(
+          "This migration executes SQL assembled through variables or multiple statements, and the " +
+          "actor-binding guard cannot read it as one complete literal supplied directly to EXECUTE. Put the complete " +
+          "SQL text directly in EXECUTE as one literal, or add the file-level exempt marker " +
+          "(-- actor-binding-check: exempt) and get a manual review."
+        );
+        return true;
+      }
       if (lits.length === 0) return false;
       if (!isDynamicSqlStatement(stmt)) return false;
       if (!carriesFnHeader(lits.map((l) => l.payload).join(""))) return false;
@@ -547,11 +512,7 @@ try {
       // supported direct shapes. Fancy but valid builders use the exemption.
       if (lits.length === 1 && carriesFnHeader(lits[0].payload)) {
         const lit = lits[0];
-        const marker = "__ACTOR_DDL_LITERAL__";
-        const skeleton = (
-          masked.slice(stmtStart, lit.start) + marker + masked.slice(lit.end, stmtEnd)
-        ).trim();
-        const directExecute = /^(?:BEGIN\s+)?EXECUTE\s*\(?\s*__ACTOR_DDL_LITERAL__\s*\)?$/i.test(skeleton);
+        const skeleton = singleLiteralSkeleton;
         const directAssign = /^(?:BEGIN\s+)?(?:"[^"]+"|[\w.]+)\s*(?::=|=(?!=))\s*__ACTOR_DDL_LITERAL__$/i.test(skeleton);
         const directSelectInto = /^(?:BEGIN\s+)?SELECT\s+__ACTOR_DDL_LITERAL__\s+INTO\s+(?:"[^"]+"|[\w.]+)$/i.test(skeleton);
         if (directExecute || directAssign || directSelectInto) return false;
