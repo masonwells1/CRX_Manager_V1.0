@@ -58,6 +58,22 @@ would need it: `create_direct_order`, `create_rush_order`, `bulk_import_order`, 
 `price_order`, `save_invoice`, and `save_quote`. (An earlier draft of this entry listed a
 `save_order` RPC — no such function exists; that was an error.)
 
+**Design settled during PR #350 review (Codex, 2026-08-09) — do not re-litigate:**
+
+- **Keep the client-side checks.** They are a UI convenience, not the enforcement boundary: they
+  give immediate feedback before a network round-trip, name the affected products, collect the
+  reason in context, and avoid pointless RPC failures in the common case where the browser's cost
+  is still current. They stay useful *after* server enforcement lands. Do not delete them, and do
+  not describe them anywhere as the financial control.
+- **Why they are insufficient on their own.** The browser compares against the cost it loaded; the
+  server stamps the live catalog cost. A cost increase between page load and RPC execution saves a
+  below-cost line with no reason, and a direct RPC caller skips the check entirely. That gap is the
+  whole reason for this decision.
+- **Shape of the server check.** On finding a below-cost line the caller did not approve, reject
+  with a *structured* error (not a bare exception) carrying the offending lines, so the client can
+  refresh costs, show what changed, collect a reason where the caller is eligible, and retry. A
+  plain failure would strand the operator with no way forward.
+
 ---
 ## 2026-08-08 — Four foundation-ultra-review owner decisions settled
 
