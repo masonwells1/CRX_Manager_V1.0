@@ -39,6 +39,15 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 23 (Codex) — one cost basis for partial draws:**
+
+The round-21 partial-draw fix rounded the weighted cost only at the `cost_at_time_cents` stamp, while
+the order header, line profit and commissions kept using the unrounded average — so drawing two units
+backed equally by $1.00 and $1.01 recorded $2.01 in the header and reported $2.02. `v_wavg_cost` is
+now settled to whole cents once, immediately after it is computed, so every derived figure and the
+stamp share one value. Fixing it at the source rather than at each consumer is the point: this is the
+same "rounded here, unrounded there" split that took three rounds to clear out of the reports.
+
 **Round 22 (Codex) — an overclaim in my own comment:**
 
 The round-21 rush-pricing gate wrote its approval reason via `logActivity` and I commented that this

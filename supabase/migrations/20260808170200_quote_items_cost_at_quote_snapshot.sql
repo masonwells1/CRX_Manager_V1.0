@@ -1496,6 +1496,16 @@ BEGIN
     FROM quote_items qi
     WHERE qi.quote_id = p_quote_id AND qi.product_id = v_product_id;
 
+    -- SNAPSHOT<<< settle the weighted cost to whole cents ONCE, here, before
+    -- anything derives from it. Several quote lines of one product with
+    -- different snapshots average to fractional cents; rounding only at the
+    -- cost_at_time_cents stamp would leave the order header, line profit and
+    -- commissions on the unrounded figure and the reports on the rounded one --
+    -- e.g. two units backed equally by $1.00 and $1.01 record $2.01 in the
+    -- header but report $2.02. One basis, fixed at the source.
+    v_wavg_cost := ROUND(COALESCE(v_wavg_cost, 0), 2);
+    -- >>>SNAPSHOT
+
     SELECT product_name INTO v_product_name FROM products WHERE id = v_product_id;
 
     IF v_booked IS NULL OR v_booked <= 0 THEN
@@ -1537,14 +1547,13 @@ BEGIN
       CASE WHEN v_wavg_price > 0 THEN ROUND(((v_wavg_price - v_wavg_cost) / v_wavg_price) * 100, 2) ELSE 0 END,
       0, v_qty, v_line_count,
       'Drawn from booking ' || v_quote.quote_number,
-      -- SNAPSHOT: a partial draw is a conversion too. v_wavg_cost is already the
-      -- quote-time cost basis (weighted across the drawn lines), so stamp the
-      -- order snapshot from it. Without this the row inserts with a NULL
-      -- cost_at_time_cents and trg_snapshot_order_item_cost stamps TODAY's
-      -- catalog cost, leaving the snapshot reports on one cost and the order
-      -- totals, line profit and commissions on another. COALESCE to 0 for the
-      -- same reason the whole-quote conversion does: an unknown historical cost
-      -- must stay unknown rather than be invented later.
+      -- SNAPSHOT: a partial draw is a conversion too. v_wavg_cost is the
+      -- quote-time basis, already settled to whole cents above, so every derived
+      -- figure and this stamp share one value. Without the stamp the row inserts
+      -- with a NULL cost_at_time_cents and trg_snapshot_order_item_cost writes
+      -- TODAY's catalog cost, splitting the reports from the order totals, line
+      -- profit and commissions. COALESCE to 0 for the same reason the whole-quote
+      -- conversion does: an unknown historical cost stays unknown.
       COALESCE(ROUND(v_wavg_cost * 100)::bigint, 0));
 
     -- Inventory: warn (never block) on net position, then prebook the draw
