@@ -371,7 +371,7 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 95 assertions, including comment-hidden headers, nested
+suite grew from 24 to 98 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
 quoted actor parameters. Forty-three individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
@@ -453,6 +453,15 @@ only when its complete SQL is one direct string literal; every variable,
 uses the existing exemption path for human review. Exact regressions cover all
 four reproduced overwrite families plus a harmless-looking `format()` call.
 Removing the single direct-literal gate alone turns the suite red.
+
+The ninth exact-SHA Codex review found that recursively scanning the raw payload
+of an executable standard SQL string could misread doubled quotes as two
+delimiters. An inner string such as `''-- harmless literal''` could therefore
+become a fake comment in the mask and hide a later mutation. Executable
+single-quoted payloads containing doubled quotes now fail closed and use the
+existing exemption/human-review path instead of attempting lossy decoding. The
+exact comment-hiding probe is covered, and removing this refusal alone turns
+that regression red.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

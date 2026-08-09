@@ -390,6 +390,13 @@ function maskSqlNoise(text, inProceduralCode = false) {
       const isDynamicSql = ch === "'" && (isProceduralContainer ||
         (carriesFnHeader(payload) && (inProceduralCode || inExecuteStatement(out, text, end))));
       if (isDynamicSql) {
+        // Recursing into the raw payload is safe only when it needs no SQL
+        // quote decoding. In an outer standard string, doubled quotes represent
+        // one inner quote; treating them as two delimiters can turn an inner
+        // `--` string into a fake comment and hide the mutation that follows.
+        // Preserve exact source indexes by refusing this fancy valid form and
+        // directing it to the explicit exemption/human-review path.
+        if (payload.includes("''")) return null;
         const inner = maskSqlNoise(payload, inProceduralCode || isProceduralContainer);
         if (inner === null) return null;
         out += ch + inner + ch;
@@ -469,8 +476,8 @@ try {
   const masked = maskSqlNoise(content);
   if (masked === null) {
     violations.push(
-      "This migration could not parse safely (unterminated SQL construct, encoded procedural body, " +
-      "or newline-concatenated procedural strings) — " +
+      "This migration could not parse safely (unterminated SQL construct, encoded or nested-quoted " +
+      "procedural body, or newline-concatenated procedural strings) — " +
       "the actor-binding guard cannot inspect it. Fix the unterminated construct, or if it is " +
       "genuinely valid SQL the lexer mishandles, add the exempt marker and get a manual review."
     );

@@ -197,11 +197,20 @@ ok(r.stdout.includes("public.dynamic_actor"), "the DO LANGUAGE dollar probe reac
 const UNBOUND_SINGLE_DO = `BEGIN EXECUTE '${UNBOUND_DDL}'; END`.replaceAll("'", "''");
 r = runHook(`DO LANGUAGE plpgsql '${UNBOUND_SINGLE_DO}';`);
 ok(isDeny(r), "DO LANGUAGE with a single-quoted body cannot hide dynamic actor DDL");
-ok(r.stdout.includes("public.dynamic_actor"), "the single-quoted DO probe reaches actor inspection");
+ok(r.stdout.includes("nested-quoted"), "the single-quoted DO probe explains its fail-closed parse boundary");
 
 const BOUND_SINGLE_DO = `BEGIN EXECUTE '${BOUND_DDL}'; END`.replaceAll("'", "''");
 r = runHook(`DO LANGUAGE plpgsql '${BOUND_SINGLE_DO}';`);
-ok(!isDeny(r), "a correctly bound function inside a single-quoted DO body remains allowed");
+ok(isDeny(r), "a nested-quoted single-string DO body fails closed even when currently bound");
+
+const DOUBLED_QUOTE_COMMENT_BYPASS = (
+  "CREATE OR REPLACE FUNCTION public.quoted_comment_actor(p_performed_by uuid) " +
+  "RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN " +
+  "RAISE NOTICE '-- harmless literal'; UPDATE invoices SET created_by = p_performed_by; END $fn$;"
+).replaceAll("'", "''");
+r = runHook(`DO $do$ BEGIN EXECUTE '${DOUBLED_QUOTE_COMMENT_BYPASS}'; END $do$;`);
+ok(isDeny(r), "doubled quotes cannot turn an inner string into a fake comment that hides mutation");
+ok(r.stdout.includes("nested-quoted"), "the doubled-quote denial explains the fail-closed parse boundary");
 
 r = runHook(`DO LANGUAGE plpgsql E'${BOUND_SINGLE_DO}';`);
 ok(isDeny(r), "an escape-string DO body the lexer cannot decode fails closed");
@@ -224,7 +233,10 @@ r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${UNBOUND_DDL.replace("dynamic_actor(", 
 ok(isDeny(r), "a nested comment cannot hide a dynamic dollar-quoted function header");
 
 r = runHook(`DO $do$ BEGIN EXECUTE '${BOUND_DDL}'; END $do$;`);
-ok(!isDeny(r), "a bound actor function in one complete EXECUTE string remains allowed");
+ok(isDeny(r), "a nested-quoted EXECUTE string fails closed even when its current function is bound");
+
+r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${BOUND_DDL}$ddl$; END $do$;`);
+ok(!isDeny(r), "a bound actor function in one complete dollar-quoted EXECUTE literal remains allowed");
 
 r = runHook(`DO $do$ BEGIN
   EXECUTE 'CREATE OR REPLACE FUNCTION public.split_actor(p_performed_by uuid) RETURNS void '
@@ -403,7 +415,7 @@ BEGIN
   EXECUTE '${BOUND_DDL.replaceAll("dynamic_bound", "nested_bound")}';
 END
 $outer$;`);
-ok(!isDeny(r), "a correctly bound nested dynamic function remains allowed");
+ok(isDeny(r), "a nested-quoted dynamic function fails closed even when currently bound");
 
 r = runHook(`INSERT INTO docs (body) VALUES ('CREATE OR REPLACE ' || 'FUNCTION public.example(p_performed_by uuid)');`);
 ok(!isDeny(r), "function-shaped fragments in a plain INSERT are data, not runtime DDL");

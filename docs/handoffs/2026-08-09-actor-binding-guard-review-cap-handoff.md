@@ -33,7 +33,10 @@ message directing intentionally complex migrations to the existing file-level
 `-- actor-binding-check: exempt` marker and human review.
 
 Focused regressions now deny all reproduced overwrite families and deny an
-apparently harmless `format()` expression. The actor suite passes at 95
+apparently harmless `format()` expression. A subsequent exact-SHA review also
+found that doubled quotes in an executable standard string could create a fake
+comment in the recursive mask; those nested-quoted payloads now fail closed.
+The actor suite passes at 98
 assertions; the idempotency reference suite remains green at 86 assertions.
 Removing only the new direct-literal enforcement makes the actor suite fail,
 then restoring it returns both suites to green. The real hook process denied a
