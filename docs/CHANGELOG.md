@@ -39,6 +39,14 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 25 (Codex) — one revenue basis for `bottom_products`:**
+
+`get_profitability_report`'s product ranking recomputed revenue as `total_units_needed * price_per_unit`
+while its headline, customer and monthly sections all sum the stored, already-cent-settled
+`oi.total_price`. With fractional quantities producing sub-cent extended prices, the ranking, its
+margin and the headline disagreed. All five sites in that aggregation (total revenue, three margin
+expressions, and the `HAVING` clause) now use `oi.total_price` — one revenue basis, as with cost.
+
 **Round 24 (Codex) — two bulk-import details:**
 
 - **Escape closed both dialogs.** The below-cost prompt renders as a sibling of the still-open import

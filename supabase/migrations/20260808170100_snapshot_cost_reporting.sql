@@ -604,14 +604,19 @@ BEGIN
     FROM (
       SELECT
         p.product_name,
-        COALESCE(SUM(oi.total_units_needed * oi.price_per_unit), 0) AS total_revenue,
+        -- oi.total_price, not quantity * price. Every other section of this RPC
+        -- sums the stored line total, which is already settled to cents;
+        -- recomputing it here re-derives sub-cent extended prices and makes the
+        -- product ranking, its margin and the headline disagree. One revenue
+        -- basis, as with cost. (Codex round 25.)
+        COALESCE(SUM(oi.total_price), 0) AS total_revenue,
         COALESCE(SUM(ROUND(oi.total_units_needed * COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0), 2)), 0) AS total_cost,
         ROUND(
           CASE
-            WHEN SUM(oi.total_units_needed * oi.price_per_unit) > 0 THEN
-              ((SUM(oi.total_units_needed * oi.price_per_unit) -
+            WHEN SUM(oi.total_price) > 0 THEN
+              ((SUM(oi.total_price) -
                 SUM(ROUND(oi.total_units_needed * COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0), 2))) /
-                NULLIF(SUM(oi.total_units_needed * oi.price_per_unit), 0)) * 100
+                NULLIF(SUM(oi.total_price), 0)) * 100
             ELSE 0
           END,
           1
@@ -625,7 +630,7 @@ BEGIN
         AND public.compute_season(COALESCE(o.order_date, o.created_at::date)) =
             public.compute_season(CURRENT_DATE)
       GROUP BY p.id, p.product_name
-      HAVING SUM(oi.total_units_needed * oi.price_per_unit) > 0
+      HAVING SUM(oi.total_price) > 0
       ORDER BY margin_pct ASC
       LIMIT 10
     ) bp
