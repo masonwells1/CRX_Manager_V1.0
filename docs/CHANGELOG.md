@@ -39,6 +39,21 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 26 (Codex) — the rush below-cost prompt could never fire:**
+
+The Set Pricing guardrail added in round 20 read `cost_per_unit`, but `create_rush_order`
+inserts every rush line with that column at 0 and the snapshot trigger writes
+`cost_at_time_cents` instead — which is exactly what `price_order` divides by 100 when it
+finalizes. So the `cost > 0` filter excluded every ordinary rush line and the prompt never
+appeared on the one path it was written for. It now reads the snapshot, keeping
+`cost_per_unit` only as a fallback for lines predating the trigger.
+
+Two other round-26 findings — validating below-cost inside `create_direct_order` and
+writing the edit approval inside the `update_order_items` transaction — are the
+already-recorded server-side enforcement gap, not new. Both remain deferred to a follow-up
+PR, tracked in `docs/manual/DECISION_LOG.md` (2026-08-09). Every below-cost check on this
+branch is client-side and advisory; a direct RPC caller bypasses all of them.
+
 **Round 25 (Codex) — one revenue basis for `bottom_products`:**
 
 `get_profitability_report`'s product ranking recomputed revenue as `total_units_needed * price_per_unit`

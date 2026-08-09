@@ -1099,15 +1099,23 @@ export default function OrderDetail() {
     // Below-cost guardrail on the rush-order Set Pricing path. Finalizing here
     // writes the sale price, sweeps draft invoices and drives commissions, so it
     // is a money write like any other and needs the same approval. Cost comes
-    // from the line's own snapshot (cost_per_unit), which is what price_order
-    // compares against. (Codex round 20.)
+    // from cost_at_time_cents, the trigger-written snapshot -- that is what
+    // price_order itself divides by 100 and writes into cost_per_unit when it
+    // finalizes. create_rush_order inserts these lines with cost_per_unit = 0,
+    // so reading that column here meant every ordinary rush line failed the
+    // cost > 0 test and the prompt could never fire on the one path it exists
+    // for. cost_per_unit is kept only as a fallback for older lines inserted
+    // before the snapshot trigger. (Codex rounds 20 and 26.)
     const isFieldStaffPricing = role === 'driver' || role === 'applicator';
     let pricingBelowCostReason: string | null = null;
     if (!isFieldStaffPricing) {
       const belowCostLines: BelowCostLine[] = priced
         .map((p) => {
           const line = items.find((i) => i.id === p.order_item_id);
-          return line ? { productName: line.product_name, price: p.price, cost: line.cost_per_unit ?? 0 } : null;
+          if (!line) return null;
+          const snapshotCost =
+            line.cost_at_time_cents != null ? line.cost_at_time_cents / 100 : (line.cost_per_unit ?? 0);
+          return { productName: line.product_name, price: p.price, cost: snapshotCost };
         })
         .filter((l): l is BelowCostLine => l !== null && l.cost > 0 && l.price < l.cost);
       if (belowCostLines.length > 0) {
