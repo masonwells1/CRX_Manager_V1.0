@@ -110,6 +110,15 @@ ok(isDeny(r), "a comment before an actor parameter cannot hide its declared name
 r = runHook(fn("UPDATE/* legal */ invoices SET created_by = p_performed_by;"));
 ok(isDeny(r), "a comment between UPDATE and its target cannot hide a mutation");
 
+r = runHook(fn("EXECUTE 'UPDATE invoices SET created_by = $1' USING p_performed_by;"));
+ok(isDeny(r), "a single-quoted dynamic UPDATE cannot disappear during string masking");
+
+r = runHook(fn("EXECUTE format('INSERT INTO financial_audit_log (actor_user_id) VALUES (%L)', p_performed_by);"));
+ok(isDeny(r), "an EXECUTE format() dynamic INSERT is treated as potentially mutating");
+
+r = runHook(fn("EXECUTE 'SELECT 1';"));
+ok(isDeny(r), "opaque dynamic SQL with an unbound actor parameter fails closed");
+
 r = runHook(fn(MUTATION).replace(
   MUTATION,
   "/* historical text: ACTOR_MISMATCH */\n" + MUTATION
@@ -325,6 +334,14 @@ ok(isDeny(r), "dollar-quoted function DDL stored inside procedural code cannot d
 // ── NEGATIVE: correctly bound / out of scope / exempt ──────────────────────
 r = runHook(fn(BOUND));
 ok(!isDeny(r), "body raising ACTOR_MISMATCH is allowed");
+
+r = runHook(fn(`
+  IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  EXECUTE 'SELECT 1';
+`));
+ok(!isDeny(r), "a bound actor function may still use dynamic SQL");
 
 r = runHook(fn(MUTATION, "p_performed_by uuid", "SECURITY INVOKER"));
 ok(!isDeny(r), "SECURITY INVOKER function is out of scope (RLS still applies)");

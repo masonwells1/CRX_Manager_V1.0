@@ -371,9 +371,9 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 73 assertions, including comment-hidden headers, nested
+suite grew from 24 to 77 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
-quoted actor parameters. Thirty-two individual clause-removal mutations were run;
+quoted actor parameters. Thirty-three individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
 idempotency suite remained green at 86 assertions.
 
@@ -405,6 +405,14 @@ earlier supported write containing one complete function-bearing literal; the
 guard never reassembles fragments or guesses through aliases. Seven more
 clause-removal mutations pin these decisions and the accepted direct-literal
 assignment/`SELECT ... INTO` cases.
+
+The fourth exact-SHA Codex review found a base-to-candidate regression: masking
+single-quoted strings also hid an actor-stamping `UPDATE` or `INSERT` executed
+through a literal or `format(...)`. An actor-bearing `SECURITY DEFINER` function
+now treats every `EXECUTE` as potentially mutating unless it performs the required
+actor binding. This intentionally refuses opaque dynamic reads too; the exemption
+marker remains the human-review path. Removing that fail-closed clause makes the
+reproduced single-quoted `UPDATE` probe fail its regression test.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

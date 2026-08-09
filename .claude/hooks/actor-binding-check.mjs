@@ -571,8 +571,14 @@ try {
     // Only SECURITY DEFINER functions can forge an actor with the owner's rights.
     if (!/SECURITY\s+DEFINER/i.test(attrs)) continue;
 
-    // Only mutating bodies attribute anything worth forging.
-    if (!/\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(maskedBody)) continue;
+    // Static mutation keywords are readable after comment masking. Dynamic SQL
+    // is not: EXECUTE may obtain or transform its statement through variables,
+    // format(), concatenation, or USING parameters. Treat every EXECUTE as
+    // potentially mutating rather than letting an opaque actor-stamping write
+    // disappear inside a string literal.
+    const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(maskedBody) ||
+      /\bEXECUTE\b/i.test(maskedBody);
+    if (!hasMutation) continue;
 
     const actorParams = splitTopLevelArgs(maskedParams, blankComments(params))
       .map(paramName)
@@ -582,7 +588,7 @@ try {
     if (/ACTOR_MISMATCH/i.test(blankComments(body))) continue;
 
     violations.push(
-      `Function ${fnName}: SECURITY DEFINER, mutates, and declares the forgeable actor parameter(s) ` +
+      `Function ${fnName}: SECURITY DEFINER, mutates or executes dynamic SQL, and declares the forgeable actor parameter(s) ` +
       `[${actorParams.join(", ")}] but the body never raises ACTOR_MISMATCH — any authenticated caller ` +
       `can attribute the write to another user.`
     );
