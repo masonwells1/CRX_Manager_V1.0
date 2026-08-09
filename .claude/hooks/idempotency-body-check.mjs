@@ -149,6 +149,158 @@ function dollarTagAt(text, i) {
  *  - "CREATE FUNCTION foo(" inside a string literal — top-level or in a
  *    RAISE NOTICE within a DO block — must not be scanned as live DDL either
  *    (Codex P2 round 6); masking string contents kills the whole class. */
+/** True when the text emitted so far puts us inside an EXECUTE statement, i.e.
+ * an EXECUTE keyword appears in the current statement (since the last ';').
+ * Round 9 only recognised the two shapes where the literal sits DIRECTLY after
+ * EXECUTE / EXECUTE format( — so `EXECUTE ('CREATE ...')` and
+ * `EXECUTE format('%s', 'CREATE ...')` fell through as opaque data and an
+ * unwired dynamically-created RPC was invisible (Codex P2 round 10). Statement
+ * scoped, and comments/string contents are already blanked in `out`, so an
+ * EXECUTE in a comment or an earlier statement cannot leak context forward. */
+function inExecuteStatement(out, text, afterIdx) {
+  const before = out.slice(out.lastIndexOf(";") + 1);
+  // The assignment target can sit AFTER the literal (`SELECT $ddl$...$ddl$ INTO
+  // v_ddl`), so the prefix alone is not the statement. Read on from just past
+  // the literal to the next `;` — starting past it, because the literal's own
+  // body routinely contains semicolons.
+  // The statement end must be found the same way the masker finds one: a raw
+  // indexOf(";") stops at a semicolon inside a following string or comment, and
+  // truncating before the `INTO` made a function-bearing literal look like data
+  // (Codex H2, round 13). Unreadable rest → scan it all, which can only widen
+  // the context, i.e. err toward treating the literal as executable.
+  const semi = firstTopLevelSemicolon(text, afterIdx);
+  return isDynamicSqlStatement(
+    before + " " + text.slice(afterIdx, semi === -1 ? text.length : semi)
+  );
+}
+
+/** The first `;` that actually ends a statement — skipping comments, quoted
+ * strings and dollar-quoted bodies. -1 when none is readable. */
+function firstTopLevelSemicolon(text, from) {
+  let i = from;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === ";") return i;
+    if (ch === "-" && text[i + 1] === "-") {
+      const nl = text.indexOf("\n", i + 2);
+      if (nl === -1) return -1;
+      i = nl + 1;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      // PostgreSQL block comments NEST. Stopping at the first `*/` left us
+      // scanning inside a still-open comment, so a `;` in there looked like a
+      // statement end and hid the `INTO` assignment that follows — the guard
+      // then read a dynamic-DDL statement as inert data and allowed an unwired
+      // mutating RPC through (Codex HIGH, round 14). Count depth, as the masker
+      // at maskSqlNoise() already does.
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { depth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      if (depth > 0) return -1;
+      i = j;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return -1;
+      i = end;
+      continue;
+    }
+    const tag = ch === "$" ? dollarTagAt(text, i) : null;
+    if (tag) {
+      const close = text.indexOf(tag, i + tag.length);
+      if (close === -1) return -1;
+      i = close + tag.length;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** A statement that builds or runs dynamic SQL: it EXECUTEs, or it assigns the
+ * text to a variable that something later EXECUTEs. Payload CONTENT alone must
+ * not make a literal executable — a plain INSERT of documentation that happens
+ * to contain a function-shaped example was denied on content alone (Codex
+ * blocker review, round 11). Context and content are both required.
+ * Round 12: `:=` is only one of PL/pgSQL's assignment forms. `v_ddl = $ddl$..$`
+ * and `SELECT $ddl$..$ INTO v_ddl` build dynamic DDL just as well, and treating
+ * them as data let an unwired mutating RPC through (Codex H1). */
+const ASSIGN_RE =
+  /(?:^|\bBEGIN\b|\bTHEN\b|\bELSE\b|\bLOOP\b|\bDECLARE\b)\s*(?:"[^"]+"|[\w.]+)\s*(?::=|=(?!=))/i;
+function isDynamicSqlStatement(stmt) {
+  return /\bEXECUTE\b/i.test(stmt) ||
+    stmt.includes(":=") ||
+    ASSIGN_RE.test(stmt) ||
+    /\bSELECT\b[\s\S]*\bINTO\b/i.test(stmt);
+}
+
+/** A REAL CREATE FUNCTION header — name plus an opening paren — as opposed to
+ * the words "create function" appearing in prose. Round 10 gated recursion on
+ * the loose word-pair plus a p_idempotency_key mention; the pair matched prose
+ * (false deny) and the conjunction hid DDL split across two literals (Codex P2
+ * round 11). Requiring the header shape is both tighter AND wider: prose no
+ * longer qualifies, and a fragment carrying only the header still does. */
+const CREATE_FN_HEAD_RE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+[\w."]+\s*\(/i;
+
+/** A literal inside a dynamic-SQL statement is lexed whenever it carries a
+ * function header. Round 14 dropped the extra `p_idempotency_key` condition and
+ * the `format()` code-vs-data carve-outs: deciding per literal whether text is
+ * code or data lost five consecutive gate rounds, because PostgreSQL keeps
+ * offering another spelling (`%1$10s`, a dollar-quoted template, a CASE arm,
+ * fragments). The guard no longer tries to win that argument — see
+ * `checkDynamicDdl`. */
+/** Blank SQL comments to spaces, length-preservingly, WITHOUT touching string
+ * literals. This is deliberately not `maskSqlNoise()`: that function calls
+ * `carriesFnHeader()`, so reusing it here would recurse forever. Block comments
+ * nest, same as everywhere else in this file. */
+function blankComments(s) {
+  let out = "";
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "-" && s[i + 1] === "-") {
+      const nl = s.indexOf("\n", i + 2);
+      const stop = nl === -1 ? s.length : nl;
+      out += " ".repeat(stop - i);
+      i = stop;
+      continue;
+    }
+    if (s[i] === "/" && s[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < s.length && depth > 0) {
+        if (s[j] === "/" && s[j + 1] === "*") { depth++; j += 2; continue; }
+        if (s[j] === "*" && s[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      out += " ".repeat(j - i);
+      i = j;
+      continue;
+    }
+    out += s[i];
+    i++;
+  }
+  return out;
+}
+
+function carriesFnHeader(payload) {
+  // PostgreSQL allows comments wherever whitespace is allowed, including
+  // between the function name and its parameter list:
+  //   CREATE FUNCTION public.f /* legal */ ( p_idempotency_key text ...
+  // Matching the RAW text missed that, so the literal was classified as data,
+  // never lexed, and an unwired invoice-mutating RPC was allowed (Codex H1,
+  // round 17). Test both spellings and take either: blanking comments can only
+  // ever remove text, and testing raw as well keeps a comment marker that lives
+  // INSIDE a string from blanking a real header away.
+  return CREATE_FN_HEAD_RE.test(payload) ||
+    CREATE_FN_HEAD_RE.test(blankComments(payload));
+}
+
 function maskSqlNoise(text) {
   let out = "";
   let i = 0;
@@ -188,8 +340,19 @@ function maskSqlNoise(text) {
         // Everything else is opaque data: mask it wholesale, since lexing a
         // payload like $q$can't$q$ as SQL sees an unterminated quote and
         // falsely denies the whole migration (Codex P2 round 7).
+        // Round 11: the content trigger is the HEADER shape, not the word pair
+        // plus p_idempotency_key. Prose that merely mentions "create function"
+        // no longer qualifies (that was the round-10 false deny), and a payload
+        // is judged on its own content rather than on sitting somewhere in an
+        // EXECUTE statement — so a data argument alongside dynamic DDL stays
+        // opaque instead of being lexed as SQL (Codex P2 round 11).
         const isExecutable = /\b(?:AS|DO|EXECUTE)\s+$/i.test(out) ||
-          /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION/i.test(payload);
+          (inExecuteStatement(out, text, close + tag.length) &&
+            carriesFnHeader(payload));
+        // FAIL CLOSED on a payload we judged executable: masking it opaque
+        // would erase real DDL and let an unwired function through, which is
+        // exactly this guard's bug class (Codex P2 round 11). Payloads that are
+        // data are never lexed at all, so they cannot reach this.
         const inner = isExecutable ? maskSqlNoise(payload) : " ".repeat(payload.length);
         if (inner === null) return null;
         out += tag + inner + tag;
@@ -210,9 +373,19 @@ function maskSqlNoise(text) {
       // so the header stays visible; all other strings stay opaque data —
       // recursing on content would re-open the round-6 false positive on
       // literals that merely mention "CREATE FUNCTION".
-      const isDynamicSql = ch === "'" && /\bEXECUTE\s+(?:format\s*\(\s*)?E?$/i.test(out);
+      // Round 10 widened "EXECUTE-adjacent" to "anywhere in an EXECUTE
+      // statement" so `EXECUTE ('CREATE ...')` and the non-first argument of
+      // `EXECUTE format('%s', 'CREATE ...')` are inspected too.
+      // Round 11 narrows this again: being inside an EXECUTE statement is not
+      // enough on its own. `format('INSERT ... %L', 'some prose')` passes its
+      // later argument as DATA, and lexing that as SQL false-denied valid
+      // migrations. The literal must also carry a CREATE FUNCTION header —
+      // which is the only thing this guard could find in it anyway.
+      const isDynamicSql = ch === "'" && inExecuteStatement(out, text, end) &&
+        carriesFnHeader(text.slice(i + 1, end - 1));
       if (isDynamicSql) {
         const payload = text.slice(i + 1, end - 1);
+        // FAIL CLOSED — see the dollar-quote branch above.
         const inner = maskSqlNoise(payload);
         if (inner === null) return null;
         out += ch + inner + ch;
@@ -340,6 +513,96 @@ if (masked === null) {
     "genuinely valid SQL the lexer mishandles, add the exempt marker and get a manual review."
   );
 }
+// FAIL-CLOSED DYNAMIC-DDL RULE (round 14, 2026-08-08).
+//
+// Five consecutive Codex gate rounds blocked this hook, every time on a rule
+// that tried to decide, literal by literal, whether text was CODE or DATA.
+// PostgreSQL always had another spelling: a positional-and-width format spec
+// (%1$10s), a dollar-quoted format template, a literal in a CASE arm, a header
+// split mid-word, a body continued in a second fragment. Enumerating variants
+// is a losing game for a guard that protects against duplicate money movement.
+//
+// So the default is inverted. Inside a statement that builds SQL at runtime, if
+// the literals TOGETHER spell a CREATE FUNCTION header, then exactly one literal
+// must carry that header and be readable on its own. Anything else is refused —
+// the author writes the dynamic DDL as one string literal, or uses the
+// file-level exempt marker and gets a human review. Refusing too much is the
+// safe side of the error here; refusing too little replays customer charges.
+//
+// Recurses into dollar-quoted payloads first: the assembly almost always lives
+// inside a DO block or a function body, which a flat scan skips as one literal.
+function checkDynamicDdl(from, to) {
+  let stmtStart = from;
+  let lits = [];
+  let i = from;
+
+  const verdict = (stmtEnd) => {
+    if (lits.length === 0) return false;
+    if (!isDynamicSqlStatement(masked.slice(stmtStart, stmtEnd))) return false;
+    if (!carriesFnHeader(lits.map((l) => l.payload).join(""))) return false;
+    // EXACTLY ONE literal in the whole statement, and it carries the header:
+    // then that literal IS the definition, and the normal signature/wiring scan
+    // has already lexed it in place.
+    //
+    // Round 15 accepted "some literal carries the header" here, which was not
+    // enough. A header is not a definition — the BODY can live in a second
+    // fragment (`EXECUTE '...LANGUAGE plpgsql AS ' || '$fn$ BEGIN UPDATE
+    // invoices ... END $fn$;'`). The normal scan only ever sees the
+    // header-bearing literal, so the mutating body was invisible and an unwired
+    // RPC was allowed (Codex HIGH, round 16). Any additional literal means some
+    // part of the definition is somewhere this guard cannot follow.
+    if (lits.length === 1 && carriesFnHeader(lits[0].payload)) return false;
+    violations.push(
+      "This migration builds a CREATE FUNCTION statement at runtime, and this guard cannot read it " +
+      "as one complete literal — the definition is split across fragments, or a fragment is not " +
+      "parseable on its own. Split that way, the guard cannot tell whether p_idempotency_key is " +
+      "declared and whether it is wired, which is exactly the retry bug it exists to catch. Build " +
+      "the dynamic DDL as a single string literal, or add the file-level exempt marker " +
+      "(-- idempotency-body-check: exempt) and get a manual review."
+    );
+    return true;
+  };
+
+  while (i < to) {
+    const ch = masked[i];
+    if (ch === ";") {
+      if (verdict(i)) return true;
+      stmtStart = i + 1;
+      lits = [];
+      i++;
+      continue;
+    }
+    let start = -1;
+    let end = -1;
+    let innerFrom = -1;
+    let innerTo = -1;
+    if (ch === "'" || ch === '"') {
+      start = i;
+      end = scanQuoted(masked, i);
+    } else {
+      const tag = ch === "$" ? dollarTagAt(masked, i) : null;
+      if (tag) {
+        const close = masked.indexOf(tag, i + tag.length);
+        if (close !== -1) {
+          start = i;
+          end = close + tag.length;
+          innerFrom = i + tag.length;
+          innerTo = close;
+        }
+      }
+    }
+    if (end === -1 || start === -1) { i++; continue; }
+    if (innerFrom !== -1 && checkDynamicDdl(innerFrom, innerTo)) return true;
+    lits.push({
+      payload: innerFrom !== -1
+        ? content.slice(innerFrom, innerTo)
+        : content.slice(start + 1, end - 1),
+    });
+    i = end;
+  }
+  return verdict(to);
+}
+if (masked !== null) checkDynamicDdl(0, masked.length);
 let head;
 while (masked !== null && (head = fnHeadRe.exec(masked)) !== null) {
   const fnName = head[1];

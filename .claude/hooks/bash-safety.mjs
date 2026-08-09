@@ -17,12 +17,14 @@
 // the exact same shell commands and used to skip every one of these checks).
 
 import { readFileSync } from "node:fs";
-import { checkCommandDeep, checkMigrationModify } from "./bash-safety-lib.mjs";
+import { checkCommandDeep, checkMigrationModify, checkAskDeep } from "./bash-safety-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
     ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
-    : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
+    : decision === "ask"
+      ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } }
+      : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
   process.stdout.write(JSON.stringify(payload));
   process.exit(0);
 }
@@ -45,6 +47,9 @@ try {
 
   const migReason = checkMigrationModify(cmd, cwd);
   if (migReason) out("block", migReason);
+
+  const askReason = checkAskDeep(cmd, cwd);
+  if (askReason) out("ask", askReason);
 } catch (err) {
   // FAIL-OPEN, but loud: a broken hook must never brick the session.
   process.stderr.write(`bash-safety.mjs internal error (allowing): ${err && err.message ? err.message : err}\n`);
