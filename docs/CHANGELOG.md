@@ -2,6 +2,71 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-09 — Line-profit precision repair (live), dependency updates, and a public-repo disclosure guard
+
+Orchestration session. No application code was authored here. Two durable outcomes: one
+owner-approved live-data precision repair, and a batch of dependency merges.
+
+**Live data change (production), owner-approved.** A subset of `order_items` rows stored
+`profit` at finer than whole-cent precision. On Mason's explicit in-conversation approval,
+those values were rounded to whole cents via a single scoped `UPDATE`. Authorization was
+recorded through the live-data guard's sanctioned override file before the statement ran,
+and the override was retired immediately afterwards once the repair was verified.
+
+`order_items.total_price` was deliberately left untouched. It is customer-billed revenue
+and carries higher stakes than an internal reporting figure; restating it is a separate
+decision that has not been made.
+
+The repair provably cannot move order-header money: `trg_recalc_order_totals` derives the
+header from `SUM(total_price) - SUM(cost_per_unit * total_units_needed)` and never reads
+`order_items.profit`. Header figures were measured before and re-measured after; the
+observed shift matched the prediction.
+
+**Known issue, NOT fixed, held at the owner's direction.** A small number of orders show
+the header profit disagreeing with the sum of their line profits, because the header
+recalculates when a cost changes and the stored line profit does not. Sales reporting reads
+the line copy while the order screen reads the header copy, so the two can disagree. The
+resolution depends on a business decision — whether a past order's profit should follow a
+later cost correction or stay fixed at the cost recorded at sale — and is unresolved.
+Per-order figures and identifiers are deliberately kept out of this public repository; they
+live in the access-controlled session record.
+
+**Dependencies.** Merged the minor-and-patch group (16 updates, including
+`@supabase/supabase-js`, `@sentry/react`, `mapbox-gl`, `pdfjs-dist`, `react-router-dom`,
+`lucide-react`), plus `dompurify`, `js-yaml`, and `fast-uri`. Each passed an independent
+Codex verdict bound to the exact head and base the merge gate demanded. One superseded
+dependabot PR was closed; another closed itself. Production was verified after each merge
+by loading the live site and confirming a clean boot with no app-level console errors.
+Authenticated screens were not reachable from this environment and remain unverified.
+
+**Held, needs an owner decision.** The React major, ESLint 10, and `@vitejs/plugin-react` 6
+upgrades all fail Lint/Type Check/Test/Build. These are breaking major-version upgrades
+requiring code migration, not routine cleanup. Mason directed that they not be merged.
+
+**Correction, twice over.** An earlier entry recorded CodeRabbit as rate-limited across the
+whole PR board. That was then corrected to "it is not rate-limited; it structurally skips
+bot-authored PRs, which is why dependabot PRs carry no review." The skip-bot-PRs half holds.
+The rest does not: later the same day CodeRabbit posted "Review limit reached — you've used
+all free OSS reviews for now" on two separate agent-authored PRs and declined an explicit
+`@coderabbitai review` on a third. Both mechanisms are real and independent — it skips bot
+PRs *and* enforces a rolling free-tier review quota on the ones it does take.
+
+This matters for the merge policy, because the CodeRabbit **status check reports SUCCESS
+even when no review ran**. A green CodeRabbit check is therefore not evidence of a review.
+Before merging on the strength of it, read the PR comments and confirm a review was actually
+posted; if the bot reports a limit, wait for the window or re-request with
+`@coderabbitai review`.
+
+**Process note.** The first draft of this entry was blocked by the pre-merge Codex gate for
+publishing live order identifiers and exact per-order financial figures into a public
+repository. That was a real disclosure risk and the entry was rewritten. Treat
+`docs/CHANGELOG.md` as public: describe what changed and why, not the production values.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - documentation only — the work landed via GitHub PR merges and one live database statement
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-09 — Phase 3C containment recognizes this repository's own worktrees
 
 Every push was blocked while a parallel session held a worktree under the
