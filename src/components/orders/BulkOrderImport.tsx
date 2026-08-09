@@ -407,6 +407,11 @@ export default function BulkOrderImport({
     // so rows whose Product does not resolve uniquely or has no usable cost are
     // skipped here and rejected/priced by the per-order logic below.
     let belowCostReason: string | null = null;
+    // Only the orders that actually contain a below-cost line get the approval
+    // note. A batch-global note would stamp "Below-cost approved" onto ordinary
+    // orders in the same upload — a false audit trail, and one that survives
+    // even if the order that triggered the prompt fails validation downstream.
+    const belowCostOrderNumbers = new Set<string>();
     if (!isFieldStaff) {
       const belowCostLines: BelowCostLine[] = [];
       for (const order of validation.valid) {
@@ -416,6 +421,7 @@ export default function BulkOrderImport({
           const cost = resolution.product.current_cost;
           if (cost == null || !Number.isFinite(cost) || cost <= 0) continue;
           if (item.price_per_unit < cost) {
+            belowCostOrderNumbers.add(order.order_number);
             belowCostLines.push({
               productName: `${order.order_number} — ${item.product_name}`,
               price: item.price_per_unit,
@@ -549,7 +555,7 @@ export default function BulkOrderImport({
           p_items: itemsPayload,
           // The approval reason rides along with the same import that creates
           // the below-cost lines, so it is durable even if activity logging fails.
-          p_notes: belowCostReason
+          p_notes: belowCostReason && belowCostOrderNumbers.has(order.order_number)
             ? [order.notes, `Below-cost approved: ${belowCostReason}`].filter(Boolean).join(' — ')
             : order.notes,
           p_idempotency_key: order.idempotency_key,

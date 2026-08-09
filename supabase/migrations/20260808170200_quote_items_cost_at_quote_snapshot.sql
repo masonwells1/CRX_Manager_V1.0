@@ -142,6 +142,17 @@ BEGIN
     RAISE EXCEPTION 'QUOTE_ITEM_COST_SNAPSHOT_IMMUTABLE: cost_at_quote_cents cannot be changed after the line is created'
       USING ERRCODE = 'P0001';
   END IF;
+  -- Swapping product_id on an existing row would leave the previous product's
+  -- cost snapshot attached to a different product — a cheap snapshot on an
+  -- expensive product inflates stored margin just as effectively as editing the
+  -- snapshot directly, and the immutability check above would not catch it.
+  -- save_quote never UPDATEs product_id (a product swap is a delete+reinsert,
+  -- and the id-reuse path only reuses an id when product_id matches), so any
+  -- direct UPDATE changing it is the RLS-policy path and is always illegitimate.
+  IF NEW.product_id IS DISTINCT FROM OLD.product_id THEN
+    RAISE EXCEPTION 'QUOTE_ITEM_PRODUCT_IMMUTABLE: product_id cannot be changed on an existing quote line; save the quote to replace the line instead'
+      USING ERRCODE = 'P0001';
+  END IF;
   RETURN NEW;
 END;
 $$;

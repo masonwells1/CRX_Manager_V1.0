@@ -39,6 +39,47 @@
 -- caller-analysis: get_profitability_report :: new function created in this migration; its only caller is the new authenticated Reports.tsx callsite added in this same branch, and authenticated + service_role are granted EXECUTE below.
 
 -- -----------------------------------------------------------------------------
+-- 0. Keep the snapshot honest across a product swap.
+--
+-- trg_snapshot_order_item_cost (20260513050000) only fires BEFORE INSERT, so a
+-- line whose product is swapped later keeps the previous product's cost. That
+-- was tolerable while the reports read cost_per_unit; once the reports below
+-- make cost_at_time_cents the canonical basis, a valid mid-order product swap
+-- would silently report the old product's cost. update_order_items performs the
+-- swap as an in-place UPDATE of product_id + cost_per_unit, so the re-stamp
+-- belongs on the table where every path is covered, not in that one RPC.
+--
+-- The re-stamp only fires when the caller left the snapshot alone; a caller that
+-- deliberately supplies a new snapshot (e.g. a vendor invoice cost) still wins,
+-- matching the INSERT trigger's "only if not pre-populated" contract.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public._resnapshot_order_item_cost_on_product_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF NEW.product_id IS DISTINCT FROM OLD.product_id
+     AND NEW.cost_at_time_cents IS NOT DISTINCT FROM OLD.cost_at_time_cents
+     AND NEW.product_id IS NOT NULL THEN
+    SELECT ROUND(current_cost * 100)::bigint INTO NEW.cost_at_time_cents
+    FROM public.products WHERE id = NEW.product_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+-- caller-analysis: _resnapshot_order_item_cost_on_product_change :: brand-new trigger-only helper created in this migration; no rpc callsites exist, trigger execution does not require caller EXECUTE.
+REVOKE ALL ON FUNCTION public._resnapshot_order_item_cost_on_product_change() FROM PUBLIC, anon, authenticated, service_role;
+
+DROP TRIGGER IF EXISTS trg_resnapshot_order_item_cost ON public.order_items;
+CREATE TRIGGER trg_resnapshot_order_item_cost
+  BEFORE UPDATE ON public.order_items
+  FOR EACH ROW
+  EXECUTE FUNCTION public._resnapshot_order_item_cost_on_product_change();
+
+-- -----------------------------------------------------------------------------
 -- 1. get_sales_detail_report: cost/profit/margin from the snapshot cost.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.get_sales_detail_report(

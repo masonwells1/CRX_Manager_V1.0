@@ -2,6 +2,32 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-08 — Codex review round 4: product-swap snapshot integrity, per-order below-cost note
+
+Closed three of four round-4 Codex findings on the pricing branch.
+
+- **P1 — quote line product swap.** The snapshot immutability guard rejected edits to
+  `cost_at_quote_cents` but allowed an owning rep to change `product_id` through the
+  `qitems_update` RLS policy, permanently attaching a cheap snapshot to an expensive
+  product. The guard now also rejects `product_id` changes (`QUOTE_ITEM_PRODUCT_IMMUTABLE`).
+  `save_quote` never UPDATEs `product_id` — a swap is delete+reinsert — so no governed
+  path is affected.
+- **P2 — order line product swap.** `update_order_items` swaps `product_id` and
+  `cost_per_unit` in place but left `cost_at_time_cents` from the old product; once the
+  reports make that column canonical, a valid swap would report the old product's cost.
+  Added `trg_resnapshot_order_item_cost`, a BEFORE UPDATE trigger that re-stamps the
+  snapshot on a product change unless the caller deliberately supplied a new one — placed
+  on the table so every write path is covered, not just that one RPC.
+- **P2 — batch-global approval note.** `BulkOrderImport` appended "Below-cost approved"
+  to every order in an upload. Now only orders that actually contain a below-cost line
+  get the note.
+
+**Deferred (owner decision):** Codex's remaining P2 asks that below-cost approval be a
+server-side invariant inside `bulk_import_order` rather than a UI gate, which would also
+close the catalog-cost-changes-mid-import race. That is a real hardening, but it changes
+what the RPC will accept from every caller — it needs Mason's call, and is tracked with
+the other open pricing decisions.
+
 ## 2026-08-08 — Codex review round 3: stable quote item ids, dashboard on snapshot cost, below-cost gate on bulk import
 
 Addressed the third Codex review round on the pricing Phase B/C branch. `save_quote`
