@@ -176,8 +176,9 @@ is only one part: `create_direct_order`, `create_rush_order`, `update_order_item
 decided once and applied across the whole money-write surface. (An earlier draft named a
 `save_order` RPC; no such function exists.) That changes what those RPCs will accept from every
 caller — it needs Mason's call, and is tracked with the other open pricing decisions.
-**Settled 2026-08-09:** yes, enforce server-side, with an admin exception — see
-`docs/manual/DECISION_LOG.md`.
+**Settled 2026-08-09:** yes, enforce server-side, with an admin exception. The *policy* is
+settled; the *implementation* is deferred to a follow-up and is **NOT IMPLEMENTED** — nothing in
+this PR enforces below-cost server-side. See `docs/manual/DECISION_LOG.md`.
 
 ## 2026-08-08 — Codex review round 3: stable quote item ids, dashboard on snapshot cost, below-cost gate on bulk import
 
