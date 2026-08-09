@@ -148,6 +148,18 @@ ok(
   "the dollar-default probe reaches the actor check, not only a parse backstop"
 );
 
+r = runHook(fn(
+  MUTATION,
+  "p_note text DEFAULT '/* harmless literal text', p_performed_by uuid"
+));
+ok(isDeny(r), "comment syntax inside a quoted default cannot erase a later actor parameter");
+
+r = runHook(fn(
+  MUTATION,
+  "p_note text DEFAULT $d$/* harmless literal text$d$, p_performed_by uuid"
+));
+ok(isDeny(r), "comment syntax inside a dollar-quoted default cannot erase a later actor parameter");
+
 // Anything the structural reader cannot safely close is denied, not skipped.
 r = runHook(fn(MUTATION, "p_note numeric((, p_performed_by uuid"));
 ok(isDeny(r), "an unparseable parameter list fails CLOSED");
@@ -309,6 +321,24 @@ BEGIN
   EXECUTE v_ddl;
 END $do$;`);
 ok(!isDeny(r), "a bound definition selected as one complete literal remains supported");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  SELECT $ddl$${BOUND_DDL}$ddl$ INTO v_ddl;
+  SELECT body INTO STRICT v_ddl FROM ddl_staging WHERE name = 'unbound_actor_function';
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "SELECT INTO STRICT cannot overwrite a proven DDL variable without invalidating it");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text;
+BEGIN
+  SELECT $ddl$${BOUND_DDL}$ddl$ INTO v_ddl;
+  EXECUTE 'SELECT body FROM ddl_staging LIMIT 1' INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "EXECUTE INTO cannot overwrite a proven DDL variable without invalidating it");
 
 r = runHook(`DO $do$
 DECLARE v_ddl text;

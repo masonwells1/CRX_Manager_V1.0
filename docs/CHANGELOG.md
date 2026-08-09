@@ -371,9 +371,9 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 86 assertions, including comment-hidden headers, nested
+suite grew from 24 to 90 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
-quoted actor parameters. Forty individual clause-removal mutations were run;
+quoted actor parameters. Forty-three individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
 idempotency suite remained green at 86 assertions.
 
@@ -431,6 +431,18 @@ The reader now refuses multi-token procedural bodies instead of reassembling
 them. The same boundary now recognizes and refuses `U&'...'`/`N'...'` procedural
 bodies whose decoding cannot remain index-safe. Removing either recognition
 clause alone makes its focused regression turn red.
+
+The seventh exact-SHA Codex review found two more parser-state bypasses. The
+comment blanker preserved string data by intent but did not actually skip over
+quoted text, so `/*` inside a legal parameter default erased the following actor
+parameter. It now copies single-, double-, and dollar-quoted spans before
+blanking real nested comments. Separately, a runtime-DDL variable marked safe
+could be overwritten through `SELECT ... INTO STRICT` or `EXECUTE ... INTO`
+without invalidating that proof. The provenance tracker now records every
+simple target of `SELECT`, `VALUES`, or `EXECUTE INTO`, including `STRICT`, and
+multiple targets are never treated as one safe direct source. Removing the
+ordinary-quote skip, dollar-quote skip, or expanded target classifier alone
+turns its exact regression red.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

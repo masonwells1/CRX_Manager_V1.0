@@ -219,6 +219,24 @@ function blankComments(s) {
   let out = "";
   let i = 0;
   while (i < s.length) {
+    if (s[i] === "'" || s[i] === '"') {
+      const end = scanQuoted(s, i);
+      if (end === -1) return s;
+      out += s.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (s[i] === "$") {
+      const tag = dollarTagAt(s, i);
+      if (tag) {
+        const close = s.indexOf(tag, i + tag.length);
+        if (close === -1) return s;
+        const end = close + tag.length;
+        out += s.slice(i, end);
+        i = end;
+        continue;
+      }
+    }
     if (s[i] === "-" && s[i + 1] === "-") {
       const nl = s.indexOf("\n", i + 2);
       const stop = nl === -1 ? s.length : nl;
@@ -470,13 +488,14 @@ try {
     const ddlVars = new Map();
 
     const ident = (value) => String(value || "").replace(/^"|"$/g, "").toLowerCase();
-    const writtenTarget = (stmt) => {
+    const writtenTargets = (stmt) => {
       let match = /^(?:BEGIN\s+|THEN\s+|ELSE\s+|LOOP\s+)?("[^"]+"|[A-Za-z_]\w*)\s*(?::=|=(?!=))/i.exec(stmt);
-      if (match) return ident(match[1]);
+      if (match) return [ident(match[1])];
       match = /^(?:DECLARE\s+)?("[^"]+"|[A-Za-z_]\w*)\s+(?:CONSTANT\s+)?[\s\S]*?(?::=|=(?!=)|DEFAULT\b)/i.exec(stmt);
-      if (match && DECLARATION_INIT_RE.test(stmt)) return ident(match[1]);
-      match = /\b(?:SELECT|VALUES)\b[\s\S]*\bINTO\s+("[^"]+"|[A-Za-z_]\w*)\s*$/i.exec(stmt);
-      return match ? ident(match[1]) : null;
+      if (match && DECLARATION_INIT_RE.test(stmt)) return [ident(match[1])];
+      match = /\b(?:SELECT|VALUES|EXECUTE)\b[\s\S]*?\bINTO\s+(?:STRICT\s+)?([\s\S]*?)(?=\b(?:FROM|WHERE|GROUP|HAVING|ORDER|LIMIT|OFFSET|FETCH|FOR|UNION|INTERSECT|EXCEPT|USING)\b|$)/i.exec(stmt);
+      if (!match) return [];
+      return [...match[1].matchAll(/"[^"]+"|[A-Za-z_]\w*/g)].map(token => ident(token[0]));
     };
 
     // An indirect EXECUTE is supported only when the same variable has exactly
@@ -484,10 +503,10 @@ try {
     // function-bearing literal. We deliberately do not reassemble variables or
     // fragments across statements: anything more complicated needs exemption.
     const trackDdlSource = (stmt, stmtEnd) => {
-      const target = writtenTarget(stmt.trim());
-      if (target) {
+      const targets = writtenTargets(stmt.trim());
+      if (targets.length) {
         let safe = false;
-        if (lits.length === 1 && carriesFnHeader(lits[0].payload)) {
+        if (targets.length === 1 && lits.length === 1 && carriesFnHeader(lits[0].payload)) {
           const marker = "__ACTOR_DDL_LITERAL__";
           const skeleton = (
             masked.slice(stmtStart, lits[0].start) + marker + masked.slice(lits[0].end, stmtEnd)
@@ -495,8 +514,10 @@ try {
           safe = /^(?:BEGIN\s+)?(?:"[^"]+"|[A-Za-z_]\w*)\s*(?::=|=(?!=))\s*__ACTOR_DDL_LITERAL__$/i.test(skeleton) ||
             /^(?:BEGIN\s+)?SELECT\s+__ACTOR_DDL_LITERAL__\s+INTO\s+(?:"[^"]+"|[A-Za-z_]\w*)$/i.test(skeleton);
         }
-        const prior = ddlVars.get(target);
-        ddlVars.set(target, { writes: (prior?.writes || 0) + 1, safe: !prior && safe });
+        for (const target of targets) {
+          const prior = ddlVars.get(target);
+          ddlVars.set(target, { writes: (prior?.writes || 0) + 1, safe: !prior && safe });
+        }
       }
 
       if (!/\bEXECUTE\b/i.test(stmt) || lits.length > 0) return false;
