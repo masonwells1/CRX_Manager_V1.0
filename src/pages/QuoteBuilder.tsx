@@ -74,6 +74,7 @@ import { useStaleQuoteCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
+import { appendBelowCostApproval } from '../lib/internalNotes';
 import type {
   Quote,
   QuoteSection,
@@ -1506,11 +1507,13 @@ export default function QuoteBuilder() {
           ...(item.id ? { id: item.id } : {}),
           product_id: item.product_id,
           sort_order: item.sort_order,
-          // Quote header/footer notes print on the customer PDF, so the
-          // below-cost approval reason is recorded on the affected line.
+          // The approval reason is recorded on the affected line rather than the
+          // quote header/footer notes, which always print. A PDF template can
+          // still opt the line-notes column in, so quotePdf strips the marker
+          // before rendering; see src/lib/internalNotes.ts.
           notes:
             belowCostReason && item.current_cost > 0 && item.price_per_unit < item.current_cost
-              ? `${item.notes ? `${item.notes}\n` : ''}Below-cost approved: ${belowCostReason}`
+              ? appendBelowCostApproval(item.notes, belowCostReason)
               : item.notes || null,
           price_per_unit: item.price_per_unit,
           price_override: item.price_override ?? null,

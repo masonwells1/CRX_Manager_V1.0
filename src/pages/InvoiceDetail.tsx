@@ -34,6 +34,7 @@ import TransactionThread from '../components/ui/TransactionThread';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
+import { appendBelowCostApproval } from '../lib/internalNotes';
 
 interface LineItem {
   id?: string;
@@ -775,7 +776,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           // approval reason is recorded on the affected line's notes instead.
           notes:
             belowCostReason && !it.is_application_fee && it.cost_cents > 0 && it.unit_price_cents < it.cost_cents
-              ? `${it.notes ? `${it.notes}\n` : ''}Below-cost approved: ${belowCostReason}`
+              ? appendBelowCostApproval(it.notes, belowCostReason)
               : it.notes,
           // Field-application detail preserved through the edit (#3 edit-path) —
           // null/false on chemical-sale lines, so save_invoice stays a no-op for them.

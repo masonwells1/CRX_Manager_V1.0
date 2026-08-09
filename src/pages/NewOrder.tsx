@@ -35,6 +35,7 @@ import { fetchOpenBookings, type OpenBooking } from '../lib/openBookings';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
+import { appendBelowCostApproval } from '../lib/internalNotes';
 import type { Product, Customer, InventoryPositionRow } from '../types';
 
 interface LocalItem {
@@ -493,9 +494,10 @@ export default function NewOrder() {
     const validItems = items.filter((item) => item.product_id && item.quantity > 0);
     // Record the below-cost approval on the order's notes so the reason
     // travels with the entity. (Rush orders never carry a reason — the
-    // below-cost gate is skipped for the unpriced path.)
+    // below-cost gate is skipped for the unpriced path.) The order summary PDF
+    // strips this marker before printing; see src/lib/internalNotes.ts.
     const notesWithApproval = belowCostReason
-      ? `${notes ? `${notes}\n` : ''}Below-cost approved: ${belowCostReason}`
+      ? appendBelowCostApproval(notes, belowCostReason)
       : notes;
     setSaving(true);
 

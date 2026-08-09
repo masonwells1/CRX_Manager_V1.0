@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-09 — Codex review round 5: keep below-cost approval reasons off customer documents
+
+Codex found that the below-cost approval reason, stored in `orders.notes` so it travels
+durably with the entity, is printed verbatim on the customer-facing order summary PDF
+(`OrderDetail.handlePrintSummary` → `orderSummaryPdf`). A reason like a price match,
+clearance decision, or goodwill exception could reach the grower.
+
+Confirmed, and found one more instance Codex did not flag: `QuoteBuilder` records the
+reason on the affected quote *line*'s notes, and while the line-notes column is not in
+the default quote PDF template, a saved template can opt it in — same leak, different
+document. (Invoice item notes do not print on the invoice PDF; only header/footer notes
+do, which the invoice path already avoids.)
+
+Rather than patch each PDF, added `src/lib/internalNotes.ts` as the single place that
+knows the marker: `appendBelowCostApproval` composes it and `stripInternalNotes` removes
+it, so a writer and the redactor cannot drift apart. All four writers (NewOrder,
+OrderDetail's bulk import, InvoiceDetail, QuoteBuilder) now use the helper, and the two
+customer-facing render points strip it. Internal documents — notably the order pick list —
+deliberately still print notes raw.
+
+No schema change; the reason stays durable on the entity and is only hidden at the
+customer-document boundary.
+
 ## 2026-08-08 — Codex review round 4: product-swap snapshot integrity, per-order below-cost note
 
 Closed three of four round-4 Codex findings on the pricing branch.

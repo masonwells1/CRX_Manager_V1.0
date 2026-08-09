@@ -12,6 +12,7 @@ import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
 import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
 import BelowCostConfirmModal, { type BelowCostLine } from '../ui/BelowCostConfirmModal';
+import { appendBelowCostApproval } from '../../lib/internalNotes';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -556,7 +557,7 @@ export default function BulkOrderImport({
           // The approval reason rides along with the same import that creates
           // the below-cost lines, so it is durable even if activity logging fails.
           p_notes: belowCostReason && belowCostOrderNumbers.has(order.order_number)
-            ? [order.notes, `Below-cost approved: ${belowCostReason}`].filter(Boolean).join(' — ')
+            ? appendBelowCostApproval(order.notes, belowCostReason)
             : order.notes,
           p_idempotency_key: order.idempotency_key,
         });
