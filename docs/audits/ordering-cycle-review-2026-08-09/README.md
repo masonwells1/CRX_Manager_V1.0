@@ -2,7 +2,7 @@
 
 Read-only review of the full ordering cycle: quote → planned booking → order → delivery → invoice, plus inventory holds, commissions, permissions, and the reports that read from all of it.
 
-**Result: 77 confirmed findings — 10 HIGH, 36 MED, 31 LOW. 26 further claims were refuted and dropped.**
+**Result: 77 confirmed findings — 10 HIGH, 36 MED, 31 LOW. 26 further claims were refuted and dropped.** Findings are not deduplicated across finders; see *Duplicates across finders* below — roughly 69 distinct defects.
 
 No code was changed. No migration was written. Nothing was pushed, deployed, or written to the database.
 
@@ -31,6 +31,21 @@ Nine finder agents ran across three phases at high reasoning effort, with no sev
 So the delivery-completion bypass appearing twice (findings 2 and 8) is **not** an independent live confirmation — both derive from committed files, one from migrations and one from the baseline. Treat it as corroboration between two offline sources, nothing more.
 
 Confirm the live function bodies, grants and policies against the database catalog before acting on **any** finding here. If anything was ever changed directly in Supabase without a migration, that drift is invisible to this review.
+
+## Duplicates across finders
+
+The nine finders worked independently and were never reconciled against each other, so **the same defect is sometimes counted more than once.** The 77 total is verified findings, not 77 distinct defects. Six known overlaps collapse 14 findings into 6, giving roughly **69 distinct defects** to remediate:
+
+| Defect | Counted as | Collapses to |
+|---|---|---|
+| Deleting a quote leaks its inventory holds | `state-machines` HIGH + `planned-holds` HIGH + `frontend-compliance` MED + `reporting-drift` MED (the parity check that would have caught it) | 1 fix, 4 findings |
+| Delivery walkable to `completed` by direct update | `state-machines` HIGH + `rls-security` HIGH | 1 fix, 2 findings |
+| NaN/Infinity accepted in money and quantity fields | `conversion-seams` MED + `money-math` MED | 1 fix, 2 findings |
+| `allocate_payment` unlocked `MAX(version)+1` race | `idempotency-concurrency` MED + `money-math` LOW | 1 fix, 2 findings |
+| Order detail reads invoices without a `deleted_at` filter | `money-math` MED + `frontend-compliance` MED | 1 fix, 2 findings |
+| Quote `accepted → sent` writable directly | `state-machines` HIGH + `idempotency-concurrency` LOW (the frontend caller that relies on it) | 1 fix, 2 findings |
+
+Duplicate coverage is useful — two finders reaching the same defect from different angles is corroboration, and the lower-severity entries usually name a second caller or a detection gap worth fixing alongside. But count the backlog by fix, not by finding. Codex flagged this on PR #356; the merge list above may not be exhaustive, so check for further overlap during triage.
 
 ## The ten HIGH findings
 

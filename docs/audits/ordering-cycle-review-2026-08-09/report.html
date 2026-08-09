@@ -198,6 +198,7 @@
   <section class="block">
     <h2>How to read this</h2>
     <p>Nine reviewers went through the ordering cycle from three angles. Every single thing they reported was then handed to a separate reviewer whose only job was to prove it wrong, using the actual migration files and source. <strong>26 claims were disproven and thrown out.</strong> The 77 below are what survived that.</p>
+    <p>The reviewers worked independently and were not reconciled against each other, so a defect two of them found is counted twice. Six known overlaps mean the real backlog is closer to <strong>69 distinct defects</strong> — count the work by fix, not by finding. The duplicates are listed in the audit README.</p>
     <div class="callout">
       <p><strong>One caveat that matters.</strong> Nothing here was checked against the live database. Every reviewer worked from committed files — the migration history, and for the permissions work a disaster-recovery snapshot taken on 27 July. If anything was ever changed directly in Supabase without a migration, that change is invisible to this review. The delivery-completion problem appearing twice is two offline sources agreeing, not a live confirmation. Confirm the live function bodies and grants before fixing anything.</p>
     </div>

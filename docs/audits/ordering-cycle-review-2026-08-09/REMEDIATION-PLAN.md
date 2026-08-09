@@ -4,6 +4,10 @@ Companion to `FINDINGS.md`. This is the agreed scope and order of work, so the l
 
 **Status: proposed. Nothing here is approved for implementation yet — the Codex triage in Step 2 comes first.**
 
+## Count the backlog by fix, not by finding
+
+The finders were never reconciled against each other, so six defects are counted twice or more (full table in `README.md`). 77 findings is roughly **69 distinct defects**. The duplicates are not noise — the second finder usually names another caller or a detection gap — but they belong to one fix each. Check for further overlap during the Step 2 triage.
+
 ## Scope decisions
 
 **LOW findings are triaged, not fixed wholesale.** Of the 31, nine are cheap and genuinely worth doing; the rest are parked as known-and-accepted. Fixing all 31 would add churn and review surface for no real gain.
@@ -51,7 +55,7 @@ Verification: real-path proof on each — run the flow, observe the invoice and 
 The six findings that share one root cause: safety logic lives in the RPCs while the tables stay directly writable by the same roles.
 - Quote `accepted → sent` trigger edge (note: `QuoteBuilder.tsx:2686` is a residual consumer — the arm cannot simply be deleted; gate it on admin override or order-existence)
 - Deliveries walkable to `completed` by direct update (found twice, from migrations and from the grants baseline — both offline sources, not a live confirmation)
-- Quote soft delete leaking planned/crop-program holds (two findings, one fix)
+- Quote soft delete leaking planned/crop-program holds (four findings, one fix — including the parity check that should have detected it)
 - Sales reps inserting orders and order lines directly
 - Driver completing a delivery by direct update
 
