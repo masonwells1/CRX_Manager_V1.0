@@ -39,6 +39,13 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 34 (Codex) — quantity belongs in the approved terms:**
+
+Round 32's fingerprint covered product, price and cost but not quantity, so after a pre-commit
+rejection an operator could raise the quantity of the same below-cost line and the earlier approval
+would still be reused — approving 10 units under cost is not approval for 500. The terms now key on
+product id (not display name), price, cost and quantity.
+
 **Round 33 (Codex) + the approved policy change — closing out the branch:**
 
 - **One profit boundary (Codex P2).** `save_quote` rounded `(price - cost) * qty` as a single

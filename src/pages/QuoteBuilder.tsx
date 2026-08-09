@@ -1469,27 +1469,31 @@ export default function QuoteBuilder() {
     const isFieldStaff = profile.role === 'driver' || profile.role === 'applicator';
     let belowCostReason: string | null = null;
     if (!isFieldStaff) {
-      const belowCostLines: BelowCostLine[] = sections
+      const belowCostItems = sections
         .flatMap((sec) => sec.items)
-        .filter((item) => item.product_id && item.current_cost > 0 && item.price_per_unit < item.current_cost)
-        .map((item) => ({
-          productName:
-            item.product?.product_name
-            || products.find((p) => p.id === item.product_id)?.product_name
-            || 'Unknown product',
-          price: item.price_per_unit,
-          cost: item.current_cost,
-        }));
+        .filter((item) => item.product_id && item.current_cost > 0 && item.price_per_unit < item.current_cost);
+      const belowCostLines: BelowCostLine[] = belowCostItems.map((item) => ({
+        productName:
+          item.product?.product_name
+          || products.find((p) => p.id === item.product_id)?.product_name
+          || 'Unknown product',
+        price: item.price_per_unit,
+        cost: item.current_cost,
+      }));
       if (belowCostLines.length > 0) {
-        // What was actually approved: which products, at which price, against
-        // which cost. A retry may reuse the reason only while these are
-        // unchanged. A rejection that stored no idempotency result (say
-        // BOOKING_OVERDRAWN) leaves the key in place, so without this an
-        // operator could cut a price or add another below-cost line and have
-        // the previous approval silently cover the new terms.
+        // What was actually approved: which product, at which price, against
+        // which cost, IN WHAT QUANTITY. A retry may reuse the reason only while
+        // all four are unchanged. A rejection that stored no idempotency result
+        // (say BOOKING_OVERDRAWN) leaves the key in place, so without this an
+        // operator could cut a price, raise the quantity, or add another
+        // below-cost line and have the previous approval silently cover the new
+        // terms. Quantity belongs here because it sets the SIZE of the loss --
+        // approving 10 units under cost is not approval for 500.
+        // (Codex rounds 32 and 34.)
         const approvedTerms = JSON.stringify(
-          belowCostLines
-            .map((l) => `${l.productName}|${l.price}|${l.cost}`)
+          belowCostItems
+            .map((item) =>
+              `${item.product_id}|${item.price_per_unit}|${item.current_cost}|${item.total_units_needed}`)
             .sort()
         );
         if (belowCostReasonRef.current?.terms === approvedTerms) {
