@@ -201,16 +201,39 @@ High findings. One is fixed; one is a decision for Mason.
    test added to `.claude/hooks/migration-apply-guard.test.mjs`, and the fix is
    mutation-tested (restoring the old condition turns the test red).
 
-2. **OPEN — `20260809170900_round_line_profit_with_revenue` must not apply yet.**
-   It rounds `total_price` and `profit` independently, while the header
-   calculation subtracts unrounded costs. For raw revenue `10.005` and cost
-   `5.001` across two lines the header lands on `$10.02` while the stored line
-   profits total `$10.00` — before this migration the report total was `$10.01`.
-   So it can WIDEN the header-vs-lines disagreement it was meant to narrow.
-   This is open question 1 above, and it is the same decision as the unresolved
-   live line-profit discrepancy: **which rounding rule is canonical, and does
-   the header or the line copy win?** Until Mason settles that, this migration
-   stays parked. The other four are unaffected.
+2. **OPEN — and `20260809170900_round_line_profit_with_revenue` APPLIED LIVE
+   ANYWAY on 2026-08-09 20:54 UTC, against this entry.** It rounds
+   `total_price` and `profit` independently, while the header calculation
+   subtracts unrounded costs. For raw revenue `10.005` and cost `5.001` across
+   two lines the header lands on `$10.02` while the stored line profits total
+   `$10.00` — before this migration the report total was `$10.01`. So it can
+   WIDEN the header-vs-lines disagreement it was meant to narrow. This is open
+   question 1 above, and it is the same decision as the unresolved live
+   line-profit discrepancy: **which rounding rule is canonical, and does the
+   header or the line copy win?**
+
+   **What actually happened.** This entry said "stays parked". The local
+   takeover session then applied all five migrations under Mason's blanket
+   "yes i approve all", without re-surfacing this blocking High to him first.
+   That approval covered applying five migrations; it did not knowingly
+   override a blocking review finding. Recorded here rather than quietly
+   reconciled.
+
+   **Live impact measured after the apply, 21:15 UTC:** none. Fractional-cent
+   rows are still exactly 46 `order_items.total_price` + 3
+   `commissions.commission_amount` (49, the documented pre-existing set), and
+   `order_items.profit` has 0 fractional rows. The migration is forward-only —
+   it did not restate a single stored figure. `trg_order_items_round_money` is
+   live and scoped to `(profit, total_price)`; `trg_commissions_round_money`
+   remains scoped to `commission_amount` alone, so an ordinary status write
+   cannot restate the pending payout. The residual is prospective and is the
+   penny-scale header-vs-lines reporting gap described above.
+
+   **Awaiting Mason (2026-08-09):** leave it live and settle the canonical
+   rounding rule, or revert it with a follow-up migration. Reverting would put
+   sub-cent precision back into a stored money column, and live already carries
+   the change, so leaving it live is the recommendation on record. The other
+   four migrations are unaffected either way.
 
 ## State you can trust
 

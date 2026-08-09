@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-09.** Live ledger high-water is **`20260809130108`** (`team_note_completion_rpc_and_assignment_notify`, 946 ledger rows), applied 2026-08-09 13:01 UTC from a concurrent session; that migration has **no file in this repository** (see the closing note in `docs/reference/migration-history.md`). The 2026-08-09 re-read covered the live ledger, the section-2 counts in `CURRENT_STATE.md`, and all 27 standing invariant sweep predicates: 26 CLEAN and one violation, `fin-money-whole-cents` at exactly 49 rows (3 `commissions` + 46 `order_items`) — the documented, deliberately-unrepaired set described below. The five foundation-ultra-review migrations (history rows 857–861, re-issued forward as `20260809170500`–`20260809170900`) are written and reviewed but **NOT yet applied live**. Everything below this line carries its 2026-08-07 verification unless dated otherwise.
+**Last verified: 2026-08-09.** Live ledger high-water is **`20260809130108`** (`team_note_completion_rpc_and_assignment_notify`, 946 ledger rows), applied 2026-08-09 13:01 UTC from a concurrent session; that migration has **no file in this repository** (see the closing note in `docs/reference/migration-history.md`). The 2026-08-09 re-read covered the live ledger, the section-2 counts in `CURRENT_STATE.md`, and all 27 standing invariant sweep predicates: 26 CLEAN and one violation, `fin-money-whole-cents` at exactly 49 rows (3 `commissions` + 46 `order_items`) — the documented, deliberately-unrepaired set described below. The five foundation-ultra-review migrations (history rows 857–861, re-issued forward as `20260809170500`–`20260809170900`) **APPLIED LIVE 2026-08-09, 20:32–20:54 UTC**, each behind its own freshly minted migration-apply-guard proof with both required reviewers clean, and each followed by a live post-apply read; Supabase assigned ledger versions `20260809203222`, `20260809204044`, `20260809204435`, `20260809204855`, `20260809205423` in file order. A 21:15 UTC re-measure confirms no stored money was restated: fractional-cent rows remain exactly 46 + 3 = 49 and `order_items.profit` holds 0 fractional rows. **`20260809170900` applied against the blocking escalation recorded below** — see that entry for what happened and the decision now owed by Mason. Everything below this line carries its 2026-08-07 verification unless dated otherwise.
 
 **2026-08-07 (evening) verification detail.** Live ledger high-water was `20260807220323` (`log_customer_fact_rpc`). Both formerly parked 2026-08-07 migrations are now APPLIED LIVE: the profile role-lock INSERT arm as `20260807215532` and the `log_customer_fact` CRM RPC as `20260807220323` (both reviewed CLEAN by both Codex charters, applied with Mason's in-chat approval; the paired predicate `profile-role-lock-insert-arm.sql` went 2 rows red → 0 green). The Section 4 bulk-order-import lifecycle gap is fixed live through six migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, non-finite-safe, Product-cost-authoritative, whole-cent per line, and create commissions from trigger-canonical stored profit. Post-apply catalog/grant checks, fractional active-sales-rep rollback smoke, all 21 standing invariant predicates, schema-registry refresh, and zero-residue checks passed. The earlier idempotency, statement-disclosure, and historical AR report protections remain live as documented below.
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
@@ -284,8 +284,10 @@ written for; it does **not** make the header agree with its lines.
 **Why it is parked, not fixed:** closing it means changing where the header
 derives from — summing the rounded line profits, or allocating the rounding
 residual across lines. Either moves live money on `orders.total_profit`. That is
-a money-semantics decision for Mason, and the two rounding migrations are not
-applied yet, so nothing about it is urgent.
+a money-semantics decision for Mason. Both rounding migrations are now applied
+live (2026-08-09), so the decision is owed rather than hypothetical — but it is
+still not an emergency: neither migration restated a stored figure, and the
+residual is a penny-scale reporting gap, not lost or double-counted money.
 
 **In plain English:** an order's profit total and the profit numbers on its own
 lines can be off by a penny from each other when a product's cost has more than
@@ -301,9 +303,24 @@ lands on `10.02` while the stored line profits total `10.00` — where before th
 profit rounding the report total was `10.01`. So a migration written to narrow
 the gap can widen it.
 
-This is now blocking, not merely parked: the review returns BLOCKED while
-`20260809170900` is in the diff. The other four migrations on that PR are
+This was recorded as blocking, not merely parked: the review returns BLOCKED
+while `20260809170900` is in the diff. The other four migrations on that PR are
 unaffected.
+
+**It applied live anyway, 2026-08-09 20:54 UTC.** The local takeover session
+applied all five migrations under Mason's blanket "yes i approve all" without
+re-surfacing this blocking finding to him first; that approval covered applying
+five migrations, not knowingly overriding a blocking review. Measured live
+impact at 21:15 UTC is none — the migration is forward-only and restated
+nothing, fractional-cent rows are still exactly 46 + 3 = 49, and
+`order_items.profit` carries 0 fractional rows. `trg_order_items_round_money` is
+live scoped to `(profit, total_price)`; `trg_commissions_round_money` is
+untouched at `commission_amount` alone, so an ordinary status write cannot
+restate the pending payout. The residual is the prospective penny-scale
+header-vs-lines gap described above. Mason's open choice: leave it live and
+settle the canonical rounding rule, or revert it with a follow-up migration —
+reverting would return sub-cent precision to a stored money column, and live
+already carries the change, so leaving it live is the recommendation on record.
 
 **The decision needed from Mason** is the same one behind the unresolved live
 line-profit discrepancy — **which stored copy of profit is canonical, the order
