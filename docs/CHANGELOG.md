@@ -62,6 +62,21 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 41 (Codex) — the quote header now sums the settled per-line cost:**
+
+Line profit moved to settled revenue minus settled extended cost, but the header still summed raw
+`current_cost * total_units_needed`. On a fractional line that put a sub-cent fraction into
+`quotes.total_cost`, broke the header identity (revenue − cost = profit) and carried the fraction
+into versions and conversion. Both `save_quote` and `duplicate_quote` now sum
+`ROUND(current_cost * total_units_needed, 2)`.
+
+Also recorded rather than fixed: the drawn-booking cent difference (`draw_down_quote` averaging
+mixed-cost lines and settling the average) shares one root with the two-row split PR #361 needed —
+cost is stored as an integer **per unit** and multiplied back by quantity, so an extended cost that
+is not a multiple of the quantity cannot be represented. Removing it means storing extended cost
+per line, a schema change across orders, invoices and every rollup. Bounded at one cent per line
+and only on fractional or mixed-cost lines; written up in `KNOWN_ISSUES.md`.
+
 **Round 40 (Codex) — the cap is now exact, and spent across all credits:**
 
 Round 39's cap scaled the per-unit cost, and both of this round's findings were consequences of

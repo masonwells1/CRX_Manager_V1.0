@@ -824,7 +824,12 @@ BEGIN
 
   SELECT
     COALESCE(SUM(total_price), 0) AS total_price,
-    COALESCE(SUM(current_cost * total_units_needed), 0) AS total_cost,
+    -- Settle each line's extended cost to cents BEFORE summing, matching the
+    -- per-line profit boundary above. Summing raw current_cost * quantity let
+    -- sub-cent extended costs into quotes.total_cost, so the header identity
+    -- (revenue - cost = profit) broke on fractional quantities and the fraction
+    -- rode into versions and conversion. (Codex round 41.)
+    COALESCE(SUM(ROUND(current_cost * total_units_needed, 2)), 0) AS total_cost,
     COALESCE(SUM(profit), 0) AS total_profit
   INTO v_server_totals
   FROM quote_items
@@ -1873,7 +1878,12 @@ BEGIN
   -- Settle the header from the rows just written, the same way save_quote does.
   SELECT
     COALESCE(SUM(total_price), 0) AS total_price,
-    COALESCE(SUM(current_cost * total_units_needed), 0) AS total_cost,
+    -- Settle each line's extended cost to cents BEFORE summing, matching the
+    -- per-line profit boundary above. Summing raw current_cost * quantity let
+    -- sub-cent extended costs into quotes.total_cost, so the header identity
+    -- (revenue - cost = profit) broke on fractional quantities and the fraction
+    -- rode into versions and conversion. (Codex round 41.)
+    COALESCE(SUM(ROUND(current_cost * total_units_needed, 2)), 0) AS total_cost,
     COALESCE(SUM(profit), 0) AS total_profit
   INTO v_totals
   FROM quote_items

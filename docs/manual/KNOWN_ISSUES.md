@@ -163,6 +163,31 @@ product cost inside the RPC, then use that one value for the snapshot and every 
 Doing it here would mean editing a third money RPC in a PR that already cannot apply its
 migrations.
 
+## OPEN — per-unit cost columns cannot carry an exact extended cost
+
+**Found 2026-08-09** (Codex, PR #350 rounds 40-41). Three separate findings share one root: costs
+are stored as an integer **per-unit** value (`order_items.cost_at_time_cents`,
+`invoice_items.cost_cents`) which the rollups multiply by the row's full quantity. Whenever the
+true extended cost is not an exact multiple of that quantity, no integer per-unit value can
+represent it.
+
+Where it currently bites:
+
+- **Partial booking draws.** `draw_down_quote` averages the cost of several quote lines of one
+  product and settles that average to cents. Two units backed by $1.00 and $1.01 average to $1.005,
+  round to $1.01, and a full draw records $2.02 of order COGS where the quote carried $2.01. The
+  settle-at-source choice is deliberate (round 23) — it keeps the order header, line profit,
+  commissions and the reports on ONE number, which is worth more than the cent — but it does mean a
+  drawn booking can differ by a cent from the same booking converted whole.
+- **Capped return reversals** (PR #361) needed a two-row split to express a capped total exactly,
+  for the same reason.
+
+**Fix when taken up:** store an extended cost per line (or allocate across source snapshots when a
+line is created from several) rather than deriving everything from a per-unit integer. That is a
+schema change touching orders, invoices and every rollup — its own project, not a rider on a
+pricing PR. Until then, expect sub-cent-per-line divergence only on fractional or mixed-cost lines,
+always bounded by one cent per line.
+
 ## OPEN — order headers recompute profit on the unrounded basis
 
 **Found 2026-08-09** (Codex, PR #350 round 36). `after_order_items_change`
