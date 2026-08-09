@@ -636,6 +636,20 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
   ok(result.unknownReason.includes("does not match"), "mismatched branch candidate fails closed as unknown");
 }
 
+{
+  const branchCandidate = "supabase/migrations/20260101000000_real.sql";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [branchCandidate] },
+    {
+      readText: () => `${PARKED_FORWARD_HEADER}-- changed after pin\n`,
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+    },
+  );
+  const result = reader(CLEAN_ENTRY);
+  eq([...result.values()], [branchCandidate], "explicit parked header keeps the candidate visible");
+  ok(result.unknownReason.includes("does not match"), "explicit parked header cannot bypass a stale SQL pin");
+}
+
 // Windows may materialize a normal text migration with CRLF even though Git stores and
 // pins its LF blob. The worktree verifier must compare the bytes Git will commit.
 {

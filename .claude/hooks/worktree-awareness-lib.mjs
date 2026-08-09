@@ -295,18 +295,18 @@ export function parkedDraftPathsFrom(
     // signal, exactly as it is after the branch lands on origin/main. Verify the pin
     // before surfacing it; an unreadable or mismatched candidate makes the branch state
     // UNKNOWN instead of silently disappearing from /fleet.
-    if (!isParked && isForwardMigration && historyText !== null) {
+    if (isForwardMigration && historyText !== null) {
       if (history?.state !== "known") {
         unknownReason ||= history?.reason || "worktree migration history is unreadable";
       } else if (history.paths.has(normalized)) {
         const expectedSha256 = history.sha256ByPath?.get(normalized);
-        if (!expectedSha256) {
+        if (!expectedSha256 && !isParked) {
           unknownReason ||= "branch-owned LOCAL CANDIDATE SQL lacks an explicit parked status header or SQL sha256 pin";
-        } else if (typeof sha256Text !== "function") {
+        } else if (expectedSha256 && typeof sha256Text !== "function") {
           unknownReason ||= "branch-owned LOCAL CANDIDATE SQL sha256 pin cannot be verified";
-        } else if (sha256Text(sqlText) !== expectedSha256) {
+        } else if (expectedSha256 && sha256Text(sqlText) !== expectedSha256) {
           unknownReason ||= "branch-owned LOCAL CANDIDATE SQL sha256 does not match migration history";
-        } else {
+        } else if (expectedSha256) {
           isParked = true;
         }
       }

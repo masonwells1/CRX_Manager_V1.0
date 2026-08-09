@@ -28,11 +28,11 @@ const warnings = [];
 
 function backupMarkerPath() {
   const localPath = path.join(projectDir, "backups", "LATEST-OK.json");
-  if (existsSync(localPath)) return localPath;
 
   // Linked worktrees share the main checkout's Git common directory, but they
   // do not share gitignored backup files. Resolve the canonical checkout root
-  // from that common directory so every worktree sees the same backup marker.
+  // from that common directory FIRST so a stale worktree-local marker cannot
+  // mask the shared backup state seen by every other session.
   try {
     const commonDir = execFileSync(
       "git",
@@ -48,6 +48,7 @@ function backupMarkerPath() {
     if (existsSync(canonicalPath)) return canonicalPath;
   } catch { /* fall back to the worktree-local path */ }
 
+  if (existsSync(localPath)) return localPath;
   return localPath;
 }
 

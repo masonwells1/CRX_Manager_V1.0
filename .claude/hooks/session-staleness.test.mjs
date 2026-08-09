@@ -142,6 +142,18 @@ try {
   ok(linkedBackupContext.includes("Last DB backup is 8 days old"), "FIX3: linked worktree reads canonical marker and computes backup age");
   ok(!linkedBackupContext.includes("No database backup exists yet"), "FIX3: canonical backup marker prevents false missing-backup warning");
 
+  mkdirSync(path.join(linkedWorktree, "backups"), { recursive: true });
+  writeFileSync(path.join(linkedWorktree, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 99,
+    total_rows: 99,
+  }));
+  r = runHook(linkedWorktree);
+  eq(r.status, 0, "FIX3: linked-worktree backup check with a local marker exits 0");
+  const canonicalWinsContext = additionalContextOf(r);
+  ok(canonicalWinsContext.includes("Last DB backup is 8 days old"), "FIX3: shared canonical marker wins over a conflicting worktree-local marker");
+  ok(!canonicalWinsContext.includes("Last DB backup is 2 days old"), "FIX3: worktree-local marker cannot split backup truth across sessions");
+
   console.log(`session-staleness: ${pass} assertions passed`);
 } finally {
   rmSync(tmpRoot, { recursive: true, force: true });

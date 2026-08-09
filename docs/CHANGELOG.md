@@ -15,7 +15,7 @@ spellings while preserving ordinary commands such as `node --test`.
 Fixed `session-staleness.mjs` so linked worktrees resolve the gitignored database-backup marker
 through Git's common directory. The current canonical marker is now correctly reported as 10 days
 old instead of nonexistent. Added a real linked-worktree regression fixture; the focused suite now
-passes 16 assertions. The full audit and protected-harness follow-ups are recorded in
+passes 19 assertions. The full audit and protected-harness follow-ups are recorded in
 `docs/audits/2026-08-08-crx-harness-permissions-audit.md`. No production deploy, live migration,
 live-data mutation, or database backup ran in this audit.
 
@@ -29,6 +29,10 @@ Closed the final PR review gap for branch-owned candidates too: before merge, a 
 worktree can now prove an ordinary forward migration from its own exact history pin. Windows CRLF
 working copies are normalized to the LF blob Git will commit, while a missing or mismatched pin
 marks parked state unknown instead of silently reporting a clean zero.
+
+Final exact-head review hardening makes an explicit parked SQL header unable to bypass a stale
+history pin, and makes every linked worktree prefer the shared canonical backup marker over any
+conflicting local copy. This keeps both migration and backup status fail-closed and fleet-wide.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
