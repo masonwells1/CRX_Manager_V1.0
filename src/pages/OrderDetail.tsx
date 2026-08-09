@@ -1131,14 +1131,25 @@ export default function OrderDetail() {
       const result = assertRpcResult<{ success: boolean; pricing_status: string; remaining_pending: number; invoices_swept: number }>(data, 'price_order');
       priceOrderIdem.resetKey();
       if (pricingBelowCostReason) {
-        // price_order has no notes/reason parameter, so the activity log is the
-        // durable record here. Making it a stored field on the order needs a
-        // migration adding p_below_cost_reason -- tracked with the settled
-        // server-side below-cost work in docs/manual/DECISION_LOG.md.
+        // BEST EFFORT, NOT DURABLE. price_order takes no reason parameter, so
+        // this is the only place to put it today -- but logActivity swallows its
+        // own errors by design, and it runs AFTER the pricing has committed. An
+        // RLS failure or a dropped connection therefore leaves the order priced
+        // below cost, with invoices swept and commissions moved, and no reason
+        // recorded, while the user still sees success. Do not read this as an
+        // audit guarantee.
+        //
+        // The real fix is to take the reason INTO price_order and write the
+        // audit row in the same transaction as the pricing. That is part of the
+        // settled server-side below-cost enforcement work in
+        // docs/manual/DECISION_LOG.md, deliberately not folded in here.
         await logActivity({
           event: 'order_priced_below_cost',
           description: `Priced ${order.order_number} below cost — approved: ${pricingBelowCostReason}`,
           performedBy: profile.id,
+          entityType: 'order',
+          entityId: order.id,
+          customerId: order.customer_id,
         });
       }
       toast('success', result.pricing_status === 'priced'

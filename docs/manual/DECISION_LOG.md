@@ -73,6 +73,15 @@ would need it: `create_direct_order`, `create_rush_order`, `bulk_import_order`, 
   with a *structured* error (not a bare exception) carrying the offending lines, so the client can
   refresh costs, show what changed, collect a reason where the caller is eligible, and retry. A
   plain failure would strand the operator with no way forward.
+- **The reason must be written in the same transaction as the money.** Today the approval reason
+  reaches the database in three different ways, and only two are durable: `bulk_import_order`,
+  `save_invoice` and `save_quote` carry it in a field written with the sale, but the rush-order
+  `price_order` path has no reason parameter, so `OrderDetail.handlePriceOrder` falls back to
+  `logActivity` *after* the pricing commits. `logActivity` swallows its own errors by design, so a
+  failure there leaves an order priced below cost — invoices swept, commissions moved — with no
+  reason recorded and a success toast shown (Codex, PR #350 round 22). When the server-side work
+  lands, `price_order` must accept the reason and write its audit row inside the same transaction.
+  Do not treat the current activity-log write as an audit guarantee.
 
 ---
 ## 2026-08-08 — Four foundation-ultra-review owner decisions settled

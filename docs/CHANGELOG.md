@@ -39,6 +39,20 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 22 (Codex) — an overclaim in my own comment:**
+
+The round-21 rush-pricing gate wrote its approval reason via `logActivity` and I commented that this
+was "the durable record". It is not: `logActivity` swallows its own errors by design and runs *after*
+the pricing commits, so a failure leaves the order priced below cost — invoices swept, commissions
+moved — with no reason recorded and a success toast shown. The comment now says plainly that this is
+best-effort and not an audit guarantee, and the activity row carries its `entityType`/`entityId`/
+`customerId` instead of leaving them null.
+
+The real fix is to take the reason into `price_order` and write the audit row in the same
+transaction, which belongs to the settled server-side enforcement work — now recorded there as an
+explicit requirement rather than left implicit. Same class of error as the invented `save_order` RPC
+earlier in this branch: a confident claim in prose that the code did not support.
+
 **Round 21 (Codex) — partial draws and the rush-pricing screen:**
 
 - **P1: `draw_down_quote` had the same conversion gap.** A partially drawn booking creates
