@@ -246,6 +246,10 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // Deleting a PO must invalidate its saved retry result so the same source
   // document can create a fresh PO if an admin intentionally removes it.
   _invalidate_deleted_purchase_order_retry_state: ['save_purchase_order'],
+  // Direct EXECUTE is service_role-only. Implementation half of the public
+  // issue_return_credit wrapper (re-emitted in mig 20260808170000 for COGS
+  // reversal); wrapper pre-checks and impl saves under the one shared cache.
+  _issue_return_credit_impl: ['issue_return_credit'],
   // Direct EXECUTE is revoked. Implementation half of the public save_invoice
   // RPC (re-emitted in mig 20260721223817 to persist payment_terms); all
   // wrapper layers intentionally share the public save_invoice cache.

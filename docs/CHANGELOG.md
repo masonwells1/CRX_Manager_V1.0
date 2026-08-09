@@ -2,6 +2,33 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-09 — Return credit COGS reversal (PARKED migration, split out of #350)
+
+Crediting a return reversed revenue but never COGS: the credit memo had no `invoice_items` rows and
+`total_cost_cents` stayed 0, so invoice-basis profit reports kept counting the original sale's cost
+after the goods came back. `_issue_return_credit_impl` now writes credit-memo line items carrying
+the cost of the returned goods and stamps the credit memo's `total_cost_cents`.
+
+Split out of PR #350 at Mason's direction (2026-08-09) so the two stable pricing migrations can land
+without it. Six Codex review rounds on this one function found six ways to reverse **more** cost than
+the reports ever counted — every one inflating profit — so the reversal is now bounded on four axes,
+all resolved from a single lookup of the source sale line:
+
+- **restocked only** — goods must actually have come back to stock.
+- **A posted source line must exist** — reversing against a sale the invoice-basis rollups never
+  counted subtracts cost that was never added.
+- **`status = 'posted'` alone** — the intersection of what the two invoice-basis reports count, since
+  `get_bottom_line_pnl` counts `'posted'` while `get_monthly_summary` counts `'posted'`/`'overdue'`.
+- **Capped at posted quantity minus what earlier credits already reversed**, under an `order_items`
+  row lock so concurrent credits cannot spend the same budget twice.
+
+Each return item becomes up to two credit-memo rows — a cost-bearing row for the allowed quantity and
+a zero-cost row for the remainder — so the capped total is exact rather than a rounded per-unit
+scaling. Revenue is split exactly between them; the customer is still credited in full.
+
+**Status: PARKED and unapplied.** Prospective only, no backfill. Wants a live test against real
+partial-invoice and repeat-return data before it is applied.
+
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
 PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in bash-safety and live-testdata guards (variant git spellings, redirect terminators, plumbing push commands, DELETE catch-all, setval/nextval and RPC-via-SELECT rules), added regression tests, resolved the changelog merge conflict with main.
