@@ -90,19 +90,19 @@ const THEMES = [
   {
     id: 'bypass',
     label: 'The rules live in the app, not the database',
-    lede: 'Six of the ten. Your safety logic sits inside the database functions the app calls — but the underlying tables are still directly writable by the same people. Anyone who talks to the API instead of clicking the button walks straight past it.',
+    lede: 'Your safety logic sits inside the database functions the app calls — but the underlying tables are still directly writable by the same people. Anyone who talks to the API instead of clicking the button walks straight past it.',
     match: t => t.startsWith('Quote transition trigger') || t.startsWith('Deliveries can be walked') || t.startsWith('Quote soft delete') || t.startsWith('Soft-deleting a planned quote') || t.startsWith('Assigned driver can complete') || t.startsWith('Sales reps can create orders'),
   },
   {
     id: 'money',
     label: 'Money that comes out wrong on its own',
-    lede: 'Three of the ten. These need no misuse at all — they are ordinary workflows that produce the wrong number.',
+    lede: 'These need no misuse at all — they are ordinary workflows that produce the wrong number.',
     match: t => t.startsWith('Caller-controlled cost') || t.startsWith('Quick-delivery invoice posted') || t.startsWith('Void→rebill'),
   },
   {
     id: 'read',
     label: 'Data readable by the wrong people',
-    lede: 'One of the ten, plus several medium-severity siblings in the appendix.',
+    lede: 'Plus several medium-severity siblings in the appendix.',
     match: t => t.startsWith('get_customer_year_end_summary'),
   },
 ];
@@ -126,7 +126,7 @@ const highHtml = RENDER_THEMES.map(th => {
   return `
 <section class="theme">
   <h3 class="theme-h">${esc(th.label)} <span class="theme-count">${items.length}</span></h3>
-  <p class="theme-lede">${esc(th.lede)}</p>
+  <p class="theme-lede">${items.length} of the ${highs.length}. ${esc(th.lede)}</p>
   ${items.map(h => {
     const n = findNote(h);
     return `<article class="finding">
@@ -179,9 +179,7 @@ const appendixHtml = PHASES.map(([key, label, lede]) => {
           <code class="row-loc">${shortLoc(i.loc)}</code>
         </li>`).join('\n')}
       </ul>
-    </div>
-</body>
-</html>`;
+    </div>`;
   }).join('\n')}
 </section>`;
 }).join('\n');
@@ -402,8 +400,8 @@ const html = `<!DOCTYPE html>
   </section>
 
   <section class="block">
-    <h2>The ten that matter</h2>
-    <p>They fall into three groups, and the first group is really one problem wearing six hats.</p>
+    <h2>The ${highs.length} that matter</h2>
+    <p>They fall into ${RENDER_THEMES.length === 1 ? 'one group' : `${RENDER_THEMES.length} groups`}, and the largest is really one problem wearing several hats.</p>
     ${highHtml}
   </section>
 
