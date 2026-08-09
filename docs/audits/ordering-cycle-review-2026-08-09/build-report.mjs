@@ -42,9 +42,9 @@ const HIGH_NOTES = {
     who: 'Office staff doing routine cleanup of stale quotes.',
   },
   'Caller-controlled cost/profit still drives': {
-    plain: 'The cost and profit figures that decide commission are supplied by the caller and never re-checked on the two main order-creation paths.',
-    why: 'This is the exact hole you closed on Bulk Order Import. Send a zero cost or an inflated profit and the system mints commission rows from it — overstating commission liability, margin reporting, and the audit-log totals.',
-    who: 'Any active sales rep.',
+    plain: 'On direct order entry, the cost figure that decides commission comes from the caller and is never re-checked.',
+    why: 'This is the exact hole you closed on Bulk Order Import. Enter a zero or understated cost in the new-order screen and the system mints commission rows from the inflated profit — overstating commission liability, margin reporting and the audit-log totals. The finding\u2019s title also names quote conversion, but that half was disproven: saving a quote recomputes every line\u2019s cost from the product record first, so conversion already passes a server-computed figure. Direct order entry is the one exposed path.',
+    who: 'Any active sales rep, through the ordinary new-order screen.',
   },
   'Quick-delivery invoice posted before completion': {
     plain: 'A quick delivery invoiced up front and then only partly completed bills the customer twice for the shortfall.',
@@ -422,7 +422,7 @@ const html = `<!DOCTYPE html>
       </li>
       <li>
         <h3 class="wave-t">Fix the three money bugs</h3>
-        <p>Double-billing on partial quick deliveries, commissions permanently cancelled by a void-and-rebill, and caller-supplied cost driving the commission basis. These need no misuse — they are ordinary workflows producing wrong numbers today, so they are quietly costing you money or trust. Each is a self-contained fix, which makes them good ground to build confidence on.</p>
+        <p>Double-billing on partial quick deliveries, commissions permanently cancelled by a void-and-rebill, and caller-supplied cost driving the commission basis on direct order entry. These need no misuse — they are ordinary workflows producing wrong numbers today, so they are quietly costing you money or trust. Each is a self-contained fix, which makes them good ground to build confidence on.</p>
       </li>
       <li>
         <h3 class="wave-t">Close the direct-write lane</h3>

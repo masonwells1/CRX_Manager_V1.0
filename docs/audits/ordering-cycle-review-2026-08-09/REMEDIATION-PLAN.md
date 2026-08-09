@@ -46,7 +46,7 @@ Independent `codex-review` (gpt-5.6-sol, high effort) over `FINDINGS.md` + cited
 ### Wave A — Money (3 HIGH + related)
 - Quick-delivery invoice posted before completion never adjusted; follow-up delivery double-bills the shortfall
 - Void-then-rebill permanently cancels an order's commissions with no re-mint path
-- Caller-controlled cost/profit drives the commission basis on `convert_quote_to_order` and `create_direct_order`
+- Caller-controlled cost drives the commission basis on `create_direct_order` — **this seam only**. The finding's title names `convert_quote_to_order` as well, but its own verifier refuted that half: `save_quote` overwrites every line's cost and profit from `products.current_cost` before conversion, so the basis it passes is already server-computed. Do not touch `convert_quote_to_order` for this; changing a money path that is not broken is added risk, not caution.
 - Plus the four money/commission LOW items kept above
 
 Verification: real-path proof on each — run the flow, observe the invoice and commission rows, not just a passing test.

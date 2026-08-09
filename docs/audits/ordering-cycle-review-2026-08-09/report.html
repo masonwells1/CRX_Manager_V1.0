@@ -300,10 +300,10 @@
         <span class="chip chip-high">High</span>
         <span class="finding-src">conversion-seams</span>
       </div>
-      <h4 class="finding-t">The cost and profit figures that decide commission are supplied by the caller and never re-checked on the two main order-creation paths.</h4>
-      <p class="finding-why">This is the exact hole you closed on Bulk Order Import. Send a zero cost or an inflated profit and the system mints commission rows from it — overstating commission liability, margin reporting, and the audit-log totals.</p>
+      <h4 class="finding-t">On direct order entry, the cost figure that decides commission comes from the caller and is never re-checked.</h4>
+      <p class="finding-why">This is the exact hole you closed on Bulk Order Import. Enter a zero or understated cost in the new-order screen and the system mints commission rows from the inflated profit — overstating commission liability, margin reporting and the audit-log totals. The finding’s title also names quote conversion, but that half was disproven: saving a quote recomputes every line’s cost from the product record first, so conversion already passes a server-computed figure. Direct order entry is the one exposed path.</p>
       <dl class="finding-meta">
-        <dt>Who can do it</dt><dd>Any active sales rep.</dd>
+        <dt>Who can do it</dt><dd>Any active sales rep, through the ordinary new-order screen.</dd>
         <dt>Where</dt><dd><code>20260730235031_quote_customer_row_version_guard.sql:317-346</code></dd>
         <dt>Technical title</dt><dd class="tech">Caller-controlled cost/profit still drives commission basis on convert_quote_to_order and create_direct_order — the exact class hardened out of bulk_import_order remains open on the two main order-creation seams</dd>
       </dl>
@@ -369,7 +369,7 @@
       </li>
       <li>
         <h3 class="wave-t">Fix the three money bugs</h3>
-        <p>Double-billing on partial quick deliveries, commissions permanently cancelled by a void-and-rebill, and caller-supplied cost driving the commission basis. These need no misuse — they are ordinary workflows producing wrong numbers today, so they are quietly costing you money or trust. Each is a self-contained fix, which makes them good ground to build confidence on.</p>
+        <p>Double-billing on partial quick deliveries, commissions permanently cancelled by a void-and-rebill, and caller-supplied cost driving the commission basis on direct order entry. These need no misuse — they are ordinary workflows producing wrong numbers today, so they are quietly costing you money or trust. Each is a self-contained fix, which makes them good ground to build confidence on.</p>
       </li>
       <li>
         <h3 class="wave-t">Close the direct-write lane</h3>

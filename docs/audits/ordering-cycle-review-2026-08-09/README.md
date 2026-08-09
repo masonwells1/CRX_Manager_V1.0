@@ -57,7 +57,7 @@ Six of the ten share one root cause: **safety logic lives in the RPCs, but the u
 2. Deliveries can be walked to `completed` by direct update, skipping all `complete_delivery` effects — no inventory movement, no order rollup, no invoice.
 3. Quote soft delete has no DB guard; deleting a planned booking leaks its inventory holds permanently.
 4. Soft-deleting a planned quote orphans its active crop-program holds (same leak, independently found).
-5. Caller-controlled cost/profit still drives the commission basis on `convert_quote_to_order` and `create_direct_order` — the class already hardened out of `bulk_import_order`.
+5. Caller-controlled cost drives the commission basis on `create_direct_order` — the class already hardened out of `bulk_import_order`. (The finding's title also names `convert_quote_to_order`; its verifier refuted that half — `save_quote` recomputes cost and profit server-side from `products.current_cost` before conversion, so only `create_direct_order` is exposed.)
 6. Quick-delivery invoice posted before completion is never adjusted on partial completion; the follow-up delivery then bills the shortfall a second time.
 7. Void-then-rebill of an order invoice permanently cancels the order's commissions, with no path that re-mints them.
 8. Assigned driver can complete a delivery by direct table update (derived from the 2026-07-27 grants baseline — same defect as 2, reached from a different committed source).
