@@ -39,6 +39,25 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 36 (Codex) — three findings, two fixed and one deliberately deferred:**
+
+- **No COGS reversal without an included sale invoice.** If the original sale invoice was never
+  created, or was deleted, voided or cancelled, the invoice-basis rollups never counted its COGS —
+  so reversing cost from the order line subtracted cost that was never added and *inflated* profit.
+  The order-line fallback is now reachable only when an eligible original sale line exists;
+  otherwise the credit memo records zero cost.
+- **The bulk-import approval reason now survives a retry.** Same shape as the quote fix in round 30:
+  each parsed order carries a stable idempotency key and `bulk_import_order` fingerprints `p_notes`,
+  which carries the approval marker — so a lost response plus retyped wording returned
+  `IDEMPOTENCY_INTENT_MISMATCH` and the component reported an already-created order as failed. The
+  reason is retained with the terms it approved (order, product, price, cost, quantity) and cleared
+  when a new file is parsed or the dialog closes.
+- **Deferred: order headers still recompute profit unrounded.** `after_order_items_change` uses
+  `cost_per_unit * qty` unrounded while reports and quotes use the settled boundary. Real, but it
+  predates this PR and the trigger fires on every `order_items` write — re-emitting it moves numbers
+  on every order and needs its own migration, review and live before/after. Recorded in
+  `KNOWN_ISSUES.md` rather than ridden along here.
+
 **Round 35 (Codex) — return COGS could reverse the wrong product's cost:**
 
 The credit-memo cost lookup matched only `order_item_id` and took the earliest invoice line.

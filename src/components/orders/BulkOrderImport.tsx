@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
@@ -100,6 +100,16 @@ export default function BulkOrderImport({
     resolve: (reason: string | null) => void;
   } | null>(null);
   const isFieldStaff = profile?.role === 'driver' || profile?.role === 'applicator';
+  // The below-cost reason belongs to the PARSED BATCH, not to one click of
+  // Import. Each parsed order carries a stable idempotency key, and
+  // bulk_import_order fingerprints p_notes -- which carries the approval marker
+  // -- so if a below-cost order commits and its response is lost, a retry that
+  // re-prompts and gets even slightly different wording comes back
+  // IDEMPOTENCY_INTENT_MISMATCH and this component reports the already-created
+  // order as failed. Held with the terms it approved (order, product, price,
+  // cost, quantity) and cleared whenever a new file is parsed, so a changed
+  // batch always re-prompts. (Codex round 36; same shape as the quote fix.)
+  const belowCostReasonRef = useRef<{ terms: string; reason: string } | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -121,6 +131,7 @@ export default function BulkOrderImport({
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);
+      belowCostReasonRef.current = null;
     }
   };
 
@@ -420,6 +431,7 @@ export default function BulkOrderImport({
     let belowCostSucceeded = false;
     if (!isFieldStaff) {
       const belowCostLines: BelowCostLine[] = [];
+      const approvedTermParts: string[] = [];
       for (const order of validation.valid) {
         for (const item of order.items) {
           const resolution = resolveExactProductIdentity(item.product_name, productCatalog);
@@ -433,17 +445,30 @@ export default function BulkOrderImport({
               price: item.price_per_unit,
               cost,
             });
+            // Quantity included: it sets the size of the loss being approved.
+            approvedTermParts.push(
+              `${order.order_number}|${resolution.product.id}|${item.price_per_unit}|${cost}|${item.quantity}`
+            );
           }
         }
       }
 
       if (belowCostLines.length > 0) {
-        belowCostReason = await new Promise<string | null>((resolve) =>
-          setBelowCostPrompt({ lines: belowCostLines, resolve })
-        );
-        if (belowCostReason === null) {
-          setUploading(false);
-          return;
+        const approvedTerms = JSON.stringify(approvedTermParts.sort());
+        if (belowCostReasonRef.current?.terms === approvedTerms) {
+          // Retry of the same batch: reuse the exact text so p_notes -- which
+          // bulk_import_order fingerprints -- is byte-identical to the attempt
+          // that may already have committed.
+          belowCostReason = belowCostReasonRef.current.reason;
+        } else {
+          belowCostReason = await new Promise<string | null>((resolve) =>
+            setBelowCostPrompt({ lines: belowCostLines, resolve })
+          );
+          if (belowCostReason === null) {
+            setUploading(false);
+            return;
+          }
+          belowCostReasonRef.current = { terms: approvedTerms, reason: belowCostReason };
         }
       }
     }
@@ -617,6 +642,7 @@ export default function BulkOrderImport({
     // would never settle — leaving the upload parked with uploading stuck true.
     belowCostPrompt?.resolve(null);
     setBelowCostPrompt(null);
+    belowCostReasonRef.current = null;
     onClose();
   };
 

@@ -103,6 +103,27 @@ own work in the two largest docs. See
 `docs/audits/2026-08-04-test-coverage-analysis.md` for the session that surfaced
 these.
 
+## OPEN — order headers recompute profit on the unrounded basis
+
+**Found 2026-08-09** (Codex, PR #350 round 36). `after_order_items_change`
+(`20260209200000_tier1_audit_fixes.sql`) recomputes an order header's profit from
+`cost_per_unit * total_units_needed` **unrounded**, while the reports — and, since PR #350, the
+quote functions — use settled revenue minus settled extended cost. On a fractional-quantity line
+whose extension lands on a half-cent (0.5 units at $0.02 against $0.01), the quote, the line, the
+reports and the commission all record $0.00 profit while the order header records $0.01.
+
+**This predates PR #350** — the trigger disagreed with the reports before that PR too. What
+changed is that quotes now agree with the reports, which makes the header the odd one out and the
+disagreement easier to hit.
+
+**Deliberately not fixed in #350.** `after_order_items_change` fires on every `order_items` write,
+so re-emitting it moves numbers on every order in the system. That deserves its own migration with
+its own review and a live before/after on real orders — not a rider on the cost-snapshot PR, and
+certainly not from a session that cannot apply migrations at all (see the entry below).
+
+**Fix when taken up:** re-emit the trigger to subtract per-line `ROUND(cost * qty, 2)` from the
+stored line totals, matching the boundary in `save_quote` and the report RPCs.
+
 ## OPEN — live migrations cannot be applied from a remote (web) session
 
 **Found 2026-08-09** while trying to apply the three pricing migrations from PR #350.

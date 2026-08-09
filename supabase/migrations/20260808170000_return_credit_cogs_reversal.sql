@@ -163,7 +163,25 @@ BEGIN
     -- Reading the outcome flag is safe here because credit_return refuses to
     -- run unless the return is already in status 'received' (guard above), so
     -- receive_return has necessarily finished and restocked is settled.
-    CASE WHEN ri.restocked THEN
+    -- ...and only when an ELIGIBLE ORIGINAL SALE LINE EXISTS. This reversal is
+    -- invoice-basis: it subtracts cost that the invoice-basis rollups already
+    -- counted. If the sale invoice was never created, or was deleted, voided or
+    -- cancelled, those rollups excluded it and never counted its COGS — so a
+    -- reversal here would subtract cost that was never added and INFLATE
+    -- profit. Falling back to the order line's cost is right only when the sale
+    -- line is on the books but carries no cost of its own. (Codex round 36.)
+    CASE WHEN ri.restocked AND EXISTS (
+        SELECT 1
+          FROM invoice_items ii
+          JOIN invoices inv ON inv.id = ii.invoice_id
+         WHERE ri.order_item_id IS NOT NULL
+           AND ii.order_item_id = ri.order_item_id
+           AND ii.product_id = ri.product_id
+           AND inv.invoice_type <> 'credit_memo'
+           AND inv.deleted_at IS NULL
+           AND inv.status NOT IN ('voided', 'cancelled')
+           AND ii.quantity > 0
+      ) THEN
       COALESCE(
         (SELECT ii.cost_cents
            FROM invoice_items ii
