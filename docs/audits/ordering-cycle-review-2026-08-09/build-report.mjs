@@ -10,6 +10,7 @@ const rows = findings.confirmed.map(f => ({
   fi: f.finder,
   ph: f.phaseName,
   loc: String(f.location).split(';')[0].trim(),
+  fs: String(f.failure_scenario || '').trim(),
 }));
 const refutedCount = findings.refutedCount;
 
@@ -73,9 +74,16 @@ const HIGH_NOTES = {
 // introduce one, and it must never be rendered as anything lesser.
 const TOP = new Set(['BLOCKER', 'HIGH']);
 const highs = rows.filter(r => TOP.has(r.s));
-const findNote = t => {
-  for (const k of Object.keys(HIGH_NOTES)) if (t.startsWith(k)) return HIGH_NOTES[k];
-  return null;
+// Hand-written plain-English notes exist for the ten findings that were
+// top-severity at publication. Triage can promote others, so anything without a
+// note falls back to its own title and failure scenario rather than aborting.
+const findNote = h => {
+  for (const k of Object.keys(HIGH_NOTES)) if (h.t.startsWith(k)) return HIGH_NOTES[k];
+  return {
+    plain: h.t,
+    why: h.fs || 'See the full entry in FINDINGS.md for the failure scenario.',
+    who: 'See FINDINGS.md',
+  };
 };
 
 const THEMES = [
@@ -99,15 +107,28 @@ const THEMES = [
   },
 ];
 
-const highHtml = THEMES.map(th => {
-  const items = highs.filter(h => th.match(h.t));
+// Anything promoted into top severity after publication lands here rather than
+// being silently dropped from the headline.
+const themedTitles = new Set(THEMES.flatMap(th => highs.filter(h => th.match(h.t)).map(h => h.t)));
+const RENDER_THEMES = THEMES.concat(
+  highs.some(h => !themedTitles.has(h.t))
+    ? [{
+        id: 'promoted',
+        label: 'Raised to top severity in triage',
+        lede: 'Findings a later review promoted after this report was first written. Their detail below comes straight from the finding record rather than a written summary.',
+        match: h => !themedTitles.has(h),
+      }]
+    : []
+);
+
+const highHtml = RENDER_THEMES.map(th => {
+  const items = highs.filter(h => (th.id === 'promoted' ? th.match(h.t) : th.match(h.t)));
   return `
 <section class="theme">
   <h3 class="theme-h">${esc(th.label)} <span class="theme-count">${items.length}</span></h3>
   <p class="theme-lede">${esc(th.lede)}</p>
   ${items.map(h => {
-    const n = findNote(h.t);
-    if (!n) throw new Error(`No HIGH_NOTES entry matches HIGH finding: ${h.t}`);
+    const n = findNote(h);
     return `<article class="finding">
       <div class="finding-head">
         <span class="chip chip-high">${h.s === 'BLOCKER' ? 'Blocker' : 'High'}</span>
@@ -125,9 +146,6 @@ const highHtml = THEMES.map(th => {
 </section>`;
 }).join('\n');
 
-const themed = new Set(THEMES.flatMap(th => highs.filter(h => th.match(h.t)).map(h => h.t)));
-const unthemed = highs.filter(h => !themed.has(h.t));
-if (unthemed.length) throw new Error(`HIGH findings not covered by any theme: ${unthemed.map(h => h.t).join(' | ')}`);
 
 const PHASES = [
   ['Phase 1: Lifecycle & Holds', 'Lifecycle &amp; holds', 'Quote, order, delivery and invoice status rules; planned bookings and the inventory holds they create.'],
