@@ -9,7 +9,7 @@ import { canonical, loadSnapshot, makeManifest, sha256 } from './generate-suppli
 import { buildOwnerDecisionSheet, ownerDecisionSheetHash } from './generate-supplier-pricing-phase3-owner-decision-sheet.mjs';
 import { verifyManifest } from './verify-supplier-pricing-phase3-classification-manifest.mjs';
 import { verifyOwnerDecisionSheet } from './verify-supplier-pricing-phase3-owner-decision-sheet.mjs';
-import { checkCommitMessagePrivateArtifactContainment, checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, forbiddenArtifactReason, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, isStructuralSignatureExempt, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, parseCli, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason, STRUCTURAL_SIGNATURE_EXEMPTIONS, STRUCTURAL_SIGNATURE_HISTORY_EXEMPTIONS, STRUCTURAL_SIGNATURE_REASON, validateStructuralSignatureExemptions, validateStructuralSignatureHistoryExemptions } from './check-supplier-pricing-phase3-private-artifacts.mjs';
+import { checkCommitMessagePrivateArtifactContainment, checkGitHubEventPrivateArtifactContainment, checkPrePushPrivateArtifactContainment, checkPrivateArtifactContainment, forbiddenArtifactReason, GITHUB_EVENT_HANDOFF_PROTOCOL, GIT_OUTPUT_MAX_BUFFER, gitOutput, hermeticGitEnvironment, ignoredLargeCandidateHasPrivateSignal, isStructuralSignatureExempt, MAX_HISTORY_COMMITS, MAX_STRUCTURAL_SCAN_BYTES, MAX_STRUCTURAL_SCAN_CANDIDATES, MAX_TOTAL_STRUCTURAL_SCAN_BYTES, ownWorktreeMarker, parseCli, readWorktreeCandidate, ScanBudget, structuralPrivateArtifactReason, structuralPrivateArtifactStreamReason, STRUCTURAL_SIGNATURE_EXEMPTIONS, STRUCTURAL_SIGNATURE_HISTORY_EXEMPTIONS, STRUCTURAL_SIGNATURE_REASON, validateStructuralSignatureExemptions, validateStructuralSignatureHistoryExemptions } from './check-supplier-pricing-phase3-private-artifacts.mjs';
 import { assertExternalArtifactPath, assertExternalPrivateDirectory, CONTAINER_TYPE_ALLOWLIST, loadValidatedSnapshot, MAX_PRIVATE_ARTIFACT_BYTES, OWNER_DECISION_HEADERS, OWNER_DECISION_SHEET_NAME, POST_STAGE_A_MANIFEST_NAME, POST_STAGE_A_SNAPSHOT_NAME, PRE_STAGE_A_SNAPSHOT_NAME, PRODUCT_FORM_ALLOWLIST, readValidatedPrivateArtifact, REPO_ROOT, validatePostStageASnapshot, without, writePrivateArtifactAtomic } from './supplier-pricing-phase3-private-artifacts.mjs';
 
 const temp = mkdtempSync(path.join(os.tmpdir(), 'crx-phase3c-synthetic-'));
@@ -895,6 +895,41 @@ git() { return 0; }
   await assert.rejects(() => fixtureContainment(embeddedRepo), /nested\/? \(embedded Git repository\)/);
   const untrackedEmbeddedRepo = fixtureRepo('containment-untracked-embedded-repository'); const untrackedNestedRepo = path.join(untrackedEmbeddedRepo, 'nested'); git(untrackedEmbeddedRepo, ['init', '--quiet', untrackedNestedRepo]); writeFileSync(path.join(untrackedNestedRepo, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
   await assert.rejects(() => fixtureContainment(untrackedEmbeddedRepo), /nested\/? \(embedded Git repository\)/);
+  // A linked worktree of THIS repository is this checkout seen twice, not a
+  // foreign repository smuggled inside it. Parallel sessions park worktrees
+  // under the ignored `.claude/worktrees/`, and Git reports each one as a
+  // single ignored directory candidate because it cannot read across a
+  // repository boundary. Before this exemption every such worktree read as an
+  // embedded repository and blocked every push from the main checkout.
+  const worktreeHost = fixtureRepo('containment-registered-own-worktree'); writeFileSync(path.join(worktreeHost, '.gitignore'), '.claude/worktrees/\n'); git(worktreeHost, ['add', '.gitignore']); git(worktreeHost, ['commit', '--quiet', '-m', 'ignore session worktrees']);
+  const ownLinkedWorktree = path.join(worktreeHost, '.claude', 'worktrees', 'session'); git(worktreeHost, ['worktree', 'add', '--quiet', '-b', 'synthetic-session', ownLinkedWorktree]);
+  writeFileSync(path.join(ownLinkedWorktree, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+  await fixtureContainment(worktreeHost);
+  // A foreign repository parked at that same ignored location still fails.
+  const foreignInWorktrees = path.join(worktreeHost, '.claude', 'worktrees', 'foreign'); git(worktreeHost, ['init', '--quiet', foreignInWorktrees]); writeFileSync(path.join(foreignInWorktrees, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+  await assert.rejects(() => fixtureContainment(worktreeHost), /foreign\/? \(embedded Git repository\)/);
+  // A `.git` POINTER FILE is not enough on its own: another repository's own
+  // worktree, checked out inside this one, is still a foreign repository.
+  const foreignWorktreeHost = fixtureRepo('containment-foreign-worktree-host'); const smuggledWorktree = path.join(worktreeHost, '.claude', 'worktrees', 'smuggled'); git(foreignWorktreeHost, ['worktree', 'add', '--quiet', '-b', 'smuggled-session', smuggledWorktree]); writeFileSync(path.join(smuggledWorktree, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+  await assert.rejects(() => fixtureContainment(worktreeHost), /smuggled\/? \(embedded Git repository\)/);
+  git(foreignWorktreeHost, ['worktree', 'remove', '--force', smuggledWorktree]); rmSync(foreignInWorktrees, { recursive: true, force: true });
+  await fixtureContainment(worktreeHost);
+  // Defense in depth behind Git's own worktree registry: the pointer file must
+  // be a single `gitdir:` line, a regular file, and aimed inside THIS
+  // repository's worktree administration directory.
+  const hostWorktreesDirectory = path.join(worktreeHost, '.git', 'worktrees');
+  assert.equal(ownWorktreeMarker(ownLinkedWorktree, hostWorktreesDirectory), true);
+  assert.equal(ownWorktreeMarker(path.join(worktreeHost, '.claude', 'worktrees', 'absent'), hostWorktreesDirectory), false);
+  const strayPointer = path.join(worktreeHost, '.claude', 'worktrees', 'stray'); mkdirSync(strayPointer, { recursive: true });
+  writeFileSync(path.join(strayPointer, '.git'), `gitdir: ${path.join(foreignWorktreeHost, '.git', 'worktrees', 'smuggled-session').split(path.sep).join('/')}\n`);
+  assert.equal(ownWorktreeMarker(strayPointer, hostWorktreesDirectory), false);
+  writeFileSync(path.join(strayPointer, '.git'), `gitdir: ${path.join(hostWorktreesDirectory, 'session').split(path.sep).join('/')}\nextra: payload\n`);
+  assert.equal(ownWorktreeMarker(strayPointer, hostWorktreesDirectory), false);
+  writeFileSync(path.join(strayPointer, '.git'), `${path.join(hostWorktreesDirectory, 'session').split(path.sep).join('/')}\n`);
+  assert.equal(ownWorktreeMarker(strayPointer, hostWorktreesDirectory), false);
+  rmSync(path.join(strayPointer, '.git'), { force: true }); mkdirSync(path.join(strayPointer, '.git'), { recursive: true });
+  assert.equal(ownWorktreeMarker(strayPointer, hostWorktreesDirectory), false);
+  rmSync(strayPointer, { recursive: true, force: true });
   const bareRepoHost = fixtureRepo('containment-bare-repository'); const bareRepoBase = git(bareRepoHost, ['rev-parse', 'HEAD']).trim(); const bareRepoPath = path.join(bareRepoHost, 'catalog.git'); git(bareRepoHost, ['init', '--bare', '--quiet', bareRepoPath]); execFileSync('git', ['--git-dir', bareRepoPath, 'hash-object', '-w', '--stdin'], { input: JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }), encoding: 'utf8', env: sanitizedFixtureGitEnv() }); mkdirSync(path.join(bareRepoPath, 'objects', 'info'), { recursive: true }); writeFileSync(path.join(bareRepoPath, 'objects', 'info', 'alternates'), '../alternate-objects\n');
   await assert.rejects(() => fixtureContainment(bareRepoHost), /catalog\.git \(bare Git repository\)/);
   git(bareRepoHost, ['add', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'synthetic bare repository']); git(bareRepoHost, ['rm', '--quiet', '-r', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'delete synthetic bare repository']); const bareRepoHead = git(bareRepoHost, ['rev-parse', 'HEAD']).trim();

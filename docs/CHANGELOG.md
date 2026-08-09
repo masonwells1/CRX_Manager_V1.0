@@ -43,9 +43,19 @@ Authenticated screens were not reachable from this environment and remain unveri
 upgrades all fail Lint/Type Check/Test/Build. These are breaking major-version upgrades
 requiring code migration, not routine cleanup. Mason directed that they not be merged.
 
-**Correction to an earlier finding.** CodeRabbit was previously recorded as rate-limited
-across the whole PR board. It is not: it reviews human- and agent-authored PRs and
-structurally skips bot-authored ones, which is why dependabot PRs carry no review.
+**Correction, twice over.** An earlier entry recorded CodeRabbit as rate-limited across the
+whole PR board. That was then corrected to "it is not rate-limited; it structurally skips
+bot-authored PRs, which is why dependabot PRs carry no review." The skip-bot-PRs half holds.
+The rest does not: later the same day CodeRabbit posted "Review limit reached — you've used
+all free OSS reviews for now" on two separate agent-authored PRs and declined an explicit
+`@coderabbitai review` on a third. Both mechanisms are real and independent — it skips bot
+PRs *and* enforces a rolling free-tier review quota on the ones it does take.
+
+This matters for the merge policy, because the CodeRabbit **status check reports SUCCESS
+even when no review ran**. A green CodeRabbit check is therefore not evidence of a review.
+Before merging on the strength of it, read the PR comments and confirm a review was actually
+posted; if the bot reports a limit, wait for the window or re-request with
+`@coderabbitai review`.
 
 **Process note.** The first draft of this entry was blocked by the pre-merge Codex gate for
 publishing live order identifiers and exact per-order financial figures into a public
@@ -56,6 +66,41 @@ repository. That was a real disclosure risk and the entry was rewritten. Treat
   - documentation only — the work landed via GitHub PR merges and one live database statement
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
+
+## 2026-08-09 — Phase 3C containment recognizes this repository's own worktrees
+
+Every push was blocked while a parallel session held a worktree under the
+ignored `.claude/worktrees/`. Git reports each such worktree as a single
+ignored directory candidate, and the containment checker classified any
+directory carrying a `.git` marker as an embedded Git repository, so three
+live session worktrees failed the pre-push gate with no way to proceed short
+of deleting another session's uncommitted work.
+
+The checker now exempts a linked worktree of this same repository. The
+exemption requires two independent signals and fails closed on either:
+`git worktree list --porcelain` must report the directory, and its `.git`
+marker must be a regular pointer file holding exactly one `gitdir:` line that
+resolves inside this repository's own `.git/worktrees/` directory. A `.git`
+directory, a symlink, extra lines, or a pointer aimed at another repository's
+administration directory remains an embedded Git repository, so another
+repository's worktree checked out inside this one is still blocked. Exempted
+worktrees are skipped rather than walked: their contents are ignored here and
+cannot be committed from this checkout, and each runs this identical guard on
+its own push.
+
+New fixtures cover the registered worktree passing, a foreign repository at
+the same ignored path failing, a foreign repository's own worktree smuggled
+inside failing, and the pointer-file predicate rejecting a stray target, a
+multi-line body, a missing `gitdir:` prefix, and a `.git` directory. Three
+clause-removal mutations were run: deleting the exemption reproduced the
+original three-worktree failure, trusting the pointer file alone let the
+smuggled foreign worktree through, and forcing the pointer predicate true
+broke its own assertions. Each was restored.
+
+Proven against the real repository rather than fixtures: the pre-push checker
+returned `PHASE3_PRIVATE_ARTIFACT_CONTAINMENT_PASS` at 53,673 paths, 2,307
+commits, and 73,799 candidates with all three session worktrees still in
+place, having failed closed on those same three directories before the change.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

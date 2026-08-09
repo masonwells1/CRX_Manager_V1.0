@@ -1555,7 +1555,68 @@ function stagedIndexContentViolations(root, execute, indexEntries) {
   return violations;
 }
 
-function worktreeEntryKind(root, repoPath) {
+// Windows path comparison is case-insensitive on disk, so a containment
+// decision must not hinge on the casing Git happened to print.
+function containmentPathKey(value) { return process.platform === 'win32' ? value.toLowerCase() : value; }
+function isContainedDirectory(child, parent) { return containmentPathKey(child).startsWith(`${containmentPathKey(parent)}${path.sep}`); }
+
+/**
+ * A linked worktree of THIS repository carries a `.git` pointer FILE, while a
+ * foreign embedded repository carries a `.git` DIRECTORY. Read the pointer
+ * without following it and require it to land inside this repository's own
+ * worktree registry. Anything else — a directory, a symlink, extra lines, or a
+ * pointer aimed at another repository's administration directory — fails here
+ * and is classified as an embedded repository by the caller.
+ */
+export function ownWorktreeMarker(absolute, worktreesDirectory) {
+  const marker = path.join(absolute, '.git');
+  let entry;
+  try { entry = lstatSync(marker); } catch (error) { if (error?.code !== 'ENOENT') throw error; return false; }
+  if (!entry.isFile()) return false;
+  let contents;
+  try { contents = readFileSync(marker, 'utf8'); } catch { return false; }
+  const lines = contents.split(/\r?\n/).filter(Boolean);
+  if (lines.length !== 1 || !lines[0].startsWith('gitdir: ')) return false;
+  const gitdir = path.resolve(absolute, lines[0].slice('gitdir: '.length).trim());
+  if (!isContainedDirectory(gitdir, worktreesDirectory)) return false;
+  try { return lstatSync(gitdir).isDirectory(); } catch { return false; }
+}
+
+/**
+ * Repo-relative directories that Git itself reports as additional worktrees of
+ * this repository AND that carry a verified own-worktree pointer file.
+ *
+ * `.claude/worktrees/` is ignored by this checkout, so a parallel session's
+ * worktree arrives as an ignored directory candidate. Without this exemption
+ * every such worktree reads as a foreign repository smuggled inside the repo
+ * and blocks every push. Nothing is weakened by skipping them: an ignored path
+ * cannot be committed from here, and that worktree runs this same guard on its
+ * own push. Both signals are required, and any failure to obtain Git's own
+ * answer exempts nothing.
+ */
+function registeredWorktreeDirectories(root, execute) {
+  const registered = new Set();
+  const lexicalRoot = path.resolve(root);
+  let records;
+  let commonDirectory;
+  try {
+    records = gitLines(['worktree', 'list', '--porcelain'], root, execute);
+    const [commonDirLine] = gitLines(['rev-parse', '--git-common-dir'], root, execute);
+    if (!commonDirLine) return registered;
+    commonDirectory = path.resolve(lexicalRoot, commonDirLine);
+  } catch { return registered; }
+  const worktreesDirectory = path.join(commonDirectory, 'worktrees');
+  for (const record of records) {
+    if (!record.startsWith('worktree ')) continue;
+    const absolute = path.resolve(lexicalRoot, record.slice('worktree '.length).trim());
+    if (!isContainedDirectory(absolute, lexicalRoot)) continue;
+    if (!ownWorktreeMarker(absolute, worktreesDirectory)) continue;
+    registered.add(path.relative(lexicalRoot, absolute).split(path.sep).join('/'));
+  }
+  return registered;
+}
+
+function worktreeEntryKind(root, repoPath, ownWorktrees = new Set()) {
   const lexicalRoot = path.resolve(root);
   const lexicalPath = path.resolve(lexicalRoot, repoPath);
   if (!lexicalPath.startsWith(`${lexicalRoot}${path.sep}`)) throw new Error('private Phase 3C worktree candidate escapes the repository');
@@ -1575,6 +1636,8 @@ function worktreeEntryKind(root, repoPath) {
     else if (entry.isDirectory()) {
       try {
         lstatSync(path.join(current, '.git'));
+        // This checkout seen twice, not a foreign repository inside it.
+        if (ownWorktrees.has(segments.slice(0, index + 1).join('/'))) return 'own-worktree';
         return 'embedded-repository';
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error;
@@ -1606,6 +1669,7 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
   for (const repoPath of ignored) if (!candidates.has(repoPath)) candidates.set(repoPath, 'ignored');
   const started = performance.now();
   const cache = { roots: new Map(), parents: new Map() };
+  const ownWorktrees = registeredWorktreeDirectories(root, execute);
   const bareRoots = bareRepositoryRoots([...candidates.keys()]);
   const bareRootList = [...bareRoots];
   for (const bareRoot of bareRoots) violations.push({ repoPath: bareRoot, reason: 'bare Git repository' });
@@ -1624,9 +1688,12 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // directory candidate. Detect their `.git` marker without walking nested
     // content; a benign ignored symlink remains non-regular and is skipped.
     if (source === 'ignored' || source === 'untracked') {
-      const entryKind = worktreeEntryKind(root, repoPath);
+      const entryKind = worktreeEntryKind(root, repoPath, ownWorktrees);
       if (entryKind === 'embedded-repository') { violations.push({ repoPath, reason: 'embedded Git repository' }); continue; }
       if (entryKind === 'bare-repository') { violations.push({ repoPath, reason: 'bare Git repository' }); continue; }
+      // A verified linked worktree of this repository is skipped rather than
+      // walked: its contents belong to that checkout's own push.
+      if (entryKind === 'own-worktree') continue;
       if (entryKind !== 'regular') continue;
     }
     // Tool-owned dependency/build roots contain harmless third-party archives.
