@@ -371,9 +371,9 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 59 assertions, including comment-hidden headers, nested
+suite grew from 24 to 68 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
-quoted actor parameters. Twenty-one individual clause-removal mutations were run;
+quoted actor parameters. Twenty-five individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
 idempotency suite remained green at 86 assertions.
 
@@ -385,6 +385,16 @@ The guard now accepts a single literal only when it is the entire direct
 `EXECUTE`, assignment, or `SELECT ... INTO` expression, and it continues
 scanning readable nested definitions. Three new clause-removal mutations pin
 those fixes.
+
+The second exact-SHA Codex review found four more legal PL/pgSQL builders the
+candidate had weakened versus the base: declaration initializers using `:=`,
+`=`, or `DEFAULT`, plus `VALUES (...) INTO`. These forms now enter the same
+fail-closed dynamic-DDL path. A complete function-bearing literal anywhere in
+a procedural `DO` or function body is also kept visible, because it can be
+stored and executed later even when the guard cannot trace that data flow.
+Regression coverage pins both single- and dollar-quoted storage while confirming
+that a normal top-level `UPDATE` remains data. The two builder classifiers and
+both procedural-literal clauses each fail their test when removed alone.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

@@ -190,10 +190,18 @@ function firstTopLevelSemicolon(text, from) {
 
 const ASSIGN_RE =
   /(?:^|\bBEGIN\b|\bTHEN\b|\bELSE\b|\bLOOP\b|\bDECLARE\b)\s*(?:"[^"]+"|[\w.]+)\s*(?::=|=(?!=))/i;
+// PL/pgSQL also permits initialization in the declaration itself:
+//   DECLARE v_ddl text := '...';  v_ddl text = '...';  v_ddl text DEFAULT '...';
+// Keep this shaped like a declaration (name + type + optional modifiers) so a
+// normal UPDATE of documentation text is not reclassified as runtime DDL.
+const DECLARATION_INIT_RE =
+  /(?:^|\bDECLARE\b)\s*(?:"[^"]+"|[A-Za-z_]\w*)\s+(?:CONSTANT\s+)?(?:"[^"]+"|[\w.]+(?:%(?:TYPE|ROWTYPE))?)(?:\s+(?:WITH(?:OUT)?\s+TIME\s+ZONE|DOUBLE\s+PRECISION|CHARACTER\s+VARYING|BIT\s+VARYING))?(?:\s*\([^;]*?\))?(?:\s*\[\s*\])?(?:\s+COLLATE\s+(?:"[^"]+"|[\w.]+))?(?:\s+NOT\s+NULL)?\s*(?::=|=(?!=)|DEFAULT\b)/i;
 function isDynamicSqlStatement(stmt) {
   return /\bEXECUTE\b/i.test(stmt) ||
     ASSIGN_RE.test(stmt) ||
-    /\bSELECT\b[\s\S]*\bINTO\b/i.test(stmt);
+    DECLARATION_INIT_RE.test(stmt) ||
+    /\bSELECT\b[\s\S]*\bINTO\b/i.test(stmt) ||
+    /\bVALUES\b[\s\S]*\bINTO\b/i.test(stmt);
 }
 
 function inExecuteStatement(out, text, afterIdx) {
@@ -245,7 +253,7 @@ function carriesFnHeader(payload) {
  * retaining executable SQL held inside procedural bodies and dynamic DDL.
  * Length-preserving so structural indexes map back to the original content.
  * Returns null for any unterminated construct; callers fail closed. */
-function maskSqlNoise(text) {
+function maskSqlNoise(text, inProceduralCode = false) {
   let out = "";
   let i = 0;
   while (i < text.length) {
@@ -276,9 +284,13 @@ function maskSqlNoise(text) {
         const close = text.indexOf(tag, i + tag.length);
         if (close === -1) return null;
         const payload = text.slice(i + tag.length, close);
-        const isExecutable = /\b(?:AS|DO|EXECUTE)\s+$/i.test(out) ||
+        const isProceduralContainer = /\b(?:AS|DO)\s+$/i.test(out);
+        const isExecutable = isProceduralContainer || /\bEXECUTE\s+$/i.test(out) ||
+          (inProceduralCode && carriesFnHeader(payload)) ||
           (inExecuteStatement(out, text, close + tag.length) && carriesFnHeader(payload));
-        const inner = isExecutable ? maskSqlNoise(payload) : " ".repeat(payload.length);
+        const inner = isExecutable
+          ? maskSqlNoise(payload, inProceduralCode || isProceduralContainer)
+          : " ".repeat(payload.length);
         if (inner === null) return null;
         out += tag + inner + tag;
         i = close + tag.length;
@@ -291,10 +303,11 @@ function maskSqlNoise(text) {
     if (ch === "'" || ch === '"') {
       const end = scanQuoted(text, i);
       if (end === -1) return null;
-      const isDynamicSql = ch === "'" && inExecuteStatement(out, text, end) &&
-        carriesFnHeader(text.slice(i + 1, end - 1));
+      const payload = text.slice(i + 1, end - 1);
+      const isDynamicSql = ch === "'" && carriesFnHeader(payload) &&
+        (inProceduralCode || inExecuteStatement(out, text, end));
       if (isDynamicSql) {
-        const inner = maskSqlNoise(text.slice(i + 1, end - 1));
+        const inner = maskSqlNoise(payload, inProceduralCode);
         if (inner === null) return null;
         out += ch + inner + ch;
       } else {

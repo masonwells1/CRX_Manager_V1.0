@@ -209,6 +209,32 @@ BEGIN
 END $do$;`);
 ok(isDeny(r), "plain = assignment of runtime DDL is still inspected");
 
+r = runHook(`DO $do$ DECLARE v_ddl text := '${UNBOUND_DDL}'; BEGIN EXECUTE v_ddl; END $do$;`);
+ok(isDeny(r), "a declaration initializer using := cannot hide runtime DDL");
+
+r = runHook(`DO $do$ DECLARE v_ddl text = '${UNBOUND_DDL}'; BEGIN EXECUTE v_ddl; END $do$;`);
+ok(isDeny(r), "a declaration initializer using = cannot hide runtime DDL");
+
+r = runHook(`DO $do$ DECLARE v_ddl text DEFAULT '${UNBOUND_DDL}'; BEGIN EXECUTE v_ddl; END $do$;`);
+ok(isDeny(r), "a declaration initializer using DEFAULT cannot hide runtime DDL");
+
+r = runHook(`DO $do$
+DECLARE v_ddl text := 'CREATE OR REPLACE ' ||
+  'FUNCTION public.declaration_split(p_performed_by uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_performed_by; END $fn$;';
+BEGIN EXECUTE v_ddl; END $do$;`);
+ok(isDeny(r), "a declaration initializer split across literals is refused");
+
+r = runHook(`DO $do$ DECLARE v_ddl text; BEGIN VALUES ('${UNBOUND_DDL}') INTO v_ddl; EXECUTE v_ddl; END $do$;`);
+ok(isDeny(r), "VALUES (...) INTO runtime DDL is inspected and blocked");
+
+r = runHook(`DO $do$ DECLARE v_ddl text; BEGIN
+  VALUES ('CREATE OR REPLACE ' ||
+    'FUNCTION public.values_split(p_performed_by uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_performed_by; END $fn$;')
+  INTO v_ddl;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "VALUES (...) INTO DDL split across literals is refused");
+
 r = runHook(`DO $do$
 DECLARE v_ddl text;
 BEGIN
@@ -252,6 +278,23 @@ ok(!isDeny(r), "a correctly bound nested dynamic function remains allowed");
 
 r = runHook(`INSERT INTO docs (body) VALUES ('CREATE OR REPLACE ' || 'FUNCTION public.example(p_performed_by uuid)');`);
 ok(!isDeny(r), "function-shaped fragments in a plain INSERT are data, not runtime DDL");
+
+r = runHook(`UPDATE docs SET body = '${UNBOUND_DDL}' WHERE id = 1;`);
+ok(!isDeny(r), "a complete function-shaped string in a plain UPDATE remains data");
+
+r = runHook(`DO $do$ DECLARE v_ddl text; BEGIN
+  INSERT INTO ddl_staging (body) VALUES ('${UNBOUND_DDL}');
+  SELECT body INTO v_ddl FROM ddl_staging LIMIT 1;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "single-quoted function DDL stored inside procedural code cannot disappear from inspection");
+
+r = runHook(`DO $do$ DECLARE v_ddl text; BEGIN
+  INSERT INTO ddl_staging (body) VALUES ($ddl$${UNBOUND_DDL}$ddl$);
+  SELECT body INTO v_ddl FROM ddl_staging LIMIT 1;
+  EXECUTE v_ddl;
+END $do$;`);
+ok(isDeny(r), "dollar-quoted function DDL stored inside procedural code cannot disappear from inspection");
 
 // ── NEGATIVE: correctly bound / out of scope / exempt ──────────────────────
 r = runHook(fn(BOUND));
