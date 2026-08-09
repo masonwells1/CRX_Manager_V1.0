@@ -39,6 +39,26 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 40 (Codex) — the cap is now exact, and spent across all credits:**
+
+Round 39's cap scaled the per-unit cost, and both of this round's findings were consequences of
+that choice — which is the signal that the mechanism, not the arithmetic, was wrong.
+
+- **Rounding could not represent the cap (P2).** `cost_cents` is an integer the rollups multiply by
+  the row's full quantity, so a scaled unit cost cannot express a capped total: 1 posted unit at
+  100c spread over 6 returned units gives `ROUND(100/6) = 17`, and `17 × 6 = 102c` reversed.
+  Each return item now becomes up to **two** rows — a cost-bearing row for the allowed quantity and
+  a zero-cost row for the remainder — with revenue split exactly between them. Exact by
+  construction, no scaling.
+- **Prior credits did not consume the cap (P1).** Every credit compared against the original posted
+  quantity, so two 2-unit returns against a line with 2 posted units each reversed 2 — 4 units of
+  COGS against 2 the reports counted. The allocation now subtracts what earlier credit memos
+  already reversed (cost-bearing rows only), and the order_items rows are locked before that read
+  so concurrent credits cannot both spend the same budget.
+
+Rounds 35-40 were all one defect wearing different clothes: eligibility, cost, quantity and now
+history each decided separately. They are now a single allocation over one resolved source line.
+
 **Round 39 (Codex) — the reversal is now capped to what was actually invoiced:**
 
 - **Quantity cap (P1).** An order line delivered in batches can have only part of it on a posted
