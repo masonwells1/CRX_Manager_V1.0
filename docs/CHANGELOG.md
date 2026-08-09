@@ -39,6 +39,18 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 20 (Codex) — the ambiguity guard blocked an ordinary edit:**
+
+The round-19 payload-side check refused whenever two id-less rows shared a product, *before* checking
+whether any prior line of that product existed. So adding two new lines of a product the quote never
+carried — an ordinary edit — was rejected, and no reload could clear it because new lines have no ids
+to supply. Both ambiguity tests are now gated on at least one unconsumed prior candidate existing:
+with zero candidates there is no history to allocate and every unresolved row is simply new.
+
+This is the second time a guard added to this mechanism has blocked legitimate work (round 11 was the
+first), and the third time the fix for one edge created another. The guards are now: refuse only when
+real history is at stake **and** the payload cannot say who owns it.
+
 **Round 19 (Codex) — a NULL basis could still be refilled, and payload-side ambiguity:**
 
 - **Fourth appearance of the NULL-passthrough shape**, this time in the ordinary save path. A prior

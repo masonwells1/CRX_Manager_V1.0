@@ -260,6 +260,7 @@ DECLARE
   v_fallback_distinct_costs int;
   v_idless_by_product jsonb := '{}'::jsonb;
   v_idless_count int;
+  v_fallback_candidates int;
   -- >>>SNAPSHOT
 BEGIN
   v_actor := auth.uid();
@@ -575,35 +576,39 @@ BEGIN
       -- for that same product. Omitting an id can therefore no longer lower a
       -- cost basis -- at worst it preserves the honest historical value.
       IF v_reuse_item_id IS NULL AND (v_item->>'product_id') IS NOT NULL THEN
-        -- AMBIGUITY CHECK. If several unconsumed prior lines share this product
-        -- but carry DIFFERENT costs, there is no information in the payload that
-        -- says which one this row is, and picking by key order would let the
-        -- arrival order decide the stored cost basis. When the candidates differ
-        -- in quantity that changes COGS, margin and commission silently, so
-        -- refuse rather than guess.
-        --
-        -- Deliberately scoped to differing costs: several prior lines of the
-        -- same product at the SAME cost are interchangeable, any pick gives an
-        -- identical result, and blocking there would be a lock-out for no gain.
-        -- More than one row needing a fallback for the SAME product is
-        -- unresolvable no matter how many prior rows exist: nothing in the
-        -- payload says which is the pre-existing line and which is the one just
-        -- swapped onto that product, so iteration order would decide who keeps
-        -- the historical cost. Refuse. (Codex round 18.)
-        v_idless_count := COALESCE((v_idless_by_product->>(v_item->>'product_id'))::int, 0);
-        IF v_idless_count > 1 THEN
-          RAISE EXCEPTION 'QUOTE_ITEM_AMBIGUOUS_COST: this save sent more than one line of the same product without identifying which existing line each one is. Reload the quote and re-apply your changes so every line keeps its own recorded cost.'
-            USING ERRCODE = 'P0001';
-        END IF;
-
-        SELECT COUNT(DISTINCT COALESCE(val->>'c', '~')) INTO v_fallback_distinct_costs
+        -- AMBIGUITY CHECK. Both tests below apply ONLY when at least one
+        -- unconsumed prior line of this product actually exists. With zero
+        -- candidates there is no history to allocate and nothing to get wrong:
+        -- every unresolved row is genuinely new and takes a fresh id and today's
+        -- stamp. Gating on that matters -- an earlier revision refused whenever
+        -- two id-less rows shared a product, which blocked the ordinary act of
+        -- adding two new lines of a product the quote never carried, and no
+        -- reload could clear it because new lines have no ids to supply.
+        -- (Codex round 20.)
+        SELECT COUNT(*), COUNT(DISTINCT COALESCE(val->>'c', '~'))
+          INTO v_fallback_candidates, v_fallback_distinct_costs
         FROM jsonb_each(v_prior_item_costs) AS e(k, val)
         WHERE val->>'p' = v_item->>'product_id'
           AND NOT (v_consumed_prior_ids ? e.k);
 
-        IF v_fallback_distinct_costs > 1 THEN
-          RAISE EXCEPTION 'QUOTE_ITEM_AMBIGUOUS_COST: this quote has more than one line of the same product recorded at different costs, and this save did not identify which line is which. Reload the quote and re-apply your changes so each line keeps its own recorded cost.'
-            USING ERRCODE = 'P0001';
+        IF v_fallback_candidates > 0 THEN
+          -- (a) Several unresolved payload rows competing for the same product's
+          -- history: nothing says which is the pre-existing line and which was
+          -- just swapped onto it, so iteration order would decide who keeps the
+          -- recorded cost.
+          v_idless_count := COALESCE((v_idless_by_product->>(v_item->>'product_id'))::int, 0);
+          IF v_idless_count > 1 THEN
+            RAISE EXCEPTION 'QUOTE_ITEM_AMBIGUOUS_COST: this save sent more than one line of the same product without identifying which existing line each one is. Reload the quote and re-apply your changes so every line keeps its own recorded cost.'
+              USING ERRCODE = 'P0001';
+          END IF;
+
+          -- (b) Several prior lines of this product recorded at DIFFERENT costs.
+          -- Same costs are interchangeable -- any pick is identical, so refusing
+          -- there would be a lock-out for no gain.
+          IF v_fallback_distinct_costs > 1 THEN
+            RAISE EXCEPTION 'QUOTE_ITEM_AMBIGUOUS_COST: this quote has more than one line of the same product recorded at different costs, and this save did not identify which line is which. Reload the quote and re-apply your changes so each line keeps its own recorded cost.'
+              USING ERRCODE = 'P0001';
+          END IF;
         END IF;
 
         SELECT k INTO v_fallback_prior_id
