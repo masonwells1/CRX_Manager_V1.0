@@ -4,7 +4,11 @@ import fs from 'fs';
 // findings.json and re-running is enough to rebuild the report.
 const findings = JSON.parse(fs.readFileSync(new URL('./findings.json', import.meta.url), 'utf8'));
 const severityOf = f => (f.verdict && f.verdict.corrected_severity) || f.severity;
-const rows = findings.confirmed.map(f => ({
+// A finding whose verdict is flipped to refuted by the live-catalog check or a
+// later triage must drop out of the report, not linger in the totals.
+const stillConfirmed = findings.confirmed.filter(f => !(f.verdict && f.verdict.refuted));
+const refutedCount = findings.refutedCount + (findings.confirmed.length - stillConfirmed.length);
+const rows = stillConfirmed.map(f => ({
   t: f.title,
   s: severityOf(f),
   fi: f.finder,
@@ -12,7 +16,6 @@ const rows = findings.confirmed.map(f => ({
   loc: String(f.location).split(';')[0].trim(),
   fs: String(f.failure_scenario || '').trim(),
 }));
-const refutedCount = findings.refutedCount;
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const shortLoc = l => esc(String(l).replace(/^supabase\/migrations\//, '').replace(/^supabase\/baselines\//, '').replace(/\s*\(.*$/, ''));
@@ -423,11 +426,7 @@ const html = `<!DOCTYPE html>
       </li>
       <li>
         <h3 class="wave-t">Close the direct-write lane</h3>
-        <p>Six of the ten high findings, and a good share of the mediums, come from the same root: the tables accept writes that skip the functions holding your safety logic. Tightening the transition triggers and the table-level permissions on quotes, orders and deliveries retires most of this group in one piece of work. It is also the change most likely to break something in normal use, so it wants care and a real test pass.</p>
-      </li>
-      <li>
-        <h3 class="wave-t">Fix the three money bugs</h3>
-        <p>Double-billing on partial quick deliveries, commissions permanently cancelled by a void-and-rebill, and caller-supplied cost driving the commission basis. These need no misuse — they are ordinary workflows producing wrong numbers, so they are quietly costing you money or trust today. Each is a self-contained fix.</p>
+        <p>Most of the top-severity findings, and a good share of the mediums, come from the same root: the tables accept writes that skip the functions holding your safety logic. Tightening the transition triggers and the table-level permissions on quotes, orders and deliveries retires most of this group in one piece of work. It is also the change most likely to break something in normal use, so it wants care and a real test pass.</p>
       </li>
       <li>
         <h3 class="wave-t">Gate the ungated read functions</h3>
