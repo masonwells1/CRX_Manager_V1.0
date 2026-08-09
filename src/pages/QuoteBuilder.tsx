@@ -74,7 +74,7 @@ import { useStaleQuoteCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
-import { appendBelowCostApproval } from '../lib/internalNotes';
+import { appendBelowCostApproval, stripInternalNotes } from '../lib/internalNotes';
 import type {
   Quote,
   QuoteSection,
@@ -4006,14 +4006,21 @@ export default function QuoteBuilder() {
                             </td>
                             <td className="px-3 py-2">
                               <div className="flex items-center gap-1">
+                                {/* Customer View is shown to the customer, so it gets the same
+                                    redaction the PDF gets: the below-cost approval marker and its
+                                    free-form reason (which can name a competitor's price or a
+                                    complaint) must not appear here. Read-only while redacted --
+                                    editing a stripped value would write the redaction back over
+                                    the real note. (Codex round 27.) */}
                                 <textarea
-                                  value={item.notes || ''}
+                                  value={customerView ? stripInternalNotes(item.notes) || '' : item.notes || ''}
+                                  readOnly={customerView}
                                   onChange={(e) => updateItem(sec._key, item._key, { notes: e.target.value || null })}
                                   rows={1}
                                   placeholder="Product notes..."
                                   className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-crx-green/20 resize-none"
                                 />
-                                {prod && preferredQuoteNotes(prod)
+                                {!customerView && prod && preferredQuoteNotes(prod)
                                   && item.notes !== preferredQuoteNotes(prod) && (
                                   <button
                                     onClick={() => updateItem(sec._key, item._key, { notes: preferredQuoteNotes(prod) })}

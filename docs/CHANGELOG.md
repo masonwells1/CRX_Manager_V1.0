@@ -39,6 +39,16 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 27 (Codex) — Customer View showed the approval reason:**
+
+The quote PDF redacts the below-cost approval marker, but `QuoteBuilder`'s Customer View —
+the screen turned toward the customer — rendered `item.notes` raw, so the free-form reason
+(which may name a competitor's price or a complaint) was visible in the notes box. Customer
+View now shows the stripped note, read-only so the redaction cannot be saved back over the
+real text, and the "Reset to default" button is hidden there for the same reason. Both
+customer-facing surfaces — the PDFs and this view — now redact; the marker never appears on
+any other screen, which are all staff-only.
+
 **Round 26 (Codex) — the rush below-cost prompt could never fire:**
 
 The Set Pricing guardrail added in round 20 read `cost_per_unit`, but `create_rush_order`
