@@ -5,8 +5,8 @@
 - Repository: `C:\CRX_Manager` / `masonwells1/CRX_Manager_V1.0`
 - Isolated checkout: `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager`
 - Branch: `codex/harden-actor-binding-sql-reader`
-- Last security-reviewed code SHA: `b7f6af4c3c15bcc0ea30c81c251a85974d74a9a1`
-- Verified remote `main` on 2026-08-09: `c43fb92a397694f121157aebfe76a2fc2daaaa4f`
+- Last security-reviewed code SHA: `824119a526e1bb3370e064bcc094fc5e3d12dd54`
+- Verified remote `main` on 2026-08-09: `122d9b6602ba230469de512bf2a82bc5c3f9ee2c`
 - No remote branch and no pull request exist.
 - Supabase project `rhyzpcqhnizqbxphqdkr` is context only; no database work occurred.
 
@@ -18,14 +18,20 @@ terminal `CODEX_PROOF_VERDICT: CLEAN`, and landing through a green protected PR.
 
 ## PROVEN
 
-- The actor-binding suite passes at 99 assertions; the idempotency reference
+- The actor-binding suite passes at 115 assertions; the idempotency reference
   suite remains green at 86 assertions.
-- Forty-three original port clauses plus the resumed indirect-`EXECUTE`, nested
-  quote, and scheduled-string clauses were each removed alone and made the suite
-  fail before restoration.
+- Fifty-four parser and decision clauses were each removed alone and made the
+  suite fail before restoration.
+- Ordinary `GRANT EXECUTE` and `REVOKE EXECUTE` function privileges are now
+  accepted without weakening the indirect runtime-`EXECUTE` refusal.
+- Post-body `LANGUAGE ... SECURITY DEFINER` attributes are inspected through the
+  function statement terminator. A missing terminator fails closed, and a later
+  statement cannot contaminate the attributes of an earlier function.
+- Top-level `SELECT cron.schedule(...)` function DDL now fails closed while
+  ordinary scheduled calls without function DDL remain allowed.
 - Real hook-process probes denied indirect variable execution, doubled-quote
-  comment hiding, and `cron.schedule` actor-forgery SQL. A complete bound function
-  supplied directly as one dollar-quoted literal was allowed.
+  comment hiding, post-body actor forgery, and scheduled actor-function DDL. A
+  complete bound function supplied directly as one dollar-quoted literal was allowed.
 - The full pre-commit barrier passed repeatedly: containment, lint, type-check,
   build, all Vitest tests, workflow/guard suites, dependency integrity, and map
   generation. Intermittent workbook timeouts passed immediately in isolation
@@ -35,17 +41,20 @@ terminal `CODEX_PROOF_VERDICT: CLEAN`, and landing through a green protected PR.
 
 ## WRITTEN, NOT PROVEN
 
-- The complete hardening work is committed locally through `b7f6af4c`.
+- The currently implemented hardening is committed locally through `824119a5`.
 - It does not have a CLEAN exact-SHA push proof. The final mandatory review
   returned `CODEX_PROOF_VERDICT: BLOCKERS`, so no proof file was minted.
 
 ## NOT STARTED
 
-- Distinguish procedural runtime `EXECUTE` from ordinary PostgreSQL privilege
-  syntax: `GRANT EXECUTE ON FUNCTION ...` and `REVOKE EXECUTE ON FUNCTION ...`.
-- Add regressions proving both privilege statements and a complete secure
-  `SECURITY DEFINER` migration are allowed, while indirect procedural execution
-  remains denied. Mutation-test that distinction.
+- Distinguish runtime dynamic SQL from ordinary trigger syntax:
+  `CREATE [EVENT] TRIGGER ... EXECUTE FUNCTION ...`.
+- Support safe direct-literal PL/pgSQL `EXECUTE '...' USING ...` and
+  `EXECUTE '...' INTO ...` forms without allowing variable, concatenated, or
+  `format(...)`-built SQL.
+- Add exact allow regressions for trigger creation and both parameterized direct
+  literal forms, retain the hostile runtime-builder denies, and mutation-test
+  each distinction independently.
 - Run the full barrier and start a fresh governed exact-SHA review cycle.
 - Only after CLEAN: push the branch, open the PR, wait for required checks and
   Vercel, resolve CodeRabbit, merge, and verify remote `main`.
@@ -59,10 +68,13 @@ outward-action approval into a receiving task. No database action is needed.
 
 - `/ship` reached its hard cap of three fix/re-review rounds. The branch must
   remain parked and unpublished from this task.
-- Final blocker: `.claude/hooks/actor-binding-check.mjs` treats every visible
-  `EXECUTE` token as runtime SQL, so it wrongly denies required `GRANT EXECUTE`
-  and `REVOKE EXECUTE` privilege statements. The exemption marker is not an
-  acceptable default because it disables the actor guard for the whole file.
+- Final blocker: `.claude/hooks/actor-binding-check.mjs` still treats every
+  remaining visible `EXECUTE` token as opaque runtime SQL. It therefore wrongly
+  denies ordinary `CREATE [EVENT] TRIGGER ... EXECUTE FUNCTION ...` statements,
+  including a current CRX migration pattern, and direct parameterized
+  PL/pgSQL `EXECUTE '...' USING ...` / `EXECUTE '...' INTO ...` forms. The
+  file-level exemption is not an acceptable default because it disables actor
+  protection for the whole migration.
 - Exact evidence:
   `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager\.claude\session-state\codex-review-latest.txt`.
 - Unrelated nonblocking repo drift remains: four 2026-08-08 migrations are
@@ -74,8 +86,9 @@ outward-action approval into a receiving task. No database action is needed.
 ## FIRST ACTION
 
 From the isolated checkout, verify GitHub `main` again, then add the smallest
-context-aware distinction that exempts only `GRANT/REVOKE EXECUTE` privilege
-syntax from the procedural-runtime refusal. Add the three exact allow/deny
-regressions before any broader test or review.
+statement-shape distinction for `CREATE [EVENT] TRIGGER ... EXECUTE FUNCTION`.
+Add exact trigger allow and hostile second-`EXECUTE` deny controls before
+handling the direct-literal `USING`/`INTO` forms. Mutation-test every decision,
+run the full barrier, and start a fresh governed exact-SHA review cycle.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
