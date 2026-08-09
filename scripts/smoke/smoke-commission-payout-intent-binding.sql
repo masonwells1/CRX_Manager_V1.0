@@ -1,0 +1,318 @@
+-- Rolled-back smoke chain: commission payout idempotency is bound to the
+-- authenticated actor and the exact payout intent.
+--
+-- Covers create_commission_payment / post_commission_payment /
+-- void_commission_payment after
+-- 20260810130500_bind_commission_payout_idempotency_to_intent.sql.
+--
+-- Proves, for each of the three operations:
+--   * the same key with an identical intent replays exactly once (no second effect);
+--   * the same key with a changed selection / payment / reason / notes is rejected
+--     with IDEMPOTENCY_INTENT_MISMATCH and performs nothing;
+--   * another admin cannot consume the original receipt (IDEMPOTENCY_ACTOR_MISMATCH);
+--   * pre-migration receipts (both binding columns NULL) fail closed;
+--   * cross-operation key reuse still fails;
+--   * the NULL-key path still performs the work and writes no receipt;
+--   * the pre-existing auth / p_performed_by / admin / reason guards are unchanged.
+--
+-- Always ends by raising SMOKE_PASS_ROLLBACK: nothing is ever committed.
+
+DO $smoke$
+DECLARE
+  v_actor_a  uuid := '11111111-1111-1111-1111-111111111111';
+  v_actor_b  uuid := '22222222-2222-2222-2222-222222222222';
+  v_actor_c  uuid := '33333333-3333-3333-3333-333333333333';
+  v_c1 uuid := 'aaaaaaaa-0000-0000-0000-000000000001';
+  v_c2 uuid := 'aaaaaaaa-0000-0000-0000-000000000002';
+  v_c3 uuid := 'aaaaaaaa-0000-0000-0000-000000000003';
+  v_p1 uuid;
+  v_p2 uuid;
+  v_replay uuid;
+  v_res jsonb;
+  v_res2 jsonb;
+  v_count integer;
+  v_fp text;
+  v_bound uuid;
+BEGIN
+  ----------------------------------------------------------------------------
+  -- create_commission_payment
+  ----------------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_a)::text, true);
+
+  v_p1 := public.create_commission_payment(
+    ARRAY[v_c1, v_c2], 'check', 'REF-1', DATE '2026-08-09', 'first batch',
+    v_actor_a, 'key-create-1'
+  );
+  IF v_p1 IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: create returned NULL payment id';
+  END IF;
+
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'create_commission_payment';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: expected 1 create effect, found %', v_count;
+  END IF;
+
+  -- The receipt must now carry the actor and a fingerprint.
+  SELECT request_actor_id, request_fingerprint INTO v_bound, v_fp
+    FROM public.idempotency_keys WHERE idempotency_key = 'key-create-1';
+  IF v_bound IS DISTINCT FROM v_actor_a OR v_fp IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: create receipt was not bound (actor=%, fingerprint=%)', v_bound, v_fp;
+  END IF;
+
+  -- Identical intent replays. Selection order and duplicates must not matter.
+  v_replay := public.create_commission_payment(
+    ARRAY[v_c2, v_c1, v_c1], 'check', 'REF-1', DATE '2026-08-09', 'first batch',
+    v_actor_a, 'key-create-1'
+  );
+  IF v_replay IS DISTINCT FROM v_p1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: replay returned % instead of %', v_replay, v_p1;
+  END IF;
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'create_commission_payment';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: replay performed a second create (% effects)', v_count;
+  END IF;
+
+  -- Changed commission selection on the retained key.
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1, v_c3], 'check', 'REF-1', DATE '2026-08-09', 'first batch',
+      v_actor_a, 'key-create-1'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed commission selection was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- Changed notes on the retained key.
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1, v_c2], 'check', 'REF-1', DATE '2026-08-09', 'second batch',
+      v_actor_a, 'key-create-1'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed notes were accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- Changed payment method on the retained key.
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1, v_c2], 'ach', 'REF-1', DATE '2026-08-09', 'first batch',
+      v_actor_a, 'key-create-1'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed payment method was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- Whitespace-only differences are not a change of intent.
+  v_replay := public.create_commission_payment(
+    ARRAY[v_c1, v_c2], 'check', '  REF-1 ', DATE '2026-08-09', ' first batch  ',
+    v_actor_a, 'key-create-1'
+  );
+  IF v_replay IS DISTINCT FROM v_p1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: whitespace variant did not replay';
+  END IF;
+
+  -- A different admin cannot consume the receipt.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_b)::text, true);
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1, v_c2], 'check', 'REF-1', DATE '2026-08-09', 'first batch',
+      v_actor_b, 'key-create-1'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a second actor consumed the receipt';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_ACTOR_MISMATCH%' THEN RAISE; END IF;
+  END;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_a)::text, true);
+
+  -- Pre-migration receipt: neither binding column set. Must fail closed.
+  INSERT INTO public.idempotency_keys (idempotency_key, operation, result)
+  VALUES ('key-legacy', 'create_commission_payment', to_jsonb(gen_random_uuid()::text));
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1, v_c2], 'check', 'REF-1', DATE '2026-08-09', 'first batch',
+      v_actor_a, 'key-legacy'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy unbound receipt was replayed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- Cross-operation reuse of a create key still fails.
+  BEGIN
+    PERFORM public.post_commission_payment(v_p1, v_actor_a, 'key-create-1');
+    RAISE EXCEPTION 'SMOKE_FAIL: cross-operation key reuse was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_CROSS_OP_KEY_REUSE%' THEN RAISE; END IF;
+  END;
+
+  -- NULL key still performs the work and writes no receipt.
+  SELECT count(*) INTO v_count FROM public.idempotency_keys;
+  v_p2 := public.create_commission_payment(
+    ARRAY[v_c3], 'check', 'REF-2', DATE '2026-08-09', 'no key', v_actor_a, NULL
+  );
+  IF v_p2 IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key create did not perform the work';
+  END IF;
+  IF (SELECT count(*) FROM public.idempotency_keys) <> v_count THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key create wrote a receipt';
+  END IF;
+
+  ----------------------------------------------------------------------------
+  -- post_commission_payment
+  ----------------------------------------------------------------------------
+  v_res := public.post_commission_payment(v_p1, v_actor_a, 'key-post-1');
+  IF v_res->>'payment_id' IS DISTINCT FROM v_p1::text THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: post returned %', v_res;
+  END IF;
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'post_commission_payment';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: expected 1 post effect, found %', v_count;
+  END IF;
+
+  v_res2 := public.post_commission_payment(v_p1, v_actor_a, 'key-post-1');
+  IF v_res2 IS DISTINCT FROM v_res THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: post replay returned % instead of %', v_res2, v_res;
+  END IF;
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'post_commission_payment';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: post replay performed a second post (% effects)', v_count;
+  END IF;
+
+  -- The audit's exact scenario: same retained key, a DIFFERENT payment.
+  BEGIN
+    PERFORM public.post_commission_payment(v_p2, v_actor_a, 'key-post-1');
+    RAISE EXCEPTION 'SMOKE_FAIL: a different payment was posted under the retained key';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'post_commission_payment';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected post still performed work (% effects)', v_count;
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_b)::text, true);
+  BEGIN
+    PERFORM public.post_commission_payment(v_p1, v_actor_b, 'key-post-1');
+    RAISE EXCEPTION 'SMOKE_FAIL: a second actor consumed the post receipt';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_ACTOR_MISMATCH%' THEN RAISE; END IF;
+  END;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_a)::text, true);
+
+  ----------------------------------------------------------------------------
+  -- void_commission_payment
+  ----------------------------------------------------------------------------
+  v_res := public.void_commission_payment(v_p1, 'duplicate batch', v_actor_a, 'key-void-1');
+  IF v_res->>'payment_id' IS DISTINCT FROM v_p1::text THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: void returned %', v_res;
+  END IF;
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'void_commission_payment';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: expected 1 void effect, found %', v_count;
+  END IF;
+
+  -- Identical reason, surrounding whitespace only: still the same intent.
+  v_res2 := public.void_commission_payment(v_p1, '  duplicate batch ', v_actor_a, 'key-void-1');
+  IF v_res2 IS DISTINCT FROM v_res THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: void replay returned % instead of %', v_res2, v_res;
+  END IF;
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'void_commission_payment';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: void replay performed a second void (% effects)', v_count;
+  END IF;
+
+  -- Changed reason on the retained key.
+  BEGIN
+    PERFORM public.void_commission_payment(v_p1, 'wrong recipient', v_actor_a, 'key-void-1');
+    RAISE EXCEPTION 'SMOKE_FAIL: a changed void reason was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- Changed payment on the retained key.
+  BEGIN
+    PERFORM public.void_commission_payment(v_p2, 'duplicate batch', v_actor_a, 'key-void-1');
+    RAISE EXCEPTION 'SMOKE_FAIL: a different payment was voided under the retained key';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_b)::text, true);
+  BEGIN
+    PERFORM public.void_commission_payment(v_p1, 'duplicate batch', v_actor_b, 'key-void-1');
+    RAISE EXCEPTION 'SMOKE_FAIL: a second actor consumed the void receipt';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_ACTOR_MISMATCH%' THEN RAISE; END IF;
+  END;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_a)::text, true);
+
+  ----------------------------------------------------------------------------
+  -- Pre-existing guards are unchanged
+  ----------------------------------------------------------------------------
+  BEGIN
+    PERFORM public.void_commission_payment(v_p2, '   ', v_actor_a, 'key-void-blank');
+    RAISE EXCEPTION 'SMOKE_FAIL: blank void reason was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%REASON_REQUIRED%' THEN RAISE; END IF;
+  END;
+
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1], 'check', 'REF-9', DATE '2026-08-09', NULL, v_actor_b, 'key-forge'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a forged p_performed_by was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%p_performed_by does not match authenticated user%' THEN RAISE; END IF;
+  END;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_c)::text, true);
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1], 'check', 'REF-9', DATE '2026-08-09', NULL, v_actor_c, 'key-nonadmin'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a non-admin created a commission payment';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%Admin access required to create a commission payment%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.post_commission_payment(v_p2, v_actor_c, 'key-nonadmin-post');
+    RAISE EXCEPTION 'SMOKE_FAIL: a non-admin posted a commission payment';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%Admin access required to post a commission payment%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.void_commission_payment(v_p2, 'nope', v_actor_c, 'key-nonadmin-void');
+    RAISE EXCEPTION 'SMOKE_FAIL: a non-admin voided a commission payment';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%INSUFFICIENT_ROLE%' THEN RAISE; END IF;
+  END;
+
+  PERFORM set_config('request.jwt.claims', '', true);
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1], 'check', 'REF-9', DATE '2026-08-09', NULL, NULL, 'key-anon'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: an unauthenticated caller created a commission payment';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%Not authenticated%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.void_commission_payment(v_p2, 'nope', NULL, 'key-anon-void');
+    RAISE EXCEPTION 'SMOKE_FAIL: an unauthenticated caller voided a commission payment';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%AUTH_REQUIRED%' THEN RAISE; END IF;
+  END;
+
+  RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
+END;
+$smoke$;

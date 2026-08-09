@@ -17,6 +17,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
@@ -339,8 +340,24 @@ export default function CommissionPayments() {
       setShowCreate(false);
       fetchPayments();
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_commission_payment' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to create payment');
+      // The retry key is bound to one actor and one exact request. When the
+      // database refuses it, no payment was created for THIS request, so the
+      // key can be retired and the next click starts a clean action.
+      const rejection = getIdempotencyBindingRejection(err);
+      if (rejection) {
+        createPaymentIdem.resetKey();
+        if (rejection === 'actor') {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_commission_payment_actor_mismatch' } });
+        }
+        toast('warning', rejection === 'actor'
+          ? 'That retry belongs to another user, so nothing was created. Reload the page and try again.'
+          : 'An earlier commission payment already went through on this retry, so nothing new was created. The list has been refreshed — review it before creating another.');
+        setShowCreate(false);
+        fetchPayments();
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_commission_payment' } });
+        toast('error', err instanceof Error ? err.message : 'Failed to create payment');
+      }
     }
     setCreating(false);
   };
@@ -371,8 +388,21 @@ export default function CommissionPayments() {
       toast('success', 'Commission payment posted');
       fetchPayments();
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_commission_payment' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to post');
+      // See handleCreate: a refused retry key means this posting did not run.
+      const rejection = getIdempotencyBindingRejection(err);
+      if (rejection) {
+        postPaymentIdem.resetKey();
+        if (rejection === 'actor') {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_commission_payment_actor_mismatch' } });
+        }
+        toast('warning', rejection === 'actor'
+          ? 'That retry belongs to another user, so nothing was posted. Reload the page and try again.'
+          : 'A different commission payment was already posted on this retry, so nothing was posted now. The list has been refreshed — check it before posting again.');
+        fetchPayments();
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_commission_payment' } });
+        toast('error', err instanceof Error ? err.message : 'Failed to post');
+      }
     }
     setPosting(null);
   };
@@ -414,8 +444,24 @@ export default function CommissionPayments() {
       setVoidTarget(null);
       fetchPayments();
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_commission_payment' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to void payment');
+      // See handleCreate: a refused retry key means this void did not run.
+      const rejection = getIdempotencyBindingRejection(err);
+      if (rejection) {
+        voidPaymentIdem.resetKey();
+        if (rejection === 'actor') {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_commission_payment_actor_mismatch' } });
+        }
+        toast('warning', rejection === 'actor'
+          ? 'That retry belongs to another user, so nothing was voided. Reload the page and try again.'
+          : 'An earlier void already went through on this retry, so nothing was voided now. The list has been refreshed — check it before voiding again.');
+        setShowVoid(false);
+        setVoidReason('');
+        setVoidTarget(null);
+        fetchPayments();
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_commission_payment' } });
+        toast('error', err instanceof Error ? err.message : 'Failed to void payment');
+      }
     }
     setVoiding(false);
   };

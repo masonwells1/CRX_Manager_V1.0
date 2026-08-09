@@ -44,6 +44,26 @@ export function legacyIntentChanged(
 }
 
 /**
+ * Why a retained idempotency key was refused by the intent-binding guard.
+ * 'intent' — the key already committed a DIFFERENT request than this one.
+ * 'actor'  — the key was first used by a different signed-in user.
+ *
+ * Either way the database performed no work for the current request, so the
+ * caller may safely reset its key and let the next attempt start fresh.
+ */
+export type IdempotencyBindingRejection = 'intent' | 'actor';
+
+export function getIdempotencyBindingRejection(
+  error: unknown,
+): IdempotencyBindingRejection | null {
+  if (!error || typeof error !== 'object') return null;
+  const message = (error as { message?: unknown }).message;
+  if (message === 'IDEMPOTENCY_INTENT_MISMATCH') return 'intent';
+  if (message === 'IDEMPOTENCY_ACTOR_MISMATCH') return 'actor';
+  return null;
+}
+
+/**
  * Extracts the committed receipt returned in an IDEMPOTENCY_INTENT_MISMATCH
  * error. PostgREST errors are plain objects, so do not use instanceof Error.
  */

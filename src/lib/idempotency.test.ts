@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
+import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -91,6 +91,25 @@ describe('getIdempotencyMismatchResult', () => {
       message: 'IDEMPOTENCY_INTENT_MISMATCH',
       details: JSON.stringify({ operation: 'save_invoice' }),
     }, 'save_invoice')).toBeNull();
+  });
+});
+
+describe('getIdempotencyBindingRejection', () => {
+  it('classifies the two intent-binding refusals and nothing else', () => {
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_INTENT_MISMATCH' })).toBe('intent');
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_ACTOR_MISMATCH' })).toBe('actor');
+    expect(getIdempotencyBindingRejection(new Error('IDEMPOTENCY_ACTOR_MISMATCH'))).toBe('actor');
+  });
+
+  it('fails closed for anything else, so real failures still surface as errors', () => {
+    expect(getIdempotencyBindingRejection(null)).toBeNull();
+    expect(getIdempotencyBindingRejection('IDEMPOTENCY_INTENT_MISMATCH')).toBeNull();
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE' })).toBeNull();
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_RECEIPT_MISSING' })).toBeNull();
+    expect(getIdempotencyBindingRejection({ message: 'Admin access required to post a commission payment' })).toBeNull();
+    // A substring must not be enough — only the exact refusal codes count.
+    expect(getIdempotencyBindingRejection({ message: 'wrapped: IDEMPOTENCY_INTENT_MISMATCH' })).toBeNull();
+    expect(getIdempotencyBindingRejection({})).toBeNull();
   });
 });
 
