@@ -37,7 +37,6 @@ import type { PickListData } from '../lib/orderPickListPdf';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
-import { stripInternalNotes } from '../lib/internalNotes';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
 /** Temporary new item (not yet saved to DB — has no real id) */
@@ -363,9 +362,9 @@ export default function OrderDetail() {
           extended_price: it.total_price,
         })),
         total_price: order.total_price,
-        // Customer-facing document: strip the internal below-cost approval
-        // reason. The pick list below is internal and prints notes raw.
-        notes: stripInternalNotes(order.notes),
+        // Raw notes: orderSummaryPdf redacts internal annotations itself, so
+        // the batch path from the Orders page is covered by the same rule.
+        notes: order.notes,
       };
       await downloadOrderSummaryPdf(data);
       toast('success', 'Order summary downloaded');

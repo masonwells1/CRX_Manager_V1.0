@@ -9,6 +9,47 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-09 — Pricing: commission clawback, no historical backfill, per-product margin targets, below-cost as a hard rule
+
+Four settled answers to the open questions from the 2026-08-08 product pricing audit
+(`docs/audits/2026-08-08-product-pricing-full-audit-and-strategy.md`). All four are Mason's
+words in chat, 2026-08-09.
+
+**1. Commission is clawed back on returns.** Today the returns lifecycle
+(`20260507110000_returns_lifecycle_rebuild.sql`) does not reference commissions at all, so a rep
+keeps full commission on product the customer sends back. **Decision: yes, pull it back**, and if
+the commission was already paid out, **reverse it against the rep's next check** rather than
+letting paid amounts stand. Operative rule: a return must generate a proportional negative
+commission adjustment; unpaid commission is reduced directly, already-paid commission becomes a
+debit carried into the next commission period.
+
+**2. No historical backfill.** The returns-COGS reversal corrects cost handling going forward, and
+the earlier question was whether to correct returns already in the database. **Decision: leave
+history as-is.** Reason: the app is not in production use for this functionality until next year,
+so the historical rows are test and transitional data, not real financial history worth correcting.
+Operative rule: do not write backfill migrations for pre-2026-08 returns COGS; if real data is
+entered before the cutover, revisit this.
+
+**3. Margin targets are per-product, not global.** **Decision: targets vary product by product** —
+there is no single company-wide margin number to price against. Operative rule: the pricing workbook
+cycle needs a per-product target, so the design must carry a target margin on the product record (or
+an equivalent per-SKU store) rather than a single configured constant. A global default may exist as
+a fallback for products with no target set, but the per-product value is authoritative. Note for
+whoever builds it: without a target populated somewhere, the workbook cannot flag anything, so
+seeding strategy for the ~600 SKUs is part of that work.
+
+**4. Below-cost selling becomes a hard rule, with an admin exception.** The 2026-08-08 work shipped
+below-cost approval as a UI confirmation, which a direct RPC caller bypasses and which a catalog-cost
+increase mid-transaction can defeat (Codex round 4, PR #350). **Decision: make it a wall — enforce it
+server-side — but admins can still sell under cost.** Operative rule: the money-write RPCs must
+reject a below-cost line unless an approval reason is supplied, with the check performed against the
+locked product cost inside the same transaction; the admin role retains the ability to proceed. This
+is deliberately a cross-cutting change to the money-write surface (`bulk_import_order`, `save_order`,
+`update_order_items`, and the invoice/quote equivalents), to be decided once and applied
+consistently rather than patched into one RPC.
+
+---
+
 ## 2026-08-07 — Governed Autonomous Software Factory REMOVED
 
 **Decision (Mason, in chat — "release the stranglehold"; chose full removal over a rebuild):** remove

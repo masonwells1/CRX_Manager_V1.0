@@ -52,4 +52,27 @@ describe('stripInternalNotes', () => {
     const notes = `Gate code 4412\nDeliver Tuesday\n${BELOW_COST_APPROVAL_PREFIX} clearance`;
     expect(stripInternalNotes(notes)).toBe('Gate code 4412\nDeliver Tuesday');
   });
+
+  // The reason is free-form textarea input, so it can carry its own newlines
+  // and em dashes. Every character from the marker onward must go.
+  it('removes a multi-line reason in full, not just its first line', () => {
+    const notes = appendBelowCostApproval(
+      'Deliver Tuesday',
+      'price match\ncustomer threatened to move to Helena'
+    );
+    expect(stripInternalNotes(notes)).toBe('Deliver Tuesday');
+    expect(stripInternalNotes(notes)).not.toContain('Helena');
+  });
+
+  it('removes a reason containing an em dash in full', () => {
+    const notes = appendBelowCostApproval('Gate code 4412', 'clearance — moving old stock');
+    expect(stripInternalNotes(notes)).toBe('Gate code 4412');
+    expect(stripInternalNotes(notes)).not.toContain('moving old stock');
+  });
+
+  it('removes a multi-line reason appended by the bulk import path', () => {
+    const notes = appendBelowCostApproval('Spring prepay', 'goodwill\nsee Mason');
+    expect(stripInternalNotes(notes)).toBe('Spring prepay');
+    expect(stripInternalNotes(notes)).not.toContain('see Mason');
+  });
 });
