@@ -201,7 +201,12 @@ function isDynamicSqlStatement(stmt) {
     ASSIGN_RE.test(stmt) ||
     DECLARATION_INIT_RE.test(stmt) ||
     /\bSELECT\b[\s\S]*\bINTO\b/i.test(stmt) ||
-    /\bVALUES\b[\s\S]*\bINTO\b/i.test(stmt);
+    /\bVALUES\b[\s\S]*\bINTO\b/i.test(stmt) ||
+    // pg_cron stores its command argument for later execution. Treat a
+    // function-bearing command like every other runtime DDL builder; the
+    // surrounding name/schedule literals mean it is not one direct DDL literal,
+    // so fail closed and use the explicit exemption/manual-review path.
+    /\bcron\s*\.\s*schedule\s*\(/i.test(stmt);
 }
 
 // EXECUTE is also a PostgreSQL privilege keyword. These two complete statement

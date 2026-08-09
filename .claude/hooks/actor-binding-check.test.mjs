@@ -226,6 +226,35 @@ const BOUND_DDL =
   "IF p_performed_by IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION ''ACTOR_MISMATCH''; END IF; " +
   "UPDATE invoices SET created_by = auth.uid(); END $fn$;";
 
+r = runHook(`SELECT cron.schedule(
+  'delayed-actor-ddl',
+  '* * * * *',
+  $job$${UNBOUND_DDL}$job$
+);`);
+ok(isDeny(r), "top-level cron.schedule cannot hide a delayed unbound actor function");
+ok(r.stdout.includes("builds a CREATE FUNCTION"), "scheduled DDL denial explains the fail-closed boundary");
+
+r = runHook(`SELECT cron.schedule(
+  'existing-safe-job',
+  '0 6 * * *',
+  $job$SELECT public.existing_safe_job()$job$
+);`);
+ok(!isDeny(r), "a normal top-level cron.schedule call without function DDL remains allowed");
+
+r = runHook(`SELECT cron.schedule(
+  'split-actor-ddl',
+  '* * * * *',
+  $head$CREATE $head$ || $tail$${UNBOUND_DDL.replace(/^CREATE /, "")}$tail$
+);`);
+ok(isDeny(r), "cron.schedule DDL split across literals fails closed");
+
+r = runHook(`SELECT cron.schedule(
+  'bound-but-fancy-ddl',
+  '* * * * *',
+  $job$${BOUND_DDL}$job$
+);`);
+ok(isDeny(r), "scheduled function DDL uses exemption even when its current text appears bound");
+
 r = runHook(`DO $do$ BEGIN EXECUTE '${UNBOUND_DDL}'; END $do$;`);
 ok(isDeny(r), "an unbound actor function in one EXECUTE string is lexed and blocked");
 

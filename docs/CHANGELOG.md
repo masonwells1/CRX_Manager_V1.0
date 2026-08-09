@@ -371,9 +371,9 @@ definition is one readable string literal. Split/concatenated definitions,
 `format(...)` wrappers, `:=` and `=` variable assembly, and `SELECT ... INTO`
 assembly fail closed with an explanation and the existing
 `-- actor-binding-check: exempt` human-review escape hatch. The actor-binding
-suite grew from 24 to 110 assertions, including comment-hidden headers, nested
+suite grew from 24 to 115 assertions, including comment-hidden headers, nested
 comments, dollar-quoted defaults, explicit parse failures, dynamic DDL, and
-quoted actor parameters. Fifty-three individual clause-removal mutations were run;
+quoted actor parameters. Fifty-four individual clause-removal mutations were run;
 each made the real suite fail before the clause was restored. The reference
 idempotency suite remained green at 86 assertions.
 
@@ -490,6 +490,16 @@ a semicolon hidden in a trailing comment, a correctly bound post-body definer,
 the missing-terminator denial, and statement-boundary isolation.
 Removing the post-body attribute slice, the missing-terminator refusal, or the
 statement-bounded slice alone makes its exact regression turn red.
+
+The thirteenth exact-SHA Codex review found that top-level
+`SELECT cron.schedule(...)` stores its command string for later execution, but
+the rewritten mask treated that string as ordinary data. A scheduled actor
+function could therefore be created after migration-time catalog sweeps. The
+runtime-SQL classifier now treats `cron.schedule` as an execution context and
+refuses function-bearing scheduled commands unless the migration uses the
+explicit exemption/manual-review path. Normal scheduled calls without function
+DDL remain allowed. Removing only the scheduling context makes the reproduced
+unsafe scheduled function regression turn red.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
