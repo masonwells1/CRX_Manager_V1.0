@@ -33,8 +33,11 @@ un-fixed on `main`:
   `bash-safety.mjs`. (The tree-ish argument is required — without `HEAD` the
   command errors out harmlessly — so the regression test must use the full
   spelling.) Add a `DANGEROUS_CMD_CHECKS` pattern (options tolerated anywhere,
-  per the round-1 lesson); `git checkout-index -f -a` is the sibling plumbing
-  spelling worth covering in the same pattern sweep.
+  per the round-1 lesson); `git checkout-index` is the sibling plumbing spelling
+  worth covering in the same sweep. Key that one on **forced** `checkout-index`
+  (`-f`/`--force`) regardless of `-a` — `git checkout-index -f <path>` and
+  `--force --stdin` overwrite tracked files from the index just as thoroughly as
+  `-f -a` does. Regression cases: all-files, targeted-path, and stdin.
 
 Both have the same shape as the merged fixes — pattern + spot-check + entry in
 `guards.test.mjs` (`node --test .claude/hooks/*.test.mjs`, 22 passing today).
