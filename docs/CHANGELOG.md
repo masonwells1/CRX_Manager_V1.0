@@ -2,6 +2,35 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-09 — Settled the canonical-profit question and wrote the fix as a reviewed,…
+
+Settled the canonical-profit question and wrote the fix as a reviewed, unapplied migration. Live measurement showed the order-vs-lines profit disagreement is a stale-cache bug, not a rounding artefact: orders.total_profit is trigger-recomputed and correct, while order_items.profit is a stored snapshot nothing refreshes, leaving 37 of 288 line rows stale across 17 orders. Mason decided the order header is canonical and line profit is derived from it, rounding each line's revenue and cost to whole cents before subtracting so the lines sum to the header exactly. Migration 20260809230500_single_canonical_line_profit.sql implements that, is forward-only, moves no live money, and is NOT yet applied; both migration reviewers returned zero blockers. Also caught and scrubbed live per-order dollar figures from the new file before commit -- this repository is public.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `77a6460c feat(db): make the order header the single canonical profit -- migration written, NOT applied`
+  - `c8bac913 Merge origin/main into claude/phone-to-local-sessions-dmqc57`
+  - `3219db58 docs: resolve CodeRabbit review on PR #354 -- correct three inaccurate claims`
+  - `40b8d9ea docs: record that all five re-issued migrations applied live, including the blocked one`
+  - `a6a3f1fe fix(hooks): the migration ordering guard was escapable by renaming`
+  - `b9ef776a Merge branch 'main' into claude/phone-to-local-sessions-dmqc57`
+  - `1f023a06 Merge remote-tracking branch 'origin/main' into claude/phone-to-local-sessions-dmqc57`
+  - `0b9cbb82 fix(migrations): apply RLS + drift reviewer findings to the five re-issued migrations`
+  - `aaa4c727 fix(migrations): correct the provenance header on the re-issued profit migration`
+  - `13e2e65a Merge remote-tracking branch 'origin/main' into claude/phone-to-local-sessions-dmqc57`
+  - `11afbb12 fix(migrations): re-issue the five foundation-review migrations above the live high-water`
+  - `fce9baa4 Merge remote-tracking branch 'origin/main' into claude/phone-to-local-sessions-dmqc57`
+  - `1028208d docs: handoff for Codex to apply the five migrations and land PR #354`
+  - `01e2f50d fix: name the apply's own project in the snapshot recapture instructions`
+  - `ed36c5f4 docs: file the ordering-guard concurrent-checkout gap as an OPEN known issue`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260808150200_cancel_order_zeroes_quantity_remaining.sql`
+  - `supabase/migrations/20260809170500_restore_batch_apply_prepayments_actor_guard.sql`
+  - `supabase/migrations/20260809170600_cancel_order_zeroes_quantity_remaining.sql`
+  - `supabase/migrations/20260809170700_revoke_inventory_truncate_and_mark_payments_dead.sql`
+  - `supabase/migrations/20260809170800_round_money_to_whole_cents.sql`
+  - `supabase/migrations/20260809170900_round_line_profit_with_revenue.sql`
+  - `supabase/migrations/20260809230500_single_canonical_line_profit.sql`
+
 ## 2026-08-09 — PR #354 local takeover: backup, Codex BLOCK, and the five migrations re-issued forward
 
 The cloud session that opened #354 wrote itself a handoff. A local session executed it, and the
