@@ -140,6 +140,13 @@ can write and review a migration but can never apply one.
 (or any environment with the trusted Codex CLI). Plan remote sessions to end at PARKED, and do not
 promise an apply from one.
 
+**The same session also cannot MERGE a risky PR.** `pr-merge-guard` shells out to `gh`, which a
+web container does not have, so it denies the merge fail-closed (`spawnSync gh ENOENT`) — and even
+with `gh` installed, a money/`_cents`/migration diff additionally requires a fresh exact-SHA
+`write-codex-push-proof.mjs` run, which needs the same missing Codex CLI. So a remote session can
+take a risky branch all the way to green CI but cannot land it. Confirmed 2026-08-09 on PR #350:
+all ten checks green, merge denied. Land it from Mason's machine.
+
 **Two lesser things found on the same path**, both worth knowing before the next attempt:
 - The applied-migration snapshot (`.claude/session-state/applied-migrations.json`) is gitignored
   and per-checkout, so a fresh container always lacks it and the ordering guard abstains until it
