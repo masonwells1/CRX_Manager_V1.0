@@ -182,7 +182,11 @@ describe('product pricing workbook', () => {
       has_formula: false,
       formula_cells: [],
     });
-  });
+    // Generates and re-parses a real xlsx via ExcelJS. Standalone it runs in
+    // ~1.3s, but under full-suite parallel load it has repeatedly crossed the
+    // 5s default and failed the pre-commit gate. The work is I/O-bound, not
+    // hung — give it headroom rather than retrying the commit until it passes.
+  }, 20000);
 
   it('creates the exact sheets, a veryHidden manifest, hidden row tokens, and blank mode validation', async () => {
     const { workbook } = await loadGeneratedWorkbook();
