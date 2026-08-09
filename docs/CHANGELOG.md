@@ -39,6 +39,29 @@ Closed the remaining Codex and CodeRabbit findings on the pricing branch.
   renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
   "35 stragglers" claim was corrected to the verified counts of 2 and 3.
 
+**Round 11 (Codex) — a lock-out I shipped, plus two consistency fixes:**
+
+- **`QUOTE_STALE_CLIENT` refused a legitimate edit.** The round-7 stale-client guard inferred a
+  current bundle by counting echoed line ids. But `assignProduct` deliberately clears the id of a
+  line whose product changed, so a user who changes the product on *every* line — trivially, on a
+  one-line quote — echoed nothing and was refused. Reloading could not clear it either: repeating
+  the same legitimate edit reproduces the same payload, so the operator was locked out with no way
+  forward. My earlier note calling this "rare and recoverable by saving twice" was wrong. Replaced
+  the heuristic with an explicit `client_sends_item_ids` capability marker that `QuoteBuilder` sets
+  on the payload; `BulkQuoteImport` is unaffected (it always passes `p_quote_id: null`, so the
+  guard cannot fire).
+- **Rounding boundary.** `get_profitability_report` summed unrounded line costs and rounded only
+  the group total, while its sibling reports round each line first — so a fractional quantity with
+  a sub-cent extended cost made the "unified" reports disagree. Now rounds per line, matching.
+
+**Deferred with reasons (Codex round 11):** the below-cost checks on `save_quote`/`save_invoice`
+comparing browser-held cost rather than server cost is the same settled server-side-enforcement work
+already recorded above. Separately, `update_order_items` still derives `cost_per_unit`, line profit
+and commissions from the caller-supplied cost while the new trigger stamps `cost_at_time_cents` from
+the server, so a product swap can leave the reports and the order records on different costs; that
+needs `update_order_items` itself to lock one server cost for every derived field, which is a change
+to that RPC's contract rather than to this migration.
+
 **Rounds 9-10 (Codex + CodeRabbit):**
 
 - **Moving a quote line to another quote (Codex P1).** The snapshot guard blocked editing the cost

@@ -234,7 +234,6 @@ DECLARE
   v_payload_item_id text;
   v_reuse_item_id uuid;
   v_preserved_cost bigint;
-  v_echoed_prior_count int := 0;
   -- >>>SNAPSHOT
 BEGIN
   v_actor := auth.uid();
@@ -487,7 +486,6 @@ BEGIN
            AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id' THEN
           v_reuse_item_id := v_payload_item_id::uuid;
           v_preserved_cost := (v_prior_item_costs->v_payload_item_id->>'c')::bigint;
-          v_echoed_prior_count := v_echoed_prior_count + 1;
         END IF;
       END IF;
       -- >>>SNAPSHOT
@@ -543,13 +541,16 @@ BEGIN
   -- silently rewriting quote profit and any order converted from it. A note
   -- only save from such a tab is enough to do it.
   --
-  -- A current tab always echoes the id of every line it loaded, so on an
-  -- existing quote that already had lines, zero echoed ids means the caller is
-  -- stale. Fail closed and make the operator refresh. This also trips if a user
-  -- replaces every single line in one save, which is rare and recoverable; a
-  -- silent rewrite of historical cost is neither.
-  IF v_prior_item_costs <> '{}'::jsonb AND v_echoed_prior_count = 0 THEN
-    RAISE EXCEPTION 'QUOTE_STALE_CLIENT: this page is out of date and cannot save without discarding the recorded quote-time costs. Refresh the quote and re-apply your changes.'
+  -- The test is an EXPLICIT capability marker the current bundle sets, not a
+  -- count of echoed ids. Counting echoes was wrong: QuoteBuilder deliberately
+  -- clears the id of a line whose product changed, so a user who changes the
+  -- product on every line -- trivially, on a one-line quote -- echoes nothing
+  -- and would be refused. Refreshing could not clear it either, because
+  -- repeating the same legitimate edit reproduces the same payload, so the
+  -- operator was locked out of an ordinary edit with no way forward.
+  IF v_prior_item_costs <> '{}'::jsonb
+     AND COALESCE((p_quote_payload->>'client_sends_item_ids')::boolean, false) IS NOT TRUE THEN
+    RAISE EXCEPTION 'QUOTE_STALE_CLIENT: this page is running an out-of-date version and cannot save without discarding the recorded quote-time costs. Reload the page and re-apply your changes.'
       USING ERRCODE = 'P0001';
   END IF;
   -- >>>SNAPSHOT
@@ -1049,6 +1050,9 @@ BEGIN
       -- domain error raised before the INSERT (not a PK violation).
       AND position('v_consumed_item_ids' in p.prosrc) > 0
       AND position('QUOTE_STALE_CLIENT' in p.prosrc) > 0
+      -- The stale-client test must be the explicit capability marker, never a
+      -- count of echoed ids (that locked out a legitimate replace-every-line save).
+      AND position('client_sends_item_ids' in p.prosrc) > 0
       AND position('QUOTE_ITEM_ID_DUPLICATE' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: save_quote not snapshot-aware or security posture wrong';

@@ -790,7 +790,13 @@ BEGIN
       o.id AS order_id,
       oi.total_units_needed AS quantity,
       oi.total_price AS revenue,
-      COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed AS cost
+      -- Round each LINE to whole cents before aggregating, matching
+      -- get_sales_detail_report and get_sales_summary_report. Summing unrounded
+      -- line costs and rounding only the group total lets a fractional quantity
+      -- with a sub-cent extended cost contribute a different number here than
+      -- in the sibling reports, so the reports this migration is supposed to
+      -- unify would disagree on profit and margin.
+      ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS cost
     FROM public.order_items oi
     JOIN public.orders o ON o.id = oi.order_id
     LEFT JOIN public.customers c ON c.id = o.customer_id
