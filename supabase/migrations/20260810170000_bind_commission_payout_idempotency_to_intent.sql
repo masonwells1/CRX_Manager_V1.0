@@ -183,6 +183,7 @@ GRANT EXECUTE ON FUNCTION public.check_idempotency_intent(text, text, uuid, text
 DO $rename_create$
 DECLARE
   v_src text;
+  v_code text;
 BEGIN
   IF to_regprocedure('public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.create_commission_payment(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
@@ -200,7 +201,20 @@ BEGIN
     -- raises IDEMPOTENCY_RECEIPT_MISSING if it is absent — and it must touch
     -- commission_payment_items, which no thin wrapper does. Fail closed rather
     -- than rename an unrelated body into the implementation slot.
-    IF v_src NOT LIKE '%check_idempotency(%' OR v_src NOT LIKE '%commission_payment_items%' THEN
+    -- prosrc keeps the comments, so a body that merely MENTIONS
+    -- check_idempotency() in a comment would satisfy a plain LIKE while doing
+    -- nothing of the kind. Strip block comments then line comments and match
+    -- the code that is left. Stripping can only remove text, so every way this
+    -- goes wrong (a '--' inside a string literal, a nested block comment)
+    -- deletes a marker and refuses loudly; it can never invent one.
+    --
+    -- Deliberately asymmetric with the wrapper-marker check above, which reads
+    -- the RAW source: there, ANY mention — comment included — should stop us,
+    -- because renaming the wrapper onto itself is the unrecoverable outcome.
+    v_code := regexp_replace(
+                regexp_replace(v_src, '/\*.*?\*/', ' ', 'gs'),
+                '--[^\n]*', ' ', 'g');
+    IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
       RAISE EXCEPTION 'public.create_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
     ALTER FUNCTION public.create_commission_payment(uuid[], text, text, date, text, uuid, text)
@@ -257,9 +271,20 @@ BEGIN
   -- with no receipt and therefore no intent binding at all — an authenticated
   -- admin calling the RPC directly (PostgREST lets a defaulted argument be
   -- omitted) reached the money path unbound, which is the exact hole this
-  -- migration exists to close. Every caller in this repository already sends
-  -- one, so refusing here costs nothing and leaves no unbound door.
-  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+  -- migration exists to close. Every application caller already sends one, and
+  -- the one checked-in smoke script that passed NULL
+  -- (scripts/smoke/smoke-commission_payment_for_update_fix.sql) was fixed in the
+  -- same change, so refusing here leaves no unbound door.
+  -- Two predicates, deliberately. The first is the house rule already live in
+  -- 20260721145936 across every money/lifecycle RPC, kept so this path does not
+  -- drift from the rest. The second is locale-independent: [[:space:]] follows
+  -- the database collation, so whether NBSP or an em-space counts as blank is
+  -- not the same answer on every cluster, and a key made only of those would be
+  -- accepted somewhere. Every key this application generates is ASCII, so
+  -- demanding one printable ASCII character costs no real caller anything.
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key !~ '[!-~]' THEN
     RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_commission_payment requires p_idempotency_key';
   END IF;
 
@@ -342,6 +367,7 @@ GRANT EXECUTE ON FUNCTION public.create_commission_payment(uuid[], text, text, d
 DO $rename_post$
 DECLARE
   v_src text;
+  v_code text;
 BEGIN
   IF to_regprocedure('public._post_commission_payment_intent_impl_20260809(uuid, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.post_commission_payment(uuid, uuid, text)') IS NULL THEN
@@ -353,7 +379,20 @@ BEGIN
       RAISE EXCEPTION 'public.post_commission_payment is already the intent-binding wrapper but its implementation _post_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
     -- See create: absence of the wrapper marker is not proof of identity.
-    IF v_src NOT LIKE '%check_idempotency(%' OR v_src NOT LIKE '%commission_payment_items%' THEN
+    -- prosrc keeps the comments, so a body that merely MENTIONS
+    -- check_idempotency() in a comment would satisfy a plain LIKE while doing
+    -- nothing of the kind. Strip block comments then line comments and match
+    -- the code that is left. Stripping can only remove text, so every way this
+    -- goes wrong (a '--' inside a string literal, a nested block comment)
+    -- deletes a marker and refuses loudly; it can never invent one.
+    --
+    -- Deliberately asymmetric with the wrapper-marker check above, which reads
+    -- the RAW source: there, ANY mention — comment included — should stop us,
+    -- because renaming the wrapper onto itself is the unrecoverable outcome.
+    v_code := regexp_replace(
+                regexp_replace(v_src, '/\*.*?\*/', ' ', 'gs'),
+                '--[^\n]*', ' ', 'g');
+    IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
       RAISE EXCEPTION 'public.post_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
     ALTER FUNCTION public.post_commission_payment(uuid, uuid, text)
@@ -394,7 +433,16 @@ BEGIN
   END IF;
 
   -- See create: a key is REQUIRED, so no caller reaches the money path unbound.
-  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+  -- Two predicates, deliberately. The first is the house rule already live in
+  -- 20260721145936 across every money/lifecycle RPC, kept so this path does not
+  -- drift from the rest. The second is locale-independent: [[:space:]] follows
+  -- the database collation, so whether NBSP or an em-space counts as blank is
+  -- not the same answer on every cluster, and a key made only of those would be
+  -- accepted somewhere. Every key this application generates is ASCII, so
+  -- demanding one printable ASCII character costs no real caller anything.
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key !~ '[!-~]' THEN
     RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_commission_payment requires p_idempotency_key';
   END IF;
 
@@ -453,6 +501,7 @@ GRANT EXECUTE ON FUNCTION public.post_commission_payment(uuid, uuid, text)
 DO $rename_void$
 DECLARE
   v_src text;
+  v_code text;
 BEGIN
   IF to_regprocedure('public._void_commission_payment_intent_impl_20260809(uuid, text, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.void_commission_payment(uuid, text, uuid, text)') IS NULL THEN
@@ -464,7 +513,20 @@ BEGIN
       RAISE EXCEPTION 'public.void_commission_payment is already the intent-binding wrapper but its implementation _void_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
     -- See create: absence of the wrapper marker is not proof of identity.
-    IF v_src NOT LIKE '%check_idempotency(%' OR v_src NOT LIKE '%commission_payment_items%' THEN
+    -- prosrc keeps the comments, so a body that merely MENTIONS
+    -- check_idempotency() in a comment would satisfy a plain LIKE while doing
+    -- nothing of the kind. Strip block comments then line comments and match
+    -- the code that is left. Stripping can only remove text, so every way this
+    -- goes wrong (a '--' inside a string literal, a nested block comment)
+    -- deletes a marker and refuses loudly; it can never invent one.
+    --
+    -- Deliberately asymmetric with the wrapper-marker check above, which reads
+    -- the RAW source: there, ANY mention — comment included — should stop us,
+    -- because renaming the wrapper onto itself is the unrecoverable outcome.
+    v_code := regexp_replace(
+                regexp_replace(v_src, '/\*.*?\*/', ' ', 'gs'),
+                '--[^\n]*', ' ', 'g');
+    IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
       RAISE EXCEPTION 'public.void_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
     ALTER FUNCTION public.void_commission_payment(uuid, text, uuid, text)
@@ -508,7 +570,16 @@ BEGIN
   IF p_reason IS NULL OR btrim(p_reason) = '' THEN RAISE EXCEPTION 'REASON_REQUIRED'; END IF;
 
   -- See create: a key is REQUIRED, so no caller reaches the money path unbound.
-  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+  -- Two predicates, deliberately. The first is the house rule already live in
+  -- 20260721145936 across every money/lifecycle RPC, kept so this path does not
+  -- drift from the rest. The second is locale-independent: [[:space:]] follows
+  -- the database collation, so whether NBSP or an em-space counts as blank is
+  -- not the same answer on every cluster, and a key made only of those would be
+  -- accepted somewhere. Every key this application generates is ASCII, so
+  -- demanding one printable ASCII character costs no real caller anything.
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key !~ '[!-~]' THEN
     RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: void_commission_payment requires p_idempotency_key';
   END IF;
 

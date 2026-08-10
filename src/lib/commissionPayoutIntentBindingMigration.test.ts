@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { getIdempotencyBindingRejection } from './idempotency';
 
@@ -165,6 +165,12 @@ describe('commission payout intent-binding migration', () => {
     expect(guard, `${rpc.name} does not reject a whitespace-only key`).toContain(
       "p_idempotency_key !~ '[^[:space:]]'",
     );
+    // [[:space:]] follows the database collation, so whether NBSP counts as
+    // blank is not the same answer on every cluster. Demanding one printable
+    // ASCII character makes the refusal deterministic wherever it runs.
+    expect(guard, `${rpc.name} accepts a key with no printable ASCII character`).toContain(
+      "p_idempotency_key !~ '[!-~]'",
+    );
     expect(guard).toContain(`RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: ${rpc.name}`);
     // And it must refuse rather than fall through to the payout.
     expect(guard, `${rpc.name} still delegates on a missing key`).not.toContain(
@@ -196,9 +202,9 @@ describe('commission payout intent-binding migration', () => {
     const body = wrapperBody(rpc.name);
     const update = body.indexOf('UPDATE public.idempotency_keys');
     expect(update).toBeGreaterThan(-1);
-    // lastIndexOf, not indexOf: the FIRST mention of the implementation is the
-    // un-keyed delegation near the top of the wrapper, so comparing against it
-    // would pass even if the binding UPDATE ran before the real payout call.
+    // lastIndexOf, not indexOf: a wrapper names its implementation more than
+    // once, and comparing against the FIRST mention would pass even if the
+    // binding UPDATE ran before the call that actually moves the money.
     expect(update).toBeGreaterThan(body.lastIndexOf(`public.${rpc.impl}(`));
     const updateBlock = body.slice(update);
     expect(updateBlock).toContain('SET request_fingerprint = v_fingerprint');
@@ -252,9 +258,24 @@ describe('commission payout intent-binding migration', () => {
     // and be renamed into the implementation slot, so the guard also demands the
     // two contract markers the wrapper actually depends on.
     expect(guard, `${rpc.name} renames on absence alone, without an identity check`).toContain(
-      "v_src NOT LIKE '%check_idempotency(%'",
+      "v_code NOT LIKE '%check_idempotency(%'",
     );
-    expect(guard).toContain("v_src NOT LIKE '%commission_payment_items%'");
+    expect(guard).toContain("v_code NOT LIKE '%commission_payment_items%'");
+
+    // …and the markers are matched against the body with its comments removed.
+    // prosrc keeps comments, so matching v_src directly would let a body that
+    // only NAMES check_idempotency() in a comment pose as the payout
+    // implementation. Stripping is one-directional — it can delete a real
+    // marker and cause a loud refusal, never manufacture a missing one.
+    const strip = guard.slice(0, guard.indexOf("v_code NOT LIKE"));
+    expect(strip, `${rpc.name} matches the identity markers against commented source`).toContain(
+      "regexp_replace(v_src, '/\\*.*?\\*/', ' ', 'gs')",
+    );
+    expect(strip).toContain("'--[^\\n]*', ' ', 'g')");
+    // The wrapper-marker check above stays on the RAW source on purpose: there,
+    // any mention at all — comment included — must stop the rename, because
+    // renaming the wrapper onto itself is the unrecoverable outcome.
+    expect(guard.slice(0, guard.indexOf(`LIKE '%${rpc.impl}%' THEN`))).not.toContain('v_code');
   });
 
   it.each(PAYOUT_RPCS)('$name keeps its renamed implementation out of the browser', (rpc) => {
@@ -351,11 +372,14 @@ describe('commission payout intent-binding callers', () => {
     // Whitespace-collapsed so re-indentation does not break it, but the branch
     // ORDER is asserted: widening the actor test to also swallow 'receipt' would
     // leave the receipt message present in the file yet permanently unreachable.
+    // The receipt/intent messages are template literals because they end by
+    // admitting a failed refresh; the actor message is a plain string because
+    // it sends the admin to reload rather than to read the list.
     expect(catchBlock.replace(/\s+/g, ' ')).toContain(
       "toast('warning', rejection === 'actor'"
       + ` ? 'That retry belongs to another user, so ${nothingHappened}. Reload the page and try again.'`
       + " : rejection === 'receipt'"
-      + ` ? 'The database could not confirm the outcome of this request, so ${nothingHappened} now.`,
+      + ` ? \`The database could not confirm the outcome of this request, so ${nothingHappened} now.`,
     );
     // The admin must never be shown the raw database code.
     expect(catchBlock).not.toContain('IDEMPOTENCY_INTENT_MISMATCH');
@@ -384,6 +408,31 @@ describe('commission payout intent-binding callers', () => {
     expect(page).toContain('already used by an earlier void');
   });
 
+  it('derives the key the way the server derives the fingerprint, not with String.trim()', () => {
+    // Postgres btrim(text) with no character set strips the ASCII space and
+    // nothing else; String.trim() also strips tabs, newlines and Unicode spaces
+    // such as NBSP. Building the key with trim() therefore collapsed pairs of
+    // values the server hashes apart — "REF" and "REF\t" shared one key but
+    // produced two fingerprints — so the retry came back as
+    // IDEMPOTENCY_INTENT_MISMATCH on a request the admin never changed. The
+    // client-side normalizer has to mirror btrim exactly.
+    expect(page).toContain("function pgBtrim(value: string): string {");
+    expect(page).toContain("return value.replace(/^ +/, '').replace(/ +$/, '');");
+
+    // The create fields are sent RAW, so btrim runs on the untouched string and
+    // the scope must too.
+    const scope = page.slice(page.indexOf('const selectionScope = JSON.stringify(['));
+    const body = scope.slice(0, scope.indexOf(']);'));
+    expect(body).toContain('pgBtrim(payMethod)');
+    expect(body).toContain('pgBtrim(payRef)');
+    expect(body).toContain('pgBtrim(payNotes)');
+    expect(body, 'the create scope still normalizes with String.trim()').not.toContain('.trim()');
+
+    // p_reason is the one field sent already JS-trimmed, so its scope mirrors
+    // btrim on that same trimmed value rather than on the raw textarea.
+    expect(page).toContain('p_reason: voidReason.trim(),');
+  });
+
   it('keeps the post and void keys per target instead of resetting on row click', () => {
     // handlePost closes its own dialog before the RPC returns, so EVERY retry
     // goes back through the row button. Resetting the key there discarded the
@@ -394,8 +443,12 @@ describe('commission payout intent-binding callers', () => {
     expect(page).toContain(
       "useIdempotencyKey('post_commission_payment', profile?.id || '', postTargetId || '')",
     );
+    // The void key also has to move with the REASON, because the server's void
+    // fingerprint covers btrim(p_reason). Keyed on the row alone, an admin who
+    // retried after editing the reason reused a key the server then refused as
+    // IDEMPOTENCY_INTENT_MISMATCH — a dead end on a genuinely new request.
     expect(page).toContain(
-      "useIdempotencyKey('void_commission_payment', profile?.id || '', voidTarget?.id || '')",
+      "`${voidTarget?.id || ''}|${pgBtrim(voidReason.trim())}`",
     );
 
     // And the row buttons must not reset. Scoped to the JSX handlers so the
@@ -444,13 +497,24 @@ describe('Reports quick-pay idempotency scope', () => {
     expect(markPaid).toContain("generateIdempotencyKey('create_commission_payment'");
   });
 
-  it('scopes the retained key to actor, date and the sorted selection', () => {
+  it('scopes the retained key to actor and the sorted selection, and freezes the date with it', () => {
     // The scope has to match what the server fingerprints. If it were narrower
     // than the fingerprint, a changed field would reuse the key and the server
     // would hard-refuse a retry the admin cannot escape.
-    expect(markPaid).toContain('const scope = `${profile!.id}|${today}|${[...new Set(ids)].sort().join(\'-\')}`');
+    expect(markPaid).toContain('const scope = `${profile!.id}|${[...new Set(ids)].sort().join(\'-\')}`');
     expect(markPaid).toContain('markPaidKeys.current.get(scope)');
-    expect(markPaid).toContain('markPaidKeys.current.set(scope, key)');
+    expect(markPaid).toContain('markPaidKeys.current.set(scope, entry)');
+
+    // Round-6 finding: the payment DATE must travel WITH the retained key, not
+    // sit in the enclosing scope where it is recomputed on every click. The
+    // server fingerprints the date, so a click at 23:59 whose reply was lost
+    // could not replay after midnight if the date were recomputed — the retry
+    // would look like a different request, mint a new key, and create a SECOND
+    // batch for commissions the first click may already have paid.
+    expect(markPaid).toContain('date: today');
+    expect(markPaid).toContain('p_payment_date: entry.date');
+    expect(markPaid, 'the retained key must carry its own date')
+      .not.toContain('p_payment_date: today');
   });
 
   it('retires this click\'s keys only AFTER every recipient landed', () => {
@@ -468,6 +532,16 @@ describe('Reports quick-pay idempotency scope', () => {
 
     const retire = markPaid.indexOf('for (const done of scopesThisClick) markPaidKeys.current.delete(done);');
     expect(retire, 'this click\'s keys are never retired').toBeGreaterThan(loopEnd);
+
+    // Round-6 finding: "after the loop" is not far enough. The status read-back
+    // below the loop can fail, and the catch block it lands in tells the admin
+    // the keys were kept and that clicking again will replay the original
+    // request. Retiring before that read made the promise false — the next
+    // click would mint brand-new keys and pay the same commissions twice.
+    const readBack = markPaid.indexOf(".select('id,status')");
+    expect(readBack, 'the created batches are never read back').toBeGreaterThan(loopEnd);
+    expect(retire, 'keys are retired before the status read-back that can throw')
+      .toBeGreaterThan(readBack);
 
     // And a binding refusal still clears everything, so a scope/fingerprint
     // drift cannot lock the admin out of quick-pay permanently.
@@ -537,17 +611,135 @@ describe('Reports quick-pay idempotency scope', () => {
     const check = markPaid.indexOf(".in('id', createdPaymentIds)");
     expect(check, 'nothing re-reads the payment rows this click points at').toBeGreaterThan(-1);
     expect(markPaid).toContain("from('commission_payments')");
-    expect(markPaid).toContain("(r as { status: string }).status !== 'voided'");
-    // A failed status read must not be swallowed into a false success.
-    expect(markPaid).toContain('if (statusError) throw new Error(statusError.message);');
 
     const successToast = markPaid.indexOf("toast('success'");
     expect(successToast, 'the success toast is missing').toBeGreaterThan(check);
-    const guard = markPaid.indexOf('if (liveCount < createdPaymentIds.length) {');
-    expect(guard, 'the voided-batch guard is missing').toBeGreaterThan(check);
+    const guard = markPaid.indexOf('if (voidedCount > 0 || unverifiedCount > 0) {');
+    expect(guard, 'the voided/unverified batch guard is missing').toBeGreaterThan(check);
     expect(guard).toBeLessThan(successToast);
     // The activity-feed entry has to sit on the same side of the guard as the
     // success toast, or a voided replay writes a "batch created" event anyway.
     expect(markPaid.indexOf("event: 'commission_payment_batch_created'")).toBeGreaterThan(guard);
+  });
+
+  it('keeps "voided" and "could not be read" apart', () => {
+    // Round-6 finding. A batch that came back VOIDED is a proven reversal. A
+    // batch that did not come back — because the read failed, or because the
+    // row was not returned — proves nothing. Counting the second as a void
+    // tells the admin a payout was reversed when it may be sitting there
+    // perfectly intact, and an admin told that goes and pays it again.
+    expect(markPaid).toContain("const voidedCount = createdPaymentIds.filter((id) => statusById.get(id) === 'voided').length;");
+    expect(markPaid).toContain('const unverifiedCount = createdPaymentIds.filter((id) => !statusById.has(id)).length;');
+
+    // A missing row must not fall into the voided bucket by default: the map
+    // is keyed by the ids that actually came back, never pre-seeded.
+    expect(markPaid).toContain('const statusById = new Map<string, string>();');
+    expect(markPaid).toContain('if (r?.id) statusById.set(r.id, String(r.status ?? \'\'));');
+
+    // A failed read is classified, not thrown — but it must still be reported,
+    // or the only trace of a read that never worked is a vague warning.
+    expect(markPaid, 'a failed status read must not abort into the catch block, which would blame the RPC')
+      .not.toContain('if (statusError) throw new Error(statusError.message);');
+    expect(markPaid).toContain("context: 'mark_commissions_paid_status_readback'");
+
+    // …and the two counts must reach the admin as distinct sentences.
+    expect(markPaid).toContain('since been voided, so those commissions are still unpaid');
+    expect(markPaid).toContain('could not be read back just now');
+  });
+
+  it('admits when the list behind the recovery message is stale', () => {
+    // Round-6 finding. Every uncertain-outcome message ends by sending the
+    // admin to the commission list to decide what to do. If the refresh that
+    // was supposed to make that list current failed, the page is showing the
+    // state from BEFORE the click — so "check the list" points at stale money.
+    expect(reports).toContain('const STALE_COMMISSION_LIST_NOTE');
+    expect(markPaid).toContain('const listIsCurrent = await fetchCommissions();');
+    expect(markPaid).toContain('${listIsCurrent ? \'\' : STALE_COMMISSION_LIST_NOTE}');
+    // The refresh has to be able to say it failed, which means reporting a
+    // boolean rather than swallowing the error.
+    expect(reports).toContain('const fetchCommissions = useCallback(async (): Promise<boolean> => {');
+    // Both failure branches carry the same admission.
+    expect(refusalBranch).toContain('STALE_COMMISSION_LIST_NOTE');
+    expect(genericBranch).toContain('STALE_COMMISSION_LIST_NOTE');
+  });
+});
+
+describe('every payout call site supplies an idempotency key', () => {
+  // Round-6 finding. The wrappers now REFUSE a missing key, but nothing in the
+  // type system says so: src/types/supabase.ts is generated from the database,
+  // where p_idempotency_key still carries a DEFAULT and so comes back optional.
+  // A new caller that omits it compiles cleanly and fails at runtime, on the
+  // money path. Hand-editing the generated file would not survive the next
+  // `generate_typescript_types`, so the durable guard is this scan of the real
+  // call sites.
+  const sourceRoot = 'src';
+
+  function sourceFiles(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const path = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return sourceFiles(path);
+      if (!/\.tsx?$/.test(entry.name) || /\.test\.tsx?$/.test(entry.name)) return [];
+      return [path];
+    });
+  }
+
+  // The three wrapped RPCs. Reports' "mark paid" button is not a fourth RPC —
+  // it calls create_commission_payment in a loop, and only its Sentry context
+  // strings say mark_commissions_paid.
+  const KEYED_RPCS = [
+    'create_commission_payment',
+    'post_commission_payment',
+    'void_commission_payment',
+  ];
+
+  const callSites = sourceFiles(sourceRoot).flatMap((path) => {
+    const source = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+    return KEYED_RPCS.flatMap((rpc) => {
+      const open = `.rpc('${rpc}', {`;
+      const found: { path: string; rpc: string; args: string }[] = [];
+      let at = source.indexOf(open);
+      while (at > -1) {
+        // Brace-matched rather than regexed to the next '}': the argument object
+        // contains nested template literals and objects, and stopping at the
+        // first '}' would truncate the very argument being looked for.
+        let depth = 0;
+        let i = at + open.length - 1;
+        for (; i < source.length; i += 1) {
+          if (source[i] === '{') depth += 1;
+          else if (source[i] === '}') {
+            depth -= 1;
+            if (depth === 0) break;
+          }
+        }
+        found.push({ path, rpc, args: source.slice(at, i + 1) });
+        at = source.indexOf(open, i);
+      }
+      return found;
+    });
+  });
+
+  it('finds the payout call sites at all', () => {
+    // A scanner that matches nothing passes every assertion below it. Pin the
+    // count so a rename that hides the call sites fails here instead of quietly
+    // making this whole describe vacuous.
+    expect(callSites.map((c) => `${c.path}:${c.rpc}`).sort()).toEqual([
+      'src/pages/CommissionPayments.tsx:create_commission_payment',
+      'src/pages/CommissionPayments.tsx:post_commission_payment',
+      'src/pages/CommissionPayments.tsx:void_commission_payment',
+      'src/pages/Reports.tsx:create_commission_payment',
+    ]);
+  });
+
+  it.each(KEYED_RPCS)('%s is never called without p_idempotency_key', (rpc) => {
+    const sites = callSites.filter((c) => c.rpc === rpc);
+    expect(sites.length, `no call sites found for ${rpc}`).toBeGreaterThan(0);
+    for (const site of sites) {
+      expect(site.args, `${site.path} calls ${rpc} without p_idempotency_key`).toContain(
+        'p_idempotency_key:',
+      );
+      // …and not with a literal null/undefined, which the wrapper refuses just
+      // as hard as an omitted argument.
+      expect(site.args).not.toMatch(/p_idempotency_key:\s*(null|undefined)\b/);
+    }
   });
 });

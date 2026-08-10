@@ -143,9 +143,13 @@ BEGIN
   -- 2. Scenario (a): happy path — this exact call raised SQLSTATE 0A000
   --    before the fix.
   -- --------------------------------------------------------------------
+  -- A key is REQUIRED since 20260810170000; passing NULL now raises
+  -- IDEMPOTENCY_KEY_REQUIRED before any work happens. Each scenario below uses
+  -- its OWN key so that what rejects a call is the guard the scenario is about,
+  -- never an accidental replay of a previous scenario's receipt.
   v_payment_id := create_commission_payment(
     ARRAY[v_c1, v_c2], 'check', '[SMOKE] ref ' || v_suffix,
-    CURRENT_DATE, '[SMOKE] cpfu notes', v_admin, NULL);
+    CURRENT_DATE, '[SMOKE] cpfu notes', v_admin, '[SMOKE]-cpfu-a-' || v_suffix);
 
   IF v_payment_id IS NULL THEN
     RAISE EXCEPTION 'SMOKE_FAIL(a): create_commission_payment returned NULL';
@@ -206,7 +210,7 @@ BEGIN
   BEGIN
     PERFORM create_commission_payment(
       ARRAY[v_c1, v_c2], 'check', '[SMOKE] dup ' || v_suffix,
-      CURRENT_DATE, '[SMOKE] dup attempt', v_admin, NULL);
+      CURRENT_DATE, '[SMOKE] dup attempt', v_admin, '[SMOKE]-cpfu-b-' || v_suffix);
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
   END;

@@ -33,6 +33,11 @@ type FinancialTab = 'pnl' | 'gross_sales' | 'customer_balance' | 'commission_bal
 type OperationalTab = 'chemical_history' | 'inventory_cost' | 'posted_applications' | 'price_list';
 
 // ─── Existing profitability interfaces (unchanged) ─────────────
+// Quick-pay recovery messages tell the admin what to do next based on what this
+// page is showing. If the refresh behind the message failed, the page is showing
+// the state from BEFORE the click, so say so rather than let it read as current.
+const STALE_COMMISSION_LIST_NOTE = ' The commission list on this page could not be refreshed just now, so reload before marking anything else paid.';
+
 interface CustomerProfit {
   [k: string]: unknown;
   farm_name: string;
@@ -136,7 +141,13 @@ export default function Reports() {
   // commissions are marked paid again, the next click is a genuinely new request
   // instead of replaying the voided payment's receipt and reporting success for
   // a batch that was never created.
-  const markPaidKeys = useRef(new Map<string, string>());
+  //
+  // The payment DATE travels with the key rather than sitting in the scope. The
+  // server fingerprints the date, so a click at 23:59 whose response was lost
+  // could not be replayed at 00:01 if the date were recomputed — the retry would
+  // look like a different request, mint a new key, and try to create a SECOND
+  // batch for commissions the first click may already have paid.
+  const markPaidKeys = useRef(new Map<string, { key: string; date: string }>());
 
   // ─── FINANCIAL data ─────────────────────────────────────────
   const [pnlData, setPnlData] = useState<PnLRow[]>([]);
@@ -223,15 +234,20 @@ export default function Reports() {
     setProductData(result);
   }, [startDate, endDate, toast]);
 
-  const fetchCommissions = useCallback(async () => {
+  // Returns whether the commission list on screen is now current. The quick-pay
+  // recovery messages send the admin to a list to work out what actually
+  // happened, so a refresh that failed has to be admitted rather than papered
+  // over with "check the list".
+  const fetchCommissions = useCallback(async (): Promise<boolean> => {
     let query = supabase.from('commissions').select('*').order('order_date', { ascending: false });
     if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
     if (startDate) query = query.gte('order_date', startDate);
     if (endDate) query = query.lte('order_date', endDate);
     const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load commissions.'); return; }
+    if (error) { toast('error', 'Failed to load commissions.'); return false; }
     setCommissionData((data || []) as CommissionRow[]);
     setSelectedCommissions(new Set());
+    return true;
   }, [isAdmin, profile, startDate, endDate, toast]);
 
   const fetchRevenue = useCallback(async () => {
@@ -507,11 +523,14 @@ export default function Reports() {
         // Sorted and de-duplicated to match the server-side fingerprint, so
         // re-selecting the same commissions in a different order is the same
         // scope here as it is there.
-        const scope = `${profile!.id}|${today}|${[...new Set(ids)].sort().join('-')}`;
-        let key = markPaidKeys.current.get(scope);
-        if (!key) {
-          key = generateIdempotencyKey('create_commission_payment', profile!.id);
-          markPaidKeys.current.set(scope, key);
+        const scope = `${profile!.id}|${[...new Set(ids)].sort().join('-')}`;
+        let entry = markPaidKeys.current.get(scope);
+        if (!entry) {
+          // First attempt for this selection: mint the key and freeze the date
+          // with it, so every replay sends the same date the server already
+          // fingerprinted.
+          entry = { key: generateIdempotencyKey('create_commission_payment', profile!.id), date: today };
+          markPaidKeys.current.set(scope, entry);
         }
         scopesThisClick.push(scope);
         attempted += 1;
@@ -519,23 +538,15 @@ export default function Reports() {
           p_commission_ids: ids,
           p_payment_method: 'other',
           p_reference: '',
-          p_payment_date: today,
+          p_payment_date: entry.date,
           p_notes: 'Quick pay from Reports page',
           p_performed_by: profile!.id,
-          p_idempotency_key: key,
+          p_idempotency_key: entry.key,
         });
         if (error) throw new Error(error.message);
         createdPaymentIds.push(assertRpcResult<string>(data, 'create_commission_payment'));
         totalBatched += ids.length;
       }
-
-      // Every recipient landed, so the click is finished and its keys are spent.
-      // Retiring them here — not mid-loop — closes the void-then-repay window for
-      // a click that SUCCEEDED: the next click on the same commissions is then a
-      // genuinely new request rather than a replay. It does nothing for a click
-      // that FAILED, whose keys deliberately survive so the retry can replay
-      // them; that case is what the live-batch check immediately below is for.
-      for (const done of scopesThisClick) markPaidKeys.current.delete(done);
 
       // A retained key does not create anything on a retry — it replays the
       // ORIGINAL outcome. So a success here is not proof that a live batch
@@ -551,12 +562,40 @@ export default function Reports() {
         .from('commission_payments')
         .select('id,status')
         .in('id', createdPaymentIds);
-      if (statusError) throw new Error(statusError.message);
-      const liveCount = (statusRows || []).filter((r) => (r as { status: string }).status !== 'voided').length;
+      // A batch that came back VOIDED is a proven reversal. A batch that did not
+      // come back at all — because the read failed, or because the row was not
+      // returned — proves nothing, and must not be counted as a void: telling the
+      // admin a payout was reversed when it may be perfectly intact is its own
+      // way of causing a duplicate.
+      if (statusError) {
+        Sentry.captureException(new Error(statusError.message), { extra: { context: 'mark_commissions_paid_status_readback' } });
+      }
+      const statusById = new Map<string, string>();
+      for (const r of (statusRows || []) as Array<{ id?: string | null; status?: string | null }>) {
+        if (r?.id) statusById.set(r.id, String(r.status ?? ''));
+      }
+      const voidedCount = createdPaymentIds.filter((id) => statusById.get(id) === 'voided').length;
+      const unverifiedCount = createdPaymentIds.filter((id) => !statusById.has(id)).length;
 
-      await fetchCommissions();
-      if (liveCount < createdPaymentIds.length) {
-        toast('warning', `${createdPaymentIds.length - liveCount} of ${createdPaymentIds.length} payment batch(es) this retry pointed at have been voided, so those commissions are still unpaid. Check Commission Payments, then mark them paid again.`);
+      // Every recipient landed AND its outcome has been read back, so the click
+      // is finished and its keys are spent. Retiring them here — not mid-loop,
+      // and not before the read above — closes the void-then-repay window for a
+      // click that SUCCEEDED: the next click on the same commissions is then a
+      // genuinely new request rather than a replay. Doing it before the read
+      // would have made the catch block's promise false, since that block tells
+      // the admin the keys were kept and the retry will replay them.
+      for (const done of scopesThisClick) markPaidKeys.current.delete(done);
+
+      const listIsCurrent = await fetchCommissions();
+      if (voidedCount > 0 || unverifiedCount > 0) {
+        const parts: string[] = [];
+        if (voidedCount > 0) {
+          parts.push(`${voidedCount} of ${createdPaymentIds.length} payment batch(es) this click pointed at ${voidedCount === 1 ? 'has' : 'have'} since been voided, so those commissions are still unpaid`);
+        }
+        if (unverifiedCount > 0) {
+          parts.push(`${unverifiedCount} could not be read back just now, so ${unverifiedCount === 1 ? 'its' : 'their'} current state is unconfirmed`);
+        }
+        toast('warning', `${parts.join('; ')}. Check Commission Payments before marking them paid again.${listIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`);
       } else {
         toast('success', `${totalBatched} commission(s) added to ${byRecipient.size} unposted payment batch${byRecipient.size > 1 ? 'es' : ''}. Review and post ${byRecipient.size > 1 ? 'them' : 'it'} in Commission Payments.`);
         if (profile) logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: profile.id });
@@ -570,13 +609,13 @@ export default function Reports() {
       if (rejection) {
         markPaidKeys.current.clear();
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `mark_commissions_paid_${rejection}_mismatch` } });
-        await fetchCommissions();
+        const refusalListIsCurrent = await fetchCommissions();
         // Never claim "nothing was created" outright — recipients processed
         // before the refusal really were paid, and telling the admin otherwise
         // invites a duplicate batch.
         toast('warning', totalBatched > 0
-          ? `That retry could not be matched to this request. ${totalBatched} commission(s) were already added to a payment batch before it stopped — check Commission Payments before trying again.`
-          : 'That retry could not be matched to this request, so no payment batch was created. Check Commission Payments before trying again.');
+          ? `That retry could not be matched to this request. ${totalBatched} commission(s) were already added to a payment batch before it stopped — check Commission Payments before trying again.${refusalListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`
+          : `That retry could not be matched to this request, so no payment batch was created. Check Commission Payments before trying again.${refusalListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`);
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_commissions_paid' } });
         // Ordinary failure (timeout, network, a server guard). Earlier recipients
@@ -584,7 +623,7 @@ export default function Reports() {
         // saying anything and name how many landed — a bare error message reads
         // as "nothing happened" and invites a duplicate batch. The keys for this
         // click are deliberately NOT retired here: retrying replays them.
-        await fetchCommissions();
+        const genericListIsCurrent = await fetchCommissions();
         const detail = err instanceof Error ? err.message : 'Failed to update commissions';
         // Three different situations, and only the third may say nothing
         // happened. `totalBatched` counts CONFIRMED recipients, so the recipient
@@ -595,9 +634,9 @@ export default function Reports() {
         // the only place that answers the question, so send the admin there
         // whenever a call actually went out.
         toast('error', totalBatched > 0
-          ? `${detail} — ${totalBatched} commission(s) were already added to a payment batch before it stopped, and the one it stopped on may have been added too. Check Commission Payments before trying again.`
+          ? `${detail} — ${totalBatched} commission(s) were already added to a payment batch before it stopped, and the one it stopped on may have been added too. Check Commission Payments before trying again.${genericListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`
           : attempted > 0
-            ? `${detail} — a payment batch may still have been created. Check Commission Payments before trying again.`
+            ? `${detail} — a payment batch may still have been created. Check Commission Payments before trying again.${genericListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`
             : detail);
       }
     }

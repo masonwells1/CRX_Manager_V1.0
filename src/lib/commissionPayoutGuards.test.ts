@@ -26,35 +26,183 @@ function migrationFiles() {
 const PAYOUT_RENAME_MIGRATION =
   '20260810170000_bind_commission_payout_idempotency_to_intent.sql';
 
+type Span = { start: number; end: number; kind: 'body' | 'string' };
+
+/** The dollar-quote tag opening at `i`, or null. `$1` is a parameter, not a tag. */
+function dollarTagAt(sql: string, i: number): string | null {
+  if (sql[i] !== '$') return null;
+  let j = i + 1;
+  if (j < sql.length && /[A-Za-z_]/.test(sql[j])) {
+    j += 1;
+    while (j < sql.length && /[A-Za-z0-9_]/.test(sql[j])) j += 1;
+  }
+  return sql[j] === '$' ? sql.slice(i, j + 1) : null;
+}
+
 /**
- * Every definition of public.<rpc> in one migration file, in file order.
+ * Lexes the file once so the scan below reads SQL rather than text.
+ *
+ * Returns a MASK the same length as the input — every offset found in the mask
+ * indexes straight back into the original — with two substitutions:
+ *
+ *  - Comments become spaces, everywhere. Postgres treats a comment exactly as
+ *    whitespace, so a block comment sitting between CREATE and OR REPLACE still
+ *    leaves a real definition that a whitespace-only regex walks straight past;
+ *    and, in the other direction, a commented-out copy of a guarded definition
+ *    must not be able to stand in as the file's "last definition" while the live
+ *    one below it dropped the guard.
+ *  - Single-quoted literals OUTSIDE a function body become spaces, so a string
+ *    containing the text of a definition cannot impersonate one. Literals INSIDE
+ *    a body are kept: the guards under test raise their error codes as string
+ *    literals, and blanking those would blind the assertions.
+ *
+ * `spans` records where the dollar-quoted bodies and the blanked top-level
+ * literals are, so a definition's body can be bounded to its own statement.
+ */
+function lexSql(sql: string): { masked: string; spans: Span[] } {
+  const out = sql.split('');
+  const spans: Span[] = [];
+  const blank = (from: number, to: number) => {
+    for (let i = from; i < to && i < out.length; i += 1) {
+      if (out[i] !== '\n') out[i] = ' ';
+    }
+  };
+
+  const openTags: string[] = [];
+  const bodyStarts: number[] = [];
+  let i = 0;
+  while (i < sql.length) {
+    const inBody = openTags.length > 0;
+
+    if (sql[i] === '-' && sql[i + 1] === '-') {
+      let end = sql.indexOf('\n', i);
+      if (end === -1) end = sql.length;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+
+    if (sql[i] === '/' && sql[i + 1] === '*') {
+      // Postgres block comments nest, unlike C's.
+      let depth = 1;
+      let j = i + 2;
+      while (j < sql.length && depth > 0) {
+        if (sql[j] === '/' && sql[j + 1] === '*') { depth += 1; j += 2; } else if (sql[j] === '*' && sql[j + 1] === '/') { depth -= 1; j += 2; } else j += 1;
+      }
+      blank(i, j);
+      i = j;
+      continue;
+    }
+
+    if (sql[i] === "'") {
+      const escaped = i > 0 && /[Ee]/.test(sql[i - 1]) && !/\w/.test(sql[i - 2] ?? ' ');
+      let j = i + 1;
+      while (j < sql.length) {
+        if (escaped && sql[j] === '\\') { j += 2; continue; }
+        if (sql[j] === "'" && sql[j + 1] === "'") { j += 2; continue; }
+        if (sql[j] === "'") { j += 1; break; }
+        j += 1;
+      }
+      if (!inBody) {
+        spans.push({ start: i, end: j, kind: 'string' });
+        blank(i, j);
+      }
+      i = j;
+      continue;
+    }
+
+    const tag = dollarTagAt(sql, i);
+    if (tag) {
+      if (inBody && openTags[openTags.length - 1] === tag) {
+        openTags.pop();
+        spans.push({ start: bodyStarts.pop()!, end: i + tag.length, kind: 'body' });
+      } else {
+        openTags.push(tag);
+        bodyStarts.push(i);
+      }
+      i += tag.length;
+      continue;
+    }
+
+    i += 1;
+  }
+
+  spans.sort((a, b) => a.start - b.start);
+  return { masked: out.join(''), spans };
+}
+
+// ~900 migration files are rescanned once per protected RPC per test; lexing
+// each file once instead of nine times keeps the suite inside its timeout.
+const lexCache = new Map<string, { masked: string; spans: Span[] }>();
+function lexed(sql: string) {
+  let hit = lexCache.get(sql);
+  if (!hit) {
+    hit = lexSql(sql);
+    lexCache.set(sql, hit);
+  }
+  return hit;
+}
+
+/**
+ * Every definition of <rpc> in one migration file, in file order.
  *
  * This deliberately does NOT use String.match(): a non-global match returns only
  * the FIRST definition in the file, so a migration that defines the same RPC
  * twice — keeping the guards in the first and dropping them from the second,
  * effective one — would leave the assertions below green while production ran
- * the unguarded body. It also accepts bare `CREATE FUNCTION`, quoted
- * identifiers, whitespace around the schema qualifier and any dollar-quote tag,
- * so a definition written in a slightly different style is caught rather than
- * silently skipped. An unterminated or non-dollar-quoted definition fails the
- * test instead of being dropped.
+ * the unguarded body.
+ *
+ * The header is matched against the lexed mask, so comments count as whitespace
+ * and no comment or literal can pose as a definition. The schema qualifier is
+ * OPTIONAL because an unqualified `CREATE FUNCTION post_commission_payment(...)`
+ * resolves to public through search_path and is the same live function. Both
+ * legal body forms are accepted — `$tag$…$tag$` and `AS '…'` — and the body has
+ * to open before this statement's semicolon, so a dollar quote belonging to a
+ * LATER statement can no longer be adopted as this definition's body.
  */
 function functionDefinitions(sql: string, functionName: string): string[] {
+  const { masked, spans } = lexed(sql);
   const header = new RegExp(
-    String.raw`CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public|"public")\s*\.\s*(?:${functionName}|"${functionName}")\s*\(`,
+    String.raw`CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|"public")\s*\.\s*)?(?:${functionName}|"${functionName}")\s*\(`,
     'gi',
   );
   const bodies: string[] = [];
   let match: RegExpExecArray | null;
-  while ((match = header.exec(sql)) !== null) {
-    const rest = sql.slice(match.index);
-    const opener = /\$([A-Za-z_]\w*)?\$/.exec(rest);
-    expect(opener, `${functionName} definition has no dollar-quoted body`).not.toBeNull();
-    const tag = opener![0];
-    const closeAt = rest.indexOf(tag, opener!.index + tag.length);
-    expect(closeAt, `${functionName} definition is unterminated`).toBeGreaterThan(opener!.index);
-    bodies.push(rest.slice(0, closeAt));
-    header.lastIndex = match.index + closeAt;
+  while ((match = header.exec(masked)) !== null) {
+    const after = header.lastIndex;
+
+    // The statement ends at the first semicolon that is not swallowed by a body
+    // or a literal. A body that opens after it belongs to some later statement.
+    let stmtEnd = -1;
+    for (let at = masked.indexOf(';', after); at !== -1; at = masked.indexOf(';', at + 1)) {
+      if (spans.some((s) => at > s.start && at < s.end)) continue;
+      stmtEnd = at;
+      break;
+    }
+
+    // Anchored on this definition's own AS. Taking the next quoted run outright
+    // would grab a routine-level literal instead — `SET search_path = ''` and a
+    // `DEFAULT ''` argument both sit between the header and the body.
+    const asToken = /\bAS\b/gi;
+    asToken.lastIndex = after;
+    const as = asToken.exec(masked);
+    const span = as ? spans.find((s) => s.start >= as.index) : undefined;
+
+    expect(as, `${functionName} definition has no AS clause`).not.toBeNull();
+    expect(span, `${functionName} definition has no body`).toBeDefined();
+    expect(
+      stmtEnd === -1 || span!.start < stmtEnd,
+      `${functionName} definition is unterminated, or its body belongs to a later statement`,
+    ).toBe(true);
+
+    // A dollar-quoted body is read from the mask, which keeps its code and its
+    // error-code literals but has already dropped its comments — so no assertion
+    // below can be satisfied by a commented-out guard. A single-quoted body is
+    // blanked in the mask, so it is read from the source instead.
+    bodies.push(span!.kind === 'body'
+      ? masked.slice(match.index, span!.end)
+      : sql.slice(match.index, span!.end));
+    header.lastIndex = span!.end;
   }
   return bodies;
 }
@@ -90,6 +238,80 @@ function finalPolicyStatements(): Map<string, string> {
 
   return policies;
 }
+
+/**
+ * The scanner is the only thing standing between a later migration and the
+ * silent removal of a money guard, so it gets tested against the evasions a
+ * text-matching version could not see. Every case below is legal SQL that
+ * Postgres would accept.
+ */
+describe('migration scanner', () => {
+  const guarded = (extra = '') => `$fn$\nBEGIN\n  ${extra}RAISE EXCEPTION 'GUARD_PRESENT';\nEND;\n$fn$`;
+
+  it('reads a comment as whitespace inside the DDL keywords', () => {
+    const sql = `CREATE /* re-issued 2026-08-10 */ OR REPLACE FUNCTION public.pay(p_id uuid)\nRETURNS void LANGUAGE plpgsql AS ${guarded()};`;
+    expect(functionDefinitions(sql, 'pay')).toHaveLength(1);
+  });
+
+  it('finds an UNQUALIFIED definition, which search_path resolves to public', () => {
+    const sql = `CREATE OR REPLACE FUNCTION pay(p_id uuid)\nRETURNS void LANGUAGE plpgsql AS ${guarded()};`;
+    expect(functionDefinitions(sql, 'pay')).toHaveLength(1);
+  });
+
+  it('does not let a COMMENTED-OUT definition pose as the last one', () => {
+    // The evasion: drop the guard from the live definition, then paste a
+    // guarded copy below it as a comment. A text scan takes the comment as the
+    // file's final word and stays green over an unguarded production body.
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS $fn$\nBEGIN\n  NULL;\nEND;\n$fn$;`,
+      `-- CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS ${guarded()};`,
+      `/* CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS ${guarded()}; */`,
+    ].join('\n');
+    const found = functionDefinitions(sql, 'pay');
+    expect(found).toHaveLength(1);
+    expect(found[0]).not.toContain('GUARD_PRESENT');
+  });
+
+  it('does not let a definition inside a STRING LITERAL count as one', () => {
+    const sql = `INSERT INTO audit_log(note) VALUES ('CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS ${guarded()};');`;
+    expect(functionDefinitions(sql, 'pay')).toHaveLength(0);
+  });
+
+  it('does not mistake a routine-level literal for the body', () => {
+    // `SET search_path = ''` sits between the header and the body, and so does
+    // a defaulted text argument. Taking the next quoted run outright would
+    // return an empty "body" and every guard assertion would fail on a
+    // perfectly correct migration.
+    const sql = `CREATE OR REPLACE FUNCTION public.pay(p_id uuid, p_note text DEFAULT '')\nRETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS ${guarded()};`;
+    const found = functionDefinitions(sql, 'pay');
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('GUARD_PRESENT');
+  });
+
+  it('does not adopt a dollar quote belonging to a LATER statement', () => {
+    // The old helper searched the whole remainder of the file for the next
+    // dollar quote, so a single-quoted body left it consuming unrelated SQL.
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE sql AS 'SELECT 1';`,
+      `DO $do$ BEGIN RAISE NOTICE 'unrelated'; END; $do$;`,
+    ].join('\n');
+    const found = functionDefinitions(sql, 'pay');
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain("'SELECT 1'");
+    expect(found[0], 'the body swallowed the next statement').not.toContain('$do$');
+  });
+
+  it('still returns EVERY definition in file order', () => {
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS ${guarded()};`,
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS $fn$\nBEGIN\n  NULL;\nEND;\n$fn$;`,
+    ].join('\n');
+    const found = functionDefinitions(sql, 'pay');
+    expect(found).toHaveLength(2);
+    expect(found[0]).toContain('GUARD_PRESENT');
+    expect(found[1]).not.toContain('GUARD_PRESENT');
+  });
+});
 
 // Each test rescans every file in supabase/migrations/ (~900 files); under
 // full-suite CPU load that exceeds vitest's 5s default and flakes the commit.

@@ -226,18 +226,15 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
     expect(message).toContain('safe');
   });
 
-  it('does not report a posting as done when the payment has since been voided', async () => {
-    // Round-5 review finding, post side. A retained key does not re-post on a
-    // retry — it replays the ORIGINAL outcome. If the first attempt committed,
-    // its reply was lost, and another admin voided the payment in between, this
-    // "success" describes a payment that no longer holds its commissions.
-    mockFrom.mockImplementation((table: string) => {
+  // Drives what the post handler's re-read of the row it just posted returns,
+  // leaving the list query alone.
+  function postReadback(readback: { data: unknown; error: unknown }) {
+    return (table: string) => {
       if (table === 'commission_payments') {
         const self: Record<string, unknown> = {};
         const method = (..._args: unknown[]) => self;
         for (const name of ['select', 'eq', 'in', 'order', 'limit']) self[name] = method;
-        // The post handler's re-read of the row it just posted.
-        self.maybeSingle = () => Promise.resolve({ data: { status: 'voided' }, error: null });
+        self.maybeSingle = () => Promise.resolve(readback);
         const list = Promise.resolve({
           data: [{ ...paymentBase, id: 'payment-1', payment_number: 'CP-0001' }],
           error: null,
@@ -254,7 +251,10 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
         return buildChain({ count: 2, error: null });
       }
       return buildChain({ data: [], error: null });
-    });
+    };
+  }
+
+  async function postAndReadWarning() {
     mockRpc.mockResolvedValue({ data: { success: true, payment_id: 'payment-1' }, error: null });
     render(<CommissionPayments />);
 
@@ -265,12 +265,69 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
     await waitFor(() => {
       expect(mockToast).toHaveBeenCalledWith('warning', expect.any(String));
     });
-    const message = mockToast.mock.calls.find((call) => call[0] === 'warning')![1] as string;
+    return mockToast.mock.calls.find((call) => call[0] === 'warning')![1] as string;
+  }
+
+  it('does not report a posting as done when the payment has since been voided', async () => {
+    // Round-5 review finding, post side. A retained key does not re-post on a
+    // retry — it replays the ORIGINAL outcome. If the first attempt committed,
+    // its reply was lost, and another admin voided the payment in between, this
+    // "success" describes a payment that no longer holds its commissions.
+    mockFrom.mockImplementation(postReadback({ data: { status: 'voided' }, error: null }));
+
+    const message = await postAndReadWarning();
     expect(message).toContain('has since been voided');
     expect(message).toContain('still unpaid');
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
     // And nothing may record a posting this click did not actually leave standing.
     expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it('does not turn a FAILED status read into a void, or into a success', async () => {
+    // Round-6 review finding. The read that confirms the posting can itself
+    // fail, and the old code folded that into "voided" — telling the admin a
+    // payout had been reversed when nothing of the sort was known, which sends
+    // them off to pay it a second time. Folding it into "live" is the mirror
+    // error: congratulating them on a posting nobody can see.
+    mockFrom.mockImplementation(postReadback({ data: null, error: { message: 'status read failed' } }));
+
+    const message = await postAndReadWarning();
+    expect(message).toContain('could not be read back');
+    expect(message).not.toContain('has since been voided');
+    expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a MISSING payment row as a proven void either', async () => {
+    // Same finding, other half: no row came back. The payment may exist and be
+    // unreadable, or the read may have raced the write. Either way this click
+    // cannot say it was voided.
+    mockFrom.mockImplementation(postReadback({ data: null, error: null }));
+
+    const message = await postAndReadWarning();
+    expect(message).toContain('could not be read back');
+    expect(message).not.toContain('has since been voided');
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it('keeps the retry key when a step AFTER the post fails', async () => {
+    // Round-6 review finding. The failure message promises that pressing Post
+    // again is safe, which is only true while the key survives to replay the
+    // original request. Retiring the key before the steps that can land in that
+    // catch — the status read, the activity write — made the promise false: the
+    // next click would mint a brand-new key and post a second time.
+    mockLogActivity.mockRejectedValue(new Error('activity feed unavailable'));
+    mockRpc.mockResolvedValue({ data: { success: true, payment_id: 'payment-1' }, error: null });
+    render(<CommissionPayments />);
+
+    const row = (await screen.findByText('CP-0001')).closest('tr');
+    fireEvent.click(within(row!).getByRole('button', { name: 'Post' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post Payments' }));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('activity feed unavailable'));
+    });
+    expect(mockResetKey).not.toHaveBeenCalled();
   });
 });
 
@@ -449,6 +506,52 @@ describe('CommissionPayments create-payment key scoping', () => {
     for (const i of indexes) fireEvent.click(boxes[i]);
     fireEvent.click(screen.getByRole('button', { name: /Create Payment/ }));
   }
+
+  it('does not report a create as done when the new payment cannot be read back', async () => {
+    // Round-6 review finding. The read-back used to answer `null` for "the
+    // query failed", "the item count failed" and "no such row" alike, and the
+    // caller read that null as "not voided" — so a payment nobody could read
+    // produced a confident success toast and an activity-feed entry saying a
+    // payment had been created for an amount this attempt never saw.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'commission_payments') {
+        const self: Record<string, unknown> = {};
+        const method = (..._args: unknown[]) => self;
+        for (const name of ['select', 'eq', 'in', 'order', 'limit']) self[name] = method;
+        // The read-back of the payment this click just created.
+        self.maybeSingle = () => Promise.resolve({ data: null, error: { message: 'permission denied' } });
+        const list = Promise.resolve({ data: [], error: null });
+        self.then = list.then.bind(list);
+        self.catch = list.catch.bind(list);
+        self.finally = list.finally.bind(list);
+        return self;
+      }
+      if (table === 'commissions') {
+        return buildChain({
+          data: [
+            { ...commissionBase, id: 'commission-a', commission_amount: 100 },
+            { ...commissionBase, id: 'commission-b', commission_amount: 200 },
+          ],
+          error: null,
+        });
+      }
+      if (table === 'profile_public_view') {
+        return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
+      }
+      return buildChain({ data: [], error: null, count: 0 });
+    });
+    mockRpc.mockResolvedValue({ data: 'payment-77', error: null });
+    render(<CommissionPayments />);
+
+    await openDialogAndSelect([0]);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('warning', expect.any(String)));
+    const message = mockToast.mock.calls.find((call) => call[0] === 'warning')![1] as string;
+    expect(message).toContain('could not be read back');
+    expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
+    // And nothing may write a "payment created" record this attempt cannot see.
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
 
   it('replays the same key when the dialog is reopened on the SAME commissions', async () => {
     // openCreate used to call resetKey(). An admin whose create timed out, who

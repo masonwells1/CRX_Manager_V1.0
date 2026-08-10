@@ -12,7 +12,8 @@
 --   * another admin cannot consume the original receipt (IDEMPOTENCY_ACTOR_MISMATCH);
 --   * pre-migration receipts (both binding columns NULL) fail closed;
 --   * cross-operation key reuse still fails;
---   * the NULL-key path still performs the work and writes no receipt;
+--   * a NULL or blank key is refused with IDEMPOTENCY_KEY_REQUIRED before the
+--     wrapper delegates, so the refused call performs no work at all;
 --   * the pre-existing auth / p_performed_by / admin / reason guards are unchanged.
 --
 -- Always ends by raising SMOKE_PASS_ROLLBACK: nothing is ever committed.
@@ -264,6 +265,27 @@ BEGIN
   IF (SELECT count(*) FROM public.proof_effects
        WHERE operation = 'create_commission_payment') <> v_count THEN
     RAISE EXCEPTION 'SMOKE_FAIL: the refused NULL-key create still paid out';
+  END IF;
+
+  -- A key made only of non-ASCII whitespace is refused too. The house predicate
+  -- (!~ '[^[:space:]]') is collation-dependent, so on some clusters a key of one
+  -- non-breaking space reads as non-blank and would be ACCEPTED as a real key —
+  -- an unbindable key that every subsequent retry would collide on. The second,
+  -- locale-independent predicate (!~ '[!-~]') is what makes this deterministic.
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'create_commission_payment';
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c3], 'check', 'REF-2', DATE '2026-08-09', 'nbsp key', v_actor_a,
+      U&'\00A0\2003\3000'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a key with no printable ASCII was accepted by create';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_KEY_REQUIRED%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proof_effects
+       WHERE operation = 'create_commission_payment') <> v_count THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the refused non-ASCII-blank create still paid out';
   END IF;
 
   v_p2 := public.create_commission_payment(
