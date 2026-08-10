@@ -449,6 +449,10 @@ After three normal pre-commit attempts exposed unrelated 5–15 second test time
 CRX worktree load, local Vitest concurrency was capped at two workers (CI keeps its isolated-runner
 default). The complete suite then passed all 323 files and 4,304 active tests without relaxing any
 individual timeout or skipping any test.
+The follow-up exact-SHA review then caught a timeout-scale regression in degraded migration discovery:
+the 600+ KiB history file was reparsed for every SQL file. Fallback classification now parses history
+once per worktree and reuses the structured result; a 867-file regression proves one parse and
+completion inside the SessionStart hook's 10-second budget.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 

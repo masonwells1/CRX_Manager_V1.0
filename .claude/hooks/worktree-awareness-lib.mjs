@@ -241,6 +241,7 @@ export function parkedFallbackFileDiscovery(
   loadText = () => "",
   historyText = null,
   sha256Text = null,
+  parsedHistory = null,
 ) {
   if (!/\.sql$/i.test(String(name || ""))) {
     return { state: "known", parked: false, reason: "" };
@@ -255,6 +256,7 @@ export function parkedFallbackFileDiscovery(
     () => loadText(),
     historyText,
     sha256Text,
+    parsedHistory,
   );
   return {
     state: parked.unknownReason ? "unknown" : "known",
@@ -263,14 +265,41 @@ export function parkedFallbackFileDiscovery(
   };
 }
 
+// A degraded worktree may contain hundreds of migrations. Parse its history once,
+// then reuse that immutable result for every file classification; reparsing the
+// 600+ KiB history per SQL file can consume the SessionStart hook's entire budget.
+export function createParkedFallbackClassifier(
+  historyText = null,
+  sha256Text = null,
+  parseHistory = localCandidateMigrationPathsFromHistory,
+) {
+  const parsedHistory = parseHistory(historyText);
+  return (repoRelPath, name, loadText = () => "") => parkedFallbackFileDiscovery(
+    repoRelPath,
+    name,
+    loadText,
+    historyText,
+    sha256Text,
+    parsedHistory,
+  );
+}
+
 export function isParkedFallbackFile(
   repoRelPath,
   name,
   loadText = () => "",
   historyText = null,
   sha256Text = null,
+  parsedHistory = null,
 ) {
-  return parkedFallbackFileDiscovery(repoRelPath, name, loadText, historyText, sha256Text).parked;
+  return parkedFallbackFileDiscovery(
+    repoRelPath,
+    name,
+    loadText,
+    historyText,
+    sha256Text,
+    parsedHistory,
+  ).parked;
 }
 
 // Which of the paths a worktree CHANGED since its branch point are parked drafts?
@@ -310,9 +339,10 @@ export function parkedDraftPathsFrom(
   readText = () => "",
   historyText = null,
   sha256Text = null,
+  parsedHistory = null,
 ) {
   const out = new Map();
-  const history = localCandidateMigrationPathsFromHistory(historyText);
+  const history = parsedHistory ?? localCandidateMigrationPathsFromHistory(historyText);
   let unknownReason = "";
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();

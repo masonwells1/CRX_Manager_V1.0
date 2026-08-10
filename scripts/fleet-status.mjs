@@ -21,7 +21,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   parseWorktreePorcelain, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, parkedFallbackFileDiscovery,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, createParkedFallbackClassifier,
   lastNonEmptyLine, firstCommentLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom, localCandidateMigrationPathsFromHistory,
@@ -261,6 +261,10 @@ for (const e of entries) {
     let fallbackChangedPaths = null;
     const fallbackHistoryText = readTextSafe(path.join(e.path, "docs", "reference", "migration-history.md")) || null;
     const fallbackDiscoveryUnknownReasons = new Set();
+    const classifyFallback = createParkedFallbackClassifier(
+      fallbackHistoryText,
+      (text) => createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex"),
+    );
     if (originMainDraftPaths) {
       try {
         fallbackChangedPaths = git(["diff", "--name-only", "origin/main", "--", ...draftPathspec()], e.path, 5000).split("\n");
@@ -275,12 +279,10 @@ for (const e of entries) {
       { root: "scripts/.staging-migrations", filter: isParkedMigrationFile },
       { root: "docs/audits", filter: isDraftSqlName },
       { root: "supabase/migrations", filter: (name, full, rel) => {
-        const discovery = parkedFallbackFileDiscovery(
+        const discovery = classifyFallback(
           rel,
           name,
           () => readTextSafe(full),
-          fallbackHistoryText,
-          (text) => createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex"),
         );
         if (discovery.state === "unknown") {
           degradedFallbackUnknown = true;

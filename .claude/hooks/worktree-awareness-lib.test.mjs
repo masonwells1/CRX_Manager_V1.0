@@ -14,7 +14,8 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
   isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
-  hasExplicitParkedMigrationHeader, isParkedFallbackFile, parkedFallbackFileDiscovery, originMainDraftPathSet,
+  hasExplicitParkedMigrationHeader, isParkedFallbackFile, parkedFallbackFileDiscovery,
+  createParkedFallbackClassifier, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
@@ -612,6 +613,28 @@ const unreadableFallbackHistory = parkedFallbackFileDiscovery(
 );
 eq(unreadableFallbackHistory.state, "unknown", "degraded fallback reports unreadable migration history as unknown");
 eq(unreadableFallbackHistory.parked, false, "unreadable fallback history cannot self-certify a SHA-pinned candidate");
+const timeoutScaleHistory = `${BRANCH_CANDIDATE_HISTORY}\n${"| 1 | 20260101000001 | APPLIED migration fixture. |\n".repeat(14000)}`;
+let timeoutScaleHistoryParses = 0;
+const timeoutScaleStarted = performance.now();
+const timeoutScaleClassifier = createParkedFallbackClassifier(
+  timeoutScaleHistory,
+  sha256Text,
+  (text) => {
+    timeoutScaleHistoryParses++;
+    return localCandidateMigrationPathsFromHistory(text);
+  },
+);
+let timeoutScaleDiscovery = null;
+for (let i = 0; i < 867; i++) {
+  timeoutScaleDiscovery = timeoutScaleClassifier(
+    "supabase/migrations/20260101000000_real.sql",
+    "20260101000000_real.sql",
+    () => BRANCH_CANDIDATE_SQL,
+  );
+}
+eq(timeoutScaleHistoryParses, 1, "degraded fallback parses migration history once per worktree, not once per SQL file");
+eq(timeoutScaleDiscovery?.parked, true, "timeout-scale fallback retains SHA-pinned discovery across 867 classifications");
+ok(performance.now() - timeoutScaleStarted < 10_000, "867 fallback classifications complete within the SessionStart hook budget");
 
 // Builds a reader over a fake git. `responses` maps a git subcommand to its output lines;
 // a value of null means that git call failed. Records every call for assertions.
