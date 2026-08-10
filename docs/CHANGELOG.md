@@ -2,6 +2,18 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-10 — Evaluated CodeRabbit's bigint-cents request on the canonical profit…
+
+Evaluated CodeRabbit's bigint-cents request on the canonical profit path and declined the conversion, drafting three migrations that fix the underlying cent-scale defects instead. PostgreSQL numeric is exact decimal, not floating point, so the AGENTS.md money rule was never violated; converting orders.total_profit, orders.total_cost, order_items.profit and order_items.net_margin to bigint cents would reach src/types/index.ts, reporting, invoicing and commissions for no correctness gain. The real defects, confirmed from live function source, are that commission rows mint their basis from a stale pre-trigger profit value rather than the canonical order header, and that several creation paths store sub-cent money. Three migrations are DRAFTED AND NOT APPLIED: 20260810150000 rebases the commission basis on the rounded order header and rounds create_direct_order money; 20260810150500 rounds save_quote total_cost and quote_items money; 20260810151000 adds whole-cent CHECK constraints to seven already-clean money columns, five more deferred behind a legacy backfill. All three ran end to end against a throwaway postgres:17-alpine and every post-condition was mutation-tested to fail closed. Deferred: the _update_order_items_impl total_price clobber is blocked on live-vs-disk function drift, and the quote-versus-order profit formula divergence is an owner decision.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `8dfbf176 docs: correct the live commission-basis mismatch count (10 -> 12)`
+  - `908da7a3 fix(money): whole-cent canonical profit + commission basis from order header`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260810150000_commission_basis_from_canonical_order_header.sql`
+  - `supabase/migrations/20260810150500_save_quote_whole_cent_total_cost.sql`
+  - `supabase/migrations/20260810151000_whole_cent_money_check_constraints.sql`
+
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 
 Settled the canonical-profit question and applied the fix to production. Live measurement showed the order-vs-lines profit disagreement is a stale-cache bug, not a rounding artefact: orders.total_profit is trigger-recomputed and correct, while order_items.profit is a stored snapshot nothing refreshes, leaving 37 of 288 line rows stale across 17 orders. Mason decided the order header is canonical and line profit is derived from it, rounding each line's revenue and cost to whole cents before subtracting so the lines sum to the header exactly. Migration 20260809230500_single_canonical_line_profit.sql implements that, is forward-only, and both migration reviewers returned zero blockers. It was **applied live on 2026-08-09** (Supabase ledger version 20260810000427) after Mason's explicit approval. A post-apply live read confirmed both function bodies changed as written, the trigger now fires on all four money columns, and the SECURITY DEFINER flag and search_path are unchanged.
