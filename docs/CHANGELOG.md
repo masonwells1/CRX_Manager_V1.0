@@ -71,8 +71,8 @@ in `WHEN MATCHED ... UPDATE` made the statement appear inspectable even when
 MERGE with an INSERT branch now requires the manual-review path; update-only
 MERGE remains allowed when every command assignment is directly inspectable.
 
-The focused actor-binding suite grew from 115 to 182 assertions while the
-idempotency reference suite remained at 86. Fifty continuation decisions were
+The focused actor-binding suite grew from 115 to 183 assertions while the
+idempotency reference suite remained at 86. Fifty-one continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless

@@ -441,6 +441,17 @@ WHEN NOT MATCHED THEN
   VALUES ('0 6 * * *', source.command, 'localhost', 5432, current_database(), current_user, true, source.jobname);`);
 ok(isDeny(r), "a direct safe MERGE update cannot hide an opaque insert branch");
 
+r = runHook(`${STAGED_DDL}
+MERGE INTO cron.job AS target
+USING (SELECT 42::bigint AS jobid, 'columnless-branch-job'::text AS jobname,
+              command FROM staged_cron_sql) AS source
+ON target.jobid = source.jobid
+WHEN MATCHED THEN UPDATE SET command = $safe$SELECT public.existing_safe_job()$safe$
+WHEN NOT MATCHED THEN
+  INSERT VALUES (source.jobid, '0 6 * * *', source.command, 'localhost', 5432,
+                 current_database(), current_user, true, source.jobname);`);
+ok(isDeny(r), "a columnless MERGE insert action remains review-only");
+
 r = runHook(`SELECT U&"\\0063ron".schedule(
   'unicode-delayed-actor-ddl',
   '* * * * *',
