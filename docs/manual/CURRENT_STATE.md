@@ -1,8 +1,12 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-08-07 evening (post-apply), **plus a 2026-08-08 addendum** — the money-loop correction below and the `payments` row in the counts table were re-verified live on 2026-08-08 and are dated inline. No other line in this document was re-checked on 2026-08-08.
+**Last verified:** 2026-08-09 — the live ledger high-water and the entire section 2 counts table were re-read from the live database on 2026-08-09 and are dated inline. The 2026-08-07 feature/postflight detail below and the deployment log were **not** re-checked on 2026-08-09.
 
-**2026-08-07 verification detail:** (post-apply). Live ledger high-water is `20260807220323` (`log_customer_fact_rpc`). The two 2026-08-07 parked migrations are now APPLIED LIVE: `20260807215532_profile_role_lock_covers_insert` (profiles role-lock trigger now BEFORE INSERT OR UPDATE, non-admin logged-in inserts blocked with PROFILE_INSERT_LOCK) and `20260807220323_log_customer_fact_rpc` (`log_customer_fact` live: anon denied, authenticated granted, single overload). The Section 4 bulk-order-import lifecycle hardening is live through seven migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, and commission-safe; every imported line uses one locked bigint-cent Product cost snapshot, retains whole-cent profit, and commission profit is reread from the trigger-canonical order header. Canonical pre-reservation Net Position shortages are returned to the browser and recorded in activity. Post-apply catalog/grant checks, rollback proof, all 21 standing invariant predicates, and a genuine live schema-registry refresh passed. The earlier idempotency, statement disclosure, and historical AR report protections remain live as documented below. Operational counts below remain the separately dated 2026-07-18 snapshot.
+**2026-08-09 live re-read.** At the time of that read, live ledger high-water was **`20260809130108`** (`team_note_completion_rpc_and_assignment_notify`), 946 ledger rows — exactly one row above the 2026-08-07 high-water. That migration was applied from a concurrent session and **has no file in this repository**; see the note at the end of `docs/reference/migration-history.md`.
+
+**2026-08-09 later the same day — the five foundation-ultra-review migrations are now APPLIED LIVE.** History rows 857–861, re-issued forward as `20260809170500`–`20260809170900`, applied one at a time between 20:32 and 20:54 UTC. Each went through its own freshly minted migration-apply-guard proof with both required reviewers clean, followed by a live post-apply read. Supabase assigned ledger versions `20260809203222`, `20260809204044`, `20260809204435`, `20260809204855`, `20260809205423` in file order, so **live high-water is now `20260809205423`** and the schema registry was regenerated from live introspection to match. None of the five altered a table, column, constraint, or enum — every schema-shape section of the registry came back byte-identical. `20260809170900` applied against a review finding that `docs/manual/KNOWN_ISSUES.md` had recorded as blocking; that entry now carries the full account and the decision still owed to Mason. The commented-out fractional-cent repair inside `20260809170800` was **not** run — the 49 pre-existing fractional rows are untouched.
+
+**2026-08-07 verification detail:** (post-apply). Live ledger high-water was `20260807220323` (`log_customer_fact_rpc`) as of that date. The two 2026-08-07 parked migrations are now APPLIED LIVE: `20260807215532_profile_role_lock_covers_insert` (profiles role-lock trigger now BEFORE INSERT OR UPDATE, non-admin logged-in inserts blocked with PROFILE_INSERT_LOCK) and `20260807220323_log_customer_fact_rpc` (`log_customer_fact` live: anon denied, authenticated granted, single overload). The Section 4 bulk-order-import lifecycle hardening is live through seven migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, and commission-safe; every imported line uses one locked bigint-cent Product cost snapshot, retains whole-cent profit, and commission profit is reread from the trigger-canonical order header. Canonical pre-reservation Net Position shortages are returned to the browser and recorded in activity. Post-apply catalog/grant checks, rollback proof, all 21 standing invariant predicates, and a genuine live schema-registry refresh passed. The earlier idempotency, statement disclosure, and historical AR report protections remain live as documented below. Operational counts below remain the separately dated 2026-07-18 snapshot.
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 **Quote/customer row-version rollout is live:** PR #290 deployed the compatible frontend first, then `20260730201230_quote_customer_row_version_guard` applied under Supabase-assigned ledger/disk version `20260730235031`. Live catalog, trigger, overload, ownership, fixed-search-path, grant, and child-table ACL checks passed. Four rollback-only behavior chains reached exact `SMOKE_PASS_ROLLBACK`, zero fixture rows remained, all 21 standing invariant predicates had zero unallowlisted findings, and the schema registry was refreshed through the subsequent AP high-water. Cached pre-migration bundles fail closed until refreshed; no rollout toggle is required.
@@ -40,9 +44,9 @@ lifecycle, field mapping and per-acre billing, inventory reservations, credit
 memos, commissions, and a driver-facing Field Mode are all shipped and live.
 The business is **actively using it**, but operational data is still ramping up:
 the database was near-empty on 2026-06-13, and by 2026-07-12 it held roughly
-153 customers and 604 products. As of this snapshot (2026-07-18) those two
-numbers are unchanged, but **deliveries are now flowing through the app**
-(107 recorded) while payments remain at zero — see the table below. Treat this
+153 customers and 604 products. As of the 2026-08-09 live re-read those two
+numbers are still unchanged, but **deliveries are flowing through the app**
+(108 recorded) while the dead legacy `payments` table remains at zero — see the table below. Treat this
 as a business in early adoption: operational usage is real, and the money loop
 (invoice → post → payment) **has** completed one real cycle — see the correction
 below.
@@ -58,22 +62,25 @@ below.
 ## 2. Live operational snapshot
 
 Read-only counts against the live database (project `rhyzpcqhnizqbxphqdkr`),
-captured 2026-07-18. These age immediately — re-run before relying on them.
+**re-read 2026-08-09** (from that day's off-site backup manifest plus two direct
+read-only queries). These age immediately — re-run before relying on them.
 
 | Table | Count | Notes |
 |---|---|---|
-| customers | 153 | |
-| products | 604 | |
+| customers | 153 | unchanged since 2026-07-12 |
+| products | 604 | unchanged since 2026-07-12 |
 | fields | 5 | field mapping/per-acre billing shipped, but growers not yet loaded in bulk |
 | quotes | 4 | |
-| orders | 64 | |
-| invoices | 11 | 8 draft / 2 posted / 1 paid |
-| payments | 0 | **dead legacy table, zero writers** (verified 2026-08-08, not part of the 2026-07-18 snapshot) — real payments live in `allocation_sets`/`prepay_credits` |
+| orders | 65 | was 64 on 2026-07-18 |
+| invoices | 13 | 9 draft / 2 posted / 1 paid / 1 unposted |
+| payments | 0 | **dead legacy table, zero writers** — real payments live in `allocation_sets` (1) / `prepay_credits` (1) |
+| order_items | 288 | 46 of these carry sub-cent `total_price`/`profit` — see history rows 860–861 |
+| commissions | 35 | 3 carry sub-cent `commission_amount`, incl. a $5,245.195 pending payout |
 | jobs | 4 | |
-| deliveries | 107 | deliveries are the most-used transactional surface |
+| deliveries | 108 | deliveries are the most-used transactional surface |
 | blend_tickets | 0 | none recorded yet |
-| negative inventory | 19 rows | `inventory.quantity_available < 0` — owner re-base pending |
-| backup_snapshots | 1 run (120 table-rows) | weekly in-DB backup automation; first run captured 120 tables |
+| negative inventory | 19 rows | `inventory.quantity_available < 0` — owner re-base pending (unchanged since 2026-07-18) |
+| backup_snapshots | 723 rows | cumulative across the weekly in-DB snapshot runs |
 
 > **Correction:** the 2026-07-13 snapshot reported jobs = 104 and deliveries = 0;
 > the 2026-07-16 live read shows jobs = 4 and deliveries = 106. The two columns

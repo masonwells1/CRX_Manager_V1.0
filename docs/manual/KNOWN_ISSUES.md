@@ -1,6 +1,8 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-07 (evening).** Live ledger high-water is `20260807220323` (`log_customer_fact_rpc`). Both formerly parked 2026-08-07 migrations are now APPLIED LIVE: the profile role-lock INSERT arm as `20260807215532` and the `log_customer_fact` CRM RPC as `20260807220323` (both reviewed CLEAN by both Codex charters, applied with Mason's in-chat approval; the paired predicate `profile-role-lock-insert-arm.sql` went 2 rows red → 0 green). The Section 4 bulk-order-import lifecycle gap is fixed live through six migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, non-finite-safe, Product-cost-authoritative, whole-cent per line, and create commissions from trigger-canonical stored profit. Post-apply catalog/grant checks, fractional active-sales-rep rollback smoke, all 21 standing invariant predicates, schema-registry refresh, and zero-residue checks passed. The earlier idempotency, statement-disclosure, and historical AR report protections remain live as documented below.
+**Last verified: 2026-08-09.** Live ledger high-water is **`20260809130108`** (`team_note_completion_rpc_and_assignment_notify`, 946 ledger rows), applied 2026-08-09 13:01 UTC from a concurrent session; that migration has **no file in this repository** (see the closing note in `docs/reference/migration-history.md`). The 2026-08-09 re-read covered the live ledger, the section-2 counts in `CURRENT_STATE.md`, and all 27 standing invariant sweep predicates: 26 CLEAN and one violation, `fin-money-whole-cents` at exactly 49 rows (3 `commissions` + 46 `order_items`) — the documented, deliberately-unrepaired set described below. The five foundation-ultra-review migrations (history rows 857–861, re-issued forward as `20260809170500`–`20260809170900`) **APPLIED LIVE 2026-08-09, 20:32–20:54 UTC**, each behind its own freshly minted migration-apply-guard proof with both required reviewers clean, and each followed by a live post-apply read; Supabase assigned ledger versions `20260809203222`, `20260809204044`, `20260809204435`, `20260809204855`, `20260809205423` in file order. A 21:15 UTC re-measure confirms no stored money was restated: fractional-cent rows remain exactly 46 + 3 = 49 and `order_items.profit` holds 0 fractional rows. **`20260809170900` applied against the blocking escalation recorded below** — see that entry for what happened and the decision now owed by Mason. Everything below this line carries its 2026-08-07 verification unless dated otherwise.
+
+**2026-08-07 (evening) verification detail.** Live ledger high-water was `20260807220323` (`log_customer_fact_rpc`). Both formerly parked 2026-08-07 migrations are now APPLIED LIVE: the profile role-lock INSERT arm as `20260807215532` and the `log_customer_fact` CRM RPC as `20260807220323` (both reviewed CLEAN by both Codex charters, applied with Mason's in-chat approval; the paired predicate `profile-role-lock-insert-arm.sql` went 2 rows red → 0 green). The Section 4 bulk-order-import lifecycle gap is fixed live through six migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, non-finite-safe, Product-cost-authoritative, whole-cent per line, and create commissions from trigger-canonical stored profit. Post-apply catalog/grant checks, fractional active-sales-rep rollback smoke, all 21 standing invariant predicates, schema-registry refresh, and zero-residue checks passed. The earlier idempotency, statement-disclosure, and historical AR report protections remain live as documented below.
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -208,6 +210,169 @@ Coverage: the three round-26 redirect cases still refuse (the local `pushInstead
 **Scope correction (2026-08-05, Codex on PR #313).** "The ambient rewrites" above means the two SSH-spelling normalizations this session carries — that is what was verified, and the resolution is real for that shape. It does **not** extend to a session that also installs a credential proxy: the proxy re-spelling makes the resolved push URL fail the `BACKUP_REPO_ID` identity check, and the run still refuses. Tracked as the second instance under the OPEN entry above. This entry stays RESOLVED for the rewrite shape it actually fixed rather than being reopened, since the blanket-ban removal it describes is sound and unaffected.
 
 Also fixed alongside it: the suite itself read the host's global git config instead of pinning its own, so the ambient rewrites failed it — and since the pre-commit hook runs that suite, it blocked every commit from a web session. It now pins `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` to an empty file and strips inherited `GIT_CONFIG_*` at startup, so it tests the script rather than the machine.
+
+## OPEN — the migration ordering guard cannot see applies from another checkout
+
+**Found 2026-08-08 (Codex P1, PR #354).** The guard decides whether a migration
+is out of order by reading a snapshot file of the applied ledger,
+`.claude/session-state/applied-migrations.json`. PR #354 made an *apply*
+invalidate that snapshot instead of trusting a 24-hour clock, which closes the
+single-session hole that caused the 2026-07-15 revert.
+
+It does not close the concurrent case. The invalidation hook deletes the file in
+the checkout it runs in. A second worktree, another machine, or an apply made
+outside this tooling leaves that checkout's snapshot intact — stale, but
+"fresh" by every check the guard has. Given Mason runs concurrent sessions, this
+is a real shape, not a theoretical one.
+
+**The sound fix** is for the guard to query the live ledger at apply time rather
+than read a cached file. That means giving a hook database access it currently
+does not have, so it is a real design change and was not bolted on mid-review.
+
+**Context on how much this matters:** the guard is defence in depth, not the
+enforcement point — Supabase's own ledger rejects a genuinely out-of-order
+apply. What it uniquely catches is an OLDER migration file re-submitted under a
+NEWER version, which lands as a "forward" apply and silently reverts whatever
+the newer one had fixed. That is exactly what happened on 2026-07-15.
+
+## RESOLVED 2026-08-09 — the migration ordering guard was escapable by renaming the migration
+
+**Found by the exact-SHA Codex review of PR #354 (High).** Separate from the
+concurrent-checkout gap above, and worse: this one needed no second checkout.
+
+`apply_migration`'s `name` is supplied by the caller, and the ordering check
+abstains on a name it cannot timestamp. The guard converted an abstention into
+a block **only when the name carried a 14-digit timestamp** — exactly backwards.
+Every other abstention cause is already refused upstream, because those checks
+constrain the *ledger snapshot*; the untimestamped *candidate* was the one case
+nothing caught. So dropping the timestamp from the name bought an unconditional
+pass. Reproduced full-hook, identical SQL, out-of-order against a fresh snapshot:
+
+```text
+name="20260101000000_old_mig"   denied=true   by-ordering-guard=true
+name="old_mig"                  denied=false  by-ordering-guard=false
+```
+
+That is the same replay class as the 2026-07-15 revert — an older file
+re-submitted so it lands as a "forward" apply and silently undoes a newer fix.
+
+**Fix:** deny on ANY abstention, and say so when the cause is a missing
+timestamp. Every repository migration is timestamped, so refusing an
+untimestamped candidate costs nothing real. Regression test added to
+`.claude/hooks/migration-apply-guard.test.mjs` covering both directions, and
+mutation-tested — restoring the old `&& /\d{14}/` condition turns it red.
+
+The concurrent-checkout entry above stays OPEN; this fix does not touch it.
+
+## FIXED LIVE 2026-08-09 — order header profit vs the sum of its own lines
+
+**Found 2026-08-08 (Codex P2, PR #354). Not a regression — it predates the
+rounding work and is unchanged by it.** `trg_recalc_order_totals` does not read
+`order_items.profit`. It recomputes the header as
+`ROUND(SUM(total_price) - SUM(cost_per_unit * total_units_needed), 2)`, and the
+cost side is never rounded per line. So when a unit cost carries fractional
+cents, the header profit and `SUM(order_items.profit)` — which
+`get_sales_detail_report` shows — can disagree by a cent, and by more across
+many lines.
+
+`20260809170800` and `20260809170900` (history rows 860–861; authored as
+`20260808150400`/`20260808170000` and re-issued forward on 2026-08-09) round the stored line columns
+(`total_price`, `profit`, `commission_amount`) at write time. That stops the
+stored money from carrying sub-cent precision, which was the finding they were
+written for; it does **not** make the header agree with its lines.
+
+**Why it is parked, not fixed:** closing it means changing where the header
+derives from — summing the rounded line profits, or allocating the rounding
+residual across lines. Either moves live money on `orders.total_profit`. That is
+a money-semantics decision for Mason. Both rounding migrations are now applied
+live (2026-08-09), so the decision is owed rather than hypothetical — but it is
+still not an emergency: neither migration restated a stored figure, and the
+residual is a penny-scale reporting gap, not lost or double-counted money.
+
+**In plain English:** an order's profit total and the profit numbers on its own
+lines can be off by a penny from each other when a product's cost has more than
+two decimal places. Nothing is lost or double-counted — it is a display/rounding
+mismatch between two places that each do their own math.
+
+**Escalated 2026-08-09 (exact-SHA Codex review of PR #354, High) — `20260809170900`
+must not apply until the rounding rule is settled.** The migration rounds
+`total_price` and `profit` independently per line, while the header keeps
+subtracting unrounded costs. That can make the disagreement *bigger*, not
+smaller: for two lines with raw revenue `10.005` and cost `5.001`, the header
+lands on `10.02` while the stored line profits total `10.00` — where before the
+profit rounding the report total was `10.01`. So a migration written to narrow
+the gap can widen it.
+
+This was recorded as blocking, not merely parked: the review returns BLOCKED
+while `20260809170900` is in the diff. The other four migrations on that PR are
+unaffected.
+
+**It applied live anyway, 2026-08-09 20:54 UTC.** The local takeover session
+applied all five migrations under Mason's blanket "yes i approve all" without
+re-surfacing this blocking finding to him first; that approval covered applying
+five migrations, not knowingly overriding a blocking review. Measured live
+impact at 21:15 UTC is none — the migration is forward-only and restated
+nothing, fractional-cent rows are still exactly 46 + 3 = 49, and
+`order_items.profit` carries 0 fractional rows. `trg_order_items_round_money` is
+live scoped to `(profit, total_price)`; `trg_commissions_round_money` is
+untouched at `commission_amount` alone, so an ordinary status write cannot
+restate the pending payout. The residual is the prospective penny-scale
+header-vs-lines gap described above. Mason's open choice: leave it live and
+settle the canonical rounding rule, or revert it with a follow-up migration —
+reverting would return sub-cent precision to a stored money column, and live
+already carries the change, so leaving it live is the recommendation on record.
+
+**The decision needed from Mason** is the same one behind the unresolved live
+line-profit discrepancy — **which stored copy of profit is canonical, the order
+header or the line items, and which single rounding rule do all writers use?**
+Once that is answered, the invariant gets enforced across every writer with a
+database invariant test, and this entry and the live discrepancy close together.
+Per-order live figures are deliberately not recorded here — this repository is
+public; they live in the access-controlled session record.
+
+### Answered 2026-08-09 — the order header is canonical; lines are derived to match it
+
+Measuring live before deciding changed the shape of the problem. The gap is
+**not** a rounding artefact. `orders.total_profit` is recomputed by a trigger on
+every write and is right. `order_items.profit` is a **stored cache that nothing
+refreshes** — edit a product's cost or a line's quantity and the line keeps its
+old profit forever. 37 of 288 line rows across 17 orders currently hold a stale
+value, and most of the 11 visible order-level gaps are orders of magnitude
+larger than any rounding rule could produce.
+
+**Mason's decision:** the order header is canonical. Line profit is derived from
+it, using one rule everywhere — round each line's revenue and each line's cost
+to whole cents, then subtract. Rounding per line (rather than rounding the sum)
+is what makes `SUM(line profit) = header total_profit` hold **exactly**, by
+algebra rather than by luck. That also disposes of the escalated blocking
+finding above: the header now subtracts per-line **rounded** cost, so the
+two-line `10.005 / 5.001` case that widened the gap cannot arise.
+
+**The fix:** `20260809230500_single_canonical_line_profit.sql` (history row 862).
+Written and reviewed 2026-08-09 — `rls-security-reviewer` and
+`migration-drift-reviewer` both returned zero blockers — and **APPLIED LIVE
+2026-08-09** as Supabase ledger version `20260810000427`. Verified live after the
+apply: both function bodies carry the new logic, the trigger fires on all four
+columns and is enabled, and the row counts are unchanged (46 fractional
+`order_items`, 3 fractional `commissions`, 37 stale lines, 11 disagreeing
+orders), with no `orders` row written in the surrounding 15 minutes.
+It is forward-only: applying it moved no live money. The one-time repair of the
+37 stale lines is written but fully commented out and is still a **separate**
+decision that has NOT been taken, because writing those rows would also round 11
+of the 46 fractional-cent `order_items` rows that `20260809170800` is
+deliberately holding back.
+
+**So the 11 disagreeing orders still disagree today.** The fix stops any *new*
+drift; it does not reach back. Those orders converge the next time one of their
+lines is written, or immediately if the section-3 repair is ever approved.
+
+**Still open after this lands, deliberately:** `_update_order_items_impl`
+(`20260617123503`, lines 274–275) overwrites `orders.total_price` with the raw
+un-rounded line sum immediately after the trigger set the rounded one. That is
+pre-existing and unrelated to profit — the exactness guarantee above is scoped
+to `total_profit` only, and `total_price` can still sit a fraction of a cent off
+its own lines until that RPC is fixed. Recorded so nobody reads the new
+guarantee as broader than it is.
 
 ## RESOLVED LIVE — Quote and Customer whole-record saves reject stale editors
 
