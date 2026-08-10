@@ -1646,6 +1646,14 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The terminal-provenance wrapper binds actor + order before issuing exact
   // governed cancellation claims and invoking the private implementation.
   cancel_order: 'delegated',
+  // The restored actor guard (migration 20260808150100) authorizes —
+  // AUTH_REQUIRED, ACTOR_MISMATCH, is_admin() — and then delegates to
+  // _batch_apply_prepayments_impl, which owns the canonical
+  // check_idempotency/save_idempotency pair. The wrapper deliberately holds no
+  // replay logic of its own: duplicating it would record the same key twice.
+  // _impl has no `authenticated` EXECUTE, so the wrapper is the only reachable
+  // entry point.
+  batch_apply_prepayments: 'delegated',
   // Required-key wrappers fail closed before delegating to the preserved,
   // directly non-executable implementations that own replay and mutation.
   create_invoice_for_unbilled_delivery: 'delegated',

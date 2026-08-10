@@ -1,0 +1,883 @@
+# Refuted claims — Ordering Cycle Review 2026-08-09
+
+These 26 claims were raised by a finder and then **disproven** by an independent verifier. They are recorded in full so a later live-catalog check or triage can overturn a refutation on stronger evidence — without this, only the titles survived.
+
+Not defects. Do not schedule work from this file.
+
+---
+
+### [LOW] QuoteBuilder shows date-expired holds as active reservations while every aggregate excludes them
+
+- **Location:** src/pages/QuoteBuilder.tsx:542-554; supabase/migrations/20260716120120_gauntlet_inventory_accuracy.sql:61; src/pages/InventoryPage.tsx:237
+
+**Claim.** loadActivePlannedHolds filters only `is_active = true` with no expires_at predicate, so once a planned quote's holds pass needed_by+14d, the QuoteBuilder reservation panel still lists them as live holds while get_inventory_position, dispatch free, the forecast, and InventoryPage's holds tab (`.or('expires_at.is.null,expires_at.gte.today')`) all exclude them. The two surfaces disagree about whether the booking is still reserved. Note nothing ever flips a date-expired hold's is_active to false (release_expired_quote_holds is status-based despite its name - asserted intended in src/lib/rpcContracts.test.ts:2261 - and no cron releases by expires_at; checked cron.schedule sites), so the rows linger active-but-uncounted until a terminal status or the next save rebuilds them with the same past date.
+
+**Evidence offered.** QuoteBuilder.tsx:543-548: `.from('inventory_holds').select('product_id, quantity, expires_at').eq('hold_type', 'crop_program').eq('source_id', targetQuoteId).eq('is_active', true)` - no expires_at filter. Position holds CTE: `AND (ih.expires_at IS NULL OR ih.expires_at >= CURRENT_DATE)`. InventoryPage.tsx:237: `.or(`expires_at.is.null,expires_at.gte.${localToday()}`)`.
+
+**Claimed failure.** A planned quote's needed-by date passed three weeks ago. The rep opens the quote and sees its holds listed as active reservations; the office looks at InventoryPage/dispatch and sees the same product fully free. Both act on contradictory pictures of the same booking.
+
+**Why it was refuted.** The finding's factual premise about the query is correct (QuoteBuilder.tsx:543-548 filters only is_active with no expires_at predicate), but its failure scenario is contradicted by rendering code the reviewer did not cite: the same query selects expires_at (line 545) precisely so the panel at QuoteBuilder.tsx:3575-3585 can compute `isLapsed` (line 3580, `earliestExpiry <= localToday()`) and render the expiry in red with an explicit " (lapsed)" suffix (line 3584, `text-red-600 font-medium`). A date-expired hold is therefore shown as "Held: X · expires <date> (lapsed)" in red — not "as active reservations" — so the claimed contradictory-picture scenario (rep sees live holds, office sees product free, no signal) cannot occur; the QuoteBuilder surface agrees with the aggregates that the reservation has lapsed and communicates it. The omission of the expires_at filter is evidently intentional: it is what lets the lapsed state be surfaced instead of the hold silently disappearing. The only residual discrepancy runs the opposite direction and is cosmetic: the UI marks a hold "(lapsed)" on its final day (`<= today`) while the DB aggregates still count it (`expires_at >= CURRENT_DATE`, migration 20260716120120 lines 61/92). The item appears in neither KNOWN_ISSUES.md nor the 2026-08-05 section-04 baseline, so it is not a duplicate — it simply does not hold up as a defect as claimed.
+
+---
+
+### [MED] cancel_delivery cancels sibling deliveries' draft/unposted invoices — the exact per-order-scoping defect already fixed in void_delivery
+
+- **Location:** supabase/migrations/20260620130000_commission_batch_freeze_guard.sql:773-786 (latest cancel_delivery body); supabase/migrations/20260716120104_gauntlet_access_boundaries.sql:683-691 (void_delivery's fix for the same defect)
+
+**Claim.** cancel_delivery's invoice cleanup iterates `invoices WHERE order_id = v_delivery.order_id AND status IN ('draft','posted','unposted')` with no delivery_id scoping, cancelling every draft/unposted invoice on the ORDER. void_delivery had the identical shape and was fixed on 2026-07-16 with an explicit Codex P1 note — '(was per-order, which would cancel a SIBLING delivery's draft invoice on void of this delivery)' — by adding `AND (delivery_id = p_delivery_id OR delivery_id IS NULL)`. cancel_delivery (last re-emitted 2026-06-20, before that fix) never received the same scoping. Under per-delivery billing (complete_delivery auto-drafts invoices carrying delivery_id; W5 made per-delivery the mandatory billing mode once any active delivery exists), cancelling delivery B destroys delivery A's legitimate draft invoice.
+
+**Evidence offered.** 20260620130000:774-777: `FOR v_invoice IN SELECT * FROM invoices WHERE order_id = v_delivery.order_id AND status IN ('draft', 'posted', 'unposted') AND deleted_at IS NULL LOOP IF v_invoice.status IN ('draft', 'unposted') THEN UPDATE invoices SET status = 'cancelled' ...` — no delivery_id predicate. void_delivery contrast (20260716120104:683-691): `-- U2 (Codex P1): scope the auto-cancel to THIS delivery's own draft invoice or an order-level one (delivery_id IS NULL) — was per-order, which would cancel a SIBLING delivery's draft invoice ... WHERE order_id = v_delivery.order_id AND status = 'draft' AND (delivery_id = p_delivery_id OR delivery_id IS NULL);`
+
+**Claimed failure.** Order has delivery A (completed, auto-drafted invoice for its delivered quantity, not yet posted) and delivery B (scheduled). A rep cancels delivery B. cancel_delivery's loop cancels delivery A's draft invoice too. Delivery A's real, delivered product now has no invoice; unless someone notices the unbilled-delivery report, the revenue is silently lost.
+
+**Why it was refuted.** The claimed defect was already fixed in a later migration the reviewer missed. supabase/migrations/20260706070000_complete_delivery_per_delivery_billing.sql (2026-07-06, superseding the cited 20260620130000 body in timestamp order) re-emits cancel_delivery with the exact scoping predicate at line 694: `AND (delivery_id = p_delivery_id OR delivery_id IS NULL)`, under the comment (lines 690-693) "U2 (Codex P1): scope the invoice reversal to THIS delivery's own invoice or an order-level one ... NEVER a sibling delivery's invoice." Its CHANGE 4/CHANGE 5 headers (lines 549-562, 727+) show cancel_delivery and void_delivery were fixed together; the 20260716120104 void_delivery text the reviewer quoted is a later re-emission, not the sole fix. Grep of all CREATE OR REPLACE FUNCTION occurrences confirms 20260706070000 is the latest cancel_delivery definition and no later migration reintroduces the unscoped loop, so the sibling-invoice cancellation scenario cannot occur against current migrations.
+
+---
+
+### [LOW] convert_quote_to_order's already-converted lookup has no status filter and no ORDER BY — it can return a cancelled/voided order as the conversion result
+
+- **Location:** supabase/migrations/20260702172500_layer2_convert_quote_to_order_job_aware.sql:93,110
+
+**Claim.** Both already-converted branches use `SELECT id INTO v_order_id FROM orders WHERE quote_id = p_quote_id LIMIT 1` — no `status NOT IN ('cancelled','voided')` filter and no ORDER BY despite the comment claiming 'Surface the most recent draw order'. If a quote's order was cancelled but the quote was left 'accepted' (the revert-quote escape hatch of 20260718152837 is optional, not automatic), converting again returns `{'status':'already_converted','order_id':<cancelled order>}` and the UI navigates the user to the dead order; with multiple orders per quote (partial draws create several) the row picked is planner-dependent.
+
+**Evidence offered.** `SELECT id INTO v_order_id FROM orders WHERE quote_id = p_quote_id LIMIT 1;` (appears at both :93 and :110, no status predicate, no ORDER BY); comment at :91-92: 'Surface the most recent draw order; never create another.'
+
+**Claimed failure.** Order from an accepted quote is cancelled; user clicks Convert on the quote again expecting a fresh order and instead lands on the cancelled order's page as if it were the live conversion; on a multi-draw quote two clicks can surface different orders.
+
+**Why it was refuted.** The code observation is accurate but the finding is refuted as already-adjudicated settled behavior plus a consequence-free remainder. (1) Verified 20260702172500 is the latest definition of convert_quote_to_order (no later CREATE OR REPLACE exists; grep of all migrations), and lines 93/110 do contain `SELECT id INTO v_order_id FROM orders WHERE quote_id = p_quote_id LIMIT 1` with no status filter or ORDER BY. (2) But the finding's only real failure scenario — cancel the conversion order, click Convert again, get the cancelled order back as 'already_converted' — is exactly gauntlet finding B2, confirmed as a BLOCKER in docs/audits/gauntlet/2026-07-18-sections-02-06-adversarial-loop.md:30-34 and remediated by supabase/migrations/20260718152837, whose header explicitly names this behavior ("a re-convert returned the cancelled order ('already_converted')") and records the settled design choice: "Safe fix (admin-driven, does NOT change default cancel/void behavior)" — converted bookings deliberately stay closed (also 20260610185806:30-34, "the quote can never be re-drawn or re-converted"), and admin revert_quote_status (which zeroes the draw ledger, lines 89-98) is the chosen recovery. Re-reporting the retained residual as a new defect re-opens that settled decision. (3) The "cancelled/voided draw order returned on multi-draw quotes" variant cannot occur: draw orders have booking_draw=true, and both cancel_order (20260610185806:801-820) and void_order (:487-505) decrement quote_product_draws for them, so the quote is no longer fully ORDER-drawn and the :93 branch raises BOOKING_PARTIALLY_DRAWN instead of returning already_converted — every order reachable at :93 in the fully-drawn state is a live order. (4) The remaining sliver — LIMIT 1 without ORDER BY contradicting the "most recent draw order" comment — picks an arbitrary live draw order among equivalent live orders; no user-visible harm beyond which valid order page opens, and no cancelled/voided row can be selected there. The DB genuinely does not filter status in these lookups (checked the migrations directly), but the enforcement the reviewer treated as missing lives in the draw-ledger reversal + revert_quote_status escape-hatch mechanism.
+
+---
+
+### [LOW] Quick delivery silently bills $0 when tier1_price is NULL, with no pricing_pending flag or warning
+
+- **Location:** supabase/migrations/20260706130000_stock_policy_warn_not_block.sql:122-126,194-198
+
+**Claim.** The A4 fix (20260702132000) cascades tier2/tier3 → tier1, matching the canonical getTierPrice. But the terminal fallback is still 0: `COALESCE(v_product.tier1_price, 0)`. A product with no tier prices at all produces a $0 order_item, $0 invoice line, and NEGATIVE profit (cost > 0) with no error, no pricing_pending marker (that mechanism exists only on the priced-order path — `price_order` / `pricing_pending` in 20260614145356), and no warning in the result JSON. The quote path forces explicit prices and the direct-order path shows the price field; quick delivery is the only seam where the server chooses the price, so it is the seam that most needs a loud failure on a missing price.
+
+**Evidence offered.** `v_item_price_cents := CASE v_customer.assigned_tier WHEN 1 THEN ROUND(COALESCE(v_product.tier1_price, 0) * 100) WHEN 2 THEN ROUND(COALESCE(v_product.tier2_price, v_product.tier1_price, 0) * 100) ELSE ROUND(COALESCE(v_product.tier3_price, v_product.tier1_price, 0) * 100) END;` — 0 is a valid outcome; no subsequent check raises on a zero price.
+
+**Claimed failure.** A newly added product has cost set but tier prices not yet entered; a driver quick-delivers 30 units of it. The customer receives product with a $0 invoice line, commissions are computed on negative profit, and nothing flags the order for pricing.
+
+**Why it was refuted.** The server code quote is accurate and still live (20260803010917 renames the 20260706 body to _create_quick_delivery_intent_impl_20260802 without changing the pricing CASE), but the finding's failure scenario cannot occur and its "no warning" claim is factually wrong: QuickDeliveryModal.tsx:342-344 has an explicit M16 guard that blocks submission with an error toast when totalCents === 0 ("Order total cannot be $0 — update product prices before submitting"), which covers exactly the stated scenario (single unpriced product delivered). The modal also displays the server-matching per-line tier price before submit (QuickDeliveryModal.tsx:272-276, :738, price/total columns :563-564, ConfirmModal total :692), so the price is not silently server-chosen. The "only seam where the server chooses the price" claim is also false — create_direct_order uses the identical COALESCE(tierN, tier1, 0) pattern per the A4 migration's own header (20260702132000:24). Finally, the 0 terminal fallback is the canonical, deliberately-aligned behavior: it matches getTierPrice (src/lib/quoteCalc.ts:40-45, tier1_price || 0), and the A4 migration header explicitly records the no-tier-price edge semantics as known and deliberately deferred. Residual exposure (a $0 line inside a mixed positive-total cart with the $0 visibly displayed, or a direct RPC call bypassing the UI) is a thin defense-in-depth note, not the reported bug.
+
+---
+
+### [LOW] Drivers can mint draft invoices via create_quick_delivery while every other invoice-creation seam requires admin/sales_rep
+
+- **Location:** supabase/migrations/20260706130000_stock_policy_warn_not_block.sql:68-70,179-184
+
+**Claim.** create_quick_delivery's role gate admits 'driver', and unless p_skip_invoice is passed it creates a draft invoice (with server-side tier pricing). create_invoice_from_order, create_split_invoices_from_order, and create_invoice_for_unbilled_delivery all require admin or admin/sales_rep. So the driver role — excluded from all pricing reads by the office-only RLS work (20260727231652 et al.) — can nonetheless cause priced invoices to exist and see the returned total_cents. Possibly a deliberate field-workflow tradeoff, but it is an undocumented asymmetry against the invoice-creation policy and partially undercuts the pricing-visibility boundary; the default should arguably be p_skip_invoice=true for drivers.
+
+**Evidence offered.** `IF v_actor_role IS NULL OR v_actor_role NOT IN ('admin', 'sales_rep', 'driver') THEN RAISE EXCEPTION 'INSUFFICIENT_ROLE: only admins, sales reps, and drivers can create quick deliveries';` and the unconditional invoice insert under `IF NOT p_skip_invoice THEN`; result JSON returns 'total_cents'.
+
+**Claimed failure.** A driver account creates a quick delivery and receives customer pricing (total_cents, per-line tier prices implicitly) in the RPC result despite the office-only pricing-read lockdown; a mispriced draft invoice enters the AR pipeline without office involvement.
+
+**Why it was refuted.** Mechanics verified in current source (20260803010917 wrapper still admits 'driver'; renamed 20260706130000 impl creates a draft invoice unless p_skip_invoice and returns total_cents), but the finding's substance does not hold up. (1) The claimed asymmetry is false: complete_delivery is another driver-reachable invoice-creation seam — a driver assigned to a delivery (20260706130000:480-483) triggers its auto-invoice path (20260706130000:600-614), so driver-triggered draft invoices are the established pattern across the delivery lane, not an anomaly; the three office-only RPCs are the separate manual-billing lane. (2) The 'pricing-visibility boundary' claim misstates 20260727231652: that migration restricted only quote_items/quote_versions/customer_application_rates/rebate_programs and its header explicitly, deliberately left products (which carries the tier prices quick-delivery uses) driver-readable BECAUSE of the QuickDeliveryModal driver flow ('products -> Deliveries (driver) via QuickDeliveryModal ... NOT attempted here'), and documents SECDEF pricing pass-throughs as 'KNOWN, DELIBERATELY OUT OF SCOPE ... tracked separately'. Drivers were never excluded from product-price reads, so total_cents pierces no boundary. (3) The design is documented (QuickDeliveryModal.tsx:3 'Used when a driver gets a phone call and needs to grab product and go'; the RPC error message names drivers by design; the UI exposes skip_invoice as a user choice), and the residual field-role pricing exposure is already tracked in KNOWN_ISSUES.md's 2026-07-27 entry open items (a)/(b) — restricted view needed for products cost/margin columns, SECDEF functions to audit. This is a deliberate, documented field-workflow design plus an already-documented residual, not a new undocumented policy gap.
+
+---
+
+### [LOW] QuoteBuilder draw-down path fires order-confirmed email/alert without the replay dedup the convert path has
+
+- **Location:** src/pages/QuoteBuilder.tsx:2396-2408 vs src/pages/QuoteBuilder.tsx:2547-2574
+
+**Claim.** The convert flow deduplicates side effects per order_id (`firedConvertSideEffects.current.has(result.order_id)`) precisely because an idempotent replay returns the same cached 'created' result. The draw_down_quote flow (partial conversion — the other quote→order seam on this page) has no such guard: on success it unconditionally dispatches the large-order alert and `sendOrderConfirmedEmail(result.order_id!)`. A same-key retry (timeout → user clicks again) replays the cached result and re-sends the customer-facing order-confirmed email.
+
+**Evidence offered.** 2403-2405: `data: { orderId: result.order_id ?? '', ... } ... sendOrderConfirmedEmail(result.order_id!);` with no membership check, versus 2554-2556: `&& !firedConvertSideEffects.current.has(result.order_id)` on the convert path.
+
+**Claimed failure.** Network timeout during a booking draw-down; the rep retries with the same idempotency key; the RPC replays the cached order but the page emails the customer a second order confirmation for the same order.
+
+**Why it was refuted.** The cited code asymmetry is real (src/pages/QuoteBuilder.tsx:2401-2405 fires trackBusinessEvent + sendOrderConfirmedEmail unconditionally, vs the firedConvertSideEffects guard at 2553-2556 on the convert path), but the claimed customer-facing harm cannot occur, for two independent reasons the reviewer missed. (1) The failure scenario is self-contradicting: on a network timeout the client throws at `if (error) throw error` (QuoteBuilder.tsx:2394) before ever reaching sendOrderConfirmedEmail at 2405, and drawDownIdem.resetKey() (2395) is only called on success — so the same-key retry that replays the cached RPC result (draw_down_quote replays via check_idempotency, supabase/migrations/20260702172000_layer2_draw_down_quote_job_aware.sql:93-96) sends the FIRST and only email, which is idempotency working as intended, not a re-send. (2) Even in a path where the success block runs twice for the same order (e.g. a double-click race before the `drawing` disable re-renders), the email layer itself dedupes: sendOrderConfirmedEmail passes a stable per-order key `order-confirmed-${order.id}` (src/lib/orderConfirmedEmail.ts:129, with an explicit docstring at lines 40-42 saying the Edge Function dedupes if "this is somehow called twice for the same order"), and the send-email edge function enforces it — a repeat key with status 'sent' returns cached success with deduplicated:true and no new email (supabase/functions/send-email/index.ts:453-468), and a still-'pending' row is refused with a 409 (index.ts:477-488). This is enforced in the checked source of the edge function, not merely assumed. The convert path's firedConvertSideEffects set is defense-in-depth for telemetry/alerts; the actual customer-email protection on BOTH paths is the stable email idempotency key. Secondary factual error in the finding: the draw-down path does not dispatch a large-order alert — notifyLargeOrder is only called on the convert path (QuoteBuilder.tsx:2570); the draw path fires only trackBusinessEvent('quote_drawn_down') and the email. The residual exposure is a possible duplicate internal analytics event in a rare same-session double-success race — not the customer-facing double email the finding claims, and not the finding as written.
+
+---
+
+### [LOW] convert_quote_to_order / create_direct_order idempotency receipts remain key+operation only — not actor- or payload-bound — after sibling RPCs were intent-bound
+
+- **Location:** supabase/migrations/20260702172500_layer2_convert_quote_to_order_job_aware.sql:52-55; supabase/migrations/20260614142939_create_direct_order_customer_po_param.sql:85-88; supabase/migrations/20260803010917_bind_idempotency_to_mutation_intent.sql:1-30
+
+**Claim.** The 2026-08-03 migration added request_fingerprint/request_actor_id binding, but wrapped only save_invoice and create_quick_delivery; bulk_import_order got its own actor/payload binding (20260806004644). convert_quote_to_order and create_direct_order still use bare `check_idempotency(key, operation)`: any authenticated caller reusing a known key gets the cached result regardless of actor or payload — reusing a convert key against a different quote returns the OTHER quote's order_id as if it were this conversion (the QuoteBuilder side-effect logic and navigation then act on the wrong order). Low because keys are client-generated UUIDs scoped per user in the frontend; the exposure is API-level key reuse/guessing and cross-actor cache reads (which also leak the other actor's order_id/warnings). May intersect the settled gauntlet Section 6 idempotency lane — I found no KNOWN_ISSUES entry covering these two RPCs specifically.
+
+**Evidence offered.** convert: `v_existing := check_idempotency(p_idempotency_key, 'convert_quote_to_order'); IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;` before any quote/actor validation of the cached payload; 20260803010917 header: 'reusing that key after the form changes can replay a result for different data' — scoped to save_invoice + create_quick_delivery only.
+
+**Claimed failure.** A retry with a stale key after the user switched quotes in another tab returns the previous quote's `{'status':'created','order_id':...}`; the page records side effects and navigates to an order unrelated to the quote on screen, and the intended quote is silently never converted.
+
+**Why it was refuted.** The finding's central claim and its only concrete failure scenario are false against current source because the reviewer missed a superseding migration. convert_quote_to_order was rewrapped by supabase/migrations/20260730235031_quote_customer_row_version_guard.sql (lines 986-1116), which is later than the cited 20260702172500 implementation (renamed to _convert_quote_to_order_owner_impl, EXECUTE revoked from authenticated). The current public wrapper: (1) enforces quote ownership BEFORE the cache read ('IF v_actor_role <> ''admin'' AND v_quote_owner IS DISTINCT FROM v_actor THEN RAISE EXCEPTION ''NOT_QUOTE_OWNER''', line ~1035), blocking the claimed cross-actor cache read for sales reps; (2) payload-binds the receipt — after conversion it stamps the cached result with '_quote_id', '_expected_row_version', '_post_row_version', and on replay validates 'v_existing->>''_quote_id'' IS DISTINCT FROM p_quote_id::text', both row versions, AND that the cached order_id exists in orders WITH 'quote_id = p_quote_id', raising IDEMPOTENCY_PAYLOAD_CONFLICT otherwise. So "reusing a convert key against a different quote returns the OTHER quote's order_id" cannot occur, and a stale-key retry after the quote changed (row_version bumped by any quote write) also fails closed rather than replaying — the described QuoteBuilder wrong-navigation scenario is impossible. The reviewer's evidence quote ("before any quote/actor validation of the cached payload") describes a dead internal impl, not the callable RPC. The surviving kernel — create_direct_order (20260614142939_create_direct_order_customer_po_param.sql:85-88 'v_cached_result := check_idempotency(p_idempotency_key, ''create_direct_order'')'; I verified no later migration redefines or rename-wraps it, and check_idempotency's latest definition in 20260714230000_gauntlet_core_guards.sql remains key+operation only) — is genuinely not actor/payload-bound. But that residual is (a) not the finding's stated failure scenario (create_direct_order is called from NewOrder.tsx, not QuoteBuilder, with a client-generated per-user UUID key), and (b) inside the settled 2026-08-06 Section 6 idempotency baseline (docs/audits/gauntlet/2026-08-06-section-06-idempotency-double-submit-refresh.md lines 13, 77: shared helpers "fingerprint payloads where required" and the open risk is "concentrated in frontend sequencing, unstable or omitted keys" — the lane reviewed intent-binding scope the day before this hunt and did not flag create_direct_order), so per instructions it does not count as a new finding. If the create_direct_order half were re-filed standalone with a correct scenario, it would be at most LOW/informational.
+
+---
+
+### [LOW] allocate_payment stamps the overpayment prepay credit's season from CURRENT_DATE, not the payment date — a backdated payment near the Oct 1 season boundary books prepay to the wrong season
+
+- **Location:** supabase/migrations/20260713060300_harden_allocate_payment_idempotency.sql:135-137, 146-152, 208-217
+
+**Claim.** The RPC accepts p_payment_date (period-checked via check_period_open) but computes v_current_season from CURRENT_DATE and uses it both for the allocation_sets row and for any overpayment-created prepay_credits row. A payment dated before Oct 1 but entered on/after Oct 1 (the season rollover per the season calendar) records the allocation set and the prepay credit under the NEW season even though the money belongs to the prior season. Season-scoped prepay reporting/settlement (rollover settlement is season-aware, 20260702180000) then sees the credit in the wrong bucket. Only reachable when a payment is backdated across the season boundary (API callers can pass any open-period date; the two UI callers omit the date so UI entries are same-day and only hit this in the entry-lag case around Oct 1).
+
+**Evidence offered.** 20260713060300:135-137: `v_current_season := CASE WHEN extract(month FROM CURRENT_DATE) >= 10 THEN extract(year FROM CURRENT_DATE)::integer + 1 ELSE extract(year FROM CURRENT_DATE)::integer END;` while :150 stores `p_payment_date` on the same row and :213 uses `v_current_season` for prepay_credits.season.
+
+**Claimed failure.** On Oct 2 the office enters a check received Sept 29 (payment_date backdated to 2026-09-29, period open). The $500 unallocated excess becomes a prepay credit with season = 2027 instead of 2026; season-2026 prepay reconciliation and rollover settlement miss it, season-2027 shows phantom early prepay.
+
+**Why it was refuted.** MECHANICAL CLAIM IS ACCURATE, BUT THE FAILURE SCENARIO CANNOT OCCUR AS DESCRIBED — the named downstream consumers do not exist, and the one that does is aligned with CURRENT_DATE, not against it.
+
+1) Code citations check out. `supabase/migrations/20260713060300_harden_allocate_payment_idempotency.sql:135-137` is verbatim `v_current_season := CASE WHEN extract(month FROM CURRENT_DATE) >= 10 THEN extract(year FROM CURRENT_DATE)::integer + 1 ELSE extract(year FROM CURRENT_DATE)::integer END;`, :131 is `PERFORM check_period_open(p_payment_date);`, :150-151 store `p_payment_date, p_notes, v_current_season`, and :213 stores `v_current_season` into `prepay_credits.season`. I confirmed 20260713060300 is the LAST definition of `allocate_payment` — the five later migrations touching it (20260714185130, 20260716120112, 20260716160000, 20260718153744, 20260718203206) contain no CREATE OR REPLACE of the function; 20260716160000 only special-cases its idempotency claim row, 20260718203206 only disables the legacy `record_invoice_payment`. No trigger recomputes season on either table (searched all migrations for INSERT/UPDATE triggers on `prepay_credits`/`allocation_sets`; the only one is `_recompute_prepay_credit_balance` from 20260512050000, which touches `balance_cents`, not `season`).
+
+2) The CURRENT_DATE basis is the DESIGNED semantics for prepay_credits.season, not a bug. `supabase/migrations/20260228200000_season_calendar_oct_sep.sql:38` — "-- Used as DEFAULT on invoices.season and prepay_credits.season columns." — and the project's own canonical backfill at :57 is `UPDATE prepay_credits SET season = compute_season(created_at::date)`, i.e. creation date, explicitly NOT payment date. (Contrast :47, `UPDATE allocation_sets SET season = compute_season(COALESCE(payment_date, created_at::date))`, and :289 `v_season := compute_season(v_payment_dt);` in `create_commission_payment` — the codebase deliberately uses payment_date where it wants payment_date.) The 2026-02-28 rewrite of `allocate_payment` itself already used `v_current_season := compute_season(CURRENT_DATE)` at :118 and the same value for the prepay INSERT at :189; 20260713060300 merely inlined the same CASE. So the prepay-credit half of the finding describes intended behavior.
+
+3) The cited harm consumer does not exist. The finding says "rollover settlement is season-aware, 20260702180000". `supabase/migrations/20260702180000_p2_2_retire_dead_objects.sql:1-3` is "P2-2 — Retire dead objects … Structure Wave-2 · PARKED — NOT APPLIED", which drops `create_prepay_credit` and `document_processing_log` — it is not a settlement function and is not applied. The actual rollover migration `20260316900000_seasonal_rollover.sql` defines `rollover_quote_to_season` (:4), which copies quotes and never reads `prepay_credits`. `20260614151115_prepay_booking_link_and_settlement.sql` reads only `q.season` / `v_quote.season` (:77, :211) and links prepay by `quote_id`; an overpayment credit from `allocate_payment` has `quote_id` NULL (see the INSERT column list at 20260713060300:210 — no quote_id), so it is out of scope for booking settlement entirely. `get_open_booking_rollover` (20260614151613:133-135) joins `prepay_credits pc ON pc.id = pa.prepay_credit_id … WHERE pc.quote_id IN (SELECT id FROM open_bookings)` — again quote_id, never `pc.season`.
+
+4) The ONLY live season-scoped reader of prepay_credits.season contradicts the finding's direction. `supabase/migrations/20260716214423_crm_call_lists.sql:44` — `WHERE pc.season = v_season` — inside `get_call_list_prepay_prospects`, whose :15 declares `v_season integer := public.current_season();` (= `compute_season(CURRENT_DATE)` per 20260228200000:42). Both the stamp and the filter use CURRENT_DATE, so the Oct-2-entered credit IS found by the Oct-2 call list. Stamping it from `p_payment_date` (season 2026) is what would make it invisible to that report. The finding's "season-2027 shows phantom early prepay" is the intended "current prepay balance" behavior of the only report that reads the column.
+
+5) No other reader is affected. The only in-DB match on the column pair is void_payment's reversal — `AND (v_set.season IS NULL OR season = v_set.season)` (20260611001904:207, restated 20260620160000:102, 20260622050000:111, 20260711060000:542). Because `allocate_payment` stamps allocation_sets.season and prepay_credits.season from the SAME `v_current_season` variable, that match is self-consistent and the unwind still finds the credit. All four frontend readers select prepay credits without any season predicate: `src/components/prepay/PrepaymentManagerPanel.tsx:168-171`, `src/components/prepay/PrepayWorkspacePanel.tsx:95-99`, `src/pages/CustomerDetail.tsx:544`, `src/pages/AccountsReceivable.tsx:52`. `reconcile_prepay_balances` does not exist as a season-scoped consumer — I found no season predicate over prepay_credits anywhere else (rg over all migrations for `prepay_credits` within 600 chars of `season` returns only INSERT column lists, the index at 20260213100000:220, the 20260228200000 comment/backfill, and the call-list line).
+
+6) Root cause is prior-documented anyway. `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md:108-109` already records D13-04/D13-05: "Server `CURRENT_DATE` is UTC … Same root cause flips `current_season()` at Oct 1 boundary" and the server/client season mismatch at the Sep 30/Oct 1 boundary. Not in KNOWN_ISSUES.md or the 2026-08-05 section-04 file, but not a new observation.
+
+RESIDUAL (not worth a finding): `allocation_sets.season` is stamped from CURRENT_DATE while the project's own backfill convention for that table is `COALESCE(payment_date, created_at::date)` — a genuine cosmetic inconsistency with zero observed consumer. `allocate_payment` also inlines the CASE instead of calling `compute_season()`, functionally identical. Neither produces the described money/reporting failure. INFO at most.
+
+---
+
+### [LOW] OrderDetail split-billing preview computes per-customer amounts in floating point independently of the server — preview can disagree with created split invoices by cents
+
+- **Location:** src/pages/OrderDetail.tsx:820-839
+
+**Claim.** The splitPreview memo distributes each line's total_price across field allocations and owner split percentages using raw double arithmetic (`fieldShare = it.total_price * acres / totalAcres`, then `fieldShare * split_pct / pctSum`), filters residues below $0.005, and shows the per-customer dollar amounts that 'will' be invoiced. The actual split is computed server-side in create_split_invoices_from_order with its own cents rounding/penny-reconciliation, so the previewed amounts can differ from the created invoices by a cent or more per customer. Display-only (no write path uses these numbers), but it is the number the user confirms before committing.
+
+**Evidence offered.** OrderDetail.tsx:828: `const fieldShare = it.total_price * Number(a.acres) / totalAcres;` :832: `for (const o of owners) add(o.customer_id, fieldShare * o.split_pct / pctSum);` :837: `.filter((r) => Math.abs(r.amount) > 0.005)` — no integer-cent math, no reconciliation to the order total.
+
+**Claimed failure.** A 3-owner 33.34/33.33/33.33 split over fractional acres shows customer A at $1,234.57 in the preview; the server's largest-remainder cent allocation produces $1,234.58 on the created invoice. The office quotes the preview number to the grower, then the invoice disagrees by a cent — noise that erodes trust in the split engine and generates reconciliation questions.
+
+**Why it was refuted.** REFUTED — the mechanism is real but it is a deliberate, explicitly-disclosed approximation, and the finding's stated harm ("it is the number the user confirms before committing") is factually false against current source.
+
+WHAT HOLDS UP (the arithmetic claim):
+The float math is accurately quoted. `src/pages/OrderDetail.tsx:828`: `const fieldShare = it.total_price * Number(a.acres) / totalAcres;` and `:832`: `for (const o of owners) add(o.customer_id, fieldShare * o.split_pct / pctSum);` and `:837`: `.filter((r) => Math.abs(r.amount) > 0.005)`. No integer-cent math, no reconciliation. Confirmed.
+
+The server genuinely does different math. Latest full body is `supabase/migrations/20260707090000_u7_split_gate_allow_predelivery.sql` (the later `20260719044912_trust_only_post_revoke_split_provenance.sql` / `20260719060256_allow_governed_split_terminal_lifecycle.sql` wrap provenance/lifecycle, they do not replace the allocation math). That body converts to bigint cents first — line ~113: `v_line_cents := round(v_item.total_price * 100)::bigint;` — then does two penny-exact largest-remainder passes via `calculate_billing_splits`: line ~129 `v_field_cents := calculate_billing_splits(v_line_cents, v_acre_pcts);` and line ~160 `v_owner_cents := calculate_billing_splits(v_field_cents[v_field_idx], v_owner_pcts);` (comment: "Split this field's portion among its owners BY split_pct (penny-exact)"). So a one-cent divergence between preview and created invoice is genuinely possible. I verified this in the migrations rather than assuming it.
+
+WHY IT IS STILL REFUTED:
+
+1. It is disclosed in the UI, on the same card, in two places. `src/pages/OrderDetail.tsx:1944`: `<span className="text-xs font-semibold text-nav-dark">Projected split (approx.) — one invoice per customer</span>` and `:1954`: `<p className="text-[11px] text-secondary mt-2">Exact penny amounts are computed when you create the invoice.</p>`. The user is told, at the point of reading the numbers, that these are approximate and that the exact pennies come at creation. The finding does not mention either string.
+
+2. It is a documented design decision, not an oversight. `src/pages/OrderDetail.tsx:816-817`: `// Live per-customer preview of the split. Approximate (the server does the penny-exact // largest-remainder version at generation); shown only to sanity-check the allocation.` The reviewer's own cited line range (820-839) begins three lines after this comment.
+
+3. The load-bearing harm claim is false. "it is the number the user confirms before committing" — `splitPreview` appears in exactly three places (grep of the file): line 890 (success toast, which uses only `splitPreview.length`, a customer COUNT, never an amount), and lines 1940/1947 (the allocations card). Neither `ConfirmModal` in the file renders it: the one at `:2116-2129` is the cancel-order modal, and the invoice-creation modal at `:2131-2145` has a hardcoded `message` string about partial-delivery over-billing with no split amounts. The confirm step the finding describes does not display these numbers.
+
+4. No write path and no server disagreement. The reviewer concedes "Display-only (no write path uses these numbers)," and `handleCreateInvoice` (`:851-895`) passes only `p_order_id`, `p_salesman_id`, `p_invoice_type`, `p_idempotency_key` — no client-computed amounts reach the RPC. The server is authoritative and correct.
+
+CONTEXT ON EXPLOITABILITY: per `docs/manual/KNOWN_ISSUES.md:836`, the order-side path (`create_split_invoices_from_order` → `split_invoice_provenance`, `split_invoice_creation_claims`, `split_invoice_mutation_claims`) has "Six tables, zero rows across both paths — no recorded split-billing usage as of 2026-07-27." The scenario has never occurred in production.
+
+NOT A BASELINE DUPLICATE: I checked `docs/audits/gauntlet/2026-08-05-section-04-...md` — it is entirely about `bulk_import_order` (non-finite numerics, cost snapshots, canonical profit) and does not cover this preview. So this is not refuted as a re-report; it is refuted on its merits.
+
+NET: the only defensible residual is cosmetic — the preview could use integer-cent math to match the server exactly. That is a polish nit, not a defect, because the divergence is bounded at ~1 cent per customer, is labeled "approx." in the UI, is annotated as intentional in the source, never reaches a write path, and is not shown in any confirmation dialog.
+
+---
+
+### [MED] create_direct_order (and cancel_order/void_order/confirm_delivery/complete_delivery) replay receipts are not bound to payload or actor
+
+- **Location:** supabase/migrations/20260614142939_create_direct_order_customer_po_param.sql:85-87,212-213; src/hooks/useIdempotencyKey.ts:25-37; src/pages/NewOrder.tsx:506-531
+
+**Claim.** Same unbound-replay class as the update_order_items finding, on the order-creation and terminal paths. create_direct_order returns check_idempotency's cached result with no comparison of the cached request to the current p_items/p_customer_id/actor. cancel_order's required-key wrapper (20260721145936) delegates to the frozen impl (md5 a2f78a…) — no ARGUMENT_MISMATCH marker exists for cancel_order, void_order, confirm_delivery, complete_delivery, or consolidate_draft_invoices anywhere in migrations (grep). Additional cross-entity hazard: useIdempotencyKey scopes keys by (operation, userId) only — not by entity — and the ref survives React Router param changes within the same mounted component, so a retained key from a failed-but-committed cancel of order A can be replayed against order B from the same OrderDetail mount.
+
+**Evidence offered.** 20260614142939:85-87: `IF p_idempotency_key IS NOT NULL THEN\n    v_cached_result := check_idempotency(p_idempotency_key, 'create_direct_order');` followed by direct return of the cached result — no request comparison. useIdempotencyKey.ts:26-27: `const keyRef = useRef…; const scope = JSON.stringify([operation, userId]);` — entity id absent from scope.
+
+**Claimed failure.** (1) NewOrder: submit commits but response is lost; user edits the cart (different products/quantities) and resubmits; the same key replays the FIRST order's result — toast success and navigation to the old order; the corrected cart is never ordered and no inventory is prebooked for it. (2) Cross-entity: cancel of order A commits with lost response (resetKey skipped); user navigates in-app to order B (same route pattern /orders/:id — component not remounted) and clicks Cancel; cancel_order(B, keyA) returns A's cached cancellation summary; UI reports order B cancelled while it remains confirmed with live holds/commissions.
+
+**Why it was refuted.** The DB-layer half of the claim is factually correct, but every stated failure scenario is blocked by frontend guards the reviewer missed, so the finding as written does not hold.
+
+WHAT CHECKS OUT (verified, not disputed): supabase/migrations/20260614142939_create_direct_order_customer_po_param.sql:85-88 does exactly `IF p_idempotency_key IS NOT NULL THEN v_cached_result := check_idempotency(p_idempotency_key, 'create_direct_order'); IF v_cached_result IS NOT NULL THEN RETURN v_cached_result; END IF; END IF;` with no payload comparison, and this is the newest definition (grep over supabase/migrations shows no later CREATE OR REPLACE of create_direct_order; 20260805211951 only mentions it in a comment). The current shared helper, supabase/migrations/20260714230000_gauntlet_core_guards.sql:5-52, binds on key+operation only: `IF FOUND AND v_existing.operation IS DISTINCT FROM p_operation THEN RAISE EXCEPTION 'IDEMPOTENCY_CROSS_OP_KEY_REUSE' ... IF FOUND THEN RETURN v_existing.result;`. The payload/actor fingerprint work (supabase/migrations/20260803010917_bind_idempotency_to_mutation_intent.sql, which adds idempotency_keys.request_fingerprint / request_actor_id) covers save_invoice and create_quick_delivery only, and the ARGUMENT_MISMATCH grep does confirm no such marker for create_direct_order, cancel_order, void_order, confirm_delivery, complete_delivery, or consolidate_draft_invoices. So "the DB does not enforce payload binding for these ops" is TRUE (checked the migrations, not merely "not found").
+
+WHY THE FINDING IS STILL REFUTED — the failure scenarios cannot occur:
+
+(1) NewOrder edited-cart replay is explicitly prevented ~380 lines above the code the reviewer cited. src/pages/NewOrder.tsx:113-135 computes an intent hash over every submitted field and resets both keys whenever it changes: `const orderIntentHash = [customerId, orderDate, orderName, notes, customerPoNumber, items.map((i) => `${i.product_id}:${i.product_name || ''}:${i.quantity}:${i.price_per_unit}:${i.unit_cost}:${i.unit_size || ''}`).sort().join(','),].join('|');` followed by `useEffect(() => { createOrderIdem.resetKey(); rushOrderIdem.resetKey(); }, [orderIntentHash]);`. The in-file comment records this as the Codex P2 fix from PR #59 (2026-05-16) for precisely this scenario: "Page stays mounted after a failed/lost-response submit; without reset, editing customer/items/date and resubmitting would replay the prior cached order_id." The hash covers exactly the six item fields mapped into rpcItems at src/pages/NewOrder.tsx:507-514 plus all five scalars, so an edited cart always mints a new key and scenario (1) fails.
+
+(2) Cross-entity cancel replay is prevented at the button. src/pages/OrderDetail.tsx:1341: `onClick={() => { cancelOrderIdem.resetKey(); setPendingStatus('cancelled'); setStatusConfirmOpen(true); }}` — the retained key from order A is discarded before the confirm modal for order B can even open, so executeStatusChange's `const cancelKey = cancelOrderIdem.getKey();` (src/pages/OrderDetail.tsx:567) always issues a fresh crypto.randomUUID-based key (src/lib/idempotency.ts:19-22). The void path has the identical guard at src/pages/OrderDetail.tsx:1349 (`voidOrderIdem.resetKey()`). The reviewer's premise that "the ref survives React Router param changes" is true of the hook (src/hooks/useIdempotencyKey.ts:26-27 scopes only by [operation, userId]) but is neutralized by these per-click resets.
+
+(3) The same guard exists on the delivery paths the finding names. src/pages/Deliveries.tsx:1135-1136 resets per row before opening the completion modal: `completeIdem.resetKey(); if (row.status === 'scheduled') confirmIdem.resetKey();`. FieldStop is route-per-stop (/my-route/:id remounts), and the contract is regression-tested in src/pages/FieldStop.idempotency.test.ts:21-34 ("a new stop mount issues a distinct complete_delivery key"). src/pages/Deliveries.tsx:465-470 documents the one deliberate retention case — same delivery, modal kept open after a partial failure — which is intended idempotent retry on identical intent, not cross-entity replay.
+
+So the residual is a defense-in-depth gap (the server trusts the client to mint a new key on changed intent), not the exploitable MED-severity bug described: the concrete consequences claimed — "the corrected cart is never ordered", "UI reports order B cancelled while it remains confirmed" — are unreachable through the app. Both scenarios additionally require a lost response AND a client that reuses the key across changed intent, which the code prevents. Note also that this class is already on the project's radar in the 2026-08-05 gauntlet section-04 baseline, which closed exactly this for bulk_order_import ("idempotent replay was not actor/payload bound" -> supabase/migrations/20260806004644_bind_bulk_import_intent_and_profit.sql), i.e. an actively-progressing hardening track rather than a new lifecycle defect. If re-filed, it should be scoped LOW as hardening ("extend the 20260803010917 fingerprint pattern to create_direct_order and the terminal order/delivery RPCs so the server stops relying on frontend resetKey discipline"), with both failure scenarios removed as factually wrong.
+
+---
+
+### [MED] DB-level idempotency-key requirement covers only 6 RPCs — allocate_payment and the rest of the cycle accept NULL and run with zero dedup
+
+- **Location:** supabase/migrations/20260721145936_require_money_lifecycle_idempotency_keys.sql:12-27,117-119; supabase/migrations/20260713060300_harden_allocate_payment_idempotency.sql:19,49
+
+**Claim.** Checked the migration named in the charter: 20260721145936's hard IDEMPOTENCY_KEY_REQUIRED gate covers exactly create_invoice_from_order, create_invoice_for_unbilled_delivery, post_invoice, cancel_order, generate_finance_charges, batch_post_invoices. Every other mutating RPC in the cycle declares `p_idempotency_key text DEFAULT NULL` and executes the full mutation when the key is NULL: allocate_payment (the primary money-application path), convert_quote_to_order, save_quote, save_invoice, create_direct_order, update_order_items, create_split_invoices_from_order, post_invoice_group, create_quick_delivery, void_order, confirm_delivery, complete_delivery, revert_quote_status, restore_quote_version, create_planned_holds, batch_apply_prepayments. All audited UI callers do pass keys (verified in QuoteBuilder/Quotes/OrderDetail/NewOrder/InvoiceDetail/PaymentAllocation/DeliveryDetail/Invoices), and offlineSync rejects actions without a key (offlineSync.ts:118), so this is a defense-in-depth gap: any direct PostgREST caller with a valid authenticated JWT, or a future code path that omits the argument, gets no double-submit protection on payment application. Mitigating factors verified: convert has a mandatory row-version gate independent of the key; create_invoice_from_order has a structural duplicate guard.
+
+**Evidence offered.** 20260713060300:19: `…p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text)`; :49: `IF p_idempotency_key IS NOT NULL THEN` — entire claim/replay block skipped for NULL. 20260721145936:117-119 (pattern applied to only the six listed functions): `IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_invoice_from_order' USING ERRCODE = '22023';`
+
+**Claimed failure.** A script or future frontend path calls allocate_payment without p_idempotency_key (the parameter is optional and the DB accepts it); a client-side retry after a gateway timeout re-executes the body and applies the same customer payment twice — paid_amount_cents double-incremented and a spurious prepay credit minted — with nothing server-side to dedupe, unlike the six wrapped RPCs which raise IDEMPOTENCY_KEY_REQUIRED (22023).
+
+**Why it was refuted.** REFUTED — the SQL facts check out, but the finding describes the project's settled, decision-logged contract rather than a defect, has no reachable path, and overstates its own failure scenario.
+
+1) Facts confirmed (partial credit). I read every cited file. `supabase/migrations/20260721145936_require_money_lifecycle_idempotency_keys.sql` does wrap exactly six RPCs — `create_invoice_from_order` (:117-119), `create_invoice_for_unbilled_delivery` (:141), `post_invoice` (:166), `cancel_order` (:189), `generate_finance_charges` (:218), `batch_post_invoices` (:250) — each raising `IDEMPOTENCY_KEY_REQUIRED ... ERRCODE = '22023'`. And `supabase/migrations/20260713060300_harden_allocate_payment_idempotency.sql:19` is still the latest definition of `allocate_payment` (verified by grepping every `FUNCTION public.allocate_payment` across all 859 migrations; nothing after 2026-07-13 redefines it — `20260716160000` only adjusts an idempotency-table trigger, `20260718203206` merely mentions it in a comment), and its whole claim/replay block is gated on `IF p_idempotency_key IS NOT NULL THEN` (:49), so a NULL key skips dedup. The pattern repeats in `20260803010917_bind_idempotency_to_mutation_intent.sql:63-64` (`IF p_idempotency_key IS NULL THEN RETURN public._save_invoice_intent_impl_20260802(...)`) and `20260719044958_revert_quote_status_deadlock_retry.sql:40-43` (the `IDEMPOTENCY_KEY_REQUIRED` raise fires only for a blank-but-not-NULL key). So the DB genuinely does not require a key on those RPCs — that half of the claim is accurate, and it is a "the DB does not enforce X" statement, correctly made.
+
+2) This is the canonical contract, not a gap. `docs/manual/DECISION_LOG.md` ("Foundational (~2026-05, still current)") states the rule verbatim: "every mutating RPC accepts and actually enforces `p_idempotency_key text DEFAULT NULL` (added after repeated double-submit bugs...)". `DEFAULT NULL` is *in* the settled rule; "actually enforces" was written against the historical bug class of RPCs that accepted the parameter and ignored it. `allocate_payment` accepts the key and, when supplied, performs an atomic UNIQUE claim, cross-op check, argument fingerprint, and cached replay (`20260713060300:65-119`) — i.e. it satisfies the rule as written. The six hard-require wrappers are a deliberate extra on the highest-risk lifecycle set, not a baseline every other RPC is failing.
+
+3) Already adjudicated, three days before this review, by a dedicated idempotency audit. `docs/audits/gauntlet/2026-08-06-section-06-idempotency-double-submit-refresh.md` is a full Section 6 pass over exactly this surface at checkout `25a6ee83`/`b34b5ddb`. It inventoried "**151** application-owned mutating signatures; **144** keyed and the **7** keyless" and "**170** authenticated RPC names declared `p_idempotency_key`". Its only contract finding is the inverse of this one and scored LOW: "Seven keyless mutators conflict with the repository's hard contract" — `check_remainder_reminders`, `check_unpriced_orders`, `reconcile_prepay_balances`, `refresh_watchdog_flags`, `release_expired_quote_holds`, `set_primary_customer_contact`, `settle_applied_record_acres`. `allocate_payment` is not among them; it is counted in the compliant 144. A focused audit that enumerated this exact population and declined to score key-accepting RPCs is a considered adjudication, not an oversight.
+
+4) No reachable path — the reviewer concedes this. The finding itself states "All audited UI callers do pass keys" and "offlineSync rejects actions without a key", which I spot-verified: `src/pages/PaymentAllocation.tsx:78` (`useIdempotencyKey('allocate_payment', ...)`) → `:286-294` passes `p_idempotency_key: idemKey`; `src/lib/offlineSync.ts:400-403` is the only other `.rpc('allocate_payment')` call site in `src/`. The stated trigger is "a script or future frontend path" — a hypothetical, and one already covered by prevention machinery Section 6 documents (`src/lib/rpcContracts.test.ts:2002-2396`, `eslint-local-rules/rules/idempotency-key-from-hook.cjs`).
+
+5) The failure scenario is overstated on its own terms. It claims a keyless replay yields "paid_amount_cents double-incremented and a spurious prepay credit minted." For the dominant case — a payment that fully covers the invoice — the replay is structurally blocked twice over by guards the reviewer did not account for: the allocation loop selects only `WHERE ... AND status IN ('posted','overdue')` and the first call already set `status = 'paid'`, producing `RAISE EXCEPTION 'Invoice % not found or not eligible for payment'`; and independently `IF v_alloc_cents > v_inv.balance_cents THEN RAISE EXCEPTION 'Allocation ($%) exceeds balance ($%) on invoice %'` against the GENERATED `balance_cents` (`20260713060300:163-176`). Compounding survives only for a strictly partial allocation or a pure-overpayment prepay — a narrower blast radius than described, and only for a caller who is already an authenticated active `admin`/`sales_rep` (`:262-266`) deliberately hand-rolling a PostgREST call.
+
+Residual: the observation is a legitimate hardening idea (extend the 20260721145936 wrapper pattern to `allocate_payment`), and I would not object to it as a LOW defense-in-depth suggestion. It is not a MED finding: no code path in the repository can reach it, it conforms to the settled contract, its worst case is partly blocked by existing guards, and a dedicated Section 6 audit reviewed this population on 2026-08-06 and scored the adjacent-but-worse class LOW. Corrected severity if the parent keeps it anyway: LOW.
+
+---
+
+### [LOW] create_planned_holds still uses the legacy non-serialized check-then-insert idempotency pattern
+
+- **Location:** supabase/migrations/20260613191120_planned_holds_drawn_sync.sql (create_planned_holds body, idempotency block)
+
+**Claim.** Unlike every hardened peer (check_idempotency's advisory lock, allocate_payment's UNIQUE claim, _claim_bound_lifecycle_idempotency), create_planned_holds does a bare `IF EXISTS(…same key…) THEN RETURN 'duplicate'` followed by a plain INSERT — the exact check-then-act race that 20260713060300's header describes as fixed for allocate_payment. Two concurrent same-key callers both pass the EXISTS, and the loser aborts on the idempotency_keys UNIQUE index with a raw 23505 instead of replaying. Also the receipt stores only the quote id (not the result) and the replay path returns `{'status':'duplicate'}` rather than the original result shape. Practical impact is small because _sync_planned_holds is a self-converging rebuild under the quote row lock and the frontend serializes clicks, but this RPC is the one remaining cycle mutator on the old pattern.
+
+**Evidence offered.** 20260613191120 create_planned_holds: `IF EXISTS (SELECT 1 FROM idempotency_keys WHERE idempotency_key = p_idempotency_key AND operation = 'create_planned_holds' AND created_at > now() - interval '24 hours') THEN RETURN jsonb_build_object('status', 'duplicate', …); END IF;\n    INSERT INTO idempotency_keys (idempotency_key, operation, result) VALUES (p_idempotency_key, 'create_planned_holds', to_jsonb(p_quote_id));` — no pg_advisory_xact_lock, no ON CONFLICT.
+
+**Claimed failure.** A double-submitted create_planned_holds (retry racing the original, e.g. flaky mobile connection re-sending) has both requests pass the EXISTS check; the slower one fails with 'duplicate key value violates unique constraint' surfaced as 'Failed to create inventory holds' (QuoteBuilder.tsx:1551) even though holds were created — user sees an error for a succeeded operation.
+
+**Why it was refuted.** REFUTED — the reviewer missed a later migration that closes exactly this window at the table level, and the two load-bearing mechanical claims ("no pg_advisory_xact_lock", "loser aborts on the UNIQUE index with a raw 23505") are both factually false against current source.
+
+1) The quoted body is accurate but incomplete as evidence. supabase/migrations/20260613191120_planned_holds_drawn_sync.sql:211 is indeed the newest CREATE OR REPLACE of create_planned_holds (verified: only 20260316500000:10, 20260317100000:348, 20260609195843:14, 20260613191120:211 define it; nothing later redefines it), and lines 226-236 do read `IF EXISTS (SELECT 1 FROM idempotency_keys WHERE idempotency_key = p_idempotency_key AND operation = 'create_planned_holds' AND created_at > now() - interval '24 hours') THEN RETURN jsonb_build_object('status','duplicate',...); END IF; INSERT INTO idempotency_keys (idempotency_key, operation, result) VALUES (p_idempotency_key, 'create_planned_holds', to_jsonb(p_quote_id));`.
+
+2) The enforcement the reviewer missed: supabase/migrations/20260714230000_gauntlet_core_guards.sql:106-113 installs a BEFORE INSERT row trigger on the table itself — `DROP TRIGGER IF EXISTS guard_idempotency_key_insert ON public.idempotency_keys; CREATE TRIGGER guard_idempotency_key_insert BEFORE INSERT ON public.idempotency_keys FOR EACH ROW EXECUTE FUNCTION public._guard_idempotency_key_insert();` — and its function (latest version at supabase/migrations/20260716160000_fix_idempotency_committed_replay_guard.sql:16-59) begins with `PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || NEW.idempotency_key, 0));`. Grep for any later `DROP TRIGGER ... idempotency` returns nothing, so it is live. So the advisory lock the finding says is absent IS taken on every insert into idempotency_keys, including create_planned_holds' inline insert — it is just held one call frame lower than the reviewer looked.
+
+3) The migration comment names this exact function class as the intended beneficiary (20260714230000_gauntlet_core_guards.sql:60-64): "Some older mutators write idempotency_keys inline instead of using the helper. Their insert happens after business work, so a concurrent loser must raise (rolling back its whole transaction), not silently lose ON CONFLICT and commit duplicate effects. This trigger shares the key-only advisory lock with check_idempotency and protects those legacy callers without re-emitting dozens of unrelated business functions." This is a settled, shipped design decision — the inline pattern was deliberately left in place because the table-level guard covers it.
+
+4) The failure scenario cannot occur as described. In the two-concurrent-callers race: both pass the unlocked EXISTS; both reach INSERT; the trigger serializes them on the advisory lock; the loser, after the winner commits, hits `IF FOUND THEN ... RAISE EXCEPTION 'IDEMPOTENCY_CONCURRENT_REPLAY_RETRY: operation % with key % completed concurrently; retry to read its saved result'` (20260716160000:53-56) — a named, machine-readable token raised BEFORE the unique index is ever reached, not "duplicate key value violates unique constraint"/23505. The loser's whole transaction rolls back, and because create_planned_holds writes the receipt BEFORE calling _sync_planned_holds (20260613191120:236 precedes :251), no hold work is even attempted by the loser. No duplicate holds can commit; the invariant the idempotency key exists to protect is intact.
+
+5) The residual claims are inert. The sequential-retry path (the realistic one — src/hooks/useIdempotencyKey.ts holds the same key across manual retries and only calls resetKey() after success) returns `{'status':'duplicate'}`, and src/lib/db.ts:54-59 shows assertRpcResult only throws on `data === null || data === undefined` — a 'duplicate' payload passes cleanly, so QuoteBuilder.tsx:1552-1556 still toasts success and reloads holds. No user-visible defect. The "flaky mobile connection re-sending" mechanism is also not real: supabase-js/PostgREST does not auto-retry RPC POSTs, so producing true concurrency requires two tabs or a click that beats the `saving` state, and even then the winner's own response has already surfaced success.
+
+6) Not pre-documented, so this is a genuine refutation on the merits rather than a baseline duplicate: grep for "create_planned_holds" and "planned hold" across docs/manual/KNOWN_ISSUES.md and docs/audits/gauntlet/2026-08-05-section-04-quote-order-delivery-invoice-payment-lifecycle-refresh.md returns no matches.
+
+What survives is purely cosmetic and not a defect: create_planned_holds stores `to_jsonb(p_quote_id)` rather than the result envelope, and its replay returns a `{'status':'duplicate'}` shape instead of the original `{'status':'created','holds_created':N}`. Both are harmless given assertRpcResult's null-only contract and the self-converging _sync_planned_holds rebuild. The stated race, the 23505, and the "one remaining cycle mutator on the old pattern" framing (the trigger is the current pattern for inline writers) do not hold.
+
+---
+
+### [LOW] Two divergent advisory-lock namespaces guard the same idempotency_keys table
+
+- **Location:** supabase/migrations/20260714220000_shared_idempotency_and_hold_hardening.sql:29; supabase/migrations/20260803010917_bind_idempotency_to_mutation_intent.sql:79-81; supabase/migrations/20260719060256_allow_governed_split_terminal_lifecycle.sql:120-125
+
+**Claim.** check_idempotency serializes same-key callers on `pg_advisory_xact_lock(hashtextextended(p_key, 0))` (bare key), while the bound family (_claim_bound_lifecycle_idempotency, save_invoice/create_quick_delivery wrappers) locks `hashtextextended('crx:idempotency:' || p_key, 0)` (and _claim_bound additionally an operation-qualified variant). A same-key pair split across the two families does not serialize on the advisory locks at all; correctness currently falls through to the idempotency_keys UNIQUE constraint plus cross-operation checks, which I traced to fail closed (IDEMPOTENCY_CROSS_OP_KEY_REUSE / IDEMPOTENCY_RECEIPT_MISSING → rollback) rather than double-execute. Reported because the dual namespace is an unstated invariant: a future RPC that takes only one of the two locks and relaxes the table-level checks reopens the both-see-no-row race that 20260714220000 was written to close.
+
+**Evidence offered.** 20260714220000:29: `PERFORM pg_advisory_xact_lock(hashtextextended(p_key, 0));` vs 20260803010917:79-81: `PERFORM pg_advisory_xact_lock(\n    hashtextextended('crx:idempotency:' || p_idempotency_key, 0)\n  );` vs 20260719060256:120-125 locking both `'crx:idempotency:' || p_operation || ':' || p_key` and `'crx:idempotency:' || p_key` — three coexisting schemes, none documented as intentional.
+
+**Claimed failure.** No user-visible failure today (fail-closed via UNIQUE + cross-op checks). Regression path: a new mutator adopts the 'crx:'-prefixed lock but replays via a bare `SELECT … FROM idempotency_keys` without the cross-op/UNIQUE-claim discipline; a same-key concurrent pair (one caller in each namespace) both observe no receipt and both mutate.
+
+**Why it was refuted.** REFUTED on the central factual premise: the "bare key" lock namespace does not exist in current schema. The finding cites supabase/migrations/20260714220000_shared_idempotency_and_hold_hardening.sql:29 (`PERFORM pg_advisory_xact_lock(hashtextextended(p_key, 0));`) as check_idempotency's current serialization boundary, but that definition is superseded one hour later by supabase/migrations/20260714230000_gauntlet_core_guards.sql:5-29, which does `CREATE OR REPLACE FUNCTION public.check_idempotency(p_key text, p_operation text)` with `PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || p_key, 0));` — the SAME namespace as the bound family. Migrations apply in timestamp order and 20260714230000 > 20260714220000. check_idempotency is defined in only four migrations (20260210000000, 20260526201319, 20260714220000, 20260714230000); 20260714230000 is the newest, and a tree-wide grep for `hashtextextended(p_key, 0)` / `hashtextextended(p_idempotency_key, 0)` returns exactly ONE hit in the entire migrations directory — the superseded 20260714220000:29 — and nothing else. So there is one key-level namespace, not two.
+
+Second, the reviewer missed an enforcement mechanism that makes the namespace convergence structural rather than conventional. supabase/migrations/20260714230000_gauntlet_core_guards.sql:65-110 defines `_guard_idempotency_key_insert()` and attaches it as `CREATE TRIGGER guard_idempotency_key_insert BEFORE INSERT ON public.idempotency_keys FOR EACH ROW EXECUTE FUNCTION public._guard_idempotency_key_insert();`. Its first statement is `PERFORM pg_advisory_xact_lock(hashtextextended('crx:idempotency:' || NEW.idempotency_key, 0));` (line 75; redefined identically at 20260716160000_fix_idempotency_committed_replay_guard.sql:16-26, line 26). Every writer of idempotency_keys — including the hypothetical future RPC in the reviewer's regression scenario, which by construction still inserts a receipt — acquires the single shared key-level lock at insert time regardless of what it did or did not lock earlier. The trigger comment states the intent explicitly: "This trigger shares the key-only advisory lock with check_idempotency and protects those legacy callers without re-emitting dozens of unrelated business functions." The dual namespace is therefore not an "unstated invariant"; it is a single documented invariant with a table-level trigger backstop.
+
+Third, the claimed third scheme at 20260719060256_allow_governed_split_terminal_lifecycle.sql:120-125 is not a divergent namespace. `_claim_bound_lifecycle_idempotency` takes `hashtextextended('crx:idempotency:' || p_operation || ':' || p_key, 0)` and THEN `hashtextextended('crx:idempotency:' || p_key, 0)` — the operation-qualified lock is strictly finer and additive, and the shared coarse lock is still acquired on every path. Same additive pattern at 20260719023344:58-62 and 20260719044958:53-56. Acquisition order (fine-then-coarse) is consistent at every site, so there is no lock-ordering inversion either. Enumerating every `hashtextextended('crx:idempotency:...` form across the tree yields exactly one key-level namespace plus always-paired narrower variants.
+
+Consequently the stated failure scenario cannot occur as described: a same-key concurrent pair split across the two "families" DOES serialize, because both families acquire the identical `'crx:idempotency:' || key` lock, and the BEFORE INSERT trigger catches any caller that acquires neither. The reviewer also self-reports "No user-visible failure today (fail-closed via UNIQUE + cross-op checks)" — so even on its own terms the finding rests entirely on a speculative future-regression premise, and that premise is itself unfounded because the trigger, not caller discipline, holds the boundary.
+
+---
+
+### [LOW] Order 'planned' toggle is a raw last-write-wins table update with client-side activity logging
+
+- **Location:** src/pages/OrderDetail.tsx:536-555
+
+**Claim.** handleTogglePlanned writes `orders.update({ is_planned: newValue })` directly from the browser — no RPC, no idempotency key, no stale/version guard (orders have none, see the row-version finding) — and then writes the activity record from the client in a second, non-atomic call (logActivity, line 549). The new value is computed from page-load state (`!order.is_planned`), so it is a blind toggle of a possibly-stale value rather than a set-to-target.
+
+**Evidence offered.** OrderDetail.tsx:540-543: `const newValue = !order.is_planned;\n      const result = await supabase.from('orders').update({ is_planned: newValue, updated_at: new Date().toISOString() }).eq('id', order.id).select();` followed at 549 by the separate client-side `logActivity({ event: 'order_updated', … })`.
+
+**Claimed failure.** Two users view the same order (is_planned=false) and both click the toggle intending 'mark planned'; both compute newValue=true — benign. But interleaved with a genuine flip (user A toggles true, user B's page still shows false, B clicks intending planned → writes true again after A already… or A toggles twice quickly across a slow network): the final state reflects write ordering, not either user's on-screen intent, and if the update succeeds while logActivity fails, the audit trail silently omits the change.
+
+**Why it was refuted.** MECHANICS ACCURATE, HARM REFUTED. The code quote is verbatim-correct and the absence of enforcement is real (I checked the migrations, not just "couldn't find it"), but every consequence the finding claims fails on inspection.
+
+WHAT I CONFIRMED AS FACTUALLY TRUE:
+1. src/pages/OrderDetail.tsx:540-549 matches the quoted evidence exactly: `const newValue = !order.is_planned;` then `.from('orders').update({ is_planned: newValue, updated_at: ... }).eq('id', order.id).select()`, `checkMutationResult(...)` at :546, and a separate `logActivity({ event: 'order_updated', ... })` at :549.
+2. THE DB DOES NOT ENFORCE a version guard on orders. I grepped every migration for `row_version`: only 20260730235031_quote_customer_row_version_guard.sql (quotes/customers) and the supplier-pricing files carry it. `orders` has no row_version column and no optimistic-concurrency guard.
+3. THE DB DOES NOT write a server-side activity row for this change. The only orders activity trigger is `trg_order_status_change` (supabase/migrations/20260210000000_tier3_idempotency_and_triggers.sql:438-444), whose `WHEN (OLD.status IS DISTINCT FROM NEW.status)` clause never fires on an is_planned-only update. There is no orders RPC for this toggle.
+
+WHY IT IS STILL NOT A DEFECT:
+
+A. The stated failure scenario is self-defeating for a two-state blind toggle. The finding asserts "the final state reflects write ordering, not either user's on-screen intent." That is false here. `newValue` is the negation of what the clicking user is looking at, so the last writer's value is always exactly that writer's on-screen intent. Stale display -> user sees `false` -> clicks "mark as Planned" (title at :1358 confirms the label is derived from the same state) -> writes `true` -> gets planned. The reviewer's own text concedes the primary case is "benign" and then never constructs a case where a user's intent is inverted, because none exists on a boolean whose intent is the negation of its display. This is an ordinary lost-update on a shared flag, not an intent inversion.
+
+B. The idempotency/double-submit angle does not apply. `newValue` is computed once, outside the request, and the PATCH carries a literal `is_planned: <bool>` — a network retry rewrites the identical value rather than re-flipping. The button is also `disabled={togglingPlanned}` (OrderDetail.tsx:1357), closing the "toggles twice quickly across a slow network" path. Set-to-literal writes are naturally replay-safe; an idempotency key would add nothing.
+
+C. The field is provably display-only, so there is no downstream state to corrupt. supabase/migrations/20260313200002_add_orders_is_planned.sql:6: `COMMENT ON COLUMN public.orders.is_planned IS 'Visual label only — true = planned/tentative, false = committed. No inventory behavior change.'` I verified that claim against current source rather than trusting the comment: the ONLY non-type consumers of orders.is_planned are src/pages/Orders.tsx:208-209 (`if (planFilter === 'planned' && !o.is_planned) return false;`) and the badges at Orders.tsx:521 and OrderDetail.tsx:1361-1362. It touches no inventory hold, no commission, no invoice/AR, no order lifecycle. (The is_planned that drives holds is quotes.is_planned — a different column, gated by `_sync_planned_holds` and the save_quote unplanning guard.)
+
+D. The audit gap is not silent and not unguarded. logActivity cannot throw into the caller and cannot fail quietly: src/lib/activityLogger.ts:27 `if (logErr) Sentry.captureException(logErr, { tags: { source: 'activity_logger', ... } });` and :30 the same in the catch. A dropped activity row is Sentry-reported, contradicting "the audit trail silently omits the change."
+
+E. Blast radius is admin-only. supabase/migrations/20260206174345_fix_security_and_performance_issues.sql:469-470: `CREATE POLICY "orders_update" ON orders FOR UPDATE TO authenticated USING (is_admin()) WITH CHECK (is_admin());` — no later migration replaces it. Sales reps and drivers cannot perform this write at all, so the "two users race" premise requires two simultaneous admins fighting over a cosmetic badge.
+
+BASELINE CHECK: I grepped docs/manual/KNOWN_ISSUES.md and docs/audits/gauntlet/2026-08-05-section-04-...md for `is_planned`/`togglePlanned` — no hits, so this is not a duplicate of the baseline. It is refuted on the merits, not on novelty.
+
+NET: what remains is a stylistic inconsistency — one cosmetic admin-only flag written by a raw table update with client-side logging while the rest of OrderDetail routes through idempotent RPCs (update_order_items at :502-507, cancel_order at :568-572). Worth a cleanup note; not a LOW-severity bug, since no claimed failure mode can actually occur and the worst realistic outcome is that a display badge shows the second admin's choice plus a Sentry-reported missing feed row.
+
+---
+
+### [HIGH] QuoteBuilder pre-accepts the quote before conversion; when conversion fails, the raw status revert never rebuilds the released planned holds
+
+- **Location:** src/pages/QuoteBuilder.tsx:2521-2523 (pre-accept), 2685-2698 (revert); supabase/migrations/20260718152837_20260718131500_revert_quote_escape_hatch_for_cancelled_order.sql:101-107; supabase/migrations/20260507210000_fix_holds_no_phantom_restoration.sql:51-70
+
+**Claim.** `executeConvertToOrder` saves the quote as `'accepted'` first (line 2521). That flip releases the booking's holds twice over: `save_quote` calls `_sync_planned_holds`, which releases holds for any quote whose status is not in ('draft','sent','revised'), and the `AFTER UPDATE OF status` trigger deactivates them as well. If `convert_quote_to_order` then fails, the catch block reverts the quote with a raw `supabase.from('quotes').update({ status: revertTo })` (line 2688). That direct table write calls no RPC, so `_sync_planned_holds` / `create_planned_holds` never runs and the holds are NOT recreated.
+
+The DB deliberately does not restore holds on any status change — migration 20260507210000 removed the restoration loops as a phantom-inventory bug. The sanctioned reopen path, `revert_quote_status`, therefore rebuilds holds explicitly and its own comment states the rule this frontend path violates. So this is an enforcement gap I confirmed in the migrations, not an unlocated check.
+
+The list-page convert (Quotes.tsx `handleConvertConfirm`) does NOT pre-accept — `convert_quote_to_order` accepts 'sent'/'revised' directly — so the same business action is destructive from one screen and safe from the other.
+
+**Evidence offered.** src/pages/QuoteBuilder.tsx:2521-2523
+    const savedId = status === 'accepted' && quoteId
+      ? quoteId
+      : await saveQuote('accepted');
+
+src/pages/QuoteBuilder.tsx:2685-2689
+      const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
+      try {
+        const previousRowVersion = quoteRowVersionRef.current;
+        const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select('*');
+        checkMutationResult(revertResult, 'Revert quote status');
+
+supabase/migrations/20260613191120_planned_holds_drawn_sync.sql:148-154
+  IF NOT v_quote.is_planned OR v_quote.status NOT IN ('draft', 'sent', 'revised') THEN
+    -- Not an open planned program: any active holds are stale — release them.
+    UPDATE inventory_holds SET is_active = false, updated_at = now()
+    WHERE source_id = p_quote_id AND is_active = true;
+    RETURN 0;
+  END IF;
+
+supabase/migrations/20260718152837_...revert_quote_escape_hatch_for_cancelled_order.sql:101-107
+  -- >>> Codex round-9 P2 (atomic planned-reopen holds) — the ONLY change vs live.
+  -- A planned booking's holds were released when it went terminal; reopening to 'sent'
+  -- must rebuild them or it reserves no inventory. ...
+  IF v_quote.is_planned THEN
+    PERFORM create_planned_holds(p_quote_id, v_actor, NULL);
+  END IF;
+
+supabase/migrations/20260507210000_fix_holds_no_phantom_restoration.sql:65-70
+    -- F7 fix: holds are soft reservations that never decremented
+    -- quantity_available, so there is nothing to restore. Just deactivate.
+    UPDATE public.inventory_holds
+    SET is_active = false, updated_at = now()
+    WHERE source_id = NEW.id AND is_active = true;
+
+**Claimed failure.** A planned booking Q-1100 (is_planned, status 'sent') holds 800 units. A rep opens it and clicks Create Order → Convert whole booking. `saveQuote('accepted')` commits, releasing all 800 units of hold. `convert_quote_to_order` then fails for any non-guard reason (transient network 502, a commission-split validator error, a `check_customer_credit_limit` unrelated 500 surfacing as an RPC error). The catch block reverts the quote to 'sent'. The rep sees 'Failed to create order', the quote looks exactly as before — but its 800 units of reservation are gone. Net Free now shows 800 more units than are really uncommitted, so the same stock can be sold to a second customer, and nothing surfaces the loss until a save/revise happens to re-run `_sync_planned_holds`.
+
+**Why it was refuted.** REFUTED — the failure path does not exist in current source; the reviewer quoted the revert block (src/pages/QuoteBuilder.tsx:2685-2689) without the guard immediately preceding it.
+
+1) The revert is gated by a live status read, not run unconditionally. In the catch block, src/pages/QuoteBuilder.tsx:2611-2623 reads the quote's live status ("let liveQuoteStatus: string | null = null; ... liveQuoteStatus = liveQuote?.status ?? null;"). Then two early returns fire before any revert write:
+   - src/pages/QuoteBuilder.tsx:2625 "if (liveQuoteStatus === 'accepted') {" → looks up the order created for savedId, navigates to it or toasts "The quote was accepted, but its order could not be found — check the Orders page", then "setConverting(false); return;" (line ~2655). The revert at 2685 is never reached.
+   - src/pages/QuoteBuilder.tsx:2657 "if (liveQuoteStatus === null) {" (read failed, outcome unknown) → toasts "the quote status was left unchanged" and returns. Again no revert write.
+   The in-source comment at 2683-2685 states the precondition exactly: "A successful status check proved the quote was not accepted."
+
+2) Therefore line 2685 is only reachable when a SUCCESSFUL read proves live status is NOT 'accepted' — i.e. the pre-accept at 2521-2523 did not persist 'accepted' (save_quote is transactional; on failure savedId is falsy and the function returns at 2524-2527). If 'accepted' was never persisted, neither hold-release mechanism ran:
+   - save_quote's "PERFORM _sync_planned_holds(v_quote_id, v_actor);" (supabase/migrations/20260616204400_save_quote_canonical_idempotency_and_transition_map.sql:359) releases only when the committed status is outside ('draft','sent','revised').
+   - the status trigger release_holds_on_quote_status_change (supabase/migrations/20260507210000_fix_holds_no_phantom_restoration.sql:53-70) fires only "IF NEW.status IN ('accepted', 'declined', 'expired') AND OLD.status NOT IN ('accepted', 'declined', 'expired')".
+   So in every state that reaches the raw revert, the planned holds are still active and there is nothing to rebuild. The revert to 'sent' from a live 'sent'/'revised' status is hold-neutral.
+
+3) The stated failure scenario ("800 units of hold released, quote reverted to 'sent', reservation silently gone") cannot occur: if the 800 units were released, the quote is live-'accepted', and the code takes the 2625 branch and leaves the status alone by design (the comment at 2600-2601 calls this out: "Lost-response-after-commit must not resurrect the booking (push-gate P1)"). The reviewer's own premise — pre-accept committed + revert executed — are mutually exclusive in current source.
+
+4) The related destructive case the reviewer alludes to (whole-converting a partially drawn booking, where the pre-accept would strip remaining holds before the RPC could refuse) is already guarded up front at src/pages/QuoteBuilder.tsx:2478-2512, which fails closed on quote_product_draws / job_product_draws and routes to Partial Order, citing the 2026-06-10 BLOCKER.
+
+Migration-order check: no later migration re-adds hold restoration on status change (20260507210000 is superseded only in scope by 20260613191120 _sync_planned_holds and 20260614152456 / 20260718152837 revert_quote_status, which rebuild holds on the sanctioned reopen path) — but that is moot here because the frontend path never reaches a state with released holds.
+
+Residual (not the claimed finding, not confirmed as a defect): a genuinely lost-response conversion can leave a quote live-'accepted' with holds released and no order row, which the UI surfaces as "check the Orders page" rather than repairing. That is deliberate per the push-gate P1 comment and is a different claim than the one under review.
+
+---
+
+### [HIGH] Failed conversion from a REVISED quote cannot revert: accepted→revised is not a legal transition, so the quote is stranded 'accepted' with no order
+
+- **Location:** src/pages/QuoteBuilder.tsx:2685 (revertTo), 2688 (raw update), 1690 (setStatus('revised')), 455 (canConvert); saveQuote at src/pages/QuoteBuilder.tsx:1478-1521 never calls setStatus; supabase/migrations/20260706030000_closed_short_booking_closure.sql:100-112
+
+**Claim.** `saveQuote()` writes `status: newStatus` into the payload but never calls `setStatus`, so the React `status` state still holds the pre-conversion value while the DB row is already `'accepted'`. In the failure path the code computes `revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent')`. For a quote the user put into revise mode, `status` is `'revised'` (set at line 1690), so `revertTo` is `'revised'` — but the DB row is `'accepted'`.
+
+The DB does enforce the transition map (verified in the migration): the only outgoing edge from `accepted` is `accepted → sent`. `accepted → revised` raises `Invalid quote status transition: accepted → revised`, which the code catches and surfaces as a 'may need a manual fix' toast. The quote is then permanently `accepted` — `canEdit` (line 445) excludes 'accepted', `canDraw` (457) excludes it, and its planned holds were already released by the pre-accept. Recovery requires an admin `revert_quote_status` RPC, which is not exposed for this state in this flow.
+
+The `'revised'` state is fully reachable at convert time: `canConvert = ['sent','revised','accepted'].includes(currentStatus)`.
+
+**Evidence offered.** src/pages/QuoteBuilder.tsx:2685
+      const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
+
+src/pages/QuoteBuilder.tsx:1418-1420 (saveQuote payload — no setStatus anywhere in saveQuote)
+      created_by: profile.id,
+      tier,
+      status: newStatus || status,
+
+src/pages/QuoteBuilder.tsx:455
+  const canConvert = ['sent', 'revised', 'accepted'].includes(currentStatus);
+
+supabase/migrations/20260706030000_closed_short_booking_closure.sql:100-112
+  IF (OLD.status = 'draft' AND NEW.status IN ('sent', 'cancelled'))
+  OR (OLD.status = 'sent' AND NEW.status IN ('revised', 'accepted', 'declined', 'expired', 'cancelled'))
+  OR (OLD.status = 'revised' AND NEW.status IN ('sent', 'accepted', 'declined', 'expired', 'cancelled'))
+  OR (OLD.status = 'accepted' AND NEW.status = 'sent')
+  ...
+  RAISE EXCEPTION 'Invalid quote status transition: % → %', OLD.status, NEW.status;
+
+src/pages/QuoteBuilder.tsx:2694-2698
+      } catch (revertErr) {
+        // The quote is now stuck 'accepted' with no order — surface it instead
+        // of failing silently so someone fixes the status by hand.
+        Sentry.captureException(revertErr, ...);
+        toast('error', `Order creation failed AND the quote could not be reverted to "${revertTo}" — its status may need a manual fix`);
+
+**Claimed failure.** A rep opens sent quote Q-1120, clicks Revise (React status → 'revised', DB status → 'revised'), edits a price, then clicks Create Order → Convert whole booking. `saveQuote('accepted')` commits the quote as 'accepted'. `convert_quote_to_order` fails transiently. The catch block computes `revertTo = 'revised'` and issues `UPDATE quotes SET status='revised'` against a row now at 'accepted'; `_enforce_quote_status_transition` raises. The rep sees 'Order creation failed AND the quote could not be reverted to "revised"'. The quote is now accepted, read-only, holds released, with no order behind it — invisible on the Quotes convert/draw paths and needing an admin DB action to recover.
+
+**Why it was refuted.** REFUTED on two independent grounds; the reviewer read the revert block in isolation and missed the guard that immediately precedes it.
+
+(1) THE PRECONDITION IS UNREACHABLE — the revert only runs after a live DB read PROVES the row is not 'accepted'. The finding's whole scenario requires "UPDATE quotes SET status='revised' against a row now at 'accepted'". That state cannot reach line 2685. Between the RPC failure and the revert, `src/pages/QuoteBuilder.tsx:2611-2620` re-reads the authoritative status:
+
+  2611:       let liveQuoteStatus: string | null = null;
+  2619:         liveQuoteStatus = liveQuote?.status ?? null;
+
+and then hard-returns on both dangerous cases BEFORE the revert:
+
+  2625:       if (liveQuoteStatus === 'accepted') {   ... looks up orders by quote_id, navigates to the created order or toasts "The quote was accepted, but its order could not be found" and refetches ...
+  2653:         setConverting(false);
+  2654:         return;
+  2655:       }
+  2657:       if (liveQuoteStatus === null) {
+  2658:         // The conversion RPC is transactional, so a genuine failure leaves the
+  2660:         // read proves the quote was not accepted.
+  2662:         setConverting(false);
+  2663:         return;
+
+The revert at 2685 is therefore only reached when `liveQuoteStatus` is a successfully-read, non-'accepted' value. In the finding's own walkthrough — `saveQuote('accepted')` commits at 2523, then `convert_quote_to_order` fails transiently — the live read returns 'accepted', control takes the 2625 branch, and line 2685 never executes. The code comment at 2659-2660 states this design explicitly. The reviewer quoted line 2685 and the catch at 2694 but never quoted or accounted for the 2625/2657 gates that dominate them.
+
+(2) EVEN IF the precondition held, the trigger would not raise. The reviewer quoted the transition map at `supabase/migrations/20260706030000_closed_short_booking_closure.sql:100-112` but skipped the function's first executable statement, line 80:
+
+  80:   IF OLD.status = NEW.status THEN RETURN NEW; END IF;
+
+The only way line 2685 fires with `revertTo === 'revised'` is a DB row still at 'revised', which is a same-status no-op that short-circuits before the transition map is ever consulted. `Invalid quote status transition: accepted → revised` cannot be produced by this code path.
+
+Ancillary claims checked and only partly accurate: `saveQuote` (1478-1521) genuinely never calls `setStatus`, and `handleReviseQuote` sets React state to 'revised' at 1690 — so the stale-state observation is real. But stale React state is harmless here precisely because the recovery write is gated on a fresh server read, not on `status`. `canConvert = ['sent','revised','accepted']` at 455 is quoted correctly. Migration currency verified: 20260706030000 is the LAST file redefining `_enforce_quote_status_transition` (earlier: 20260610185806, 20260616204400, 20260702131000, 20260703200000), so the cited map is current.
+
+Residual, much narrower and NOT the reported bug: the revert UPDATE at 2688 filters only `.eq('id', savedId)` with no row_version predicate, so a concurrent tab accepting the quote between the 2620 read and the 2688 write could produce the raise. That race fails CLOSED — the trigger refuses, no data is corrupted, Sentry captures it, and the user gets an explicit toast. It is a different claim at a far lower severity than the deterministic single-user HIGH asserted here.
+
+Not previously documented in KNOWN_ISSUES.md or the 2026-08-05 section-04 baseline; refutation rests on current source, not on the baseline.
+
+---
+
+### [LOW] InvoiceDetail's edit-path save_invoice discards the RPC return without assertRpcResult, so a null result is reported as 'Invoice saved'
+
+- **Location:** src/pages/InvoiceDetail.tsx:775-806 (call at 775, assert only inside the isNew branch at 798-800, else branch at 801-802, success toast at 811-813); eslint-local-rules/rules/require-assert-rpc-result.cjs:69-84
+
+**Claim.** `save_invoice` returns the invoice id. The handler asserts it only when `isNew`; on the edit path the returned `data` is dropped and the code goes straight to `fetchInvoice(id!)` and `toast('success', 'Invoice saved')`. This violates the CRX hard rule 'Call assertRpcResult() after RPCs', whose whole purpose is catching `{ data: null, error: null }`.
+
+The local lint rule does not catch it: `require-assert-rpc-result` only tracks a destructured `data` identifier and clears it as soon as ANY `assertRpcResult` call for that variable appears in scope — the `isNew` branch satisfies it for both branches. The same lint blind spot lets three `post_invoice` callsites (OrderDetail.tsx:972, InvoiceDetail.tsx:837, Invoices.tsx:259) skip the assert, but those are correct: `post_invoice` is `RETURNS void`, so an assert there would always throw. Only the `save_invoice` edit path is a genuine gap.
+
+**Evidence offered.** src/pages/InvoiceDetail.tsx:775-805
+        const { data, error } = await supabase.rpc('save_invoice', {
+          p_invoice: payload,
+          p_items: itemsPayload,
+          p_idempotency_key: idemKey,
+        });
+        ...
+        if (isNew) {
+          const savedId = assertRpcResult<string>(data, 'save_invoice');
+          navigate(`/invoices/${savedId}`, { replace: true });
+        } else {
+          await fetchInvoice(id!);
+        }
+        return 'saved';
+
+src/pages/InvoiceDetail.tsx:811-813
+    if (outcome === 'saved') {
+      toast('success', isNew ? 'Invoice created' : 'Invoice saved');
+    }
+
+supabase/migrations/20260721145936_require_money_lifecycle_idempotency_keys.sql (post_invoice — why the other three are fine)
+CREATE FUNCTION public.post_invoice(p_invoice_id uuid, p_idempotency_key text DEFAULT NULL)
+RETURNS void
+
+**Claimed failure.** An RLS or grant change makes `save_invoice` return NULL without raising for a sales_rep editing an existing invoice. The `error` branch is skipped, `fetchInvoice(id)` re-reads the unchanged invoice, and the user is told 'Invoice saved'. The edits are silently discarded and the operator only notices when the customer disputes the printed invoice.
+
+**Why it was refuted.** REFUTED — the code shape is quoted accurately, but the claimed failure scenario is unreachable, the supporting lint/test analysis is factually wrong, and the proposed fix would not catch the one real silent-discard path that does exist.
+
+1) The failure scenario ("save_invoice returns NULL without raising for a sales_rep editing an existing invoice") cannot occur. The edit-path payload always carries the id — src/pages/InvoiceDetail.tsx:709 `id: isNew ? undefined : id` — and the current wrapper, supabase/migrations/20260803010917_bind_idempotency_to_mutation_intent.sql:33-170, is `RETURNS uuid ... SECURITY DEFINER`. Every denial path RAISEs rather than returning NULL: line 52 `RAISE EXCEPTION 'AUTH_REQUIRED'`, line 59 `RAISE EXCEPTION 'INSUFFICIENT_ROLE'`, plus IDEMPOTENCY_* raises. The impl it delegates to (`_save_invoice_intent_impl_20260802`, statically emitted as `_save_invoice_scoped_impl` in supabase/migrations/20260721223817_save_invoice_payment_terms.sql:3-336) sets `v_invoice_id := (p_invoice->>'id')::uuid` at line 31 — non-null on the edit path by construction — and every non-new RETURN returns that same non-null uuid (lines 143, 335). A grant/EXECUTE change produces a PostgREST error (`permission denied for function`), which lands in the `error` branch at InvoiceDetail.tsx:781 and throws. There is no reachable `{data: null, error: null}` for this RPC on the edit path. I checked the migrations for this — this is "the chain provably cannot return NULL", not "I couldn't find where it's prevented".
+
+2) The reviewer's diagnosis of the lint blind spot is wrong on its own terms. All three cited `post_invoice` call sites are fire-and-forget with `.throwOnError()` and no destructure at all — src/pages/InvoiceDetail.tsx:837 `await supabase.rpc('post_invoice', {...}).throwOnError();`, src/pages/OrderDetail.tsx:972-975, src/pages/Invoices.tsx:259-262 (with the explicit comment at Invoices.tsx:257-258: "post_invoice RETURNS void — the canonical void-RPC pattern is .throwOnError() with no result capture"). eslint-local-rules/rules/require-assert-rpc-result.cjs:44-79 only registers a tracked variable when `node.id.type === 'ObjectPattern'` contains a `data` property, so these sites are never tracked — they are the documented convention, not victims of the "clears as soon as any assert appears" blind spot the reviewer describes.
+
+3) The file also passes the hard ratchet: src/lib/assertRpcCoverage.test.ts:86 `BASELINE_VIOLATION_COUNT = 0` with a per-file 1:1 capture-to-assert count. InvoiceDetail.tsx has 10 captured rpc calls (lines 775, 828, 861, 881, 925, 938, 971, 1019, 1088, 1119) and 10 `assertRpcResult` calls (800, 834, 869, 887, 931, 944, 978, 1029, 1096, 1126) — a legitimate 1:1 match, not a smuggled violation.
+
+4) Most damning for the remediation value: a genuine silent-discard path does exist, and `assertRpcResult` is provably blind to it. supabase/migrations/20260721223817_save_invoice_payment_terms.sql:137-145:
+  `IF NOT v_is_new THEN IF NOT EXISTS (SELECT 1 FROM invoices WHERE id = v_invoice_id AND status IN ('draft','unposted')) THEN ... PERFORM save_idempotency(p_idempotency_key,'save_invoice', jsonb_build_object('invoice_id', v_invoice_id, 'no_op', true)); RETURN v_invoice_id; END IF; END IF;`
+An edit against a posted invoice silently no-ops and returns a NON-NULL uuid, so the proposed `assertRpcResult` would pass and the user would still see "Invoice saved". The reviewer's own stated harm ("edits silently discarded, operator told it saved") is caused by a `no_op: true` return the fix does not address. Any real finding here is about the frontend ignoring the `no_op` receipt, not about a missing null-assert — that is a different, unfiled claim, not the one under review.
+
+Net: a cosmetic deviation from the letter of the "call assertRpcResult() after RPCs" convention on one branch, with zero reachable failure mode and a fix that would not catch the adjacent real gap. Not a defect. (Not previously documented in docs/manual/KNOWN_ISSUES.md or the 2026-08-05 section-04 gauntlet refresh — neither mentions save_invoice or assertRpcResult — but it is refuted on the merits, not on duplication.)
+
+---
+
+### [LOW] Retrying a payment with a corrected amount surfaces the raw IDEMPOTENCY_ARGUMENT_MISMATCH token with no recovery path
+
+- **Location:** src/pages/InvoiceDetail.tsx:1002-1052 (payIdem.getKey at 1014, resetKey only on success at 1036, catch at 1046-1049); modal open reset at 1458; supabase/migrations/20260713060300_harden_allocate_payment_idempotency.sql:99-100; src/lib/errorSanitizer.ts:28-59
+
+**Claim.** `payIdem` is correctly reset when the Record Payment modal opens (line 1458), but not when a submit fails while the modal stays open — which is right for a plain retry. `allocate_payment` is payload-bound (unlike most RPCs here), so an operator who corrects the amount and resubmits gets `IDEMPOTENCY_ARGUMENT_MISMATCH` instead of a silent replay. That is the safe direction, but the catch block only calls `sanitizeError(err)`, whose pass-through branch returns the raw message — none of its patterns match this token.
+
+Unlike `save_invoice` on the same page, which has a dedicated `getIdempotencyMismatchResult` reconciliation path (lines 786-800), the payment path offers no guidance and no way to clear the stuck key except closing and reopening the modal.
+
+**Evidence offered.** src/pages/InvoiceDetail.tsx:1046-1049
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'allocate_payment' } });
+      toast('error', sanitizeError(err));
+    }
+
+supabase/migrations/20260713060300_harden_allocate_payment_idempotency.sql:99-100
+          RAISE EXCEPTION 'IDEMPOTENCY_ARGUMENT_MISMATCH: key % was already used for different allocate_payment arguments',
+            p_idempotency_key;
+
+src/lib/errorSanitizer.ts:57-58
+  // Pass through safe messages (user-facing RPC RAISE EXCEPTION text)
+  return message;
+
+src/pages/InvoiceDetail.tsx:786-790 (the reconciliation the save path has and this one lacks)
+          const receipt = getIdempotencyMismatchResult(error, 'save_invoice');
+          const committedInvoiceId = receipt?.invoice_id;
+
+**Claimed failure.** An office user opens Record Payment on INV-9001, types 5000 instead of 500, and submits. `allocate_payment` fails (period closed, or a transient error). She corrects the amount to 500 and clicks Record Payment again. The toast reads 'IDEMPOTENCY_ARGUMENT_MISMATCH: key allocate_payment:… was already used for different allocate_payment arguments'. Nothing tells her to close and reopen the dialog, so she retries repeatedly and concludes the payment screen is broken.
+
+**Why it was refuted.** The finding's failure mechanism does not hold: the stated trigger ("allocate_payment fails — period closed, or a transient error — she corrects the amount and resubmits → IDEMPOTENCY_ARGUMENT_MISMATCH") cannot occur, because a failed allocate_payment rolls back the very claim row the mismatch check reads.
+
+1. The claim row and the money work are in ONE transaction with NO exception handler. `supabase/migrations/20260713060300_harden_allocate_payment_idempotency.sql` has a single `BEGIN` (line 42) and a single `END;` (line 275) — I grepped the whole file for `EXCEPTION WHEN` and there is none. The claim is an ordinary INSERT inside that transaction (lines 70-79): `INSERT INTO idempotency_keys (idempotency_key, operation, result) VALUES (p_idempotency_key, 'allocate_payment', jsonb_build_object('_contract','allocate_payment_v1','request',v_idem_request,'response',NULL)) ON CONFLICT (idempotency_key) DO NOTHING;`. A Supabase RPC call is one transaction, so every downstream `RAISE EXCEPTION` aborts it and the claim row is never persisted.
+
+2. Every failure mode the finding names aborts after the claim: `IF NOT EXISTS (SELECT 1 FROM profiles ...) THEN RAISE EXCEPTION 'Not authorized to allocate payments';` (line ~124), `IF p_total_cents <= 0 THEN RAISE EXCEPTION 'Payment amount must be positive'; END IF;` (line ~129), `PERFORM check_period_open(p_payment_date);` (line ~131 — the "period closed" case the finding cites), `RAISE EXCEPTION 'Invoice % not found or not eligible for payment'` and `RAISE EXCEPTION 'Allocation ($%) exceeds balance ($%) on invoice %'` in the allocation loop (lines ~168-176). All of these roll the claim back. So after the described first failure there is no `idempotency_keys` row at all, `IF NOT FOUND THEN RAISE ... IDEMPOTENCY_CLAIM_LOST` is not reached either (that arm is only entered when ROW_COUNT = 0, i.e. an existing committed row), and the corrected resubmit with the same key succeeds normally — which is exactly what the retry-safe `useIdempotencyKey` contract intends (`src/hooks/useIdempotencyKey.ts:24-45`: key held in a ref, `resetKey()` "only after a confirmed success").
+
+3. The mismatch branch (lines 96-100) is reachable only when a prior call for that key COMMITTED with a different request payload. With `payIdem.resetKey()` on modal open (`src/pages/InvoiceDetail.tsx:1458`) and on success (`:1036`), the only residual path is a commit whose response was lost in transit (client timeout/network drop) followed by a corrected-amount retry — in which case the payment already exists and `IDEMPOTENCY_ARGUMENT_MISMATCH` is the correct double-post protection, not a stuck-key defect. The finding itself concedes "that is the safe direction," so what remains is a message-wording nit in an already-rare path, not the operator-facing dead end described.
+
+4. Secondary claims check out but do not rescue the finding: `sanitizeError` (`src/lib/errorSanitizer.ts:28-59`) does pass the token through unchanged (`return message;` at :58, no CONSTRAINT_PATTERNS entry matches, and the schema-identifier catch-all `/relation "|column "|constraint "|table "/` does not match), and the payment catch at `src/pages/InvoiceDetail.tsx:1046-1049` has no `getIdempotencyMismatchResult` reconciliation like the save path at `:782`. A typed token and a precedent handler do exist (`src/lib/db.ts:238` `IDEMPOTENCY_ARGUMENT_MISMATCH`, `src/types/index.ts:1175`, used via `hasRpcCode` at `src/pages/OfflineWorkReview.tsx:141`), so friendlier copy is possible — but that is a cosmetic polish item, not the described broken-payment-screen bug.
+
+I also checked for a later migration superseding the behavior: `20260716160000_fix_idempotency_committed_replay_guard.sql:45-46` only exempts allocate_payment's deliberate claim INSERT from a replay-guard trigger; `20260716120112_gauntlet_money_workflows.sql:390` and `20260718203206_retire_legacy_record_invoice_payment.sql` do not redefine the function's idempotency arms. Nothing in `docs/manual/KNOWN_ISSUES.md` or the 2026-08-05 section-04 baseline covers this specific item — it is refuted on mechanism, not on prior documentation.
+
+---
+
+### [LOW] get_field_billing_splits_for_order is an ungated SECURITY DEFINER reader of per-field billing split percentages
+
+- **Location:** supabase/migrations/20260335200000_workflow_gaps_phase3_field_billing_splits.sql:34; baseline public_schema.sql line 28326
+
+**Claim.** `SECURITY DEFINER`, granted EXECUTE to `authenticated`, no auth or role check. It joins `orders -> quotes -> quote_sections -> field_billing_defaults` under definer rights and returns `customer_id`, `split_pct`, `is_primary`, `field_id` for any order id. It bypasses `orders_select` (admin/sales_rep), `quotes_select` (admin/sales_rep) and the office-only scoping applied to quote children. The data is a co-ownership split ratio rather than money, so exposure is limited, but it discloses which growers co-own which fields and in what proportion — commercially sensitive and outside a field user's need to know.
+
+**Evidence offered.** baseline public_schema.sql:28326 —
+CREATE FUNCTION "public"."get_field_billing_splits_for_order"("p_order_id" "uuid") RETURNS TABLE("customer_id" "uuid", "split_pct" numeric, "is_primary" boolean, "field_id" "uuid")
+    LANGUAGE "plpgsql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+BEGIN
+  RETURN QUERY
+    SELECT DISTINCT fbd.customer_id, fbd.split_pct, fbd.is_primary, fbd.field_id
+    FROM orders o JOIN quotes q ON q.id = o.quote_id
+    JOIN quote_sections qs ON qs.quote_id = q.id
+    JOIN field_billing_defaults fbd ON fbd.field_id = qs.field_id
+    WHERE o.id = p_order_id AND qs.field_id IS NOT NULL;
+END;
+$$;
+
+**Claimed failure.** A driver who obtained an order id from global_search calls /rest/v1/rpc/get_field_billing_splits_for_order and learns that field F is billed 60/40 between two named growers — an ownership relationship the driver cannot see through any table policy, since orders, quotes and quote_sections are all closed to them.
+
+**Why it was refuted.** REFUTED. The catalog facts are accurate but the harm claim is false, and the residual is already documented baseline.
+
+1) The function's facts check out: `supabase/migrations/20260335200000_workflow_gaps_phase3_field_billing_splits.sql:34-56` defines `get_field_billing_splits_for_order(p_order_id uuid)` as `LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp` with no `auth.uid()` or role check, and `supabase/migrations/20260529214355_revoke_anon_execute_on_report_dashboard_secdef.sql:70-71` sets `REVOKE ... FROM anon, PUBLIC; GRANT EXECUTE ... TO authenticated, service_role`. `supabase/baselines/20260727174805_acl_lockdown.sql:1108-1109` confirms the live grant to `authenticated`. I found no later migration adding an in-body gate (searched every `.sql` under supabase/migrations for the identifier; only callers, no re-emission with a gate).
+
+2) The failure scenario does not hold. The finding asserts the split ratio is "an ownership relationship the driver cannot see through any table policy, since orders, quotes and quote_sections are all closed to them." That is wrong about the table that actually holds the data. `field_billing_defaults` is directly readable by every active authenticated profile, drivers included:
+   - `supabase/migrations/20260213000000_phase1_fields_foundation.sql:247-249` — `CREATE POLICY fbd_select ON field_billing_defaults FOR SELECT TO authenticated USING (true);`
+   - `supabase/migrations/20260727174657_broad_reads_require_active_profile.sql:96-97` — `ALTER POLICY "fbd_select" ON public.field_billing_defaults USING ((SELECT public.is_active_profile()));` — role-agnostic, active-profile only; the 2026-07-27 office-only narrowing (`20260727231652`) covered `quote_items`, `quote_versions`, `customer_application_rates`, `rebate_programs` and deliberately did NOT include `field_billing_defaults`.
+   - `supabase/baselines/20260727174805_acl_lockdown.sql:217` — `GRANT DELETE, INSERT, ... SELECT ... ON TABLE public.field_billing_defaults TO authenticated;`
+   So a driver can simply `GET /rest/v1/field_billing_defaults?select=customer_id,split_pct,is_primary,field_id` and obtain the same four columns for *every* field — a strictly larger disclosure than the RPC's one-order subset. The RPC is not a bypass of any control; it returns a filtered subset of data the caller can already read directly. This is by design: `src/components/field-app/SelectLocationsModal.tsx:40` (`billing_defaults:field_billing_defaults(customer_id, split_pct, is_primary, ...)`), `src/lib/applicatorSheetPrintData.ts:169` (`.from('field_billing_defaults')`) and `src/pages/OrderDetail.tsx:270` (`.from('field_billing_defaults').select('field_id, customer_id, split_pct')`) are field-app/applicator-reachable readers that depend on that policy. The only incremental information the RPC adds is the order→field linkage, which is not what the finding claims and is trivially available to a driver via delivery/job field data.
+
+3) Already documented baseline, twice over:
+   - `docs/manual/KNOWN_ISSUES.md` §0a item (a) names this exact table as a known, still-open, deliberately-not-narrowed read: "`products`, `application_services`, `field_billing_defaults` and `blend_recipe_items` are read by driver/applicator-reachable pages, so the cost/margin *columns* — not the tables — are what needs hiding".
+   - `docs/manual/KNOWN_ISSUES.md` §0a item (b) documents the whole class as open work: "`SECURITY DEFINER` functions granted to `authenticated` bypass RLS entirely and can still return these figures through a direct PostgREST `/rpc/` call ... a live enumeration after the apply found **20** `authenticated`-executable SECDEF functions ... Each needs its body checked for a role gate". The originating migration itself flags the same follow-up at `20260529214355...sql:26-29` ("defense-in-depth = add internal role/scope guards to these report RPCs ... a separate pass").
+
+4) Minor accuracy note: the function is also a superseded dead path for billing — `supabase/migrations/20260617164803_rewrite_create_split_invoices_by_acre.sql:37` states "`get_field_billing_splits_for_order` is intentionally LEFT AS-IS", and migration-history row 459 calls it "now a superseded dead path". It remains PostgREST-callable, so that alone would not refute the claim, but it further reduces any real exposure.
+
+Net: the DB does not gate this RPC by role (verified against migrations, not merely "not found"), but the data it returns is already table-readable by the same caller, so no privilege boundary is crossed and the stated driver scenario cannot yield anything new. Refuted on impact and as documented baseline.
+
+---
+
+### [LOW] Cost data is fetched into the client-side invoice PDF payload although it is never rendered
+
+- **Location:** src/lib/invoicePdf.ts:33,90,166,318,331; src/lib/quotePdf.ts:61-63
+
+**Claim.** I checked every PDF generator for internal cost/margin/commission leakage into customer-facing output and found none: the 'Cost' and 'Total Cost' columns in invoicePdf.ts:1004-1005 and :1205-1206 are populated from `item.unit_price_cents` and `item.extended_cents` (customer price), statementPdf.ts:620 and yearEndSummaryPdf.ts:366 are the same shape, and `quotePdf.ts` declares `totalCost`/`totalProfit`/`avgMargin` in its data interface but never draws them — the only `margin` identifier in the render body is the page layout margin. So there is no PDF disclosure finding. What remains is that `buildInvoicePdfData` still carries `cost_cents` per line and `total_cost_cents` into the browser-side payload object. That is bounded by `invoices_select`/`invoice_items_select` (the caller could already read those columns), but it means the internal-cost figure travels into a document-generation payload where a future 'add a cost column' change would surface it customer-side with no policy or type barrier in the way.
+
+**Evidence offered.** src/lib/invoicePdf.ts:318,331 —
+      cost_cents: Number(it.cost_cents) || 0,
+...
+    total_cost_cents: inv.total_cost_cents || 0,
+
+src/lib/quotePdf.ts:61-63 (declared, never rendered) —
+    totalCost: number;
+    totalProfit: number;
+    avgMargin: number;
+
+src/lib/invoicePdf.ts:1004-1005 and the row builder at :1035-1042 confirm the visible column is price, not cost —
+    ? [['Product', 'EPA Reg', 'Rate / Acre', 'Total Applied', 'Total Applied GL/LB', 'Unit Price', 'Total Cost']]
+...
+        unitPrice,
+        fmt(item.extended_cents),
+
+**Claimed failure.** No disclosure today. The latent path: a change request to show a cost or margin column on the internal copy of an invoice PDF finds `cost_cents` already present on the data object and adds it to the shared `head`/`rows` arrays, and the same generator is used for the customer copy — the cost ships to the grower with no compile-time or policy failure to stop it.
+
+**Why it was refuted.** Every citation in the finding is factually accurate, but the finding does not describe a defect and its underlying data-visibility concern is already documented.
+
+VERIFIED AS ACCURATE (so I am not disputing the facts):
+- src/lib/invoicePdf.ts:33 `cost_cents?: number;` and :90 `total_cost_cents: number;` exist on `InvoicePdfItem`/`InvoicePdfData`; :318 `cost_cents: Number(it.cost_cents) || 0,` and :331 `total_cost_cents: inv.total_cost_cents || 0,` populate them in `buildInvoicePdfDataFromRow`. The item select at :215 is `.select('*, product:products(product_name, epa_registration, product_form)')`, so `cost_cents` does ride along.
+- `grep -n "cost" src/lib/invoicePdf.ts` returns exactly 33, 90, 166, 318, 331, 1210, 1213, 1214. The only render-side hits are :1210 `const costStr = \`${fmt(item.unit_price_cents)} ...\`` and the two row builders at :1213-1214 consuming `costStr` and `fmt(item.extended_cents)`. Confirmed at :1004-1005 the head is `'Unit Price', 'Total Cost'` and at :1203-1204 `'Cost', 'Total'` — both fed by customer price, never by `cost_cents`. So `cost_cents`/`total_cost_cents` are genuinely never rendered.
+- src/lib/quotePdf.ts:61-63 declares `totalCost`/`totalProfit`/`avgMargin`; grep for cost/margin/profit in that file returns those three declarations plus 27 hits on the page-layout `const margin = 40` (:92) and its arithmetic. Never rendered. Confirmed no other consumer: grep for those identifiers across src/ hits only BulkOrderImport.tsx, BulkQuoteImport.tsx, and financeChargeCalc.test.ts — unrelated locals.
+
+WHY IT IS STILL REFUTED:
+
+1. The finding self-refutes. Its own detail says "there is no PDF disclosure finding" and "No disclosure today." The `failure_scenario` is not a scenario that can occur against current source — it is a hypothetical future change request ("a change request to show a cost column ... finds cost_cents already present"). Unused-but-populated fields on a data object are dead code at worst, not a defect. No input, state, or user action in the shipped code produces a wrong output.
+
+2. The substantive concern is already an OPEN, DOCUMENTED owner decision — and it is documented at exactly the columns cited. docs/manual/KNOWN_ISSUES.md:378-381, section "0e. OPEN OWNER DECISIONS — application-service cost follow-ups": "Sales reps can still recover internal application-service cost for invoices assigned to them from `invoice_items.cost_cents` plus acres or `invoices.total_cost_cents`. Drivers cannot. Narrowing sales-rep visibility on their own invoices is a product decision for Mason, not a grant-only correction." The finding itself concedes the same boundary ("bounded by invoices_select/invoice_items_select — the caller could already read those columns"), which means the payload adds no exposure beyond what KNOWN_ISSUES already tracks. Re-reporting it as a PDF-layer finding is a re-frame of a known, deliberately-parked product decision.
+
+3. The threat model does not close. The payload is built in the browser by `buildInvoicePdfDataFromRow` and consumed by jsPDF in the same tab; it is never serialized to a customer. The reader of the payload is by construction a user who already holds `invoice_items_select` on that row, i.e. the exact population KNOWN_ISSUES:380 identifies. There is no principal who gains anything from the field being present on the object.
+
+I found no enforcement mechanism to point at because none is needed — there is nothing being violated. The correct characterization is "no defect present," not "the DB does not enforce X."
+
+---
+
+### [HIGH] get_program_completion never learned the two terminal quote statuses added in July 2026 — closed_by_application and closed_short bookings stay on Program Tracker and OfficeCockpit forever
+
+- **Location:** supabase/migrations/20260728182141_secdef_pricing_reads_office_only.sql:194-195 (latest on-disk definition); consumed by src/pages/ProgramTracker.tsx:53 and src/pages/OfficeCockpit.tsx:599
+
+**Claim.** The live quote status set is nine values (.claude/schema-registry.json: `quotes.status = ['draft','sent','revised','accepted','declined','expired','cancelled','closed_by_application','closed_short']`). `get_program_completion` filters `q.status NOT IN ('declined','expired','cancelled')` only. Both missing statuses are TERMINAL closures of a PLANNED booking — `closed_by_application` (fulfilled by field application, migration 20260703200000) and `closed_short` (customer walked away, migration 20260706030000). Their own migrations threaded the new status through the transition enforcer, the hold-release trigger, the allocator and create_job_from_quote_section; the program-completion report was missed. This function was last re-emitted 2026-07-28, three weeks AFTER both statuses shipped live, so the omission is current, not historical. A closed booking with no jobs stays at `not_started` and 0% forever; one with partial jobs stays `in_progress`. Separately, the query has no `q.deleted_at IS NULL` predicate even though `quotes.deleted_at` exists and `src/pages/Quotes.tsx:409` soft-deletes quotes by setting it — so soft-deleted planned quotes are also reported as live programs. Caveat on evidence: this is the newest on-disk CREATE OR REPLACE; I did not query live pg_proc.
+
+**Evidence offered.** supabase/migrations/20260728182141_secdef_pricing_reads_office_only.sql:190-195:
+    FROM quotes q
+    JOIN customers c ON c.id = q.customer_id
+    JOIN quote_sections qs ON qs.quote_id = q.id
+    LEFT JOIN quote_items qi ON qi.section_id = qs.id
+    WHERE q.is_planned = true AND q.season = v_season
+      AND q.status NOT IN ('declined', 'expired', 'cancelled')
+
+.claude/schema-registry.json: quotes.status = ['draft','sent','revised','accepted','declined','expired','cancelled','closed_by_application','closed_short']
+
+src/pages/ProgramTracker.tsx:52-53:
+      const { data, error } = await supabase.rpc('get_program_completion', { p_season: season });
+
+**Claimed failure.** A planned booking is closed with the "Close — Applied" button (QuoteBuilder.tsx:1782 sets status `closed_by_application`). Program Tracker's Not Started / In Progress tiles keep counting it every season it is queried, and OfficeCockpit's program-completion tile shows work outstanding on a booking that was fully delivered by application months earlier. The office chases a program that is already done.
+
+**Why it was refuted.** REFUTED — the finding's central claim ("the program-completion report was missed") is factually false. Both migrations that introduced the statuses explicitly enumerate `get_program_completion` in a "Deliberately NOT touched" list with a written rationale, ~150 lines above the CHECK-constraint line the reviewer quoted from the same files.
+
+supabase/migrations/20260703200000_layer2_close_quote_as_applied.sql:37-45:
+  "-- Deliberately NOT touched: _enforce_quote_terminal_not_drawn ... 
+   --   get_program_completion (tracks how much of a program was APPLIED — a
+   --   closed-by-application booking is a COMPLETED program that belongs there)."
+
+supabase/migrations/20260706030000_closed_short_booking_closure.sql:50-64:
+  "-- Deliberately NOT touched (same reasoning as the 'closed_by_application'
+   -- migration — each auto-handles the new terminal status correctly): ...
+   --   get_program_completion (excludes only declined/expired/
+   --   cancelled -> a short-closed program keeps its partial-applied amounts
+   --   visible, same as closed_by_application) ..."
+
+So the exclusion is a recorded design decision, not an omission. The report's semantic contract is "how many planned acres were actually applied," derived from jobs → blend_tickets → blend_ticket_fields.actual_acres (20260728182141:170-183). Declined/expired/cancelled are bookings that were never worked and therefore have nothing to report; closed_by_application and closed_short are bookings that WERE worked (fully or partly) and whose applied acreage is precisely what the report exists to show. Dropping them would delete the completed work from the season-to-date view — the opposite of what the reviewer wants.
+
+Three supporting refutations:
+
+1. The "re-emitted 2026-07-28, three weeks after the statuses shipped, so it's current not historical" argument does not carry the weight claimed. That migration's own header (20260728182141:33-34) states: "Both bodies below are written out in full, transcribed from the live catalog definition read during the audit; the ONLY change is the inserted guard block." It was a verbatim SECDEF-guard re-emission from a pricing-bypass security audit, not a semantic re-review — so it is not independent evidence that anyone looked at the status list again and missed it.
+
+2. The failure scenario is weaker than stated. `close_quote_as_applied` (20260703200000:322-390) requires status IN ('sent','revised') AND is_planned, and counts active jobs (`SELECT COUNT(*) INTO v_active_jobs FROM jobs WHERE quote_id = p_quote_id ...`) purely as an informational warning. The "stays at not_started and 0% forever" case therefore requires a booking closed as *applied* with zero jobs and zero blend tickets — i.e. someone marked a program fulfilled while no application was ever recorded. Showing 0% there is a correct data-quality signal, not a false alarm. The realistic case (jobs + blend tickets exist) computes completion_pct from actual acres and lands on 'completed' via the same CASE at :177-182, exactly as the migration comment predicts. The closed_short "in_progress" case is the explicitly stated intent ("keeps its partial-applied amounts visible").
+
+3. Neither consumer treats these rows as an outstanding-work queue in the way the scenario asserts. ProgramTracker.tsx:75-77 exposes a free-text status filter over not_started/in_progress/completed and tiles that are descriptive counts; OfficeCockpit.tsx:665-675 reduces the payload to a single average completion percentage (`programCompletionPct`) rendered at :1720 — there is no "work outstanding" alert, badge, or action list driven by this RPC.
+
+Residual, and it is not the reported finding: the missing `q.deleted_at IS NULL` predicate is factually accurate. 20260728182141:190-195 has no soft-delete filter, quotes.deleted_at exists and is written by src/pages/Quotes.tsx:407-411 (`.from('quotes').update({ deleted_at: new Date().toISOString() })`), and the function is SECURITY DEFINER so RLS cannot compensate. But (a) this gap is present unchanged in the ORIGINAL 20260405300000_program_completion_rpc.sql:52-70 — it is historical, has nothing to do with the July status work, and none of the six migrations touching this function ever added it; (b) the same Quotes.tsx handler blocks deletion of any quote with order draws or job reservations (:398-405), so a deletable planned booking is one with no draws and no jobs, which lands on not_started/0% — indistinguishable from a genuinely unstarted planned program and adding only a phantom row to Total Programs plus a 0% drag on OfficeCockpit's average. That is LOW at most, and it does not rescue the HIGH headline, which is refuted outright.
+
+---
+
+### [MED] Every OfficeCockpit exception tile count is `.length` over a query hard-capped at 50 rows
+
+- **Location:** src/pages/OfficeCockpit.tsx:321 (TILE_LIMIT), :496-582 (nine `.limit(TILE_LIMIT)` queries), :917-926 (totalExceptions), :1133/:1249/:1326/:1376/:1521/:1568/:1611 (count props)
+
+**Claim.** `const TILE_LIMIT = 50;` is applied to every cockpit source query — unbilled jobs, draft/unposted field-app invoices, draft/unposted chemical-sale invoices, completed deliveries, upcoming jobs, expiring licenses, overdue field-app AR, unassigned jobs, and shortfalls. Each tile then renders `count={data.X.length}` and the page's headline `totalExceptions` is the sum of those `.length` values. There is no separate `count: 'exact'` head request and no "showing first 50" disclosure; the "+N more" text at :1599 is computed from the same truncated array. A backlog of 300 unposted invoices reads as exactly 50, and the number stops moving as the office posts them until the queue drops below 50 — the tile looks stuck rather than wrong.
+
+**Evidence offered.** src/pages/OfficeCockpit.tsx:321: `const TILE_LIMIT = 50;`
+src/pages/OfficeCockpit.tsx:509-517:
+      supabase
+        .from('invoices')
+        .select('id, invoice_number, status, total_amount_cents, customer:customers(farm_name)')
+        .eq('invoice_type', 'chemical_sale')
+        .in('status', ['draft', 'unposted'])
+        .is('deleted_at', null)
+        .order('invoice_date', { ascending: true })
+        .limit(TILE_LIMIT),
+
+src/pages/OfficeCockpit.tsx:917-926:
+  const totalExceptions =
+    data.unbilledJobs.length +
+    data.postableInvoices.length +
+    data.chemicalDrafts.length +
+    data.deliveredNotInvoiced.length + ...
+
+**Claimed failure.** Season peak leaves 180 completed deliveries not yet invoiced. The "Delivered not invoiced" tile reads 50, the office works through 20 of them, and the tile still reads 50 — the operator concludes the queue is not shrinking or, worse, treats 50 as the real backlog and under-staffs billing by 130 deliveries.
+
+**Why it was refuted.** REFUTED on three independently load-bearing points; the reviewer read the query block (:490-582) and the `count=` props (:1133-1611) but never read the ~640 intervening lines where the truncation is detected and disclosed.
+
+(1) "There is ... no 'showing first 50' disclosure" is FALSE. The page computes explicit hit-limit sentinels and renders them:
+- src/pages/OfficeCockpit.tsx:770 — `const chemicalDraftsHitLimit = (chemicalDraftsRes.data || []).length === TILE_LIMIT;`
+- src/pages/OfficeCockpit.tsx:773 — `const deliveredNotInvoicedHitLimit = rawCompletedDeliveries.length === TILE_LIMIT;`
+carried into state at :174/:177 and :892/:895, and rendered as user-facing text at
+- :1364-1368 — `{data.chemicalDraftsHitLimit && (<p className="mt-2 text-xs text-gray-400">Showing the first 50 &mdash; open Invoices for the full list.</p>)}`
+- :1415-1419 — `{data.deliveredNotInvoicedLoadOk && data.deliveredNotInvoicedHitLimit && (<p ...>Coverage checked for the newest 50 completed deliveries.</p>)}`
+
+(2) The stated failure scenario CANNOT occur as written. It is built entirely on the "Delivered, not invoiced" tile ("180 completed deliveries ... tile reads 50 ... operator treats 50 as the real backlog"). That is precisely one of the two tiles that renders a truncation disclosure (:1417). The reviewer's own quoted evidence block (:509-517, the chemical-sale drafts query) is the OTHER disclosed tile (:1366). Both pieces of quoted evidence are drawn from the two tiles that refute the claim.
+
+(3) "Every ... tile" and "nine `.limit(TILE_LIMIT)` queries" are both wrong. There are EIGHT `.limit(TILE_LIMIT)` call sites (:496, :506, :517, :527, :538, :548, :562, :582). Three of the ten `totalExceptions` addends at :917-926 are not TILE_LIMIT-capped at all: `watchdogFlags` comes from `get_watchdog_flags` (:457), `shortfalls` from `get_job_inventory_shortfalls` (:467), and `plannedBookingAttention` from `get_expiring_planned_holds` (:473) plus an explicitly UNLIMITED `inventory_holds` query (:585-595, which has `.order('expires_at', ...)` and no `.limit()`). The reviewer's cited `:1611 count={data.shortfalls.length}` is therefore not a truncated count, and neither is :1427.
+
+What actually survives is a much narrower, lower-severity gap: six tiles cap at 50 without a disclosure — unbilledJobs (:496/:1133), postableInvoices (:506/:1249), upcomingJobs (:538/:1472), expiringLicenses (:548/:1521), overdueAR (:562/:1568), needsDispatchJobs (:582/:1178). This is a cosmetic/UX undercount on a triage dashboard, not a money or data-integrity defect: every tile carries a `linkLabel`/`onLink` out to the authoritative full-list page (e.g. :1329-1330 `linkLabel="Invoices" onLink={() => navigate('/invoices')}`) and the "+N more" rows navigate there too, and the codebase demonstrably already knows the disclosure pattern — it just was not applied to these six. That residue would be LOW, not MED, and is not the finding as filed. Note the reviewer's separate claim of no `count: 'exact'` head request is accurate but is not by itself a defect given the disclosure pattern in use.
+
+Not previously documented: neither docs/manual/KNOWN_ISSUES.md nor docs/audits/gauntlet/2026-08-05-section-04-*.md contains any TILE_LIMIT/truncation entry (grep for `TILE_LIMIT|cockpit|truncat|first 50` returns nothing relevant in the gauntlet file; KNOWN_ISSUES mentions OfficeCockpit only at :423, :475, :982 on unrelated RPC-availability and due-date-policy topics). So this is refuted on the merits, not as a duplicate.
+
+---
+
+### [MED] Open credit memos are counted company-wide in the Net Position tile but can only be displayed on AR Aging for customers who also have positive outstanding
+
+- **Location:** src/pages/AccountsReceivable.tsx:58-66 and :81; supabase/migrations/20260805151605_fix_historical_ar_report_cutoffs.sql:222-228
+
+**Claim.** get_ar_aging joins `eligible_invoices` with an INNER JOIN restricted to `ei.statement_balance_cents > 0` and applies `HAVING sum(ei.statement_balance_cents) > 0`, so a customer with no open invoice never produces a row — regardless of how large their unapplied credit memo balance is. Their `open_credit_cents` is therefore unreachable through the AR Aging report. The AccountsReceivable "Credit Memos" tile above it queries `invoices` directly across all customers, so the tile total is systematically larger than the sum of the visible "Credit on file" column. Note the sister report was fixed for exactly this: get_customer_balance_listing (20260805171334:138-140) uses a LEFT JOIN and `HAVING ... > 0 OR COALESCE(oc.credit_cents, 0) > 0`, so it does surface credit-only customers. get_ar_aging was not given the same treatment.
+
+**Evidence offered.** supabase/migrations/20260805151605_fix_historical_ar_report_cutoffs.sql:220-228:
+  FROM public.customers c
+  JOIN eligible_invoices ei
+    ON ei.customer_id = c.id
+   AND ei.statement_balance_cents > 0
+  LEFT JOIN open_credits oc ON oc.customer_id = c.id
+  GROUP BY c.id, c.farm_name, c.prepay_balance_cents, oc.credit_cents
+  HAVING sum(ei.statement_balance_cents) > 0
+
+supabase/migrations/20260805171334_fix_customer_balance_paid_invoice_totals.sql:135-140 (the fixed sibling):
+  LEFT JOIN eligible_invoices ei ON ei.customer_id = c.id
+  LEFT JOIN open_credits oc ON oc.customer_id = c.id
+  ...
+  HAVING COALESCE(sum(ei.statement_balance_cents) FILTER (WHERE ei.statement_balance_cents > 0), 0) > 0
+      OR COALESCE(oc.credit_cents, 0) > 0
+
+src/pages/AccountsReceivable.tsx:58-66 (tile source, all customers):
+          .from('invoices')
+          .select('balance_cents')
+          .eq('invoice_type', 'credit_memo')
+          .eq('status', 'posted')
+          .lt('balance_cents', 0)
+
+**Claimed failure.** A customer pays off every invoice and is left holding a $9,000 credit memo. The Credit Memos tile shows $9,000; the AR Aging table beneath shows no row for that customer and no credit anywhere, so nobody applies it. Because the aging report is also the dunning surface (ARaging.tsx:496 AR reminders), the credit stays invisible until the next invoice posts.
+
+**Why it was refuted.** REFUTED — the SQL shapes are quoted accurately, but the finding's causal story, its "unreachable credit" claim, and its failure scenario all fail against current source.
+
+WHAT IS TRUE (verified): `get_ar_aging` at supabase/migrations/20260805151605_fix_historical_ar_report_cutoffs.sql:218-227 does use `JOIN eligible_invoices ei ON ei.customer_id = c.id AND ei.statement_balance_cents > 0 ... HAVING sum(ei.statement_balance_cents) > 0`, so a customer with zero open invoice emits no row. `20260805151605` is the latest definition (checked every migration mentioning `get_ar_aging`: 20260213200000, 20260311200000, 20260323200000, 20260330100000, 20260333900000, 20260609130744, 20260702161000, 20260707040000, 20260709230000, 20260712210000, 20260805151605 — none later). The AccountsReceivable tile at src/pages/AccountsReceivable.tsx:58-66 does query `invoices` unfiltered by customer. So the tile total can exceed the sum of the visible "Credit on file" column. That much holds.
+
+WHY IT IS REFUTED:
+
+1. The "sister report was fixed for exactly this, get_ar_aging was not given the same treatment" framing is factually wrong. The two JOIN shapes were written **deliberately and simultaneously** in supabase/migrations/20260712210000_ar_credit_visibility.sql. In that one file, `get_ar_aging` is already `FROM customers c INNER JOIN (...) ... HAVING SUM(balance) > 0` (lines 117-130) while `get_customer_balance_listing` is already `FROM public.customers c LEFT JOIN public.invoices i ... HAVING COALESCE(SUM(i.balance_cents),0) != 0 OR COALESCE(cm.credit_cents,0) != 0` (lines 237-252). The migration's own header states the intent per-function: item 2 is "get_ar_aging — DROP/CREATE: new open_credit_cents column" and only item 4 says "get_customer_balance_listing — ... credit-only customers now listed." This is Mason's recorded 2026-07-11 Option B design, not an omission. And `20260805171334_fix_customer_balance_paid_invoice_totals.sql` — cited as "the fix" — is by its own filename and postflight (checks `sum(ei.total_amount_cents)`, `sum(ei.paid_amount_cents)`, `count(ei.id)`) a fix to invoiced/paid/count totals, not to credit-only visibility; it inherited the LEFT JOIN from 2026-07-11.
+
+2. "Their open_credit_cents is therefore unreachable through the AR Aging report ... no credit anywhere, so nobody applies it" — false as an app-level claim. The credit-only customer IS surfaced with a credit figure at src/pages/Reports.tsx:276 (`get_customer_balance_listing`) rendered as the "Credit Available" column at Reports.tsx:705, which is precisely the report designed to list credit-only customers. The credit memo itself is also listed and type-filterable on src/pages/Invoices.tsx:139/593/596, and selectable in the apply flow at src/pages/InvoiceDetail.tsx:1063.
+
+3. The dunning harm is fabricated. ARaging.tsx:496 does not use `get_ar_aging` — `handleSendARReminders` calls `supabase.rpc('get_ar_reminder_candidates')` (src/pages/ARaging.tsx:496-511), a separate RPC that keys off overdue invoices with `balance_cents > 0` and carries its own `open_credit_cents` hold at ARaging.tsx:535-539 ("never dun an account whose unapplied credit-memo balance fully covers the overdue total"). A customer with zero open invoices is not a dunning candidate at all, so the stated harm ("nobody duns them") is the intended outcome, not a defect. There is no path by which the aging row's absence causes a wrong dun or a wrong finance charge.
+
+4. No money is misstated. Net Position at AccountsReceivable.tsx:81 correctly subtracts the full company-wide open credit; the tile is the conservative/complete figure. Nothing is double-counted, dropped, or netted wrong.
+
+What survives is at most a cosmetic UX note (LOW, arguably by-design): a credit-only customer's credit shows in the tile and on the Reports customer-balance listing but not in the aging table beneath the tile, and CustomerDetail.tsx:1777-1779's "Credit on file" banner — which reads the aging row fetched at CustomerDetail.tsx:531-536 — likewise won't render for that customer. That is standard AR-aging semantics (an aging report ages open receivables) and does not support a MED finding as written.
+
+---
+
+### [LOW] Customer Balance Listing columns no longer reconcile with each other after the paid-invoice fix, and credit-only-plus-paid customers are still excluded
+
+- **Location:** supabase/migrations/20260805171334_fix_customer_balance_paid_invoice_totals.sql:124-141
+
+**Claim.** Verifying the fix the task flagged: it is correct and complete for what it set out to do — `total_invoiced`, `total_paid`, `prepay_applied` and `invoice_count` now aggregate every cutoff-eligible non-credit invoice, and only `outstanding_balance` and `oldest_unpaid_date` carry the `FILTER (WHERE ei.statement_balance_cents > 0)`. Two residuals it did not address. (1) Because the cumulative columns are unfiltered and Outstanding is positive-only, the four columns no longer form an identity: for a customer with an overpaid invoice, Invoiced − Paid − Prepay Applied ≠ Outstanding Balance, and nothing on the report explains the gap. (2) The HAVING keeps a customer only when outstanding > 0 or open credit > 0, so a customer whose invoices are all fully paid produces no row — defensible for a report named "balance listing", but it means the newly-correct cumulative Invoiced/Paid figures are unreachable for exactly the customers who paid in full, which is the population the fix's own smoke test ($50 paid + $100 open) does not cover.
+
+**Evidence offered.** supabase/migrations/20260805171334_fix_customer_balance_paid_invoice_totals.sql:124-133:
+  SELECT
+    c.id,
+    c.farm_name,
+    round(COALESCE(sum(ei.total_amount_cents), 0) / 100.0, 2),
+    round(COALESCE(sum(ei.paid_amount_cents), 0) / 100.0, 2),
+    round(COALESCE(sum(ei.prepay_applied_cents), 0) / 100.0, 2),
+    round(COALESCE(sum(ei.statement_balance_cents) FILTER (WHERE ei.statement_balance_cents > 0), 0) / 100.0, 2),
+    round(COALESCE(oc.credit_cents, 0) / 100.0, 2),
+    count(ei.id),
+    min(ei.invoice_date) FILTER (WHERE ei.statement_balance_cents > 0)
+
+:138-140:
+  GROUP BY c.id, c.farm_name, oc.credit_cents
+  HAVING COALESCE(sum(ei.statement_balance_cents) FILTER (WHERE ei.statement_balance_cents > 0), 0) > 0
+      OR COALESCE(oc.credit_cents, 0) > 0
+
+**Claimed failure.** A customer overpaid one invoice by $300 and owes $1,000 on another. The listing shows Invoiced $5,000, Paid $4,300, Outstanding $1,000 — the $300 overpayment is silently absent from Outstanding, so the row does not add up and an accountant reconciling the report to the ledger cannot tell whether the difference is an overpayment, a write-off, or a defect.
+
+**Why it was refuted.** REFUTED — the quotes are accurate but both residuals collapse on inspection.
+
+**Residual (1) — the "columns no longer reconcile" claim — rests on a failure mode the database forbids.** The scenario requires a non-credit-memo invoice with a negative `statement_balance_cents` (an overpayment). That cannot exist:
+
+- Live generated expression (`.claude/schema-registry.json:957-961`, matching `supabase/migrations/20260711021000_credit_apply_balance_lever.sql:39-46`): `balance_cents = ((total_amount_cents - paid_amount_cents) - prepay_applied_cents - write_off_cents) + CASE WHEN invoice_type = 'credit_memo' THEN credit_applied_cents ELSE -credit_applied_cents END`.
+- Live CHECK constraint (`.claude/schema-registry.json:2988`): `CHECK (((invoice_type = 'credit_memo'::text) OR (balance_cents >= 0)))`. Introduced `supabase/migrations/20260513040000_invoices_balance_non_negative.sql:22-23`, narrowed for memos at `20260609130744_credit_memo_invoice_constraints.sql:34-36`, and recreated after the column redefine at `20260711021000:49-51`. I traced every migration naming the constraint; it is never dropped without recreation.
+- The report already excludes memo rows — `20260805171334:83`: `WHERE i.invoice_type <> 'credit_memo'`. So every row in `eligible_invoices` is under the `balance_cents >= 0` arm of the CHECK.
+- Overpayment never lands on the invoice anyway: `allocate_payment` caps at outstanding and routes the excess to a prepay credit — `20260222200000_fix_allocate_payment_double_count.sql:84` `RAISE EXCEPTION 'Allocation ($%) exceeds balance ($%) on invoice %'` and `:167` `'Prepay credit of $... created from overpayment'`; same pattern through `20260311000001_audit_financial_fixes.sql:127,164`.
+
+The reviewer's "$300 overpayment" therefore has no representation to be silently dropped. Because `statement_balance_cents >= 0` for all eligible rows, `sum(...) FILTER (WHERE statement_balance_cents > 0)` is arithmetically identical to the unfiltered `sum(...)` (zero-balance rows contribute 0). The `FILTER` removes nothing from the total, so it opens no gap. This is a checked-the-migrations refutation, not a failure to locate enforcement.
+
+The premise is also historically backwards. "No longer form an identity" implies they once did. In the immediately prior version, `20260805151605_fix_historical_ar_report_cutoffs.sql:360-365`, **all four** columns carried `FILTER (WHERE ei.statement_balance_cents > 0)` — Invoiced/Paid/Prepay counted only unpaid invoices, so no identity held then either. Any true residual gap comes from `write_off_cents` and `credit_applied_cents` being in the generated formula but absent as report columns — a different, pre-existing cause the finding does not identify and which the fix did not touch.
+
+**Residual (2) — fully-paid customers excluded — is unchanged pre-existing intended behavior, not a defect of this migration.** The `HAVING` at `20260805171334:139-140` is carried verbatim from `20260805151605:372-373`, and the same exclusion existed earlier as `20260216200000_reporting_rpcs.sql:454` `HAVING COALESCE(SUM(i.balance_cents), 0) != 0` and `20260712210000_ar_credit_visibility.sql:268`. A zero-balance customer was never on this report. The reviewer concedes it is "defensible for a report named 'balance listing'," and their own detail states the fix "is correct and complete for what it set out to do" — leaving no defect claim.
+
+Not in `docs/manual/KNOWN_ISSUES.md` or the 2026-08-05 gauntlet section-04 baseline, but it does not need to be: it is not a real defect.
+
+---
+
+### [MED] Lifecycle test coverage: the two terminal quote closures, partial booking draw-down, planned-flag edges and planned-quote reopen have no behavioural test of any kind
+
+- **Location:** tests/e2e/holds-cleanup-paths.spec.ts:176,:211; tests/e2e/quote-builder-v2.spec.ts; tests/e2e/mega-workflow.spec.ts:493-599; src/pages/QuoteBuilder.test.tsx:668-848; src/lib/rpcContracts.test.ts / src/lib/rpcFixtureLiveDiff.test.ts
+
+**Claim.** Mapping the named specs against the lifecycle: mega-workflow covers draft→sent→accepted→convert→order→delivery→invoice on a NON-planned quote (every fixture is a plain quote). quote-builder-v2 covers create/version/compare/duplicate/template/rollover/convert and toggles `is_planned` at Step 06 but never exercises a hold consequence of it. holds-cleanup-paths covers exactly two of the seven hold-release paths — Path A (planned→accepted→cancel_order, :176) and Path B (planned→declined, :211). math-inventory-flow is a UI-rendering/arithmetic smoke over existing data, not a lifecycle test. concurrent-operations covers inventory exhaustion, over-allocation, draft-invoice payment, negative payment and double-complete — none of it quote-side. Untested seams, each with a named owner in code: (1) `closed_by_application` and `closed_short` — grep across tests/ and src/**/*.test.* returns ZERO references to either literal; the only coverage is static source-string assertions in rpcContracts.test.ts / rpcFixtureLiveDiff.test.ts, which prove the SQL text exists, not that closing releases the remainder. (2) `draw_down_quote` — the partial-booking money+inventory path — appears only in rpcIdempotencyScope.test.ts and rpcFixtureLiveDiff.test.ts, i.e. no behavioural test at all. (3) Planned reopen — QuoteBuilder.test.tsx has four reopen tests (:668, :782, :803, :825) and every single fixture is `is_planned: false`, so the atomic hold-rebuild that revert_quote_status was specifically hardened to do (QuoteBuilder.tsx:1885-1888 cites Codex round-9 P2 and migration 20260613290000) is unproven from the client side. (4) Unplanning — flipping `is_planned` true→false on a quote with job draws is a guarded path (migration 20260702183000_layer2_save_quote_block_unplan_with_job_draws) with no test naming it; grep for 'unplan' across tests/ returns nothing. (5) Hold release on `cancelled` and `expired` — neither path is in holds-cleanup-paths. (6) Soft-delete of a planned quote — the stranded-hold path in the finding above — untested.
+
+**Evidence offered.** `grep -rln "closed_short\|closed_by_application" tests src --include=*.spec.ts --include=*.test.ts --include=*.test.tsx` → no test files (only src/types, Badge.tsx, page sources)
+
+`grep -rln draw_down_quote tests src --include=*.spec.ts --include=*.test.ts --include=*.test.tsx` → src/lib/rpcIdempotencyScope.test.ts, src/lib/rpcFixtureLiveDiff.test.ts
+
+tests/e2e/holds-cleanup-paths.spec.ts:176: `test('Path A: planned quote → accept → cancel order ends at start qty', ...)`
+tests/e2e/holds-cleanup-paths.spec.ts:211: `test('Path B: planned quote → decline (no convert) ends at start qty', ...)`
+
+src/pages/QuoteBuilder.test.tsx:783: `const quote = { id: 'quote-reopen', ..., status: 'accepted', is_planned: false, ... };`
+src/pages/QuoteBuilder.test.tsx:804: `... status: 'accepted', is_planned: false, ...`
+
+**Claimed failure.** A future change to `release_holds_on_quote_status_change` drops `closed_short` from its terminal-status list (exactly the kind of edit the AGENTS.md hard rules invite when a new status is added). Every test in the suite passes — nothing anywhere exercises that status — and every booking closed short from that point silently keeps its inventory reserved, showing up only as unexplained Net Position shrinkage weeks later.
+
+**Why it was refuted.** REFUTED as written — the finding is an artifact of a grep methodology that excluded the repo's primary behavioural database-test layer. The reviewer restricted every grep to `tests/**/*.spec.ts` and `src/**/*.test.ts(x)`, missing `scripts/smoke/` — a 115-file rolled-back SQL smoke-chain harness wired into `package.json:38` (`"smoke": "node scripts/smoke/run-smoke.mjs"`) with a spec registry at `scripts/smoke/smoke-specs.json`. Per `scripts/smoke/run-smoke.mjs:18-21`, each chain is "a single DO block that ALWAYS raises... Error text containing SMOKE_PASS_ROLLBACK = PASS". These are behavioural end-to-end tests against the real schema, not static assertions.
+
+Sub-claim (2), `draw_down_quote` "no behavioural test at all" — FALSE. `scripts/smoke/smoke-planned-holds-drawn-sync.sql:143` calls the RPC for real: `v_res := draw_down_quote(v_q, jsonb_build_array(jsonb_build_object('product_id', v_pa, 'quantity', 250)), v_admin, NULL);` and :147 asserts the inventory consequence: `RAISE EXCEPTION 'SMOKE_FAIL: (b) after draw 250, pa holds = %, expected 250'`. Additional draw-path chains: `smoke-draw-ledger-reversal.sql`, `smoke-order-draw-lock.sql`, `smoke-save-quote-drawn-guard.sql`, `smoke-restore-version-drawn-guard.sql`, `smoke-rollover-remainder.sql`.
+
+Sub-claim (4), unplanning "no test naming it; grep for 'unplan' across tests/ returns nothing" — FALSE. Same file :225 `UPDATE quotes SET is_planned = false WHERE id = v_q;` then :234 `RAISE EXCEPTION 'SMOKE_FAIL: (f) unplanned quote still has % active holds'`. The file header :34-36 documents scenario (f) as "is_planned switched off + save -> 0 active holds (server-side release)". `unplan` also appears in `scripts/smoke/smoke-specs.json:18`, which specifies ordering "split-conflict < stale-token < lifecycle/unplan < write".
+
+Sub-claim (3), planned reopen / atomic hold-rebuild "unproven" — substantially FALSE. The hardening cited (migration 20260613290000) is server-side, and the server side is proven: same file :216-221 restores a version and asserts `'SMOKE_FAIL: (e) after restore holds pa=% (expected 150)'`. `scripts/smoke/smoke-revert-quote-escape-hatch.sql:1-11` is a dedicated fail-first proof that `revert_quote_status` reopens a stranded accepted quote, releases the draw ledger, and permits re-conversion. The reviewer's own wording concedes the gap is only "from the client side" — a client fixture gap, not an unproven behaviour.
+
+Sub-claim (5), expired path — partially false; `scripts/smoke/smoke-auto-expire-draw-skip.sql` behaviourally covers `auto_expire_quotes` against drawn vs. control quotes.
+
+The finding's headline claim of "no behavioural test of any kind" across the enumerated seams is therefore majority-false, and the stated failure scenario's premise (that nothing anywhere exercises these paths) does not hold.
+
+SURVIVING RESIDUE (why severity is corrected to LOW rather than dismissed outright): sub-claim (1) checks out. The closure RPCs are `public.close_quote_as_applied` and `public.close_quote_as_short`, both in `supabase/migrations/20260706030000_closed_short_booking_closure.sql` (:268, :310). I grepped for the RPC *names* — which the reviewer never did, having only grepped the status literals — across the whole repo excluding migrations/docs: hits are only `src/types/supabase.ts`, `src/lib/db.ts`, `src/lib/rpcFixtureLiveDiff.test.ts`, `src/lib/rpcContracts.test.ts`, `src/pages/QuoteBuilder.tsx`, plus registry/graph JSON. `grep -n "close_quote" scripts/smoke/smoke-specs.json` returns nothing. So the short/applied booking-closure path genuinely has no behavioural test in either the Playwright suite or the smoke harness — only the static source-string assertions the reviewer correctly characterized. That is a real but narrow test-coverage gap on a non-money-losing-by-itself path, not the broad MED-severity lifecycle blind spot claimed. Not documented in `docs/manual/KNOWN_ISSUES.md` or the 2026-08-05 section-04 baseline (both checked; neither mentions closure, draw-down, or unplan coverage).
+
+---
+
+### [LOW] docs/reference/rpc-functions.md header states a live function inventory as of 2026-07-17, three weeks behind the live ledger, and nothing verifies it
+
+- **Location:** docs/reference/rpc-functions.md:1-6
+
+**Claim.** The header claims "356 callable overloads across 348 names + 89 trigger functions — live DB as of 2026-07-17" and the second note concedes the per-section inventory is "a curated snapshot last verified 2026-06-29 and has not been re-audited function-by-function". The live high-water recorded in docs/manual/KNOWN_ISSUES.md:3 is `20260807220323`, and at least eight lifecycle/AR functions have been re-emitted since 2026-07-17 (20260720175946, 20260721014858, 20260721145936, 20260728182141, 20260730235031, 20260805151605, 20260805171334, plus the six bulk-import follow-ups). `npm run check:docs` (run this session, all PASS) does not check any count in this file — its checks are migration-history sequence, migration index completeness, page/route counts, hook counts and manual-doc stamps. So the counts drift with no signal, on the file agents are pointed at for the RPC surface.
+
+**Evidence offered.** docs/reference/rpc-functions.md:1: `# RPC Functions Reference (356 callable overloads across 348 names + 89 trigger functions — live DB as of 2026-07-17)`
+
+docs/reference/rpc-functions.md:5: `> **2026-07-13 note:** the section-by-section inventory below ... is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above`
+
+`npm run check:docs` output (this session): PASS migration-history sequence claim=856 actual=856 / PASS all migrations indexed claim=859 / PASS pages-routes 80/88 / PASS wired hooks 36 / PASS manual doc stamps — no RPC-count check.
+
+**Claimed failure.** An agent trusts the header's "one overload per name" framing for a function re-emitted in August, writes a call against the June signature, and the mismatch surfaces only as a PostgREST function-not-found at runtime in production.
+
+**Why it was refuted.** REFUTED — the factual sub-claims are accurate but the finding does not describe a defect, and its failure scenario cannot occur.
+
+WHAT CHECKS OUT (verified myself):
+- docs/reference/rpc-functions.md:1 does read `# RPC Functions Reference (356 callable overloads across 348 names + 89 trigger functions — live DB as of 2026-07-17)`.
+- docs/manual/KNOWN_ISSUES.md:3 does record live high-water `20260807220323`.
+- scripts/check-doc-drift.mjs (113 lines, the whole file — `check:docs` maps to it at package.json:47) contains exactly five check families: migration-history sequence (line 27), all-migrations-indexed (36), pages/routes (45,47), wired hooks (61), manual-doc stamps + the KNOWN_ISSUES/CURRENT_STATE freshness gate (72-101). No RPC-count check exists. Confirmed by reading the file, not by absence of grep hits.
+- New functions have shipped since 2026-07-17, so the raw number is now low: e.g. supabase/migrations/20260805151605_fix_historical_ar_report_cutoffs.sql:55 `CREATE FUNCTION public.assert_customer_balance_reconstructable_as_of(`.
+
+WHY IT IS STILL REFUTED:
+
+1. The header is a correctly scoped, datestamped historical measurement, not a live claim. "live DB as of 2026-07-17" is true on 2026-07-17 and remains true as a statement about that date. A dated snapshot getting older is not drift in the sense a checker should fail on.
+
+2. The doc already self-discloses exactly the limitation the reviewer "found", twice, in the two lines the reviewer quotes as evidence against it. rpc-functions.md:5: `the section-by-section inventory below ... is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing.` A caveat that names the staleness, names the risk, and names the two authoritative substitutes is the mitigation. The finding is "the doc says it is a snapshot" restated as a defect.
+
+3. The failure scenario is not reachable from any cited change. I traced the two lifecycle functions that actually changed signature after 2026-07-17, both in supabase/migrations/20260730235031_quote_customer_row_version_guard.sql:
+   - line 993 `CREATE FUNCTION public.convert_quote_to_order(p_quote_id uuid, p_performed_by uuid DEFAULT NULL, p_idempotency_key text DEFAULT NULL, p_expected_row_version bigint DEFAULT NULL)`
+   - line 842 `CREATE FUNCTION public.create_quote_version(p_quote_id uuid, p_performed_by uuid, p_method text DEFAULT 'presented', p_idempotency_key text DEFAULT NULL, p_expected_row_version bigint DEFAULT NULL)`
+   Both additions are a single new trailing parameter with `DEFAULT NULL`. A PostgREST call written against the June argument set still resolves — the added arg defaults. There is no "function-not-found" outcome. The file also contains zero `DROP FUNCTION` (grep: no matches); the pre-existing implementation is preserved by rename, not dropped: line 835 `ALTER FUNCTION public.create_quote_version(uuid, uuid, text, text) RENAME TO _create_quote_version_owner_impl;` with EXECUTE revoked from PUBLIC/anon/authenticated at 837-838. So the header's "one overload per name" framing — the specific thing the reviewer says an agent would wrongly trust — is still factually correct after these migrations, and was deliberately preserved by them.
+
+4. `.claude/schema-registry.json` plus the live DB are the designated authority for signatures under both AGENTS.md and the doc's own line 5, and the registry has a dedicated refresh path and a registry-freshness hook. The signature surface is not unguarded; it is guarded somewhere other than where the reviewer looked.
+
+RESIDUAL SLIVER (not the reported finding, and not a bug): AGENTS.md's closing line says "Do not put migration/page/function counts in always-loaded agent files; `npm run check:docs` verifies those claims in reference docs" — check-doc-drift.mjs verifies migration and page counts but not function counts, so that sentence overstates coverage by one noun. That is a one-word wording nit in AGENTS.md, not a LOW defect in rpc-functions.md, and it has no runtime or ordering-cycle consequence. Also out of scope for an ordering-cycle review.
+
+---
