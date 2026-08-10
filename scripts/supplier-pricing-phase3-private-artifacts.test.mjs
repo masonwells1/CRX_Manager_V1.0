@@ -930,6 +930,42 @@ git() { return 0; }
   rmSync(path.join(strayPointer, '.git'), { force: true }); mkdirSync(path.join(strayPointer, '.git'), { recursive: true });
   assert.equal(ownWorktreeMarker(strayPointer, hostWorktreesDirectory), false);
   rmSync(strayPointer, { recursive: true, force: true });
+  // The own-worktree registry is keyed by a path string, so membership must be
+  // compared through the same case normalization every other containment
+  // decision uses. Git prints the registered path with whatever casing it
+  // recorded at `worktree add` time, while the ignored-directory listing
+  // reports the casing on disk. When those disagree the lookup missed and a
+  // legitimate linked worktree of THIS repository was classified as an
+  // embedded repository — the same push block this exemption exists to remove.
+  let worktreeCasingSkews = 0;
+  const skewedWorktreeCasingExecute = (command, args, options) => {
+    const output = fixtureGitExecute(command, args, options);
+    if (args[0] !== 'worktree' || args[1] !== 'list') return output;
+    return String(output).replace(/^(worktree .*)session$/gm, (_record, prefix) => { worktreeCasingSkews += 1; return `${prefix}SESSION`; });
+  };
+  const skewedWorktreeCasingContainment = () => checkPrivateArtifactContainment({ root: worktreeHost, execute: skewedWorktreeCasingExecute });
+  // On a case-sensitive filesystem the two casings really are two different
+  // directories, so the registered path is genuinely absent and failing closed
+  // is correct. Only Windows compares paths case-insensitively.
+  if (process.platform === 'win32') await skewedWorktreeCasingContainment();
+  else await assert.rejects(skewedWorktreeCasingContainment, /session\/? \(embedded Git repository\)/);
+  assert(worktreeCasingSkews >= 1, 'the casing-skew harness must actually rewrite the registered worktree path, or this assertion proves nothing');
+  // The same disagreement from the other side: the registry keeps the casing it
+  // recorded while the ignored listing reports a differently cased directory.
+  // This direction is meaningful only on Windows — elsewhere the skewed path
+  // names a directory that does not exist.
+  if (process.platform === 'win32') {
+    let listingCasingSkews = 0;
+    const skewedListingCasingExecute = (command, args, options) => {
+      const output = fixtureGitExecute(command, args, options);
+      if (args[0] !== 'ls-files' || !args.includes('--ignored')) return output;
+      // NUL-separated raw path bytes: round-trip through latin1 so the rewrite
+      // cannot disturb any byte outside the segment being recased.
+      return Buffer.from(output.toString('latin1').replace(/\.claude\/worktrees\/session\//g, () => { listingCasingSkews += 1; return '.claude/worktrees/SESSION/'; }), 'latin1');
+    };
+    await checkPrivateArtifactContainment({ root: worktreeHost, execute: skewedListingCasingExecute });
+    assert(listingCasingSkews >= 1, 'the casing-skew harness must actually rewrite the ignored listing path, or this assertion proves nothing');
+  }
   const bareRepoHost = fixtureRepo('containment-bare-repository'); const bareRepoBase = git(bareRepoHost, ['rev-parse', 'HEAD']).trim(); const bareRepoPath = path.join(bareRepoHost, 'catalog.git'); git(bareRepoHost, ['init', '--bare', '--quiet', bareRepoPath]); execFileSync('git', ['--git-dir', bareRepoPath, 'hash-object', '-w', '--stdin'], { input: JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }), encoding: 'utf8', env: sanitizedFixtureGitEnv() }); mkdirSync(path.join(bareRepoPath, 'objects', 'info'), { recursive: true }); writeFileSync(path.join(bareRepoPath, 'objects', 'info', 'alternates'), '../alternate-objects\n');
   await assert.rejects(() => fixtureContainment(bareRepoHost), /catalog\.git \(bare Git repository\)/);
   git(bareRepoHost, ['add', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'synthetic bare repository']); git(bareRepoHost, ['rm', '--quiet', '-r', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'delete synthetic bare repository']); const bareRepoHead = git(bareRepoHost, ['rev-parse', 'HEAD']).trim();

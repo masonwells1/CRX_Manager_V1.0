@@ -1611,7 +1611,9 @@ function registeredWorktreeDirectories(root, execute) {
     const absolute = path.resolve(lexicalRoot, record.slice('worktree '.length).trim());
     if (!isContainedDirectory(absolute, lexicalRoot)) continue;
     if (!ownWorktreeMarker(absolute, worktreesDirectory)) continue;
-    registered.add(path.relative(lexicalRoot, absolute).split(path.sep).join('/'));
+    // Normalized like every other containment comparison: membership must not
+    // hinge on the casing `git worktree list --porcelain` happened to print.
+    registered.add(containmentPathKey(path.relative(lexicalRoot, absolute).split(path.sep).join('/')));
   }
   return registered;
 }
@@ -1637,7 +1639,7 @@ function worktreeEntryKind(root, repoPath, ownWorktrees = new Set()) {
       try {
         lstatSync(path.join(current, '.git'));
         // This checkout seen twice, not a foreign repository inside it.
-        if (ownWorktrees.has(segments.slice(0, index + 1).join('/'))) return 'own-worktree';
+        if (ownWorktrees.has(containmentPathKey(segments.slice(0, index + 1).join('/')))) return 'own-worktree';
         return 'embedded-repository';
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error;
