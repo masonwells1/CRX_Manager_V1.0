@@ -32,16 +32,16 @@ stored cents), asserted before the write. Row counts, order counts and similar c
 accompany that digest but may never be the only thing standing between an approval and a write.
 
 **Enforcement (hard, not prose).** `scripts/validate-sql-migrations.sh` now fails any migration
-stamped `20260811000000` or later that contains a top-level `UPDATE`/`DELETE` against a business-row
+stamped `20260810025160` or later that contains a top-level `UPDATE`/`DELETE` against a business-row
 table unless the file either (a) carries `-- APPROVED_SET_DIGEST: <64 hex>` *and* asserts that same
 hex in executable SQL before the write, or (b) explicitly waives it with
 `-- APPROVED_SET_DIGEST: NOT-REQUIRED - <reason>` for the case where there is no before-value to
 protect (backfilling a column the same migration just added). Rewrites inside a function body are
-runtime logic and are not checked. The gate is scoped by **date, not an allowlist**, so it needs no
-maintenance and leaves zero headroom for the next migration written; every migration before the
-cutoff is history, including the already-applied `20260810025159_backfill_stale_line_profit.sql`,
-which `AGENTS.md` forbids editing. This is the deterministic replay/baseline guard Codex asked for
-in place of editing applied SQL.
+runtime logic and are not checked. The gate is scoped by **timestamp, not an allowlist**, so it needs
+no maintenance; the cutoff sits one second past the already-applied
+`20260810025159_backfill_stale_line_profit.sql`, which `AGENTS.md` forbids editing, so that migration
+stays history and **every** migration written from here on is in force. This is the deterministic
+replay/baseline guard Codex asked for in place of editing applied SQL.
 
 **Hardened after review (same day).** The first cut of that guard did not enforce what it claimed,
 and a round-3 Codex review (`CRX-GUARD-001`) was right to say so. Three bypasses, all now closed:
@@ -67,12 +67,38 @@ The protected-table list was also too narrow: it covered the ordering and invoic
 `inventory`, `vendor_bills`, `vendor_payments`, `cost_history`, `prepay_credits`, and the rest of the
 financial state. It now covers all of them.
 
-**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 18
-synthetic migrations — twelve real bypass attempts, one waiver, and five shapes that must stay
+**Hardened again after a second review (same day).** A round-5 Codex review found four more bypasses
+in the hardened version. All closed:
+
+4. **The comparison accepted `=`.** `IF actual = '<approved>' THEN RAISE EXCEPTION` reads exactly
+   like a guard and is its precise inversion: it aborts when the data is *right* and writes when it
+   has *drifted*. Only a mismatch test now counts — `<>`, `!=`, or `IS DISTINCT FROM` (preferred, it
+   is NULL-safe). Equality is rejected outright with a message naming why.
+5. **"A hash appears somewhere above" was not a binding.** A migration could hash an unrelated table,
+   hand-set the compared variable to the literal, and pass. The guard now reads the **identifier on
+   the left of the mismatch** and requires *that* variable to be the one a hash was assigned into,
+   matched statement-by-statement so a multi-line `SELECT … INTO` still works.
+6. **Two blind spots in the function-body state machine.** A block comment naming `CREATE FUNCTION`
+   pinned the scanner in function-body mode and swallowed every rewrite after it; and a one-line
+   `CREATE FUNCTION … AS $$ … $$ LANGUAGE plpgsql;` opened that mode and never closed it. Block
+   comments are now stripped statefully before anything else, and the close is checked on the same
+   line as the open.
+7. **The cutoff left a hole.** Rounding up to the next midnight meant every later `20260810…`
+   migration was unguarded. It is now one second past the last applied stamp.
+8. **The waiver was a self-authored bypass.** Naming the tables was not enough — an author could
+   waive their own guard on any rewrite. The waiver is now restricted to its one honest use: every
+   table it names must get an `ADD COLUMN` in the same migration, i.e. there is genuinely no
+   pre-existing population to protect. Anything else is a `VIOLATION`.
+
+**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 23
+synthetic migrations — seventeen real bypass attempts, one waiver, and five shapes that must stay
 silent — runs the actual script over them, and asserts what it printed for each. It runs in
-`npm run test:correction-guards`. The test was itself verified by breaking the guard on purpose and
-watching eight cases go red, then restoring it and watching them go green. Per the standing rule that
-an untested guard is decoration, that red-then-green run is the evidence, not a reading of the diff.
+`npm run test:correction-guards`. The test was itself verified by breaking the guard six different
+ways on purpose — accepting `=`, dropping the block-comment stripper, un-closing the same-line
+function body, dropping the `ADD COLUMN` requirement, dropping the variable binding, and narrowing
+the table list — and watching each mutant turn exactly its own case(s) red, then restoring and
+watching all 23 go green. Per the standing rule that an untested guard is decoration, that
+red-then-green run is the evidence, not a reading of the diff.
 
 **Also settled here.** The permission entry `Read(//c/CRX_Manager/**)` was removed from the tracked
 `.claude/settings.local.json` (Codex finding 2). It had been added by an auto-approved prompt during

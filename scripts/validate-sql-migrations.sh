@@ -61,9 +61,11 @@ done
 # Only migrations stamped on or after the cutoff are held to this. Everything
 # before it is history — including 20260810025159_backfill_stale_line_profit.sql,
 # which is already APPLIED LIVE and therefore cannot be edited (AGENTS.md).
-# The cutoff is a date, not an allowlist, so it needs no maintenance and closes
-# with zero headroom for the next migration written.
-APPROVED_SET_CUTOFF=20260811000000
+# The cutoff sits one second past that stamp — not at the next midnight, which
+# would have left every later 20260810 migration unguarded. It is a timestamp,
+# not an allowlist, so it needs no maintenance, and every migration written from
+# here on is in force.
+APPROVED_SET_CUTOFF=20260810025160
 
 # Tables whose rows carry money, inventory, or customer-visible state. A
 # top-level rewrite of these is what needs binding; rewrites inside a function
@@ -345,13 +347,34 @@ for file in $ALL_SQL; do
       {
         raw[FNR] = $0
         line = tolower($0)
+        # Block comments first: a /* CREATE FUNCTION */ that survives here would
+        # pin the scanner in function-body mode and hide every later rewrite.
+        while (1) {
+          if (inblk) {
+            e = index(line, "*/")
+            if (e == 0) { line = ""; break }
+            line = substr(line, e + 2); inblk = 0
+          }
+          s = index(line, "/*")
+          if (s == 0) break
+          e = index(substr(line, s + 2), "*/")
+          if (e == 0) { line = substr(line, 1, s - 1); inblk = 1; break }
+          line = substr(line, 1, s - 1) " " substr(line, s + 2 + e + 1)
+        }
         sub(/--.*/, "", line)
         gsub(/'"'"'[^'"'"']*'"'"'/, " ", line)
         # Drop quoting BEFORE normalizing, so "public"."orders" survives as one
         # dotted token instead of splitting into public . orders.
         gsub(/"/, "", line)
-        if (line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?function/) { infn = 1 }
-        else if (infn && line ~ /language[ \t]+(plpgsql|sql)/) { infn = 0; next }
+        # Function-body mode. Both markers can share one line
+        # (CREATE FUNCTION f() RETURNS void AS $$ ... $$ LANGUAGE plpgsql;), so
+        # the close is checked on the same line as the open, not only after it.
+        if (line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?function/) {
+          infn = 1
+          if (line ~ /language[ \t]+(plpgsql|sql)/) { infn = 0 }
+          next
+        }
+        if (infn && line ~ /language[ \t]+(plpgsql|sql)/) { infn = 0; next }
         if (infn) next
         # Normalize every non-identifier character to a space. This also strips
         # quotes, so "public"."orders" collapses to the token public.orders.
@@ -397,32 +420,77 @@ for file in $ALL_SQL; do
       DIGEST_BOUND=0
       DIGEST_WHY=""
       if [ -n "$DIGEST_HEX" ]; then
-        # Where is that hex first COMPARED in executable sql (comments stripped)?
-        # Mentioning it — selecting it into a variable, logging it — is not a
-        # comparison, so those lines are skipped rather than accepted.
-        DIGEST_EXEC_LINE=$(awk -v hex="$DIGEST_HEX" '
+        # Where is that hex first compared for INEQUALITY in executable sql?
+        # Only a mismatch operator counts. `IF actual = '<approved>' THEN RAISE`
+        # reads like a guard and is the exact inversion of one: it aborts when
+        # the data is right and writes when it has drifted. Equality is not a
+        # near-miss here, it is the bypass, so it is rejected outright.
+        #
+        # Also capture the identifier on the left of that operator, so the next
+        # check can prove THAT variable is the one the hash was computed into —
+        # otherwise any unrelated hash call anywhere above satisfies the guard.
+        DIGEST_CMP=$(awk -v hex="$DIGEST_HEX" '
           {
             l = tolower($0); sub(/--.*/, "", l)
-            if (index(l, hex) == 0) next
-            if (l ~ /(<>|!=|=|is[[:space:]]+distinct[[:space:]]+from)/) { print FNR; exit }
+            p = index(l, hex)
+            if (p == 0) next
+            pre = substr(l, 1, p - 1)
+            # Drop string literals from the prefix so an operator or an @ inside
+            # quoted text cannot be mistaken for the comparison itself.
+            gsub(/'"'"'[^'"'"']*'"'"'/, " ", pre)
+            gsub(/is[ \t]+distinct[ \t]+from/, "@", pre)
+            gsub(/<>/, "@", pre)
+            gsub(/!=/, "@", pre)
+            k = 0
+            for (j = length(pre); j >= 1; j--) { if (substr(pre, j, 1) == "@") { k = j; break } }
+            if (k == 0) next
+            lhs = substr(pre, 1, k - 1)
+            sub(/[^a-z0-9_]+$/, "", lhs)
+            if (match(lhs, /[a-z0-9_]+$/)) { print FNR "\t" substr(lhs, RSTART, RLENGTH) }
+            else { print FNR "\t" }
+            exit
           }
         ' "$file")
+        DIGEST_EXEC_LINE=$(printf '%s' "$DIGEST_CMP" | cut -f1)
+        DIGEST_VAR=$(printf '%s' "$DIGEST_CMP" | cut -f2)
         DIGEST_MENTION_LINE=$(awk -v hex="$DIGEST_HEX" '
           { l = tolower($0); sub(/--.*/, "", l); if (index(l, hex) > 0) { print FNR; exit } }
         ' "$file")
         if [ -z "$DIGEST_EXEC_LINE" ] && [ -n "$DIGEST_MENTION_LINE" ]; then
-          DIGEST_WHY="the digest is mentioned at line $DIGEST_MENTION_LINE but never compared — no comparison operator on that line"
+          DIGEST_WHY="the digest is mentioned at line $DIGEST_MENTION_LINE but never tested for a MISMATCH — use <>, != or IS DISTINCT FROM (an = test aborts when the data is right and writes when it has drifted)"
         elif [ -z "$DIGEST_EXEC_LINE" ]; then
           DIGEST_WHY="the digest appears only in a comment — it is documented, never compared"
         elif [ "$DIGEST_EXEC_LINE" -ge "$FIRST_REWRITE_LINE" ]; then
           DIGEST_WHY="the digest is compared at line $DIGEST_EXEC_LINE, AFTER the first write at line $FIRST_REWRITE_LINE"
         else
           # The hex must be compared against something the migration COMPUTED,
-          # not against another literal. A hash call over the approved set has
-          # to appear somewhere before the write.
-          COMPUTED=$(awk -v fl="$FIRST_REWRITE_LINE" '
-            FNR < fl { l = tolower($0); sub(/--.*/, "", l); print l }
-          ' "$file" | grep -cE '(md5|sha256|sha512|digest|encode)[[:space:]]*\(' || true)
+          # not against another literal — and specifically against THIS variable.
+          # "A hash appears somewhere above" is not a binding: a migration could
+          # hash an unrelated table, then compare a hand-set variable to the
+          # literal and pass. So require the same identifier that sits on the
+          # left of the mismatch to be the one the hash result was assigned to.
+          #
+          # Statement-level, not line-level: a SELECT ... INTO routinely spans
+          # several lines, so the text before the write is joined and split on
+          # `;`, and the hash call and the assignment must land in one statement.
+          DIGEST_VAR_RE=$(printf '%s' "$DIGEST_VAR" | sed 's/[^a-z0-9_]//g')
+          if [ -z "$DIGEST_VAR_RE" ]; then
+            COMPUTED=0
+          else
+            COMPUTED=$(awk -v fl="$FIRST_REWRITE_LINE" -v var="$DIGEST_VAR_RE" '
+              FNR >= fl { next }
+              { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
+              END {
+                n = split(buf, st, /;/)
+                for (i = 1; i <= n; i++) {
+                  s = st[i]
+                  if (s !~ /(md5|sha224|sha256|sha384|sha512|digest|encode)[ \t]*\(/) continue
+                  if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)")) { print "yes"; exit }
+                  if (s ~ (var "[ \t]*:=")) { print "yes"; exit }
+                }
+              }
+            ' "$file" | grep -c yes || true)
+          fi
 
           # Fail-closed: the mismatch branch must abort. Require the RAISE to sit
           # inside the SAME IF block as the comparison — a RAISE that merely
@@ -443,7 +511,7 @@ for file in $ALL_SQL; do
           ' "$file" | grep -c yes || true)
 
           if [ "$COMPUTED" -eq 0 ]; then
-            DIGEST_WHY="the digest is compared against another literal — nothing before line $FIRST_REWRITE_LINE computes a hash (md5/sha256/digest/encode) over the approved set"
+            DIGEST_WHY="the value compared to the digest at line $DIGEST_EXEC_LINE is not one this migration computed — no statement before line $FIRST_REWRITE_LINE assigns a hash (md5/sha256/digest/encode) into '${DIGEST_VAR:-<no identifier>}'"
           elif [ "$RAISE_IN_BRANCH" -eq 0 ]; then
             DIGEST_WHY="the comparison at line $DIGEST_EXEC_LINE does not RAISE EXCEPTION inside its own IF block — a mismatch would not abort"
           else
@@ -455,16 +523,52 @@ for file in $ALL_SQL; do
       if [ "$DIGEST_BOUND" -eq 1 ]; then
         : # bound to an approved-set digest, asserted fail-closed before the write
       elif [ -n "$OPT_OUT" ]; then
+        # The waiver has exactly one honest use: the migration is populating a
+        # column IT JUST ADDED, so there is no pre-existing approved population
+        # to bind to. Anything else is the author waiving their own guard, which
+        # is not a guard. So a waiver must name every table AND every named
+        # table must get an ADD COLUMN in this same migration.
+        ADDED_COL_TABLES=$(awk '
+          { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
+          END {
+            n = split(buf, st, /;/)
+            for (i = 1; i <= n; i++) {
+              s = st[i]
+              if (s !~ /alter[ \t]+table/) continue
+              if (s !~ /add[ \t]+column/) continue
+              gsub(/"/, "", s)
+              if (match(s, /alter[ \t]+table[ \t]+(if[ \t]+exists[ \t]+)?(only[ \t]+)?[a-z0-9_.]+/)) {
+                t = substr(s, RSTART, RLENGTH)
+                sub(/.*[ \t]/, "", t)
+                sub(/^public\./, "", t)
+                print t
+              }
+            }
+          }
+        ' "$file" | sort -u)
+
         MISSING_TBL=""
+        UNADDED_TBL=""
         while IFS= read -r t; do
           [ -z "$t" ] && continue
-          echo "$OPT_OUT" | grep -qiE "(^|[^a-z0-9_])${t}([^a-z0-9_]|$)" || MISSING_TBL="$MISSING_TBL $t"
+          if ! echo "$OPT_OUT" | grep -qiE "(^|[^a-z0-9_])${t}([^a-z0-9_]|$)"; then
+            MISSING_TBL="$MISSING_TBL $t"
+          elif ! printf '%s\n' "$ADDED_COL_TABLES" | grep -qxF "$t"; then
+            UNADDED_TBL="$UNADDED_TBL $t"
+          fi
         done <<< "$REWRITE_TABLES"
         if [ -n "$MISSING_TBL" ]; then
           echo "VIOLATION: $file"
           echo "  APPROVED_SET_DIGEST: NOT-REQUIRED does not name every table it waives."
           echo "  Unnamed:$MISSING_TBL"
           echo "  A waiver must list each business table it covers, so it cannot be a blanket pass."
+          echo ""
+          VIOLATIONS=$((VIOLATIONS + 1))
+        elif [ -n "$UNADDED_TBL" ]; then
+          echo "VIOLATION: $file"
+          echo "  APPROVED_SET_DIGEST: NOT-REQUIRED is only for backfilling a column this"
+          echo "  migration adds. These tables are rewritten but get no ADD COLUMN here:$UNADDED_TBL"
+          echo "  Existing rows are being rewritten — bind them with an approved-set digest."
           echo ""
           VIOLATIONS=$((VIOLATIONS + 1))
         else

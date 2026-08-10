@@ -22,12 +22,20 @@ const SCRIPT = join(HERE, 'validate-sql-migrations.sh');
 const HEX = 'a'.repeat(64);
 const OTHER_HEX = 'b'.repeat(64);
 
-/** A digest block that is genuinely fail-closed: computed, compared, aborts. */
+/**
+ * A digest block that is genuinely fail-closed: computed, compared, aborts.
+ *
+ * sha256 via encode(digest(...), 'hex'), not md5 — the declared digest is 64
+ * hex characters, and an md5 fixture would compare a 32-character value to it
+ * and could never match. The fixture has to be a migration someone could
+ * actually ship, or it tests the guard against a shape that does not exist.
+ */
+const HASH_EXPR = `encode(digest(string_agg(id::text, ',' ORDER BY id), 'sha256'), 'hex')`;
 const GOOD_DIGEST_BLOCK = `DO $$
 DECLARE actual text;
 BEGIN
-  SELECT md5(string_agg(id::text, ',' ORDER BY id)) INTO actual FROM public.orders WHERE stale;
-  IF actual <> '${HEX}' THEN
+  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE stale;
+  IF actual IS DISTINCT FROM '${HEX}' THEN
     RAISE EXCEPTION 'APPROVED_SET_DRIFTED: expected ${HEX}, got %', actual;
   END IF;
 END $$;`;
@@ -83,16 +91,64 @@ const CASES = [
     expect: 'violation',
     sql:
       `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
-      `  SELECT md5(string_agg(id::text, ',' ORDER BY id)) INTO actual FROM public.orders;\n` +
-      `  IF actual <> '${HEX}' THEN\n    RAISE NOTICE 'drifted, carrying on';\n  END IF;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders;\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n    RAISE NOTICE 'drifted, carrying on';\n  END IF;\n` +
       `  IF false THEN\n    RAISE EXCEPTION 'unreachable';\n  END IF;\n` +
       `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    // The inversion, not a near-miss: this aborts when the data is RIGHT and
+    // writes when it has drifted. It is the most dangerous shape here because
+    // it reads exactly like a guard.
+    name: 'equality polarity: IF actual = digest THEN RAISE (writes on drift)',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders;\n` +
+      `  IF actual = '${HEX}' THEN\n    RAISE EXCEPTION 'drift';\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    // A real hash is computed — over the right table, even — but into a
+    // different variable than the one compared. The compared value is hand-set.
+    name: 'hash computed into a different variable than the one compared',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text; other text;\nBEGIN\n` +
+      `  SELECT ${HASH_EXPR} INTO other FROM public.orders;\n` +
+      `  actual := '${HEX}';\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n    RAISE EXCEPTION 'drift';\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    // A block comment mentioning CREATE FUNCTION must not pin the scanner in
+    // function-body mode and swallow every rewrite after it.
+    name: 'block comment naming CREATE FUNCTION does not hide the rewrite',
+    expect: 'violation',
+    sql: `/* CREATE FUNCTION public.decoy() is not defined here */\nUPDATE public.orders SET total_profit = 0;\n`,
+  },
+  {
+    name: 'one-line CREATE FUNCTION ... LANGUAGE plpgsql closes before the rewrite',
+    expect: 'violation',
+    sql:
+      `CREATE OR REPLACE FUNCTION public.f_inline() RETURNS void AS $$ BEGIN NULL; END $$ LANGUAGE plpgsql;\n` +
+      `UPDATE public.orders SET total_profit = 0;\n`,
   },
   {
     name: 'waiver that does not name the table it waives',
     expect: 'violation',
     sql:
       `-- APPROVED_SET_DIGEST: NOT-REQUIRED (invoices) - column added by this migration\n` +
+      `UPDATE public.orders SET total_profit = 0;\n`,
+  },
+  {
+    // Naming the table is not enough. The waiver's only honest use is a column
+    // this migration adds; rewriting a pre-existing column is the author
+    // waiving their own guard.
+    name: 'waiver on a table that gets no ADD COLUMN in this migration',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: NOT-REQUIRED (orders) - reviewed by hand\n` +
       `UPDATE public.orders SET total_profit = 0;\n`,
   },
   {
@@ -108,10 +164,11 @@ const CASES = [
 
   // ── must WARN (accepted, but never silent) ──────────────────────────────
   {
-    name: 'waiver naming every table it waives',
+    name: 'waiver naming every table, backfilling a column this migration adds',
     expect: 'warning',
     sql:
       `-- APPROVED_SET_DIGEST: NOT-REQUIRED (orders) - backfills a column this migration adds\n` +
+      `ALTER TABLE public.orders ADD COLUMN total_profit bigint;\n` +
       `UPDATE public.orders SET total_profit = 0;\n`,
   },
 
