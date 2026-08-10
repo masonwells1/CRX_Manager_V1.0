@@ -4,7 +4,7 @@
 
 Date pulled: 2026-08-09 · Corrected and extended: 2026-08-10 · Project: `rhyzpcqhnizqbxphqdkr` (production) · Branch base: `origin/main` @ `37c4bca6`
 
-> **Correction pass, 2026-08-10.** Review feedback on PR #362 challenged two claims in the first draft. Both challenges were right. The `_is_admin_override()` safety claim was **false as stated** and has been rewritten with the actual reason (§C). Findings #6 and #7 were labelled live-confirmed on the strength of chains that do not contain the code those findings run through; the missing fifteen functions have now been fingerprinted against production (§D). Three further errors — a miscount, a wrong migration list, and an unverified `MAINTAIN` claim — were found and fixed in the same pass. A second round raised a `search_path` disagreement between the repo and production; chasing it produced a **wrong** finding, which a third round caught and which is now **retracted in place** (§A) — there is no drift. The third round also added a fifth ungated year-end RPC to finding #9 (§D). **No verdict changed. Every correction is marked in place rather than silently overwritten.**
+> **Correction pass, 2026-08-10.** Review feedback on PR #362 challenged two claims in the first draft. Both challenges were right. The `_is_admin_override()` safety claim was **false as stated** and has been rewritten with the actual reason (§C). Findings #6 and #7 were labelled live-confirmed on the strength of chains that do not contain the code those findings run through; the missing fifteen functions have now been fingerprinted against production (§D). Three further errors — a miscount, a wrong migration list, and an unverified `MAINTAIN` claim — were found and fixed in the same pass. A second round raised a `search_path` disagreement between the repo and production; chasing it produced a **wrong** finding, which a third round caught and which is now **retracted in place** (§A) — there is no drift. The third round also added a fifth ungated year-end RPC to finding #9 (§D), and showed that the admin-override rewrite from round one was *itself* still incomplete — it enumerated callers, and missed a second setter syntax and every wrapper reaching a setter indirectly. §C no longer rests on that enumeration; it now rests on a property that holds for all 26 setters at once. **No verdict changed. Every correction is marked in place rather than silently overwritten.**
 
 ---
 
@@ -227,14 +227,26 @@ HIGH #1 is confirmed by direct quotation from production.
 
 **`_is_admin_override()`** — reads `current_setting('app.admin_override', true) = 'true'`. This is the escape hatch that lets the transition triggers above be bypassed, so who can set it matters a great deal.
 
-**Correction to an earlier draft of this document, which got the reason wrong.** That draft claimed no `authenticated`-executable function sets the flag. **That is false.** Seven functions granted `EXECUTE` to `authenticated` do set it: `assign_job_applicator`, `cancel_delivery`, `cancel_return`, `revert_quote_status`, `unapply_credit_memo`, `unpost_invoice`, `void_delivery`.
+**This paragraph has now been wrong twice, and the second correction is the important one.** The first draft claimed no `authenticated`-executable function sets the flag — false. The second draft corrected that to a list of seven direct setters and rested the safety conclusion partly on having enumerated them. **That enumeration was also incomplete**, for a reason worth recording: it searched for `set_config(`, and the database sets this flag in *two* syntaxes. `SET LOCAL app.admin_override = 'true'` is the other one, and a `set_config`-only search cannot see it. It also counted only functions that set the flag *themselves*, ignoring wrappers that reach a setter through a private callee — `cancel_order` and `convert_quote_to_order` are both `authenticated`-executable and both reach one that way.
 
-**The conclusion still holds, but for two different reasons, both verified live:**
+**Enumerating callers was the wrong basis for the conclusion.** It is fragile — it has now failed twice — and it is unnecessary, because a single property settles the question for every path at once, direct or transitive, known or missed.
 
-1. **The flag is transaction-local.** Every one of the seven calls `set_config('app.admin_override', 'true', true)`. That third argument, `true`, means *local to the current transaction* — the setting cannot survive into a later statement or leak onto a pooled connection reused by another user. Each is also paired with an explicit reset to `'false'`.
-2. **Every one of the seven authorises the caller before it ever reaches the override.** Each raises `AUTH_REQUIRED`, `ACTOR_MISMATCH`, `INSUFFICIENT_ROLE`, or an explicit role check first. Measured as character offsets into each live body, the first authorisation check always precedes the first `set_config` — by 906 characters in the closest case (`assign_job_applicator`, check at 146, override at 1052) and by 5,758 in the widest (`revert_quote_status`, 322 vs 6,080).
+**The whole database contains 26 functions that set this flag. Every one of them sets it transaction-locally. Verified live:**
 
-So the override is still **not a client-reachable bypass** — but the safety comes from in-function authorisation and transaction scoping, not from the grants. Anyone hardening these functions must preserve *both* properties; removing the early authorisation check would open the bypass even though the grant list is unchanged.
+| How the flag is set | Count | Scope |
+|---|---|---|
+| `set_config('app.admin_override', …, true)` | 18 | transaction-local (`is_local = true`) |
+| `SET LOCAL app.admin_override = …` | 9 | transaction-local by definition |
+| `set_config('app.admin_override', …, false)` | **0** | *would* be session-scoped |
+| `SET app.admin_override = …` (no `LOCAL`) | **0** | *would* be session-scoped |
+
+(18 + 9 exceeds 26 because one function uses both spellings.)
+
+**Zero session-scoped setters exist.** The override therefore cannot outlive the transaction that set it on *any* code path. It cannot survive into a later statement, and it cannot leak onto a pooled connection reused by another user. That holds without knowing which functions are reachable, which is exactly why it is the claim worth relying on.
+
+The in-function authorisation checks are a real second layer, and they were measured on the eight functions that set the flag directly and are `authenticated`-executable — `assign_job_applicator`, `cancel_delivery`, `cancel_return`, `revert_quote_status`, `transfer_invoice_to_job`, `unapply_credit_memo`, `unpost_invoice`, `void_delivery`. In each, an `AUTH_REQUIRED` / `ACTOR_MISMATCH` / `INSUFFICIENT_ROLE` or explicit role check precedes the override, by 906 characters in the closest case (`assign_job_applicator`) and 5,758 in the widest (`revert_quote_status`). **This is defence in depth, not the load-bearing argument** — the transaction-locality above is.
+
+So the override is **not a client-reachable bypass**. The property to preserve when hardening any of these functions is the transaction-local scope: a future change that sets this flag with `is_local = false`, or with a bare `SET`, would open a real bypass no grant review would catch. **Worth a guard** — this is a one-line, mechanically checkable rule, and per the project's own preference for hard scaffolding over prose it belongs in a test rather than in this paragraph. Recorded for the triage, not acted on here.
 
 ---
 
@@ -357,3 +369,4 @@ Two smaller items to carry into the triage, neither urgent and neither requiring
 
 - **Wave C:** widen the scope from four functions to five. `get_batch_year_end_summaries` (§D, #9) is a `SECURITY DEFINER` bulk loop over an arbitrary array of customer IDs with no caller check, granted to `authenticated`. Gating the four singles leaves it wide open, and the wave's verification must call the batch endpoint.
 - **Wave B:** add `REVOKE TRUNCATE` on the four ordering-cycle tables (§E), following the precedent already merged for `inventory`.
+- **Any wave, cheap:** add a guard test asserting that no `public` function sets `app.admin_override` session-scoped — no `set_config(…, false)` and no bare `SET app.admin_override`. All 26 setters are transaction-local today (§C), and that is the single property the whole override-safety argument rests on. It is one regex over `pg_proc.prosrc` and it turns a paragraph of prose into something that fails loudly.
