@@ -22,7 +22,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 183 assertions; the idempotency reference
+- The actor-binding suite passes at 189 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -62,6 +62,10 @@ PR workflow.
   exact staged INSERT-branch regression before restoration.
 - The columnless MERGE INSERT spelling was independently narrowed back to the
   column-list-only check and exposed its own regression before restoration.
+- Five legacy-executor decisions were independently weakened or broadened and
+  each exposed its exact regression or safe-control failure: direct recursive
+  recognition, narrow callable scoping, named `sql_query` recognition, opaque
+  executor-expression refusal, and direct-safe-literal allowance.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -169,6 +173,18 @@ PR workflow.
   regression before restoration, the restored actor suite passed 183
   assertions, and the commit completed the full pre-commit barrier without a
   hook bypass.
+- The exact-SHA review of `eb958374c64afb9e237c07dfe8e71277e19b3ad4`
+  found that CRX's legacy SECURITY DEFINER `execute_sql_readonly(text)` can
+  execute a SELECT containing cron.schedule while the outer SQL literal was
+  masked as data. Its snapshot probe proved the approved base denied that
+  delayed actor-DDL packet while the candidate allowed it.
+- Fix commit `04bc67f868fa7b144ab1c9e3b3e8968407338069` recursively
+  inspects direct function-bearing SQL for that exact executor and refuses
+  opaque/staged executor expressions. The restored actor suite passed 189
+  assertions, idempotency remained green at 86, real subprocess probes denied
+  direct nested and staged unsafe SQL while allowing a direct harmless query
+  and an unrelated documentation callable, and the commit completed the full
+  pre-commit barrier without a hook bypass.
 
 ## GOVERNED STATUS
 
@@ -200,6 +216,10 @@ PR workflow.
 - The review of `7e7c67c6` returned one HIGH blocker for a mixed-branch MERGE.
   It was reproduced and fixed in `1fbcc103`; its BLOCKERS verdict likewise does
   not approve the final documentation HEAD.
+- The review of `eb958374` returned one HIGH blocker for nested pg_cron SQL
+  passed through `execute_sql_readonly`. It was reproduced and fixed in
+  `04bc67f8`; its BLOCKERS verdict likewise does not approve the final
+  documentation HEAD.
 
 ## REMAINING LANDING WORK
 
@@ -216,7 +236,7 @@ outward-action approval into a receiving task. No database action is needed.
 ## GATES AND BLOCKERS
 
 - The prior `/ship` review cycle reached its three-round cap. Its blocker and the
-  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, `3c0f8e75`, `9c2552ca`, `f221c283`, and `7e7c67c6` pg_cron blockers have now been
+  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, `3c0f8e75`, `9c2552ca`, `f221c283`, `7e7c67c6`, and `eb958374` blockers have now been
   addressed locally, but the branch remains unpublished until a new exact-SHA
   governed review independently returns CLEAN.
 - Historical blocker evidence:
