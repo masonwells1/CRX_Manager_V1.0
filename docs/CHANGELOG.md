@@ -269,6 +269,54 @@ that fix (rebased onto the new `main`) plus the two Codex findings raised agains
 
 Coverage: apply-guard 79 assertions, ordering-lib 18, `agent-manifest-parity` clean.
 
+## 2026-08-09 — Team Board delegated completion shipped (database live, frontend in PR #351)
+
+Assigning a to-do to a teammate on the Team Board was effectively broken: the checkbox
+wrote straight to the table, and the creator-or-admin row policy silently rejected the
+assignee, so their click did nothing. Delegation is now governed by an RPC and the
+notification path is hardened.
+
+**Live database changes (owner-approved, applied this session).**
+
+- `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
+  `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
+  with a pinned `search_path`, taking the actor from `auth.uid()` so it cannot be forged.
+  Authorization (creator, current assignee, or active admin) runs *before* the idempotency
+  replay, and the function reports the row's actual state so a no-op cannot rewrite
+  `completed_by`. Also adds the assignment trigger that files one `task_assigned`
+  notification, staying silent on self-assignment and unchanged assignees. Revoked from
+  PUBLIC and anon; granted to authenticated only.
+- `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
+  closes the gap review found afterwards: a deactivated profile whose token had not yet
+  expired could satisfy the legacy creator-only insert policy and make the owner-run
+  trigger notify an active teammate. Now the insert policy requires an active profile and
+  the trigger independently rejects an inactive effective actor. `tnotes_update` is
+  deliberately unchanged.
+
+Both migrations cleared the `rls-security-reviewer` and `migration-drift-reviewer` charters
+with CLEAN machine verdicts on the exact file content before apply, and both disk files were
+renamed content-identically to their server-assigned ledger versions.
+
+**Proven against live, by rollback-only probes rather than tests alone.** An active
+non-admin assignee completed a note they did not create, with `completed_by` stamped from
+`auth.uid()` and exactly one notification filed; an unrelated employee was refused with
+`NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile was refused at the row-policy layer;
+and with that layer deliberately bypassed, the trigger's own guard raised `PROFILE_INACTIVE`.
+The normal assignment and completion path was re-checked afterwards and was unaffected.
+
+**Frontend (pushed to PR #351, not yet merged — users do not have it).** Team Board calls the
+RPC instead of writing the table, guards against double-submit, and maps six new error codes
+to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
+are not the creator, assignee, or an admin. Notification deep-links now route team notes to
+the board, and the deep-link fetch no longer waits on a populated list before resolving.
+
+**Not done.** The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` still
+needs its external `SMOKE_PASS_ROLLBACK` terminal; it is a manual `npm run smoke` spec, not
+CI. `.claude/schema-registry.json` was stale at `20260809130108` when this entry was first
+written; the merge into `main` on 2026-08-10 moved its high-water to `20260810010308` and
+added the two migrations below to its applied list. None of these changes alter a table,
+column, constraint, or enum, so no schema-shape section of that file moved.
+
 ## 2026-08-09 — Line-profit precision repair (live), dependency updates, and a public-repo disclosure guard
 
 Orchestration session. No application code was authored here. Two durable outcomes: one
@@ -560,6 +608,15 @@ failure did not reproduce here — it passes with 29 assertions, and `agent-mani
   - `51582137 chore: commit auto-added local permission entry`
   - `c6c45fb5 docs: record Mason's four foundation-ultra-review owner decisions`
   - `f5811338 audit: 2026-08-08 foundation ultra review + bucket-1 doc/test fixes`
+
+## 2026-08-08 — Read-only audit of the Team Board to-do/delegation feature; added…
+
+Read-only audit of the Team Board to-do/delegation feature; added docs/audits/team-board-todo-audit-2026-08-08.md (branch claude/todo-list-audit-hoxpl5, draft PR #351). Key findings: tnotes_update RLS blocks assignees from completing delegated tasks, task assignment sends no notification, note deep-links broken in TeamBoard and Notifications, escalation column unused; board dormant since 2026-03-20. No code, migration, or live-data changes.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `6bb86d18 docs: add Team Board / to-do list functionality audit (2026-08-08)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
 
 ## 2026-08-07 — Governed Software Factory REMOVED
 
