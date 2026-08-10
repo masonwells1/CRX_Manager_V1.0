@@ -461,9 +461,28 @@ describe('Idempotency operation literals in latest disk migrations', () => {
 
   it('regression guard: restore_quote_version lookup stays scoped to its own operation', () => {
     // Codex 2026-06-08 LOW — the lookup originally filtered on the key only.
-    const def = defs.get('restore_quote_version');
-    expect(def).toBeDefined();
-    expect(def!.body).toMatch(/operation\s*=\s*'restore_quote_version'/i);
+    // 20260810180002 wraps the function for below-cost approval and renames
+    // the idempotent body emitted by 20260810180001. Pin both halves so the
+    // disk scanner does not mistake the intentionally thin public wrapper for
+    // loss of operation scoping.
+    const wrapper = defs.get('restore_quote_version');
+    expect(wrapper).toBeDefined();
+    expect(wrapper!.body).toContain('_restore_quote_version_below_cost_impl_20260810');
+
+    const snapshotMigration = readFileSync(
+      join(MIGRATIONS_DIR, '20260810180001_quote_items_cost_at_quote_snapshot.sql'),
+      'utf8'
+    );
+    const enforcementMigration = readFileSync(
+      join(MIGRATIONS_DIR, '20260810180002_enforce_below_cost_admin_approval.sql'),
+      'utf8'
+    );
+    expect(snapshotMigration).toMatch(
+      /CREATE OR REPLACE FUNCTION public\._restore_quote_version_owner_impl[\s\S]*?operation\s*=\s*'restore_quote_version'/i
+    );
+    expect(enforcementMigration).toMatch(
+      /ALTER FUNCTION public\.restore_quote_version[\s\S]*?RENAME TO _restore_quote_version_below_cost_impl_20260810/i
+    );
   });
 
   it('disk scan found a meaningful number of function definitions (sanity)', () => {
