@@ -1288,7 +1288,7 @@ git() { return 0; }
   assert(ci.includes('types: [opened, reopened, synchronize, edited]'));
   assert(ci.includes("if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'"));
   const ciCheckoutBlocks = ci.split('uses: actions/checkout@v7').slice(1);
-  assert.equal(ciCheckoutBlocks.length, 4, 'CI checkout count changed; review least-privilege settings');
+  assert.equal(ciCheckoutBlocks.length, 5, 'CI checkout count changed; review least-privilege settings');
   for (const block of ciCheckoutBlocks) {
     const checkout = block.slice(0, block.indexOf('\n      - name:'));
     assert(checkout.includes('persist-credentials: false'), 'every CI checkout must drop the GitHub token');

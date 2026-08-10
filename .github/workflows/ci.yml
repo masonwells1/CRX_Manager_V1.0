@@ -229,6 +229,14 @@ jobs:
           node-version-file: '.nvmrc'
 
       - name: Phase 3C private-artifact regression tests (win32 path semantics)
+        # The hosted runner points TEMP at an 8.3 short path
+        # (`C:\Users\RUNNER~1\...`). Node's `os.tmpdir()`/`realpathSync` keep the
+        # short form while Git expands it, so a fixture repository created under
+        # the default TEMP can never equal `git rev-parse --show-toplevel` and
+        # every canonical-root check fails. `runner.temp` is a plain long path.
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
         run: node scripts/supplier-pricing-phase3-private-artifacts.test.mjs
 
   e2e-smoke:

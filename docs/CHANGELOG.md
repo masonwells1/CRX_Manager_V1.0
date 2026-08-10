@@ -53,6 +53,19 @@ green. A `Phase 3C Containment (Windows)` job now runs this suite on
 `windows-latest`. The suite imports only Node builtins and sibling scripts, so
 that leg needs Git and Node but no `npm ci`.
 
+Standing that job up surfaced a pre-existing incompatibility between this suite
+and the hosted Windows runner, which points `TEMP` at an 8.3 short path
+(`C:\Users\RUNNER~1\...`). The suite builds its fixture repositories under
+`os.tmpdir()`, and Node's `realpathSync` keeps the short form while Git expands
+it, so a fixture root passed its own canonical check and then never equalled
+`git rev-parse --show-toplevel` — every canonical-root assertion failed. That
+was reproduced locally against a deliberately short-named directory before
+being fixed; the job now runs with `TMP`/`TEMP` set to `runner.temp`, a plain
+long path. The guard itself is unchanged: the fix corrects the test
+environment, not the check. The suite also pins the number of CI checkout steps
+so each new one gets a least-privilege review, and this job's checkout drops the
+GitHub token like the other four.
+
 Raised by CodeRabbit on PR #359 and deferred there only because a new commit
 would have discarded that PR's banked Vercel status while the daily build
 quota was exhausted.
