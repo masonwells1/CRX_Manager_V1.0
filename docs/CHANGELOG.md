@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-10 — Pricing audit follow-through: cost snapshots and report unification…
 
+**Local takeover update (not live yet).** The fresh exact-SHA review correctly refused the old
+handoff's plan to defer server-side below-cost enforcement. The branch now includes
+`20260810144144_enforce_below_cost_admin_approval.sql`: one shared PostgreSQL wall for all seven
+sell-side write RPCs, active-admin-only overrides, locked current Product cost, an immutable
+same-transaction approval audit, and authoritative product-swap / price-order cost math. The UI
+now denies sales-rep approval and carries the fresh order-edit / price-order reason inside the
+existing JSON payload, so public RPC signatures remain rollout-compatible. Exact catalog,
+supplier-adoption and margin figures were also removed from the public audit document. This work
+is local and has not been pushed, merged, or applied live yet.
+
 Pricing audit follow-through. The two settled migrations — snapshot-cost report unification and the
 quote-time cost snapshot — went through roughly 41 Codex rounds to green on PR #350, which is now
 mergeable. The return-credit COGS reversal was split to its own parked PR #361 at Mason's direction:
@@ -37,6 +47,7 @@ has no caller until the deferred `Reports.tsx` switch lands after the migration 
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - `supabase/migrations/20260810135537_snapshot_cost_reporting.sql`
   - `supabase/migrations/20260810135538_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260810144144_enforce_below_cost_admin_approval.sql`
 
 ## 2026-08-09 — Returns migration split out; quote profit settled on the report boundary
 

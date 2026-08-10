@@ -728,6 +728,10 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           cost: it.cost_cents / 100,
         }));
       if (belowCostLines.length > 0) {
+        if (profile?.role !== 'admin') {
+          toast('error', 'Only an active admin can approve an invoice below cost. Ask an admin to review it.');
+          return;
+        }
         belowCostReason = await new Promise<string | null>((resolve) =>
           setBelowCostPrompt({ lines: belowCostLines, resolve })
         );

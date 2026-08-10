@@ -1488,6 +1488,10 @@ export default function QuoteBuilder() {
         cost: item.current_cost,
       }));
       if (belowCostLines.length > 0) {
+        if (!isAdmin) {
+          toast('error', 'Only an active admin can approve a quote below cost. Ask an admin to review it.');
+          return null;
+        }
         // What was actually approved: which product, at which price, against
         // which cost, IN WHAT QUANTITY. A retry may reuse the reason only while
         // all four are unchanged. A rejection that stored no idempotency result

@@ -521,6 +521,10 @@ export default function OrderDetail() {
         .filter((item) => item.cost > 0 && item.price < item.cost)
         .map((item) => ({ productName: item.name, price: item.price, cost: item.cost }));
       if (belowCostLines.length > 0) {
+        if (profile.role !== 'admin') {
+          toast('error', 'Only an active admin can approve an order below cost. Ask an admin to review it.');
+          return;
+        }
         belowCostReason = await new Promise<string | null>((resolve) =>
           setBelowCostPrompt({ lines: belowCostLines, resolve })
         );
@@ -554,11 +558,14 @@ export default function OrderDetail() {
           }));
 
         const itemsPayload = [...existingPayload, ...newPayload];
+        const guardedItemsPayload = belowCostReason
+          ? itemsPayload.map((item) => ({ ...item, below_cost_reason: belowCostReason }))
+          : itemsPayload;
 
         const idemKey = updateOrderIdem.getKey();
         const { data, error } = await supabase.rpc('update_order_items', {
           p_order_id: id!,
-          p_items: itemsPayload,
+          p_items: guardedItemsPayload,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
@@ -576,19 +583,6 @@ export default function OrderDetail() {
           throw error;
         }
         assertRpcResult(data, 'update_order_items');
-
-        // update_order_items carries no notes (order-level or per-line), so the
-        // below-cost approval reason is recorded on the order's activity trail.
-        if (belowCostReason && order) {
-          logActivity({
-            event: 'order_updated',
-            description: `Order ${order.order_number} below-cost approved: ${belowCostReason}`,
-            performedBy: profile.id,
-            entityType: 'order',
-            entityId: order.id,
-            customerId: order.customer_id,
-          });
-        }
 
         updateOrderIdem.resetKey();
         const addedCount = newPayload.length;
@@ -1140,6 +1134,10 @@ export default function OrderDetail() {
         })
         .filter((l): l is BelowCostLine => l !== null && l.cost > 0 && l.price < l.cost);
       if (belowCostLines.length > 0) {
+        if (profile.role !== 'admin') {
+          toast('error', 'Only an active admin can approve pricing below cost. Ask an admin to review this order.');
+          return;
+        }
         pricingBelowCostReason = await new Promise<string | null>((resolve) =>
           setBelowCostPrompt({ lines: belowCostLines, resolve })
         );
@@ -1152,35 +1150,15 @@ export default function OrderDetail() {
       const idemKey = priceOrderIdem.getKey();
       const { data, error } = await supabase.rpc('price_order', {
         p_order_id: order.id,
-        p_items: priced,
+        p_items: pricingBelowCostReason
+          ? priced.map((item) => ({ ...item, below_cost_reason: pricingBelowCostReason }))
+          : priced,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
       const result = assertRpcResult<{ success: boolean; pricing_status: string; remaining_pending: number; invoices_swept: number }>(data, 'price_order');
       priceOrderIdem.resetKey();
-      if (pricingBelowCostReason) {
-        // BEST EFFORT, NOT DURABLE. price_order takes no reason parameter, so
-        // this is the only place to put it today -- but logActivity swallows its
-        // own errors by design, and it runs AFTER the pricing has committed. An
-        // RLS failure or a dropped connection therefore leaves the order priced
-        // below cost, with invoices swept and commissions moved, and no reason
-        // recorded, while the user still sees success. Do not read this as an
-        // audit guarantee.
-        //
-        // The real fix is to take the reason INTO price_order and write the
-        // audit row in the same transaction as the pricing. That is part of the
-        // settled server-side below-cost enforcement work in
-        // docs/manual/DECISION_LOG.md, deliberately not folded in here.
-        await logActivity({
-          event: 'order_priced_below_cost',
-          description: `Priced ${order.order_number} below cost — approved: ${pricingBelowCostReason}`,
-          performedBy: profile.id,
-          entityType: 'order',
-          entityId: order.id,
-          customerId: order.customer_id,
-        });
-      }
       toast('success', result.pricing_status === 'priced'
         ? `Order priced${result.invoices_swept ? ` — ${result.invoices_swept} draft invoice(s) updated` : ''}`
         : `Saved — ${result.remaining_pending} line(s) still need a price`);

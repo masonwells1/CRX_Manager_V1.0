@@ -1,17 +1,17 @@
 # Product Pricing — Full Audit and Strategy (2026-08-08)
 
-Read-only audit of everything that touches product pricing: cost capture, margin math, vendor/price history, and how to keep a ~600-SKU list current. Evidence = current source, migrations, and live read-only queries against project `rhyzpcqhnizqbxphqdkr` on 2026-08-08. No data was changed.
+Read-only audit of everything that touches product pricing: cost capture, margin math, vendor/price history, and how to keep a several-hundred-SKU list current. Evidence = current source, migrations, and live read-only queries on 2026-08-08. No data was changed. Exact commercial counts and margin figures are intentionally omitted from this public repository.
 
 ## Verdict
 
-**PARTIAL — the pricing machinery is strong; the pricing *practice* is behind the machinery.** The governed pricing engine (preview → approve → apply, with history) built in the July phases is live and hardened, but it is barely being used: the multi-vendor pipeline covers ~10 of 604 products, cost freshness is untrackable for 98% of the catalog, and no written pricing strategy (target margins, tier formula, refresh cadence) exists anywhere. Plus a short list of real defects that corrupt margin numbers.
+**PARTIAL — the pricing machinery is strong; the pricing *practice* is behind the machinery.** The governed pricing engine (preview → approve → apply, with history) built in the July phases is live and hardened, but it is barely being used: the multi-vendor pipeline covers only a pilot subset, cost freshness is untrackable for the vast majority of the catalog, and no written pricing strategy (target margins, tier formula, refresh cadence) exists anywhere. Plus a short list of real defects that corrupt margin numbers.
 
 ## 1. What exists today (and works)
 
-- **Catalog**: 604 products (595 active), 13 vendors. Only 2 products missing cost, 3 missing tier-1 price.
+- **Catalog**: several hundred products and roughly a dozen vendors. Only a handful of products are missing a cost or tier-1 price.
 - **Three price tiers per product** (`tier1/2/3_price`), derived from `current_cost × (1 + markup)` by a DB trigger; customers get a tier via `customers.assigned_tier`. Sell-price resolution at sale time: manual override → quoted price → tier price.
 - **Governed price-change engine** (Phase 1a/2, live): Product-page edits, Products-list inline edits, and a monthly Excel workbook round-trip all flow through the same `preview_product_cost_basis_changes` → `apply_product_cost_basis_change_set` RPCs, with old→new diffs, optimistic concurrency (`pricing_version`, row tokens), expiring change sets, and a single database history writer. Direct pricing writes from app roles are denied (`20260718190000`). This is the hardened path — use it.
-- **Bulk update capability already exists**: `generateProductPricingWorkbook` / `parseProductPricingWorkbook` (`src/lib/productPricingWorkbook.ts`) export a styled .xlsx of the whole catalog, accept edited costs, margins, or prices back (margin-driven or price-driven per row), detect formulas and stale rows, and apply atomically. **The 600-SKU reprice tool Mason is asking for is already built** — it needs adoption, not construction.
+- **Bulk update capability already exists**: `generateProductPricingWorkbook` / `parseProductPricingWorkbook` (`src/lib/productPricingWorkbook.ts`) export a styled .xlsx of the whole catalog, accept edited costs, margins, or prices back (margin-driven or price-driven per row), detect formulas and stale rows, and apply atomically. **The full-catalog reprice tool Mason is asking for is already built** — it needs adoption, not construction.
 - **Multi-vendor price evidence pipeline** (Phase 1b/3, live but gated): `vendors` → `product_supplier_links` (with SKU + unit-of-measure conversion) → `supplier_price_imports` → `supplier_price_observations` (bigint cents, effective-dated, supersession) → `product_cost_basis` (one active, provenance-checked cost basis per product). Supplier quote-sheet .xlsx export/re-import with staging + approval lives at `src/pages/SupplierPricing.tsx`.
 - **Cost snapshots at transaction time**: `order_items.cost_at_time_cents`, `invoice_items.cost_cents`, PO items with `cost_provenance` + `cost_snapshot_at`, locked after receipt.
 - **Margin reporting**: `FieldProfitability` and `FinancialDashboard` are server-computed; commission math is a locked canonical helper minting from chemical-line profit.
@@ -20,15 +20,15 @@ Read-only audit of everything that touches product pricing: cost capture, margin
 
 | Metric (live, 2026-08-08) | Value | Meaning |
 |---|---|---|
-| Products with supplier links / price observations | 10 / 604 | Multi-vendor pipeline ~2% adopted |
-| Cost basis rows still `manual_override / migration_baseline` | 601 of 602 active | Real vendor evidence backs 1 product's cost |
-| `cost_updated_date` NULL | 591 of 604 | Cost freshness is untrackable for 98% of SKUs |
-| `cost_history` rows | 32 total | Pre-July price changes are unrecorded (settled: no backfill without source documents) |
+| Products with supplier links / price observations | Pilot subset only | Multi-vendor pipeline has very low adoption |
+| Cost basis rows still `manual_override / migration_baseline` | Nearly all active rows | Real vendor evidence backs only a negligible share of product costs |
+| `cost_updated_date` NULL | Vast majority | Cost freshness is untrackable for most SKUs |
+| `cost_history` rows | Sparse | Pre-July price changes are unrecorded (settled: no backfill without source documents) |
 | `supplier_cost_basis_enabled` | false (Wells canary only) | The governed cost-basis engine is dark for the catalog |
-| Avg tier-1 gross margin (computed from price/cost) | 14.3% | Tier-3 avg 29.5% |
-| Tier-1 SKUs under 10% gross margin | 131 of 593 | Thin-margin tail worth a deliberate look |
-| Invoice lines missing cost snapshot | 4 of 15 | Small volume, but 27% of margin data absent |
-| Pricing workbook exports ever run | 0 | The bulk tool has never been used in production |
+| Average tier gross margins | Internal-only | Lower and upper tiers differ materially |
+| Tier-1 SKUs under the review threshold | Material tail | Thin-margin products are worth a deliberate review |
+| Invoice lines missing cost snapshot | Non-zero minority | Margin data has a small but material completeness gap |
+| Pricing workbook adoption | No completed production cycle observed | The bulk tool has not yet become an operating routine |
 
 ## 3. Defects and design risks (ranked)
 
@@ -45,9 +45,9 @@ Read-only audit of everything that touches product pricing: cost capture, margin
 ## 4. Recommended plan
 
 **Phase A — turn on what's built (biggest payoff, mostly process not code):**
-1. Run the first real **pricing workbook cycle**: export the full catalog, review the 131 sub-10% tier-1 SKUs, and clean up the stragglers missing a cost or a tier-1 price (**2 and 3 products respectively**, per the catalog counts in §1 — an earlier draft of this plan said "35", which does not match any verified query and was wrong). Apply through the governed preview. This also seeds `cost_history` and `cost_updated_date` going forward.
+1. Run the first real **pricing workbook cycle**: export the full catalog, review the material thin-margin tail, and clean up the handful of products missing a cost or a tier-1 price. Apply through the governed preview. This also seeds `cost_history` and `cost_updated_date` going forward.
 2. **Scale the supplier-pricing pipeline past the Wells canary**: pick the top 2–3 vendors by spend, run the quote-sheet export → vendor fills → import → approve loop, and expand the `product_cost_basis` rollout gate vendor-by-vendor until `supplier_cost_basis_enabled` can flip on. Target: every A-mover SKU has ≥1 current supplier observation before spring season.
-3. **Write the pricing strategy doc** (one page, Mason decides): target gross margin by category/tier, floor margin, tier formula, and a refresh cadence (e.g., monthly workbook cycle + event-driven vendor sheet imports). Today 209 distinct tier-1 markups exist with no stated policy.
+3. **Write the pricing strategy doc** (one page, Mason decides): target gross margin by category/tier, floor margin, tier formula, and a refresh cadence (e.g., monthly workbook cycle + event-driven vendor sheet imports). Today the catalog contains a wide variety of tier-1 markups with no stated policy.
 
 **Phase B — fix the margin-corrupting defects (small, high value):**
 4. Returns-COGS fix (already recommended "yes, soon" in the inventory-costing plan).

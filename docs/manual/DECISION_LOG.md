@@ -39,18 +39,21 @@ cycle needs a per-product target, so the design must carry a target margin on th
 an equivalent per-SKU store) rather than a single configured constant. A global default may exist as
 a fallback for products with no target set, but the per-product value is authoritative. Note for
 whoever builds it: without a target populated somewhere, the workbook cannot flag anything, so
-seeding strategy for the ~600 SKUs is part of that work.
+seeding strategy for the catalog is part of that work.
 
 **4. Below-cost selling becomes a hard rule, with an admin exception.** The 2026-08-08 work shipped
 below-cost approval as a UI confirmation, which a direct RPC caller bypasses and which a catalog-cost
 increase mid-transaction can defeat (Codex round 4, PR #350). **The policy is settled: make it a
 wall — enforce it server-side — but admins can still sell under cost.**
 
-**Status: NOT IMPLEMENTED.** PR #350 ships the UI confirmation only; the server-side invariant is
-deferred follow-up work and no migration for it exists yet. Do not read this entry as describing
-current behavior.
+**Status: IMPLEMENTED LOCALLY ON THE PR #350 FINISH BRANCH; NOT LIVE UNTIL MIGRATION APPLY.**
+`20260810144144_enforce_below_cost_admin_approval.sql` adds the shared PostgreSQL wall, immutable
+same-transaction approval audit, active-admin exception, and authoritative cost handling for
+`update_order_items` / `price_order`. The browser still provides the early explanation and reason
+prompt, but sales reps can no longer approve. Until that migration is applied, production retains
+the prior UI-only behavior; do not describe the server wall as live from source alone.
 
-When built, the operative rule is: the money-write RPCs must reject a below-cost line unless an
+The operative rule is: the money-write RPCs must reject a below-cost line unless an
 approval reason is supplied, with the check performed against the locked product cost inside the
 same transaction, and the admin role retains the ability to proceed. It must land across the whole
 money-write surface at once rather than being patched into one RPC. The RPCs that actually exist and
@@ -63,7 +66,7 @@ would need it: `create_direct_order`, `create_rush_order`, `bulk_import_order`, 
 - **Keep the client-side checks.** They are a UI convenience, not the enforcement boundary: they
   give immediate feedback before a network round-trip, name the affected products, collect the
   reason in context, and avoid pointless RPC failures in the common case where the browser's cost
-  is still current. They stay useful *after* server enforcement lands. Do not delete them, and do
+  is still current. They stay useful after server enforcement lands. Do not delete them, and do
   not describe them anywhere as the financial control.
 - **Why they are insufficient on their own.** The browser compares against the cost it loaded; the
   server stamps the live catalog cost. A cost increase between page load and RPC execution saves a
@@ -80,8 +83,9 @@ would need it: `create_direct_order`, `create_rush_order`, `bulk_import_order`, 
   `logActivity` *after* the pricing commits. `logActivity` swallows its own errors by design, so a
   failure there leaves an order priced below cost — invoices swept, commissions moved — with no
   reason recorded and a success toast shown (Codex, PR #350 round 22). When the server-side work
-  lands, `price_order` must accept the reason and write its audit row inside the same transaction.
-  Do not treat the current activity-log write as an audit guarantee.
+  lands, `price_order` must carry the reason and write its audit row inside the same transaction.
+  The local implementation carries the reason in the price-item JSON so the public RPC signature
+  stays deployment-compatible, and the shared trigger writes `below_cost_approvals` atomically.
 
 ---
 ## 2026-08-09 — The order header is the canonical profit; line profit is derived to match it

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   from: vi.fn(),
   rpc: vi.fn(),
   toast: vi.fn(),
+  profileRole: 'admin',
 }));
 
 // Fully chainable Supabase query-builder mock
@@ -45,7 +46,7 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ profile: { id: 'user-1', full_name: 'Test User' } }),
+  useAuth: () => ({ profile: { id: 'user-1', full_name: 'Test User', role: mocks.profileRole } }),
 }));
 
 vi.mock('../../lib/activityLogger', () => ({
@@ -69,6 +70,7 @@ describe('BulkOrderImport', () => {
   const defaultProps = { open: true, onClose: vi.fn(), onSuccess: vi.fn() };
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.profileRole = 'admin';
     mocks.from.mockImplementation((table: string) => {
       if (table === 'products') {
         return chainable({
@@ -411,6 +413,33 @@ describe('BulkOrderImport', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /import 1 order/i })).toBeEnabled()
     );
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+  });
+
+  it('denies a sales rep instead of showing the below-cost approval prompt', async () => {
+    mocks.profileRole = 'sales_rep';
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit',
+      'O-BELOW-REP,North Farm,SKU-B,2,3',
+    ].join('\n');
+    const file = new File([csv], 'below-rep.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/below-rep\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-BELOW-REP/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
+
+    await waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith(
+        'error',
+        expect.stringMatching(/only an active admin can approve sales below cost/i),
+      )
+    );
+    expect(screen.queryByLabelText(/reason \(required\)/i)).not.toBeInTheDocument();
     expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
   });
 

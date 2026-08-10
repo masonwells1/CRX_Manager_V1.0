@@ -454,6 +454,11 @@ export default function BulkOrderImport({
       }
 
       if (belowCostLines.length > 0) {
+        if (profile?.role !== 'admin') {
+          toast('error', 'Only an active admin can approve sales below cost. Ask an admin to review this import.');
+          setUploading(false);
+          return;
+        }
         const approvedTerms = JSON.stringify(approvedTermParts.sort());
         if (belowCostReasonRef.current?.terms === approvedTerms) {
           // Retry of the same batch: reuse the exact text so p_notes -- which

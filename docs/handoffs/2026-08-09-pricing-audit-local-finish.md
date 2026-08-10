@@ -5,6 +5,16 @@ PR #361. That session could not merge or apply migrations; a local session with 
 
 Read this file, then `docs/manual/KNOWN_ISSUES.md` (five new entries at the top are from this work).
 
+> **Local takeover update — 2026-08-10.** The historical state below is retained for provenance,
+> but it is no longer the execution state. PR #350 conflicted with current `main`; the branch was
+> refreshed and all local gates passed. The required fresh exact-SHA review then failed closed on
+> the intentionally deferred server-side below-cost wall, the related `update_order_items` cost
+> trust, and exact commercial metrics in the public audit. Those blockers are now being repaired
+> on `codex/finish-pricing-audit-20260810`, including new local migration
+> `20260810144144_enforce_below_cost_admin_approval.sql`. Nothing from this takeover has been
+> pushed, merged, or applied live at the time of this note. Do not run the old two-migration apply
+> list without reconciling this update and a fresh live ledger.
+
 ---
 
 ## Why a handoff file instead of resuming the session

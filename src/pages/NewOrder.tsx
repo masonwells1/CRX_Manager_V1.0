@@ -479,6 +479,10 @@ export default function NewOrder() {
         .filter((item) => item.unit_cost > 0 && item.price_per_unit < item.unit_cost)
         .map((item) => ({ productName: item.product_name, price: item.price_per_unit, cost: item.unit_cost }));
       if (belowCostLines.length > 0) {
+        if (profile.role !== 'admin') {
+          toast('error', 'Only an active admin can approve a sale below cost. Ask an admin to review this order.');
+          return;
+        }
         belowCostReason = await new Promise<string | null>((resolve) =>
           setBelowCostPrompt({ lines: belowCostLines, resolve })
         );

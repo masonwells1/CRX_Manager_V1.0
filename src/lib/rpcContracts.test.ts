@@ -2243,6 +2243,8 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
+  _enforce_below_cost_line:
+    'RETURNS trigger and is reachable only from the three owner-installed line triggers; direct browser EXECUTE is revoked, while the seven idempotent public money RPCs own replay safety and the surrounding transaction',
   _close_undelivered_order_remainder_20260718:
     'preserved internal cancel-remainder impl (Phase 1a closeout); the required-key public cancel_order wrapper owns idempotency and every application-role EXECUTE is revoked',
   _post_deleted_delivery_recovery_invoice_20260719:
