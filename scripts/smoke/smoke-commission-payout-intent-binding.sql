@@ -3,7 +3,7 @@
 --
 -- Covers create_commission_payment / post_commission_payment /
 -- void_commission_payment after
--- 20260810130500_bind_commission_payout_idempotency_to_intent.sql.
+-- 20260810170000_bind_commission_payout_idempotency_to_intent.sql.
 --
 -- Proves, for each of the three operations:
 --   * the same key with an identical intent replays exactly once (no second effect);

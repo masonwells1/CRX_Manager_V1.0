@@ -17,14 +17,14 @@ function migrationFiles() {
 }
 
 /**
- * 20260810130500 RENAMED the payout bodies out from under their public names and
+ * 20260810170000 RENAMED the payout bodies out from under their public names and
  * put a thin intent-binding wrapper on top. The stale-selection guards below did
  * not move — they are still the only thing that runs the payout — but they now
  * live under the implementation name. Scanning past this migration would find
  * the wrapper and wrongly report the guards as deleted.
  */
 const PAYOUT_RENAME_MIGRATION =
-  '20260810130500_bind_commission_payout_idempotency_to_intent.sql';
+  '20260810170000_bind_commission_payout_idempotency_to_intent.sql';
 
 function latestFunctionDefinition(functionName: string, stopBefore?: string): string {
   let latest = '';
@@ -91,34 +91,51 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
     // conditions at the bottom of the rename migration name the implementation
     // too, so a slice that ran to EOF would pass on that mention alone even if
     // the wrapper never called it.
-    const bodyOf = (sql: string): string => {
-      const start = sql.indexOf('CREATE OR REPLACE FUNCTION public.create_commission_payment(');
+    // All THREE payout RPCs, not just create. post and void carry the same
+    // operation-only receipt lookup the migration exists to replace, so a guard
+    // that watched create alone would let a later migration silently restore the
+    // wrong-result risk for posting or voiding.
+    const bound = [
+      { rpc: 'create_commission_payment', impl: '_create_commission_payment_intent_impl_20260809' },
+      { rpc: 'post_commission_payment', impl: '_post_commission_payment_intent_impl_20260809' },
+      { rpc: 'void_commission_payment', impl: '_void_commission_payment_intent_impl_20260809' },
+    ];
+
+    const bodyOf = (sql: string, rpc: string): string => {
+      const start = sql.indexOf(`CREATE OR REPLACE FUNCTION public.${rpc}(`);
       if (start === -1) return '';
       const end = sql.indexOf('$function$;', start);
-      expect(end, 'create_commission_payment definition is unterminated').toBeGreaterThan(start);
+      expect(end, `${rpc} definition is unterminated`).toBeGreaterThan(start);
       return sql.slice(start, end);
     };
 
     const rename = migrationFiles().find((f) => f.name === PAYOUT_RENAME_MIGRATION);
     expect(rename, `${PAYOUT_RENAME_MIGRATION} is missing`).toBeDefined();
     const renameSql = rename!.content.replace(/\r\n/g, '\n');
-    expect(renameSql).toContain('RENAME TO _create_commission_payment_intent_impl_20260809;');
-    expect(bodyOf(renameSql)).toContain(
-      'public._create_commission_payment_intent_impl_20260809(',
-    );
+
+    for (const { rpc, impl } of bound) {
+      expect(renameSql, `${rpc} is never renamed out of the way`).toContain(`RENAME TO ${impl};`);
+      expect(
+        bodyOf(renameSql, rpc),
+        `the ${rpc} wrapper does not delegate to ${impl}`,
+      ).toContain(`public.${impl}(`);
+    }
 
     // And nothing since has quietly reinstated a self-contained public body. A
-    // later migration re-creating create_commission_payment with the old
-    // operation-only idempotency logic would leave every migration-specific test
-    // above green while removing intent binding from production.
+    // later migration re-creating any of the three with the old operation-only
+    // idempotency logic would leave every migration-specific test above green
+    // while removing intent binding from production.
     for (const file of migrationFiles()) {
       if (file.name <= PAYOUT_RENAME_MIGRATION) continue;
-      const body = bodyOf(file.content.replace(/\r\n/g, '\n'));
-      if (!body) continue;
-      expect(
-        body,
-        `${file.name} redefines public.create_commission_payment without delegating to the intent-bound implementation`,
-      ).toContain('public._create_commission_payment_intent_impl_20260809(');
+      const sql = file.content.replace(/\r\n/g, '\n');
+      for (const { rpc, impl } of bound) {
+        const body = bodyOf(sql, rpc);
+        if (!body) continue;
+        expect(
+          body,
+          `${file.name} redefines public.${rpc} without delegating to the intent-bound implementation`,
+        ).toContain(`public.${impl}(`);
+      }
     }
   });
 

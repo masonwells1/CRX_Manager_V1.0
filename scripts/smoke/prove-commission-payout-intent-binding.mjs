@@ -28,7 +28,7 @@ const PREFIX = 'crx-commission-payout-intent-proof-';
 const CONTAINER = `${PREFIX}${process.pid}-${Date.now().toString(36)}`.toLowerCase();
 const MIGRATION = path.join(
   ROOT, 'supabase', 'migrations',
-  '20260810130500_bind_commission_payout_idempotency_to_intent.sql',
+  '20260810170000_bind_commission_payout_idempotency_to_intent.sql',
 );
 const SMOKE = path.join(ROOT, 'scripts', 'smoke', 'smoke-commission-payout-intent-binding.sql');
 const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK';

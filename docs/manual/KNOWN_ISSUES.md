@@ -1122,11 +1122,11 @@ Prevention actions proposed by the report: a static guard requiring any RPC acce
 
 ### 3.5 BUILT AND PROVEN LOCALLY 2026-08-09 — NOT YET APPLIED LIVE
 
-Option B is implemented on branch `fix/commission-payout-intent-binding` (split off `main` on 2026-08-10; originally built on `ship/harden-actor-binding-sql-reader`). It is **not live**: the migration has never run against production. Treat 3.5 as still open in production until the ledger shows `20260810130500`.
+Option B is implemented on branch `fix/commission-payout-intent-binding` (split off `main` on 2026-08-10; originally built on `ship/harden-actor-binding-sql-reader`). It is **not live**: the migration has never run against production. Treat 3.5 as still open in production until the ledger shows `20260810170000`.
 
 | Piece | File | State |
 | --- | --- | --- |
-| Migration — renames the three payout bodies to `_<name>_intent_impl_20260809` (money logic never retyped) and creates public wrappers that bind each receipt to `request_actor_id` + a SHA-256 `request_fingerprint`; adds the `check_idempotency_intent` helper | `supabase/migrations/20260810130500_bind_commission_payout_idempotency_to_intent.sql` | Written; proven in a disposable container |
+| Migration — renames the three payout bodies to `_<name>_intent_impl_20260809` (money logic never retyped) and creates public wrappers that bind each receipt to `request_actor_id` + a SHA-256 `request_fingerprint`; adds the `check_idempotency_intent` helper | `supabase/migrations/20260810170000_bind_commission_payout_idempotency_to_intent.sql` | Written; proven in a disposable container |
 | Rollback-only smoke chain | `scripts/smoke/smoke-commission-payout-intent-binding.sql` (registered in `scripts/smoke/smoke-specs.json` under `create_commission_payment`) | Passing |
 | Container proof — network-isolated throwaway PostgreSQL 17, prints `COMMISSION_PAYOUT_INTENT_BINDING_PROOF_PASS` | `scripts/smoke/prove-commission-payout-intent-binding.mjs` | Green |
 | Frontend — `getIdempotencyBindingRejection` maps the three refusals to plain-English warnings and retires the dead key in all three handlers | `src/lib/idempotency.ts`, `src/pages/CommissionPayments.tsx` | Done |

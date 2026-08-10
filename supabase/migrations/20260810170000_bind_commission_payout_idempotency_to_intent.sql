@@ -41,13 +41,16 @@
 -- and the operator retries with a fresh key, a second payout for the same
 -- commissions is hard-refused by that guard rather than by idempotency alone.
 --
--- CHECK 6 live preflight (read-only Supabase execute_sql, re-run 2026-08-10):
--- max(supabase_migrations.schema_migrations.version) = 20260810025159. This
--- file's timestamp 20260810130500 is strictly greater, and sorts after every
--- 20260809170500-20260809230500 migration; none of those redefine the three
--- payout RPCs. The file was renumbered from 20260809171500 because PR #354
--- pushed the live high-water past it, which silently dropped
--- check_idempotency_intent out of the generated mutating-RPC inventory.
+-- CHECK 6 live preflight (read-only Supabase execute_sql, re-read 2026-08-10):
+-- max(supabase_migrations.schema_migrations.version) = 20260810155629 across 957
+-- applied migrations. This file's timestamp 20260810170000 is strictly greater,
+-- and sorts after every 20260809170500-20260809230500 migration; none of those
+-- redefine the three payout RPCs. The file has been renumbered forward twice —
+-- from 20260809171500, then from 20260810130500 — because parallel sessions kept
+-- pushing the live high-water past it while this branch was in review. A file
+-- numbered behind live can be skipped by migration delivery, which would leave
+-- production on the unbound RPCs while the frontend ships. Re-read the live
+-- high-water immediately before applying and renumber again if it has moved.
 --
 -- Also verified live at that time: idempotency_keys already carries
 -- request_actor_id and request_fingerprint; digest() resolves in the extensions

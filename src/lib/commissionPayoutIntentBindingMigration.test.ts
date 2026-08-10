@@ -6,7 +6,7 @@ import { getIdempotencyBindingRejection } from './idempotency';
  * Source guard for the Section 07 gauntlet HIGH finding: the commission payout
  * RPCs keyed their idempotency receipts on [operation, user] only, so a
  * retained browser key could replay a DIFFERENT payout's cached success.
- * 20260810130500 binds each receipt to the acting user and a hash of the exact
+ * 20260810170000 binds each receipt to the acting user and a hash of the exact
  * request. These assertions keep both halves — the SQL wrappers and their
  * page-level callers — from silently losing that binding.
  *
@@ -15,7 +15,7 @@ import { getIdempotencyBindingRejection } from './idempotency';
  * guards the structure those runtime proofs depend on.
  */
 const MIGRATION_PATH =
-  'supabase/migrations/20260810130500_bind_commission_payout_idempotency_to_intent.sql';
+  'supabase/migrations/20260810170000_bind_commission_payout_idempotency_to_intent.sql';
 
 const migration = readFileSync(MIGRATION_PATH, 'utf8').replace(/\r\n/g, '\n');
 const page = readFileSync('src/pages/CommissionPayments.tsx', 'utf8').replace(/\r\n/g, '\n');
@@ -309,7 +309,7 @@ describe('commission payout intent-binding callers', () => {
       "toast('warning', rejection === 'actor'"
       + ` ? 'That retry belongs to another user, so ${nothingHappened}. Reload the page and try again.'`
       + " : rejection === 'receipt'"
-      + ` ? 'The database could not confirm the outcome of the earlier attempt, so ${nothingHappened} now.`,
+      + ` ? 'The database could not confirm the outcome of this request, so ${nothingHappened} now.`,
     );
     // The admin must never be shown the raw database code.
     expect(catchBlock).not.toContain('IDEMPOTENCY_INTENT_MISMATCH');
@@ -328,9 +328,48 @@ describe('commission payout intent-binding callers', () => {
     // result at all, so the wording must not assert the retry did anything —
     // only that its outcome cannot be confirmed.
     expect(page).not.toContain('what this retry already did');
+    // IDEMPOTENCY_RECEIPT_MISSING is raised by the CURRENT attempt's binding
+    // UPDATE and rolls that statement back, so a 'receipt' refusal does not
+    // imply an earlier attempt ever happened. Wording that names one is a claim
+    // the database cannot support.
+    expect(page).not.toContain('outcome of the earlier attempt');
     expect(page).toContain('already used by an earlier commission payment');
     expect(page).toContain('already used by an earlier posting');
     expect(page).toContain('already used by an earlier void');
+  });
+
+  it('keeps the post and void keys per target instead of resetting on row click', () => {
+    // handlePost closes its own dialog before the RPC returns, so EVERY retry
+    // goes back through the row button. Resetting the key there discarded the
+    // one thing that could replay an uncertain post: the retry arrived with a
+    // fresh key, the server refused it as already posted, and committed work was
+    // reported to the admin as a failure. Scoping the key to the target id gives
+    // a different row its own key without throwing this row's key away.
+    expect(page).toContain(
+      "useIdempotencyKey('post_commission_payment', profile?.id || '', postTargetId || '')",
+    );
+    expect(page).toContain(
+      "useIdempotencyKey('void_commission_payment', profile?.id || '', voidTarget?.id || '')",
+    );
+
+    // And the row buttons must not reset. Scoped to the JSX handlers so the
+    // legitimate resets — after a confirmed success and after a refusal — stay.
+    for (const [handle, setter] of [
+      ['postPaymentIdem', 'setPostTargetId(r.id);'],
+      ['voidPaymentIdem', 'setVoidTarget(r);'],
+    ]) {
+      let at = page.indexOf(setter);
+      expect(at, `${setter} is missing`).toBeGreaterThan(-1);
+      while (at > -1) {
+        const handlerStart = page.lastIndexOf('e.stopPropagation();', at);
+        expect(handlerStart).toBeGreaterThan(-1);
+        expect(
+          page.slice(handlerStart, at),
+          `the row button that runs ${setter} still discards the retained ${handle} key`,
+        ).not.toContain(`${handle}.resetKey();`);
+        at = page.indexOf(setter, at + 1);
+      }
+    }
   });
 });
 
@@ -368,14 +407,26 @@ describe('Reports quick-pay idempotency scope', () => {
     expect(markPaid).toContain('markPaidKeys.current.set(scope, key)');
   });
 
-  it('retires only the recipient that succeeded, and every key on a refusal', () => {
-    // Per-recipient retirement: clearing the whole Map on success would hand the
-    // next recipient in the SAME click a fresh key mid-loop.
-    expect(markPaid).toContain('markPaidKeys.current.delete(scope);');
-    const succeeded = markPaid.indexOf('markPaidKeys.current.delete(scope);');
+  it('retires this click\'s keys only AFTER every recipient landed', () => {
+    // The retirement must sit outside the loop. Retiring inside it strands a
+    // partial batch: recipient A succeeds, recipient B times out, and dropping
+    // A's key means the retry sends A a NEW key — the server refuses A (already
+    // in a non-voided payment), the loop throws, and B is never reached.
+    const loopStart = markPaid.indexOf('for (const [, ids] of byRecipient) {');
+    const loopEnd = markPaid.indexOf('\n      }', loopStart);
+    expect(loopStart, 'the per-recipient loop is missing').toBeGreaterThan(-1);
+    expect(loopEnd).toBeGreaterThan(loopStart);
+    const loopBody = markPaid.slice(loopStart, loopEnd);
+    expect(loopBody, 'keys must not be retired inside the per-recipient loop')
+      .not.toContain('markPaidKeys.current.delete(');
+
+    const retire = markPaid.indexOf('for (const done of scopesThisClick) markPaidKeys.current.delete(done);');
+    expect(retire, 'this click\'s keys are never retired').toBeGreaterThan(loopEnd);
+
+    // And a binding refusal still clears everything, so a scope/fingerprint
+    // drift cannot lock the admin out of quick-pay permanently.
     const cleared = markPaid.indexOf('markPaidKeys.current.clear();');
     expect(cleared, 'a binding refusal must clear every retained key').toBeGreaterThan(-1);
-    expect(succeeded).toBeLessThan(cleared);
     expect(markPaid).toContain('getIdempotencyBindingRejection(err)');
   });
 
@@ -389,5 +440,18 @@ describe('Reports quick-pay idempotency scope', () => {
     // duplicate batch.
     expect(markPaid.replace(/\s+/g, ' ')).toContain("toast('warning', totalBatched > 0");
     expect(markPaid).toContain('were already added to a payment batch before it stopped');
+  });
+
+  it('also refreshes and reports partial progress on an ORDINARY failure', () => {
+    // A binding refusal is the rare path. The common one is a timeout on the
+    // third recipient, and that lands in the generic branch — which used to show
+    // a bare error over a stale list, reading as "nothing happened" to an admin
+    // who had in fact just paid two people.
+    const generic = markPaid.slice(markPaid.indexOf('} else {', markPaid.indexOf("toast('warning'")));
+    expect(generic, 'the generic failure branch is missing').toContain("toast('error'");
+    const refreshAt = generic.indexOf('await fetchCommissions();');
+    expect(refreshAt, 'the generic failure branch does not await a refresh').toBeGreaterThan(-1);
+    expect(refreshAt).toBeLessThan(generic.indexOf("toast('error'"));
+    expect(generic.replace(/\s+/g, ' ')).toContain("toast('error', totalBatched > 0");
   });
 });

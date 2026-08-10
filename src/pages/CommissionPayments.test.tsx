@@ -35,9 +35,22 @@ vi.mock('../components/ui/Toast', () => ({
   useToast: () => ({ toast: mockToast }),
 }));
 
-vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({ getKey: () => 'test-key', resetKey: mockResetKey }),
-}));
+// Delegates to the REAL hook and only observes resetKey. A stub returning a
+// constant key would make the retry tests below vacuous: they exist to prove the
+// page hands the SAME key to a retry of the same payment, which is only a real
+// assertion if the key actually comes from the hook.
+vi.mock('../hooks/useIdempotencyKey', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../hooks/useIdempotencyKey')>();
+  return {
+    useIdempotencyKey: (operation: string, userId: string, target = '') => {
+      const real = actual.useIdempotencyKey(operation, userId, target);
+      return {
+        getKey: real.getKey,
+        resetKey: () => { mockResetKey(); real.resetKey(); },
+      };
+    },
+  };
+});
 
 vi.mock('../lib/sentry', () => ({
   Sentry: { captureException: mockCaptureException },
@@ -169,9 +182,9 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
     expect(warning).toContain('nothing was posted now');
     expect(warning).not.toContain('IDEMPOTENCY');
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.anything());
-    // resetKey also fires when the Post button is pressed, so require the
-    // additional reset from the refusal handler itself.
-    expect(mockResetKey.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Exactly once, from the refusal handler. The Post button must NOT reset:
+    // that would discard the key a retry of this same payment needs.
+    expect(mockResetKey).toHaveBeenCalledTimes(1);
     expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
@@ -181,7 +194,7 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
     expect(warning).toContain('belongs to another user');
     expect(warning).not.toContain('IDEMPOTENCY');
     expect(mockToast).not.toHaveBeenCalledWith('error', expect.anything());
-    expect(mockResetKey.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(mockResetKey).toHaveBeenCalledTimes(1);
     expect(mockCaptureException).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -201,5 +214,75 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
     await waitFor(() => {
       expect(mockToast).toHaveBeenCalledWith('error', 'Failed to post');
     });
+  });
+});
+
+// Round-4 review finding: posting closes its own confirmation dialog before the
+// RPC answers, so every retry after an uncertain response goes back through the
+// row button. The button used to reset the key there, which meant the retry
+// arrived as a brand-new request the server refused as already posted — real
+// committed work reported to the admin as a failure.
+describe('CommissionPayments uncertain-response retry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'commission_payments') {
+        return buildChain({
+          data: [
+            { ...paymentBase, id: 'payment-1', payment_number: 'CP-0001' },
+            { ...paymentBase, id: 'payment-2', payment_number: 'CP-0002' },
+          ],
+          error: null,
+        });
+      }
+      if (table === 'profile_public_view') {
+        return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
+      }
+      if (table === 'commission_payment_items') {
+        return buildChain({ count: 2, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+  });
+
+  async function clickPost(paymentNumber: string) {
+    const row = (await screen.findByText(paymentNumber)).closest('tr');
+    fireEvent.click(within(row!).getByRole('button', { name: 'Post' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post Payments' }));
+  }
+
+  const postKeys = () =>
+    mockRpc.mock.calls
+      .filter((call) => call[0] === 'post_commission_payment')
+      .map((call) => (call[1] as { p_idempotency_key: string }).p_idempotency_key);
+
+  it('retries the SAME payment with the SAME key after a timeout', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'Network request timed out' } });
+    render(<CommissionPayments />);
+
+    await clickPost('CP-0001');
+    await waitFor(() => expect(postKeys()).toHaveLength(1));
+    await clickPost('CP-0001');
+    await waitFor(() => expect(postKeys()).toHaveLength(2));
+
+    const [first, second] = postKeys();
+    expect(first).toBeTruthy();
+    // The whole point: identical key, so the server can replay the original
+    // outcome instead of refusing a request it has already carried out.
+    expect(second).toBe(first);
+    expect(mockResetKey).not.toHaveBeenCalled();
+  });
+
+  it('still mints a fresh key when the admin posts a DIFFERENT payment', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'Network request timed out' } });
+    render(<CommissionPayments />);
+
+    await clickPost('CP-0001');
+    await waitFor(() => expect(postKeys()).toHaveLength(1));
+    await clickPost('CP-0002');
+    await waitFor(() => expect(postKeys()).toHaveLength(2));
+
+    const [first, second] = postKeys();
+    expect(second).not.toBe(first);
   });
 });

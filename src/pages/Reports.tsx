@@ -489,6 +489,14 @@ export default function Reports() {
         byRecipient.get(rid)!.push(c.id);
       }
 
+      // Scopes touched by THIS click, retired together once the whole loop
+      // finishes. Retiring inside the loop strands a partial batch: if
+      // recipient A succeeds and recipient B times out, dropping A's key means
+      // the retry sends A a NEW key, the server refuses A (its commissions are
+      // already in a non-voided payment), the loop throws, and B is never
+      // reached. Keeping A's key lets the retry replay A's receipt and carry on
+      // to B, which is the whole point of retaining a key.
+      const scopesThisClick: string[] = [];
       for (const [, ids] of byRecipient) {
         // Sorted and de-duplicated to match the server-side fingerprint, so
         // re-selecting the same commissions in a different order is the same
@@ -499,6 +507,7 @@ export default function Reports() {
           key = generateIdempotencyKey('create_commission_payment', profile!.id);
           markPaidKeys.current.set(scope, key);
         }
+        scopesThisClick.push(scope);
         const { data, error } = await supabase.rpc('create_commission_payment', {
           p_commission_ids: ids,
           p_payment_method: 'other',
@@ -510,12 +519,15 @@ export default function Reports() {
         });
         if (error) throw new Error(error.message);
         assertRpcResult<string>(data, 'create_commission_payment');
-        // Retire only this recipient's key. A batch spanning several recipients
-        // makes one call each, and a later call failing must not re-run an
-        // earlier recipient's payment under a fresh key on the next attempt.
-        markPaidKeys.current.delete(scope);
         totalBatched += ids.length;
       }
+
+      // Every recipient landed, so the click is finished and its keys are spent.
+      // Retiring them here — not mid-loop — means that if this payment is later
+      // VOIDED and the same commissions are marked paid again, the next click is
+      // a genuinely new request rather than a replay of the voided payment's
+      // receipt reporting success for a batch that no longer exists.
+      for (const done of scopesThisClick) markPaidKeys.current.delete(done);
 
       toast('success', `${totalBatched} commission(s) added to ${byRecipient.size} unposted payment batch${byRecipient.size > 1 ? 'es' : ''}. Review and post ${byRecipient.size > 1 ? 'them' : 'it'} in Commission Payments.`);
       if (profile) logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: profile.id });
@@ -524,7 +536,7 @@ export default function Reports() {
       // Backstop only. The scoping above should make a binding refusal
       // unreachable from this page, so if one arrives the scope and the server
       // fingerprint have drifted apart — clear every retained key so the admin is
-      // not locked out of quick-pay, and say plainly that nothing was created.
+      // not locked out of quick-pay, and report exactly how far the loop got.
       const rejection = getIdempotencyBindingRejection(err);
       if (rejection) {
         markPaidKeys.current.clear();
@@ -538,7 +550,16 @@ export default function Reports() {
           : 'That retry could not be matched to this request, so no payment batch was created. Check Commission Payments before trying again.');
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_commissions_paid' } });
-        toast('error', err instanceof Error ? err.message : 'Failed to update commissions');
+        // Ordinary failure (timeout, network, a server guard). Earlier recipients
+        // in this same click may already be batched, so refresh the list BEFORE
+        // saying anything and name how many landed — a bare error message reads
+        // as "nothing happened" and invites a duplicate batch. The keys for this
+        // click are deliberately NOT retired here: retrying replays them.
+        await fetchCommissions();
+        const detail = err instanceof Error ? err.message : 'Failed to update commissions';
+        toast('error', totalBatched > 0
+          ? `${detail} — ${totalBatched} commission(s) were already added to a payment batch before it stopped. Check Commission Payments before trying again.`
+          : detail);
       }
     }
     setMarkingPaid(false);

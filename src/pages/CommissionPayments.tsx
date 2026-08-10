@@ -55,8 +55,6 @@ export default function CommissionPayments() {
   const { profile } = useAuth();
   const { toast } = useToast();
   const createPaymentIdem = useIdempotencyKey('create_commission_payment', profile?.id || '');
-  const postPaymentIdem = useIdempotencyKey('post_commission_payment', profile?.id || '');
-  const voidPaymentIdem = useIdempotencyKey('void_commission_payment', profile?.id || '');
 
   const [tab, setTab] = useState<'unposted' | 'posted' | 'voided'>('unposted');
   const [payments, setPayments] = useState<CommissionPaymentRow[]>([]);
@@ -70,6 +68,16 @@ export default function CommissionPayments() {
   const [voidTarget, setVoidTarget] = useState<CommissionPaymentRow | null>(null);
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
+
+  // Scoped to the row being acted on. Posting closes its dialog before the RPC
+  // returns, so EVERY retry goes back through the row button — resetting the key
+  // there (the old PR #59 behaviour) threw away the only thing that could replay
+  // an uncertain post, and the server then refused the retry as already posted.
+  // Target scoping keeps the key for a retry of the SAME payment and still mints
+  // a fresh one the moment the admin picks a different row, which is what the
+  // PR #59 reset was for.
+  const postPaymentIdem = useIdempotencyKey('post_commission_payment', profile?.id || '', postTargetId || '');
+  const voidPaymentIdem = useIdempotencyKey('void_commission_payment', profile?.id || '', voidTarget?.id || '');
 
   // Create payment modal
   const [showCreate, setShowCreate] = useState(false);
@@ -359,13 +367,16 @@ export default function CommissionPayments() {
         // Wording notes: on a pre-migration receipt the database cannot prove the
         // earlier request DIFFERED from this one, only that the key is already
         // spent — so the text says "already used" and claims no difference. And
-        // a 'receipt' refusal covers both a receipt whose result is unreadable
-        // and no receipt at all, so it must not assert that the retry did
-        // anything — only that its outcome cannot be confirmed.
+        // a 'receipt' refusal covers two different situations: an EARLIER
+        // receipt whose stored result is unusable (IDEMPOTENCY_RESULT_INVALID),
+        // and THIS attempt failing to bind its own receipt after the payout ran
+        // (IDEMPOTENCY_RECEIPT_MISSING — that raise rolls the whole statement
+        // back, so there may be no earlier attempt at all). The text therefore
+        // says "this request" and asserts nothing about a prior one.
         toast('warning', rejection === 'actor'
           ? 'That retry belongs to another user, so nothing was created. Reload the page and try again.'
           : rejection === 'receipt'
-            ? 'The database could not confirm the outcome of the earlier attempt, so nothing was created now. Check the payment list below before creating another.'
+            ? 'The database could not confirm the outcome of this request, so nothing was created now. Check the payment list below before creating another.'
             : 'This retry was already used by an earlier commission payment, so nothing new was created. Check the payment list below before creating another.');
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_commission_payment' } });
@@ -413,7 +424,7 @@ export default function CommissionPayments() {
         toast('warning', rejection === 'actor'
           ? 'That retry belongs to another user, so nothing was posted. Reload the page and try again.'
           : rejection === 'receipt'
-            ? 'The database could not confirm the outcome of the earlier attempt, so nothing was posted now. Check the payment list below before posting again.'
+            ? 'The database could not confirm the outcome of this request, so nothing was posted now. Check the payment list below before posting again.'
             : 'This retry was already used by an earlier posting, so nothing was posted now. Check the payment list below before posting again.');
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_commission_payment' } });
@@ -475,7 +486,7 @@ export default function CommissionPayments() {
         toast('warning', rejection === 'actor'
           ? 'That retry belongs to another user, so nothing was voided. Reload the page and try again.'
           : rejection === 'receipt'
-            ? 'The database could not confirm the outcome of the earlier attempt, so nothing was voided now. Check the payment list below before voiding again.'
+            ? 'The database could not confirm the outcome of this request, so nothing was voided now. Check the payment list below before voiding again.'
             : 'This retry was already used by an earlier void, so nothing was voided now. Check the payment list below before voiding again.');
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_commission_payment' } });
@@ -564,8 +575,9 @@ export default function CommissionPayments() {
                     icon={<Send className="w-3 h-3" />}
                     onClick={(e: React.MouseEvent) => {
                       e.stopPropagation();
-                      // Codex P2 fix: reset key so different post-target uses fresh intent.
-                      postPaymentIdem.resetKey();
+                      // No resetKey here: the key is scoped to postTargetId, so a
+                      // different row already mints a fresh one. Resetting would
+                      // also discard the retained key for a retry of THIS row.
                       setPostTargetId(r.id);
                       setShowPostConfirm(true);
                     }}
@@ -588,7 +600,7 @@ export default function CommissionPayments() {
                   icon={<RotateCcw className="w-3 h-3" />}
                   onClick={(e: React.MouseEvent) => {
                     e.stopPropagation();
-                    voidPaymentIdem.resetKey();
+                    // No resetKey here: the key is scoped to voidTarget.id.
                     setVoidTarget(r);
                     setVoidReason('');
                     setShowVoid(true);
@@ -613,8 +625,9 @@ export default function CommissionPayments() {
                   icon={<RotateCcw className="w-3 h-3" />}
                   onClick={(e: React.MouseEvent) => {
                     e.stopPropagation();
-                    // Codex P2 fix: reset key so different void target uses fresh intent.
-                    voidPaymentIdem.resetKey();
+                    // No resetKey here: the key is scoped to voidTarget.id, so a
+                    // different row mints a fresh key on its own and a retry of
+                    // THIS row keeps the key that can replay it.
                     setVoidTarget(r);
                     setVoidReason('');
                     setShowVoid(true);
