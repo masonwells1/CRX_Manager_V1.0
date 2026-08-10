@@ -82,7 +82,6 @@ export async function convertQuoteToOrderWithRowVersion(args: {
   p_below_cost_reason?: string | null;
 }) {
   const { p_below_cost_reason = null, ...rowVersionArgs } = args;
-  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = rowVersionArgs;
   const { data, error } = await callBelowCostAwareRpc(
     'convert_quote_to_order', rowVersionArgs, p_below_cost_reason,
   );
@@ -92,19 +91,10 @@ export async function convertQuoteToOrderWithRowVersion(args: {
       error: null,
     };
   }
-  if (!isMissingLifecycleSignature(error, 'convert_quote_to_order')) {
-    return { data: null, error };
-  }
-
-  const { data: legacyData, error: legacyError } = await supabaseUntyped.rpc(
-    'convert_quote_to_order',
-    legacyArgs,
-  );
-  if (legacyError) return { data: null, error: legacyError };
-  return {
-    data: assertRpcResult<ConvertQuoteToOrderResult>(legacyData, 'convert_quote_to_order'),
-    error: null,
-  };
+  // Conversion is money/security sensitive. A missing governed signature must
+  // fail closed instead of retrying an overload without row-version and
+  // below-cost approval arguments.
+  return { data: null, error };
 }
 
 export async function restoreQuoteVersionWithRowVersion(args: {
@@ -116,7 +106,6 @@ export async function restoreQuoteVersionWithRowVersion(args: {
   p_below_cost_reason?: string | null;
 }) {
   const { p_below_cost_reason = null, ...rowVersionArgs } = args;
-  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = rowVersionArgs;
   const { data, error } = await callBelowCostAwareRpc(
     'restore_quote_version', rowVersionArgs, p_below_cost_reason,
   );
@@ -126,17 +115,7 @@ export async function restoreQuoteVersionWithRowVersion(args: {
       error: null,
     };
   }
-  if (!isMissingLifecycleSignature(error, 'restore_quote_version')) {
-    return { data: null, error };
-  }
-
-  const { data: legacyData, error: legacyError } = await supabaseUntyped.rpc(
-    'restore_quote_version',
-    legacyArgs,
-  );
-  if (legacyError) return { data: null, error: legacyError };
-  return {
-    data: assertRpcResult<RestoreQuoteVersionResult>(legacyData, 'restore_quote_version'),
-    error: null,
-  };
+  // Restore can recreate money-bearing lines. Preserve the governed error and
+  // never retry a legacy overload that omits the concurrency and approval wall.
+  return { data: null, error };
 }

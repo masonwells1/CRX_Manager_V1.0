@@ -58,6 +58,14 @@ draw-down. A fresh current-production-schema replay applied all three migrations
 both pricing rollback smokes passed, all three cent-scale constraints were validated, and no smoke
 fixture or approval residue remained. A replacement exact-SHA review is still required.
 
+**Exact-SHA review follow-up 6 (still local).** Review of `4b78bddf` found two older
+row-version rollout bridges that could still undo the new fail-closed RPC adapter: Quote conversion
+and version restore retried signatures without the expected row version or below-cost reason after
+`PGRST202`. Both money-bearing wrappers now preserve the governed error after exactly one call;
+wrapper-level tests pin the full reason and row-version payload and prove no legacy retry occurs.
+The unrelated, non-money `create_quote_version` compatibility fallback remains intentionally
+unchanged. A replacement exact-SHA review is required before publication.
+
 **Exact-SHA review follow-up (still local).** The review of `b5f949fa` correctly found that the
 first server-wall draft still left direct PostgREST line writes available, ran after the canonical
 rounding trigger and could overwrite its whole-cent result, and could parse an older approval
