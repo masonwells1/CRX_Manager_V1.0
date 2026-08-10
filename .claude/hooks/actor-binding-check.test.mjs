@@ -225,6 +225,8 @@ const BOUND_DDL =
   "RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN " +
   "IF p_performed_by IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION ''ACTOR_MISMATCH''; END IF; " +
   "UPDATE invoices SET created_by = auth.uid(); END $fn$;";
+const STAGED_DDL = `CREATE TEMP TABLE staged_cron_sql (command text);
+INSERT INTO staged_cron_sql (command) VALUES ($staged$${UNBOUND_DDL}$staged$);`;
 
 r = runHook(`SELECT cron.schedule(
   'delayed-actor-ddl',
@@ -240,6 +242,25 @@ r = runHook(`SELECT cron.schedule(
   $job$SELECT public.existing_safe_job()$job$
 );`);
 ok(!isDeny(r), "a normal top-level cron.schedule call without function DDL remains allowed");
+
+r = runHook(`${STAGED_DDL}
+SELECT cron.schedule('staged-actor-ddl', '* * * * *',
+  (SELECT command FROM staged_cron_sql LIMIT 1));`);
+ok(isDeny(r), "a subquery cannot stage actor DDL into cron.schedule");
+ok(r.stdout.includes("stores a pg_cron command"), "opaque scheduled-command denial explains the manual-review boundary");
+
+r = runHook(`SELECT cron.schedule(
+  job_name => 'named-safe-job',
+  schedule => '0 6 * * *',
+  command => $job$SELECT public.existing_safe_job()$job$
+);`);
+ok(!isDeny(r), "a named direct-literal cron.schedule command remains allowed");
+
+r = runHook(`SELECT cron.unschedule('existing-safe-job');`);
+ok(!isDeny(r), "cron.unschedule remains allowed because it does not store command text");
+
+r = runHook(`SELECT cron.unschedule(42);`);
+ok(!isDeny(r), "numeric cron.unschedule remains allowed because it has no command input");
 
 r = runHook(`SELECT "cron"."schedule"(
   'quoted-delayed-actor-ddl',
@@ -317,6 +338,18 @@ SET command = $job$SELECT public.existing_safe_job()$job$
 WHERE jobname = 'safe-existing-job';`);
 ok(!isDeny(r), "UPDATE cron.job.command without function DDL remains allowed");
 
+r = runHook(`${STAGED_DDL}
+UPDATE cron.job
+SET command = (SELECT command FROM staged_cron_sql LIMIT 1)
+WHERE jobname = 'staged-existing-job';`);
+ok(isDeny(r), "a subquery cannot stage actor DDL into cron.job.command");
+
+r = runHook(`${STAGED_DDL}
+UPDATE cron.job
+SET (command, active) = ((SELECT command FROM staged_cron_sql LIMIT 1), true)
+WHERE jobid = 42;`);
+ok(isDeny(r), "a tuple assignment cannot stage actor DDL into cron.job.command");
+
 r = runHook(`INSERT INTO cron.job (schedule, command, nodename, nodeport, database, username, active, jobname)
 VALUES ('* * * * *', $job$${UNBOUND_DDL}$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'inserted-actor-ddl');`);
 ok(isDeny(r), "INSERT INTO cron.job cannot create a delayed unbound actor-DDL job");
@@ -329,6 +362,29 @@ ok(isDeny(r), "search_path cannot hide an unqualified quoted cron.job INSERT");
 r = runHook(`INSERT INTO cron.job (schedule, command, nodename, nodeport, database, username, active, jobname)
 VALUES ('0 6 * * *', $job$SELECT public.existing_safe_job()$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'safe-inserted-job');`);
 ok(!isDeny(r), "INSERT INTO cron.job without function DDL remains allowed");
+
+r = runHook(`${STAGED_DDL}
+INSERT INTO cron.job (schedule, command, nodename, nodeport, database, username, active, jobname)
+SELECT '* * * * *', command, 'localhost', 5432, 'postgres', 'postgres', true, 'staged-inserted-job'
+FROM staged_cron_sql;`);
+ok(isDeny(r), "INSERT SELECT cannot stage actor DDL into cron.job.command");
+
+r = runHook(`${STAGED_DDL}
+INSERT INTO cron.job (jobid, schedule, command, nodename, nodeport, database, username, active, jobname)
+VALUES (42, '0 6 * * *', $job$SELECT public.existing_safe_job()$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'upserted-job')
+ON CONFLICT (jobid) DO UPDATE SET command = (SELECT command FROM staged_cron_sql LIMIT 1);`);
+ok(isDeny(r), "ON CONFLICT UPDATE cannot stage actor DDL into cron.job.command");
+
+r = runHook(`INSERT INTO cron.job (jobid, schedule, command, nodename, nodeport, database, username, active, jobname)
+VALUES (42, '0 6 * * *', $job$SELECT public.existing_safe_job()$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'safe-upserted-job')
+ON CONFLICT (jobid) DO UPDATE SET command = $job$SELECT public.existing_safe_job()$job$;`);
+ok(!isDeny(r), "ON CONFLICT UPDATE with direct safe command literals remains allowed");
+
+r = runHook(`COPY cron.job (command) FROM '/tmp/cron-commands.csv';`);
+ok(isDeny(r), "COPY into cron.job requires the explicit manual-review path");
+
+r = runHook(`COPY public.job (command) FROM '/tmp/ordinary-commands.csv';`);
+ok(!isDeny(r), "COPY into an explicitly non-cron schema.job remains ordinary data");
 
 r = runHook(`UPDATE public.job SET command = $job$${UNBOUND_DDL}$job$ WHERE jobid = 42;`);
 ok(!isDeny(r), "an explicitly non-cron schema.job UPDATE is not a cron sink");
@@ -368,6 +424,13 @@ ON target.jobid = source.jobid
 WHEN MATCHED THEN UPDATE SET command = $job$SELECT public.existing_safe_job()$job$;`);
 ok(!isDeny(r), "MERGE without function DDL remains allowed");
 
+r = runHook(`${STAGED_DDL}
+MERGE INTO cron.job AS target
+USING (SELECT 42 AS jobid, command FROM staged_cron_sql) AS source
+ON target.jobid = source.jobid
+WHEN MATCHED THEN UPDATE SET command = source.command;`);
+ok(isDeny(r), "MERGE cannot stage actor DDL into cron.job.command");
+
 r = runHook(`SELECT U&"\\0063ron".schedule(
   'unicode-delayed-actor-ddl',
   '* * * * *',
@@ -404,6 +467,10 @@ r = runHook(`SELECT cron.alter_job(
   command := $job$${UNBOUND_DDL}$job$
 );`);
 ok(isDeny(r), "cron.alter_job cannot replace a command with hidden actor DDL");
+
+r = runHook(`${STAGED_DDL}
+SELECT cron.alter_job(42, command := (SELECT command FROM staged_cron_sql LIMIT 1));`);
+ok(isDeny(r), "cron.alter_job cannot receive a staged command expression");
 
 r = runHook(`SELECT cron.alter_job(42, active := false);`);
 ok(!isDeny(r), "cron.alter_job without function DDL remains allowed");

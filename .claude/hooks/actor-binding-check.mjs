@@ -265,14 +265,239 @@ function maskSqlForCallNames(text) {
   return out;
 }
 
+/** True only when the complete expression is one plain single-quoted or
+ * dollar-quoted SQL string. Casts, concatenation, subqueries, variables, and
+ * prefixed/escaped string syntaxes stay opaque and use the manual-review path. */
+function isDirectSqlStringLiteral(expression) {
+  const sql = String(expression || "").trim();
+  if (sql.startsWith("'")) return scanQuoted(sql, 0) === sql.length;
+  const tag = dollarTagAt(sql, 0);
+  if (!tag) return false;
+  const close = sql.indexOf(tag, tag.length);
+  return close !== -1 && close + tag.length === sql.length;
+}
+
+function normalizedIdentifier(identifier) {
+  const value = String(identifier || "").trim();
+  if (/^U&/i.test(value)) return null;
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replace(/""/g, '"').toLowerCase();
+  }
+  return value.toLowerCase();
+}
+
+/** Return the current pg_cron call sites while preserving the source argument
+ * text. Unicode-escaped API names are returned with api=null and therefore use
+ * the conservative unknown-API rule below. */
+function pgCronCallSites(rawStmt) {
+  const raw = String(rawStmt || "");
+  const callableSql = maskSqlForCallNames(raw);
+  if (callableSql === null) return [];
+  const identifier = '(?:U&\\s*"(?:[^"]|"")*"|"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)';
+  const unicodeIdentifier = 'U&\\s*"(?:[^"]|"")*"';
+  const currentApi = '(?:"(?:schedule|schedule_in_database|alter_job)"|(?:schedule|schedule_in_database|alter_job))';
+  const patterns = [
+    new RegExp(`(?:^|[^\\w$])(?:"cron"|cron|${unicodeIdentifier})\\s*\\.\\s*(${identifier})\\s*\\(`, "gi"),
+    new RegExp(`(?:^|[^\\w$.\"])(` + currentApi + `)\\s*\\(`, "gi"),
+  ];
+  const sites = [];
+  const seen = new Set();
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(callableSql)) !== null) {
+      const relativeOpen = match[0].lastIndexOf("(");
+      const open = match.index + relativeOpen;
+      if (seen.has(open)) continue;
+      // INSERT INTO/COPY cron.job (...) is a table column list, not a call.
+      if (/\b(?:INSERT\s+INTO|COPY)\s+(?:"cron"|cron)\s*\.\s*(?:"job"|job)\s*$/i
+        .test(callableSql.slice(0, open))) continue;
+      const parsed = readBalancedParens(callableSql, open);
+      if (!parsed) {
+        sites.push({ api: normalizedIdentifier(match[1]), args: null });
+        seen.add(open);
+        continue;
+      }
+      sites.push({
+        api: normalizedIdentifier(match[1]),
+        args: splitTopLevelArgs(parsed.params, raw.slice(open + 1, parsed.end - 1)),
+      });
+      seen.add(open);
+    }
+  }
+  return sites;
+}
+
+function namedArgumentValue(argument, name) {
+  const masked = maskSqlForCallNames(String(argument || ""));
+  if (masked === null) return null;
+  const match = new RegExp(`^\\s*(?:"${name}"|${name})\\s*(?:=>|:=)\\s*`, "i").exec(masked);
+  return match ? String(argument).slice(match[0].length) : null;
+}
+
+/** pg_cron persists command text beyond the migration. If that command arrives
+ * through a variable, subquery, DEFAULT, concatenation, or another expression,
+ * this lexical guard cannot inspect the eventual SQL and must fail closed. */
+function hasOpaquePgCronCallCommand(rawStmt) {
+  const noCommandApis = new Set(["unschedule"]);
+  for (const site of pgCronCallSites(rawStmt)) {
+    if (site.args === null) return true;
+    const args = site.args;
+    const namedCommand = args.map((arg) => namedArgumentValue(arg, "command"))
+      .find((value) => value !== null);
+    if (namedCommand !== undefined) {
+      if (!isDirectSqlStringLiteral(namedCommand)) return true;
+      continue;
+    }
+
+    const hasNamedArgs = args.some((arg) => /(?:=>|:=)/.test(maskSqlForCallNames(arg) || ""));
+    if (site.api === "alter_job") {
+      if (hasNamedArgs || args.length < 3) continue; // command was not changed
+      if (!isDirectSqlStringLiteral(args[2])) return true;
+      continue;
+    }
+    if (site.api === "schedule") {
+      if (hasNamedArgs) return true; // required command was not readable by name
+      const command = args.length >= 3 ? args[2] : args[1];
+      if (!isDirectSqlStringLiteral(command)) return true;
+      continue;
+    }
+    if (site.api === "schedule_in_database") {
+      if (hasNamedArgs || !isDirectSqlStringLiteral(args[2])) return true;
+      continue;
+    }
+    if (site.api !== null && noCommandApis.has(site.api)) continue;
+
+    // A new or Unicode-escaped cron API may itself store executable SQL. It is
+    // safe to inspect only when every supplied value is a direct SQL literal.
+    if (args.some((arg) => {
+      const masked = maskSqlForCallNames(arg) || "";
+      const named = /^\s*(?:"(?:[^"]|"")*"|[A-Za-z_]\w*)\s*(?:=>|:=)\s*/.exec(masked);
+      return !isDirectSqlStringLiteral(named ? arg.slice(named[0].length) : arg);
+    })) return true;
+  }
+  return false;
+}
+
+function directLiteralAt(raw, from) {
+  let start = from;
+  while (/\s/.test(raw[start] || "")) start++;
+  if (raw[start] === "'") {
+    const end = scanQuoted(raw, start);
+    return end === -1 ? null : { start, end };
+  }
+  const tag = dollarTagAt(raw, start);
+  if (!tag) return null;
+  const close = raw.indexOf(tag, start + tag.length);
+  return close === -1 ? null : { start, end: close + tag.length };
+}
+
+function commandAssignmentsAreDirect(rawStmt, callableSql) {
+  const assignment = /(?:\bSET\b|,)\s*(?:"command"|command)\s*=\s*/gi;
+  let found = false;
+  let match;
+  while ((match = assignment.exec(callableSql)) !== null) {
+    found = true;
+    const literal = directLiteralAt(rawStmt, match.index + match[0].length);
+    if (!literal) return false;
+    const remainder = callableSql.slice(literal.end).trimStart();
+    if (remainder !== "" && !/^(?:,|\b(?:FROM|WHERE|RETURNING|WHEN)\b)/i.test(remainder)) return false;
+  }
+  return found ? true : null;
+}
+
+function tupleCommandAssignmentsAreDirect(rawStmt, callableSql) {
+  const tupleHead = /(?:\bSET\b|,)\s*\(/gi;
+  let found = false;
+  let match;
+  while ((match = tupleHead.exec(callableSql)) !== null) {
+    const columnsOpen = match.index + match[0].lastIndexOf("(");
+    const columns = readBalancedParens(callableSql, columnsOpen);
+    if (!columns) return false;
+    const names = splitTopLevelArgs(columns.params).map(normalizedIdentifier);
+    const commandIndex = names.indexOf("command");
+    if (commandIndex === -1) { tupleHead.lastIndex = columns.end; continue; }
+    found = true;
+    const rhsHead = /^\s*=\s*\(/.exec(callableSql.slice(columns.end));
+    if (!rhsHead) return false;
+    const valuesOpen = columns.end + rhsHead[0].lastIndexOf("(");
+    const values = readBalancedParens(callableSql, valuesOpen);
+    if (!values) return false;
+    const sourceValues = splitTopLevelArgs(
+      values.params,
+      rawStmt.slice(valuesOpen + 1, values.end - 1)
+    );
+    if (sourceValues.length !== names.length || !isDirectSqlStringLiteral(sourceValues[commandIndex])) {
+      return false;
+    }
+    tupleHead.lastIndex = values.end;
+  }
+  return found ? true : null;
+}
+
+function insertCommandValuesAreDirect(rawStmt, callableSql) {
+  const jobTable = '(?:(?:"cron"|cron)\\s*\\.\\s*)?(?:"job"|job)';
+  const head = new RegExp(`(?:^|[^\\w$.\"])(?:INSERT\\s+INTO)\\s+${jobTable}\\s*`, "i").exec(callableSql);
+  if (!head) return null;
+  const columnsOpen = head.index + head[0].length;
+  if (callableSql[columnsOpen] !== "(") return false;
+  const columns = readBalancedParens(callableSql, columnsOpen);
+  if (!columns) return false;
+  const names = splitTopLevelArgs(columns.params).map(normalizedIdentifier);
+  const commandIndex = names.indexOf("command");
+  if (commandIndex === -1) return false;
+  const valuesHead = /^\s*VALUES\s*/i.exec(callableSql.slice(columns.end));
+  if (!valuesHead) return false;
+  let cursor = columns.end + valuesHead[0].length;
+  let rows = 0;
+  while (callableSql[cursor] === "(") {
+    const values = readBalancedParens(callableSql, cursor);
+    if (!values) return false;
+    const sourceValues = splitTopLevelArgs(
+      values.params,
+      rawStmt.slice(cursor + 1, values.end - 1)
+    );
+    if (sourceValues.length !== names.length || !isDirectSqlStringLiteral(sourceValues[commandIndex])) {
+      return false;
+    }
+    rows++;
+    cursor = values.end;
+    while (/\s/.test(callableSql[cursor] || "")) cursor++;
+    if (callableSql[cursor] !== ",") break;
+    cursor++;
+    while (/\s/.test(callableSql[cursor] || "")) cursor++;
+  }
+  return rows > 0;
+}
+
+function hasOpaquePgCronCommandWrite(rawStmt) {
+  if (!isPgCronCommandWrite(rawStmt)) return false;
+  const raw = String(rawStmt || "");
+  const callableSql = maskSqlForCallNames(raw);
+  if (callableSql === null) return true;
+  if (/\b(?:UPDATE|INSERT\s+INTO|MERGE\s+INTO|COPY)\b[\s\S]*U&\s*"/i.test(callableSql)) return true;
+  if (/\bCOPY\b/i.test(callableSql)) return true;
+
+  const insertDirect = insertCommandValuesAreDirect(raw, callableSql);
+  if (insertDirect !== null && !insertDirect) return true;
+  const directAssignment = commandAssignmentsAreDirect(raw, callableSql);
+  const directTuple = tupleCommandAssignmentsAreDirect(raw, callableSql);
+  if (directAssignment === false || directTuple === false) return true;
+  const hasDirectCommand = directAssignment === true || directTuple === true;
+  const isMerge = /\bMERGE\s+INTO\b/i.test(callableSql);
+  if (isMerge && !hasDirectCommand) return true;
+  if (!isMerge && /\bUPDATE\b/i.test(callableSql) &&
+      insertDirect === null && !hasDirectCommand) return true;
+  return false;
+}
+
 /** pg_cron stores executable command text through multiple APIs (currently
  * schedule, schedule_in_database, and alter_job). Treat any direct call in the
  * cron schema as a runtime-SQL boundary so a new qualified overload/API cannot
  * silently reopen this reader. Also recognize the current APIs when unqualified:
  * PostgreSQL can resolve `schedule(...)` to `cron.schedule(...)` through
  * search_path (or a wrapper), so requiring the literal `cron.` prefix would be
- * fail-open. Ordinary calls stay allowed because only literals that actually
- * carry a CREATE FUNCTION header are exposed for actor inspection. */
+ * fail-open. Command-bearing APIs additionally require a direct, inspectable
+ * command literal; non-command APIs such as unschedule remain ordinary calls. */
 function isPgCronCall(rawStmt) {
   const callableSql = maskSqlForCallNames(String(rawStmt || ""));
   if (callableSql === null) return false;
@@ -301,10 +526,9 @@ function isPgCronCall(rawStmt) {
 }
 
 /** cron.job.command is the table-level equivalent of cron.alter_job(command):
- * INSERT can create an executable job and UPDATE can replace its executable
- * command. Recognize schema-qualified, quoted, ONLY/alias, tuple-assignment, and
- * search_path-resolved `job` forms. This remains narrow: ordinary table writes
- * are data, and this boundary matters only when a literal carries function DDL. */
+ * INSERT/COPY can create jobs and UPDATE/MERGE can replace their commands.
+ * Recognize schema-qualified, quoted, ONLY/alias, tuple-assignment, and
+ * search_path-resolved `job` forms while leaving other schemas alone. */
 function isPgCronCommandWrite(rawStmt) {
   const callableSql = maskSqlForCallNames(String(rawStmt || ""));
   if (callableSql === null) return false;
@@ -316,7 +540,11 @@ function isPgCronCommandWrite(rawStmt) {
 
   // An escaped schema/table identifier can decode to cron.job. Any write using
   // such an identifier is opaque enough to require the runtime-DDL boundary.
-  if (/\b(?:UPDATE|INSERT\s+INTO|MERGE\s+INTO)\b[\s\S]*U&\s*"/i.test(callableSql)) {
+  if (/\b(?:UPDATE|INSERT\s+INTO|MERGE\s+INTO|COPY)\b[\s\S]*U&\s*"/i.test(callableSql)) {
+    return true;
+  }
+
+  if (new RegExp(`${writeBoundary}COPY\\s+${target}`, "i").test(callableSql)) {
     return true;
   }
 
@@ -746,8 +974,19 @@ try {
         );
         return true;
       }
+      const rawStmt = content.slice(stmtStart, stmtEnd);
+      if (!hasProceduralContainer &&
+          (hasOpaquePgCronCallCommand(rawStmt) || hasOpaquePgCronCommandWrite(rawStmt))) {
+        violations.push(
+          "This migration stores a pg_cron command through a variable, subquery, DEFAULT, " +
+          "concatenation, or another expression that the actor-binding guard cannot inspect. " +
+          "Supply the complete command directly as one plain or dollar-quoted string literal, " +
+          "or add the file-level exempt marker (-- actor-binding-check: exempt) and get a manual review."
+        );
+        return true;
+      }
       if (lits.length === 0) return false;
-      if (!isDynamicSqlStatement(stmt, content.slice(stmtStart, stmtEnd))) return false;
+      if (!isDynamicSqlStatement(stmt, rawStmt)) return false;
       const ddlLiterals = directExecuteLiteral ? [directExecuteLiteral.literal] : lits;
       if (!carriesFnHeader(ddlLiterals.map((l) => l.payload).join(""))) return false;
 

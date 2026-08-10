@@ -47,8 +47,19 @@ executable calls or writes containing Unicode identifiers through the runtime
 SQL boundary. Unicode-looking text inside comments or data literals remains
 ignored.
 
-The focused actor-binding suite grew from 115 to 162 assertions while the
-idempotency reference suite remained at 86. Thirty-two continuation decisions were
+The exact-SHA review of that tree found one more high-severity data-flow bypass:
+unsafe function DDL could first be stored as ordinary data, then supplied to
+`cron.schedule(...)` or `cron.job.command` through a subquery or variable. The
+reader now requires command-bearing pg_cron APIs and table writes to receive the
+complete command as one directly inspectable plain or dollar-quoted literal.
+Subqueries, variables, `DEFAULT`, concatenation, `INSERT ... SELECT`, opaque
+upserts, and opaque MERGE/tuple assignments fail closed into the existing
+exemption/manual-review path. Named direct literals remain allowed,
+`cron.unschedule` remains recognized as non-command-bearing, and `COPY` into
+`cron.job` conservatively requires manual review.
+
+The focused actor-binding suite grew from 115 to 176 assertions while the
+idempotency reference suite remained at 86. Forty-five continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless
@@ -56,7 +67,8 @@ quoted cron calls, while denying variable, concatenated, formatted,
 second-`EXECUTE`, quoted scheduled-DDL, cross-database scheduled-DDL, cron
 command-replacement, unqualified search-path scheduling, and direct
 `cron.job.command` actor-DDL controls, including CTE, `MERGE`, and Unicode-escaped
-forms. The exact-SHA independent review remains an
+forms. They also denied staged SQL delivered through schedule/update/insert/MERGE
+expressions while preserving direct safe command literals. The exact-SHA independent review remains an
 external governed proof and must match the final branch HEAD before publication;
 this entry does not self-certify it.
 
