@@ -22,7 +22,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 162 assertions; the idempotency reference
+- The actor-binding suite passes at 176 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -48,6 +48,12 @@ PR workflow.
   a CTE, recognizing `MERGE INTO cron.job`, recognizing an executable call with
   a Unicode-escaped identifier, and recognizing a command-table write with a
   Unicode-escaped identifier.
+- Thirteen staged-command decisions were independently weakened or removed and
+  each exposed its corresponding regression or safe-control failure: the opaque
+  call and table-write gates, named direct-command allowance, non-command
+  `unschedule` allowance, direct and tuple assignment checks, `INSERT ... SELECT`,
+  MERGE, direct VALUES allowance, omitted `alter_job` command allowance,
+  INSERT-table/function-call disambiguation, opaque upsert handling, and COPY.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -71,6 +77,12 @@ PR workflow.
   tuple UPDATEs, CTE-prefixed writes, search-path-resolved `job` INSERTs, and
   PostgreSQL Unicode-escaped identifiers. Harmless command strings, explicitly
   non-cron `schema.job` writes, and Unicode-looking data text remain allowed.
+- Command-bearing pg_cron calls and table writes now require the stored command
+  to be one directly inspectable plain or dollar-quoted literal. Subqueries,
+  variables, DEFAULT, concatenation, `INSERT ... SELECT`, opaque upserts, and
+  opaque tuple/MERGE expressions require the explicit exemption/manual-review
+  path. Named direct commands and `cron.unschedule` remain allowed; COPY into
+  `cron.job` is conservatively review-only.
 - Real hook-process probes denied indirect variable execution, doubled-quote
   comment hiding, post-body actor forgery, and scheduled actor-function DDL. A
   complete bound function supplied directly as one dollar-quoted literal was allowed.
@@ -112,6 +124,16 @@ PR workflow.
   denied unsafe CTE, MERGE, and Unicode-call forms while allowing their harmless
   controls. The commit completed the repository pre-commit barrier without a
   hook bypass.
+- The exact-SHA review of `9c2552cafa10aa9ecd22a2e1a8d13c195a261315`
+  found the staged-command data-flow bypass. Real snapshot probes proved the
+  approved base denied staged subquery commands supplied to cron.schedule and
+  cron.job UPDATE while that candidate allowed both.
+- Fix commit `49e41d7aae888e66db69579dfc981d2479f1b779` closes that
+  bypass across call, UPDATE, tuple, INSERT/UPSERT, MERGE, and COPY forms. The
+  restored actor suite passed 176 assertions, the idempotency reference suite
+  passed 86, real subprocess probes denied staged schedule/update/insert/MERGE
+  controls and allowed direct safe commands, and the commit completed the full
+  pre-commit barrier without a hook bypass.
 
 ## GOVERNED STATUS
 
@@ -133,6 +155,10 @@ PR workflow.
   MERGE, and Unicode-identifier variants. Those findings were reproduced and
   fixed in `879ef432`; its BLOCKERS verdict likewise does not approve the final
   documentation HEAD.
+- The review of `9c2552ca` returned one HIGH blocker for staged command text
+  supplied through subqueries or variables. It was reproduced and fixed in
+  `49e41d7a`; its BLOCKERS verdict likewise does not approve the final
+  documentation HEAD.
 
 ## REMAINING LANDING WORK
 
@@ -149,7 +175,7 @@ outward-action approval into a receiving task. No database action is needed.
 ## GATES AND BLOCKERS
 
 - The prior `/ship` review cycle reached its three-round cap. Its blocker and the
-  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, and `3c0f8e75` pg_cron blockers have now been
+  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, `3c0f8e75`, and `9c2552ca` pg_cron blockers have now been
   addressed locally, but the branch remains unpublished until a new exact-SHA
   governed review independently returns CLEAN.
 - Historical blocker evidence:
