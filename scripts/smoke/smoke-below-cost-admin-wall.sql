@@ -1,8 +1,8 @@
 -- Full rollback-only proof for 20260810180002_enforce_below_cost_admin_approval.
 -- Run only after that migration exists in the current transaction/database.
 -- The common trigger is reached through real create_direct_order,
--- update_order_items, create_rush_order, and price_order calls; catalog checks
--- prove the same wrapper is present on bulk_import_order, save_invoice, and
+-- update_order_items, create_rush_order, price_order, and save_invoice calls;
+-- catalog checks prove the same wrapper is present on bulk_import_order and
 -- save_quote. The terminal exception rolls back every synthetic row.
 -- Product fixtures bypass the unrelated supplier-pricing write guard exactly
 -- as the established split-order rollback harness does. This disable is inside
@@ -24,6 +24,7 @@ DECLARE
   v_delivery_id uuid;
   v_delivery_item_id uuid;
   v_invoice_id uuid;
+  v_misc_invoice_id uuid;
   v_invoice_item_id uuid;
   v_result jsonb;
   v_cost numeric;
@@ -93,12 +94,131 @@ BEGIN
     END IF;
   END;
 
+  -- A null-product line is not a free bypass. save_invoice accepts caller cost
+  -- for classified fees/miscellaneous lines, so positive stored cost must be
+  -- compared with stored total revenue even though no catalog Product exists.
+  v_misc_invoice_id := public.save_invoice(
+    jsonb_build_object(
+      'customer_id', v_customer,
+      'invoice_type', 'misc_charge',
+      'status', 'draft',
+      'invoice_date', CURRENT_DATE,
+      'salesman_id', v_sales
+    ),
+    jsonb_build_array(jsonb_build_object(
+      'product_id', NULL,
+      'description', '[SMOKE] Zero Cost Application Fee ' || v_sfx,
+      'quantity', 1,
+      'unit_price_cents', 900,
+      'extended_cents', 900,
+      'cost_cents', 0,
+      'is_application_fee', true
+    )),
+    'smoke-zero-cost-invoice-rep-' || v_sfx
+  );
+  SELECT count(*) INTO v_audit_count
+  FROM public.below_cost_approvals
+  WHERE entity_type = 'invoice' AND entity_id = v_misc_invoice_id;
+  IF v_audit_count <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: zero-cost non-product fee wrote an approval';
+  END IF;
+
+  BEGIN
+    PERFORM public.save_invoice(
+      jsonb_build_object(
+        'customer_id', v_customer,
+        'invoice_type', 'misc_charge',
+        'status', 'draft',
+        'invoice_date', CURRENT_DATE,
+        'salesman_id', v_sales
+      ),
+      jsonb_build_array(jsonb_build_object(
+        'product_id', NULL,
+        'description', '[SMOKE] Below Cost Application Fee ' || v_sfx,
+        'quantity', 1,
+        'unit_price_cents', 900,
+        'extended_cents', 900,
+        'cost_cents', 1000,
+        'is_application_fee', true,
+        'notes', 'Below-cost approved: sales rep cannot approve null product'
+      )),
+      'smoke-below-invoice-rep-' || v_sfx
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: sales rep null-product below-cost invoice committed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'BELOW_COST_ADMIN_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected null-product admin denial, got %', SQLERRM;
+    END IF;
+  END;
+
   -- An admin is still denied when the same money write has no fresh reason.
   PERFORM set_config(
     'request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text,
     true
   );
+  BEGIN
+    PERFORM public.save_invoice(
+      jsonb_build_object(
+        'customer_id', v_customer,
+        'invoice_type', 'misc_charge',
+        'status', 'draft',
+        'invoice_date', CURRENT_DATE,
+        'salesman_id', v_sales
+      ),
+      jsonb_build_array(jsonb_build_object(
+        'product_id', NULL,
+        'description', '[SMOKE] Below Cost Application Fee ' || v_sfx,
+        'quantity', 1,
+        'unit_price_cents', 900,
+        'extended_cents', 900,
+        'cost_cents', 1000,
+        'is_application_fee', true
+      )),
+      'smoke-below-invoice-noreason-' || v_sfx
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: reasonless null-product below-cost invoice committed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'BELOW_COST_REASON_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected null-product reason denial, got %', SQLERRM;
+    END IF;
+  END;
+
+  v_misc_invoice_id := public.save_invoice(
+    jsonb_build_object(
+      'customer_id', v_customer,
+      'invoice_type', 'misc_charge',
+      'status', 'draft',
+      'invoice_date', CURRENT_DATE,
+      'salesman_id', v_sales
+    ),
+    jsonb_build_array(jsonb_build_object(
+      'product_id', NULL,
+      'description', '[SMOKE] Below Cost Application Fee ' || v_sfx,
+      'quantity', 1,
+      'unit_price_cents', 900,
+      'extended_cents', 900,
+      'cost_cents', 1000,
+      'is_application_fee', true,
+      'notes', 'Below-cost approved: null product invoice approval'
+    )),
+    'smoke-below-invoice-admin-' || v_sfx
+  );
+  SELECT count(*) INTO v_audit_count
+  FROM public.below_cost_approvals
+  WHERE operation = 'save_invoice'
+    AND entity_type = 'invoice'
+    AND entity_id = v_misc_invoice_id
+    AND product_id IS NULL
+    AND actor_user_id = v_admin
+    AND reason = 'null product invoice approval'
+    AND unit_price_cents = 900
+    AND locked_unit_cost_cents = 1000
+    AND total_shortfall_cents = 100;
+  IF v_audit_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: expected one null-product invoice approval, got %', v_audit_count;
+  END IF;
+
   BEGIN
     PERFORM public.create_direct_order(
       p_customer_id := v_customer,

@@ -35,6 +35,7 @@ import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 import { appendBelowCostApproval } from '../lib/internalNotes';
+import { invoiceBelowCostValues } from '../lib/belowCostRpc';
 
 interface LineItem {
   id?: string;
@@ -714,19 +715,26 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       return;
     }
 
-    // Below-cost guardrail (non-field-staff only): a product line priced
-    // strictly under its recorded cost needs an explicit reason before saving.
-    // Application-fee lines and lines without a cost are skipped.
+    // Below-cost guardrail (non-field-staff only): product/misc lines compare
+    // unit price to unit cost; application fees compare exact extended revenue
+    // to their exact stored line-total cost because quantity is acres.
     const isFieldStaff = profile?.role === 'driver' || profile?.role === 'applicator';
     let belowCostReason: string | null = null;
     if (!isFieldStaff) {
       const belowCostLines: BelowCostLine[] = items
-        .filter((it) => !it.is_application_fee && it.cost_cents > 0 && it.unit_price_cents < it.cost_cents)
-        .map((it) => ({
-          productName: it.product_name || it.description,
-          price: it.unit_price_cents / 100,
-          cost: it.cost_cents / 100,
-        }));
+        .map((it) => {
+          const values = invoiceBelowCostValues({
+            isApplicationFee: it.is_application_fee,
+            unitPriceCents: it.unit_price_cents,
+            extendedCents: it.extended_cents,
+            costCents: it.cost_cents,
+          });
+          return values ? {
+            productName: it.product_name || it.description,
+            ...values,
+          } : null;
+        })
+        .filter((line): line is BelowCostLine => line !== null);
       if (belowCostLines.length > 0) {
         if (profile?.role !== 'admin') {
           toast('error', 'Only an active admin can approve an invoice below cost. Ask an admin to review it.');
@@ -779,7 +787,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           // The invoice header notes print for the customer, so the below-cost
           // approval reason is recorded on the affected line's notes instead.
           notes:
-            belowCostReason && !it.is_application_fee && it.cost_cents > 0 && it.unit_price_cents < it.cost_cents
+            belowCostReason && invoiceBelowCostValues({
+              isApplicationFee: it.is_application_fee,
+              unitPriceCents: it.unit_price_cents,
+              extendedCents: it.extended_cents,
+              costCents: it.cost_cents,
+            })
               ? appendBelowCostApproval(it.notes, belowCostReason)
               : it.notes,
           // Field-application detail preserved through the edit (#3 edit-path) —

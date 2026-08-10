@@ -9,7 +9,7 @@
   "specs": {
     "below_cost_admin_wall": {
       "chain": "smoke-below-cost-admin-wall.sql",
-      "description": "Server-side below-cost wall: real direct-order, order-edit, rush-order, price-order, delivery-completion with derived invoicing, and order-cancellation calls prove sales-rep denial, required admin reason, locked current Product cost, caller-cost rejection, same-value profit math, immutable same-transaction audit, exact order-to-invoice lineage, lifecycle-safe fulfillment and invoice bookkeeping, fail-closed exposure increases, and terminal rollback. Catalog assertions prove bulk import, invoice save, and quote save route through the same trigger context without public overloads.",
+      "description": "Server-side below-cost wall: real direct-order, order-edit, rush-order, price-order, null-product invoice-save, delivery-completion with derived invoicing, and order-cancellation calls prove sales-rep denial, required admin reason, locked current Product cost, classified non-product total-cost enforcement, caller-cost rejection, same-value profit math, immutable same-transaction audit, exact order-to-invoice lineage, lifecycle-safe fulfillment and invoice bookkeeping, fail-closed exposure increases, and terminal rollback. Catalog assertions prove bulk import and quote save route through the same trigger context without public overloads.",
       "covers": ["create_direct_order", "create_rush_order", "bulk_import_order", "update_order_items", "price_order", "save_invoice", "save_quote", "complete_delivery", "cancel_order", "below_cost_approvals"],
       "area": ["billing", "pricing", "security", "idempotency", "regression"]
     },

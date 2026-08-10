@@ -1,11 +1,33 @@
 # Decision Log
 
-Last verified: 2026-08-09
+Last verified: 2026-08-10
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar columns are a compatibility exception
+
+**Source:** `docs/audits/2026-08-10-order-profit-bigint-cents-evaluation.md`, the owner-approved
+live apply recorded in migration-history row 867, and the exact-SHA review of the pricing finish
+branch on 2026-08-10.
+
+**Decision.** New money storage remains bigint cents, but the existing Order/Quote cluster is not
+converted from PostgreSQL `numeric` dollars. PostgreSQL `numeric` is exact decimal; converting this
+established cluster would be a coordinated unit change across dozens of database functions and UI
+readers, where one missed call site creates a 100x error. The accepted compatibility path is exact
+numeric-dollar storage plus validated finite whole-cent CHECKs on every clean column. Dirty legacy
+columns remain explicitly deferred until Mason separately approves rewriting those rows.
+
+**Operative rule.** The invariant is exact whole cents, not a blind type conversion. New database
+money columns use bigint cents. A legacy numeric-dollar column may remain only under this documented
+exception, must use exact PostgreSQL `numeric` arithmetic, and must receive the finite whole-cent
+CHECK as soon as its existing rows are clean. Browser preview math must convert the decimal operands
+to integer cents before multiplying, dividing, rounding, or aggregating; binary `Math.round` money
+is not permitted. The server remains authoritative for persisted Quote values.
 
 ---
 
@@ -30,6 +52,152 @@ rather than writing, so a re-run fails closed instead of touching an unapproved 
 to a **digest of the sorted approved record ids plus the material before-values** (for money, the
 stored cents), asserted before the write. Row counts, order counts and similar cardinalities may
 accompany that digest but may never be the only thing standing between an approval and a write.
+
+**Enforcement (hard, not prose).** `scripts/validate-sql-migrations.sh` now fails any migration
+stamped `20260810025160` or later that contains a top-level `UPDATE`/`DELETE` against a business-row
+table unless the file either (a) carries `-- APPROVED_SET_DIGEST: <64 hex>` *and* asserts that same
+hex in executable SQL before the write, or (b) explicitly waives it with
+`-- APPROVED_SET_DIGEST: NOT-REQUIRED - <reason>` for the case where there is no before-value to
+protect (backfilling a column the same migration just added). Rewrites inside a function body are
+runtime logic and are not checked. The gate is scoped by **timestamp, not an allowlist**, so it needs
+no maintenance; the cutoff sits one second past the already-applied
+`20260810025159_backfill_stale_line_profit.sql`, which `AGENTS.md` forbids editing, so that migration
+stays history and **every** migration written from here on is in force. This is the deterministic
+replay/baseline guard Codex asked for in place of editing applied SQL.
+
+**Hardened after review (same day).** The first cut of that guard did not enforce what it claimed,
+and a round-3 Codex review (`CRX-GUARD-001`) was right to say so. Three bypasses, all now closed:
+
+1. **Detection was line-anchored.** SQL is free-form, so `UPDATE`, the optional `ONLY`, and the table
+   name can each sit on a different line, and the table can be quoted (`"public"."orders"`). Any of
+   those walked straight past the check. Detection is now **token-based** over the flattened
+   non-function-body text, with quoted identifiers and string literals stripped first — so prose
+   inside a `RAISE NOTICE` cannot fabricate a match either.
+2. **The digest was decorative.** It passed by appearing anywhere in executable SQL. Four things are
+   now required together, and the failure message names which one is missing: the digest must be
+   **compared** (a comparison operator on that line — mentioning or `SELECT … INTO` is not a check);
+   the value it is compared against must be **computed** (a hash call over the approved set before
+   the write, so it is not one literal compared to another); the comparison must sit **before the
+   first write**; and a `RAISE EXCEPTION` must sit **inside that comparison's own `IF` block**, so a
+   drifted set aborts. A `RAISE` that merely happens to be nearby, in an unrelated or unreachable
+   branch, no longer counts.
+3. **The opt-out was a silent blanket pass.** It must now **name every business table it waives**,
+   and it emits a `WARNING` — a waived money rewrite belongs in the CI log where a reviewer sees it,
+   not passing quietly.
+
+The protected-table list was also too narrow: it covered the ordering and invoicing tables but not
+`inventory`, `vendor_bills`, `vendor_payments`, `cost_history`, `prepay_credits`, and the rest of the
+financial state. It now covers all of them.
+
+**Hardened again after a second review (same day).** A round-5 Codex review found four more bypasses
+in the hardened version. All closed:
+
+4. **The comparison accepted `=`.** `IF actual = '<approved>' THEN RAISE EXCEPTION` reads exactly
+   like a guard and is its precise inversion: it aborts when the data is *right* and writes when it
+   has *drifted*. Only a mismatch test now counts — `<>`, `!=`, or `IS DISTINCT FROM` (preferred, it
+   is NULL-safe). Equality is rejected outright with a message naming why.
+5. **"A hash appears somewhere above" was not a binding.** A migration could hash an unrelated table,
+   hand-set the compared variable to the literal, and pass. The guard now reads the **identifier on
+   the left of the mismatch** and requires *that* variable to be the one a hash was assigned into,
+   matched statement-by-statement so a multi-line `SELECT … INTO` still works.
+6. **Two blind spots in the function-body state machine.** A block comment naming `CREATE FUNCTION`
+   pinned the scanner in function-body mode and swallowed every rewrite after it; and a one-line
+   `CREATE FUNCTION … AS $$ … $$ LANGUAGE plpgsql;` opened that mode and never closed it. Block
+   comments are now stripped statefully before anything else, and the close is checked on the same
+   line as the open.
+7. **The cutoff left a hole.** Rounding up to the next midnight meant every later `20260810…`
+   migration was unguarded. It is now one second past the last applied stamp.
+8. **The waiver was a self-authored bypass.** Naming the tables was not enough — an author could
+   waive their own guard on any rewrite. The waiver is now restricted to its one honest use: every
+   table it names must get an `ADD COLUMN` in the same migration, i.e. there is genuinely no
+   pre-existing population to protect. Anything else is a `VIOLATION`.
+
+**Hardened a third time after a round-6 review (same day).** Codex `CRX-GUARD-001` found the guard
+still only understood one shape of rewrite and never checked what the digest was actually a hash
+*of*. Four more closed:
+
+9. **Only `UPDATE`/`DELETE` counted as a rewrite.** `INSERT … ON CONFLICT DO UPDATE SET` and
+    `MERGE INTO … WHEN MATCHED THEN UPDATE` rewrite existing rows just as thoroughly and walked
+    straight past the guard. Both are now detected. A *plain* `INSERT` still is not — it adds rows,
+    it does not overwrite an approved population — so ordinary seed migrations stay silent.
+10. **The digest could be a hash of anything.** The guard checked that a hash was assigned into the
+    compared variable, not what the hash covered. `encode(digest('approved', 'sha256'), 'hex')` — a
+    real hash of a constant — passed. The hashing statement must now read one of the tables the
+    migration rewrites, cover the row `id`s, and cover at least one of the columns the rewrite
+    actually assigns. The failure message says which of the three is missing.
+11. **The waiver was still table-level.** "This table gets an `ADD COLUMN`" let a migration add one
+    harmless column and, in the same file, rewrite a pre-existing money column on that same table.
+    The waiver is now **column-level**: every column the rewrite assigns must be a column this
+    migration adds. A waiver on a `DELETE` — which backfills nothing — is a `VIOLATION` outright.
+12. **A one-shot data migration must never be replayed.** (Codex `CRX-DATA-001`.) The applied
+    backfill is not editable, so containment is forward-only:
+    `supabase/baselines/one-shot-migrations.json` registers it, and
+    `scripts/list-post-baseline-migrations.mjs` — whose stdout *is* the disaster-recovery replay plan
+    — withholds registered one-shot data migrations from that plan and says so loudly on stderr.
+    A restore brings the corrected values back with the data; re-running the edit would point it at a
+    different population. `--include-one-shot` exists as a deliberate, reviewed override. Schema and
+    function migrations never belong in the registry — they are idempotent by contract and must keep
+    rebuilding.
+
+**Hardened a fourth time after a round-8 review (same day).** Codex returned `BLOCKERS` again with
+three High findings. All closed:
+
+13. **The digest checks were statement-wide, not span-scoped.** Round 6 required the hashing
+    statement to cover the ids and a written column — but it looked for those tokens anywhere in the
+    statement, and a `SELECT` can mention plenty of things outside the hash call. So
+    `SELECT encode(digest('approved','sha256'),'hex') INTO actual FROM orders WHERE id = ANY(...)
+    AND total_profit IS NOT NULL` — a hash of a **constant** — passed by naming `id` and
+    `total_profit` in its `WHERE` clause. The guard now extracts the **argument span of the hash
+    call** by balancing parentheses, and requires the ids and the written column to appear *inside
+    that span*. It also requires the span to contain a `string_agg()`: a digest that is not an
+    ordered aggregate over the affected rows is not a digest *of* them. The table check stays
+    statement-level by design — in the mandated shape the `FROM` legitimately sits outside the hash
+    call.
+14. **The protected-table list was an allowlist, and allowlists rot.** The hand-maintained set had
+    grown to 52 tables and still missed `application_services`, `customer_application_rates`,
+    `allocation_sets`, `field_app_billing_lines`, `invoice_line_share_snapshots`, and the
+    supplier-pricing tables — so `UPDATE public.application_services SET cost_per_acre_cents = 0`
+    was simply not a rewrite as far as the guard was concerned. Protection is now **default-deny**:
+    every table in `.claude/schema-registry.json` is protected, minus a short, commented exemption
+    list of append-only logs, queues, and transient notice tables (17 entries, each with its reason
+    on the line). New tables are protected the moment the registry is refreshed, with no edit here.
+    The derivation **fails closed** — an unreadable registry, or one yielding fewer than 100 tables,
+    aborts the script rather than silently protecting a partial list. The registry path resolves
+    from the script's own location, not the working directory, because the mutation harness runs the
+    script against temp directories.
+15. **One-shot containment was advisory.** Item 12 taught the disaster-recovery *replay planner* to
+    withhold registered one-shot data migrations. That is one path to an apply; the SQL file is
+    still on disk, and an ordinary `apply_migration` against a restored or drifted database still
+    saw it. `.claude/hooks/migration-apply-guard.mjs` now **refuses** any apply that matches a
+    registered one-shot whenever the target database's applied-migration ledger does not already
+    contain it, and quotes the registry's reason in the refusal. A ledger that *does* contain it is
+    by definition the population the migration was approved against, so the guard stays silent
+    there. The MCP `name` is caller-controlled, so a name match is only a convenience — the
+    normalized SQL body is checked against the registered file on disk, and renaming the migration
+    does not get past it. The escape hatch is **digest-bound**: the override must carry the SHA-256
+    of the exact SQL being applied, so it authorizes that text and nothing else; a name-keyed flag
+    would have been a wave-through for any body. A missing or unparseable registry denies the apply.
+
+**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 41
+synthetic migrations — real bypass attempts, waivers, and shapes that must stay silent — runs the
+actual script over them, and asserts what it printed for each. It runs in
+`npm run test:correction-guards`, as does `scripts/list-post-baseline-migrations.test.mjs`, which
+covers the one-shot replay containment (both were added to that slice, so neither is a guard the
+regression gate cannot see). The apply-time refusal added in item 15 is covered by
+`.claude/hooks/migration-apply-guard.test.mjs` (98 assertions), which seeds a real one-shot registry
+per fixture and drives the hook end to end. Each round was verified by breaking the guard on purpose
+and watching each mutant turn exactly its own case(s) red, then restoring and watching everything go
+green: round 5 by accepting `=`, dropping the block-comment stripper, un-closing the same-line
+function body, dropping the `ADD COLUMN` requirement, dropping the variable binding, and narrowing
+the table list; round 7 by removing upsert detection, removing `MERGE` detection, removing the
+digest's table-coverage check, removing its written-column check, removing the column-level waiver
+check, bypassing the one-shot quarantine, and emptying the registry; round 8 by widening the hash
+span back to the whole statement, dropping the `string_agg` requirement, putting
+`application_services` back in the exemption list, making the one-shot registry read fail open,
+checking only the caller-supplied name instead of the SQL body, un-binding the override from the
+query digest, and firing the guard even when the ledger already had the migration. Per the standing
+rule that an untested guard is decoration, that red-then-green run is the evidence, not a reading of
+the diff.
 
 **Also settled here.** The permission entry `Read(//c/CRX_Manager/**)` was removed from the tracked
 `.claude/settings.local.json` (Codex finding 2). It had been added by an auto-approved prompt during

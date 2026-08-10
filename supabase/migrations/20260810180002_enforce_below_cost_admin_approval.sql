@@ -23,7 +23,7 @@
 -- create_rush_order is wrapped with the other six paths, but its deliberately
 -- unpriced pricing_pending rows are exempt until price_order supplies a price.
 
-CREATE TABLE IF NOT EXISTS public.below_cost_approvals (
+CREATE TABLE public.below_cost_approvals (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   operation text NOT NULL CHECK (operation IN (
     'create_direct_order',
@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS public.below_cost_approvals (
   entity_type text NOT NULL CHECK (entity_type IN ('order', 'invoice', 'quote')),
   entity_id uuid NOT NULL,
   line_id uuid NOT NULL,
-  product_id uuid NOT NULL REFERENCES public.products(id),
+  -- NULL identifies a classified non-product invoice line (for example an
+  -- application fee). Its total stored revenue/cost is still governed below.
+  product_id uuid REFERENCES public.products(id),
   actor_user_id uuid NOT NULL REFERENCES public.profiles(id),
   reason text NOT NULL CHECK (length(btrim(reason)) > 0),
   unit_price_cents bigint NOT NULL CHECK (unit_price_cents >= 0),
@@ -53,11 +55,17 @@ CREATE TABLE IF NOT EXISTS public.below_cost_approvals (
 );
 
 COMMENT ON TABLE public.below_cost_approvals IS
-  'Immutable audit of active-admin overrides for sell-side prices below the product cost locked by PostgreSQL in the same transaction.';
+  'Immutable audit of active-admin overrides for sell-side prices below the product cost locked by PostgreSQL in the same transaction, or below the stored total cost on a classified non-product invoice line.';
+COMMENT ON COLUMN public.below_cost_approvals.product_id IS
+  'Product whose catalog cost was locked; NULL only for a classified non-product invoice line governed against its stored total cost.';
+COMMENT ON COLUMN public.below_cost_approvals.unit_price_cents IS
+  'Unit sale price for product lines; stored total revenue for a classified non-product invoice line.';
+COMMENT ON COLUMN public.below_cost_approvals.locked_unit_cost_cents IS
+  'Locked catalog unit cost for product lines; stored total cost for a classified non-product invoice line.';
 
-CREATE INDEX IF NOT EXISTS below_cost_approvals_entity_idx
+CREATE INDEX below_cost_approvals_entity_idx
   ON public.below_cost_approvals (entity_type, entity_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS below_cost_approvals_product_idx
+CREATE INDEX below_cost_approvals_product_idx
   ON public.below_cost_approvals (product_id, created_at DESC);
 
 ALTER TABLE public.below_cost_approvals ENABLE ROW LEVEL SECURITY;
@@ -79,7 +87,10 @@ CREATE POLICY below_cost_approvals_admin_read
     )
   );
 
-REVOKE ALL ON TABLE public.below_cost_approvals FROM PUBLIC, anon, authenticated;
+-- Local and hosted projects may carry default privileges for service_role, so
+-- revoke it explicitly rather than relying on the new-table default ACL.
+REVOKE ALL ON TABLE public.below_cost_approvals
+  FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON TABLE public.below_cost_approvals TO authenticated;
 
 -- Line collections are RPC-owned. RLS alone is not an authorization boundary
@@ -298,6 +309,7 @@ DECLARE
   v_entity_id uuid;
   v_line_id uuid;
   v_product_id uuid;
+  v_is_application_fee boolean;
   v_detail jsonb;
 BEGIN
   IF TG_TABLE_NAME = 'order_items' THEN
@@ -355,23 +367,61 @@ BEGIN
     -- bookkeeping only. Neither increases the approved below-cost exposure.
     IF TG_OP = 'UPDATE'
        AND COALESCE(v_operation, '') = ''
+       AND NEW.product_id IS NOT NULL
        AND NEW.product_id IS NOT DISTINCT FROM OLD.product_id
+       AND NEW.order_item_id IS NOT DISTINCT FROM OLD.order_item_id
        AND NEW.unit_price_cents IS NOT DISTINCT FROM OLD.unit_price_cents
+       AND NEW.cost_cents IS NOT DISTINCT FROM OLD.cost_cents
        AND COALESCE(NEW.is_application_fee, false)
            IS NOT DISTINCT FROM COALESCE(OLD.is_application_fee, false)
        AND COALESCE(NEW.quantity, 0) <= COALESCE(OLD.quantity, 0) THEN
       RETURN NEW;
     END IF;
-    -- Application fees have no product cost basis and are not product sales.
-    IF NEW.product_id IS NULL OR COALESCE(NEW.is_application_fee, false) THEN
-      RETURN NEW;
+    v_is_application_fee := COALESCE(NEW.is_application_fee, false);
+    IF v_is_application_fee AND NEW.product_id IS NOT NULL THEN
+      RAISE EXCEPTION 'APPLICATION_FEE_PRODUCT_INVALID';
     END IF;
     v_entity_type := 'invoice';
     v_entity_id := NEW.invoice_id;
     v_line_id := NEW.id;
     v_product_id := NEW.product_id;
-    v_price_cents := NEW.unit_price_cents;
-    v_quantity := NEW.quantity;
+    IF v_product_id IS NULL THEN
+      -- A non-product line has no catalog row to lock, but save_invoice lets a
+      -- caller supply cost_cents. Zero-cost fees/miscellaneous charges are not
+      -- below cost. Positive-cost lines compare their total stored revenue to
+      -- total stored cost and use quantity=1 in the approval audit so neither
+      -- an application fee nor a null-product misc line can bypass the wall.
+      IF COALESCE(NEW.cost_cents, 0) < 0 THEN
+        RAISE EXCEPTION 'INVALID_COST';
+      END IF;
+      IF NEW.quantity IS NULL
+         OR NEW.quantity::text IN ('NaN', 'Infinity', '-Infinity')
+         OR NEW.quantity <= 0 THEN
+        RAISE EXCEPTION 'INVALID_QUANTITY';
+      END IF;
+      IF COALESCE(NEW.cost_cents, 0) = 0 THEN
+        RETURN NEW;
+      END IF;
+      v_product_name := COALESCE(
+        NULLIF(btrim(NEW.description), ''),
+        CASE WHEN v_is_application_fee
+          THEN 'Application fee'
+          ELSE 'Non-product invoice line'
+        END
+      );
+      v_price_cents := COALESCE(
+        NEW.extended_cents,
+        round(COALESCE(NEW.unit_price_cents, 0) * COALESCE(NEW.quantity, 0))::bigint
+      );
+      v_cost_cents := CASE
+        WHEN v_is_application_fee THEN NEW.cost_cents
+        ELSE round(NEW.cost_cents * COALESCE(NEW.quantity, 0))::bigint
+      END;
+      v_quantity := 1;
+    ELSE
+      v_price_cents := NEW.unit_price_cents;
+      v_quantity := NEW.quantity;
+    END IF;
   ELSIF TG_TABLE_NAME = 'quote_items' THEN
     -- save_quote first inserts the client shape and then, in the same
     -- transaction, recomputes every line from the locked Product row. App
@@ -406,25 +456,27 @@ BEGIN
 
   IF v_price_cents < 0 THEN RAISE EXCEPTION 'INVALID_PRICE'; END IF;
 
-  -- FOR SHARE prevents products.current_cost from changing between the check
-  -- and the line write, while allowing unrelated product rows to proceed.
-  SELECT p.product_name, p.current_cost
-    INTO v_product_name, v_cost
-  FROM public.products p
-  WHERE p.id = v_product_id
-  FOR SHARE;
+  IF v_product_id IS NOT NULL THEN
+    -- FOR SHARE prevents products.current_cost from changing between the check
+    -- and the line write, while allowing unrelated product rows to proceed.
+    SELECT p.product_name, p.current_cost
+      INTO v_product_name, v_cost
+    FROM public.products p
+    WHERE p.id = v_product_id
+    FOR SHARE;
 
-  IF NOT FOUND THEN RAISE EXCEPTION 'PRODUCT_NOT_FOUND'; END IF;
-  IF v_cost IS NULL
-     OR v_cost::text IN ('NaN', 'Infinity', '-Infinity')
-     OR v_cost <= 0 THEN
-    RAISE EXCEPTION 'COST_BASIS_REQUIRED:%', v_product_id;
-  END IF;
-  IF v_cost <> round(v_cost, 2) THEN
-    RAISE EXCEPTION 'COST_BASIS_CENTS_REQUIRED:%', v_product_id;
-  END IF;
+    IF NOT FOUND THEN RAISE EXCEPTION 'PRODUCT_NOT_FOUND'; END IF;
+    IF v_cost IS NULL
+       OR v_cost::text IN ('NaN', 'Infinity', '-Infinity')
+       OR v_cost <= 0 THEN
+      RAISE EXCEPTION 'COST_BASIS_REQUIRED:%', v_product_id;
+    END IF;
+    IF v_cost <> round(v_cost, 2) THEN
+      RAISE EXCEPTION 'COST_BASIS_CENTS_REQUIRED:%', v_product_id;
+    END IF;
 
-  v_cost_cents := round(v_cost * 100)::bigint;
+    v_cost_cents := round(v_cost * 100)::bigint;
+  END IF;
 
   -- update_order_items previously trusted p_items.cost_per_unit, and
   -- price_order previously reused an older snapshot. Both must write the same
@@ -511,7 +563,8 @@ CREATE TRIGGER zz_crx_below_cost_order_items
   ON public.order_items
   FOR EACH ROW EXECUTE FUNCTION public._enforce_below_cost_line();
 CREATE TRIGGER zz_crx_below_cost_invoice_items
-  BEFORE INSERT OR UPDATE OF product_id, unit_price_cents, quantity, is_application_fee
+  BEFORE INSERT OR UPDATE OF product_id, order_item_id, unit_price_cents,
+    extended_cents, cost_cents, quantity, is_application_fee
   ON public.invoice_items
   FOR EACH ROW EXECUTE FUNCTION public._enforce_below_cost_line();
 CREATE TRIGGER zz_crx_below_cost_quote_items
@@ -836,6 +889,7 @@ DECLARE
   v_role text;
   v_table text;
   v_privilege text;
+  v_column_shape jsonb;
 BEGIN
   FOREACH v_name IN ARRAY ARRAY[
     'create_direct_order', 'create_rush_order', 'bulk_import_order',
@@ -861,6 +915,71 @@ BEGIN
 
   IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE 'zz_crx_below_cost_%') <> 3 THEN
     RAISE EXCEPTION 'verify failed: expected three below-cost line triggers';
+  END IF;
+
+  SELECT jsonb_object_agg(
+           a.attname,
+           jsonb_build_object(
+             'type', format_type(a.atttypid, a.atttypmod),
+             'not_null', a.attnotnull
+           )
+         )
+    INTO v_column_shape
+  FROM pg_attribute a
+  WHERE a.attrelid = 'public.below_cost_approvals'::regclass
+    AND a.attnum > 0
+    AND NOT a.attisdropped;
+
+  IF v_column_shape IS DISTINCT FROM jsonb_build_object(
+    'id', jsonb_build_object('type', 'uuid', 'not_null', true),
+    'operation', jsonb_build_object('type', 'text', 'not_null', true),
+    'entity_type', jsonb_build_object('type', 'text', 'not_null', true),
+    'entity_id', jsonb_build_object('type', 'uuid', 'not_null', true),
+    'line_id', jsonb_build_object('type', 'uuid', 'not_null', true),
+    'product_id', jsonb_build_object('type', 'uuid', 'not_null', false),
+    'actor_user_id', jsonb_build_object('type', 'uuid', 'not_null', true),
+    'reason', jsonb_build_object('type', 'text', 'not_null', true),
+    'unit_price_cents', jsonb_build_object('type', 'bigint', 'not_null', true),
+    'locked_unit_cost_cents', jsonb_build_object('type', 'bigint', 'not_null', true),
+    'quantity', jsonb_build_object('type', 'numeric', 'not_null', true),
+    'total_shortfall_cents', jsonb_build_object('type', 'bigint', 'not_null', true),
+    'created_at', jsonb_build_object('type', 'timestamp with time zone', 'not_null', true),
+    'updated_at', jsonb_build_object('type', 'timestamp with time zone', 'not_null', true)
+  ) THEN
+    RAISE EXCEPTION 'verify failed: below_cost_approvals column shape drifted: %', v_column_shape;
+  END IF;
+
+  IF NOT (SELECT c.relrowsecurity
+          FROM pg_class c
+          WHERE c.oid = 'public.below_cost_approvals'::regclass)
+     OR (SELECT count(*) FROM pg_policy p
+         WHERE p.polrelid = 'public.below_cost_approvals'::regclass) <> 1
+     OR NOT EXISTS (
+       SELECT 1 FROM pg_policy p
+       WHERE p.polrelid = 'public.below_cost_approvals'::regclass
+         AND p.polname = 'below_cost_approvals_admin_read'
+         AND p.polcmd = 'r'
+     ) THEN
+    RAISE EXCEPTION 'verify failed: below_cost_approvals RLS/policy shape drifted';
+  END IF;
+
+  IF NOT EXISTS (
+       SELECT 1 FROM pg_trigger t
+       WHERE t.tgrelid = 'public.below_cost_approvals'::regclass
+         AND t.tgname = 'a_below_cost_approvals_immutable'
+         AND NOT t.tgisinternal
+         AND t.tgenabled = 'O'
+     )
+     OR has_table_privilege('anon', 'public.below_cost_approvals', 'SELECT')
+     OR NOT has_table_privilege('authenticated', 'public.below_cost_approvals', 'SELECT')
+     OR has_table_privilege('authenticated', 'public.below_cost_approvals', 'INSERT')
+     OR has_table_privilege('authenticated', 'public.below_cost_approvals', 'UPDATE')
+     OR has_table_privilege('authenticated', 'public.below_cost_approvals', 'DELETE')
+     OR has_table_privilege('service_role', 'public.below_cost_approvals', 'SELECT')
+     OR has_table_privilege('service_role', 'public.below_cost_approvals', 'INSERT')
+     OR has_table_privilege('service_role', 'public.below_cost_approvals', 'UPDATE')
+     OR has_table_privilege('service_role', 'public.below_cost_approvals', 'DELETE') THEN
+    RAISE EXCEPTION 'verify failed: below_cost_approvals immutability/ACL shape drifted';
   END IF;
 
   FOREACH v_name IN ARRAY ARRAY[

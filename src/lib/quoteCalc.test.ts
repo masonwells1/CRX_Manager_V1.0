@@ -403,6 +403,46 @@ describe('recalcItem', () => {
     expect(result.net_margin).toBe(50);    // 250/500 = 50%
   });
 
+  it('settles exact decimal half-cents like PostgreSQL instead of binary Math.round', () => {
+    const product = makeProduct({
+      tier1_price: 1.005,
+      current_cost: 0,
+      inventory_unit: 'Gallon',
+    });
+    const item = makeItem({
+      calc_mode: 'units_direct' as CalcMode,
+      total_units_needed: 1,
+      actual_rate: null,
+      rate_unit: null,
+      acres: null,
+      current_cost: 0,
+    });
+
+    const result = recalcItem(item, product, 1, conversions);
+
+    expect(result.total_price).toBe(1.01);
+    expect(result.profit).toBe(1.01);
+  });
+
+  it('keeps rate/acres money exact across a fractional-unit division', () => {
+    const product = makeProduct({
+      tier1_price: 1.005,
+      current_cost: 0,
+      inventory_unit: 'Gallon',
+    });
+    const item = makeItem({
+      actual_rate: 1,
+      rate_unit: 'fl oz',
+      acres: 128,
+      current_cost: 0,
+    });
+
+    const result = recalcItem(item, product, 1, conversions);
+
+    expect(result.total_units_needed).toBe(1);
+    expect(result.total_price).toBe(1.01);
+  });
+
   it('units_direct: back-calculates oz/acre and $/acre when acres provided', () => {
     const product = makeProduct({ tier1_price: 20, current_cost: 10, inventory_unit: 'Gallon' });
     const item = makeItem({

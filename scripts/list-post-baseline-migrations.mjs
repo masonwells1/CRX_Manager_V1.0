@@ -38,12 +38,53 @@ export function listPostBaselineMigrations(migrationNames, highWater, ledgerName
   });
 }
 
+/**
+ * Split the pending set into what a rebuild may replay and what it may not.
+ *
+ * A one-shot DATA migration rewrote specific rows that existed on production at
+ * a specific moment. Replaying it on a database whose ledger lacks it points
+ * that same edit at a DIFFERENT population — which is an unapproved money
+ * mutation, not a rebuild. Schema and function migrations are unaffected: they
+ * are idempotent by contract and stay in the plan.
+ */
+export function partitionOneShot(pending, oneShotStems) {
+  const replay = [];
+  const quarantined = [];
+  for (const name of pending) {
+    (oneShotStems.has(name.slice(0, -4)) ? quarantined : replay).push(name);
+  }
+  return { replay, quarantined };
+}
+
+const registry = JSON.parse(readFileSync(path.join(baselineDir, 'one-shot-migrations.json'), 'utf8'));
+const oneShotStems = new Set(Object.keys(registry.one_shot ?? {}));
+
 const pending = listPostBaselineMigrations(
   migrationFiles,
   manifest.migrations_high_water,
   capturedNames,
 );
+const { replay, quarantined } = partitionOneShot(pending, oneShotStems);
+const includeOneShot = process.argv.includes('--include-one-shot');
 
-for (const name of pending) {
+for (const name of includeOneShot ? pending : replay) {
   console.log(path.posix.join('supabase', 'migrations', name));
+}
+
+// stderr, not stdout: the plan on stdout must stay directly runnable, and a
+// withheld money migration must never be silently absent from it.
+if (quarantined.length > 0) {
+  const verb = includeOneShot ? 'INCLUDED BY --include-one-shot' : 'WITHHELD from the replay plan';
+  process.stderr.write(`\nONE-SHOT DATA MIGRATION(S) ${verb}:\n`);
+  for (const name of quarantined) {
+    process.stderr.write(`  ${name}\n    ${registry.one_shot[name.slice(0, -4)]}\n`);
+  }
+  process.stderr.write(
+    includeOneShot
+      ? '  Replaying these rewrites rows on THIS database. Only do it against a ledger\n' +
+        '  you have proven matches the population the migration was approved against.\n\n'
+      : '  These edited data, not schema. After a restore the corrected values come back\n' +
+        '  with the DATA restore. Pass --include-one-shot only after proving the target\n' +
+        '  population matches the one each migration was approved against.\n\n',
+  );
 }

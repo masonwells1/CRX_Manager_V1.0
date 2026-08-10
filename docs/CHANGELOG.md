@@ -66,6 +66,21 @@ wrapper-level tests pin the full reason and row-version payload and prove no leg
 The unrelated, non-money `create_quote_version` compatibility fallback remains intentionally
 unchanged. A replacement exact-SHA review is required before publication.
 
+**Exact-SHA review follow-up 7 (still local).** Review of `585eb281` found three final hard
+gaps. First, a caller-controlled positive cost on a null-product invoice line could skip the
+admin wall; the real `save_invoice` path now denies a sales rep, requires an admin reason, and
+writes one immutable audit against the line's stored total revenue and cost. The Invoice editor now
+prompts on the same application-fee total-revenue/total-cost boundary instead of skipping fees, so
+an admin has a usable approval path while a sales rep is stopped early. The migration creates
+the audit table fail-closed and validates its complete column, RLS, policy, trigger, and ACL shape.
+Second, Quote preview money now converts canonical decimal operands to bigint cents and rounds with
+integer arithmetic, including the `1.005 -> 1.01` boundary; the decision log explicitly records the
+already-approved exact-`numeric` compatibility exception for legacy PostgreSQL dollar columns.
+Third, the already-live stale-profit migration remains byte-identical, is registered as a one-shot
+data migration and withheld from normal rebuild replay, while a mutation-tested repository guard
+requires sorted-ID plus material-before-value digests for every future business-row rewrite. A
+replacement exact-SHA review is required before publication.
+
 **Exact-SHA review follow-up (still local).** The review of `b5f949fa` correctly found that the
 first server-wall draft still left direct PostgREST line writes available, ran after the canonical
 rounding trigger and could overwrite its whole-cent result, and could parse an older approval

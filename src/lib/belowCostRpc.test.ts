@@ -5,7 +5,46 @@ vi.mock('./db', () => ({
 }));
 
 import { supabaseUntyped } from './db';
-import { belowCostLinesFromRpcError, callBelowCostAwareRpc } from './belowCostRpc';
+import {
+  belowCostLinesFromRpcError,
+  callBelowCostAwareRpc,
+  invoiceBelowCostValues,
+} from './belowCostRpc';
+
+describe('invoiceBelowCostValues', () => {
+  it('compares a product line on per-unit price and cost', () => {
+    expect(invoiceBelowCostValues({
+      isApplicationFee: false,
+      unitPriceCents: 900,
+      extendedCents: 1800,
+      costCents: 1000,
+    })).toEqual({ price: 9, cost: 10 });
+  });
+
+  it('compares an application fee on exact line-total revenue and cost', () => {
+    expect(invoiceBelowCostValues({
+      isApplicationFee: true,
+      unitPriceCents: 100,
+      extendedCents: 900,
+      costCents: 1000,
+    })).toEqual({ price: 9, cost: 10 });
+  });
+
+  it('does not prompt for zero-cost or above-cost lines', () => {
+    expect(invoiceBelowCostValues({
+      isApplicationFee: true,
+      unitPriceCents: 100,
+      extendedCents: 900,
+      costCents: 0,
+    })).toBeNull();
+    expect(invoiceBelowCostValues({
+      isApplicationFee: true,
+      unitPriceCents: 100,
+      extendedCents: 1000,
+      costCents: 1000,
+    })).toBeNull();
+  });
+});
 
 describe('belowCostLinesFromRpcError', () => {
   it('uses the server-locked price and cost in the approval line', () => {

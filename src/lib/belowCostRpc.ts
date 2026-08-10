@@ -14,6 +14,27 @@ function errorText(error: unknown): string {
   return '';
 }
 
+type InvoiceCostCandidate = {
+  isApplicationFee: boolean;
+  unitPriceCents: number;
+  extendedCents: number;
+  costCents: number;
+};
+
+/**
+ * Return the comparable sale/cost pair for an Invoice approval prompt.
+ * Product and ordinary misc lines store per-unit cost; application fees store
+ * exact line-total cost because their quantity is acres, not a COGS multiplier.
+ */
+export function invoiceBelowCostValues(
+  line: InvoiceCostCandidate,
+): { price: number; cost: number } | null {
+  if (!Number.isFinite(line.costCents) || line.costCents <= 0) return null;
+  const priceCents = line.isApplicationFee ? line.extendedCents : line.unitPriceCents;
+  if (!Number.isFinite(priceCents) || priceCents >= line.costCents) return null;
+  return { price: priceCents / 100, cost: line.costCents / 100 };
+}
+
 /**
  * Call a lifecycle RPC through the database-enforced approval boundary.
  * Missing-signature PGRST202 errors deliberately fail closed: retrying the old
