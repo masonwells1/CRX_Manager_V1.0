@@ -2,6 +2,42 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-10 — Pricing audit follow-through: cost snapshots and report unification…
+
+Pricing audit follow-through. The two settled migrations — snapshot-cost report unification and the
+quote-time cost snapshot — went through roughly 41 Codex rounds to green on PR #350, which is now
+mergeable. The return-credit COGS reversal was split to its own parked PR #361 at Mason's direction:
+six rounds on that one function each found a different way to reverse more cost than the reports had
+counted, so it wants a live test rather than another review round. Nothing was applied to the live
+database — a web session cannot mint the Codex proof the apply and merge guards require, which is
+now recorded in `KNOWN_ISSUES.md` along with four other deferred items. `docs/handoffs/2026-08-09-
+pricing-audit-local-finish.md` carries the ordered steps for finishing from a machine with the CLI.
+
+**Read before applying:** `20260808170200` is broader than at first review — it also re-emits
+`duplicate_quote` and drops the three rep-facing write policies on `quote_items` (approved
+2026-08-09). And merging #350 does **not** change the Profitability tabs: `get_profitability_report`
+has no caller until the deferred `Reports.tsx` switch lands after the migration applies.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `7aa390128 Add the handoff for finishing the pricing work from a local session`
+  - `c688318b4 Record the per-unit cost limitation behind the remaining rounding items`
+  - `7f4903be4 Merge remote-tracking branch 'origin/claude/pricing-audit-strategy-jym8rr' into claude/pricing-audit-strategy-jym8rr`
+  - `c5e8d9ba6 Split out the returns migration and settle quote profit on one boundary`
+  - `dc806c654 Merge branch 'main' into claude/pricing-audit-strategy-jym8rr`
+  - `f3654d8d7 Make the return COGS cap exact and spend it across all credits`
+  - `01335255f Cap the return COGS reversal to the quantity actually invoiced`
+  - `28306aa54 Record that the profitability tabs are not fixed until their caller is wired`
+  - `7ab9c2429 Gate the COGS reversal on what both profit reports count`
+  - `d1a966dd8 Judge order edits and return COGS against the same basis the reports use`
+  - `72ab09080 Record that remote sessions also cannot merge a risky PR`
+  - `83cb8a448 Gate the return COGS reversal and retain the bulk approval reason`
+  - `50232b393 Match the returned product when reversing return COGS`
+  - `5b875690d Record that remote sessions cannot apply live migrations`
+  - `6f21070a5 Include quantity in the retained below-cost approval terms`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260808170100_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260808170200_quote_items_cost_at_quote_snapshot.sql`
+
 ## 2026-08-09 — Returns migration split out; quote profit settled on the report boundary
 
 **Split (Mason, 2026-08-09).** `20260808170000_return_credit_cogs_reversal.sql` is removed from this
