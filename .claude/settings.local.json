@@ -14,7 +14,8 @@
       "Bash(git pull:*)",
       "Bash(git stash:*)",
       "Bash(grep:*)",
-      "mcp__Claude_Preview__preview_start"
+      "mcp__Claude_Preview__preview_start",
+      "Read(//c/CRX_Manager/**)"
     ]
   }
 }

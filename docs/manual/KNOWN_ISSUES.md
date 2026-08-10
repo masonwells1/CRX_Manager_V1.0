@@ -7,6 +7,34 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN — three money residuals deliberately left by the 2026-08-09 profit backfill
+
+**Found 2026-08-09** while applying `20260810022500_backfill_stale_line_profit.sql`. All three were
+measured, disclosed to Mason, and scoped OUT of that migration on purpose. None is a new bug; each is
+a known remainder. Do not "discover" them again, and do not fold them into an unrelated change.
+
+1. **Eleven `pending` commission rows keep a pre-backfill basis.** The backfill restates eleven order
+   headers (downward, up to a cent each). Pending commissions are rescaled from the order header by
+   the `update_order_items` RPC — **not** by a trigger — so a direct `UPDATE` on `order_items` never
+   reaches that logic. Each affected commission is therefore off by a fraction of a cent. Rewriting
+   commission rows was not approved, so they were left alone. Fixing this means re-running the
+   commission rescale for those orders, which is a money write and needs its own approval.
+2. **One fulfilled order's header sits a cent above its own lines.** This is the *mirror* of the bug
+   the backfill fixed: the lines are already canonical and the **header** is stale, left over from
+   the older aggregate-rounding version of `trg_recalc_order_totals`. Because that order has no stale
+   lines, the backfill's predicate does not select it and cannot repair it. A no-op write to any of
+   its lines would re-fire `trg_recalc_order_totals` and settle it — one cent, needs approval.
+3. **The other sub-cent-price `order_items` rows, and the parked pending-payout row, are untouched.**
+   Their stored profit already agrees with the canonical rule, so they are correct; only their prices
+   carry sub-cent fractions. They were deliberately held back by the earlier rounding work and remain
+   held back. See the 2026-08-08 canonical-rounding decision in `docs/manual/DECISION_LOG.md`.
+
+**Why this matters for invariant sweeps:** a sweep that compares `orders.total_profit` against
+`SUM(order_items.profit)` across the whole table will report item (2) as one mismatching order, and a
+sweep comparing a commission's stored basis against the current order header will report item (1) as
+eleven rows. Both are expected until separately approved and fixed — treat a *larger* count as the
+real signal.
+
 ## OPEN — agent tooling breaks in remote (Claude Code on the web) sessions
 
 **Found 2026-08-04**, extended 2026-08-05. Three problems, two sharing one root

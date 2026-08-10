@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-08-08
+Last verified: 2026-08-09
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -8,6 +8,43 @@ settled calls. Newest first. Each entry is a decision, why it was made, and the 
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
 
 ---
+
+## 2026-08-09 — Stale line-level profit is repaired to match the canonical rule
+
+**Source:** Mason in chat, 2026-08-09. Migration `20260810022500_backfill_stale_line_profit.sql`.
+
+**Background.** `order_items.profit` is a DERIVED field: the BEFORE trigger
+`_round_money_to_whole_cents` discards whatever a caller passes and computes it from the row's own
+rounded price and cost, and `trg_recalc_order_totals` sums the same two rounded quantities into the
+order header. That rule went live 2026-08-09 but did not touch rows written before it existed.
+
+**The decision.** Mason asked to "recompute the stale line level profit," and — shown the per-row
+figures — chose to **include all 37 stale rows** rather than exclude the 11 whose price carries a
+sub-cent fraction. Those 11 prices therefore also round to whole cents (well under a cent in total),
+and eleven order headers are restated downward by up to a cent each. Sales Reports read the line
+copy, so this is a **reporting correction**; no amount owed changes, because accounts receivable is
+carried on `invoices.balance_cents`, which nothing in this path writes.
+
+**Operative rules this implies.**
+
+1. **The trigger is the single definition of a line profit.** The backfill re-saves stale rows so the
+   trigger re-derives them; it does not recompute profit in the migration. Do not fork the formula
+   into a second place.
+2. **The approved set is 37 rows / 17 orders / 11 fractional-price.** The migration hard-codes those
+   counts and aborts with `APPROVED_SET_DRIFTED` if live disagrees. That is deliberate — the counts
+   bind the write to what Mason actually approved, and an abort on a clone, staging copy or restored
+   backup is correct behavior, not a bug.
+3. **Deliberately out of scope, and still open:** the other sub-cent-price rows whose profit is
+   already correct; the separately parked pending-payout row; the 11 `pending` commission rows that
+   keep a pre-backfill basis (the rescale lives in the `update_order_items` RPC, not a trigger, so a
+   direct UPDATE does not reach it — drift is a fraction of a cent per row); and one fulfilled order
+   whose header sits a cent above its own already-correct lines (the mirror bug — stale header
+   rather than stale lines). None of these were approved for change. See
+   `docs/manual/KNOWN_ISSUES.md`.
+4. **Open question, not settled here.** Mason separately asked whether orders should book profit on
+   delivery, or whether profit should be computed only on invoices, given that orders are edited
+   before delivery and goods are returned after it. That is an unscoped accounting change and is
+   **not** decided by this entry.
 
 ## 2026-08-08 — Four foundation-ultra-review owner decisions settled
 
