@@ -1,6 +1,8 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-08-07 evening (post-apply). Live ledger high-water is `20260807220323` (`log_customer_fact_rpc`). The two 2026-08-07 parked migrations are now APPLIED LIVE: `20260807215532_profile_role_lock_covers_insert` (profiles role-lock trigger now BEFORE INSERT OR UPDATE, non-admin logged-in inserts blocked with PROFILE_INSERT_LOCK) and `20260807220323_log_customer_fact_rpc` (`log_customer_fact` live: anon denied, authenticated granted, single overload). The Section 4 bulk-order-import lifecycle hardening is live through seven migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, and commission-safe; every imported line uses one locked bigint-cent Product cost snapshot, retains whole-cent profit, and commission profit is reread from the trigger-canonical order header. Canonical pre-reservation Net Position shortages are returned to the browser and recorded in activity. Post-apply catalog/grant checks, rollback proof, all 21 standing invariant predicates, and a genuine live schema-registry refresh passed. The earlier idempotency, statement disclosure, and historical AR report protections remain live as documented below. Operational counts below remain the separately dated 2026-07-18 snapshot.
+**Last verified:** 2026-08-07 evening (post-apply), **plus a 2026-08-08 addendum** — the money-loop correction below and the `payments` row in the counts table were re-verified live on 2026-08-08 and are dated inline. No other line in this document was re-checked on 2026-08-08.
+
+**2026-08-07 verification detail:** (post-apply). Live ledger high-water is `20260807220323` (`log_customer_fact_rpc`). The two 2026-08-07 parked migrations are now APPLIED LIVE: `20260807215532_profile_role_lock_covers_insert` (profiles role-lock trigger now BEFORE INSERT OR UPDATE, non-admin logged-in inserts blocked with PROFILE_INSERT_LOCK) and `20260807220323_log_customer_fact_rpc` (`log_customer_fact` live: anon denied, authenticated granted, single overload). The Section 4 bulk-order-import lifecycle hardening is live through seven migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, and commission-safe; every imported line uses one locked bigint-cent Product cost snapshot, retains whole-cent profit, and commission profit is reread from the trigger-canonical order header. Canonical pre-reservation Net Position shortages are returned to the browser and recorded in activity. Post-apply catalog/grant checks, rollback proof, all 21 standing invariant predicates, and a genuine live schema-registry refresh passed. The earlier idempotency, statement disclosure, and historical AR report protections remain live as documented below. Operational counts below remain the separately dated 2026-07-18 snapshot.
 **Update triggers:** refresh when a major feature ships or quarterly, whichever first.
 
 **Quote/customer row-version rollout is live:** PR #290 deployed the compatible frontend first, then `20260730201230_quote_customer_row_version_guard` applied under Supabase-assigned ledger/disk version `20260730235031`. Live catalog, trigger, overload, ownership, fixed-search-path, grant, and child-table ACL checks passed. Four rollback-only behavior chains reached exact `SMOKE_PASS_ROLLBACK`, zero fixture rows remained, all 21 standing invariant predicates had zero unallowlisted findings, and the schema registry was refreshed through the subsequent AP high-water. Cached pre-migration bundles fail closed until refreshed; no rollout toggle is required.
@@ -41,8 +43,17 @@ the database was near-empty on 2026-06-13, and by 2026-07-12 it held roughly
 153 customers and 604 products. As of this snapshot (2026-07-18) those two
 numbers are unchanged, but **deliveries are now flowing through the app**
 (107 recorded) while payments remain at zero — see the table below. Treat this
-as a business in early adoption: operational usage is real, the money loop
-(invoice → post → payment) has not completed a real cycle yet.
+as a business in early adoption: operational usage is real, and the money loop
+(invoice → post → payment) **has** completed one real cycle — see the correction
+below.
+
+> **Correction (2026-08-08 foundation ultra review):** the `payments` row count
+> below is not evidence the money loop is unexercised. `payments` is a **dead
+> legacy table** with zero writers; the live ledger is `allocation_sets` +
+> `prepay_credits`. On 2026-07-17 a $6,800 check was recorded against the owner's
+> own customer record — $5,020.40 allocated to invoice CS-2026-0094 and $1,779.60
+> booked as prepay credit — and both halves reconcile exactly. Do not read
+> `payments = 0` as missing money or as an unrun money loop.
 
 ## 2. Live operational snapshot
 
@@ -57,7 +68,7 @@ captured 2026-07-18. These age immediately — re-run before relying on them.
 | quotes | 4 | |
 | orders | 64 | |
 | invoices | 11 | 8 draft / 2 posted / 1 paid |
-| payments | 0 | none recorded yet |
+| payments | 0 | **dead legacy table, zero writers** (verified 2026-08-08, not part of the 2026-07-18 snapshot) — real payments live in `allocation_sets`/`prepay_credits` |
 | jobs | 4 | |
 | deliveries | 107 | deliveries are the most-used transactional surface |
 | blend_tickets | 0 | none recorded yet |
