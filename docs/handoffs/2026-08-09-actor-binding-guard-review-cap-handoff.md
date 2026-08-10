@@ -24,7 +24,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 195 assertions; the idempotency reference
+- The actor-binding suite passes at 199 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -240,6 +240,15 @@ PR workflow.
 - The review of `fee38277` returned one HIGH blocker for quoted function names.
   It was reproduced and fixed in `0b5c896a`; its BLOCKERS verdict likewise does
   not approve the final documentation HEAD.
+- CodeRabbit's publication review of PR `#373` found that a CTE-prefixed cron
+  UPDATE scanned its assignment tail from the wrong offset and that this packet's
+  no-PR status had become stale. Both findings were reproduced and fixed in
+  `d74a5399`; that review applies only to the prior PR head.
+- The governed exact-SHA review of `d74a5399` returned one HIGH blocker for a
+  rename-call-restore alias of `execute_sql_readonly`. The bypass was reproduced
+  and fixed in the current continuation by refusing non-allowlisted callables
+  receiving function SQL and blocking identity changes to the known executor.
+  Its BLOCKERS verdict does not approve the new HEAD.
 
 ## REMAINING LANDING WORK
 

@@ -94,7 +94,15 @@ after the matched cron target, and a safe CTE control proves the false positive
 closed. The same follow-up makes raw/masked argument alignment explicit and uses
 valid quote forms for both single-quoted and dollar-quoted test fixtures.
 
-The focused actor-binding suite grew from 115 to 195 assertions while the
+The next governed exact-SHA review found an executor-identity bypass: a migration
+could rename `execute_sql_readonly`, call the alias with scheduled actor-forgery
+SQL, and restore the old name. The reader now fails closed when function-bearing
+SQL is passed to any unproven callable and blocks renames or schema moves of the
+known owner-executing SQL function. Plain table storage remains ordinary data;
+callable sinks, unknown aliases, and rename-call-restore sequences require the
+exemption/manual-review path.
+
+The focused actor-binding suite grew from 115 to 199 assertions while the
 idempotency reference suite remained at 86. Sixty continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary

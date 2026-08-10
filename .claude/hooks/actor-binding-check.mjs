@@ -857,6 +857,62 @@ function isExecuteSqlReadonlyLiteralPrefix(prefix) {
   return qualified.test(prefix) || unqualified.test(prefix);
 }
 
+const NON_CALLABLE_PAREN_KEYWORDS = new Set([
+  "all", "any", "array", "case", "cast", "exists", "in", "row", "select", "values",
+]);
+
+/** Return true when a literal is the next argument to a SQL callable. SQL
+ * grammar constructs that also use parentheses are excluded deliberately. */
+function isCallableLiteralPrefix(prefix) {
+  const namedArg = `(?:${SQL_IDENTIFIER_PATTERN}\\s*(?:=>|:=)\\s*)?`;
+  const match = new RegExp(
+    `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(\\s*${namedArg}$`,
+    "i"
+  ).exec(prefix);
+  if (!match) return false;
+  if (!match[1].includes(".") && !/^U&/i.test(match[1])) {
+    const name = normalizedIdentifier(match[1]);
+    if (name !== null && NON_CALLABLE_PAREN_KEYWORDS.has(name)) return false;
+  }
+  return true;
+}
+
+function isSqlTextBuilderLiteralPrefix(prefix) {
+  const schema = '(?:(?:"pg_catalog"|pg_catalog)\\s*\\.\\s*)?';
+  const callable = '(?:"format"|format)';
+  return new RegExp(
+    `(?:^|[^\\w$."])${schema}${callable}\\s*\\([^)]*$`,
+    "i"
+  ).test(prefix);
+}
+
+/** Renaming or moving the known owner-executing SQL function would make later
+ * calls invisible to the name-bound reader. Require the explicit exemption and
+ * manual review instead of trying to carry aliases across migration files. */
+function hasExecuteSqlReadonlyIdentityChange(rawSql) {
+  const callableSql = maskSqlForCallNames(String(rawSql || ""));
+  if (callableSql === null) return false;
+  const unicodeIdentifier =
+    'U&\\s*"(?:[^"]|"")*"(?:\\s+UESCAPE\\s*\'(?:[^\']|\'\')*\')?';
+  const schema = `(?:(?:"public"|public)\\s*\\.\\s*)?`;
+  const executor = '(?:"execute_sql_readonly"|execute_sql_readonly)';
+  const identityAction = '(?:RENAME\\s+TO|SET\\s+SCHEMA)';
+  const exact = new RegExp(
+    `\\bALTER\\s+(?:FUNCTION|ROUTINE)\\s+(?:IF\\s+EXISTS\\s+)?` +
+    `${schema}${executor}\\s*\\([^;]*\\)\\s*${identityAction}`,
+    "i"
+  );
+  const opaqueUnicode = new RegExp(
+    `\\bALTER\\s+(?:FUNCTION|ROUTINE)\\s+(?:IF\\s+EXISTS\\s+)?` +
+    `(?:${SQL_QUALIFIED_IDENTIFIER_PATTERN})?${unicodeIdentifier}` +
+    `(?:\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN})?\\s*\\([^;]*\\)\\s*${identityAction}`,
+    "i"
+  );
+  return exact.test(callableSql) || opaqueUnicode.test(callableSql);
+}
+
+let sawOpaqueFunctionCallable = false;
+
 /** Replace comments and quoted-string contents with spaces, while recursively
  * retaining executable SQL held inside procedural bodies and dynamic DDL.
  * Length-preserving so structural indexes map back to the original content.
@@ -893,12 +949,21 @@ function maskSqlNoise(text, inProceduralCode = false) {
         if (close === -1) return null;
         const payload = text.slice(i + tag.length, close);
         const isProceduralContainer = isProceduralContainerPrefix(out);
-        const isKnownSqlExecutor = carriesFnHeader(payload) &&
+        const hasFunctionHeader = carriesFnHeader(payload);
+        const isKnownSqlExecutor = hasFunctionHeader &&
           isExecuteSqlReadonlyLiteralPrefix(out);
+        const isExecuteBuilder = hasFunctionHeader &&
+          isSqlTextBuilderLiteralPrefix(out) &&
+          inExecuteStatement(out, text, close + tag.length);
+        if (hasFunctionHeader && isCallableLiteralPrefix(out) &&
+            !isKnownSqlExecutor && !isExecuteBuilder) {
+          sawOpaqueFunctionCallable = true;
+          return null;
+        }
         const isExecutable = isProceduralContainer || /\bEXECUTE\s+$/i.test(out) ||
           isKnownSqlExecutor ||
-          (inProceduralCode && carriesFnHeader(payload)) ||
-          (carriesFnHeader(payload) && inExecuteStatement(out, text, close + tag.length));
+          (inProceduralCode && hasFunctionHeader) ||
+          (hasFunctionHeader && inExecuteStatement(out, text, close + tag.length));
         const inner = isExecutable
           ? maskSqlNoise(payload, inProceduralCode || isProceduralContainer)
           : " ".repeat(payload.length);
@@ -922,10 +987,18 @@ function maskSqlNoise(text, inProceduralCode = false) {
       // literal. Recognize all of them, then fail closed.
       if (isProceduralContainer && proceduralStringKind !== "plain") return null;
       if (isProceduralContainer && hasAdjacentNewlineString(text, end) !== false) return null;
-      const isKnownSqlExecutor = ch === "'" && carriesFnHeader(payload) &&
+      const hasFunctionHeader = carriesFnHeader(payload);
+      const isKnownSqlExecutor = ch === "'" && hasFunctionHeader &&
         isExecuteSqlReadonlyLiteralPrefix(out);
+      const isExecuteBuilder = ch === "'" && hasFunctionHeader &&
+        isSqlTextBuilderLiteralPrefix(out) && inExecuteStatement(out, text, end);
+      if (ch === "'" && hasFunctionHeader && isCallableLiteralPrefix(out) &&
+          !isKnownSqlExecutor && !isExecuteBuilder) {
+        sawOpaqueFunctionCallable = true;
+        return null;
+      }
       const isDynamicSql = ch === "'" && (isProceduralContainer || isKnownSqlExecutor ||
-        (carriesFnHeader(payload) && (inProceduralCode || inExecuteStatement(out, text, end))));
+        (hasFunctionHeader && (inProceduralCode || inExecuteStatement(out, text, end))));
       if (isDynamicSql) {
         // Recursing into the raw payload is safe only when it needs no SQL
         // quote decoding. In an outer standard string, doubled quotes represent
@@ -1022,14 +1095,30 @@ function readAttrsAndBody(text, fromIdx) {
 
 const violations = [];
 try {
+  if (hasExecuteSqlReadonlyIdentityChange(content)) {
+    violations.push(
+      "This migration renames or moves execute_sql_readonly, so later owner-executing SQL calls " +
+      "would no longer match the actor-binding reader. Keep the canonical identity, or add the " +
+      "file-level exempt marker (-- actor-binding-check: exempt) and get a manual review."
+    );
+  }
   const masked = maskSqlNoise(content);
   if (masked === null) {
-    violations.push(
-      "This migration could not parse safely (unterminated SQL construct, encoded or nested-quoted " +
-      "procedural body, or newline-concatenated procedural strings) — " +
-      "the actor-binding guard cannot inspect it. Fix the unterminated construct, or if it is " +
-      "genuinely valid SQL the lexer mishandles, add the exempt marker and get a manual review."
-    );
+    if (sawOpaqueFunctionCallable) {
+      violations.push(
+        "This migration passes CREATE FUNCTION text to a callable that is not allowlisted as a " +
+        "data-only sink. The callable may execute or store that SQL under another name. Use a " +
+        "known reviewed executor, or add the file-level exempt marker " +
+        "(-- actor-binding-check: exempt) and get a manual review."
+      );
+    } else {
+      violations.push(
+        "This migration could not parse safely (unterminated SQL construct, encoded or nested-quoted " +
+        "procedural body, or newline-concatenated procedural strings) — " +
+        "the actor-binding guard cannot inspect it. Fix the unterminated construct, or if it is " +
+        "genuinely valid SQL the lexer mishandles, add the exempt marker and get a manual review."
+      );
+    }
   }
 
   // Fail closed on runtime SQL unless EXECUTE receives exactly one complete,

@@ -310,7 +310,26 @@ SELECT public.execute_sql_readonly(
 ok(isDeny(r), "execute_sql_readonly rejects a staged SQL expression");
 
 r = runHook(`SELECT public.store_documentation($doc$${UNBOUND_DDL}$doc$);`);
-ok(!isDeny(r), "an unrelated callable receiving function documentation remains ordinary data");
+ok(isDeny(r), "an unproven documentation callable cannot receive function-bearing SQL");
+
+r = runHook(`SELECT public.actor_sql_alias($outer$
+  SELECT cron.schedule('alias-delayed-actor-ddl', '* * * * *',
+    $job$${UNBOUND_DDL}$job$)
+$outer$);`);
+ok(isDeny(r), "an unknown callable cannot receive function-bearing SQL without manual review");
+
+r = runHook(`ALTER FUNCTION public.execute_sql_readonly(text) RENAME TO actor_sql_alias;`);
+ok(isDeny(r), "the known SQL executor cannot be renamed past the name-bound reader");
+ok(r.stdout.includes("renames or moves execute_sql_readonly"),
+  "the executor rename reaches the dedicated identity-change guard");
+
+r = runHook(`ALTER FUNCTION public.execute_sql_readonly(text) RENAME TO actor_sql_alias;
+SELECT public.actor_sql_alias($outer$
+  SELECT cron.schedule('renamed-executor-actor-ddl', '* * * * *',
+    $job$${UNBOUND_DDL}$job$)
+$outer$);
+ALTER FUNCTION public.actor_sql_alias(text) RENAME TO execute_sql_readonly;`);
+ok(isDeny(r), "rename-call-restore cannot hide delayed actor-forgery SQL");
 
 r = runHook(`SELECT U&"\\0065xecute_sql_readonly"($outer$
   SELECT cron.schedule('unicode-executor-actor-ddl', '* * * * *',
