@@ -4,7 +4,7 @@
 
 Date pulled: 2026-08-09 · Corrected and extended: 2026-08-10 · Project: `rhyzpcqhnizqbxphqdkr` (production) · Branch base: `origin/main` @ `37c4bca6`
 
-> **Correction pass, 2026-08-10.** Review feedback on PR #362 challenged two claims in the first draft. Both challenges were right. The `_is_admin_override()` safety claim was **false as stated** and has been rewritten with the actual reason (§C). Findings #6 and #7 were labelled live-confirmed on the strength of chains that do not contain the code those findings run through; the missing fifteen functions have now been fingerprinted against production (§D). Three further errors — a miscount, a wrong migration list, and an unverified `MAINTAIN` claim — were found and fixed in the same pass. A second review round then surfaced a `search_path` disagreement between the repo and production (§A), which turned out to be the only genuine repo/live drift in the audit. **No verdict changed. Every correction is marked in place rather than silently overwritten.**
+> **Correction pass, 2026-08-10.** Review feedback on PR #362 challenged two claims in the first draft. Both challenges were right. The `_is_admin_override()` safety claim was **false as stated** and has been rewritten with the actual reason (§C). Findings #6 and #7 were labelled live-confirmed on the strength of chains that do not contain the code those findings run through; the missing fifteen functions have now been fingerprinted against production (§D). Three further errors — a miscount, a wrong migration list, and an unverified `MAINTAIN` claim — were found and fixed in the same pass. A second round raised a `search_path` disagreement between the repo and production; chasing it produced a **wrong** finding, which a third round caught and which is now **retracted in place** (§A) — there is no drift. The third round also added a fifth ungated year-end RPC to finding #9 (§D). **No verdict changed. Every correction is marked in place rather than silently overwritten.**
 
 ---
 
@@ -32,9 +32,9 @@ This document closes that gap. It compares what is actually running in the produ
 
 **Production matches the repository. The review's picture of production was accurate.** All fourteen function bodies in the core table survey are identical to the repo, or differ only by stripped comments or line endings — in no case by a single instruction. A further fifteen function bodies making up the full `complete_delivery`, `post_invoice`, `create_invoice_from_order` and `void_invoice` chains were checked the same way and also match. All sixteen RLS policies and all table grants on `quotes` / `orders` / `deliveries` / `order_items` match the committed 2026-07-27 baseline exactly.
 
-**One genuine repo/live disagreement was found, and production is the safer side of it:** `get_customer_year_end_summary` runs live with the required `search_path = public, pg_temp`, but the repository's committed definition omits `pg_temp`. Live needs no change; the repo does. Details in §A.
+**No repo/live disagreement survived checking.** A `search_path` mismatch on `get_customer_year_end_summary` was reported in an earlier revision and has been **withdrawn** — a bulk hardening migration accounts for it, and replaying the committed migrations reproduces production exactly. The retraction and what it teaches are in §A.
 
-**Consequence: none of the ten HIGH findings dissolve on contact with live.** Eight are confirmed as-written. Two are confirmed but need their wording tightened before they become work. Zero are already fixed. Zero are worse than described.
+**Consequence: none of the ten HIGH findings dissolve on contact with live.** Eight are confirmed as-written. Two are confirmed but need their wording tightened before they become work. Zero are already fixed. Zero are less serious than described — and **one, #9, is broader**: it names one function, and live introspection found **five** ungated `SECURITY DEFINER` RPCs of the same shape, including a batch endpoint that loops over an arbitrary array of customer IDs. Wave C's scope has to widen by one function. Details in §D.
 
 Three things the review could not have known, which live introspection surfaced:
 
@@ -83,28 +83,29 @@ The line it describes — the escape fix that stops a user typing `%` from match
 
 ### Structural checks, all clean
 
-- **All fourteen** use `SET search_path = public, pg_temp` **in production** (the project's hard rule against search-path hijacking), read from `pg_proc.proconfig`. **One of them does not say so in the repo — see the drift note immediately below.**
+- **All fourteen** use `SET search_path = public, pg_temp` **in production** (the project's hard rule against search-path hijacking), read from `pg_proc.proconfig`. The repository produces the same result once the full migration set is replayed — see the retracted-finding note immediately below.
 - **All are `SECURITY DEFINER` except `_enforce_quote_status_transition`**, which correctly is not — it is a trigger and should run as the caller.
 - **No duplicate overloads exist** for any of them. (A stale second copy of a function with slightly different arguments is a known failure mode in this repo; there are none here.)
 
-### Attribute drift — `get_customer_year_end_summary`
+### Retracted: the claimed `search_path` drift on `get_customer_year_end_summary`
 
-**This is the one place where production and the repository genuinely disagree, and production is the *safer* of the two.**
+**An earlier revision of this document reported a genuine repo/live disagreement here. That report was wrong, and it is withdrawn. There is no drift. Nothing needs fixing in the repo, and nothing needs applying live.**
 
-A function has a body and it has *attributes* — `SECURITY DEFINER`, `search_path`, and so on. They are stored separately, and `ALTER FUNCTION … SET search_path` changes the attribute **without touching the body by a single byte**. A body fingerprint therefore cannot see attribute drift at all. That is exactly what happened here, and it is why this check had to be run separately against `pg_proc.proconfig`.
+The claim was that `get_customer_year_end_summary` runs live with `search_path = public, pg_temp` while its committed definition at `20260228200000_season_calendar_oct_sep.sql:850` declares only `public`. Both halves of that are true. The conclusion drawn from them was not, because the search for a later change looked only for another definition of *that function*. There is one, and it is not function-specific:
 
-| | `search_path` |
+`20260332800000_fix_pg_temp_search_path_all_functions.sql` walks **every** `SECURITY DEFINER` function in `public` whose `search_path` lacks `pg_temp` and issues `ALTER FUNCTION … SET search_path = public, pg_temp`, then raises an exception if any is left unfixed. The live ledger confirms it applied *after* the migration that creates this function:
+
+| Applied | Migration |
 |---|---|
-| **Live** | `public, pg_temp` ✅ compliant |
-| **Repo** — last definition, `20260228200000_season_calendar_oct_sep.sql:850` | `public` ❌ missing `pg_temp` |
+| `20260228121207` | `season_calendar_oct_sep` — creates the function with `search_path = public` |
+| `20260316220422` | `batch_year_end_and_cleanup` |
+| `20260318182924` | `fix_pg_temp_search_path_all_functions` — hardens both, and everything else |
 
-No migration anywhere in `supabase/migrations` alters it afterward, so the repo has no record of how production came to be hardened. Checked across all fourteen functions, **this is the only one affected** — the other thirteen declare `public, pg_temp` in their own migrations (some as `TO public, pg_temp`, some as `= 'public', 'pg_temp'`; both forms are equivalent).
+So replaying the committed migrations from scratch reproduces production's `public, pg_temp` exactly. The repo is not a footgun; it fixes itself two migrations later.
 
-**Why it matters, and it is not academic.** Production is fine *today*. The risk is directional: anyone who rebuilds this function from the repository — a restore, a fresh environment, or simply a later migration that does `CREATE OR REPLACE` starting from the committed text — silently reintroduces the weaker `search_path` on a `SECURITY DEFINER` function that any signed-in user can call (see HIGH #9). The repo is a loaded footgun even though live is clean.
+**The lesson worth keeping.** A function has a body and it has *attributes* — `SECURITY DEFINER`, `search_path`, and so on. They are stored separately, and `ALTER FUNCTION … SET search_path` changes the attribute **without touching the body by a single byte**. That cuts both ways: a body fingerprint cannot see attribute drift, *and* reading an attribute off a function's `CREATE` header is not the repo's final answer either. **Attributes have to be replayed across the whole migration set, exactly like bodies** — a bulk `ALTER` migration that names no function individually is invisible to any per-function search. That is the mistake this section records.
 
-**Recommended:** a one-line forward migration setting `search_path` to `public, pg_temp` for this function, so the repo states what production already does. Wave C already scopes this function for caller-gating, so it costs nothing extra to fold in there. Nothing needs to be applied live — live is already correct.
-
-*(Raised by the automated reviewer as "the clean verdict is false". The verdict about **live** is correct and unchanged; the reviewer was reading the repository. The underlying concern was right and is recorded here.)*
+*(An automated reviewer raised "the clean verdict is false", correctly identifying the header/live mismatch. The verdict about **live** was correct throughout. Chasing the reviewer's concern produced a wrong intermediate conclusion, corrected here.)*
 
 ### A note on line endings
 
@@ -251,7 +252,7 @@ Summary: **10 confirmed, 0 already fixed, 0 worse. Two need their wording tighte
 | 6 | Quick-delivery invoice posted before completion is never adjusted on partial completion; follow-up delivery double-bills | **CONFIRMED AGAINST LIVE (by identity)** |
 | 7 | Void-then-rebill permanently cancels an order's commissions, no re-mint path | **CONFIRMED AGAINST LIVE (by identity)** |
 | 8 | Assigned driver can complete a delivery by direct table update | **CONFIRMED — narrower than described** |
-| 9 | `get_customer_year_end_summary` is an ungated `SECURITY DEFINER` RPC granted to `authenticated` | **CONFIRMED AGAINST LIVE — and it is four functions, not one** |
+| 9 | `get_customer_year_end_summary` is an ungated `SECURITY DEFINER` RPC granted to `authenticated` | **CONFIRMED AGAINST LIVE — and it is five functions, not one** |
 | 10 | Sales reps can insert orders and order lines directly, bypassing canonical order creation | **CONFIRMED AGAINST LIVE** |
 
 ### The detail behind each verdict
@@ -275,7 +276,13 @@ Summary: **10 confirmed, 0 already fixed, 0 worse. Two need their wording tighte
 
 **#8 — confirmed, narrower than described.** The `del_update` policy admits the assigned driver only when the delivery's existing status is `in_progress` or `completed`. So the driver **cannot** start the walk — they cannot move a `scheduled` delivery to `in_progress`. They *can* perform the final `in_progress → completed` hop, which is precisely the state a delivery is in while a driver is working it. The finding holds; the fix must account for the driver needing legitimate write access to `in_progress` rows.
 
-**#9 — confirmed, and larger than the finding's title.** All four of `get_customer_year_end_summary`, `check_customer_credit_limit`, `get_customer_summary`, and `global_search` are live `SECURITY DEFINER`, granted `EXECUTE` to `authenticated`, and **not one of them contains any caller check of any kind** — no `is_admin()`, no `is_sales_rep()`, no `is_office()`, no `auth.uid()` comparison, no role lookup. Any signed-in user can call any of them for any customer. `anon` is correctly excluded from all four. The remediation plan already scopes all four into Wave C; this confirms that scoping is correct. **Fold the `search_path` repo/live drift on `get_customer_year_end_summary` (§A) into the same Wave C change** — it is the same function, and a `SECURITY DEFINER` function that any signed-in user can call is precisely the one whose committed definition should not be missing `pg_temp`.
+**#9 — confirmed, and larger than the finding's title. It is five functions, not one.** `get_customer_year_end_summary`, `check_customer_credit_limit`, `get_customer_summary`, `global_search`, and `get_batch_year_end_summaries` are all live `SECURITY DEFINER`, granted `EXECUTE` to `authenticated`, and **not one of them contains any caller check of any kind** — no `is_admin()`, no `is_sales_rep()`, no `is_office()`, no `auth.uid()` comparison, no role lookup. Any signed-in user can call any of them for any customer. `anon` is correctly excluded from all five.
+
+**The fifth one was missed until the third review round, and it is the worst of them.** `get_batch_year_end_summaries(uuid[], integer)` takes an **array** of customer IDs and loops, calling `get_customer_year_end_summary` once per entry and concatenating the results. Its entire live body is thirteen lines with no authorisation anywhere in it. Verified live: `SECURITY DEFINER`, `search_path = public, pg_temp`, `EXECUTE` held by `authenticated` and `service_role`, denied to `anon` and `metabase_ro`, and its body is byte-identical to the repo (`98e8b1de00708a0027103a6fccaf271d`, 357 characters, from `20260316100003_batch_year_end_and_cleanup.sql`).
+
+Why it matters more than the other four: it turns a one-customer-per-call leak into a **bulk export**. Gating `get_customer_year_end_summary` alone would not close it, because the batch function is `SECURITY DEFINER` in its own right — its privileges do not depend on the caller's. **Wave C must gate this function too, and the remediation verification must exercise the batch endpoint, not only the four singles.** The plan's current scope of four is therefore incomplete by one.
+
+*(Raised by an automated reviewer against a revision that listed only four. Verified live and confirmed correct.)*
 
 **#10 — confirmed.** Live `orders_insert` and `oitems_insert` both permit `is_admin() OR is_sales_rep()`, and `authenticated` holds INSERT on both tables. Nothing in the trigger set enforces the confirmed-only status rule on a direct insert.
 
@@ -332,7 +339,7 @@ Live reads via the Supabase MCP `execute_sql` tool against project `rhyzpcqhnizq
 - Repo-side fingerprints: rather than scanning for the last `CREATE [OR REPLACE] FUNCTION` per name (which misses renamed bodies entirely), the whole migration directory is **replayed** in filename order, maintaining a map of function name → current body and honouring `CREATE OR REPLACE`, `ALTER FUNCTION … RENAME TO`, and `DROP FUNCTION`, with statements applied in their within-file order. This is what makes the `_..._impl_<date>` layers checkable at all: those functions exist only because an older body was renamed under them, so no `CREATE` statement for them exists anywhere. The replay was validated by reproducing ten already-confirmed fingerprints exactly before being trusted for the rest.
 - Every fingerprint was computed **twice** — once on the raw file bytes and once with `\r\n` normalised to `\n` — and a function is reported as matching only if one of the two agrees exactly with live. Comparing under a single convention produces false mismatches on this repo (see "A note on line endings").
 - Grants: `information_schema.role_table_grants`, plus `has_table_privilege` for `MAINTAIN` and `TRUNCATE`, which that view does not report. Function permissions: `pg_proc.proacl`.
-- Function attributes: `pg_proc.proconfig` (`search_path`) and `pg_proc.prosecdef` (`SECURITY DEFINER`). These are stored separately from the body, so they are invisible to a body fingerprint and must be compared on their own — which is how the one genuine drift in this audit was found. Repo side: the `SET search_path` clause in each function's `CREATE` header, accepting both the `TO x, y` and `= 'x', 'y'` spellings the repo uses interchangeably.
+- Function attributes: `pg_proc.proconfig` (`search_path`) and `pg_proc.prosecdef` (`SECURITY DEFINER`). These are stored separately from the body, so they are invisible to a body fingerprint and must be compared on their own. Repo side, the `SET search_path` clause in each function's `CREATE` header is only a *starting* value — bulk `ALTER FUNCTION` migrations that name no function individually change it later, so attributes must be replayed across the whole migration set exactly as bodies are. Reading the header alone produced this audit's one retracted finding (§A). Both the `TO x, y` and `= 'x', 'y'` spellings the repo uses interchangeably are accepted.
 - Policies: `pg_policies` (`qual`, `with_check`, `roles`, `cmd`); RLS state from `pg_class.relrowsecurity` / `relforcerowsecurity`.
 - Triggers: reconstructed from `pg_trigger` catalog columns (`tgname`, `tgenabled`, `tgtype` bitmask, joined to `pg_proc`). `pg_get_triggerdef()` is blocked by a local safety hook, so the catalog was read directly.
 - Baseline policies: `20260727174805_public_schema.sql.br` decompressed with Node's `zlib.brotliDecompressSync` (3,054,020 characters, 423 policies).
@@ -348,5 +355,5 @@ The evidence gap is closed and the review survived it intact: all ten HIGH findi
 
 Two smaller items to carry into the triage, neither urgent and neither requiring a live change:
 
-- **Wave C:** add the one-line `search_path` forward migration for `get_customer_year_end_summary` (§A) alongside the caller-gating already planned for it.
+- **Wave C:** widen the scope from four functions to five. `get_batch_year_end_summaries` (§D, #9) is a `SECURITY DEFINER` bulk loop over an arbitrary array of customer IDs with no caller check, granted to `authenticated`. Gating the four singles leaves it wide open, and the wave's verification must call the batch endpoint.
 - **Wave B:** add `REVOKE TRUNCATE` on the four ordering-cycle tables (§E), following the precedent already merged for `inventory`.
