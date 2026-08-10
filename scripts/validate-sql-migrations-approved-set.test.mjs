@@ -349,9 +349,26 @@ const CASES = [
     sql: `UPDATE public.activity_feed SET description = 'x';\n`,
   },
   {
-    name: 'an exempt queue table (idempotency_keys) is not in scope',
-    expect: 'silent',
+    // Round 8 exempted this as "RPC replay bookkeeping" — operational
+    // plumbing holding no money. That is true of the rows and false of their
+    // purpose: a used idempotency key that no longer exists is a key whose
+    // money or inventory RPC executes a second time. Same for
+    // offline_action_receipts and the throttling tables (Codex High, round 9).
+    name: 'deleting idempotency_keys re-arms replayed money RPCs',
+    expect: 'violation',
+    // A DELETE assigns no columns, which is exactly the field-shift case.
+    mustReport: 'DELETE FROM public.idempotency_keys',
     sql: `DELETE FROM public.idempotency_keys WHERE created_at < now();\n`,
+  },
+  {
+    name: 'deleting offline_action_receipts re-arms replayed offline actions',
+    expect: 'violation',
+    sql: `DELETE FROM public.offline_action_receipts WHERE created_at < now();\n`,
+  },
+  {
+    name: 'deleting rate_limit_log re-arms throttled abuse',
+    expect: 'violation',
+    sql: `DELETE FROM public.rate_limit_log WHERE created_at < now();\n`,
   },
   {
     // A table nobody has ever created is not in the registry, so default-deny
@@ -368,12 +385,141 @@ const CASES = [
     expect: 'silent',
     sql: `INSERT INTO public.orders (id, total_profit) VALUES (1, 0);\n`,
   },
+
+  // ── round 9: TRUNCATE ───────────────────────────────────────────────────
+  // The most total rewrite there is, and it spells neither UPDATE nor DELETE,
+  // so round 8 produced no finding for it at all (Codex High, round 9).
+  {
+    name: 'TRUNCATE of a business table is a rewrite',
+    expect: 'violation',
+    mustReport: 'TRUNCATE public.orders;',
+    sql: `TRUNCATE public.orders;\n`,
+  },
+  {
+    name: 'TRUNCATE TABLE ONLY a, b RESTART IDENTITY CASCADE names both tables',
+    expect: 'violation',
+    sql: `TRUNCATE TABLE ONLY public.orders, ONLY public.order_items RESTART IDENTITY CASCADE;\n`,
+  },
+  {
+    name: 'TRUNCATE of an exempt log table is not in scope',
+    expect: 'silent',
+    sql: `TRUNCATE public.activity_feed;\n`,
+  },
+  {
+    // A TRUNCATE assigns no column, so it can never be "backfilling a column
+    // this migration adds" — the waiver must not rescue it, exactly as for a
+    // DELETE.
+    name: 'a NOT-REQUIRED waiver cannot excuse a TRUNCATE',
+    expect: 'violation',
+    sql: `-- APPROVED_SET_DIGEST: NOT-REQUIRED (orders)\nTRUNCATE public.orders;\n`,
+  },
+
+  // ── round 9: top-level dynamic SQL ──────────────────────────────────────
+  // String literals are stripped before scanning so prose cannot fabricate a
+  // match — which also means a write hidden inside one cannot be read. Refused
+  // rather than analyzed (Codex High, round 9).
+  {
+    name: 'EXECUTE of a literal statement hides the write from every static guard',
+    expect: 'violation',
+    mustReport: "EXECUTE 'DELETE FROM public.orders';",
+    sql: `DO $$\nBEGIN\n  EXECUTE 'DELETE FROM public.orders';\nEND $$;\n`,
+  },
+  {
+    name: 'EXECUTE format(...) is dynamic too',
+    expect: 'violation',
+    sql: `DO $$\nBEGIN\n  EXECUTE format('UPDATE %I SET total_profit = 0', 'orders');\nEND $$;\n`,
+  },
+  {
+    name: 'EXECUTE of a composed variable is dynamic too',
+    expect: 'violation',
+    sql: `DO $$\nDECLARE v_sql text := 'UPDATE public.orders SET total_profit = 0';\nBEGIN\n  EXECUTE v_sql;\nEND $$;\n`,
+  },
+  {
+    // GRANT EXECUTE and trigger bodies are the ordinary, non-dynamic uses of
+    // the keyword. Flagging them would fire on most migrations in the repo.
+    name: 'GRANT EXECUTE ON FUNCTION is not dynamic SQL',
+    expect: 'silent',
+    sql: `GRANT EXECUTE ON FUNCTION public.f_fixture() TO authenticated;\n`,
+  },
+  {
+    name: 'REVOKE EXECUTE ON FUNCTION is not dynamic SQL',
+    expect: 'silent',
+    sql: `REVOKE EXECUTE ON FUNCTION public.f_fixture() FROM anon;\n`,
+  },
+  {
+    name: 'CREATE TRIGGER ... EXECUTE FUNCTION is not dynamic SQL',
+    expect: 'silent',
+    sql:
+      `CREATE TRIGGER trg_fixture AFTER INSERT ON public.orders\n` +
+      `  FOR EACH ROW EXECUTE FUNCTION public.f_fixture();\n`,
+  },
+
+  // ── round 9: digest coverage is per-table and per-column ────────────────
+  // Round 8 handed the digest check the UNION of rewritten tables and columns
+  // and asked only that ANY ONE of each appear. Hash the cheap table, rewrite
+  // the expensive one alongside it, and the guard was satisfied by the first
+  // (Codex High, round 9).
+  {
+    name: 'a digest over one table does not authorize rewriting a second',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE stale;\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\n` +
+      `  UPDATE public.order_items SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    name: 'a digest covering one assigned column does not authorize a second',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE stale;\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0, subtotal_cents = 0;\nEND $$;\n`,
+  },
+  {
+    // The other side of the same rule: two tables, two digests, both asserted
+    // before either write. This has to pass, or the fix is just a ban on
+    // multi-table repairs.
+    name: 'two tables each covered by their own asserted digest is bound',
+    expect: 'silent',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE stale;\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.order_items WHERE stale;\n` +
+      `  IF actual IS DISTINCT FROM '${OTHER_HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\n` +
+      `  UPDATE public.order_items SET total_profit = 0;\nEND $$;\n`,
+  },
 ];
 
 // A stamp at/after the cutoff, so the guard is in force.
 const IN_FORCE = 29990101;
 // A stamp before the cutoff: history, never retro-checked.
 const PRE_CUTOFF = '20260101000001_pre_cutoff.sql';
+
+/**
+ * The reported block for one file, so a case can assert WHAT the guard said and
+ * not merely that it said something. This exists because the round-9 TRUNCATE
+ * and dynamic-SQL findings printed a blank source line: `read` treats a tab as
+ * IFS whitespace, so the empty written-columns field collapsed and shifted
+ * every field after it. The verdict was right and the message was useless, and
+ * a violation/silent assertion could not tell the difference.
+ */
+function blockFor(output, fileName) {
+  const lines = output.split(/\r?\n/);
+  const start = lines.findIndex((l) => l.startsWith('VIOLATION:') && l.includes(fileName));
+  if (start < 0) return '';
+  const out = [];
+  for (let i = start; i < lines.length && lines[i] !== ''; i++) out.push(lines[i]);
+  return out.join('\n');
+}
 
 function classify(output, fileName) {
   const lines = output.split(/\r?\n/);
@@ -411,6 +557,15 @@ function run() {
   CASES.forEach((c, i) => {
     const got = classify(out, names[i]);
     if (got !== c.expect) failures.push(`  ${c.name}\n    expected ${c.expect}, got ${got}`);
+    if (c.mustReport && got === 'violation') {
+      const block = blockFor(out, names[i]);
+      if (!block.includes(c.mustReport)) {
+        failures.push(
+          `  ${c.name}\n    report is missing ${JSON.stringify(c.mustReport)}\n` +
+            block.split('\n').map((l) => `      | ${l}`).join('\n'),
+        );
+      }
+    }
   });
   const preGot = classify(out, PRE_CUTOFF);
   if (preGot !== 'silent') {

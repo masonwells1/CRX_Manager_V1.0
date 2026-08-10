@@ -156,7 +156,54 @@ three High findings. All closed:
     of the exact SQL being applied, so it authorizes that text and nothing else; a name-keyed flag
     would have been a wave-through for any body. A missing or unparseable registry denies the apply.
 
-**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 41
+16. **Digest coverage was a union, so one table could stand in for all of them.** Round 7 required
+    the digest to cover the rewritten tables and the assigned columns, but it pooled them and asked
+    only whether *some* qualifying hash statement mentioned *some* rewritten table and *some*
+    assigned column. A migration that rewrites `orders` and `order_items` and hashes only `orders`
+    passed, and so did one that assigns `unit_price_cents` and `line_profit_cents` and hashes only
+    the first — the approval bound half the change and waved the other half through. Coverage is now
+    accumulated across every qualifying hash statement and then checked **per table and per column**:
+    each table the migration rewrites must be read by the hashing SQL, and each column it assigns
+    must sit inside the hashed expression. The failure message names the specific tables or columns
+    left uncovered, because "the digest is incomplete" is not actionable (Codex High, round 9).
+
+17. **`TRUNCATE` produced no finding at all, and `EXECUTE` hid whatever it wanted.** The scanner only
+    understood `UPDATE`, `DELETE`, upserts, and `MERGE`. `TRUNCATE public.orders` — the most
+    destructive rewrite in the language — was invisible, and so was every statement built at runtime,
+    because the string-literal stripper that keeps quoted SQL from producing phantom matches also
+    erased the real statement inside `EXECUTE 'DELETE FROM public.orders'`. `TRUNCATE` is now parsed
+    as a rewrite of every table it names, including the multi-table `ONLY … RESTART IDENTITY CASCADE`
+    form, and it cannot be excused by a column-level waiver, since it assigns no columns and destroys
+    all of them. Top-level dynamic SQL in a data migration is **refused outright** rather than
+    analyzed: an `EXECUTE` composes its statement at runtime, so no static guard can see which tables
+    it rewrites, and a guard that cannot see a statement must not certify it. `GRANT`/`REVOKE EXECUTE
+    ON FUNCTION` and `CREATE TRIGGER … EXECUTE FUNCTION` are privilege and DDL syntax, not dynamic
+    SQL, and are told apart by the first token of the enclosing statement (Codex High, round 9).
+
+18. **Replay-protection bookkeeping was exempt, which is exactly backwards.** `idempotency_keys`,
+    `offline_action_receipts`, `rate_limits`, and `rate_limit_log` had been filed with the logs and
+    retry queues because they hold no money themselves. That is the trap: their entire value is that
+    they continue to exist. Deleting a used idempotency key re-arms the money or inventory mutation
+    it was recording as already done, so a bulk prune of that table is a money change wearing
+    maintenance clothes. All four are now protected. A real retention policy over them is still
+    possible — it just has to bind a digest and be approved like any other rewrite of state that
+    money depends on (Codex High, round 9).
+
+19. **A tab-delimited field shift was silently disarming the waiver path — found while checking our
+    own error message.** The new dynamic-SQL finding printed a blank source line. The cause was not
+    in the new code: the scanner emits `line⇥table⇥kind⇥columns⇥raw` and the shell reads it with
+    `IFS=$'\t' read`, but a tab is IFS *whitespace*, so consecutive tabs collapse into one. Any
+    rewrite with no assigned columns — every `DELETE`, and now every `TRUNCATE` — produced an empty
+    fourth field, which shifted the raw statement text into the columns variable and left the last
+    variable empty. Two things were broken by this and neither failed loudly: the reported statement
+    text was lost, and the waiver loop's "assigns no column this migration adds" branch was
+    unreachable for every `DELETE`, because the emptiness it tested for could never arrive. All three
+    emit sites now write an explicit `-` placeholder, which is filtered back out on the shell side
+    (with `|| true`, since a rewrite set that is entirely column-less would otherwise abort the whole
+    validator under `set -o pipefail`). The tests now assert **what the guard printed**, not merely
+    that it printed something, so a message that reports the wrong text fails.
+
+**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 56
 synthetic migrations — real bypass attempts, waivers, and shapes that must stay silent — runs the
 actual script over them, and asserts what it printed for each. It runs in
 `npm run test:correction-guards`, as does `scripts/list-post-baseline-migrations.test.mjs`, which
@@ -173,7 +220,10 @@ check, bypassing the one-shot quarantine, and emptying the registry; round 8 by 
 span back to the whole statement, dropping the `string_agg` requirement, putting
 `application_services` back in the exemption list, making the one-shot registry read fail open,
 checking only the caller-supplied name instead of the SQL body, un-binding the override from the
-query digest, and firing the guard even when the ledger already had the migration. Per the standing
+query digest, and firing the guard even when the ledger already had the migration; round 9 by
+removing `TRUNCATE` detection, removing dynamic-SQL detection, reverting per-table digest coverage to
+any-one, reverting per-column coverage to any-one, putting `idempotency_keys` back in the exemption
+list, and emitting an empty written-columns field instead of the `-` placeholder. Per the standing
 rule that an untested guard is decoration, that red-then-green run is the evidence, not a reading of
 the diff.
 

@@ -85,6 +85,16 @@ APPROVED_SET_CUTOFF=20260810025160
 # reason. Exempt = append-only logs, retry queues, and operational plumbing that
 # hold no money, inventory, or customer-visible state, where a bulk rewrite is
 # ordinary maintenance rather than an authorized data repair.
+#
+# NOT exempt, however operational they look: replay- and abuse-protection
+# bookkeeping — `idempotency_keys`, `offline_action_receipts`, `rate_limits`,
+# `rate_limit_log`. These rows hold no money themselves, which is exactly why
+# they read as prunable, but deleting them re-arms the money and inventory
+# mutations they were recording as already done: a used idempotency key that no
+# longer exists is a key that executes a second time (Codex High, round 9).
+# Their value is entirely in their continued existence. A genuine retention
+# policy over them is still possible — it just has to bind a digest and be
+# approved like any other bulk rewrite of state that money depends on.
 APPROVED_SET_EXEMPT_TABLES=(
   activity_feed                # append-only UI activity feed
   note_activity_log            # append-only note history
@@ -92,10 +102,6 @@ APPROVED_SET_EXEMPT_TABLES=(
   failed_notifications         # retry queue
   notifications                # transient user notices
   job_notifications            # transient user notices
-  idempotency_keys             # RPC replay bookkeeping
-  rate_limits                  # throttling counters
-  rate_limit_log               # throttling log
-  offline_action_receipts      # offline replay bookkeeping
   backup_runs                  # backup telemetry
   backup_snapshots             # backup telemetry
   integrity_alerts             # watchdog output
@@ -411,8 +417,25 @@ for file in $ALL_SQL; do
     # `INSERT INTO <tbl> ... ON CONFLICT ... DO UPDATE` and `MERGE INTO <tbl>`.
     # Quoted string literals are dropped first so prose inside a RAISE NOTICE
     # cannot fabricate a match.
+    #
+    # TRUNCATE counts too (Codex High, round 9). It never spells UPDATE or
+    # DELETE, so round 8 let `TRUNCATE public.orders` — the most total rewrite
+    # there is — produce no finding at all. Its target is a comma-separated
+    # list, optionally `TABLE`- and `ONLY`-decorated, so the list is walked.
+    #
+    # Top-level dynamic SQL is caught on a separate channel (kind `dynamic`).
+    # `EXECUTE 'DELETE FROM public.orders'` hides the write inside a string
+    # literal, and literals are stripped before scanning precisely so prose
+    # cannot fabricate matches — which also means they cannot be read. Dynamic
+    # SQL in a data migration is unauditable by construction, so it is not
+    # analyzed, it is refused.
     # Output is TAB-separated: line, table, kind, written-columns, text.
-    REWRITES=$(awk -v tables="$BUSINESS_ROW_TABLES" '
+    # The written-columns field is `-` when there are none (a DELETE, a
+    # TRUNCATE, an unreadable SET). It can NOT be left empty: `read` treats a
+    # tab as IFS *whitespace*, so a run of tabs collapses into one delimiter
+    # and an empty field silently shifts every field after it — which put the
+    # statement text into r_cols and left r_raw blank for every DELETE.
+    SCAN_HITS=$(awk -v tables="$BUSINESS_ROW_TABLES" '
       {
         raw[FNR] = $0
         line = tolower($0)
@@ -479,8 +502,39 @@ for file in $ALL_SQL; do
         }
         return out
       }
+      # First token of the statement containing token p, so a privilege
+      # `GRANT EXECUTE ON FUNCTION` is never mistaken for dynamic SQL.
+      function stmt_head(p,   k) {
+        for (k = p - 1; k >= 1; k--) { if (tok[k] == ";") return tok[k + 1] }
+        return tok[1]
+      }
       END {
         for (i = 1; i <= ntok; i++) {
+          # Dynamic SQL: refused outright, no table needed. `EXECUTE FUNCTION`
+          # / `EXECUTE PROCEDURE` (trigger bodies) and `... EXECUTE ON ...`
+          # (privilege grants) are the non-dynamic uses of the keyword.
+          if (tok[i] == "execute" &&
+              tok[i + 1] != "function" && tok[i + 1] != "procedure" &&
+              tok[i + 1] != "on" &&
+              stmt_head(i) != "grant" && stmt_head(i) != "revoke") {
+            printf "%d\t%s\t%s\t%s\t%s\n", tokln[i], "(dynamic)", "dynamic", "-", raw[tokln[i]]
+            continue
+          }
+          if (tok[i] == "truncate") {
+            j = i + 1
+            if (tok[j] == "table") j++
+            while (j <= ntok && tok[j] != ";") {
+              if (tok[j] == "only") { j++; continue }
+              tt = tok[j]
+              sub(/^public\./, "", tt)
+              if (tt ~ ("^(" tables ")$")) {
+                printf "%d\t%s\t%s\t%s\t%s\n", tokln[i], tt, "truncate", "-", raw[tokln[i]]
+              }
+              if (tok[j + 1] == ",") { j += 2; continue }
+              break
+            }
+            continue
+          }
           target = ""; kind = ""; setp = 0
           if (tok[i] == "update" && tok[i - 1] != "do") {
             j = i + 1
@@ -509,12 +563,32 @@ for file in $ALL_SQL; do
           if (target == "") continue
           sub(/^public\./, "", target)
           if (target ~ ("^(" tables ")$")) {
+            sc = (setp ? set_cols(setp) : "")
             printf "%d\t%s\t%s\t%s\t%s\n", tokln[i], target, kind,
-                   (setp ? set_cols(setp) : ""), raw[tokln[i]]
+                   (sc == "" ? "-" : sc), raw[tokln[i]]
           }
         }
       }
     ' "$file")
+
+    # Dynamic SQL rides the same scan but is not a bindable rewrite — it is a
+    # refusal, and it stands on its own whether or not any table rewrite was
+    # also found.
+    DYNAMIC_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "dynamic"')
+    REWRITES=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 != "dynamic"')
+
+    if [ -n "$DYNAMIC_HITS" ]; then
+      echo "VIOLATION: $file"
+      echo "  Top-level dynamic SQL in a data migration:"
+      printf '%s\n' "$DYNAMIC_HITS" | while IFS=$'\t' read -r d_ln d_tbl d_kind d_cols d_raw; do
+        echo "    line $d_ln: $d_raw"
+      done
+      echo "  An EXECUTE builds its statement at runtime, so no static guard can"
+      echo "  see which tables or columns it rewrites — including this one."
+      echo "  Write the statement out literally so it can be read and bound."
+      echo ""
+      VIOLATIONS=$((VIOLATIONS + 1))
+    fi
 
     if [ -n "$REWRITES" ]; then
       FIRST_REWRITE_LINE=$(printf '%s\n' "$REWRITES" | head -1 | cut -f1)
@@ -523,7 +597,11 @@ for file in $ALL_SQL; do
       # rewrites assign. The digest has to be shown to cover THIS material, so
       # both are handed to the hash check below.
       REWRITE_TABLES_RE=$(printf '%s\n' "$REWRITE_TABLES" | tr '\n' '|' | sed 's/|$//')
-      REWRITE_COLS=$(printf '%s\n' "$REWRITES" | cut -f4 | tr ' ' '\n' | sort -u | tr '\n' ' ')
+      # `|| true` because the script runs under `set -o pipefail`: a rewrite set
+      # that is ALL column-less (a DELETE-only repair) filters to nothing, and
+      # grep's exit 1 would abort the whole validator.
+      REWRITE_COLS=$(printf '%s\n' "$REWRITES" | cut -f4 | tr ' ' '\n' \
+                       | { grep -vx '-' || true; } | sort -u | tr '\n' ' ')
 
       # The declared digest, from a comment marker.
       DIGEST_HEX=$(grep -oiE 'APPROVED_SET_DIGEST:[[:space:]]*[0-9a-f]{64}' "$file" \
@@ -620,8 +698,10 @@ for file in $ALL_SQL; do
           if [ -z "$DIGEST_VAR_RE" ]; then
             COMPUTED=0
           else
+            REWRITE_TABLES_LIST=$(printf '%s\n' "$REWRITE_TABLES" | tr '\n' ' ')
             DIGEST_SRC_WHY=$(awk -v fl="$FIRST_REWRITE_LINE" -v var="$DIGEST_VAR_RE" \
-                                 -v tbls="$REWRITE_TABLES_RE" -v cols="$REWRITE_COLS" '
+                                 -v tbls="$REWRITE_TABLES_RE" -v cols="$REWRITE_COLS" \
+                                 -v tbllist="$REWRITE_TABLES_LIST" '
               # Arguments of the FIRST hash-family call in str, found by walking
               # parentheses to the matching close. Returns "" when there is no
               # such call. Callers pass literal-stripped text, so a quote cannot
@@ -648,7 +728,19 @@ for file in $ALL_SQL; do
               { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
               END {
                 ncol = split(cols, c, / +/)
+                ntbl = split(tbllist, tb, / +/)
                 n = split(buf, st, /;/)
+                # EVERY qualifying hash statement must be well formed, and
+                # TOGETHER they must cover EVERY rewritten table and EVERY
+                # assigned column (Codex High, round 9). Round 8 accepted the
+                # first statement that covered any ONE table and any ONE
+                # column, because the tables and columns arrived here already
+                # unioned: a migration could hash orders.id + total_profit and,
+                # in the same breath, overwrite an unhashed money column on a
+                # second table and satisfy the guard with the first one. So the
+                # spans and statements are accumulated and the coverage test
+                # moved after the loop.
+                found = 0
                 for (i = 1; i <= n; i++) {
                   s = st[i]
                   if (s !~ /(md5|sha224|sha256|sha384|sha512|digest|encode)[ \t]*\(/) continue
@@ -663,27 +755,41 @@ for file in $ALL_SQL; do
                   if (span !~ /(^|[^a-z0-9_.])string_agg[ \t]*\(/) {
                     print "does not hash a string_agg() over the affected rows — a digest that is not an ordered aggregate of those rows is not a digest OF them"; exit
                   }
-                  # The table stays a statement-level check: in the mandated
-                  # shape the FROM sits OUTSIDE the hash call
-                  # (SELECT encode(digest(string_agg(...))) FROM orders), and it
-                  # was never the bypass vector. What must be inside the hash is
-                  # the MATERIAL — the aggregate, the ids, the before-values.
-                  if (s !~ ("(^|[^a-z0-9_.])(public\\.)?(" tbls ")([^a-z0-9_]|$)")) {
-                    print "reads none of the rewritten tables (" tbls ")"; exit
-                  }
                   if (!tok_in(span, "id")) {
                     print "does not cover the row ids inside the hashed expression"; exit
                   }
-                  hit = 0
-                  for (k = 1; k <= ncol; k++) {
-                    if (c[k] == "") continue
-                    if (tok_in(span, c[k])) { hit = 1; break }
-                  }
-                  if (ncol > 0 && c[1] != "" && !hit) {
-                    print "does not cover any column the rewrite assigns (" cols ") inside the hashed expression"; exit
-                  }
-                  print "OK"; exit
+                  found = 1
+                  stmtall = stmtall " " s
+                  spanall = spanall " " span
                 }
+                # No statement assigns a hash into the compared variable at all.
+                # Printing nothing is the signal for that case; the caller
+                # reports it separately.
+                if (!found) exit
+                # The tables stay a statement-level check: in the mandated shape
+                # the FROM sits OUTSIDE the hash call
+                # (SELECT encode(digest(string_agg(...))) FROM orders), and it
+                # was never the bypass vector. What must be inside the hash is
+                # the MATERIAL — the aggregate, the ids, the before-values.
+                misst = ""
+                for (k = 1; k <= ntbl; k++) {
+                  if (tb[k] == "") continue
+                  if (stmtall !~ ("(^|[^a-z0-9_.])(public\\.)?" tb[k] "([^a-z0-9_]|$)")) {
+                    misst = misst " " tb[k]
+                  }
+                }
+                if (misst != "") {
+                  print "never reads the rewritten table(s)" misst " — every table the migration rewrites has to be hashed, not just one of them"; exit
+                }
+                missc = ""
+                for (k = 1; k <= ncol; k++) {
+                  if (c[k] == "") continue
+                  if (!tok_in(spanall, c[k])) missc = missc " " c[k]
+                }
+                if (missc != "") {
+                  print "leaves the rewritten column(s)" missc " outside the hashed expression — every column the migration assigns has to be covered, not just one of them"; exit
+                }
+                print "OK"
               }
             ' "$file")
             if [ "$DIGEST_SRC_WHY" = "OK" ]; then
@@ -772,7 +878,7 @@ for file in $ALL_SQL; do
             esac
             continue
           fi
-          if [ -z "$r_cols" ]; then
+          if [ -z "$r_cols" ] || [ "$r_cols" = "-" ]; then
             UNADDED_TBL="$UNADDED_TBL ${r_tbl}(line ${r_ln}: ${r_kind} assigns no column this migration adds)"
             continue
           fi
