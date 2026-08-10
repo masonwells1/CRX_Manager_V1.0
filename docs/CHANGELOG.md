@@ -102,7 +102,14 @@ known owner-executing SQL function. Plain table storage remains ordinary data;
 callable sinks, unknown aliases, and rename-call-restore sequences require the
 exemption/manual-review path.
 
-The focused actor-binding suite grew from 115 to 199 assertions while the
+The following exact-SHA review found that the first version of this callable
+boundary inspected only a direct first argument. The reader now walks every
+enclosing callable around function-bearing SQL, so later positional/named
+arguments and cast/parenthesis wrappers cannot hide an executor. Direct
+`EXECUTE format(...)` remains on its existing reviewed builder path; unproven
+wrappers such as `dblink_exec(connection, sql)` require manual review.
+
+The focused actor-binding suite grew from 115 to 204 assertions while the
 idempotency reference suite remained at 86. Sixty continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary

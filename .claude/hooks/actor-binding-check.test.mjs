@@ -318,6 +318,21 @@ r = runHook(`SELECT public.actor_sql_alias($outer$
 $outer$);`);
 ok(isDeny(r), "an unknown callable cannot receive function-bearing SQL without manual review");
 
+r = runHook(`SELECT public.actor_sql_alias('connection-name', $outer$${UNBOUND_DDL}$outer$);`);
+ok(isDeny(r), "a later positional argument cannot hide function-bearing SQL");
+
+r = runHook(`SELECT public.actor_sql_alias(mode => 'read', sql_query => $outer$${UNBOUND_DDL}$outer$);`);
+ok(isDeny(r), "a later named argument cannot hide function-bearing SQL");
+
+r = runHook(`SELECT public.actor_sql_alias(CAST($outer$${UNBOUND_DDL}$outer$ AS text));`);
+ok(isDeny(r), "a cast wrapper cannot hide function-bearing SQL from its outer callable");
+
+r = runHook(`SELECT public.actor_sql_alias(($outer$${UNBOUND_DDL}$outer$));`);
+ok(isDeny(r), "a parenthesized argument cannot hide function-bearing SQL");
+
+r = runHook(`SELECT dblink_exec('connection-name', $outer$${UNBOUND_DDL}$outer$);`);
+ok(isDeny(r), "dblink_exec cannot receive delayed actor-forgery SQL in a later argument");
+
 r = runHook(`ALTER FUNCTION public.execute_sql_readonly(text) RENAME TO actor_sql_alias;`);
 ok(isDeny(r), "the known SQL executor cannot be renamed past the name-bound reader");
 ok(r.stdout.includes("renames or moves execute_sql_readonly"),

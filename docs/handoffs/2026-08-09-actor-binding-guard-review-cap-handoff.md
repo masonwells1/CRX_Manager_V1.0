@@ -24,7 +24,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 199 assertions; the idempotency reference
+- The actor-binding suite passes at 204 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -249,6 +249,11 @@ PR workflow.
   and fixed in the current continuation by refusing non-allowlisted callables
   receiving function SQL and blocking identity changes to the known executor.
   Its BLOCKERS verdict does not approve the new HEAD.
+- The governed exact-SHA review of `697aa6ac` returned one HIGH blocker because
+  the first callable-boundary fix inspected only a direct first argument. The
+  bypass was reproduced and fixed by walking every enclosing callable across
+  later positional/named and cast/parenthesized arguments. Its BLOCKERS verdict
+  does not approve the new HEAD.
 
 ## REMAINING LANDING WORK
 

@@ -858,32 +858,63 @@ function isExecuteSqlReadonlyLiteralPrefix(prefix) {
 }
 
 const NON_CALLABLE_PAREN_KEYWORDS = new Set([
-  "all", "any", "array", "case", "cast", "exists", "in", "row", "select", "values",
+  "all", "any", "array", "as", "case", "cast", "exists", "in", "row", "select", "values",
 ]);
 
-/** Return true when a literal is the next argument to a SQL callable. SQL
- * grammar constructs that also use parentheses are excluded deliberately. */
-function isCallableLiteralPrefix(prefix) {
-  const namedArg = `(?:${SQL_IDENTIFIER_PATTERN}\\s*(?:=>|:=)\\s*)?`;
-  const match = new RegExp(
-    `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(\\s*${namedArg}$`,
-    "i"
-  ).exec(prefix);
-  if (!match) return false;
-  if (!match[1].includes(".") && !/^U&/i.test(match[1])) {
-    const name = normalizedIdentifier(match[1]);
-    if (name !== null && NON_CALLABLE_PAREN_KEYWORDS.has(name)) return false;
+function unmatchedOpenParens(prefix) {
+  const stack = [];
+  for (let i = 0; i < prefix.length; i++) {
+    const ch = prefix[i];
+    if (ch === "'" || ch === '"') {
+      const end = scanQuoted(prefix, i);
+      if (end === -1) return [];
+      i = end - 1;
+      continue;
+    }
+    const tag = ch === "$" ? dollarTagAt(prefix, i) : null;
+    if (tag) {
+      const close = prefix.indexOf(tag, i + tag.length);
+      if (close === -1) return [];
+      i = close + tag.length - 1;
+      continue;
+    }
+    if (ch === "(") stack.push(i);
+    else if (ch === ")") stack.pop();
   }
-  return true;
+  return stack;
 }
 
-function isSqlTextBuilderLiteralPrefix(prefix) {
-  const schema = '(?:(?:"pg_catalog"|pg_catalog)\\s*\\.\\s*)?';
-  const callable = '(?:"format"|format)';
-  return new RegExp(
-    `(?:^|[^\\w$."])${schema}${callable}\\s*\\([^)]*$`,
-    "i"
-  ).test(prefix);
+function callableNameBeforeOpen(prefix, open) {
+  const match = new RegExp(`(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*$`, "i")
+    .exec(prefix.slice(0, open));
+  if (!match) return null;
+  const name = match[1];
+  if (/^[A-Za-z_]\w*$/.test(name) &&
+      NON_CALLABLE_PAREN_KEYWORDS.has(name.toLowerCase())) return null;
+  return name;
+}
+
+function isKnownSqlExecutorName(name) {
+  const legacy = /^(?:(?:"public"|public)\s*\.\s*)?(?:"execute_sql_readonly"|execute_sql_readonly)$/i;
+  const pgCron = /^(?:(?:"cron"|cron)\s*\.\s*)?(?:"(?:schedule|schedule_in_database|alter_job)"|schedule|schedule_in_database|alter_job)$/i;
+  return legacy.test(name) || pgCron.test(name);
+}
+
+function isExecuteFormatBuilderName(name) {
+  return /^(?:(?:"pg_catalog"|pg_catalog)\s*\.\s*)?(?:"format"|format)$/i.test(name);
+}
+
+/** Inspect every enclosing callable, not only the immediate/first argument.
+ * This catches later positional/named arguments and CAST/paren wrappers. */
+function hasUnprovenCallableContext(callablePrefix, structuralPrefix, fullText, literalEnd) {
+  for (const open of unmatchedOpenParens(callablePrefix)) {
+    const name = callableNameBeforeOpen(callablePrefix, open);
+    if (name === null || isKnownSqlExecutorName(name)) continue;
+    if (isExecuteFormatBuilderName(name) &&
+        inExecuteStatement(structuralPrefix, fullText, literalEnd)) continue;
+    return true;
+  }
+  return false;
 }
 
 /** Renaming or moving the known owner-executing SQL function would make later
@@ -952,11 +983,13 @@ function maskSqlNoise(text, inProceduralCode = false) {
         const hasFunctionHeader = carriesFnHeader(payload);
         const isKnownSqlExecutor = hasFunctionHeader &&
           isExecuteSqlReadonlyLiteralPrefix(out);
-        const isExecuteBuilder = hasFunctionHeader &&
-          isSqlTextBuilderLiteralPrefix(out) &&
-          inExecuteStatement(out, text, close + tag.length);
-        if (hasFunctionHeader && isCallableLiteralPrefix(out) &&
-            !isKnownSqlExecutor && !isExecuteBuilder) {
+        const callablePrefix = hasFunctionHeader
+          ? maskSqlForCallNames(text.slice(0, i))
+          : "";
+        if (hasFunctionHeader && callablePrefix !== null &&
+            hasUnprovenCallableContext(
+              callablePrefix, out, text, close + tag.length
+            )) {
           sawOpaqueFunctionCallable = true;
           return null;
         }
@@ -990,10 +1023,11 @@ function maskSqlNoise(text, inProceduralCode = false) {
       const hasFunctionHeader = carriesFnHeader(payload);
       const isKnownSqlExecutor = ch === "'" && hasFunctionHeader &&
         isExecuteSqlReadonlyLiteralPrefix(out);
-      const isExecuteBuilder = ch === "'" && hasFunctionHeader &&
-        isSqlTextBuilderLiteralPrefix(out) && inExecuteStatement(out, text, end);
-      if (ch === "'" && hasFunctionHeader && isCallableLiteralPrefix(out) &&
-          !isKnownSqlExecutor && !isExecuteBuilder) {
+      const callablePrefix = ch === "'" && hasFunctionHeader
+        ? maskSqlForCallNames(text.slice(0, i))
+        : "";
+      if (ch === "'" && hasFunctionHeader && callablePrefix !== null &&
+          hasUnprovenCallableContext(callablePrefix, out, text, end)) {
         sawOpaqueFunctionCallable = true;
         return null;
       }
