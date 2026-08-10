@@ -264,7 +264,7 @@ mutation-tested — restoring the old `&& /\d{14}/` condition turns it red.
 
 The concurrent-checkout entry above stays OPEN; this fix does not touch it.
 
-## DECIDED 2026-08-09 — order header profit vs the sum of its own lines (fix written, NOT yet applied)
+## FIXED LIVE 2026-08-09 — order header profit vs the sum of its own lines
 
 **Found 2026-08-08 (Codex P2, PR #354). Not a regression — it predates the
 rounding work and is unchanged by it.** `trg_recalc_order_totals` does not read
@@ -350,11 +350,21 @@ two-line `10.005 / 5.001` case that widened the gap cannot arise.
 
 **The fix:** `20260809230500_single_canonical_line_profit.sql` (history row 862).
 Written and reviewed 2026-08-09 — `rls-security-reviewer` and
-`migration-drift-reviewer` both returned zero blockers. **Not yet applied.**
-It is forward-only: applying it moves no live money. The one-time repair of the
-37 stale lines is written but fully commented out and is a **separate** decision,
-because writing those rows would also round 11 of the 46 fractional-cent
-`order_items` rows that `20260809170800` is deliberately holding back.
+`migration-drift-reviewer` both returned zero blockers — and **APPLIED LIVE
+2026-08-09** as Supabase ledger version `20260810000427`. Verified live after the
+apply: both function bodies carry the new logic, the trigger fires on all four
+columns and is enabled, and the row counts are unchanged (46 fractional
+`order_items`, 3 fractional `commissions`, 37 stale lines, 11 disagreeing
+orders), with no `orders` row written in the surrounding 15 minutes.
+It is forward-only: applying it moved no live money. The one-time repair of the
+37 stale lines is written but fully commented out and is still a **separate**
+decision that has NOT been taken, because writing those rows would also round 11
+of the 46 fractional-cent `order_items` rows that `20260809170800` is
+deliberately holding back.
+
+**So the 11 disagreeing orders still disagree today.** The fix stops any *new*
+drift; it does not reach back. Those orders converge the next time one of their
+lines is written, or immediately if the section-3 repair is ever approved.
 
 **Still open after this lands, deliberately:** `_update_order_items_impl`
 (`20260617123503`, lines 274–275) overwrites `orders.total_price` with the raw

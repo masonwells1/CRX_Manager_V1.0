@@ -42,10 +42,12 @@ Rounding **per line** rather than rounding the sum is deliberate — it makes
 - `net_margin` stays a percentage and is deliberately excluded from whole-cent rounding.
 
 **Implementation:** `20260809230500_single_canonical_line_profit.sql`, written and reviewed
-2026-08-09 (both migration reviewers returned zero blockers). **Forward-only — applying it moves no
-live money.** Repairing the 37 already-stale lines is a **separate** decision and its statement is
-deliberately commented out, because writing those rows would also round 11 of the 46 fractional-cent
-`order_items` rows that `20260809170800` is intentionally holding back.
+2026-08-09 (both migration reviewers returned zero blockers) and **applied live 2026-08-09** as
+Supabase ledger version `20260810000427`, with a post-apply live read confirming both function
+bodies, the widened trigger, and unchanged row counts. **Forward-only — applying it moved no
+live money.** Repairing the 37 already-stale lines is a **separate** decision that has NOT been
+taken; its statement is deliberately commented out, because writing those rows would also round 11
+of the 46 fractional-cent `order_items` rows that `20260809170800` is intentionally holding back.
 
 **Explicitly still open, not covered by this decision:** `_update_order_items_impl`
 (`20260617123503`) overwrites `orders.total_price` with the raw un-rounded line sum. The exactness
