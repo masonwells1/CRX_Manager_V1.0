@@ -284,7 +284,21 @@ export function parkedDraftPathsFrom(
   let unknownReason = "";
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();
-    if (!existsOnDisk(p)) continue;
+    if (!existsOnDisk(p)) {
+      // A vanished path is normally just a retired draft — the SUPERSEDED- rename
+      // shows up in the diff as a change to the OLD path, and counting it would
+      // re-report the very file the rename retired. But if this branch's own
+      // migration-history still registers that path as a LOCAL CANDIDATE, the
+      // registry now points at SQL nobody can read, and skipping it silently makes
+      // /fleet report a confident zero over a dangling pin. Say UNKNOWN instead;
+      // "I don't know" sends the caller to a full scan, and under-reporting hides
+      // real pending work. This is an O(1) set lookup on a path already in hand,
+      // not the broad blob scan runtime deliberately avoids.
+      if (history?.state === "known" && history.paths.has(normRepoPath(p))) {
+        unknownReason ||= "branch-owned LOCAL CANDIDATE SQL named by migration history is missing from disk";
+      }
+      continue;
+    }
     const normalized = normRepoPath(p);
     const isForwardMigration = normalized.startsWith("supabase/migrations/");
     const sqlText = isForwardMigration ? readText(p) : "";

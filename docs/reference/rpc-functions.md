@@ -6,7 +6,7 @@
 >
 > **Prior baselines:** 2026-06-23 live: 228 callable RPCs + 51 trigger functions. 2026-06-29 branch HEAD (local, pre-live-merge): 270 callable RPCs + 56 trigger functions.
 >
-> **2026-08-09 candidate warning:** the function and trigger changes in local migrations `20260808150100`, `20260808150200`, and `20260808150400` are not included as live behavior. Production still has the older batch-prepayment/cancellation bodies and no whole-cent rounding trigger function.
+> **2026-08-09 update (retires the earlier candidate warning):** those function and trigger changes **are live**. The candidates `20260808150100` / `20260808150200` / `20260808150400` were re-issued forward and applied on 2026-08-09 as `20260809170500` / `20260809170600` / `20260809170800` (ledger versions `20260809203222`, `20260809204044`, `20260809204855`), together with `20260809170700` and `20260809170900`. Production now carries the restored `batch_apply_prepayments` actor guard, the cancel-order `quantity_remaining` zeroing, and the whole-cent rounding trigger function `public._round_money_to_whole_cents`. Per-migration proof: `docs/reference/migration-history.md` rows 857–861.
 >
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 >

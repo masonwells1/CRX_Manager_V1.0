@@ -30,9 +30,19 @@ function backupMarkerPath() {
   const localPath = path.join(projectDir, "backups", "LATEST-OK.json");
 
   // Linked worktrees share the main checkout's Git common directory, but they
-  // do not share gitignored backup files. Resolve the canonical checkout root
-  // from that common directory FIRST so a stale worktree-local marker cannot
-  // mask the shared backup state seen by every other session.
+  // do not share gitignored backup files, so the marker can legitimately land in
+  // either place: `/backup-db` stamps `backups/LATEST-OK.json` relative to the
+  // checkout it ran in (scripts/backup-db.mjs), which is a worktree whenever the
+  // backup session was started from one.
+  //
+  // Pick the NEWEST marker rather than preferring one location. Preferring the
+  // canonical checkout kept a stale worktree-local marker from masking shared
+  // state, but it also meant a backup taken from a worktree was invisible — every
+  // later session then warned that a fresh backup was missing or stale, which
+  // trains Mason to ignore the one warning that says his only copy of production
+  // data died. Newest-wins keeps the original protection (a stale local marker
+  // simply loses to the newer canonical one) without inventing the false alarm.
+  const candidates = [localPath];
   try {
     const commonDir = execFileSync(
       "git",
@@ -44,12 +54,26 @@ function backupMarkerPath() {
         stdio: ["ignore", "pipe", "ignore"],
       },
     ).trim();
-    const canonicalPath = path.join(path.dirname(commonDir), "backups", "LATEST-OK.json");
-    if (existsSync(canonicalPath)) return canonicalPath;
+    candidates.push(path.join(path.dirname(commonDir), "backups", "LATEST-OK.json"));
   } catch { /* fall back to the worktree-local path */ }
 
-  if (existsSync(localPath)) return localPath;
-  return localPath;
+  let best = null;
+  let bestAt = -Infinity;
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    // An unreadable or undated marker still counts as "a backup exists" — it must
+    // not be silently dropped in favour of nothing — it just cannot win on date.
+    let completedAt = -Infinity;
+    try {
+      const parsed = Date.parse(JSON.parse(readFileSync(candidate, "utf8"))?.completed_at);
+      if (Number.isFinite(parsed)) completedAt = parsed;
+    } catch { /* undated marker: keep it as a last-resort candidate */ }
+    if (best === null || completedAt > bestAt) {
+      best = candidate;
+      bestAt = completedAt;
+    }
+  }
+  return best ?? localPath;
 }
 
 function migrationMayAffectSchemaRegistry(sql) {

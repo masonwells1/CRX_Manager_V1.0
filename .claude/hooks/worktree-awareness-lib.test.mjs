@@ -517,9 +517,16 @@ const readCanonicalBlob = (repoPath) => {
   }
   return readFileSync(path.join(repoRoot, ...repoPath.split("/")), "utf8").replace(/\r\n/g, "\n");
 };
+// Both sides of the cross-reference must come from the SAME source, or the guard
+// compares artifacts that will never be committed together: hashing the staged
+// SQL while parsing the unstaged history file lets a staged all-zero pin pass
+// because the correct pin is still sitting unstaged on disk. Read the history
+// through the same index-first reader so pre-commit validates the commit being
+// created, not a mix of staged and working-tree bytes.
+const historyText = readCanonicalBlob("docs/reference/migration-history.md");
 const currentCrossReference = validateParkedMigrationCrossReferences(
   repoMigrationPaths,
-  readFileSync(path.join(repoRoot, "docs", "reference", "migration-history.md"), "utf8"),
+  historyText,
   readCanonicalBlob,
   sha256Text,
 );
@@ -529,7 +536,6 @@ eq(currentCrossReference.state, "known", "repository correction guard proves eve
 // Hard-coding a number goes stale the moment a candidate is applied live (all
 // four 20260808* candidates were re-issued and applied on 2026-08-09, taking
 // this from 4 to 0), and a stale number turns a real guard into a red build.
-const historyText = readFileSync(path.join(repoRoot, "docs", "reference", "migration-history.md"), "utf8");
 const independentCandidateCount = new Set(
   historyText
     .split(/\r?\n/)

@@ -142,6 +142,14 @@ try {
   ok(linkedBackupContext.includes("Last DB backup is 8 days old"), "FIX3: linked worktree reads canonical marker and computes backup age");
   ok(!linkedBackupContext.includes("No database backup exists yet"), "FIX3: canonical backup marker prevents false missing-backup warning");
 
+  // NEWEST-WINS (2026-08-10, replaces canonical-always-wins). /backup-db stamps
+  // backups/LATEST-OK.json relative to the checkout it ran in, so a backup taken
+  // from a worktree lives only in that worktree. Preferring the canonical marker
+  // unconditionally made that real, recent backup invisible and warned "stale" at
+  // every later session — which trains Mason to ignore the one warning that says
+  // his only copy of production data died. Both halves are asserted below: the
+  // fresher marker wins wherever it lives, and the protection the old rule
+  // existed for (a stale local marker masking shared truth) still holds.
   mkdirSync(path.join(linkedWorktree, "backups"), { recursive: true });
   writeFileSync(path.join(linkedWorktree, "backups", "LATEST-OK.json"), JSON.stringify({
     completed_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
@@ -150,9 +158,24 @@ try {
   }));
   r = runHook(linkedWorktree);
   eq(r.status, 0, "FIX3: linked-worktree backup check with a local marker exits 0");
-  const canonicalWinsContext = additionalContextOf(r);
-  ok(canonicalWinsContext.includes("Last DB backup is 8 days old"), "FIX3: shared canonical marker wins over a conflicting worktree-local marker");
-  ok(!canonicalWinsContext.includes("Last DB backup is 2 days old"), "FIX3: worktree-local marker cannot split backup truth across sessions");
+  const freshLocalContext = additionalContextOf(r);
+  ok(!freshLocalContext.includes("Last DB backup is 8 days old"), "FIX3: a fresher worktree-local backup is not masked by the older canonical marker");
+  ok(!freshLocalContext.includes("💾"), "FIX3: a 2-day-old backup taken from a worktree raises no backup warning at all");
+
+  // Inverse: a STALE worktree-local marker must not mask a fresh canonical one.
+  writeFileSync(path.join(linkedWorktree, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  writeFileSync(path.join(backupRepo, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  r = runHook(linkedWorktree);
+  const staleLocalContext = additionalContextOf(r);
+  ok(!staleLocalContext.includes("💾"), "FIX3: a stale worktree-local marker cannot fake a stale backup when the canonical one is fresh");
 
   console.log(`session-staleness: ${pass} assertions passed`);
 } finally {
