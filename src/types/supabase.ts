@@ -11651,6 +11651,14 @@ export type Database = {
         }
         Returns: Json
       }
+      complete_team_note: {
+        Args: {
+          p_completed: boolean
+          p_idempotency_key?: string
+          p_note_id: string
+        }
+        Returns: Json
+      }
       compute_application_service_fee: {
         Args: {
           p_acres: number

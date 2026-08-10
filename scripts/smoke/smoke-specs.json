@@ -7,6 +7,12 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency, regression). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "complete_team_note": {
+      "chain": "smoke-complete-team-note-chain.sql",
+      "description": "Team Board delegation chain (migrations 20260809130108 + 20260809154649): INSERT-with-assignee fires exactly one task_assigned notification; a rollback-only synthetic inactive auth/profile fixture proves inactive actors are rejected and inactive assignees stay silent without touching a real teammate's auth state; no-auth and anon calls raise AUTH_REQUIRED; an authenticated outsider (not creator/assignee/admin) is rejected; the non-admin ASSIGNEE completes a note they did not create with completed_by stamped from auth.uid(); exact idempotent replay returns the saved result without double activity logging; same-key different-payload raises COMPLETE_REPLAY_PAYLOAD_MISMATCH; the creator reopens; reassignment notifies only the new assignee; self-assignment and unchanged-assignee updates stay silent; a soft-deleted note raises NOTE_NOT_FOUND; anon EXECUTE is denied on the RPC and client roles cannot EXECUTE the trigger function. Terminal rollback.",
+      "covers": ["complete_team_note", "notify_team_note_assignment"],
+      "area": ["lifecycle", "security", "idempotency"]
+    },
     "historical_ar_report_cutoffs": {
       "chain": "smoke-historical-ar-report-cutoffs.sql",
       "description": "Section 2 historical AR report proof: an overdue invoice remains visible in both AR Aging and Customer Balance Listing, a fully paid invoice remains in cumulative invoiced/paid/count totals without entering open balance, a future-dated invoice is excluded, a post-cutoff credit application is replayed to the exact gross/open-credit cutoff, later prepay activity fails closed, and anonymous/private-helper grants remain denied. Self-contained fixtures and terminal rollback.",

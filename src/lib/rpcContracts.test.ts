@@ -2151,7 +2151,9 @@ function registryMigrationHighWater(): string {
 // under server-assigned ledger version 20260729222311; it is not pending.
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+  '20260809154649',
+]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2255,6 +2257,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
+  notify_team_note_assignment:
+    'PENDING 20260809154649 trigger-only assignment notifier; parent team_notes INSERT/UPDATE owns the transaction, direct application-role EXECUTE is revoked, and the active-actor guard fails closed before privileged notification DML',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
