@@ -225,6 +225,9 @@ const BOUND_DDL =
   "RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN " +
   "IF p_performed_by IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION ''ACTOR_MISMATCH''; END IF; " +
   "UPDATE invoices SET created_by = auth.uid(); END $fn$;";
+// BOUND_DDL doubles its inner quotes for embedding in an outer single-quoted
+// SQL string. Dollar-quoted containers need the function's literal SQL text.
+const BOUND_DDL_DOLLAR = BOUND_DDL.replaceAll("''", "'");
 const QUOTED_UNBOUND_DDL = UNBOUND_DDL.replace(
   "public.dynamic_actor",
   '"public" . "dynamic_actor"'
@@ -248,7 +251,7 @@ r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${UNBOUND_DDL.replace(
 )}$ddl$; END $do$;`);
 ok(isDeny(r), "a doubled quote inside a function identifier remains inspectable");
 
-r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${BOUND_DDL.replace(
+r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${BOUND_DDL_DOLLAR.replace(
   "public.dynamic_bound",
   '"public"."dynamic_bound"'
 )}$ddl$; END $do$;`);
@@ -470,6 +473,16 @@ SET command = $job$${UNBOUND_DDL}$job$
 WHERE jobid IN (SELECT jobid FROM target_job);`);
 ok(isDeny(r), "a CTE prefix cannot hide UPDATE cron.job.command actor DDL");
 
+r = runHook(`WITH unrelated_write AS (
+  UPDATE public.job
+  SET command = $job$${UNBOUND_DDL}$job$
+  WHERE jobid = 42
+)
+UPDATE cron.job
+SET active = false
+WHERE jobid = 42;`);
+ok(!isDeny(r), "a CTE data assignment cannot impersonate the outer cron.job update tail");
+
 r = runHook(`WITH target_job AS (
   SELECT jobid FROM cron.job WHERE jobname = 'cte-safe-job'
 )
@@ -616,7 +629,7 @@ ok(isDeny(r), "cron.schedule DDL split across literals fails closed");
 r = runHook(`SELECT cron.schedule(
   'bound-but-fancy-ddl',
   '* * * * *',
-  $job$${BOUND_DDL}$job$
+  $job$${BOUND_DDL_DOLLAR}$job$
 );`);
 ok(isDeny(r), "scheduled function DDL uses exemption even when its current text appears bound");
 
@@ -668,7 +681,7 @@ ok(isDeny(r), "a nested comment cannot hide a dynamic dollar-quoted function hea
 r = runHook(`DO $do$ BEGIN EXECUTE '${BOUND_DDL}'; END $do$;`);
 ok(isDeny(r), "a nested-quoted EXECUTE string fails closed even when its current function is bound");
 
-r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${BOUND_DDL}$ddl$; END $do$;`);
+r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${BOUND_DDL_DOLLAR}$ddl$; END $do$;`);
 ok(!isDeny(r), "a bound actor function in one complete dollar-quoted EXECUTE literal remains allowed");
 
 r = runHook("GRANT EXECUTE ON FUNCTION public.bound_actor(uuid) TO authenticated, service_role;");
@@ -834,7 +847,7 @@ ok(isDeny(r), "VALUES (...) INTO DDL split across literals is refused");
 r = runHook(`DO $do$
 DECLARE v_ddl text;
 BEGIN
-  v_ddl := $ddl$${BOUND_DDL}$ddl$;
+  v_ddl := $ddl$${BOUND_DDL_DOLLAR}$ddl$;
   EXECUTE v_ddl;
 END $do$;`);
 ok(isDeny(r), "even a previously bound assignment cannot make indirect EXECUTE readable");
@@ -842,7 +855,7 @@ ok(isDeny(r), "even a previously bound assignment cannot make indirect EXECUTE r
 r = runHook(`DO $do$
 DECLARE v_ddl text;
 BEGIN
-  SELECT $ddl$${BOUND_DDL}$ddl$ INTO v_ddl;
+  SELECT $ddl$${BOUND_DDL_DOLLAR}$ddl$ INTO v_ddl;
   EXECUTE v_ddl;
 END $do$;`);
 ok(isDeny(r), "even a previously bound SELECT cannot make indirect EXECUTE readable");
@@ -850,7 +863,7 @@ ok(isDeny(r), "even a previously bound SELECT cannot make indirect EXECUTE reada
 r = runHook(`DO $do$
 DECLARE v_ddl text;
 BEGIN
-  SELECT $ddl$${BOUND_DDL}$ddl$ INTO v_ddl;
+  SELECT $ddl$${BOUND_DDL_DOLLAR}$ddl$ INTO v_ddl;
   SELECT body INTO STRICT v_ddl FROM ddl_staging WHERE name = 'unbound_actor_function';
   EXECUTE v_ddl;
 END $do$;`);
@@ -859,7 +872,7 @@ ok(isDeny(r), "SELECT INTO STRICT cannot overwrite a proven DDL variable without
 r = runHook(`DO $do$
 DECLARE v_ddl text;
 BEGIN
-  SELECT $ddl$${BOUND_DDL}$ddl$ INTO v_ddl;
+  SELECT $ddl$${BOUND_DDL_DOLLAR}$ddl$ INTO v_ddl;
   EXECUTE 'SELECT body FROM ddl_staging LIMIT 1' INTO v_ddl;
   EXECUTE v_ddl;
 END $do$;`);
@@ -868,7 +881,7 @@ ok(isDeny(r), "EXECUTE INTO cannot overwrite a proven DDL variable without inval
 r = runHook(`DO $do$
 DECLARE v_ddl text;
 BEGIN
-  v_ddl := $ddl$${BOUND_DDL}$ddl$;
+  v_ddl := $ddl$${BOUND_DDL_DOLLAR}$ddl$;
   UPDATE ddl_staging SET body = current_setting('app.dynamic_ddl') RETURNING body INTO v_ddl;
   EXECUTE v_ddl;
 END $do$;`);
@@ -877,7 +890,7 @@ ok(isDeny(r), "RETURNING INTO cannot make an indirect EXECUTE trustworthy");
 r = runHook(`DO $do$
 DECLARE v_ddl text;
 BEGIN
-  v_ddl := $ddl$${BOUND_DDL}$ddl$;
+  v_ddl := $ddl$${BOUND_DDL_DOLLAR}$ddl$;
   IF true THEN v_ddl := current_setting('app.dynamic_ddl'); END IF;
   EXECUTE v_ddl;
 END $do$;`);
@@ -887,7 +900,7 @@ r = runHook(`DO $do$
 DECLARE v_ddl text;
 DECLARE c CURSOR FOR SELECT body FROM ddl_staging;
 BEGIN
-  v_ddl := $ddl$${BOUND_DDL}$ddl$;
+  v_ddl := $ddl$${BOUND_DDL_DOLLAR}$ddl$;
   OPEN c;
   FETCH c INTO v_ddl;
   EXECUTE v_ddl;
@@ -895,7 +908,7 @@ END $do$;`);
 ok(isDeny(r), "FETCH INTO cannot make an indirect EXECUTE trustworthy");
 
 r = runHook(`DO $do$
-DECLARE v_ddl text := $ddl$${BOUND_DDL}$ddl$;
+DECLARE v_ddl text := $ddl$${BOUND_DDL_DOLLAR}$ddl$;
 BEGIN
   CALL replace_dynamic_ddl(v_ddl);
   EXECUTE v_ddl;

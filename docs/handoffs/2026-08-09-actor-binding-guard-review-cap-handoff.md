@@ -9,7 +9,9 @@
 - Originally rebased onto verified remote `main` at `0b85b5e447381261f53629f031ce5e703c6cab5d`,
   then integrated current `origin/main` `8dcb82fb2570b693478abd5d0adb8643bddce614`
   through local merge commit `c50cfbcfef236ad747623ebead5c8e6d023f933d` on 2026-08-10.
-- No remote branch and no pull request exist.
+- Historical handoff state: no remote branch or pull request existed when this
+  packet was written. Current ship state on 2026-08-10 is PR `#373`; re-verify
+  GitHub before any further landing action and do not create a duplicate PR.
 - Supabase project `rhyzpcqhnizqbxphqdkr` is context only; no database work occurred.
 
 ## GOAL
@@ -22,7 +24,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 194 assertions; the idempotency reference
+- The actor-binding suite passes at 195 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -241,10 +243,11 @@ PR workflow.
 
 ## REMAINING LANDING WORK
 
-- Run the fresh governed exact-SHA review cycle on the final documentation commit.
-- Only with a HEAD-matching CLEAN proof: push the branch, open the PR, wait for
-  required checks and Vercel, resolve CodeRabbit, merge, and verify remote
-  `main`. Publishing is outside this handoff's approval state.
+- Re-verify the current branch and PR state before acting. PR `#373` is the
+  protected landing lane; do not push or open a duplicate branch/PR.
+- Only with a HEAD-matching CLEAN proof: wait for required checks and Vercel,
+  resolve CodeRabbit, merge the verified PR, and verify remote `main`.
+  Publishing is outside this handoff's own approval state.
 
 ## APPROVAL STATE
 

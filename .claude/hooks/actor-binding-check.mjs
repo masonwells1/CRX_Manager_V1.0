@@ -67,6 +67,9 @@ function splitTopLevelArgs(argsText, sourceText = argsText) {
   let start = 0;
   const structural = String(argsText || "");
   const source = String(sourceText || "");
+  // Split indexes come from the masked structural text and are applied to the
+  // matching raw source text. Refuse a future caller that breaks that alignment.
+  if (structural.length !== source.length) return [];
   for (let i = 0; i < structural.length; i++) {
     const ch = structural[i];
     if (ch === "(") { depth++; continue; }
@@ -611,7 +614,7 @@ function isPgCronCommandWrite(rawStmt) {
 
   const updateHead = new RegExp(`${writeBoundary}UPDATE\\s+${target}`, "i").exec(callableSql);
   if (!updateHead) return false;
-  const tail = callableSql.slice(updateHead[0].length);
+  const tail = callableSql.slice(updateHead.index + updateHead[0].length);
   const command = '(?:"command"|command)';
   const directAssignment = new RegExp(`(?:\\bSET\\b|,)\\s*${command}\\s*=`, "i");
   const tupleAssignment = new RegExp(
@@ -895,7 +898,7 @@ function maskSqlNoise(text, inProceduralCode = false) {
         const isExecutable = isProceduralContainer || /\bEXECUTE\s+$/i.test(out) ||
           isKnownSqlExecutor ||
           (inProceduralCode && carriesFnHeader(payload)) ||
-          (inExecuteStatement(out, text, close + tag.length) && carriesFnHeader(payload));
+          (carriesFnHeader(payload) && inExecuteStatement(out, text, close + tag.length));
         const inner = isExecutable
           ? maskSqlNoise(payload, inProceduralCode || isProceduralContainer)
           : " ".repeat(payload.length);

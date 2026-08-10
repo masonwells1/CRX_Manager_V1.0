@@ -86,7 +86,15 @@ Both the recursive function-header detector and final actor scanner now share a
 qualified-identifier grammar covering quoted, doubled-quote, whitespace-around-
 dot, and Unicode/UESCAPE forms. A bound quoted function remains allowed.
 
-The focused actor-binding suite grew from 115 to 194 assertions while the
+CodeRabbit's publication review then found that a CTE-prefixed `UPDATE cron.job`
+scanned its assignment tail from the regex-match length instead of the match's
+actual source offset. That conservative mistake could make an unrelated CTE
+`command` assignment impersonate the outer cron update. The tail now starts
+after the matched cron target, and a safe CTE control proves the false positive
+closed. The same follow-up makes raw/masked argument alignment explicit and uses
+valid quote forms for both single-quoted and dollar-quoted test fixtures.
+
+The focused actor-binding suite grew from 115 to 195 assertions while the
 idempotency reference suite remained at 86. Sixty continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
