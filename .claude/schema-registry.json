@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-08-09",
+    "generated_at": "2026-08-10",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260809205423",
+    "migrations_high_water": "20260810010308",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -328,11 +328,13 @@
       "20260805204716_harden_bulk_order_import_lifecycle",
       "20260807153000_profile_role_lock_covers_insert",
       "20260807221500_log_customer_fact_rpc",
+      "20260809154649_active_team_note_assignment_actor",
       "20260809170500_restore_batch_apply_prepayments_actor_guard",
       "20260809170600_cancel_order_zeroes_quantity_remaining",
       "20260809170700_revoke_inventory_truncate_and_mark_payments_dead",
       "20260809170800_round_money_to_whole_cents",
       "20260809170900_round_line_profit_with_revenue",
+      "20260809230500_single_canonical_line_profit",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
