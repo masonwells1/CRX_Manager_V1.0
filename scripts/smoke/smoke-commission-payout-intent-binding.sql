@@ -27,7 +27,10 @@ DECLARE
   v_c3 uuid := 'aaaaaaaa-0000-0000-0000-000000000003';
   v_p1 uuid;
   v_p2 uuid;
+  v_p3 uuid;
+  v_p4 uuid;
   v_replay uuid;
+  v_msg text;
   v_res jsonb;
   v_res2 jsonb;
   v_count integer;
@@ -107,6 +110,52 @@ BEGIN
     IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
   END;
 
+  -- Changed cheque/ACH reference on the retained key. This is the field an admin
+  -- is most likely to correct after a timeout, so it must break the fingerprint.
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1, v_c2], 'check', 'REF-9', DATE '2026-08-09', 'first batch',
+      v_actor_a, 'key-create-1'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed reference was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- Changed payment date on the retained key.
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1, v_c2], 'check', 'REF-1', DATE '2026-08-10', 'first batch',
+      v_actor_a, 'key-create-1'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed payment date was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- NULL and empty-string metadata must fingerprint identically, so an admin who
+  -- clears a field and retries is not told the intent changed.
+  v_p3 := public.create_commission_payment(
+    ARRAY[v_c3], 'check', NULL, DATE '2026-08-09', NULL, v_actor_a, 'key-create-null'
+  );
+  v_replay := public.create_commission_payment(
+    ARRAY[v_c3], 'check', '', DATE '2026-08-09', '   ', v_actor_a, 'key-create-null'
+  );
+  IF v_replay IS DISTINCT FROM v_p3 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: empty-string metadata did not replay the NULL-metadata receipt';
+  END IF;
+
+  -- Blank-key parity with check_idempotency: a whitespace-only key is a caller
+  -- bug and must keep raising IDEMPOTENCY_KEY_REQUIRED, not be treated as absent.
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1], 'check', 'REF-1', DATE '2026-08-09', NULL, v_actor_a, '   '
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a whitespace-only idempotency key was accepted';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_KEY_REQUIRED%' THEN RAISE; END IF;
+  END;
+
   -- Whitespace-only differences are not a change of intent.
   v_replay := public.create_commission_payment(
     ARRAY[v_c1, v_c2], 'check', '  REF-1 ', DATE '2026-08-09', ' first batch  ',
@@ -142,13 +191,62 @@ BEGIN
     IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
   END;
 
-  -- Cross-operation reuse of a create key still fails.
+  -- Cross-operation reuse of a create key still fails, AND still produces the
+  -- original formatted message. A caller or test keying on that text must not
+  -- start seeing a bare code just because the wrapper now checks first.
   BEGIN
     PERFORM public.post_commission_payment(v_p1, v_actor_a, 'key-create-1');
     RAISE EXCEPTION 'SMOKE_FAIL: cross-operation key reuse was accepted';
   EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM NOT LIKE '%IDEMPOTENCY_CROSS_OP_KEY_REUSE%' THEN RAISE; END IF;
+    v_msg := SQLERRM;
+    IF v_msg NOT LIKE '%IDEMPOTENCY_CROSS_OP_KEY_REUSE%' THEN RAISE; END IF;
+    IF v_msg NOT LIKE
+       '%idempotency_key key-create-1 is already in use for operation create_commission_payment; cannot reuse it for operation post_commission_payment%'
+    THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: cross-op message lost its detail: %', v_msg;
+    END IF;
   END;
+
+  -- A receipt whose stored result is SQL NULL must never be read as "not yet
+  -- performed" — that is the exact shape that would re-run a committed payout.
+  INSERT INTO public.idempotency_keys
+    (idempotency_key, operation, result, request_actor_id, request_fingerprint)
+  SELECT 'key-null-result', 'create_commission_payment', NULL, request_actor_id, request_fingerprint
+    FROM public.idempotency_keys WHERE idempotency_key = 'key-create-1';
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1, v_c2], 'check', 'REF-1', DATE '2026-08-09', 'first batch',
+      v_actor_a, 'key-null-result'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a NULL stored result was replayed as success';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_RESULT_INVALID%' THEN RAISE; END IF;
+  END;
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'create_commission_payment';
+  IF v_count <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL-result receipt re-ran the payout (% effects)', v_count;
+  END IF;
+
+  -- Same for a receipt holding JSON null rather than SQL NULL.
+  INSERT INTO public.idempotency_keys
+    (idempotency_key, operation, result, request_actor_id, request_fingerprint)
+  SELECT 'key-json-null', 'create_commission_payment', 'null'::jsonb, request_actor_id, request_fingerprint
+    FROM public.idempotency_keys WHERE idempotency_key = 'key-create-1';
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c1, v_c2], 'check', 'REF-1', DATE '2026-08-09', 'first batch',
+      v_actor_a, 'key-json-null'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a JSON null stored result was replayed as success';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_RESULT_INVALID%' THEN RAISE; END IF;
+  END;
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'create_commission_payment';
+  IF v_count <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: JSON-null receipt re-ran the payout (% effects)', v_count;
+  END IF;
 
   -- NULL key still performs the work and writes no receipt.
   SELECT count(*) INTO v_count FROM public.idempotency_keys;
@@ -207,6 +305,53 @@ BEGIN
   END;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_a)::text, true);
 
+  -- Pre-migration post receipt: neither binding column set. Must fail closed
+  -- rather than replay, exactly as for create.
+  INSERT INTO public.idempotency_keys (idempotency_key, operation, result)
+  VALUES ('key-legacy-post', 'post_commission_payment', jsonb_build_object('success', true));
+  BEGIN
+    PERFORM public.post_commission_payment(v_p1, v_actor_a, 'key-legacy-post');
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy unbound post receipt was replayed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- A post receipt whose stored result is SQL NULL must fail closed.
+  INSERT INTO public.idempotency_keys
+    (idempotency_key, operation, result, request_actor_id, request_fingerprint)
+  SELECT 'key-post-null', 'post_commission_payment', NULL, request_actor_id, request_fingerprint
+    FROM public.idempotency_keys WHERE idempotency_key = 'key-post-1';
+  BEGIN
+    PERFORM public.post_commission_payment(v_p1, v_actor_a, 'key-post-null');
+    RAISE EXCEPTION 'SMOKE_FAIL: a NULL stored post result was replayed as success';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_RESULT_INVALID%' THEN RAISE; END IF;
+  END;
+
+  -- The p_performed_by guard runs BEFORE the receipt lookup, so a forged actor
+  -- is refused even when a valid receipt for that key exists — the receipt can
+  -- never be used to smuggle a different performer into the audit trail.
+  BEGIN
+    PERFORM public.post_commission_payment(v_p1, v_actor_b, 'key-post-1');
+    RAISE EXCEPTION 'SMOKE_FAIL: a forged p_performed_by was accepted on the post replay path';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%p_performed_by does not match authenticated user%' THEN RAISE; END IF;
+  END;
+
+  -- NULL key still performs the work and writes no receipt.
+  v_p4 := public.create_commission_payment(
+    ARRAY[v_c2], 'check', 'REF-4', DATE '2026-08-09', 'nokey post', v_actor_a, NULL
+  );
+  SELECT count(*) INTO v_count FROM public.idempotency_keys;
+  PERFORM public.post_commission_payment(v_p4, v_actor_a, NULL);
+  IF (SELECT count(*) FROM public.idempotency_keys) <> v_count THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key post wrote a receipt';
+  END IF;
+  IF (SELECT count(*) FROM public.proof_effects
+       WHERE operation = 'post_commission_payment' AND entity_id = v_p4) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key post did not perform the work';
+  END IF;
+
   ----------------------------------------------------------------------------
   -- void_commission_payment
   ----------------------------------------------------------------------------
@@ -255,6 +400,49 @@ BEGIN
     IF SQLERRM NOT LIKE '%IDEMPOTENCY_ACTOR_MISMATCH%' THEN RAISE; END IF;
   END;
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_actor_a)::text, true);
+
+  -- Pre-migration void receipt: neither binding column set. Must fail closed.
+  INSERT INTO public.idempotency_keys (idempotency_key, operation, result)
+  VALUES ('key-legacy-void', 'void_commission_payment', jsonb_build_object('success', true));
+  BEGIN
+    PERFORM public.void_commission_payment(v_p1, 'duplicate batch', v_actor_a, 'key-legacy-void');
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy unbound void receipt was replayed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE; END IF;
+  END;
+
+  -- A void receipt whose stored result is SQL NULL must fail closed.
+  INSERT INTO public.idempotency_keys
+    (idempotency_key, operation, result, request_actor_id, request_fingerprint)
+  SELECT 'key-void-null', 'void_commission_payment', NULL, request_actor_id, request_fingerprint
+    FROM public.idempotency_keys WHERE idempotency_key = 'key-void-1';
+  BEGIN
+    PERFORM public.void_commission_payment(v_p1, 'duplicate batch', v_actor_a, 'key-void-null');
+    RAISE EXCEPTION 'SMOKE_FAIL: a NULL stored void result was replayed as success';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_RESULT_INVALID%' THEN RAISE; END IF;
+  END;
+
+  -- See post: the actor guard precedes the receipt lookup on the void path too.
+  BEGIN
+    PERFORM public.void_commission_payment(v_p1, 'duplicate batch', v_actor_b, 'key-void-1');
+    RAISE EXCEPTION 'SMOKE_FAIL: a forged p_performed_by was accepted on the void replay path';
+  EXCEPTION WHEN OTHERS THEN
+    -- Exact match, not LIKE: IDEMPOTENCY_ACTOR_MISMATCH also contains
+    -- "ACTOR_MISMATCH", and only the guard firing first proves the point.
+    IF SQLERRM <> 'ACTOR_MISMATCH' THEN RAISE; END IF;
+  END;
+
+  -- NULL key still performs the work and writes no receipt.
+  SELECT count(*) INTO v_count FROM public.idempotency_keys;
+  PERFORM public.void_commission_payment(v_p4, 'no key void', v_actor_a, NULL);
+  IF (SELECT count(*) FROM public.idempotency_keys) <> v_count THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key void wrote a receipt';
+  END IF;
+  IF (SELECT count(*) FROM public.proof_effects
+       WHERE operation = 'void_commission_payment' AND entity_id = v_p4) <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key void did not perform the work';
+  END IF;
 
   ----------------------------------------------------------------------------
   -- Pre-existing guards are unchanged

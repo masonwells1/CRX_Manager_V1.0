@@ -19,7 +19,7 @@
 
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,6 +56,137 @@ function psql(sql, { allowFailure = false } = {}) {
   );
 }
 
+/**
+ * Concurrent sibling of psql(): starts a real second backend so two sessions can
+ * race on the same idempotency key. spawnSync cannot express that — the whole
+ * point is that both connections are open at once.
+ */
+function psqlConcurrent(sql, { quiet = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      'docker',
+      ['exec', '-i', CONTAINER, 'psql', '-U', 'postgres', '-d', 'postgres',
+       '-X', '-q', '-t', '-A', '-v', 'ON_ERROR_STOP=1'],
+      { cwd: ROOT },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (status) => {
+      if (!quiet && status !== 0 && !stderr) reject(new Error('psql died with no output'));
+      else resolve({ status, stdout, stderr });
+    });
+    child.stdin.end(sql);
+  });
+}
+
+/** Single scalar, unaligned and untitled, so the caller compares a bare value. */
+function psqlValue(sql) {
+  return docker(
+    ['exec', '-i', CONTAINER, 'psql', '-U', 'postgres', '-d', 'postgres',
+     '-X', '-q', '-t', '-A', '-v', 'ON_ERROR_STOP=1'],
+    { input: sql },
+  ).stdout.trim();
+}
+
+const ACTOR_A = '11111111-1111-1111-1111-111111111111';
+
+function concurrentCreate(commissionId, key) {
+  // set_config is SESSION-scoped (is_local = false) on purpose: each statement
+  // below autocommits, so a transaction-local setting would be gone by the time
+  // the payout call runs.
+  //
+  // The race_gate barrier is what makes this a real race. Without it the two
+  // "docker exec" processes start whole tenths of a second apart, so the first
+  // session commits before the second one connects and the race never happens —
+  // which is exactly how an earlier version of this test stayed green after the
+  // advisory lock was deleted. Each session announces itself, then blocks until
+  // BOTH have announced, so neither can call the payout function until the other
+  // is connected and ready. crx.race_delay then holds the winner inside the
+  // window between the receipt check and the receipt write.
+  return `
+SELECT set_config('request.jwt.claims', '{"sub":"${ACTOR_A}"}', false);
+SELECT set_config('crx.race_delay', 'on', false);
+INSERT INTO public.race_gate(session_tag) VALUES ('${commissionId}:${key}');
+DO $gate$
+BEGIN
+  FOR i IN 1..1000 LOOP
+    EXIT WHEN (SELECT count(*) FROM public.race_gate) >= 2;
+    PERFORM pg_sleep(0.01);
+  END LOOP;
+  IF (SELECT count(*) FROM public.race_gate) < 2 THEN
+    RAISE EXCEPTION 'RACE_BARRIER_TIMEOUT: the second session never arrived';
+  END IF;
+END
+$gate$;
+SELECT public.create_commission_payment(
+  ARRAY['${commissionId}'::uuid], 'check', 'REF-CONC', DATE '2026-08-09',
+  'concurrent', '${ACTOR_A}', '${key}'
+);
+`;
+}
+
+const RESET_CONCURRENCY_FIXTURE = `
+CREATE TABLE IF NOT EXISTS public.race_gate (session_tag text);
+TRUNCATE public.proof_effects, public.commission_payments, public.idempotency_keys,
+         public.race_gate;
+`;
+
+function createdIds(run) {
+  return (run.stdout.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g) || []);
+}
+
+/**
+ * Two live backends hit the same retained key at the same moment. The advisory
+ * lock inside check_idempotency_intent is the only thing serializing them, so
+ * this is what proves there is no window where both sessions see "no receipt"
+ * and both pay out.
+ */
+async function proveConcurrency() {
+  // Different intents, same key: exactly one payout, and the loser is refused
+  // rather than silently handed the winner's receipt.
+  psql(RESET_CONCURRENCY_FIXTURE);
+  const different = await Promise.all([
+    psqlConcurrent(concurrentCreate('aaaaaaaa-0000-0000-0000-000000000001', 'key-race'), { quiet: true }),
+    psqlConcurrent(concurrentCreate('aaaaaaaa-0000-0000-0000-000000000002', 'key-race'), { quiet: true }),
+  ]);
+  const winners = different.filter((r) => r.status === 0);
+  const losers = different.filter((r) => r.status !== 0);
+  assert.equal(winners.length, 1, `expected exactly one winner, got ${winners.length}`);
+  assert.match(
+    losers[0].stderr,
+    /IDEMPOTENCY_INTENT_MISMATCH/,
+    `losing session was not refused on intent:\n${losers[0].stderr}`,
+  );
+  assert.equal(
+    psqlValue("SELECT count(*) FROM public.proof_effects WHERE operation = 'create_commission_payment';"),
+    '1',
+    'concurrent different-intent race did not pay out exactly once',
+  );
+
+  // Identical intents, same key: both callers succeed, both are told about the
+  // SAME payment, and the payout happened once.
+  psql(RESET_CONCURRENCY_FIXTURE);
+  const same = await Promise.all([
+    psqlConcurrent(concurrentCreate('aaaaaaaa-0000-0000-0000-000000000001', 'key-race-same'), { quiet: true }),
+    psqlConcurrent(concurrentCreate('aaaaaaaa-0000-0000-0000-000000000001', 'key-race-same'), { quiet: true }),
+  ]);
+  for (const run of same) {
+    assert.equal(run.status, 0, `identical-intent session failed:\n${run.stderr}`);
+  }
+  const [idA] = createdIds(same[0]);
+  const [idB] = createdIds(same[1]);
+  assert.ok(idA && idB, 'concurrent identical-intent sessions did not both return a payment id');
+  assert.equal(idA, idB, 'concurrent identical-intent sessions returned different payments');
+  assert.equal(
+    psqlValue("SELECT count(*) FROM public.proof_effects WHERE operation = 'create_commission_payment';"),
+    '1',
+    'concurrent identical-intent race did not pay out exactly once',
+  );
+}
+
 function assertInputs() {
   for (const file of [MIGRATION, SMOKE]) {
     assert.ok(existsSync(file), `missing checked-in proof input: ${file}`);
@@ -77,10 +208,22 @@ function assertInputs() {
   for (const marker of [
     PASS_TOKEN,
     'changed commission selection was accepted',
+    'changed reference was accepted',
+    'changed payment date was accepted',
     'a second actor consumed the receipt',
     'legacy unbound receipt was replayed',
+    'legacy unbound post receipt was replayed',
+    'legacy unbound void receipt was replayed',
     'a different payment was posted under the retained key',
     'a changed void reason was accepted',
+    'a NULL stored result was replayed as success',
+    'a JSON null stored result was replayed as success',
+    'a whitespace-only idempotency key was accepted',
+    'cross-op message lost its detail',
+    'forged p_performed_by was accepted on the post replay path',
+    'forged p_performed_by was accepted on the void replay path',
+    'NULL-key post wrote a receipt',
+    'NULL-key void wrote a receipt',
   ]) {
     assert.ok(smoke.includes(marker), `smoke marker missing: ${marker}`);
   }
@@ -228,6 +371,13 @@ BEGIN
     v_existing := check_idempotency(p_idempotency_key, 'create_commission_payment');
     IF v_existing IS NOT NULL THEN RETURN (v_existing #>> '{}')::uuid; END IF;
   END IF;
+  -- Off unless a concurrency session turns it on. It does not create a race
+  -- window; it widens the one that already exists between the receipt check and
+  -- the receipt write, so the two-backend proof is deterministic instead of
+  -- depending on how fast two "docker exec" processes happen to start.
+  IF current_setting('crx.race_delay', true) = 'on' THEN
+    PERFORM pg_sleep(0.4);
+  END IF;
   IF array_length(p_commission_ids, 1) IS NULL THEN
     RAISE EXCEPTION 'No commissions selected';
   END IF;
@@ -338,6 +488,10 @@ try {
   const output = `${smoke.stdout || ''}\n${smoke.stderr || ''}`;
   assert.notEqual(smoke.status, 0, 'rollback smoke unexpectedly committed');
   assert.match(output, new RegExp(PASS_TOKEN), output);
+
+  // Runs after the rollback smoke: this one COMMITS inside the disposable
+  // container, because two backends cannot see each other's uncommitted work.
+  await proveConcurrency();
 
   console.log('COMMISSION_PAYOUT_INTENT_BINDING_PROOF_PASS');
 } finally {

@@ -147,4 +147,3 @@ One initial catalog statement containing `pg_get_triggerdef()` was blocked by th
 - Index and ranked summary updated.
 - No remediation attempted.
 - No app/source code, migration, live database state, commit, push, deploy, deletion, or forbidden external system was touched.
-

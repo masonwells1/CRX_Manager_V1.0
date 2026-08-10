@@ -1129,7 +1129,7 @@ Option B is implemented on branch `fix/commission-payout-intent-binding` (split 
 | Migration — renames the three payout bodies to `_<name>_intent_impl_20260809` (money logic never retyped) and creates public wrappers that bind each receipt to `request_actor_id` + a SHA-256 `request_fingerprint`; adds the `check_idempotency_intent` helper | `supabase/migrations/20260810130500_bind_commission_payout_idempotency_to_intent.sql` | Written; proven in a disposable container |
 | Rollback-only smoke chain | `scripts/smoke/smoke-commission-payout-intent-binding.sql` (registered in `scripts/smoke/smoke-specs.json` under `create_commission_payment`) | Passing |
 | Container proof — network-isolated throwaway PostgreSQL 17, prints `COMMISSION_PAYOUT_INTENT_BINDING_PROOF_PASS` | `scripts/smoke/prove-commission-payout-intent-binding.mjs` | Green |
-| Frontend — `getIdempotencyBindingRejection` maps the two refusals to plain-English warnings and retires the dead key in all three handlers | `src/lib/idempotency.ts`, `src/pages/CommissionPayments.tsx` | Done |
+| Frontend — `getIdempotencyBindingRejection` maps the three refusals to plain-English warnings and retires the dead key in all three handlers | `src/lib/idempotency.ts`, `src/pages/CommissionPayments.tsx` | Done |
 | Source guard the report asked for | `src/lib/commissionPayoutIntentBindingMigration.test.ts` | Passing |
 
 Two deliberate departures from the `20260803010917` reference pattern, both documented in the migration header:
@@ -1138,6 +1138,19 @@ Two deliberate departures from the `20260803010917` reference pattern, both docu
 2. **No per-entity scope check before returning the receipt in the error DETAIL.** All three payout RPCs are admin-only, the wrapper re-runs `is_admin()` before any receipt is read, and an admin can already read every payout row.
 
 Mutation-tested (guard broken → test red → restored): the fingerprint comparison, the actor comparison, the legacy-receipt bridge, the frontend refusal branch, and the frontend key reset.
+
+**Both Codex reviews returned DO NOT SHIP on 2026-08-09 (sol and terra, independently). Every confirmed finding is fixed on this branch as of 2026-08-10; the branch is still not live and still needs a clean re-review plus Mason's explicit OK before the migration is applied.** What the reviews caught, and what changed:
+
+- **A dead key trapped the operator.** `IDEMPOTENCY_RESULT_INVALID` and `IDEMPOTENCY_RECEIPT_MISSING` were not classified, so the UI left an unusable key in place and every retry failed the same way forever. They are now a third refusal kind, `'receipt'`, with their own wording, and the key is retired like the other two.
+- **The UI asserted something the database cannot prove.** On a pre-migration receipt the database knows only that the key is spent, not that the earlier request differed. The warning no longer claims a different payment was involved.
+- **The refresh was not awaited**, so the toast told the admin to check a list that had not reloaded yet.
+- **The privilege post-condition checked only `anon` and `authenticated`.** A `service_role` grant could have put an unguarded implementation back on a PostgREST-reachable surface. The `DO $verify$` block now denies all three roles across the receipt helper and all three implementations.
+- **The concurrency test proved nothing.** Two `docker exec` sessions never actually overlapped, so deleting the advisory lock kept the proof green. The proof now holds both backends at a barrier and widens the window with a session-gated delay; removing the lock fails with two winners, as it should.
+- **Structural tests had a first-occurrence bug**: the ordering check compared against the un-keyed delegation branch, so the binding `UPDATE` could have moved ahead of the payout call unnoticed.
+
+Mutation coverage after the fixes: 7/7 behavioural mutations (advisory lock, result-invalid guard, `service_role` grant, two fingerprint fields, legacy replay, actor stamping) and 8/8 structural mutations go red. Full frontend suite green (4,339 tests).
+
+`src/lib/commissionPayoutGuards.test.ts` needed a rename-aware fix: the stale-selection guards moved into the renamed implementation, so a name-based scan read the new thin wrapper and reported them missing. It now reads the body from before the rename and separately proves the wrapper still calls it — worth remembering for any future migration that renames a guarded function out from under its public name.
 
 ---
 

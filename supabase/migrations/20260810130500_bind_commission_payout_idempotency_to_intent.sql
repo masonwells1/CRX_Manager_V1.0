@@ -10,8 +10,14 @@
 --
 -- Fix: derive a server-side SHA-256 fingerprint of the exact intent, persist it
 -- with the authenticated actor on the receipt, and fail closed when a key is
--- reused for a different actor or a different intent. Public signatures,
--- behaviour, and error messages for every legitimate path are unchanged.
+-- reused for a different actor or a different intent. Public signatures and
+-- error messages are unchanged on every legitimate path.
+--
+-- One deliberate behaviour change: create now passes the SAME whitespace-
+-- normalized payment_method / reference / notes to the implementation that it
+-- fingerprints, and void does the same for reason. Previously the raw values
+-- were stored. Normalizing on only one side would let ' REF-1 ' replay REF-1's
+-- receipt while claiming to have persisted something different.
 --
 -- Established pattern reused verbatim from
 -- 20260803010917_bind_idempotency_to_mutation_intent.sql (save_invoice /
@@ -23,13 +29,31 @@
 -- payout RPCs are admin-only. The wrapper re-runs is_admin() before any receipt
 -- is read, and admins can already read every payout row, so no additional
 -- per-entity scope check is required before returning the committed receipt in
--- the error DETAIL.
+-- the error DETAIL. This is a narrowed disclosure, not zero disclosure: an admin
+-- who collides on another admin's key sees that receipt's result. Admin-to-admin
+-- over rows both can already read, so it is accepted — but it is a leak, and any
+-- future non-admin caller of these RPCs invalidates that reasoning.
 --
--- CHECK 6 live preflight (read-only Supabase execute_sql, 2026-08-09 17:07:28
--- UTC): supabase_migrations.schema_migrations contained 946 rows; max(version)
--- = 20260809130108 and the ledger name was
--- team_note_completion_rpc_and_assignment_notify. This file's timestamp
--- 20260810130500 is strictly greater. No live schema or data was changed.
+-- Double-payout backstop (verified live 2026-08-10 against the implementation):
+-- _create_commission_payment_intent_impl_20260809 locks every selected
+-- commission FOR UPDATE and raises COMMISSION_PAYMENT_SELECTION_STALE unless all
+-- are still 'pending'. So even when the bridge below refuses a legacy receipt
+-- and the operator retries with a fresh key, a second payout for the same
+-- commissions is hard-refused by that guard rather than by idempotency alone.
+--
+-- CHECK 6 live preflight (read-only Supabase execute_sql, re-run 2026-08-10):
+-- max(supabase_migrations.schema_migrations.version) = 20260810025159. This
+-- file's timestamp 20260810130500 is strictly greater, and sorts after every
+-- 20260809170500-20260809230500 migration; none of those redefine the three
+-- payout RPCs. The file was renumbered from 20260809171500 because PR #354
+-- pushed the live high-water past it, which silently dropped
+-- check_idempotency_intent out of the generated mutating-RPC inventory.
+--
+-- Also verified live at that time: idempotency_keys already carries
+-- request_actor_id and request_fingerprint; digest() resolves in the extensions
+-- schema; and there were ZERO unexpired receipts for the three payout
+-- operations, so the legacy-receipt bridge below strands no in-flight retry at
+-- cutover. No live schema or data was changed.
 
 -- ---------------------------------------------------------------------------
 -- Shared intent-aware receipt check
@@ -62,6 +86,11 @@ BEGIN
   IF p_key IS NULL THEN
     RETURN NULL;
   END IF;
+  -- Parity with check_idempotency: a whitespace-only key is a caller bug, not a
+  -- missing key, and must keep raising the original message.
+  IF btrim(p_key) = '' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED';
+  END IF;
   IF p_actor IS NULL THEN
     RAISE EXCEPTION 'AUTH_REQUIRED';
   END IF;
@@ -88,8 +117,12 @@ BEGIN
     RETURN NULL;
   END IF;
 
+  -- Message parity with check_idempotency: the wrapper reaches this check first,
+  -- so the caller must still see the original formatted text, not a bare code.
   IF v_existing.operation IS DISTINCT FROM p_operation THEN
-    RAISE EXCEPTION 'IDEMPOTENCY_CROSS_OP_KEY_REUSE';
+    RAISE EXCEPTION
+      'IDEMPOTENCY_CROSS_OP_KEY_REUSE: idempotency_key % is already in use for operation %; cannot reuse it for operation %',
+      p_key, v_existing.operation, p_operation;
   END IF;
 
   -- Deployment bridge: receipts written by the pre-migration implementation
@@ -135,15 +168,29 @@ GRANT EXECUTE ON FUNCTION public.check_idempotency_intent(text, text, uuid, text
 -- ---------------------------------------------------------------------------
 -- create_commission_payment
 -- ---------------------------------------------------------------------------
-ALTER FUNCTION public.create_commission_payment(uuid[], text, text, date, text, uuid, text)
-  RENAME TO _create_commission_payment_intent_impl_20260809;
+-- Re-runnable: rename only on the first application. A bare ALTER ... RENAME
+-- aborts on a replay (the target name already exists), which would strand a
+-- recovery that re-runs this file after a lost ledger write. Fail closed if the
+-- public function is missing entirely rather than installing a wrapper over
+-- nothing.
+DO $rename_create$
+BEGIN
+  IF to_regprocedure('public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
+    IF to_regprocedure('public.create_commission_payment(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
+      RAISE EXCEPTION 'create_commission_payment(uuid[], text, text, date, text, uuid, text) not found; refusing to install the intent-binding wrapper';
+    END IF;
+    ALTER FUNCTION public.create_commission_payment(uuid[], text, text, date, text, uuid, text)
+      RENAME TO _create_commission_payment_intent_impl_20260809;
+  END IF;
+END
+$rename_create$;
 
 REVOKE ALL ON FUNCTION public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)
   TO postgres;
 
-CREATE FUNCTION public.create_commission_payment(
+CREATE OR REPLACE FUNCTION public.create_commission_payment(
   p_commission_ids uuid[],
   p_payment_method text,
   p_reference text,
@@ -162,6 +209,13 @@ DECLARE
   v_fingerprint text;
   v_replay jsonb;
   v_payment_id uuid;
+  -- Normalize ONCE, then use these same values for both the fingerprint and the
+  -- implementation call. Fingerprinting a trimmed value while storing the raw
+  -- one would let ' REF-1 ' replay REF-1's receipt while claiming to persist
+  -- different metadata, so the two must never diverge.
+  v_payment_method text := NULLIF(btrim(COALESCE(p_payment_method, '')), '');
+  v_reference      text := NULLIF(btrim(COALESCE(p_reference, '')), '');
+  v_notes          text := NULLIF(btrim(COALESCE(p_notes, '')), '');
 BEGIN
   -- Same guards, same messages, same order as the implementation, so no
   -- legitimate caller sees a behaviour change.
@@ -177,8 +231,8 @@ BEGIN
 
   IF p_idempotency_key IS NULL THEN
     RETURN public._create_commission_payment_intent_impl_20260809(
-      p_commission_ids, p_payment_method, p_reference,
-      p_payment_date, p_notes, p_performed_by, NULL
+      p_commission_ids, v_payment_method, v_reference,
+      p_payment_date, v_notes, p_performed_by, NULL
     );
   END IF;
 
@@ -186,6 +240,15 @@ BEGIN
   -- every payment field the admin can edit. p_payment_date is fingerprinted
   -- raw: substituting CURRENT_DATE here would make an otherwise identical
   -- retry across midnight look like a changed intent.
+  --
+  -- p_performed_by is deliberately NOT fingerprinted, and that omission depends
+  -- on the guard above constraining it to {NULL, v_actor} — it therefore carries
+  -- no information beyond actor_id. If that guard is ever relaxed, p_performed_by
+  -- MUST be added here.
+  --
+  -- The DISTINCT below matches the implementation, which also de-duplicates the
+  -- selection (SELECT DISTINCT id FROM unnest(p_commission_ids)) before locking
+  -- and paying, so [A, A] and [A] are the same request in both layers.
   v_fingerprint := encode(
     extensions.digest(
       convert_to(jsonb_build_object(
@@ -196,10 +259,10 @@ BEGIN
               SELECT DISTINCT unnest(COALESCE(p_commission_ids, ARRAY[]::uuid[])) AS cid
             ) s
         ),
-        'payment_method', NULLIF(btrim(COALESCE(p_payment_method, '')), ''),
-        'reference', NULLIF(btrim(COALESCE(p_reference, '')), ''),
+        'payment_method', v_payment_method,
+        'reference', v_reference,
         'payment_date', p_payment_date,
-        'notes', NULLIF(btrim(COALESCE(p_notes, '')), '')
+        'notes', v_notes
       )::text, 'UTF8'),
       'sha256'
     ),
@@ -223,8 +286,8 @@ BEGIN
   END IF;
 
   v_payment_id := public._create_commission_payment_intent_impl_20260809(
-    p_commission_ids, p_payment_method, p_reference,
-    p_payment_date, p_notes, p_performed_by, p_idempotency_key
+    p_commission_ids, v_payment_method, v_reference,
+    p_payment_date, v_notes, p_performed_by, p_idempotency_key
   );
 
   UPDATE public.idempotency_keys
@@ -248,15 +311,25 @@ GRANT EXECUTE ON FUNCTION public.create_commission_payment(uuid[], text, text, d
 -- ---------------------------------------------------------------------------
 -- post_commission_payment
 -- ---------------------------------------------------------------------------
-ALTER FUNCTION public.post_commission_payment(uuid, uuid, text)
-  RENAME TO _post_commission_payment_intent_impl_20260809;
+-- See create_commission_payment: rename only on first application.
+DO $rename_post$
+BEGIN
+  IF to_regprocedure('public._post_commission_payment_intent_impl_20260809(uuid, uuid, text)') IS NULL THEN
+    IF to_regprocedure('public.post_commission_payment(uuid, uuid, text)') IS NULL THEN
+      RAISE EXCEPTION 'post_commission_payment(uuid, uuid, text) not found; refusing to install the intent-binding wrapper';
+    END IF;
+    ALTER FUNCTION public.post_commission_payment(uuid, uuid, text)
+      RENAME TO _post_commission_payment_intent_impl_20260809;
+  END IF;
+END
+$rename_post$;
 
 REVOKE ALL ON FUNCTION public._post_commission_payment_intent_impl_20260809(uuid, uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._post_commission_payment_intent_impl_20260809(uuid, uuid, text)
   TO postgres;
 
-CREATE FUNCTION public.post_commission_payment(
+CREATE OR REPLACE FUNCTION public.post_commission_payment(
   p_payment_id uuid,
   p_performed_by uuid DEFAULT NULL::uuid,
   p_idempotency_key text DEFAULT NULL::text
@@ -339,15 +412,25 @@ GRANT EXECUTE ON FUNCTION public.post_commission_payment(uuid, uuid, text)
 -- ---------------------------------------------------------------------------
 -- void_commission_payment
 -- ---------------------------------------------------------------------------
-ALTER FUNCTION public.void_commission_payment(uuid, text, uuid, text)
-  RENAME TO _void_commission_payment_intent_impl_20260809;
+-- See create_commission_payment: rename only on first application.
+DO $rename_void$
+BEGIN
+  IF to_regprocedure('public._void_commission_payment_intent_impl_20260809(uuid, text, uuid, text)') IS NULL THEN
+    IF to_regprocedure('public.void_commission_payment(uuid, text, uuid, text)') IS NULL THEN
+      RAISE EXCEPTION 'void_commission_payment(uuid, text, uuid, text) not found; refusing to install the intent-binding wrapper';
+    END IF;
+    ALTER FUNCTION public.void_commission_payment(uuid, text, uuid, text)
+      RENAME TO _void_commission_payment_intent_impl_20260809;
+  END IF;
+END
+$rename_void$;
 
 REVOKE ALL ON FUNCTION public._void_commission_payment_intent_impl_20260809(uuid, text, uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._void_commission_payment_intent_impl_20260809(uuid, text, uuid, text)
   TO postgres;
 
-CREATE FUNCTION public.void_commission_payment(
+CREATE OR REPLACE FUNCTION public.void_commission_payment(
   p_payment_id uuid,
   p_reason text,
   p_performed_by uuid DEFAULT NULL::uuid,
@@ -363,6 +446,9 @@ DECLARE
   v_fingerprint text;
   v_replay jsonb;
   v_result jsonb;
+  -- See create_commission_payment: fingerprint and implementation must receive
+  -- the identical normalized value, never trimmed here and raw there.
+  v_reason text := btrim(COALESCE(p_reason, ''));
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
   IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
@@ -375,7 +461,7 @@ BEGIN
 
   IF p_idempotency_key IS NULL THEN
     RETURN public._void_commission_payment_intent_impl_20260809(
-      p_payment_id, p_reason, p_performed_by, NULL
+      p_payment_id, v_reason, p_performed_by, NULL
     );
   END IF;
 
@@ -386,7 +472,7 @@ BEGIN
       convert_to(jsonb_build_object(
         'actor_id', v_actor,
         'payment_id', p_payment_id,
-        'reason', btrim(p_reason)
+        'reason', v_reason
       )::text, 'UTF8'),
       'sha256'
     ),
@@ -408,7 +494,7 @@ BEGIN
   END IF;
 
   v_result := public._void_commission_payment_intent_impl_20260809(
-    p_payment_id, p_reason, p_performed_by, p_idempotency_key
+    p_payment_id, v_reason, p_performed_by, p_idempotency_key
   );
 
   UPDATE public.idempotency_keys
@@ -436,12 +522,34 @@ DO $verify$
 DECLARE
   v_name text;
   v_count integer;
+  v_role text;
+  v_target text;
+  -- Public entry points: reachable by a signed-in browser session, never by anon.
+  v_public text[] := ARRAY[
+    'public.create_commission_payment(uuid[],text,text,date,text,uuid,text)',
+    'public.post_commission_payment(uuid,uuid,text)',
+    'public.void_commission_payment(uuid,text,uuid,text)'
+  ];
+  -- Internal surface: the receipt helper and the three renamed implementations.
+  -- Every one of these skips a guard the wrapper performs, so NONE of the three
+  -- PostgREST roles may execute them — not anon, not authenticated, and not
+  -- service_role. Checking only anon+authenticated (as an earlier revision did)
+  -- would let a service_role grant reintroduce the unguarded path.
+  v_internal text[] := ARRAY[
+    'public.check_idempotency_intent(text,text,uuid,text)',
+    'public._create_commission_payment_intent_impl_20260809(uuid[],text,text,date,text,uuid,text)',
+    'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)',
+    'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'
+  ];
 BEGIN
   FOREACH v_name IN ARRAY ARRAY[
     'create_commission_payment',
     'post_commission_payment',
     'void_commission_payment',
-    'check_idempotency_intent'
+    'check_idempotency_intent',
+    '_create_commission_payment_intent_impl_20260809',
+    '_post_commission_payment_intent_impl_20260809',
+    '_void_commission_payment_intent_impl_20260809'
   ] LOOP
     SELECT count(*) INTO v_count
       FROM pg_proc
@@ -452,24 +560,23 @@ BEGIN
     END IF;
   END LOOP;
 
-  IF has_function_privilege('anon', 'public.create_commission_payment(uuid[],text,text,date,text,uuid,text)', 'EXECUTE')
-     OR has_function_privilege('anon', 'public.post_commission_payment(uuid,uuid,text)', 'EXECUTE')
-     OR has_function_privilege('anon', 'public.void_commission_payment(uuid,text,uuid,text)', 'EXECUTE')
-     OR has_function_privilege('anon', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'anonymous execution must remain revoked';
-  END IF;
+  FOREACH v_target IN ARRAY v_public LOOP
+    IF has_function_privilege('anon', v_target, 'EXECUTE') THEN
+      RAISE EXCEPTION 'anonymous execution must remain revoked: %', v_target;
+    END IF;
+    IF NOT has_function_privilege('authenticated', v_target, 'EXECUTE') THEN
+      RAISE EXCEPTION 'authenticated execution grant missing: %', v_target;
+    END IF;
+  END LOOP;
 
-  IF NOT has_function_privilege('authenticated', 'public.create_commission_payment(uuid[],text,text,date,text,uuid,text)', 'EXECUTE')
-     OR NOT has_function_privilege('authenticated', 'public.post_commission_payment(uuid,uuid,text)', 'EXECUTE')
-     OR NOT has_function_privilege('authenticated', 'public.void_commission_payment(uuid,text,uuid,text)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'authenticated execution grant missing';
-  END IF;
-
-  IF has_function_privilege('authenticated', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public._create_commission_payment_intent_impl_20260809(uuid[],text,text,date,text,uuid,text)', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public._post_commission_payment_intent_impl_20260809(uuid,uuid,text)', 'EXECUTE')
-     OR has_function_privilege('authenticated', 'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'internal payout implementations must not be browser-executable';
-  END IF;
+  FOREACH v_target IN ARRAY v_internal LOOP
+    FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
+      IF has_function_privilege(v_role, v_target, 'EXECUTE') THEN
+        RAISE EXCEPTION
+          'internal payout implementations must not be browser-executable: % may execute %',
+          v_role, v_target;
+      END IF;
+    END LOOP;
+  END LOOP;
 END;
 $verify$;

@@ -16,7 +16,17 @@ function migrationFiles() {
     }));
 }
 
-function latestFunctionDefinition(functionName: string): string {
+/**
+ * 20260810130500 RENAMED the payout bodies out from under their public names and
+ * put a thin intent-binding wrapper on top. The stale-selection guards below did
+ * not move — they are still the only thing that runs the payout — but they now
+ * live under the implementation name. Scanning past this migration would find
+ * the wrapper and wrongly report the guards as deleted.
+ */
+const PAYOUT_RENAME_MIGRATION =
+  '20260810130500_bind_commission_payout_idempotency_to_intent.sql';
+
+function latestFunctionDefinition(functionName: string, stopBefore?: string): string {
   let latest = '';
   const fnPattern = new RegExp(
     `CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+public\\.${functionName}\\b[\\s\\S]*?\\$function\\$;`,
@@ -24,6 +34,7 @@ function latestFunctionDefinition(functionName: string): string {
   );
 
   for (const file of migrationFiles()) {
+    if (stopBefore && file.name >= stopBefore) break;
     const match = file.content.match(fnPattern);
     if (match) latest = match[0];
   }
@@ -56,7 +67,10 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
   const activeAdminPolicyPattern = /USING\s*\(\s*\(*\s*(?:SELECT\s+)?(?:public\.)?is_admin\(\)\s*\)*\s*\)/i;
 
   it('create_commission_payment rejects stale selections instead of inserting a pending subset', () => {
-    const definition = latestFunctionDefinition('create_commission_payment');
+    const definition = latestFunctionDefinition(
+      'create_commission_payment',
+      PAYOUT_RENAME_MIGRATION,
+    );
 
     expect(definition).toContain('v_locked_count <> v_selected_count');
     expect(definition).toContain('v_non_pending_count > 0');
@@ -65,6 +79,22 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
     expect(definition).toContain('COMMISSION_PAYMENT_SELECTION_STALE');
     expect(definition).toMatch(/SELECT DISTINCT id\s+FROM unnest\(p_commission_ids\)/i);
     expect(definition).toMatch(/FOR UPDATE OF c/i);
+  });
+
+  it('the guarded payout body is still what every live call reaches', () => {
+    // Half of the assertion above is only meaningful if the renamed body is
+    // still on the call path. If the wrapper ever stopped delegating to it, the
+    // stale-selection guards would be dead code and the test above would be
+    // asserting against a function nothing invokes.
+    const rename = migrationFiles().find((f) => f.name === PAYOUT_RENAME_MIGRATION);
+    expect(rename, `${PAYOUT_RENAME_MIGRATION} is missing`).toBeDefined();
+    const sql = rename!.content.replace(/\r\n/g, '\n');
+
+    expect(sql).toContain('RENAME TO _create_commission_payment_intent_impl_20260809;');
+    const wrapper = sql.slice(
+      sql.indexOf('CREATE OR REPLACE FUNCTION public.create_commission_payment('),
+    );
+    expect(wrapper).toContain('public._create_commission_payment_intent_impl_20260809(');
   });
 
   it('commission payment tables expose no direct authenticated write policies', () => {

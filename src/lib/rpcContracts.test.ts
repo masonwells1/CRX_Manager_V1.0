@@ -10,7 +10,7 @@
  *   - Frontend passes a number where RPC expects a string
  *   - Missing required parameters
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -1745,6 +1745,15 @@ function getMigrationFiles(): { name: string; content: string }[] {
     .map((name) => ({ name, content: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') }));
   return _migrationFilesCache;
 }
+
+// The cache above made the scan O(files), but the FIRST caller still paid the
+// whole ~900-file disk read inside whichever test happened to reach it first,
+// on that test's 5s default budget. Under full-suite contention that still
+// flaked (seen blocking a commit on 2026-08-10). Warming it here moves the I/O
+// outside every per-test budget, where it can have a timeout that fits it.
+beforeAll(() => {
+  getMigrationFiles();
+}, 60_000);
 
 /**
  * Returns the body of the LATEST migration definition of `rpc`, or null if no
