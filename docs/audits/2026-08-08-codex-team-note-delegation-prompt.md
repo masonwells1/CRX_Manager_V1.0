@@ -5,7 +5,7 @@
 **Reviewer:** Codex `gpt-5.6-sol`, high reasoning effort (independent second opinion)
 **Claude session:** pre-apply review of the Team Board delegation fix on branch `claude/todo-list-audit-hoxpl5` (PR #351). The Codex CLI is unavailable in the current cloud session, so this is the manual fallback packet.
 
-**Post-review status (2026-08-10):** both migrations are applied live under Supabase-assigned versions `20260809130108` and `20260810010308`, both disk files were B7-renamed, live catalog/ACL checks passed, live schema artifacts were refreshed, and the temporary RPC-contract exemption was removed. The registered rollback-only smoke returned the required `SMOKE_PASS_ROLLBACK`; the frontend remains pending in PR #351. The invariant sweep has one unrelated, documented historical fractional-cent data residual.
+**Post-review status (2026-08-10):** both migrations are applied live under Supabase-assigned versions `20260809130108` and `20260810010308`, both disk files were B7-renamed, live catalog/ACL checks passed, live schema artifacts were refreshed, and the temporary RPC-contract exemption was removed. The registered rollback-only smoke returned the required `SMOKE_PASS_ROLLBACK`; the frontend merged via PR #351. The invariant sweep has one unrelated, documented historical fractional-cent data residual.
 
 ---
 
