@@ -16,7 +16,7 @@ export const meta = {
 // ---------------------------------------------------------------------------
 const PREAMBLE = [
   'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at C:\\CRX_Manager.',
-  'It is a production agricultural-retail ERP. Money is stored as bigint cents (display ÷100). The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 6 Edge Functions; treat any count as a lead to confirm live, never a fact.',
+  'It is a production agricultural-retail ERP. New money storage uses bigint cents; documented legacy PostgreSQL numeric-dollar columns are exact-decimal compatibility exceptions. The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 6 Edge Functions; treat any count as a lead to confirm live, never a fact.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database. The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql" or "supabase list tables"). Live project id is rhyzpcqhnizqbxphqdkr. You MAY run read-only SQL (SELECT, pg_catalog, information_schema) to ground every finding against the live DB.',
   '',
@@ -96,7 +96,7 @@ const DIMENSIONS = [
   {
     key: 'money-financial',
     prompt:
-      'Audit MONEY & FINANCIAL correctness. Flag: (a) float math on money — parseFloat on *_cents variables, or money stored as numeric/float instead of bigint cents (exception: commissions.commission_amount is numeric dollars by design); (b) parseDollarsToCents vs parseDollarsToCentsSigned misuse — signed is legitimate only in the 3 vendor-bill adjustment callsites; (c) any UPDATE that writes invoices.balance_cents (it is GENERATED ALWAYS — writing it is a bug); (d) violations of inventory_transactions / financial_audit_log immutability invariants; (e) rounding errors in commission splits or payment allocation. Inspect src/lib/parseCents.ts (parseDollarsToCents / parseDollarsToCentsSigned), src/lib/reconciliation.ts, the *.test.ts for commission-split / payment-allocation / finance-charge math, and the corresponding mutating RPC bodies via live pg_proc (commission split, payment allocation, finance charges).',
+      'Audit MONEY & FINANCIAL correctness. Flag: (a) binary-float money arithmetic or rounding, new money storage that is not bigint cents, or documented legacy PostgreSQL numeric-dollar columns that lose exact numeric math or their finite whole-cent constraint once clean; (b) parseDollarsToCents vs parseDollarsToCentsSigned misuse — signed is legitimate only in the 3 vendor-bill adjustment callsites; (c) any UPDATE that writes invoices.balance_cents (it is GENERATED ALWAYS — writing it is a bug); (d) violations of inventory_transactions / financial_audit_log immutability invariants; (e) rounding errors in commission splits or payment allocation. Inspect src/lib/parseCents.ts (parseDollarsToCents / parseDollarsToCentsSigned), src/lib/reconciliation.ts, the *.test.ts for commission-split / payment-allocation / finance-charge math, and the corresponding mutating RPC bodies via live pg_proc (commission split, payment allocation, finance charges).',
   },
   {
     key: 'frontend-safety',

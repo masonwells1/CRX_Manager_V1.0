@@ -61,7 +61,9 @@ F2 is last because it may need an owner decision.
   the mock too, or the error path throws `No "X" export is defined on the mock`.
 - ESLint `no-unused-vars` fires on intermediate edit states (import added before its usage) - it
   clears when the usage lands; confirm with a final `npm run lint`.
-- Money is bigint cents; display/edit dollars via `(cents/100).toFixed(2)` + `parseDollarsToCents`
+- New money storage is bigint cents; documented legacy PostgreSQL numeric-dollar columns retain
+  exact `numeric` arithmetic. Parse/edit dollars with the shared exact cents helpers, never binary
+  floating-point rounding.
   (from `src/lib/parseCents`).
 - In NEW code avoid raw em-dashes (the file-write pipeline can mangle them) - use ASCII "-" or the
   `—` escape / `&mdash;` in JSX text.

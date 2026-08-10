@@ -159,7 +159,7 @@ const LAYERS = [
     prompt:
       `Layer D — Business-logic invariant sweep. ${GROUND_RULE}\n\n` +
       `Confirm the invariants that make the workflow safe to extend (query the live DB via Supabase MCP where stated):\n` +
-      `- Money: no parseFloat / float math on *_cents; money stored as bigint cents.\n` +
+      `- Money: no binary-float arithmetic/rounding; new storage uses bigint cents; documented legacy PostgreSQL numeric-dollar columns retain exact numeric math and finite whole-cent constraints once clean.\n` +
       `- RLS: every table has RLS enabled + >=1 policy (cross-check live pg_policies against list_tables). The ONE intentional exception is profile_public_view (SECURITY DEFINER semantics) — do not flag it.\n` +
       `- Idempotency: every mutating RPC accepts p_idempotency_key AND actually reads/writes idempotency_keys (columns idempotency_key/operation/result).\n` +
       `- SECURITY DEFINER: every such function has SET search_path.\n` +

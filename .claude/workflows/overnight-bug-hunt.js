@@ -38,7 +38,7 @@ const KNOWN_DROP = [
 ].join('\n')
 
 const PREAMBLE = [
-  'You are hunting REAL bugs and flawed logic in the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at the repo root of THIS worktree. It is a production agricultural-retail ERP. Money is stored as bigint cents (display ÷100).',
+  'You are hunting REAL bugs and flawed logic in the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at the repo root of THIS worktree. It is a production agricultural-retail ERP. New money storage uses bigint cents; documented legacy PostgreSQL numeric-dollar columns are exact-decimal compatibility exceptions.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database (production project id rhyzpcqhnizqbxphqdkr). The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql"). You MAY run read-only SQL (SELECT, pg_catalog, information_schema, pg_get_functiondef) to ground every finding. The live DB reflects `main`; this worktree is based on `main`, so code and live DB are coherent.',
   'EVIDENCE STATUS: Return executionStatus=BLOCKED if any required repo or live-DB source is unavailable. An empty findings array may be VERIFIED only after the requested sources ran; summarize them concretely in evidenceSummary.',

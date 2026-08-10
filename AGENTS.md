@@ -64,9 +64,10 @@ Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use des
 - Money must be exact whole cents. New money storage uses bigint cents. Existing PostgreSQL
   numeric-dollar columns are a documented compatibility exception only: authoritative database
   math must stay exact `numeric`, clean columns get finite whole-cent CHECKs, and dirty legacy
-  values are never widened or rewritten without approval. Authoritative TypeScript money math
-  converts decimal operands to integer cents before arithmetic; never use binary floating-point
-  rounding for money. See the 2026-08-10 decision in `docs/manual/DECISION_LOG.md`.
+  values are never widened or rewritten without approval. New or changed authoritative TypeScript
+  money math must parse decimal operands into integer cents before arithmetic; never introduce
+  binary floating-point rounding for money. See the 2026-08-10 decision in
+  `docs/manual/DECISION_LOG.md`.
 - Inventory and financial invariants belong in PostgreSQL RPCs/triggers, not only in React.
 - Use `src/lib/db.ts` as the only Supabase client.
 - Call `assertRpcResult()` after RPCs and `checkMutationResult()` after `.update()` or `.delete()`.

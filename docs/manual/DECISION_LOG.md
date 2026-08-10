@@ -24,9 +24,11 @@ columns are not widened or rewritten without Mason's separate approval.
 **Operative rule.** The invariant is exact whole cents, not a blind type conversion. New database
 money columns use bigint cents. A legacy numeric-dollar column may remain only under this documented
 exception, must use exact PostgreSQL `numeric` arithmetic, and should receive a finite whole-cent
-CHECK once its existing rows are clean. Authoritative TypeScript money math must convert decimal
-operands to integer cents before multiplying, dividing, rounding, or aggregating; binary
-floating-point rounding is not permitted. The server remains authoritative for persisted values.
+CHECK once its existing rows are clean. New or changed authoritative TypeScript money math must
+parse decimal operands into integer cents before multiplying, dividing, rounding, or aggregating;
+do not introduce binary floating-point rounding. Existing helpers that still use binary conversion
+are migration work, not evidence that the old approach is acceptable. The server remains
+authoritative for persisted values.
 
 ---
 
@@ -640,15 +642,19 @@ reserved balance, not a patch) plus a fresh Codex-gated build.
 
 ---
 
-## Foundational (~2026-05, still current) — Core engineering invariants
+## Foundational (~2026-05) — Core engineering invariants; money storage clause superseded 2026-08-10
 
-**Decision:** Four rules fixed at the project's foundation and never revisited: (1) money is
-always `bigint` cents, never floating-point; (2) business invariants (balances, inventory,
+**Decision:** Four rules fixed at the project's foundation: (1) money used bigint cents and never
+floating-point; (2) business invariants (balances, inventory,
 state transitions) are enforced in Postgres RPCs/triggers/constraints, not React; (3)
 `src/lib/db.ts` is the only Supabase client, and `assertRpcResult()`/`checkMutationResult()`
 are mandatory after every RPC call/`.update()`/`.delete()`; (4) every mutating RPC accepts and
 actually enforces `p_idempotency_key text DEFAULT NULL` (added after repeated double-submit
 bugs, e.g. the 2026-07-10 `save_job_applied_record` fix).
+The first clause is superseded by the 2026-08-10 exact-whole-cent decision above: bigint cents
+remains mandatory for new storage, while documented legacy PostgreSQL numeric-dollar columns may
+remain under exact arithmetic and finite whole-cent constraints. The other three rules remain
+current and unchanged.
 **Why:** these are the recurring bug classes (money bugs, invariant bypass via a second code
 path, double-submits from retries/flaky networks) that have cost the most rework historically.
 **What this forbids/implies:** any new RPC, migration, or money-touching code that violates

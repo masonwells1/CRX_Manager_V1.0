@@ -7,8 +7,10 @@ All significant development milestones, in reverse chronological order.
 Recorded Mason's financial storage decision independently of the pricing implementation: new money
 storage uses bigint cents, while established PostgreSQL numeric-dollar columns may remain when their
 math stays exact and their values are constrained to finite whole cents once clean. Browser money
-math must first convert decimal operands to integer cents and may not rely on binary floating-point
-rounding. This is policy and documentation only; it changes no schema, data, or production behavior.
+paths that are added or changed must parse decimal operands into integer cents and may not introduce
+binary floating-point rounding. Updated every authoritative review/workflow source that still stated
+the superseded blanket bigint-only rule. Existing helper conversion is owned by the separate pricing
+implementation branch; this policy PR changes no schema, data, or production behavior.
 
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 
