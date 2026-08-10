@@ -2257,6 +2257,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
+  _crx_payout_assert_impl_20260809:
+    'read-only identity check used by 20260810170000 to decide whether a body may be renamed into the payout implementation slot; it writes nothing (the inventory sees its SELECT ... INTO local variables), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',

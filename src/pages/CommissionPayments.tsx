@@ -150,68 +150,81 @@ export default function CommissionPayments() {
   // otherwise stack two toasts saying the same thing, and the generic
   // "Failed to load" one reads like the action itself failed. The return value
   // is unchanged, so a quiet caller still knows the list is stale.
+  // Never throws. Supabase reports a query failure in `error`, but the calls
+  // below can still REJECT — a dropped connection or an aborted fetch — and
+  // every recovery path on this page calls this from inside its own catch. A
+  // throw from here would therefore replace the specific "the payment posted
+  // but the refresh failed" message with no message at all, and leave `loading`
+  // stuck true with the spinner up. Returning false instead keeps the caller's
+  // own explanation on screen and tells it the list is stale.
   const fetchPayments = useCallback(async ({ quiet = false } = {}): Promise<boolean> => {
     setLoading(true);
-    // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
-    const { data, error } = await supabase
-      .from('commission_payments')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(200);
+    try {
+      // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
+      const { data, error } = await supabase
+        .from('commission_payments')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(200);
 
-    if (error) {
-      if (!quiet) toast('error', 'Failed to load commission payments');
-      setLoading(false);
-      return false;
-    }
-
-    const recipientIds = [...new Set(
-      ((data || []) as Array<{ recipient_id?: string | null }>)
-        .map((p) => p.recipient_id)
-        .filter(Boolean) as string[]
-    )];
-    const recipientMap: Record<string, string> = {};
-    if (recipientIds.length > 0) {
-      const { data: recipients } = await supabase
-        .from('profile_public_view')
-        .select('id, full_name')
-        .in('id', recipientIds);
-      (recipients || []).forEach((r: { id: string | null; full_name: string | null }) => { if (r.id) recipientMap[r.id] = r.full_name ?? ''; });
-    }
-
-    // Get item counts
-    const rows: CommissionPaymentRow[] = [];
-    let hasUnverifiedItemCount = false;
-    for (const p of (data || []) as Array<Record<string, unknown> & { recipient_id?: string | null }>) {
-      const { count, error: itemCountError } = await supabase
-        .from('commission_payment_items')
-        .select('*', { count: 'exact', head: true })
-        .eq('commission_payment_id', p.id as string);
-
-      if (itemCountError || count === null) {
-        hasUnverifiedItemCount = true;
-        Sentry.captureException(
-          itemCountError ?? new Error('Commission item count was unavailable'),
-          { extra: { context: 'load_commission_payment_item_count', paymentId: p.id } },
-        );
+      if (error) {
+        if (!quiet) toast('error', 'Failed to load commission payments');
+        return false;
       }
 
-      rows.push({
-        ...p,
-        recipient_name: p.recipient_id ? recipientMap[p.recipient_id] || 'Unknown' : 'Unknown',
-        item_count: itemCountError || count === null ? null : count,
-      } as CommissionPaymentRow);
-    }
+      const recipientIds = [...new Set(
+        ((data || []) as Array<{ recipient_id?: string | null }>)
+          .map((p) => p.recipient_id)
+          .filter(Boolean) as string[]
+      )];
+      const recipientMap: Record<string, string> = {};
+      if (recipientIds.length > 0) {
+        const { data: recipients } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', recipientIds);
+        (recipients || []).forEach((r: { id: string | null; full_name: string | null }) => { if (r.id) recipientMap[r.id] = r.full_name ?? ''; });
+      }
 
-    setPayments(rows);
-    if (hasUnverifiedItemCount) {
-      toast('error', 'Some commission payment item counts could not be verified. Posting is disabled for those rows.');
+      // Get item counts
+      const rows: CommissionPaymentRow[] = [];
+      let hasUnverifiedItemCount = false;
+      for (const p of (data || []) as Array<Record<string, unknown> & { recipient_id?: string | null }>) {
+        const { count, error: itemCountError } = await supabase
+          .from('commission_payment_items')
+          .select('*', { count: 'exact', head: true })
+          .eq('commission_payment_id', p.id as string);
+
+        if (itemCountError || count === null) {
+          hasUnverifiedItemCount = true;
+          Sentry.captureException(
+            itemCountError ?? new Error('Commission item count was unavailable'),
+            { extra: { context: 'load_commission_payment_item_count', paymentId: p.id } },
+          );
+        }
+
+        rows.push({
+          ...p,
+          recipient_name: p.recipient_id ? recipientMap[p.recipient_id] || 'Unknown' : 'Unknown',
+          item_count: itemCountError || count === null ? null : count,
+        } as CommissionPaymentRow);
+      }
+
+      setPayments(rows);
+      if (hasUnverifiedItemCount) {
+        toast('error', 'Some commission payment item counts could not be verified. Posting is disabled for those rows.');
+      }
+      // The payment rows themselves are current, which is what the recovery
+      // messages send the admin here to read; an unverified item count is
+      // reported separately above and does not make the list stale.
+      return true;
+    } catch (err) {
+      Sentry.captureException(err, { extra: { context: 'load_commission_payments' } });
+      if (!quiet) toast('error', 'Failed to load commission payments');
+      return false;
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-    // The payment rows themselves are current, which is what the recovery
-    // messages send the admin here to read; an unverified item count is
-    // reported separately above and does not make the list stale.
-    return true;
   }, [toast]);
 
   useEffect(() => {

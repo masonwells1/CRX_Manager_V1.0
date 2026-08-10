@@ -238,16 +238,26 @@ export default function Reports() {
   // recovery messages send the admin to a list to work out what actually
   // happened, so a refresh that failed has to be admitted rather than papered
   // over with "check the list".
+  // Never throws — see the same note on fetchPayments in CommissionPayments.tsx.
+  // Both recovery paths in handleMarkPaid await this from inside their own
+  // catch, so a rejection here would discard the specific "some commissions were
+  // already batched" warning and surface nothing in its place.
   const fetchCommissions = useCallback(async (): Promise<boolean> => {
-    let query = supabase.from('commissions').select('*').order('order_date', { ascending: false });
-    if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
-    if (startDate) query = query.gte('order_date', startDate);
-    if (endDate) query = query.lte('order_date', endDate);
-    const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load commissions.'); return false; }
-    setCommissionData((data || []) as CommissionRow[]);
-    setSelectedCommissions(new Set());
-    return true;
+    try {
+      let query = supabase.from('commissions').select('*').order('order_date', { ascending: false });
+      if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
+      if (startDate) query = query.gte('order_date', startDate);
+      if (endDate) query = query.lte('order_date', endDate);
+      const { data, error } = await query;
+      if (error) { toast('error', 'Failed to load commissions.'); return false; }
+      setCommissionData((data || []) as CommissionRow[]);
+      setSelectedCommissions(new Set());
+      return true;
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_commissions' } });
+      toast('error', 'Failed to load commissions.');
+      return false;
+    }
   }, [isAdmin, profile, startDate, endDate, toast]);
 
   const fetchRevenue = useCallback(async () => {
@@ -658,8 +668,12 @@ export default function Reports() {
             ? `${detail} — a payment batch may still have been created. Check Commission Payments before trying again.${genericListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`
             : detail);
       }
+    } finally {
+      // In a finally, not after the catch: both recovery paths above await
+      // fetchCommissions(), and a throw from either would otherwise leave this
+      // flag set and Mark Paid disabled until a reload.
+      setMarkingPaid(false);
     }
-    setMarkingPaid(false);
   };
 
   const toggleCommissionSelect = (id: string) => {

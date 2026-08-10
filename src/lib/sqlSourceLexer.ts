@@ -23,13 +23,30 @@ export type Ident = { start: number; end: number };
 
 export type Lexed = { masked: string; spans: Span[]; idents: Ident[] };
 
-/** The dollar-quote tag opening at `i`, or null. `$1` is a parameter, not a tag. */
+/**
+ * A character Postgres allows in an unquoted identifier. `\w` is not this: it
+ * omits `$`, and it omits the letters-with-diacriticals and non-Latin letters
+ * Postgres accepts. Used to decide where an identifier ends, which is what
+ * separates a real `E'…'` prefix from the tail of a name ending in `e`.
+ */
+const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
+
+/**
+ * The dollar-quote tag opening at `i`, or null. `$1` is a parameter, not a tag.
+ *
+ * A tag is identifier characters, so restricting it to ASCII would read
+ * `$é$…$é$` as CODE and let text hidden in a literal be scanned as live SQL —
+ * the unsafe direction. Accept any run without a `$` or whitespace that does
+ * not start with a digit. That is slightly wider than Postgres, and the excess
+ * is the safe direction: over-blanking can only hide a definition, and every
+ * scan built on this treats a definition it cannot find as a failure.
+ */
 export function dollarTagAt(sql: string, i: number): string | null {
   if (sql[i] !== '$') return null;
   let j = i + 1;
-  if (j < sql.length && /[A-Za-z_]/.test(sql[j])) {
+  if (j < sql.length && !/[0-9$\s]/.test(sql[j])) {
     j += 1;
-    while (j < sql.length && /[A-Za-z0-9_]/.test(sql[j])) j += 1;
+    while (j < sql.length && !/[$\s]/.test(sql[j])) j += 1;
   }
   return sql[j] === '$' ? sql.slice(i, j + 1) : null;
 }
@@ -103,7 +120,7 @@ export function lexSql(
     }
 
     if (sql[i] === "'") {
-      const escaped = i > 0 && /[Ee]/.test(sql[i - 1]) && !/\w/.test(sql[i - 2] ?? ' ');
+      const escaped = i > 0 && /[Ee]/.test(sql[i - 1]) && !IDENT_CHAR.test(sql[i - 2] ?? ' ');
       let j = i + 1;
       while (j < sql.length) {
         if (escaped && sql[j] === '\\') { j += 2; continue; }

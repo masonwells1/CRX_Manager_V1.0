@@ -286,9 +286,10 @@ describe('commission payout intent-binding migration', () => {
     // and be renamed into the implementation slot, so the guard also demands the
     // two contract markers the wrapper actually depends on.
     expect(guard, `${rpc.name} renames on absence alone, without an identity check`).toContain(
-      "v_code NOT LIKE '%check_idempotency(%'",
+      'PERFORM public._crx_payout_assert_impl_20260809(\n'
+      + `      to_regprocedure('public.${rpc.name}(${rpc.signature})'),\n`
+      + `      'public.${rpc.name}');`,
     );
-    expect(guard).toContain("v_code NOT LIKE '%commission_payment_items%'");
 
     // …and the markers are matched against the body reduced to CODE, not
     // against raw prosrc. prosrc keeps the comments AND every literal, so a body
@@ -304,14 +305,37 @@ describe('commission payout intent-binding migration', () => {
     // character-loop lexer that knows each construct's real terminator and
     // RAISEs on anything it cannot terminate, so a body it cannot read
     // confidently is a refusal rather than a pass.
-    const strip = guard.slice(0, guard.indexOf('v_code NOT LIKE'));
-    expect(strip, `${rpc.name} matches the identity markers against raw source`).toContain(
-      `v_code := public._crx_payout_code_only_20260809(v_src, 'public.${rpc.name}');`,
-    );
     // The wrapper-marker check above stays on the RAW source on purpose: there,
     // any mention at all — comment included — must stop the rename, because
     // renaming the wrapper onto itself is the unrecoverable outcome.
-    expect(guard.slice(0, guard.indexOf(`LIKE '%${rpc.impl}%' THEN`))).not.toContain('v_code');
+    expect(guard.slice(0, guard.indexOf(`LIKE '%${rpc.impl}%' THEN`)))
+      .not.toContain('_crx_payout_assert_impl_20260809');
+  });
+
+  it.each(PAYOUT_RPCS)('$name identity-checks an implementation that already exists', (rpc) => {
+    // Round-9 finding. The rename is skipped when the private implementation is
+    // already present, and that skip used to carry the identity check with it —
+    // so on a replay after a partially-applied migration, or against any
+    // unrelated function that happened to occupy the implementation name, this
+    // file wrapped a body it had never validated. The wrapper would then report
+    // a successful payout for whatever that body did instead.
+    //
+    // The name is not evidence. The pre-existing body has to pass exactly the
+    // same test as a freshly renamed one.
+    const start = migration.indexOf(
+      `IF to_regprocedure('public.${rpc.impl}(${rpc.signature})') IS NULL THEN`,
+    );
+    expect(start, `${rpc.name} rename block not found`).toBeGreaterThan(0);
+    const block = migration.slice(start, migration.indexOf('\nEND\n$rename_', start));
+    const elseAt = block.indexOf('\n  ELSE\n');
+    expect(elseAt, `${rpc.name} has no branch for an implementation that already exists`)
+      .toBeGreaterThan(0);
+    expect(block.slice(elseAt), `${rpc.name} skips the identity check on the replay path`)
+      .toContain(
+        'PERFORM public._crx_payout_assert_impl_20260809(\n'
+        + `      to_regprocedure('public.${rpc.impl}(${rpc.signature})'),\n`
+        + `      'public.${rpc.impl}');`,
+      );
   });
 
   it('reduces a candidate body to code with a lexer that fails closed', () => {
@@ -342,6 +366,14 @@ describe('commission payout intent-binding migration', () => {
     // A body may be prefixed E'…\'…', where a backslash escapes the quote.
     expect(helper, 'the lexer ignores E-string backslash escapes').toContain('is_e');
 
+    // Round-9 finding. A dollar-quote tag is IDENTIFIER characters, which in
+    // Postgres include letters with diacriticals and non-Latin letters. An
+    // ASCII-only tag rule read $é$…$é$ as CODE, so a marker hidden inside that
+    // literal counted as a call the body never makes — the unsafe direction.
+    expect(helper, 'the lexer only recognises ASCII dollar-quote tags').toContain(
+      "'^[$][$]|^[$][^0-9$[:space:]][^$[:space:]]*[$]'",
+    );
+
     // It runs before the first rename that uses it, and it is not reachable
     // from the browser while it exists.
     expect(create).toBeLessThan(
@@ -358,7 +390,7 @@ describe('commission payout intent-binding migration', () => {
       'DROP FUNCTION IF EXISTS public._crx_payout_code_only_20260809(text, text);',
     );
     expect(drop, 'the identity-check helper is left behind').toBeGreaterThan(
-      migration.lastIndexOf('v_code := public._crx_payout_code_only_20260809('),
+      migration.lastIndexOf('PERFORM public._crx_payout_assert_impl_20260809('),
     );
     const verify = migration.slice(migration.indexOf('DO $verify$'));
     expect(verify).toContain(
@@ -366,6 +398,56 @@ describe('commission payout intent-binding migration', () => {
     );
     expect(verify).toContain(
       "RAISE EXCEPTION 'the identity-check helper _crx_payout_code_only_20260809 was left behind'",
+    );
+  });
+
+  it('matches the identity markers on identifier boundaries, not as substrings', () => {
+    const create = migration.indexOf(
+      'CREATE OR REPLACE FUNCTION public._crx_payout_assert_impl_20260809(p_oid regprocedure, p_what text)',
+    );
+    expect(create, 'the identity check is not defined').toBeGreaterThan(-1);
+    const assert = migration.slice(create, migration.indexOf('$assert_impl$;', create));
+
+    // Round-9 finding. LIKE '%check_idempotency(%' is a SUBSTRING test, so a
+    // body calling fakecheck_idempotency() and writing to
+    // archived_commission_payment_items satisfied both markers while doing
+    // neither. Anchor each marker on an identifier boundary instead.
+    // Both predicates are asserted against v_code, the reduced body — matching
+    // the raw v_src instead would count a marker that only appears in a comment
+    // or inside a RAISE NOTICE, which is the hole the lexer exists to close.
+    expect(assert, 'check_idempotency is matched as a bare substring').toContain(
+      "IF v_code !~ '(^|[^A-Za-z0-9_$])check_idempotency[[:space:]]*\\('",
+    );
+    expect(assert, 'commission_payment_items is matched as a bare substring').toContain(
+      "OR v_code !~ '(^|[^A-Za-z0-9_$])commission_payment_items([^A-Za-z0-9_$]|$)'",
+    );
+
+    // Round-9 finding. The lexer treats backslash as an escape only inside
+    // E'…', which is correct ONLY under standard_conforming_strings = on. With
+    // it off, an ordinary literal can end somewhere the lexer does not expect
+    // and text hidden inside it is read as code. Refuse rather than guess —
+    // for the function's own setting and for this session's.
+    expect(assert, 'a body that turns off standard_conforming_strings is not refused')
+      .toContain("lower(setting) LIKE 'standard\\_conforming\\_strings=%'");
+    expect(assert).toContain("current_setting('standard_conforming_strings', true)");
+    expect(assert.match(/RAISE EXCEPTION/g) ?? []).toHaveLength(3);
+
+    // It reads the function itself rather than taking a body as text, so the
+    // two rename paths cannot be handed different source than they validate.
+    expect(assert).toContain('SELECT p.prosrc, p.proconfig INTO v_src, v_config FROM pg_proc p WHERE p.oid = p_oid;');
+    expect(assert).toContain("v_code := public._crx_payout_code_only_20260809(v_src, p_what);");
+
+    // Same lifecycle as the lexer: unreachable from the browser while it
+    // exists, dropped afterwards, and the post-conditions refuse if it survived.
+    expect(migration).toContain(
+      'REVOKE ALL ON FUNCTION public._crx_payout_assert_impl_20260809(regprocedure, text)\n  FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    expect(migration).toContain(
+      'DROP FUNCTION IF EXISTS public._crx_payout_assert_impl_20260809(regprocedure, text);',
+    );
+    const verify = migration.slice(migration.indexOf('DO $verify$'));
+    expect(verify).toContain(
+      "RAISE EXCEPTION 'the identity-check helper _crx_payout_assert_impl_20260809 was left behind'",
     );
   });
 
@@ -624,9 +706,13 @@ describe('commission payout intent-binding callers', () => {
     expect(fetchStart).toBeGreaterThan(-1);
     const fetchFn = page.slice(fetchStart, page.indexOf('}, [', fetchStart));
     expect(fetchFn).toContain('async ({ quiet = false } = {})');
-    expect(fetchFn, 'the load-failure toast is not suppressible').toContain(
-      "if (!quiet) toast('error', 'Failed to load commission payments');",
-    );
+    // Both of them: the returned-error path and the thrown-error path. A
+    // toContain() here was satisfied by either one, so suppression could be
+    // dropped from a path while the assertion still passed.
+    expect(
+      fetchFn.match(/if \(!quiet\) toast\('error', 'Failed to load commission payments'\);/g) ?? [],
+      'a load-failure path raises its toast unsuppressibly',
+    ).toHaveLength(2);
     // The suppression must not cost the caller the fact itself: the refusal
     // wording is driven by the RETURN value, so quiet still has to report false.
     expect(fetchFn.slice(fetchFn.indexOf('if (!quiet)'))).toContain('return false;');
@@ -647,6 +733,22 @@ describe('commission payout intent-binding callers', () => {
       }
     }
   });
+
+  it('never rejects out of a recovery handler', () => {
+    // Round-9 finding. fetchPayments() is awaited from inside the catch blocks
+    // that recover from a payout failure. If it threw — a network drop mid
+    // recovery is enough — the throw escaped that handler, so the specific
+    // "your payout may have gone through, reload and check" wording was never
+    // shown, and the spinner stayed up over a list that had stopped loading.
+    const fetchStart = page.indexOf('const fetchPayments = useCallback(');
+    const fetchFn = page.slice(fetchStart, page.indexOf('}, [', fetchStart));
+    expect(fetchFn, 'fetchPayments can still reject into a recovery handler').toContain('} catch (err) {');
+    expect(fetchFn, 'the loading flag is not cleared on every path').toContain('} finally {\n      setLoading(false);\n    }');
+    expect(fetchFn).toContain("Sentry.captureException(err, { extra: { context: 'load_commission_payments' } });");
+    // One clear, in the finally — a second inline clear would mean some path
+    // still owns it, which is how the flag got stranded in the first place.
+    expect(fetchFn.match(/setLoading\(false\)/g) ?? []).toHaveLength(1);
+  });
 });
 
 /**
@@ -664,6 +766,26 @@ describe('Reports quick-pay idempotency scope', () => {
     expect(end).toBeGreaterThan(start);
     return reports.slice(start, end);
   })();
+
+  it('re-enables Mark Paid on every path, including a failed recovery refresh', () => {
+    // Round-9 finding. setMarkingPaid(false) used to sit after the catch, and
+    // both recovery paths await fetchCommissions() first. A throw from that
+    // refresh skipped the reset, leaving the button disabled with no way back
+    // but a page reload — and no way to retry a payout that may not have run.
+    expect(markPaid, 'the busy flag is not cleared in a finally').toContain(
+      '    } finally {\n',
+    );
+    expect(markPaid.slice(markPaid.indexOf('    } finally {'))).toContain('setMarkingPaid(false);');
+    expect(markPaid.match(/setMarkingPaid\(false\)/g) ?? []).toHaveLength(1);
+
+    // The refresh it awaits must not be able to throw in the first place.
+    const fetchStart = reports.indexOf('const fetchCommissions = useCallback(');
+    expect(fetchStart).toBeGreaterThan(-1);
+    const fetchFn = reports.slice(fetchStart, reports.indexOf('}, [', fetchStart));
+    expect(fetchFn, 'fetchCommissions can still reject into a recovery handler').toContain('} catch (err) {');
+    expect(fetchFn).toContain("extra: { context: 'load_commissions' }");
+    expect(fetchFn.slice(fetchFn.indexOf('} catch (err) {'))).toContain('return false;');
+  });
 
   it('does not derive the key from the commission ids alone', () => {
     // The original bug: `reports-commission-pay-${ids.join('-')}` is a pure

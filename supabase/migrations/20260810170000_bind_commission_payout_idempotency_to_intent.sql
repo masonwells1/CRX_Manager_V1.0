@@ -273,7 +273,15 @@ BEGIN
     ELSIF c = '$' THEN
       -- Dollar-quoted literal, or a bare '$' (a $1 parameter reference).
       -- No capture group, so substring() returns the whole opening tag.
-      tag := substring(substr(p_src, i, 256) FROM '^[$][$]|^[$][A-Za-z_][A-Za-z0-9_]*[$]');
+      --
+      -- A tag is identifier characters, which in Postgres include letters with
+      -- diacriticals and non-Latin letters, not just [A-Za-z_]. Matching only
+      -- ASCII would read $é$…$é$ as CODE and let hidden text inside a literal
+      -- count as a marker — the unsafe direction. So accept any run without a
+      -- '$' or whitespace that does not start with a digit. That is slightly
+      -- WIDER than Postgres: the excess is fail-closed, because over-blanking
+      -- can only remove markers and cause a refusal, never fabricate one.
+      tag := substring(substr(p_src, i, 256) FROM '^[$][$]|^[$][^0-9$[:space:]][^$[:space:]]*[$]');
       IF tag IS NULL THEN
         out_text := out_text || c;
         i := i + 1;
@@ -321,6 +329,63 @@ $code_only$;
 REVOKE ALL ON FUNCTION public._crx_payout_code_only_20260809(text, text)
   FROM PUBLIC, anon, authenticated, service_role;
 
+-- The identity check itself. Absence of the wrapper marker is not proof a body
+-- is the one we mean to wrap, so require the two contract markers the wrapper
+-- actually depends on: the implementation must write an idempotency receipt via
+-- check_idempotency() — the wrapper stamps that receipt afterwards and raises
+-- IDEMPOTENCY_RECEIPT_MISSING if it is absent — and it must touch
+-- commission_payment_items, which no thin wrapper does.
+--
+-- Matched on identifier boundaries, not as bare substrings: a body calling
+-- fakecheck_idempotency() and writing archived_commission_payment_items
+-- satisfies a plain LIKE '%…%' on both while doing neither.
+--
+-- One function rather than six inlined copies so the two rename paths below —
+-- first application, and replay over an implementation that already exists —
+-- provably apply the SAME test. Dropped with the lexer at the end of this file.
+CREATE OR REPLACE FUNCTION public._crx_payout_assert_impl_20260809(p_oid regprocedure, p_what text)
+RETURNS void
+LANGUAGE plpgsql
+STABLE
+SET search_path TO pg_catalog, pg_temp
+AS $assert_impl$
+DECLARE
+  v_src    text;
+  v_config text[];
+  v_code   text;
+BEGIN
+  SELECT p.prosrc, p.proconfig INTO v_src, v_config FROM pg_proc p WHERE p.oid = p_oid;
+
+  -- The lexer treats backslash as an escape only inside E'…'. That is correct
+  -- under standard_conforming_strings = on, which is the server default and the
+  -- live setting. With it OFF, a backslash escapes in ORDINARY strings too, so
+  -- a literal could end somewhere the lexer does not expect and hidden text
+  -- would be read as code. Rather than guess which mode a body was written for,
+  -- refuse when either the function or this session turns it off.
+  IF v_config IS NOT NULL
+     AND EXISTS (
+       SELECT 1 FROM unnest(v_config) AS s(setting)
+        WHERE lower(setting) LIKE 'standard\_conforming\_strings=%'
+          AND lower(setting) NOT LIKE '%=on'
+     ) THEN
+    RAISE EXCEPTION '% sets standard_conforming_strings off, so its source cannot be read reliably; refusing to rename it', p_what;
+  END IF;
+  IF lower(coalesce(current_setting('standard_conforming_strings', true), 'on')) <> 'on' THEN
+    RAISE EXCEPTION 'standard_conforming_strings is off in this session, so % cannot be read reliably; refusing to rename it', p_what;
+  END IF;
+
+  v_code := public._crx_payout_code_only_20260809(v_src, p_what);
+
+  IF v_code !~ '(^|[^A-Za-z0-9_$])check_idempotency[[:space:]]*\('
+     OR v_code !~ '(^|[^A-Za-z0-9_$])commission_payment_items([^A-Za-z0-9_$]|$)' THEN
+    RAISE EXCEPTION '% does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it', p_what;
+  END IF;
+END
+$assert_impl$;
+
+REVOKE ALL ON FUNCTION public._crx_payout_assert_impl_20260809(regprocedure, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
 -- ---------------------------------------------------------------------------
 -- create_commission_payment
 -- ---------------------------------------------------------------------------
@@ -336,7 +401,6 @@ REVOKE ALL ON FUNCTION public._crx_payout_code_only_20260809(text, text)
 DO $rename_create$
 DECLARE
   v_src text;
-  v_code text;
 BEGIN
   IF to_regprocedure('public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.create_commission_payment(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
@@ -347,28 +411,26 @@ BEGIN
     IF v_src LIKE '%_create_commission_payment_intent_impl_20260809%' THEN
       RAISE EXCEPTION 'public.create_commission_payment is already the intent-binding wrapper but its implementation _create_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
-    -- Absence of the wrapper marker is not proof this is the body we mean to
-    -- wrap. Require the two contract markers the wrapper actually depends on:
-    -- the implementation must write an idempotency receipt via
-    -- check_idempotency() — the wrapper stamps that receipt afterwards and
-    -- raises IDEMPOTENCY_RECEIPT_MISSING if it is absent — and it must touch
-    -- commission_payment_items, which no thin wrapper does. Fail closed rather
-    -- than rename an unrelated body into the implementation slot.
-    -- prosrc keeps the comments AND every literal, so a body that merely
-    -- MENTIONS check_idempotency() in a comment — or raises it inside a
-    -- RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the
-    -- kind. _crx_payout_code_only_20260809 reduces the body to code, and
-    -- refuses outright on any construct it cannot terminate.
-    --
     -- Deliberately asymmetric with the wrapper-marker check above, which reads
     -- the RAW source: there, ANY mention — comment included — should stop us,
     -- because renaming the wrapper onto itself is the unrecoverable outcome.
-    v_code := public._crx_payout_code_only_20260809(v_src, 'public.create_commission_payment');
-    IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
-      RAISE EXCEPTION 'public.create_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
-    END IF;
+    -- The identity check below reads CODE ONLY, because a body that merely
+    -- mentions check_idempotency() in a comment is not the implementation.
+    PERFORM public._crx_payout_assert_impl_20260809(
+      to_regprocedure('public.create_commission_payment(uuid[], text, text, date, text, uuid, text)'),
+      'public.create_commission_payment');
     ALTER FUNCTION public.create_commission_payment(uuid[], text, text, date, text, uuid, text)
       RENAME TO _create_commission_payment_intent_impl_20260809;
+  ELSE
+    -- Replay path. Skipping the identity check here because "the impl already
+    -- exists" would let this migration wrap an unvalidated body: a re-run after
+    -- a partially-applied migration, or any unrelated function that happens to
+    -- occupy this name, would be adopted silently and every payout would then
+    -- report success for work the real implementation never did. The name is
+    -- not evidence — hold the pre-existing body to exactly the same test.
+    PERFORM public._crx_payout_assert_impl_20260809(
+      to_regprocedure('public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)'),
+      'public._create_commission_payment_intent_impl_20260809');
   END IF;
 END
 $rename_create$;
@@ -525,7 +587,6 @@ GRANT EXECUTE ON FUNCTION public.create_commission_payment(uuid[], text, text, d
 DO $rename_post$
 DECLARE
   v_src text;
-  v_code text;
 BEGIN
   IF to_regprocedure('public._post_commission_payment_intent_impl_20260809(uuid, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.post_commission_payment(uuid, uuid, text)') IS NULL THEN
@@ -536,22 +597,19 @@ BEGIN
     IF v_src LIKE '%_post_commission_payment_intent_impl_20260809%' THEN
       RAISE EXCEPTION 'public.post_commission_payment is already the intent-binding wrapper but its implementation _post_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
-    -- See create: absence of the wrapper marker is not proof of identity.
-    -- prosrc keeps the comments AND every literal, so a body that merely
-    -- MENTIONS check_idempotency() in a comment — or raises it inside a
-    -- RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the
-    -- kind. _crx_payout_code_only_20260809 reduces the body to code, and
-    -- refuses outright on any construct it cannot terminate.
-    --
-    -- Deliberately asymmetric with the wrapper-marker check above, which reads
-    -- the RAW source: there, ANY mention — comment included — should stop us,
-    -- because renaming the wrapper onto itself is the unrecoverable outcome.
-    v_code := public._crx_payout_code_only_20260809(v_src, 'public.post_commission_payment');
-    IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
-      RAISE EXCEPTION 'public.post_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
-    END IF;
+    -- See create: the wrapper-marker check above reads the RAW source, the
+    -- identity check below reads CODE ONLY.
+    PERFORM public._crx_payout_assert_impl_20260809(
+      to_regprocedure('public.post_commission_payment(uuid, uuid, text)'),
+      'public.post_commission_payment');
     ALTER FUNCTION public.post_commission_payment(uuid, uuid, text)
       RENAME TO _post_commission_payment_intent_impl_20260809;
+  ELSE
+    -- See create: a pre-existing implementation is held to the same test, so a
+    -- replay cannot wrap a body this migration never validated.
+    PERFORM public._crx_payout_assert_impl_20260809(
+      to_regprocedure('public._post_commission_payment_intent_impl_20260809(uuid, uuid, text)'),
+      'public._post_commission_payment_intent_impl_20260809');
   END IF;
 END
 $rename_post$;
@@ -664,7 +722,6 @@ GRANT EXECUTE ON FUNCTION public.post_commission_payment(uuid, uuid, text)
 DO $rename_void$
 DECLARE
   v_src text;
-  v_code text;
 BEGIN
   IF to_regprocedure('public._void_commission_payment_intent_impl_20260809(uuid, text, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.void_commission_payment(uuid, text, uuid, text)') IS NULL THEN
@@ -675,22 +732,19 @@ BEGIN
     IF v_src LIKE '%_void_commission_payment_intent_impl_20260809%' THEN
       RAISE EXCEPTION 'public.void_commission_payment is already the intent-binding wrapper but its implementation _void_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
-    -- See create: absence of the wrapper marker is not proof of identity.
-    -- prosrc keeps the comments AND every literal, so a body that merely
-    -- MENTIONS check_idempotency() in a comment — or raises it inside a
-    -- RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the
-    -- kind. _crx_payout_code_only_20260809 reduces the body to code, and
-    -- refuses outright on any construct it cannot terminate.
-    --
-    -- Deliberately asymmetric with the wrapper-marker check above, which reads
-    -- the RAW source: there, ANY mention — comment included — should stop us,
-    -- because renaming the wrapper onto itself is the unrecoverable outcome.
-    v_code := public._crx_payout_code_only_20260809(v_src, 'public.void_commission_payment');
-    IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
-      RAISE EXCEPTION 'public.void_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
-    END IF;
+    -- See create: the wrapper-marker check above reads the RAW source, the
+    -- identity check below reads CODE ONLY.
+    PERFORM public._crx_payout_assert_impl_20260809(
+      to_regprocedure('public.void_commission_payment(uuid, text, uuid, text)'),
+      'public.void_commission_payment');
     ALTER FUNCTION public.void_commission_payment(uuid, text, uuid, text)
       RENAME TO _void_commission_payment_intent_impl_20260809;
+  ELSE
+    -- See create: a pre-existing implementation is held to the same test, so a
+    -- replay cannot wrap a body this migration never validated.
+    PERFORM public._crx_payout_assert_impl_20260809(
+      to_regprocedure('public._void_commission_payment_intent_impl_20260809(uuid, text, uuid, text)'),
+      'public._void_commission_payment_intent_impl_20260809');
   END IF;
 END
 $rename_void$;
@@ -802,8 +856,10 @@ GRANT EXECUTE ON FUNCTION public.void_commission_payment(uuid, text, uuid, text)
   TO authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
--- The identity-check helper exists only for the three renames above. Drop it so
--- the migration leaves no extra function behind for a later caller to reach.
+-- The identity-check helpers exist only for the three renames above. Drop them
+-- so the migration leaves no extra function behind for a later caller to reach.
+-- Order matters: the assert helper calls the lexer.
+DROP FUNCTION IF EXISTS public._crx_payout_assert_impl_20260809(regprocedure, text);
 DROP FUNCTION IF EXISTS public._crx_payout_code_only_20260809(text, text);
 
 -- ---------------------------------------------------------------------------
@@ -835,6 +891,9 @@ DECLARE
 BEGIN
   IF to_regprocedure('public._crx_payout_code_only_20260809(text, text)') IS NOT NULL THEN
     RAISE EXCEPTION 'the identity-check helper _crx_payout_code_only_20260809 was left behind';
+  END IF;
+  IF to_regprocedure('public._crx_payout_assert_impl_20260809(regprocedure, text)') IS NOT NULL THEN
+    RAISE EXCEPTION 'the identity-check helper _crx_payout_assert_impl_20260809 was left behind';
   END IF;
 
   FOREACH v_name IN ARRAY ARRAY[

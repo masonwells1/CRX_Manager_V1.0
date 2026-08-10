@@ -321,6 +321,50 @@ describe('migration scanner', () => {
     expect(() => functionDefinitions(sql, 'pay')).toThrow(/E''\/U&''/);
   });
 
+  it('agrees with the database on what counts as an identifier character', () => {
+    // Round-9 finding. The E-string test is "a quote preceded by e/E that is not
+    // itself the tail of an identifier". This side used the JS \w class, which
+    // omits $ and every non-ASCII letter; the migration's own PL/pgSQL lexer
+    // uses [A-Za-z0-9_$]. Where the two disagree, this scanner refuses a body
+    // the database accepts — so a guard change would look unreviewable rather
+    // than unsafe, and the two lexers must be held to one rule.
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS $fn$`,
+      `BEGIN`,
+      `  PERFORM x$e'a\\' || 'GUARD_PRESENT';`,
+      `END;`,
+      `$fn$;`,
+    ].join('\n');
+    const [definition] = functionDefinitions(sql, 'pay');
+    // The e belongs to the identifier x$e, so this is an ordinary literal: the
+    // backslash is just a character and the quote after it closes the literal.
+    // Read as an E-string instead, that quote is escaped, the literal runs on
+    // through the concatenation, and GUARD_PRESENT falls out of the mask and is
+    // counted as executable code — a guard the function does not actually have.
+    expect(codeOnly(definition)).not.toContain('GUARD_PRESENT');
+  });
+
+  it('reads a dollar-quote tag the database would accept, including a non-ASCII one', () => {
+    // Same round-9 split, in the other lexer rule. Postgres allows any
+    // non-digit, non-dollar, non-whitespace character in a dollar-quote tag;
+    // an ASCII-only tag pattern leaves $café$…$café$ unrecognised, and the
+    // literal's contents then read as executable code — which is how a hidden
+    // marker gets counted as a real guard.
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS $fn$`,
+      `BEGIN`,
+      `  RAISE NOTICE $café$GUARD_PRESENT$café$;`,
+      `END;`,
+      `$fn$;`,
+    ].join('\n');
+    const [definition] = functionDefinitions(sql, 'pay');
+    expect(definition, 'the raw body keeps what it prints').toContain('GUARD_PRESENT');
+    expect(
+      codeOnly(definition),
+      'a non-ASCII dollar-quoted literal was read as executable SQL',
+    ).not.toContain('GUARD_PRESENT');
+  });
+
   it('codeOnly() strips the literals a dollar-quoted body keeps', () => {
     const sql = [
       `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS $fn$`,

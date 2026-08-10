@@ -553,6 +553,11 @@ function proveCodeOnlyLexer() {
     ['a plain call', 'BEGIN PERFORM check_idempotency( x ); END;', 'check_idempotency('],
     ['a table reference', 'INSERT INTO commission_payment_items VALUES (1);', 'commission_payment_items'],
     ['a $1 parameter reference', 'SELECT f($1) FROM commission_payment_items;', '$1'],
+    // The round-9 widening of the tag rule stops at digits and whitespace. Two
+    // positional parameters on one line are the case it must NOT swallow: read
+    // as a tag, everything between them would be blanked and the real
+    // implementation would be refused.
+    ['two positional parameters', 'SELECT f($1, $2) FROM commission_payment_items;', 'commission_payment_items'],
   ]) {
     const out = call(input);
     assert.ok(
@@ -567,6 +572,9 @@ function proveCodeOnlyLexer() {
     ['a single-quoted literal', "RAISE NOTICE 'commission_payment_items';"],
     ['a dollar-quoted literal', 'RAISE NOTICE $msg$commission_payment_items$msg$;'],
     ['an empty-tag dollar-quoted literal', 'RAISE NOTICE $$commission_payment_items$$;'],
+    // Round-9 finding: a dollar-quote tag is IDENTIFIER characters, and Postgres
+    // identifiers are not ASCII-only. An [A-Za-z_] tag rule read this as CODE.
+    ['a dollar-quoted literal with a non-ASCII tag', 'RAISE NOTICE $café$commission_payment_items$café$;'],
     ['an E-string with an escaped quote', "RAISE NOTICE E'commission_payment_items \\' still inside';"],
     ['a literal holding a -- comment opener', "RAISE NOTICE 'commission_payment_items -- x';"],
     ['a literal holding a */ comment closer', "RAISE NOTICE 'commission_payment_items */ x';"],
@@ -639,9 +647,23 @@ function proveIdentityGuard() {
     ['markers that are only quoted identifiers',
       'BEGIN\n  PERFORM 1 FROM "commission_payment_items" WHERE "check_idempotency(" IS NULL;\n  RETURN NULL;\nEND;',
       REFUSED],
+    // Round-9 finding: the markers were matched as bare SUBSTRINGS, so a body
+    // that calls a DIFFERENT function and writes a DIFFERENT table satisfied
+    // both while doing neither. Now anchored on identifier boundaries.
+    ['markers that are only the tails of longer identifiers',
+      'BEGIN\n  PERFORM fakecheck_idempotency(1);\n  INSERT INTO archived_commission_payment_items VALUES (1);\n  RETURN NULL;\nEND;',
+      REFUSED],
+    // Round-9 finding: the lexer treats backslash as an escape only inside
+    // E'…', which holds only while standard_conforming_strings is on. A body
+    // that turns it off is unreadable rather than safe, so it is refused before
+    // the markers are even looked at — note this body carries REAL markers.
+    ['a body that turns off standard_conforming_strings',
+      'BEGIN\n  PERFORM check_idempotency(1);\n  INSERT INTO commission_payment_items VALUES (1);\n  RETURN NULL;\nEND;',
+      /sets standard_conforming_strings off/,
+      'SET standard_conforming_strings TO off\n'],
   ];
 
-  for (const [label, body, expected] of DECOYS) {
+  for (const [label, body, expected, extraConfig = ''] of DECOYS) {
     const run = psql(
       `BEGIN;\nDROP FUNCTION ${SIGNATURE};\n`
       + 'CREATE FUNCTION public.create_commission_payment(\n'
@@ -649,6 +671,7 @@ function proveIdentityGuard() {
       + '  p_payment_date date, p_notes text,\n'
       + '  p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text\n'
       + ') RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, pg_temp\n'
+      + extraConfig
       + `AS $decoy$\n${body}\n$decoy$;\n`
       + `${migration}\nROLLBACK;\n`,
       { allowFailure: true },
@@ -668,12 +691,59 @@ function proveIdentityGuard() {
   );
 }
 
+/**
+ * The replay path — round-9 HIGH.
+ *
+ * The rename is skipped when the private implementation already exists, and
+ * that skip used to carry the identity check away with it. So a re-run over a
+ * partially-applied migration, or over ANY function that happened to occupy the
+ * implementation name, wrapped a body this file had never validated: the
+ * wrapper would then bind a receipt, call the impostor, and report a successful
+ * payout for whatever it did. The name is not evidence.
+ *
+ * Proved in both directions — a wrong body under the implementation name is
+ * refused, and a genuine second application still succeeds.
+ */
+function proveReplayIdentityGuard() {
+  const migration = readFileSync(MIGRATION, 'utf8');
+  const IMPL = '_create_commission_payment_intent_impl_20260809';
+  const run = psql(
+    `BEGIN;\nCREATE FUNCTION public.${IMPL}(\n`
+    + '  p_commission_ids uuid[], p_payment_method text, p_reference text,\n'
+    + '  p_payment_date date, p_notes text,\n'
+    + '  p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text\n'
+    + ') RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, pg_temp\n'
+    + "AS $decoy$\nBEGIN\n  RAISE NOTICE 'check_idempotency( commission_payment_items';\n  RETURN NULL;\nEND;\n$decoy$;\n"
+    + `${migration}\nROLLBACK;\n`,
+    { allowFailure: true },
+  );
+  const output = `${run.stdout || ''}\n${run.stderr || ''}`;
+  assert.notEqual(run.status, 0, `the migration wrapped an unvalidated implementation:\n${output}`);
+  assert.match(
+    output,
+    new RegExp(`public\\.${IMPL} does not look like the payout implementation`),
+    `wrong refusal on the replay path:\n${output}`,
+  );
+  assert.equal(
+    psqlValue(`SELECT to_regprocedure('public.${IMPL}(uuid[], text, text, date, text, uuid, text)') IS NULL;`),
+    't',
+    'the replay decoy transaction did not roll back',
+  );
+}
+
 try {
   assertInputs();
   startContainer();
   installBaseline();
   proveCodeOnlyLexer();
   proveIdentityGuard();
+  proveReplayIdentityGuard();
+  psql(readFileSync(MIGRATION, 'utf8'));
+
+  // Re-runnability. The identity check the replay path now performs must accept
+  // the implementation this migration itself installed, or the migration would
+  // pass once and then refuse to run again — which is how a half-applied
+  // deployment gets stuck with no way forward.
   psql(readFileSync(MIGRATION, 'utf8'));
 
   const smoke = psql(readFileSync(SMOKE, 'utf8'), { allowFailure: true });
