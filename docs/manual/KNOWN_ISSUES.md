@@ -15,7 +15,8 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ## OPEN — the Codex `read_only=true` guard may not describe the connection Codex actually uses
 
-**Found 2026-08-10.** Does not affect production. It affects how much assurance
+**Found 2026-08-10.** No production write was performed during the investigation.
+Production write capability remains unverified. This affects how much assurance
 the read-only guard is entitled to claim.
 
 `check-agent-workflows.mjs:92` and `check-agent-guidance.mjs:121` both assert
