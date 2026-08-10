@@ -22,7 +22,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 152 assertions; the idempotency reference
+- The actor-binding suite passes at 162 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -43,6 +43,11 @@ PR workflow.
   exposed its exact regression before restoration: runtime-boundary registration,
   UPDATE, INSERT, direct assignment, tuple assignment, quoted table identifiers,
   quoted `command`, `ONLY`, and unqualified search-path-resolved `job`.
+- Four final legal-form decisions were independently weakened or removed and
+  each exposed its exact regression before restoration: finding an UPDATE after
+  a CTE, recognizing `MERGE INTO cron.job`, recognizing an executable call with
+  a Unicode-escaped identifier, and recognizing a command-table write with a
+  Unicode-escaped identifier.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -61,10 +66,11 @@ PR workflow.
   `SET search_path = cron, public; SELECT schedule(...)` and its
   `schedule_in_database`/`alter_job` equivalents. Ordinary calls and cron-looking
   text inside data strings/comments remain allowed.
-- Direct `UPDATE` and `INSERT` writes to `cron.job.command` are runtime-SQL
-  boundaries too, including quoted identifiers, `ONLY`/alias and tuple UPDATEs,
-  and search-path-resolved `job` INSERTs. Harmless command strings and ordinary
-  non-cron documentation writes remain allowed.
+- Direct `UPDATE`, `INSERT`, and `MERGE` writes to `cron.job.command` are
+  runtime-SQL boundaries too, including quoted identifiers, `ONLY`/alias and
+  tuple UPDATEs, CTE-prefixed writes, search-path-resolved `job` INSERTs, and
+  PostgreSQL Unicode-escaped identifiers. Harmless command strings, explicitly
+  non-cron `schema.job` writes, and Unicode-looking data text remain allowed.
 - Real hook-process probes denied indirect variable execution, doubled-quote
   comment hiding, post-body actor forgery, and scheduled actor-function DDL. A
   complete bound function supplied directly as one dollar-quoted literal was allowed.
@@ -95,6 +101,17 @@ PR workflow.
   attempt had one unrelated five-second pricing-workbook timeout after 4,303
   tests passed; that exact file passed alone in 2.47 seconds, and the unchanged
   full retry passed all 323 files, 4,304 tests, and 152 actor-binding assertions.
+- The exact-SHA review of `3c0f8e75357149522a828cde8482f5201067f4a5`
+  found three remaining legal SQL variants: CTE-prefixed UPDATE, `MERGE INTO
+  cron.job`, and a `U&"\\0063ron"` schema identifier. Snapshot probes proved the
+  approved base denied all three while that candidate allowed them.
+- Fix commit `879ef43210ff44d6df39fa3c58f2ac05a825da85` closes those
+  three variants. Four focused mutation runs failed on their matching assertion
+  before restoration; the restored actor suite passed 162 assertions and the
+  idempotency reference suite passed 86. Separate real-hook subprocess probes
+  denied unsafe CTE, MERGE, and Unicode-call forms while allowing their harmless
+  controls. The commit completed the repository pre-commit barrier without a
+  hook bypass.
 
 ## GOVERNED STATUS
 
@@ -112,6 +129,10 @@ PR workflow.
 - The review of `f4da59bf` returned one HIGH blocker for direct writes to
   `cron.job.command`. That finding was reproduced and fixed in `b4ae07bf`; its
   BLOCKERS verdict likewise does not approve the new HEAD.
+- The review of `3c0f8e75` returned one HIGH blocker covering CTE-prefixed,
+  MERGE, and Unicode-identifier variants. Those findings were reproduced and
+  fixed in `879ef432`; its BLOCKERS verdict likewise does not approve the final
+  documentation HEAD.
 
 ## REMAINING LANDING WORK
 
@@ -128,7 +149,7 @@ outward-action approval into a receiving task. No database action is needed.
 ## GATES AND BLOCKERS
 
 - The prior `/ship` review cycle reached its three-round cap. Its blocker and the
-  later `8620ad17`, `5cb6e4d7`, and `f4da59bf` pg_cron blockers have now been
+  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, and `3c0f8e75` pg_cron blockers have now been
   addressed locally, but the branch remains unpublished until a new exact-SHA
   governed review independently returns CLEAN.
 - Historical blocker evidence:
