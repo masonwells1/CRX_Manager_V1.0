@@ -272,6 +272,19 @@ DECLARE
   v_detail jsonb;
 BEGIN
   IF TG_TABLE_NAME = 'order_items' THEN
+    -- Delivery completion and cancellation update fulfillment counters on an
+    -- already-approved sale. They do not make a new pricing decision. Let
+    -- context-free bookkeeping (and exposure-reducing quantity corrections)
+    -- proceed, while a product/price change or quantity increase still reaches
+    -- the fail-closed approval wall below.
+    IF TG_OP = 'UPDATE'
+       AND COALESCE(v_operation, '') = ''
+       AND NEW.product_id IS NOT DISTINCT FROM OLD.product_id
+       AND NEW.price_per_unit IS NOT DISTINCT FROM OLD.price_per_unit
+       AND COALESCE(NEW.total_units_needed, 0)
+           <= COALESCE(OLD.total_units_needed, 0) THEN
+      RETURN NEW;
+    END IF;
     -- Rush orders intentionally carry zero prices until price_order. They are
     -- not sales decisions yet, so defer the wall to the pricing RPC.
     IF NEW.pricing_pending = true AND NEW.price_per_unit = 0 THEN
@@ -284,6 +297,37 @@ BEGIN
     v_price_cents := round(NEW.price_per_unit * 100)::bigint;
     v_quantity := NEW.total_units_needed;
   ELSIF TG_TABLE_NAME = 'invoice_items' THEN
+    -- complete_delivery can materialize an invoice line from an already-made
+    -- order pricing decision. Permit only an exact, exposure-bounded descendant
+    -- of that governed order line; a caller cannot use this hatch to substitute
+    -- another Product, price, cost snapshot, or larger quantity. Browser roles
+    -- also have no direct INSERT privilege on invoice_items.
+    IF TG_OP = 'INSERT'
+       AND COALESCE(v_operation, '') = ''
+       AND NEW.order_item_id IS NOT NULL
+       AND EXISTS (
+         SELECT 1
+         FROM public.order_items oi
+         WHERE oi.id = NEW.order_item_id
+           AND oi.product_id IS NOT DISTINCT FROM NEW.product_id
+           AND round(oi.price_per_unit * 100)::bigint = NEW.unit_price_cents
+           AND round(COALESCE(oi.cost_per_unit, 0) * 100)::bigint = NEW.cost_cents
+           AND COALESCE(NEW.quantity, 0) >= 0
+           AND COALESCE(NEW.quantity, 0) <= COALESCE(oi.total_units_needed, 0)
+       ) THEN
+      RETURN NEW;
+    END IF;
+    -- Partial delivery can reduce a draft invoice line and tote-copy updates
+    -- bookkeeping only. Neither increases the approved below-cost exposure.
+    IF TG_OP = 'UPDATE'
+       AND COALESCE(v_operation, '') = ''
+       AND NEW.product_id IS NOT DISTINCT FROM OLD.product_id
+       AND NEW.unit_price_cents IS NOT DISTINCT FROM OLD.unit_price_cents
+       AND COALESCE(NEW.is_application_fee, false)
+           IS NOT DISTINCT FROM COALESCE(OLD.is_application_fee, false)
+       AND COALESCE(NEW.quantity, 0) <= COALESCE(OLD.quantity, 0) THEN
+      RETURN NEW;
+    END IF;
     -- Application fees have no product cost basis and are not product sales.
     IF NEW.product_id IS NULL OR COALESCE(NEW.is_application_fee, false) THEN
       RETURN NEW;
@@ -295,6 +339,14 @@ BEGIN
     v_price_cents := NEW.unit_price_cents;
     v_quantity := NEW.quantity;
   ELSIF TG_TABLE_NAME = 'quote_items' THEN
+    IF TG_OP = 'UPDATE'
+       AND COALESCE(v_operation, '') = ''
+       AND NEW.product_id IS NOT DISTINCT FROM OLD.product_id
+       AND NEW.price_per_unit IS NOT DISTINCT FROM OLD.price_per_unit
+       AND COALESCE(NEW.total_units_needed, 0)
+           <= COALESCE(OLD.total_units_needed, 0) THEN
+      RETURN NEW;
+    END IF;
     v_entity_type := 'quote';
     v_entity_id := NEW.quote_id;
     v_line_id := NEW.id;
@@ -405,13 +457,16 @@ REVOKE ALL ON FUNCTION public._enforce_below_cost_line()
   FROM PUBLIC, anon, authenticated;
 
 CREATE TRIGGER zz_crx_below_cost_order_items
-  BEFORE INSERT OR UPDATE ON public.order_items
+  BEFORE INSERT OR UPDATE OF product_id, price_per_unit, total_units_needed
+  ON public.order_items
   FOR EACH ROW EXECUTE FUNCTION public._enforce_below_cost_line();
 CREATE TRIGGER zz_crx_below_cost_invoice_items
-  BEFORE INSERT OR UPDATE ON public.invoice_items
+  BEFORE INSERT OR UPDATE OF product_id, unit_price_cents, quantity, is_application_fee
+  ON public.invoice_items
   FOR EACH ROW EXECUTE FUNCTION public._enforce_below_cost_line();
 CREATE TRIGGER zz_crx_below_cost_quote_items
-  BEFORE INSERT OR UPDATE ON public.quote_items
+  BEFORE INSERT OR UPDATE OF product_id, price_per_unit, total_units_needed
+  ON public.quote_items
   FOR EACH ROW EXECUTE FUNCTION public._enforce_below_cost_line();
 
 -- Preserve the hardened implementations behind non-API names. The public

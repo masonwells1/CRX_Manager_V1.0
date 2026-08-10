@@ -21,12 +21,19 @@ DECLARE
   v_order_id uuid;
   v_rush_order_id uuid;
   v_order_item_id uuid;
+  v_delivery_id uuid;
+  v_delivery_item_id uuid;
+  v_invoice_id uuid;
+  v_invoice_item_id uuid;
   v_result jsonb;
   v_cost numeric;
   v_cost_cents bigint;
   v_total numeric;
   v_profit numeric;
   v_audit_count integer;
+  v_audit_before integer;
+  v_quantity numeric;
+  v_status text;
   v_name text;
   v_role text;
   v_table text;
@@ -192,6 +199,100 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: update_order_items atomic approval count %', v_audit_count;
   END IF;
 
+  -- The approval belongs to the pricing decision, not every later bookkeeping
+  -- write. Exercise the real delivery RPC against the approved below-cost line
+  -- with no fresh below-cost context. It updates quantity_delivered and
+  -- quantity_remaining only and must not demand or manufacture another approval.
+  PERFORM set_config('app.crx_below_cost_operation', '', true);
+  PERFORM set_config('app.crx_below_cost_reason', '', true);
+  SELECT count(*) INTO v_audit_before
+  FROM public.below_cost_approvals WHERE line_id = v_order_item_id;
+
+  INSERT INTO public.deliveries (
+    delivery_number, order_id, customer_id, scheduled_date, status, created_by
+  ) VALUES (
+    '[SMOKE] BELOW-COST-DELIVERY-' || v_sfx,
+    v_order_id, v_customer, CURRENT_DATE, 'scheduled', v_admin
+  ) RETURNING id INTO v_delivery_id;
+  INSERT INTO public.delivery_items (
+    delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
+  ) VALUES (
+    v_delivery_id, v_order_item_id, v_product_b, 1, 0, 'gal'
+  ) RETURNING id INTO v_delivery_item_id;
+  UPDATE public.deliveries SET status = 'in_progress' WHERE id = v_delivery_id;
+
+  SELECT public.complete_delivery(
+    p_delivery_id := v_delivery_id,
+    p_signed_by := 'Below Cost Lifecycle Smoke',
+    p_performed_by := v_admin,
+    p_quantities := jsonb_build_object(v_delivery_item_id::text, 1),
+    p_idempotency_key := 'smoke-below-delivery-' || v_sfx,
+    p_completed_at := clock_timestamp()
+  ) INTO v_result;
+  SELECT quantity_delivered, status
+    INTO v_quantity, v_status
+  FROM public.order_items oi
+  JOIN public.orders o ON o.id = oi.order_id
+  WHERE oi.id = v_order_item_id;
+  IF v_quantity <> 1 OR v_status <> 'partially_fulfilled' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: approved below-cost delivery lifecycle failed (qty %, status %)',
+      v_quantity, v_status;
+  END IF;
+  SELECT count(*) INTO v_audit_count
+  FROM public.below_cost_approvals WHERE line_id = v_order_item_id;
+  IF v_audit_count <> v_audit_before THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: delivery bookkeeping wrote a fresh approval (% -> %)',
+      v_audit_before, v_audit_count;
+  END IF;
+
+  -- The delivery RPC also materializes a draft invoice from the governed order
+  -- line. That exact lineage insert must be usable without a second approval.
+  -- Partial-delivery adjustment and tote copy likewise reduce exposure or touch
+  -- bookkeeping only, while a later quantity increase still fails closed.
+  SELECT ii.invoice_id, ii.id
+    INTO v_invoice_id, v_invoice_item_id
+  FROM public.invoice_items ii
+  JOIN public.invoices i ON i.id = ii.invoice_id
+  WHERE i.order_id = v_order_id
+    AND ii.order_item_id = v_order_item_id
+  ORDER BY ii.created_at, ii.id
+  LIMIT 1;
+  IF v_invoice_item_id IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: delivery did not materialize governed invoice lineage';
+  END IF;
+  SELECT count(*) INTO v_audit_before
+  FROM public.below_cost_approvals
+  WHERE entity_type = 'invoice' AND entity_id = v_invoice_id;
+  IF v_audit_before <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: lifecycle-derived invoice duplicated approval, got %', v_audit_before;
+  END IF;
+
+  PERFORM set_config('app.crx_below_cost_operation', '', true);
+  PERFORM set_config('app.crx_below_cost_reason', '', true);
+  UPDATE public.invoice_items
+  SET tote_number = 'SMOKE-TOTE', updated_at = clock_timestamp()
+  WHERE id = v_invoice_item_id;
+  UPDATE public.invoice_items
+  SET quantity = 0.5, extended_cents = 556
+  WHERE id = v_invoice_item_id;
+  SELECT count(*) INTO v_audit_count
+  FROM public.below_cost_approvals
+  WHERE entity_type = 'invoice' AND entity_id = v_invoice_id;
+  IF v_audit_count <> v_audit_before THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: invoice lifecycle wrote a fresh approval (% -> %)',
+      v_audit_before, v_audit_count;
+  END IF;
+  BEGIN
+    UPDATE public.invoice_items
+    SET quantity = 2, extended_cents = 2222
+    WHERE id = v_invoice_item_id;
+    RAISE EXCEPTION 'SMOKE_FAIL: context-free invoice exposure increase committed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE 'BELOW_COST_CONTEXT_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected invoice context denial, got %', SQLERRM;
+    END IF;
+  END;
+
   -- price_order is the other path that previously committed before a
   -- best-effort browser log. Its reason now travels in the RPC payload and the
   -- same transaction stores the approval.
@@ -232,6 +333,24 @@ BEGIN
     AND reason = 'price-order rollback approval';
   IF v_audit_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: price_order atomic approval count %', v_audit_count;
+  END IF;
+
+  -- The real cancel path zeroes quantity_remaining after delegating to the
+  -- mature cancellation implementation. That fulfillment-only update must not
+  -- re-open an already-approved pricing decision.
+  PERFORM set_config('app.crx_below_cost_operation', '', true);
+  PERFORM set_config('app.crx_below_cost_reason', '', true);
+  SELECT public.cancel_order(
+    v_rush_order_id, v_admin, 'smoke-below-cancel-' || v_sfx
+  ) INTO v_result;
+  SELECT o.status, oi.quantity_remaining
+    INTO v_status, v_quantity
+  FROM public.orders o
+  JOIN public.order_items oi ON oi.order_id = o.id
+  WHERE o.id = v_rush_order_id;
+  IF v_status <> 'cancelled' OR v_quantity <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: approved below-cost cancellation failed (status %, remaining %)',
+      v_status, v_quantity;
   END IF;
 
   -- All seven public RPCs must have one SECURITY DEFINER overload routed

@@ -22,6 +22,18 @@ all three later migrations applied cleanly, both rollback-only below-cost smokes
 The lifecycle smoke mutation-tests a pre-rounding historical snapshot and asserts conversion
 commission basis equals the canonical Order header.
 
+**Exact-SHA review follow-up 3 (still local).** Review of `f52e8c85` found that the shared line
+trigger also ran on delivery/cancellation bookkeeping and on delivery-generated invoice lines,
+which could strand a correctly approved below-cost Order later in its lifecycle. UPDATE triggers
+now name only pricing-relevant columns; context-free changes are limited to unchanged pricing with
+no quantity increase; and a delivery-generated invoice line is accepted only when Product, unit
+price, cost snapshot, and quantity exactly descend from its governed Order line. The rollback smoke
+now completes a real partial delivery, verifies the derived invoice, proves bookkeeping and a real
+Order cancellation remain usable, and mutation-tests that an unapproved invoice quantity increase
+still fails closed. Both pricing smokes passed again on a fresh current-live schema with zero
+residue. The reviewer also identified the applied stale-profit source missing from this branch;
+that exact already-live migration is being restored before the replacement review.
+
 **Exact-SHA review follow-up (still local).** The review of `b5f949fa` correctly found that the
 first server-wall draft still left direct PostgREST line writes available, ran after the canonical
 rounding trigger and could overwrite its whole-cent result, and could parse an older approval
