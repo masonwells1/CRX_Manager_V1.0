@@ -14,6 +14,14 @@ existing JSON payload, so public RPC signatures remain rollout-compatible. Exact
 supplier-adoption and margin figures were also removed from the public audit document. This work
 is local and has not been pushed, merged, or applied live yet.
 
+After production advanced with the already-live whole-cent and canonical-commission migrations,
+the pricing files were re-issued as `20260810180000`–`20260810180002` and rebased onto those exact
+function bodies. A fresh read-only production schema dump restored into a new disposable database;
+all three later migrations applied cleanly, both rollback-only below-cost smokes reached
+`SMOKE_PASS_ROLLBACK`, and the postcheck found zero smoke customers, products, or approval rows.
+The lifecycle smoke mutation-tests a pre-rounding historical snapshot and asserts conversion
+commission basis equals the canonical Order header.
+
 **Exact-SHA review follow-up (still local).** The review of `b5f949fa` correctly found that the
 first server-wall draft still left direct PostgREST line writes available, ran after the canonical
 rounding trigger and could overwrite its whole-cent result, and could parse an older approval

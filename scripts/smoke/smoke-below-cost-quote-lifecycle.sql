@@ -18,6 +18,7 @@ DECLARE
   v_quote_unknown uuid;
   v_section_unknown uuid;
   v_version uuid;
+  v_order_id uuid;
   v_row_version bigint;
   v_result jsonb;
   v_sections jsonb;
@@ -87,7 +88,12 @@ BEGIN
         'customer_id', v_customer,
         'status', 'draft',
         'tier', 1,
-        'is_planned', true
+        'is_planned', true,
+        'commission_split', jsonb_build_object(
+          'splits', jsonb_build_array(jsonb_build_object(
+            'recipient', 'Below Cost Admin', 'percentage', 100
+          ))
+        )
       ),
       v_sections,
       v_admin,
@@ -125,6 +131,23 @@ BEGIN
     'smoke-q-version-' || v_sfx, v_row_version
   );
   v_version := (v_result->>'version_id')::uuid;
+
+  -- Mutation proof for the post-20260810151000 whole-cent constraints. A
+  -- historical JSON snapshot can predate those constraints even though every
+  -- current quote row is clean. Restore must normalize the replay boundary,
+  -- not fail the CHECK or reintroduce fractional stored money.
+  UPDATE public.quote_versions
+  SET snapshot_data = jsonb_set(
+    jsonb_set(
+      jsonb_set(
+        jsonb_set(snapshot_data, '{quote,total_price}', '110.005'::jsonb),
+        '{quote,total_profit}', '10.005'::jsonb
+      ),
+      '{sections,0,items,0,total_price}', '110.005'::jsonb
+    ),
+    '{sections,0,items,0,profit}', '10.005'::jsonb
+  )
+  WHERE id = v_version;
 
   -- The same customer prices are now below the fresh catalog cost. Every path
   -- must deny a blank reason, then atomically approve and audit an admin retry.
@@ -205,6 +228,19 @@ BEGIN
     'smoke-q-restore-ok-' || v_sfx, v_row_version,
     'restore lifecycle approval'
   );
+  IF EXISTS (
+    SELECT 1 FROM public.quotes q
+    WHERE q.id = v_quote_restore
+      AND (q.total_price <> ROUND(q.total_price, 2)
+        OR q.total_profit <> ROUND(q.total_profit, 2))
+  ) OR EXISTS (
+    SELECT 1 FROM public.quote_items qi
+    WHERE qi.quote_id = v_quote_restore
+      AND (qi.total_price <> ROUND(qi.total_price, 2)
+        OR qi.profit <> ROUND(qi.profit, 2))
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: historical restore retained fractional money';
+  END IF;
 
   SELECT row_version INTO v_row_version
   FROM public.quotes WHERE id = v_quote_convert;
@@ -219,10 +255,21 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: conversion denial was %', SQLERRM;
     END IF;
   END;
-  PERFORM public.convert_quote_to_order(
+  v_result := public.convert_quote_to_order(
     v_quote_convert, v_admin, 'smoke-q-convert-ok-' || v_sfx,
     v_row_version, 'conversion lifecycle approval'
   );
+  v_order_id := (v_result->>'order_id')::uuid;
+  SELECT count(*) INTO v_audit_count
+  FROM public.commissions c
+  JOIN public.orders o ON o.id = c.order_id
+  WHERE o.id = v_order_id
+    AND c.order_profit IS DISTINCT FROM o.total_profit;
+  IF v_audit_count <> 0 OR NOT EXISTS (
+    SELECT 1 FROM public.commissions WHERE order_id = v_order_id
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: conversion commission basis drifted from canonical order profit';
+  END IF;
 
   BEGIN
     PERFORM public.draw_down_quote(

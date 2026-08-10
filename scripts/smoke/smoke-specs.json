@@ -15,7 +15,7 @@
     },
     "below_cost_quote_lifecycle": {
       "chain": "smoke-below-cost-quote-lifecycle.sql",
-      "description": "Quote lifecycle below-cost wall: real duplicate, restore-version, whole-conversion, and partial-draw RPCs first reject a blank reason after live Product cost rises above the locked Quote price, then accept an active-admin reason and write an atomic approval audit. A synthetic legacy Quote with an unknown historical cost is refused before it can become a zero-cost Order. Terminal rollback and zero residue.",
+      "description": "Quote lifecycle below-cost wall: real duplicate, restore-version, whole-conversion, and partial-draw RPCs first reject a blank reason after live Product cost rises above the locked Quote price, then accept an active-admin reason and write an atomic approval audit. A synthetic legacy Quote with an unknown historical cost is refused before it can become a zero-cost Order; a mutated pre-rounding version snapshot restores as whole-cent money; conversion commission basis is asserted equal to the canonical Order header. Terminal rollback and zero residue.",
       "covers": ["duplicate_quote", "restore_quote_version", "convert_quote_to_order", "draw_down_quote", "below_cost_approvals"],
       "area": ["billing", "inventory", "lifecycle", "pricing", "security", "idempotency", "regression"]
     },

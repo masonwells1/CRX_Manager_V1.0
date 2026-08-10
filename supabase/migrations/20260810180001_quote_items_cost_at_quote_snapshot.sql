@@ -23,7 +23,8 @@
 --      Known edge: a legacy row with NULL current_cost stays NULL, and the
 --      immutability guard below then blocks any later in-place repair — fixing
 --      such a row requires a new migration that drops/recreates the guard.
---   4. CREATE OR REPLACE save_quote (base: 20260730235031, replicated in full):
+--   4. CREATE OR REPLACE save_quote (base: live after 20260810150500,
+--      replicated in full):
 --      save_quote delete+reinserts quote_items, which would wipe the snapshot on
 --      every save. Before the DELETE it captures the prior lines keyed STRICTLY
 --      by quote_item id, each carrying its product_id; a reinserted row keeps a
@@ -672,8 +673,10 @@ BEGIN
         (v_item->>'acres')::numeric,
         (v_item->>'total_units_needed')::numeric,
         v_item->>'unit_size',
-        COALESCE((v_item->>'profit')::numeric, 0),
-        COALESCE((v_item->>'total_price')::numeric, 0),
+        -- Preserve 20260810150500 DELTA-B2: normalize transient client money
+        -- before the already-live whole-cent constraints inspect the row.
+        ROUND(COALESCE((v_item->>'profit')::numeric, 0), 2),
+        ROUND(COALESCE((v_item->>'total_price')::numeric, 0), 2),
         COALESCE((v_item->>'net_margin')::numeric, 0),
         COALESCE(v_item->>'calc_mode', 'rate_acres'),
         v_item->>'price_unit',
@@ -1000,9 +1003,12 @@ BEGIN
   UPDATE quotes SET
     header_notes = v_snapshot->'quote'->>'header_notes',
     footer_notes = v_snapshot->'quote'->>'footer_notes',
-    total_price = (v_snapshot->'quote'->>'total_price')::numeric,
-    total_cost = (v_snapshot->'quote'->>'total_cost')::numeric,
-    total_profit = (v_snapshot->'quote'->>'total_profit')::numeric,
+    -- Historical snapshots may predate the live whole-cent constraints from
+    -- 20260810151000. Normalize the replay boundary so restoring one cannot
+    -- fail or reintroduce fractional stored money.
+    total_price = ROUND((v_snapshot->'quote'->>'total_price')::numeric, 2),
+    total_cost = ROUND((v_snapshot->'quote'->>'total_cost')::numeric, 2),
+    total_profit = ROUND((v_snapshot->'quote'->>'total_profit')::numeric, 2),
     total_margin_pct = (v_snapshot->'quote'->>'total_margin_pct')::numeric,
     status = 'revised',
     updated_at = now()
@@ -1057,8 +1063,8 @@ BEGIN
         (v_item->>'acres')::numeric,
         (v_item->>'total_units_needed')::numeric,
         v_item->>'unit_size',
-        (v_item->>'profit')::numeric,
-        (v_item->>'total_price')::numeric,
+        ROUND((v_item->>'profit')::numeric, 2),
+        ROUND((v_item->>'total_price')::numeric, 2),
         (v_item->>'net_margin')::numeric,
         v_item->>'calc_mode',
         v_item->>'price_unit',
@@ -1151,10 +1157,11 @@ $function$;
 -- -----------------------------------------------------------------------------
 -- _convert_quote_to_order_owner_impl: carry the quote-time cost into the order.
 --
--- Base: the 3-arg body from 20260702172500, which 20260730235031 RENAMED to
--- _convert_quote_to_order_owner_impl behind a 4-arg public wrapper. Replicated
--- verbatim except the marked SNAPSHOT block; the wrapper, its signature, guards,
--- idempotency scoping and grants are untouched.
+-- Base: live after 20260810150000, which preserved the 20260730235031 owner
+-- wrapper split and added canonical header profit plus whole-cent header input.
+-- This re-emission retains those live deltas and adds only the marked SNAPSHOT
+-- behavior; the wrapper, signature, guards, idempotency scope and grants stay
+-- unchanged.
 --
 -- caller-analysis: _convert_quote_to_order_owner_impl :: CREATE OR REPLACE of the existing owner impl; no signature or grant change, and its only caller is the public convert_quote_to_order wrapper, which is unchanged.
 -- -----------------------------------------------------------------------------
@@ -1170,6 +1177,7 @@ DECLARE
   v_customer record; v_inv record; v_shortfalls text[] := '{}'; v_net_position numeric;
   v_result jsonb; v_existing jsonb;
   v_has_draws boolean; v_fully_drawn boolean;
+  v_canonical_profit numeric; -- retained from live 20260810150000 DELTA-A
 BEGIN
   v_actor := auth.uid();
   IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
@@ -1302,8 +1310,13 @@ BEGIN
   INSERT INTO orders (order_number, quote_id, customer_id, status, commission_split,
     total_price, total_cost, total_profit, total_margin_pct, order_date, program_notes)
   VALUES (v_order_number, p_quote_id, v_quote.customer_id, 'confirmed',
-    v_quote.commission_split, v_quote.total_price, v_quote.total_cost,
-    v_quote.total_profit, v_quote.total_margin_pct, current_date,
+    -- Retain live 20260810150000 DELTA-E. The constraints validate this INSERT
+    -- before order-item triggers replace the header from canonical line money.
+    v_quote.commission_split,
+    ROUND(COALESCE(v_quote.total_price, 0), 2),
+    ROUND(COALESCE(v_quote.total_cost, 0), 2),
+    ROUND(COALESCE(v_quote.total_profit, 0), 2),
+    v_quote.total_margin_pct, current_date,
     (SELECT string_agg(qs.section_name || ': ' || qs.section_header_notes, E'\n')
      FROM quote_sections qs WHERE qs.quote_id = p_quote_id
        AND qs.section_header_notes IS NOT NULL AND qs.section_header_notes <> ''))
@@ -1360,8 +1373,16 @@ BEGIN
       v_order_id, v_actor, 'Pre-booked for order ' || v_order_number);
   END LOOP;
 
+  -- Retain live 20260810150000 DELTA-A: item triggers have now settled the
+  -- canonical order header, so commissions must mint from that value rather
+  -- than the quote's cached profit.
+  SELECT ROUND(COALESCE(o.total_profit, 0), 2)
+    INTO v_canonical_profit
+    FROM orders o
+   WHERE o.id = v_order_id;
+
   PERFORM _insert_commissions_for_order(
-    v_order_id, v_quote.customer_id, v_quote.total_profit,
+    v_order_id, v_quote.customer_id, v_canonical_profit,
     v_quote.commission_split, current_date
   );
 
@@ -2069,6 +2090,9 @@ BEGIN
       -- cannot install them re-sends them id-less forever and eventually
       -- deadlocks on the ambiguity guard above.
       AND position('v_item_ids' in p.prosrc) > 0
+      -- Preserve the already-live whole-cent writer changes.
+      AND position('ROUND(COALESCE((v_item->>''profit'')::numeric, 0), 2)' in p.prosrc) > 0
+      AND position('SUM(ROUND(current_cost * total_units_needed, 2))' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: save_quote not snapshot-aware or security posture wrong';
   END IF;
@@ -2087,6 +2111,8 @@ BEGIN
       AND p.prosecdef
       AND position('cost_at_quote_cents' in p.prosrc) > 0
       AND position('crx.quote_cost_snapshot_passthrough' in p.prosrc) > 0
+      AND position('total_price = ROUND((v_snapshot->''quote''->>''total_price'')::numeric, 2)' in p.prosrc) > 0
+      AND position('ROUND((v_item->>''profit'')::numeric, 2)' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: restore_quote_version owner impl not snapshot-aware';
   END IF;
@@ -2103,6 +2129,8 @@ BEGIN
       AND p.prosecdef
       AND position('cost_at_quote_cents' in p.prosrc) > 0
       AND position('cost_at_time_cents' in p.prosrc) > 0
+      AND position('v_canonical_profit' in p.prosrc) > 0
+      AND position('ROUND(COALESCE(v_quote.total_cost, 0), 2)' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: convert_quote_to_order owner impl does not carry the quote cost snapshot';
   END IF;
