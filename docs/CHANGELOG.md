@@ -81,6 +81,25 @@ one on a non-elevated machine. The guard is again unchanged, and was verified
 directly: a junction pointing at a real directory of packets — the shape that
 could actually carry private data — was already rejected.
 
+Review of that fix then found a real hole in the exemption itself, and this one
+could hide private data rather than merely block a push. A linked worktree of
+this repository is recognised by a `.git` pointer file naming a directory inside
+this repository's worktree bookkeeping. That pointer was trusted on its face, so
+a *copy* of a genuine worktree's pointer file was equally convincing. Because
+Windows can hold `session` and `SESSION` as two different directories that the
+containment check folds to a single key, a foreign directory parked at the
+colliding name could copy the pointer next door and inherit the exemption — its
+private contents skipped. That was reproduced end to end before anything
+changed: a private packet passed the gate. The exemption now reads the backlink
+Git keeps in that bookkeeping directory and requires it to name the very
+directory being exempted. The comparison is made on filesystem identity rather
+than path text, because Node's `realpathSync` returns whatever casing it was
+handed on Windows while case-sensitive directories make two spellings genuinely
+two places; and it compares the backlink's parent *directory*, so hard-linking
+the pointer file — which would preserve the file's identity — fails too, NTFS
+having no way to hard-link a directory. Both attacks and both legitimate cases
+are now fixtures in the suite, each confirmed red against the previous shape.
+
 Raised by CodeRabbit on PR #359 and deferred there only because a new commit
 would have discarded that PR's banked Vercel status while the daily build
 quota was exhausted.

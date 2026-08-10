@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { chmodSync, closeSync, existsSync, ftruncateSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, copyFileSync, existsSync, ftruncateSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -943,6 +943,26 @@ git() { return 0; }
   rmSync(path.join(strayPointer, '.git'), { force: true }); mkdirSync(path.join(strayPointer, '.git'), { recursive: true });
   assert.equal(ownWorktreeMarker(strayPointer, hostWorktreesDirectory), false);
   rmSync(strayPointer, { recursive: true, force: true });
+  // A pointer file that genuinely IS this repository's, copied out of a real
+  // worktree, must not carry the exemption with it. The pointer is only a
+  // claim; the administration directory it names holds a `gitdir` backlink
+  // naming the one directory that claim is true of. Hard-linking the pointer
+  // preserves the FILE's identity, which is why the backlink is compared
+  // against the candidate DIRECTORY — NTFS cannot hard-link a directory.
+  const clonedPointer = path.join(worktreeHost, '.claude', 'worktrees', 'cloned'); mkdirSync(clonedPointer, { recursive: true });
+  copyFileSync(path.join(ownLinkedWorktree, '.git'), path.join(clonedPointer, '.git'));
+  assert.equal(ownWorktreeMarker(clonedPointer, hostWorktreesDirectory), false);
+  rmSync(path.join(clonedPointer, '.git'), { force: true });
+  linkSync(path.join(ownLinkedWorktree, '.git'), path.join(clonedPointer, '.git'));
+  assert.equal(ownWorktreeMarker(clonedPointer, hostWorktreesDirectory), false);
+  rmSync(clonedPointer, { recursive: true, force: true });
+  // A worktree whose backlink Git can no longer resolve fails closed instead of
+  // being waved through as this checkout seen twice.
+  const sessionBacklink = path.join(hostWorktreesDirectory, 'session', 'gitdir');
+  renameSync(sessionBacklink, `${sessionBacklink}.parked`);
+  assert.equal(ownWorktreeMarker(ownLinkedWorktree, hostWorktreesDirectory), false);
+  renameSync(`${sessionBacklink}.parked`, sessionBacklink);
+  assert.equal(ownWorktreeMarker(ownLinkedWorktree, hostWorktreesDirectory), true);
   // The own-worktree registry is keyed by a path string, so membership must be
   // compared through the same case normalization every other containment
   // decision uses. Git prints the registered path with whatever casing it
@@ -993,11 +1013,28 @@ git() { return 0; }
   let caseDistinctNames = false;
   try { mkdirSync(path.join(collisionWorktrees, 'probe')); mkdirSync(path.join(collisionWorktrees, 'PROBE')); caseDistinctNames = readdirSync(collisionWorktrees).filter(name => name.toLowerCase() === 'probe').length === 2; } catch { caseDistinctNames = false; }
   for (const probe of readdirSync(collisionWorktrees)) rmSync(path.join(collisionWorktrees, probe), { recursive: true, force: true });
+  // Windows is the only platform where the case-folded key can collide, so it
+  // is the only platform where skipping this would hide the bug it covers.
+  // Fail loudly rather than reporting a pass that never ran.
+  assert(caseDistinctNames || process.platform !== 'win32', 'case-distinct worktree directory names are unavailable on this Windows filesystem, so the case-folded collision assertions cannot run');
   if (caseDistinctNames) {
     git(collisionHost, ['worktree', 'add', '--quiet', '-b', 'collision-session', path.join(collisionWorktrees, 'session')]);
     await fixtureContainment(collisionHost);
     const collidingForeign = path.join(collisionWorktrees, 'SESSION'); git(collisionHost, ['init', '--quiet', collidingForeign]); writeFileSync(path.join(collidingForeign, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
     assert.equal(readdirSync(collisionWorktrees).filter(name => name.toLowerCase() === 'session').length, 2, 'the collision fixture must hold two case-distinct worktree directories, or this assertion proves nothing');
+    await assert.rejects(() => fixtureContainment(collisionHost), /SESSION\/? \(embedded Git repository\)/);
+    // The same collision carrying a COPY of the real worktree's own pointer
+    // file: case folding lands it on the registered key and the pointer aims
+    // inside this repository's administration directory, so only the backlink
+    // check on the candidate itself keeps its private contents from being
+    // skipped. Hard-linking the pointer is the same attack with the file's
+    // identity preserved.
+    rmSync(collidingForeign, { recursive: true, force: true }); mkdirSync(collidingForeign);
+    copyFileSync(path.join(collisionWorktrees, 'session', '.git'), path.join(collidingForeign, '.git'));
+    writeFileSync(path.join(collidingForeign, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+    await assert.rejects(() => fixtureContainment(collisionHost), /SESSION\/? \(embedded Git repository\)/);
+    rmSync(path.join(collidingForeign, '.git'), { force: true });
+    linkSync(path.join(collisionWorktrees, 'session', '.git'), path.join(collidingForeign, '.git'));
     await assert.rejects(() => fixtureContainment(collisionHost), /SESSION\/? \(embedded Git repository\)/);
   }
   const bareRepoHost = fixtureRepo('containment-bare-repository'); const bareRepoBase = git(bareRepoHost, ['rev-parse', 'HEAD']).trim(); const bareRepoPath = path.join(bareRepoHost, 'catalog.git'); git(bareRepoHost, ['init', '--bare', '--quiet', bareRepoPath]); execFileSync('git', ['--git-dir', bareRepoPath, 'hash-object', '-w', '--stdin'], { input: JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }), encoding: 'utf8', env: sanitizedFixtureGitEnv() }); mkdirSync(path.join(bareRepoPath, 'objects', 'info'), { recursive: true }); writeFileSync(path.join(bareRepoPath, 'objects', 'info', 'alternates'), '../alternate-objects\n');

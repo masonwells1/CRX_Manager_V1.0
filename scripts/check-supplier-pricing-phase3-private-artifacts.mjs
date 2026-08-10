@@ -1567,6 +1567,21 @@ function isContainedDirectory(child, parent) { return containmentPathKey(child).
  * worktree registry. Anything else — a directory, a symlink, extra lines, or a
  * pointer aimed at another repository's administration directory — fails here
  * and is classified as an embedded repository by the caller.
+ *
+ * Landing inside the registry is necessary but not sufficient: a pointer file
+ * is ordinary text, so a foreign directory can simply copy a legitimate
+ * worktree's pointer and inherit its exemption. Git records the reverse link —
+ * each administration entry names the `.git` file it was issued for — so the
+ * pointer is required to point back at THIS candidate.
+ *
+ * That comparison is made on filesystem identity, not on path text. Node's
+ * `realpathSync` hands back the casing it was given on Windows, so one
+ * directory reached through two spellings would read as two different places,
+ * while in a directory with per-directory case sensitivity enabled `session`
+ * and `SESSION` really are two directories and must not be conflated. What is
+ * compared is the DIRECTORY the backlink names rather than the pointer file
+ * itself, so copying the pointer — or hard-linking it, which would preserve the
+ * file's identity — still fails, NTFS having no way to hard-link a directory.
  */
 export function ownWorktreeMarker(absolute, worktreesDirectory) {
   const marker = path.join(absolute, '.git');
@@ -1579,7 +1594,22 @@ export function ownWorktreeMarker(absolute, worktreesDirectory) {
   if (lines.length !== 1 || !lines[0].startsWith('gitdir: ')) return false;
   const gitdir = path.resolve(absolute, lines[0].slice('gitdir: '.length).trim());
   if (!isContainedDirectory(gitdir, worktreesDirectory)) return false;
-  try { return lstatSync(gitdir).isDirectory(); } catch { return false; }
+  try { if (!lstatSync(gitdir).isDirectory()) return false; } catch { return false; }
+  let backlink;
+  try { backlink = readFileSync(path.join(gitdir, 'gitdir'), 'utf8').trim(); } catch { return false; }
+  if (!backlink) return false;
+  // A worktree Git can no longer resolve fails closed here rather than being
+  // waved through as this checkout seen twice.
+  return sameDirectory(path.dirname(path.resolve(gitdir, backlink)), absolute);
+}
+
+/** Whether two paths name the same directory on disk, compared by filesystem identity. */
+function sameDirectory(left, right) {
+  try {
+    const first = statSync(left, { bigint: true });
+    const second = statSync(right, { bigint: true });
+    return first.isDirectory() && second.isDirectory() && first.dev === second.dev && first.ino === second.ino && first.ino !== 0n;
+  } catch { return false; }
 }
 
 /**
