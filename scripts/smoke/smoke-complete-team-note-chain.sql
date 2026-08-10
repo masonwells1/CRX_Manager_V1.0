@@ -1,6 +1,6 @@
 -- ============================================================================
 -- SMOKE CHAIN: complete_team_note + notify_team_note_assignment
--- (migrations 20260809130108 + 20260809154649)
+-- (migrations 20260809130108 + 20260810010308)
 -- ----------------------------------------------------------------------------
 -- Proves the Team Board delegation loop end to end, rolled back by design:
 --   assignment notification on INSERT -> auth probes (P1/P2) -> outsider

@@ -2147,13 +2147,11 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// The latest approved migration in this checkout applied live 2026-07-29
-// under server-assigned ledger version 20260729222311; it is not pending.
-// Keep this set aligned with rows explicitly marked PENDING APPLY in
-// docs/reference/migration-history.md.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
-  '20260809154649',
-]);
+// Both Team Board delegation migrations applied live 2026-08-09 under
+// server-assigned ledger versions 20260809130108 and 20260810010308, so
+// nothing in this checkout is pending. Keep this set aligned with rows
+// explicitly marked PENDING APPLY in docs/reference/migration-history.md.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2258,7 +2256,7 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
   notify_team_note_assignment:
-    'PENDING 20260809154649 trigger-only assignment notifier; parent team_notes INSERT/UPDATE owns the transaction, direct application-role EXECUTE is revoked, and the active-actor guard fails closed before privileged notification DML',
+    'trigger-only assignment notifier; parent team_notes INSERT/UPDATE owns the transaction, direct application-role EXECUTE is revoked, and the active-actor guard fails closed before privileged notification DML',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
