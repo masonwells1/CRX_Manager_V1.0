@@ -22,7 +22,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 182 assertions; the idempotency reference
+- The actor-binding suite passes at 183 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -60,6 +60,8 @@ PR workflow.
   parsing, and direct-safe-literal allowance for an otherwise opaque API name.
 - The mixed-branch MERGE decision was independently removed and exposed the
   exact staged INSERT-branch regression before restoration.
+- The columnless MERGE INSERT spelling was independently narrowed back to the
+  column-list-only check and exposed its own regression before restoration.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -156,12 +158,17 @@ PR workflow.
   opaque staged command in `WHEN NOT MATCHED ... INSERT`. Its real snapshot
   probe proved the approved base denied the packet while that candidate allowed
   it, and every companion SQL safety hook also allowed the candidate packet.
-- Fix commit `1fbcc103c2d9445e4fe8edf7561fdd04acb3ec56` makes any
-  pg_cron job MERGE with an INSERT branch review-only while preserving the
-  direct update-only safe control. The restored actor suite passed 182
+- Fix commit `1fbcc103c2d9445e4fe8edf7561fdd04acb3ec56` makes pg_cron
+  job MERGE INSERT branches with explicit column lists review-only while
+  preserving the direct update-only safe control. The restored actor suite passed 182
   assertions, idempotency remained green at 86, the exact mixed-branch
   subprocess probe denied, and the commit completed the full pre-commit barrier
   without a hook bypass.
+- Follow-up commit `3f9d04d7bc8ce1fc3d5e9e24602b93b74b4cf471` extends the
+  same rule to legal columnless INSERT actions. Its mutation failed the new
+  regression before restoration, the restored actor suite passed 183
+  assertions, and the commit completed the full pre-commit barrier without a
+  hook bypass.
 
 ## GOVERNED STATUS
 
