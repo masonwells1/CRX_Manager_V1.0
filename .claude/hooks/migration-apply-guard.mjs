@@ -244,6 +244,112 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       `Refusing the apply rather than skipping the check. Fix the guard, or state an explicit ` +
       `intentional replay in the migration SQL if that is genuinely what this is.`);
   }
+
+  // ONE-SHOT REPLAY GUARD (2026-08-10, Codex High round 8).
+  //
+  // supabase/baselines/one-shot-migrations.json registers data migrations whose
+  // authorization was bound to the live population at the moment they were
+  // written — counts, not row identity. Replaying one onto a database whose
+  // ledger does not already contain it rewrites rows nobody approved.
+  //
+  // Registering them only taught scripts/list-post-baseline-migrations.mjs to
+  // withhold them from the replay plan. That is one path. This is the other:
+  // the SQL file is still sitting on disk, and an ordinary apply against a
+  // restored or drifted database still sees it, so the containment was
+  // advisory. It is now enforced at the apply itself.
+  //
+  // "Ledger lacks it" is the trigger, because a ledger that HAS it is by
+  // definition the population the migration was approved against — and a
+  // duplicate apply there is an ordering problem, already handled above.
+  {
+    const registryPath = path.join(projectDir, "supabase", "baselines", "one-shot-migrations.json");
+    let oneShot = null;
+    try {
+      const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+      oneShot = parsed?.one_shot;
+      if (!oneShot || typeof oneShot !== "object") throw new Error("no `one_shot` map");
+    } catch (err) {
+      // Fail closed. The registry is tracked in git and ships beside this hook,
+      // so an unreadable one means the checkout is broken or the file was
+      // removed — the two states in which a silent pass is most dangerous.
+      out("block",
+        `ONE-SHOT REPLAY GUARD: could not read the one-shot migration registry at ${registryPath} ` +
+        `(${err?.message || err}). Without it there is no way to tell an idempotent schema ` +
+        `migration from a population-bound data repair, so this apply is refused. Restore the ` +
+        `file from git (it is tracked) and retry.`);
+    }
+
+    // Normalize for comparison: lowercase, strip `--` line comments, collapse
+    // whitespace. Enough to catch a reformatted copy-paste of the same body;
+    // NOT enough to catch a materially rewritten one — but a materially
+    // rewritten body is a new migration that needs its own review anyway.
+    const norm = (s) => s
+      .toLowerCase()
+      .replace(/--[^\n]*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const normQuery = norm(migQuery);
+    const ledgerHas = (stem) => {
+      const version = (stem.match(/\d{14}/) || [])[0];
+      return appliedNames.some((n) => n.includes(stem) || (version && n.includes(version)));
+    };
+
+    for (const [stem, reason] of Object.entries(oneShot)) {
+      if (ledgerHas(stem)) continue;
+
+      const version = (stem.match(/\d{14}/) || [])[0] || "";
+      let matched = "";
+      // The MCP `name` is caller-controlled, so a name match is a convenience,
+      // not the whole test — the body is checked too.
+      if (migName && (migName.includes(stem) || (version && migName.includes(version)))) {
+        matched = `the migration name "${safeName}"`;
+      } else if (normQuery) {
+        try {
+          const filePath = path.join(projectDir, "supabase", "migrations", `${stem}.sql`);
+          if (existsSync(filePath)) {
+            const normFile = norm(readFileSync(filePath, "utf8"));
+            if (normFile && (normQuery.includes(normFile) || normFile.includes(normQuery))) {
+              matched = `the SQL body (it matches ${stem}.sql on disk)`;
+            }
+          }
+        } catch { /* a missing or unreadable file just means no body match */ }
+      }
+      if (!matched) continue;
+
+      // Digest-bound override: an operator who genuinely means to replay this
+      // must hash the EXACT SQL they are about to run and record it. A named
+      // flag would be a wave-through for any body; binding to `currentHash`
+      // means the override authorizes this text and nothing else.
+      const ovPath = path.join(stateDir, "one-shot-replay-override.json");
+      let overrideOk = false;
+      try {
+        if (existsSync(ovPath)) {
+          const ov = JSON.parse(readFileSync(ovPath, "utf8"));
+          overrideOk =
+            (ov?.migration || "").toString().trim() === stem &&
+            currentHash !== "" &&
+            (ov?.queryHash || "").toString().trim().toLowerCase() === currentHash;
+        }
+      } catch { overrideOk = false; }
+      if (overrideOk) continue;
+
+      out("block",
+        `ONE-SHOT REPLAY GUARD: this apply matches ${matched}, which is registered as a one-shot ` +
+        `DATA migration in supabase/baselines/one-shot-migrations.json, and the applied-migration ` +
+        `ledger for this database does NOT contain it.\n\n` +
+        `Why it is registered: ${reason}\n\n` +
+        `Its authorization was bound to the live population at the time it was written, so running ` +
+        `it against a database that never had it rewrites rows nobody approved. After a restore, ` +
+        `the corrected values come back with the DATA — not by re-running the edit.\n\n` +
+        `If this really is a deliberate, reviewed replay, bind the override to the exact SQL:\n` +
+        `  node -e "const c=require('node:crypto'),f=require('node:fs');` +
+        `const q=f.readFileSync('supabase/migrations/${stem}.sql','utf8');` +
+        `f.writeFileSync('.claude/session-state/one-shot-replay-override.json',` +
+        `JSON.stringify({migration:'${stem}',queryHash:c.createHash('sha256').update(q).digest('hex')}))"\n` +
+        `That override authorizes that exact text and nothing else. Get Mason's explicit OK first — ` +
+        `this is a live money write.`);
+    }
+  }
 }
 
 // HARD carve-out (Mason's settled 2026-07-13 policy): in a hands-free run, a

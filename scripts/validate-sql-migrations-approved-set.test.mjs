@@ -37,6 +37,18 @@ const OTHER_HEX = 'b'.repeat(64);
 const HASH_EXPR = `encode(digest(string_agg(id::text || ':' || total_profit::text, ',' ORDER BY id), 'sha256'), 'hex')`;
 /** A real hash, correctly assigned — but over a constant. Binds nothing. */
 const CONST_HASH_EXPR = `encode(digest('approved', 'sha256'), 'hex')`;
+/**
+ * The constant hash again, this time inside a SELECT that ALSO computes a
+ * perfectly good string_agg over the ids and the rewritten column — into a
+ * throwaway variable. Every token a statement-wide check looks for is present
+ * (table, string_agg, id, total_profit) and not one of them is an input to the
+ * hash the guard is comparing. This is the exact bypass the round-7 guard
+ * admitted (Codex High, round 8); only reading the hash call's own arguments
+ * catches it.
+ */
+const CONST_HASH_DECOY_SELECT =
+  `SELECT ${CONST_HASH_EXPR},\n         string_agg(id::text || ':' || total_profit::text, ',' ORDER BY id)\n` +
+  `    INTO actual, junk FROM public.orders`;
 const GOOD_DIGEST_BLOCK = `DO $$
 DECLARE actual text;
 BEGIN
@@ -185,6 +197,73 @@ const CASES = [
       `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
   },
   {
+    // Codex round 8. The hash is still of a constant, but the SELECT around it
+    // names the table, the ids and the rewritten column, so a check that reads
+    // the whole statement finds everything it was looking for. Only reading the
+    // hash call's own arguments catches this.
+    name: 'constant hash smuggled past a real string_agg computed alongside it',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text; junk text;\nBEGIN\n` +
+      `  ${CONST_HASH_DECOY_SELECT};\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n    RAISE EXCEPTION 'drift';\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    // The hash argument is a string literal that merely SPELLS the column
+    // names. Literals are stripped before the span is inspected precisely so
+    // quoted text cannot stand in for hashed data.
+    name: 'hash of a literal that spells the column names',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
+      `  SELECT encode(digest('id total_profit string_agg', 'sha256'), 'hex')\n` +
+      `    INTO actual FROM public.orders;\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n    RAISE EXCEPTION 'drift';\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    // Real columns, hashed — but one row at a time, with no ordered aggregate.
+    // A digest of whichever row the planner happened to return authorizes that
+    // row, not the population.
+    name: 'hash of row values with no string_agg over the population',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
+      `  SELECT encode(digest(id::text || ':' || total_profit::text, 'sha256'), 'hex')\n` +
+      `    INTO actual FROM public.orders LIMIT 1;\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n    RAISE EXCEPTION 'drift';\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    // Codex's own example: application_services stores customer-facing rates
+    // and internal costs in cents, and the hand-written allowlist never named
+    // it. Default-deny over the schema registry is what covers it now.
+    name: 'application_services is protected by default-deny',
+    expect: 'violation',
+    sql: `UPDATE public.application_services SET cost_per_acre_cents = 0;\n`,
+  },
+  {
+    name: 'customer_application_rates is protected by default-deny',
+    expect: 'violation',
+    sql: `UPDATE public.customer_application_rates SET rate_cents = 0;\n`,
+  },
+  {
+    name: 'supplier_price_observations is protected by default-deny',
+    expect: 'violation',
+    sql: `UPDATE public.supplier_price_observations SET price_cents = 0;\n`,
+  },
+  {
+    name: 'invoice_line_share_snapshots is protected by default-deny',
+    expect: 'violation',
+    sql: `DELETE FROM public.invoice_line_share_snapshots WHERE id IS NOT NULL;\n`,
+  },
+  {
+    name: 'app_settings is protected by default-deny',
+    expect: 'violation',
+    sql: `UPDATE public.app_settings SET value = 'x';\n`,
+  },
+  {
     name: 'hash of an unrelated table',
     expect: 'violation',
     sql:
@@ -261,9 +340,26 @@ const CASES = [
     sql: `DO $$\nBEGIN\n  RAISE NOTICE 'about to update orders and delete from invoices';\nEND $$;\n`,
   },
   {
-    name: 'a non-business table is not in scope',
+    // The only tables outside the default-deny set are the reason-annotated
+    // exemptions: append-only logs, retry queues, operational plumbing. Bulk
+    // rewrites there are ordinary maintenance, and flagging them would be the
+    // noise that gets a guard switched off.
+    name: 'an exempt log table (activity_feed) is not in scope',
     expect: 'silent',
-    sql: `UPDATE public.app_settings SET value = 'x';\n`,
+    sql: `UPDATE public.activity_feed SET description = 'x';\n`,
+  },
+  {
+    name: 'an exempt queue table (idempotency_keys) is not in scope',
+    expect: 'silent',
+    sql: `DELETE FROM public.idempotency_keys WHERE created_at < now();\n`,
+  },
+  {
+    // A table nobody has ever created is not in the registry, so default-deny
+    // cannot protect it. Asserted so the failure mode is a documented one:
+    // protection follows the registry, and a stale registry is a real gap.
+    name: 'a table absent from the schema registry is out of scope',
+    expect: 'silent',
+    sql: `UPDATE public.not_a_real_crx_table SET x = 0;\n`,
   },
   {
     // A plain INSERT adds rows; it rewrites no approved population. Flagging it

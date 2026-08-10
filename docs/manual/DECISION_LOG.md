@@ -117,19 +117,65 @@ still only understood one shape of rewrite and never checked what the digest was
     function migrations never belong in the registry — they are idempotent by contract and must keep
     rebuilding.
 
-**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 31
+**Hardened a fourth time after a round-8 review (same day).** Codex returned `BLOCKERS` again with
+three High findings. All closed:
+
+13. **The digest checks were statement-wide, not span-scoped.** Round 6 required the hashing
+    statement to cover the ids and a written column — but it looked for those tokens anywhere in the
+    statement, and a `SELECT` can mention plenty of things outside the hash call. So
+    `SELECT encode(digest('approved','sha256'),'hex') INTO actual FROM orders WHERE id = ANY(...)
+    AND total_profit IS NOT NULL` — a hash of a **constant** — passed by naming `id` and
+    `total_profit` in its `WHERE` clause. The guard now extracts the **argument span of the hash
+    call** by balancing parentheses, and requires the ids and the written column to appear *inside
+    that span*. It also requires the span to contain a `string_agg()`: a digest that is not an
+    ordered aggregate over the affected rows is not a digest *of* them. The table check stays
+    statement-level by design — in the mandated shape the `FROM` legitimately sits outside the hash
+    call.
+14. **The protected-table list was an allowlist, and allowlists rot.** The hand-maintained set had
+    grown to 52 tables and still missed `application_services`, `customer_application_rates`,
+    `allocation_sets`, `field_app_billing_lines`, `invoice_line_share_snapshots`, and the
+    supplier-pricing tables — so `UPDATE public.application_services SET cost_per_acre_cents = 0`
+    was simply not a rewrite as far as the guard was concerned. Protection is now **default-deny**:
+    every table in `.claude/schema-registry.json` is protected, minus a short, commented exemption
+    list of append-only logs, queues, and transient notice tables (17 entries, each with its reason
+    on the line). New tables are protected the moment the registry is refreshed, with no edit here.
+    The derivation **fails closed** — an unreadable registry, or one yielding fewer than 100 tables,
+    aborts the script rather than silently protecting a partial list. The registry path resolves
+    from the script's own location, not the working directory, because the mutation harness runs the
+    script against temp directories.
+15. **One-shot containment was advisory.** Item 12 taught the disaster-recovery *replay planner* to
+    withhold registered one-shot data migrations. That is one path to an apply; the SQL file is
+    still on disk, and an ordinary `apply_migration` against a restored or drifted database still
+    saw it. `.claude/hooks/migration-apply-guard.mjs` now **refuses** any apply that matches a
+    registered one-shot whenever the target database's applied-migration ledger does not already
+    contain it, and quotes the registry's reason in the refusal. A ledger that *does* contain it is
+    by definition the population the migration was approved against, so the guard stays silent
+    there. The MCP `name` is caller-controlled, so a name match is only a convenience — the
+    normalized SQL body is checked against the registered file on disk, and renaming the migration
+    does not get past it. The escape hatch is **digest-bound**: the override must carry the SHA-256
+    of the exact SQL being applied, so it authorizes that text and nothing else; a name-keyed flag
+    would have been a wave-through for any body. A missing or unparseable registry denies the apply.
+
+**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 41
 synthetic migrations — real bypass attempts, waivers, and shapes that must stay silent — runs the
 actual script over them, and asserts what it printed for each. It runs in
 `npm run test:correction-guards`, as does `scripts/list-post-baseline-migrations.test.mjs`, which
 covers the one-shot replay containment (both were added to that slice, so neither is a guard the
-regression gate cannot see). Each round was verified by breaking the guard on purpose and watching
-each mutant turn exactly its own case(s) red, then restoring and watching everything go green:
-round 5 by accepting `=`, dropping the block-comment stripper, un-closing the same-line function
-body, dropping the `ADD COLUMN` requirement, dropping the variable binding, and narrowing the table
-list; round 7 by removing upsert detection, removing `MERGE` detection, removing the digest's
-table-coverage check, removing its written-column check, removing the column-level waiver check,
-bypassing the one-shot quarantine, and emptying the registry. Per the standing rule that an untested
-guard is decoration, that red-then-green run is the evidence, not a reading of the diff.
+regression gate cannot see). The apply-time refusal added in item 15 is covered by
+`.claude/hooks/migration-apply-guard.test.mjs` (98 assertions), which seeds a real one-shot registry
+per fixture and drives the hook end to end. Each round was verified by breaking the guard on purpose
+and watching each mutant turn exactly its own case(s) red, then restoring and watching everything go
+green: round 5 by accepting `=`, dropping the block-comment stripper, un-closing the same-line
+function body, dropping the `ADD COLUMN` requirement, dropping the variable binding, and narrowing
+the table list; round 7 by removing upsert detection, removing `MERGE` detection, removing the
+digest's table-coverage check, removing its written-column check, removing the column-level waiver
+check, bypassing the one-shot quarantine, and emptying the registry; round 8 by widening the hash
+span back to the whole statement, dropping the `string_agg` requirement, putting
+`application_services` back in the exemption list, making the one-shot registry read fail open,
+checking only the caller-supplied name instead of the SQL body, un-binding the override from the
+query digest, and firing the guard even when the ledger already had the migration. Per the standing
+rule that an untested guard is decoration, that red-then-green run is the evidence, not a reading of
+the diff.
 
 **Also settled here.** The permission entry `Read(//c/CRX_Manager/**)` was removed from the tracked
 `.claude/settings.local.json` (Codex finding 2). It had been added by an auto-approved prompt during

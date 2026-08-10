@@ -67,10 +67,76 @@ done
 # here on is in force.
 APPROVED_SET_CUTOFF=20260810025160
 
-# Tables whose rows carry money, inventory, or customer-visible state. A
-# top-level rewrite of these is what needs binding; rewrites inside a function
-# body are runtime logic, not a one-shot data migration, and are not checked.
-BUSINESS_ROW_TABLES='orders|order_items|order_shares|order_line_allocations|order_item_field_allocations|quotes|quote_items|quote_versions|quote_product_draws|invoices|invoice_items|invoice_shares|invoice_line_shares|invoice_line_allocations|payments|commissions|commission_payments|commission_payment_items|deliveries|delivery_items|delivery_remainders|purchase_orders|purchase_order_items|returns|return_items|inventory|inventory_holds|inventory_transactions|cycle_counts|cycle_count_items|receiving_records|products|product_cost_basis|cost_history|customers|jobs|job_product_draws|write_offs|prepay_applications|prepay_credits|credit_memo_applications|finance_charges|vendors|vendor_bills|vendor_payments|rebate_claims|accounting_periods|financial_audit_log|application_records|blend_tickets|blend_ticket_products|rup_sales_records|profiles'
+# Which tables carry rows worth binding an approval to? DEFAULT-DENY: every
+# table in .claude/schema-registry.json, minus a short, reason-annotated
+# exemption list.
+#
+# This was a hand-written allowlist of 52 tables, and it silently omitted live
+# financial ones — `application_services` (customer-facing rates and internal
+# costs, in cents), `customer_application_rates`, `allocation_sets`,
+# `field_app_billing_lines`, `invoice_line_share_snapshots`, and the whole
+# supplier-pricing family. `UPDATE public.application_services SET
+# cost_per_acre_cents = 0` walked straight past the guard (Codex High, round 8).
+# An allowlist you must remember to extend is an allowlist that drifts, and it
+# drifts silently — nothing fails when a new money table is missing from it.
+#
+# Inverted, a new table is protected the moment it lands in the registry, and
+# REMOVING protection costs a deliberate, reviewed edit right here with a stated
+# reason. Exempt = append-only logs, retry queues, and operational plumbing that
+# hold no money, inventory, or customer-visible state, where a bulk rewrite is
+# ordinary maintenance rather than an authorized data repair.
+APPROVED_SET_EXEMPT_TABLES=(
+  activity_feed                # append-only UI activity feed
+  note_activity_log            # append-only note history
+  email_log                    # outbound delivery log
+  failed_notifications         # retry queue
+  notifications                # transient user notices
+  job_notifications            # transient user notices
+  idempotency_keys             # RPC replay bookkeeping
+  rate_limits                  # throttling counters
+  rate_limit_log               # throttling log
+  offline_action_receipts      # offline replay bookkeeping
+  backup_runs                  # backup telemetry
+  backup_snapshots             # backup telemetry
+  integrity_alerts             # watchdog output
+  integrity_negative_baseline  # watchdog baseline
+  watchdog_flags               # watchdog output
+  watchdog_flag_dismissals     # watchdog output
+  ocr_processing_queue         # work queue
+)
+
+# A top-level rewrite of a protected table is what needs binding; rewrites
+# inside a function body are runtime logic, not a one-shot data migration, and
+# are not checked.
+#
+# The registry is located relative to THIS SCRIPT, not the working directory:
+# the protected set is a property of the repository, while the directory being
+# scanned is an argument (the mutation tests point the scanner at a scratch
+# tree of synthetic migrations). Resolving it from cwd would have made the
+# guard collapse to "cannot derive" the moment it was aimed anywhere else.
+APPROVED_SET_REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.claude/schema-registry.json"
+
+BUSINESS_ROW_TABLES=$(node -e "
+const fs = require('fs');
+const reg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const exempt = new Set((process.argv[1] || '').split(/\s+/).filter(Boolean));
+const tables = Object.keys(reg.columns || {})
+  .filter((n) => /^[a-z0-9_]+\$/.test(n) && !exempt.has(n))
+  .sort();
+if (tables.length < 100) {
+  throw new Error('schema registry yielded only ' + tables.length + ' protected tables');
+}
+process.stdout.write(tables.join('|'));
+" "${APPROVED_SET_EXEMPT_TABLES[*]}" "$APPROVED_SET_REGISTRY" 2>/dev/null || true)
+
+# Fail closed. A guessed or empty list would turn the approved-set binding check
+# into a silent no-op — exactly the failure mode this replaced.
+if [ -z "$BUSINESS_ROW_TABLES" ]; then
+  echo "❌ FATAL: could not derive the protected table set from $APPROVED_SET_REGISTRY"
+  echo "   (needs a readable registry with a 'columns' map of at least 100 tables, and node on PATH)."
+  echo "   The approved-set binding check is default-deny and must not run on a partial list."
+  exit 1
+fi
 
 # Tables that do NOT have an updated_at column
 TABLES_WITHOUT_UPDATED_AT=(
@@ -517,12 +583,34 @@ for file in $ALL_SQL; do
           # not against another literal — and specifically against THIS variable,
           # over THIS material. "A hash appears somewhere above" is not a
           # binding: a migration could hash a constant, or an unrelated table,
-          # then compare a hand-set variable to the literal and pass. So the
-          # statement that assigns the hash must (a) assign it to the same
-          # identifier that sits on the left of the mismatch, (b) read one of the
-          # tables being rewritten, (c) cover `id`, and (d) cover at least one of
-          # the columns the rewrite actually assigns — that last one is what
-          # makes it a digest of BEFORE-VALUES rather than of row identity alone.
+          # then compare a hand-set variable to the literal and pass.
+          #
+          # Round 7 checked that by looking for the table name, `id` and a
+          # written column ANYWHERE in the assigning statement, which Codex broke
+          # in round 8: those tokens are all over an ordinary
+          # `SELECT ... FROM orders`, so `encode(digest('approved','sha256'),'hex')`
+          # — a hash of a constant string — passed while the surrounding SELECT
+          # supplied the vocabulary. Mentioning a column is not hashing it.
+          #
+          # So the MATERIAL check now reads the ARGUMENTS OF THE HASH CALL, not
+          # the statement around it: find the first hash-family call, walk the
+          # parentheses to its matching close, drop string literals, and require
+          # the aggregate, the ids and the before-values to appear INSIDE that
+          # span. The mandated shape is
+          #
+          #   SELECT encode(digest(
+          #            string_agg(id::text || ':' || total_profit::text,
+          #                       ',' ORDER BY id),
+          #            'sha256'), 'hex')
+          #     INTO v_actual FROM public.orders WHERE ...;
+          #
+          # string_agg() is required because a digest that is not an ordered
+          # aggregate over the affected rows cannot be a digest OF those rows;
+          # dropping literals first is what kills `digest('id total_profit',
+          # 'sha256')`, whose argument merely spells the column names.
+          #
+          # The table stays a statement-level check — in that shape the FROM
+          # sits outside the hash call, and it was never the vector.
           #
           # Statement-level, not line-level: a SELECT ... INTO routinely spans
           # several lines, so the text before the write is joined and split on
@@ -534,6 +622,28 @@ for file in $ALL_SQL; do
           else
             DIGEST_SRC_WHY=$(awk -v fl="$FIRST_REWRITE_LINE" -v var="$DIGEST_VAR_RE" \
                                  -v tbls="$REWRITE_TABLES_RE" -v cols="$REWRITE_COLS" '
+              # Arguments of the FIRST hash-family call in str, found by walking
+              # parentheses to the matching close. Returns "" when there is no
+              # such call. Callers pass literal-stripped text, so a quote cannot
+              # hide an unbalanced paren.
+              function hash_args(str,   i, ch, depth, start, n) {
+                if (match(str, /(md5|sha224|sha256|sha384|sha512|digest|encode)[ \t]*\(/) == 0) return ""
+                start = RSTART + RLENGTH
+                depth = 1
+                n = length(str)
+                for (i = start; i <= n; i++) {
+                  ch = substr(str, i, 1)
+                  if (ch == "(") depth++
+                  else if (ch == ")") { depth--; if (depth == 0) return substr(str, start, i - start) }
+                }
+                return substr(str, start)
+              }
+              # Does token t appear in str, optionally alias- or schema-qualified
+              # (`o.id`, `public.orders`) but never as part of a longer
+              # identifier (`order_id` must NOT satisfy `id`)?
+              function tok_in(str, t) {
+                return (str ~ ("(^|[^a-z0-9_])([a-z0-9_]+\\.)?" t "([^a-z0-9_]|$)"))
+              }
               FNR >= fl { next }
               { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
               END {
@@ -545,20 +655,32 @@ for file in $ALL_SQL; do
                   if (s !~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") &&
                       s !~ (var "[ \t]*:=")) continue
                   # This statement does assign a hash to the compared variable.
-                  # Now prove the hash is over the material being rewritten.
+                  # Now prove the material being rewritten is INSIDE the hash.
+                  sl = s
+                  gsub(/'"'"'[^'"'"']*'"'"'/, " ", sl)
+                  span = hash_args(sl)
+                  if (span == "") { print "has no parsable hash-call arguments"; exit }
+                  if (span !~ /(^|[^a-z0-9_.])string_agg[ \t]*\(/) {
+                    print "does not hash a string_agg() over the affected rows — a digest that is not an ordered aggregate of those rows is not a digest OF them"; exit
+                  }
+                  # The table stays a statement-level check: in the mandated
+                  # shape the FROM sits OUTSIDE the hash call
+                  # (SELECT encode(digest(string_agg(...))) FROM orders), and it
+                  # was never the bypass vector. What must be inside the hash is
+                  # the MATERIAL — the aggregate, the ids, the before-values.
                   if (s !~ ("(^|[^a-z0-9_.])(public\\.)?(" tbls ")([^a-z0-9_]|$)")) {
                     print "reads none of the rewritten tables (" tbls ")"; exit
                   }
-                  if (s !~ /(^|[^a-z0-9_.])id([^a-z0-9_]|$)/) {
-                    print "does not cover the row ids"; exit
+                  if (!tok_in(span, "id")) {
+                    print "does not cover the row ids inside the hashed expression"; exit
                   }
                   hit = 0
                   for (k = 1; k <= ncol; k++) {
                     if (c[k] == "") continue
-                    if (s ~ ("(^|[^a-z0-9_.])" c[k] "([^a-z0-9_]|$)")) { hit = 1; break }
+                    if (tok_in(span, c[k])) { hit = 1; break }
                   }
                   if (ncol > 0 && c[1] != "" && !hit) {
-                    print "does not cover any column the rewrite assigns (" cols ")"; exit
+                    print "does not cover any column the rewrite assigns (" cols ") inside the hashed expression"; exit
                   }
                   print "OK"; exit
                 }
@@ -591,7 +713,7 @@ for file in $ALL_SQL; do
           ' "$file" | grep -c yes || true)
 
           if [ "$COMPUTED" -eq 0 ] && [ -n "$DIGEST_SRC_WHY" ]; then
-            DIGEST_WHY="the hash assigned to '${DIGEST_VAR}' before line $FIRST_REWRITE_LINE $DIGEST_SRC_WHY — a digest that does not cover the rewritten rows and their before-values authorizes nothing"
+            DIGEST_WHY="the hash assigned to '${DIGEST_VAR}' before line $FIRST_REWRITE_LINE $DIGEST_SRC_WHY — a digest that does not cover the rewritten rows and their before-values authorizes nothing. Required shape: v := encode(digest((SELECT string_agg(t.id::text || ':' || t.<col>::text, ',' ORDER BY t.id) FROM <rewritten table> t WHERE ...), 'sha256'), 'hex')"
           elif [ "$COMPUTED" -eq 0 ]; then
             DIGEST_WHY="the value compared to the digest at line $DIGEST_EXEC_LINE is not one this migration computed — no statement before line $FIRST_REWRITE_LINE assigns a hash (md5/sha256/digest/encode) into '${DIGEST_VAR:-<no identifier>}'"
           elif [ "$RAISE_IN_BRANCH" -eq 0 ]; then
