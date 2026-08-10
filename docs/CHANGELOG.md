@@ -4,10 +4,31 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 
-Settled the canonical-profit question and applied the fix to production. Live measurement showed the order-vs-lines profit disagreement is a stale-cache bug, not a rounding artefact: orders.total_profit is trigger-recomputed and correct, while order_items.profit is a stored snapshot nothing refreshes, leaving 37 of 288 line rows stale across 17 orders. Mason decided the order header is canonical and line profit is derived from it, rounding each line's revenue and cost to whole cents before subtracting so the lines sum to the header exactly. Migration 20260809230500_single_canonical_line_profit.sql implements that, is forward-only, and both migration reviewers returned zero blockers. It was **applied live on 2026-08-09** (Supabase ledger version 20260810000427) after Mason's explicit approval. A post-apply live read confirmed both function bodies changed as written, the trigger now fires on all four money columns, the SECURITY DEFINER flag and search_path are unchanged, and every row count is identical to the pre-apply measurement -- including zero order rows written in the surrounding fifteen minutes, which is the proof that applying it moved no live money. The optional repair that would restate the already-stale line rows is deliberately left commented out and has NOT been run, so the previously-disagreeing orders still disagree; they converge the next time one of their lines is written. Also caught and scrubbed live per-order dollar figures from the new file before commit -- this repository is public.
+Settled the canonical-profit question and applied the fix to production. Live measurement showed the order-vs-lines profit disagreement is a stale-cache bug, not a rounding artefact: orders.total_profit is trigger-recomputed and correct, while order_items.profit is a stored snapshot nothing refreshes, leaving 37 of 288 line rows stale across 17 orders. Mason decided the order header is canonical and line profit is derived from it, rounding each line's revenue and cost to whole cents before subtracting so the lines sum to the header exactly. Migration 20260809230500_single_canonical_line_profit.sql implements that, is forward-only, and both migration reviewers returned zero blockers. It was **applied live on 2026-08-09** (Supabase ledger version 20260810000427) after Mason's explicit approval. A post-apply live read confirmed both function bodies changed as written, the trigger now fires on all four money columns, and the SECURITY DEFINER flag and search_path are unchanged.
 
+That the apply moved no live money rests on the migration's own contents, not on an observation window: every executable statement in the file is DDL or a REVOKE -- `CREATE OR REPLACE FUNCTION`, `DROP`/`CREATE TRIGGER`, `REVOKE` -- and it contains no top-level INSERT, UPDATE, DELETE or TRUNCATE. The only UPDATE in the file sits inside the `trg_recalc_order_totals` body, where it runs on future trigger firings rather than at apply time, and creating a BEFORE trigger does not rewrite existing rows. Two live observations are consistent with that and were recorded as corroboration, not as the proof: every row count matched the pre-apply measurement, and zero order rows were written in the surrounding fifteen minutes. The optional repair that would restate the already-stale line rows is deliberately left commented out and has NOT been run, so the previously-disagreeing orders still disagree; they converge the next time one of their lines is written. Also caught and scrubbed live per-order dollar figures from the new file before commit -- this repository is public.
+
+- **CodeRabbit review, disposition.** Three findings. The two on this changelog were real and are
+  fixed above: the entry listed only a commit whose subject said `NOT applied` while claiming a live
+  apply, and it called a fifteen-minute zero-write window "the proof" of no money movement, which
+  overclaims what an observation window can establish. The third -- *"use bigint cents for the
+  canonical profit path"*, raised against the migration itself -- is **not actioned, deliberately**.
+  `orders.total_profit` and `order_items.profit` have been `numeric` since the original schema
+  (`20260206172436`); converting them to bigint cents is a breaking schema change reaching types,
+  reports, invoicing and commissions, which CodeRabbit itself labels a heavy lift. It is a
+  pre-existing property of the schema, not something this PR introduced, and this migration moves
+  toward whole-cent discipline rather than away from it. PostgreSQL `numeric` is exact decimal
+  arithmetic, so the hard rule this cites -- never use floating-point math for money -- is not
+  violated. The migration is also already applied live and must not be edited. Filed as follow-up
+  work, not a blocker for this PR.
+- **Status transition.** `77a6460c` below is the **pre-apply** state -- it authored the migration
+  and its subject line says so. The live apply happened afterwards and is recorded in two places:
+  Supabase ledger version `20260810000427`, and commit `a6c78f2e`, which updated
+  `docs/reference/migration-history.md`, `KNOWN_ISSUES.md` and `DECISION_LOG.md` to APPLIED LIVE.
+  No commit subject below should be read as the current state of the migration.
 - **Commits this session** (git log origin/main..HEAD):
-  - `77a6460c feat(db): make the order header the single canonical profit -- migration written, NOT applied`
+  - `a6c78f2e docs: record the canonical-profit migration as applied live and verified`
+  - `77a6460c feat(db): make the order header the single canonical profit -- migration written, NOT applied` *(pre-apply)*
   - `c8bac913 Merge origin/main into claude/phone-to-local-sessions-dmqc57`
   - `3219db58 docs: resolve CodeRabbit review on PR #354 -- correct three inaccurate claims`
   - `40b8d9ea docs: record that all five re-issued migrations applied live, including the blocked one`
