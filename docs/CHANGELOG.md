@@ -102,6 +102,31 @@ returned `PHASE3_PRIVATE_ARTIFACT_CONTAINMENT_PASS` at 53,673 paths, 2,307
 commits, and 73,799 candidates with all three session worktrees still in
 place, having failed closed on those same three directories before the change.
 
+## 2026-08-09 — Ordering cycle review (read-only)
+
+Three-phase, adversarially verified review of the full ordering cycle — quote → planned
+booking → order → delivery → invoice — plus inventory holds, commissions, permissions, and
+the reports that read from all of it. 77 confirmed findings (10 HIGH, 36 MED, 31 LOW,
+roughly 69 distinct defects once duplicate findings across finders are merged); 26 further
+claims were refuted and are preserved in full. No application code, schema, migration,
+deployment, or live data was changed.
+
+Four rounds of Codex review corrected the record before it landed. Two corrections were
+material: the report had claimed no database backup exists (false — an off-site weekly
+`pg_dump` and an in-database `pg_cron` snapshot both run), and had claimed phase 3 pulled
+live schema and grants (it did not — it used the 2026-07-27 grants baseline). **No phase
+queried the live database**, so every finding describes on-disk files rather than confirmed
+production state.
+
+`docs/audits/ordering-cycle-review-2026-08-09/REMEDIATION-PLAN.md` proposes the order of
+work and is explicitly **not approved**: confirm backups, pull live function bodies and
+grants to close the evidence gap, Codex triage to produce the reconciled list Mason signs
+off on, then Wave A (money) → Wave B (direct-write lockdown) → Wave C (ungated read RPCs) →
+Wave D (MED maintenance). No remediation has started.
+
+- **Landed via** PR #356.
+- **Migrations touched:** none.
+
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
 PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in bash-safety and live-testdata guards (variant git spellings, redirect terminators, plumbing push commands, DELETE catch-all, setval/nextval and RPC-via-SELECT rules), added regression tests, resolved the changelog merge conflict with main.

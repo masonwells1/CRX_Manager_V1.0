@@ -7,7 +7,9 @@ import localRules from 'eslint-plugin-local-rules';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage', 'CRX_Manager_V1.0', '.claude/worktrees', '.claude/workflows', '.playwright-mcp', 'playwright-report', 'test-results'] },
+  // Archived audit workflow scripts run under the Workflow tool, which allows top-level
+  // `return`; they are not standalone ES modules and must be ignored like .claude/workflows.
+  { ignores: ['dist', 'coverage', 'CRX_Manager_V1.0', '.claude/worktrees', '.claude/workflows', 'docs/audits/**/workflow.mjs', '.playwright-mcp', 'playwright-report', 'test-results'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
