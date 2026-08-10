@@ -22,7 +22,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 181 assertions; the idempotency reference
+- The actor-binding suite passes at 182 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -58,6 +58,8 @@ PR workflow.
   each exposed its matching regression or safe-control failure: unqualified
   Unicode API registration, Unicode named-argument refusal, optional UESCAPE
   parsing, and direct-safe-literal allowance for an otherwise opaque API name.
+- The mixed-branch MERGE decision was independently removed and exposed the
+  exact staged INSERT-branch regression before restoration.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -149,6 +151,17 @@ PR workflow.
   passed 86, exact real-process Unicode probes denied staged SQL and allowed a
   direct safe command, and the commit completed the full pre-commit barrier
   without a hook bypass.
+- The exact-SHA review of `7e7c67c6c8a340fd58c8585a54fc1c533da7252a`
+  found that a safe direct `WHEN MATCHED ... UPDATE` command could hide an
+  opaque staged command in `WHEN NOT MATCHED ... INSERT`. Its real snapshot
+  probe proved the approved base denied the packet while that candidate allowed
+  it, and every companion SQL safety hook also allowed the candidate packet.
+- Fix commit `1fbcc103c2d9445e4fe8edf7561fdd04acb3ec56` makes any
+  pg_cron job MERGE with an INSERT branch review-only while preserving the
+  direct update-only safe control. The restored actor suite passed 182
+  assertions, idempotency remained green at 86, the exact mixed-branch
+  subprocess probe denied, and the commit completed the full pre-commit barrier
+  without a hook bypass.
 
 ## GOVERNED STATUS
 
@@ -177,6 +190,9 @@ PR workflow.
 - The review of `f221c283` returned one HIGH blocker covering Unicode API and
   argument names. It was reproduced and fixed in `572d31aa`; its BLOCKERS
   verdict likewise does not approve the final documentation HEAD.
+- The review of `7e7c67c6` returned one HIGH blocker for a mixed-branch MERGE.
+  It was reproduced and fixed in `1fbcc103`; its BLOCKERS verdict likewise does
+  not approve the final documentation HEAD.
 
 ## REMAINING LANDING WORK
 
@@ -193,7 +209,7 @@ outward-action approval into a receiving task. No database action is needed.
 ## GATES AND BLOCKERS
 
 - The prior `/ship` review cycle reached its three-round cap. Its blocker and the
-  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, `3c0f8e75`, `9c2552ca`, and `f221c283` pg_cron blockers have now been
+  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, `3c0f8e75`, `9c2552ca`, `f221c283`, and `7e7c67c6` pg_cron blockers have now been
   addressed locally, but the branch remains unpublished until a new exact-SHA
   governed review independently returns CLEAN.
 - Historical blocker evidence:
