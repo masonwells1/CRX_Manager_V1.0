@@ -90,15 +90,46 @@ in the hardened version. All closed:
    table it names must get an `ADD COLUMN` in the same migration, i.e. there is genuinely no
    pre-existing population to protect. Anything else is a `VIOLATION`.
 
-**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 23
-synthetic migrations — seventeen real bypass attempts, one waiver, and five shapes that must stay
-silent — runs the actual script over them, and asserts what it printed for each. It runs in
-`npm run test:correction-guards`. The test was itself verified by breaking the guard six different
-ways on purpose — accepting `=`, dropping the block-comment stripper, un-closing the same-line
-function body, dropping the `ADD COLUMN` requirement, dropping the variable binding, and narrowing
-the table list — and watching each mutant turn exactly its own case(s) red, then restoring and
-watching all 23 go green. Per the standing rule that an untested guard is decoration, that
-red-then-green run is the evidence, not a reading of the diff.
+**Hardened a third time after a round-6 review (same day).** Codex `CRX-GUARD-001` found the guard
+still only understood one shape of rewrite and never checked what the digest was actually a hash
+*of*. Four more closed:
+
+9. **Only `UPDATE`/`DELETE` counted as a rewrite.** `INSERT … ON CONFLICT DO UPDATE SET` and
+    `MERGE INTO … WHEN MATCHED THEN UPDATE` rewrite existing rows just as thoroughly and walked
+    straight past the guard. Both are now detected. A *plain* `INSERT` still is not — it adds rows,
+    it does not overwrite an approved population — so ordinary seed migrations stay silent.
+10. **The digest could be a hash of anything.** The guard checked that a hash was assigned into the
+    compared variable, not what the hash covered. `encode(digest('approved', 'sha256'), 'hex')` — a
+    real hash of a constant — passed. The hashing statement must now read one of the tables the
+    migration rewrites, cover the row `id`s, and cover at least one of the columns the rewrite
+    actually assigns. The failure message says which of the three is missing.
+11. **The waiver was still table-level.** "This table gets an `ADD COLUMN`" let a migration add one
+    harmless column and, in the same file, rewrite a pre-existing money column on that same table.
+    The waiver is now **column-level**: every column the rewrite assigns must be a column this
+    migration adds. A waiver on a `DELETE` — which backfills nothing — is a `VIOLATION` outright.
+12. **A one-shot data migration must never be replayed.** (Codex `CRX-DATA-001`.) The applied
+    backfill is not editable, so containment is forward-only:
+    `supabase/baselines/one-shot-migrations.json` registers it, and
+    `scripts/list-post-baseline-migrations.mjs` — whose stdout *is* the disaster-recovery replay plan
+    — withholds registered one-shot data migrations from that plan and says so loudly on stderr.
+    A restore brings the corrected values back with the data; re-running the edit would point it at a
+    different population. `--include-one-shot` exists as a deliberate, reviewed override. Schema and
+    function migrations never belong in the registry — they are idempotent by contract and must keep
+    rebuilding.
+
+**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 31
+synthetic migrations — real bypass attempts, waivers, and shapes that must stay silent — runs the
+actual script over them, and asserts what it printed for each. It runs in
+`npm run test:correction-guards`, as does `scripts/list-post-baseline-migrations.test.mjs`, which
+covers the one-shot replay containment (both were added to that slice, so neither is a guard the
+regression gate cannot see). Each round was verified by breaking the guard on purpose and watching
+each mutant turn exactly its own case(s) red, then restoring and watching everything go green:
+round 5 by accepting `=`, dropping the block-comment stripper, un-closing the same-line function
+body, dropping the `ADD COLUMN` requirement, dropping the variable binding, and narrowing the table
+list; round 7 by removing upsert detection, removing `MERGE` detection, removing the digest's
+table-coverage check, removing its written-column check, removing the column-level waiver check,
+bypassing the one-shot quarantine, and emptying the registry. Per the standing rule that an untested
+guard is decoration, that red-then-green run is the evidence, not a reading of the diff.
 
 **Also settled here.** The permission entry `Read(//c/CRX_Manager/**)` was removed from the tracked
 `.claude/settings.local.json` (Codex finding 2). It had been added by an auto-approved prompt during

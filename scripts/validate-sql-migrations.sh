@@ -340,9 +340,12 @@ for file in $ALL_SQL; do
     # optional `ONLY`, and the table name may sit on three different lines, and
     # the table may be quoted ("public"."orders"). A line-anchored regex misses
     # all of that, so the non-function-body text is flattened into a token
-    # stream and scanned for `UPDATE [ONLY] <tbl>` / `DELETE FROM [ONLY] <tbl>`.
+    # stream and scanned for `UPDATE [ONLY] <tbl>` / `DELETE FROM [ONLY] <tbl>`,
+    # plus the two rewrite shapes that do not spell UPDATE first:
+    # `INSERT INTO <tbl> ... ON CONFLICT ... DO UPDATE` and `MERGE INTO <tbl>`.
     # Quoted string literals are dropped first so prose inside a RAISE NOTICE
-    # cannot fabricate a match. Output is TAB-separated: line, table, text.
+    # cannot fabricate a match.
+    # Output is TAB-separated: line, table, kind, written-columns, text.
     REWRITES=$(awk -v tables="$BUSINESS_ROW_TABLES" '
       {
         raw[FNR] = $0
@@ -378,28 +381,70 @@ for file in $ALL_SQL; do
         if (infn) next
         # Normalize every non-identifier character to a space. This also strips
         # quotes, so "public"."orders" collapses to the token public.orders.
-        gsub(/[^a-z0-9_.]+/, " ", line)
+        # `;` `,` and `=` survive as tokens of their own: statement boundaries
+        # are what bound an UPSERT search, and `,`/`=` are what identify the
+        # columns a SET clause actually assigns.
+        gsub(/;/, " ; ", line)
+        gsub(/,/, " , ", line)
+        gsub(/=/, " = ", line)
+        gsub(/[^a-z0-9_.;,=]+/, " ", line)
         n = split(line, t, / +/)
         for (i = 1; i <= n; i++) {
           if (t[i] != "") { ntok++; tok[ntok] = t[i]; tokln[ntok] = FNR }
         }
       }
+      # Which columns does the statement starting at token p actually assign?
+      # Only tokens sitting directly after SET or a comma AND directly before an
+      # `=` count, so the `=` inside a WHERE, an ON, or a USING is not mistaken
+      # for a written column.
+      function set_cols(p,   k, insetc, out, c) {
+        insetc = 0; out = ""
+        for (k = p; k <= ntok; k++) {
+          if (tok[k] == ";") break
+          if (tok[k] == "set") { insetc = 1; continue }
+          if (tok[k] == "where" || tok[k] == "returning" || tok[k] == "from" ||
+              tok[k] == "when" || tok[k] == "on" || tok[k] == "using") { insetc = 0; continue }
+          if (!insetc) continue
+          if (tok[k + 1] == "=" && (tok[k - 1] == "set" || tok[k - 1] == ",")) {
+            c = tok[k]
+            sub(/^[a-z0-9_]+\./, "", c)
+            if (index(" " out " ", " " c " ") == 0) out = (out == "" ? c : out " " c)
+          }
+        }
+        return out
+      }
       END {
         for (i = 1; i <= ntok; i++) {
-          target = ""
-          if (tok[i] == "update") {
+          target = ""; kind = ""; setp = 0
+          if (tok[i] == "update" && tok[i - 1] != "do") {
             j = i + 1
             if (tok[j] == "only") j++
-            target = tok[j]
+            target = tok[j]; kind = "update"; setp = j + 1
           } else if (tok[i] == "delete" && tok[i + 1] == "from") {
             j = i + 2
             if (tok[j] == "only") j++
-            target = tok[j]
+            target = tok[j]; kind = "delete"
+          } else if (tok[i] == "insert" && tok[i + 1] == "into") {
+            # An INSERT is only a rewrite of EXISTING rows when it carries
+            # ON CONFLICT ... DO UPDATE. A plain INSERT adds rows and is out of
+            # scope for approved-set binding.
+            j = i + 2
+            if (tok[j] == "only") j++
+            for (k = j; k <= ntok && tok[k] != ";"; k++) {
+              if (tok[k] == "do" && tok[k + 1] == "update") { setp = k + 2; break }
+            }
+            if (setp == 0) continue
+            target = tok[j]; kind = "upsert"
+          } else if (tok[i] == "merge" && tok[i + 1] == "into") {
+            j = i + 2
+            if (tok[j] == "only") j++
+            target = tok[j]; kind = "merge"; setp = j + 1
           }
           if (target == "") continue
           sub(/^public\./, "", target)
           if (target ~ ("^(" tables ")$")) {
-            printf "%d\t%s\t%s\n", tokln[i], target, raw[tokln[i]]
+            printf "%d\t%s\t%s\t%s\t%s\n", tokln[i], target, kind,
+                   (setp ? set_cols(setp) : ""), raw[tokln[i]]
           }
         }
       }
@@ -408,6 +453,11 @@ for file in $ALL_SQL; do
     if [ -n "$REWRITES" ]; then
       FIRST_REWRITE_LINE=$(printf '%s\n' "$REWRITES" | head -1 | cut -f1)
       REWRITE_TABLES=$(printf '%s\n' "$REWRITES" | cut -f2 | sort -u)
+      # Alternation of the rewritten tables, and the union of the columns those
+      # rewrites assign. The digest has to be shown to cover THIS material, so
+      # both are handed to the hash check below.
+      REWRITE_TABLES_RE=$(printf '%s\n' "$REWRITE_TABLES" | tr '\n' '|' | sed 's/|$//')
+      REWRITE_COLS=$(printf '%s\n' "$REWRITES" | cut -f4 | tr ' ' '\n' | sort -u | tr '\n' ' ')
 
       # The declared digest, from a comment marker.
       DIGEST_HEX=$(grep -oiE 'APPROVED_SET_DIGEST:[[:space:]]*[0-9a-f]{64}' "$file" \
@@ -464,32 +514,62 @@ for file in $ALL_SQL; do
           DIGEST_WHY="the digest is compared at line $DIGEST_EXEC_LINE, AFTER the first write at line $FIRST_REWRITE_LINE"
         else
           # The hex must be compared against something the migration COMPUTED,
-          # not against another literal — and specifically against THIS variable.
-          # "A hash appears somewhere above" is not a binding: a migration could
-          # hash an unrelated table, then compare a hand-set variable to the
-          # literal and pass. So require the same identifier that sits on the
-          # left of the mismatch to be the one the hash result was assigned to.
+          # not against another literal — and specifically against THIS variable,
+          # over THIS material. "A hash appears somewhere above" is not a
+          # binding: a migration could hash a constant, or an unrelated table,
+          # then compare a hand-set variable to the literal and pass. So the
+          # statement that assigns the hash must (a) assign it to the same
+          # identifier that sits on the left of the mismatch, (b) read one of the
+          # tables being rewritten, (c) cover `id`, and (d) cover at least one of
+          # the columns the rewrite actually assigns — that last one is what
+          # makes it a digest of BEFORE-VALUES rather than of row identity alone.
           #
           # Statement-level, not line-level: a SELECT ... INTO routinely spans
           # several lines, so the text before the write is joined and split on
           # `;`, and the hash call and the assignment must land in one statement.
           DIGEST_VAR_RE=$(printf '%s' "$DIGEST_VAR" | sed 's/[^a-z0-9_]//g')
+          DIGEST_SRC_WHY=""
           if [ -z "$DIGEST_VAR_RE" ]; then
             COMPUTED=0
           else
-            COMPUTED=$(awk -v fl="$FIRST_REWRITE_LINE" -v var="$DIGEST_VAR_RE" '
+            DIGEST_SRC_WHY=$(awk -v fl="$FIRST_REWRITE_LINE" -v var="$DIGEST_VAR_RE" \
+                                 -v tbls="$REWRITE_TABLES_RE" -v cols="$REWRITE_COLS" '
               FNR >= fl { next }
               { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
               END {
+                ncol = split(cols, c, / +/)
                 n = split(buf, st, /;/)
                 for (i = 1; i <= n; i++) {
                   s = st[i]
                   if (s !~ /(md5|sha224|sha256|sha384|sha512|digest|encode)[ \t]*\(/) continue
-                  if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)")) { print "yes"; exit }
-                  if (s ~ (var "[ \t]*:=")) { print "yes"; exit }
+                  if (s !~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") &&
+                      s !~ (var "[ \t]*:=")) continue
+                  # This statement does assign a hash to the compared variable.
+                  # Now prove the hash is over the material being rewritten.
+                  if (s !~ ("(^|[^a-z0-9_.])(public\\.)?(" tbls ")([^a-z0-9_]|$)")) {
+                    print "reads none of the rewritten tables (" tbls ")"; exit
+                  }
+                  if (s !~ /(^|[^a-z0-9_.])id([^a-z0-9_]|$)/) {
+                    print "does not cover the row ids"; exit
+                  }
+                  hit = 0
+                  for (k = 1; k <= ncol; k++) {
+                    if (c[k] == "") continue
+                    if (s ~ ("(^|[^a-z0-9_.])" c[k] "([^a-z0-9_]|$)")) { hit = 1; break }
+                  }
+                  if (ncol > 0 && c[1] != "" && !hit) {
+                    print "does not cover any column the rewrite assigns (" cols ")"; exit
+                  }
+                  print "OK"; exit
                 }
               }
-            ' "$file" | grep -c yes || true)
+            ' "$file")
+            if [ "$DIGEST_SRC_WHY" = "OK" ]; then
+              COMPUTED=1
+              DIGEST_SRC_WHY=""
+            else
+              COMPUTED=0
+            fi
           fi
 
           # Fail-closed: the mismatch branch must abort. Require the RAISE to sit
@@ -510,7 +590,9 @@ for file in $ALL_SQL; do
             }
           ' "$file" | grep -c yes || true)
 
-          if [ "$COMPUTED" -eq 0 ]; then
+          if [ "$COMPUTED" -eq 0 ] && [ -n "$DIGEST_SRC_WHY" ]; then
+            DIGEST_WHY="the hash assigned to '${DIGEST_VAR}' before line $FIRST_REWRITE_LINE $DIGEST_SRC_WHY — a digest that does not cover the rewritten rows and their before-values authorizes nothing"
+          elif [ "$COMPUTED" -eq 0 ]; then
             DIGEST_WHY="the value compared to the digest at line $DIGEST_EXEC_LINE is not one this migration computed — no statement before line $FIRST_REWRITE_LINE assigns a hash (md5/sha256/digest/encode) into '${DIGEST_VAR:-<no identifier>}'"
           elif [ "$RAISE_IN_BRANCH" -eq 0 ]; then
             DIGEST_WHY="the comparison at line $DIGEST_EXEC_LINE does not RAISE EXCEPTION inside its own IF block — a mismatch would not abort"
@@ -526,22 +608,32 @@ for file in $ALL_SQL; do
         # The waiver has exactly one honest use: the migration is populating a
         # column IT JUST ADDED, so there is no pre-existing approved population
         # to bind to. Anything else is the author waiving their own guard, which
-        # is not a guard. So a waiver must name every table AND every named
-        # table must get an ADD COLUMN in this same migration.
-        ADDED_COL_TABLES=$(awk '
+        # is not a guard.
+        #
+        # Column-level, not table-level. "This table gets some ADD COLUMN" is a
+        # bypass: add a harmless column, then rewrite a pre-existing money column
+        # in the same migration and the waiver covers it. So a waiver must name
+        # every table AND every column the rewrite assigns must be a column this
+        # migration adds. A rewrite that assigns nothing identifiable — a DELETE,
+        # or an UPDATE whose SET clause could not be read — is never a backfill.
+        ADDED_COLS=$(awk '
           { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
           END {
             n = split(buf, st, /;/)
             for (i = 1; i <= n; i++) {
               s = st[i]
-              if (s !~ /alter[ \t]+table/) continue
-              if (s !~ /add[ \t]+column/) continue
               gsub(/"/, "", s)
-              if (match(s, /alter[ \t]+table[ \t]+(if[ \t]+exists[ \t]+)?(only[ \t]+)?[a-z0-9_.]+/)) {
-                t = substr(s, RSTART, RLENGTH)
-                sub(/.*[ \t]/, "", t)
-                sub(/^public\./, "", t)
-                print t
+              if (s !~ /alter[ \t]+table/) continue
+              if (!match(s, /alter[ \t]+table[ \t]+(if[ \t]+exists[ \t]+)?(only[ \t]+)?[a-z0-9_.]+/)) continue
+              t = substr(s, RSTART, RLENGTH)
+              sub(/.*[ \t]/, "", t)
+              sub(/^public\./, "", t)
+              rest = s
+              while (match(rest, /add[ \t]+column[ \t]+(if[ \t]+not[ \t]+exists[ \t]+)?[a-z0-9_]+/)) {
+                c = substr(rest, RSTART, RLENGTH)
+                sub(/.*[ \t]/, "", c)
+                print t "\t" c
+                rest = substr(rest, RSTART + RLENGTH)
               }
             }
           }
@@ -549,14 +641,25 @@ for file in $ALL_SQL; do
 
         MISSING_TBL=""
         UNADDED_TBL=""
-        while IFS= read -r t; do
-          [ -z "$t" ] && continue
-          if ! echo "$OPT_OUT" | grep -qiE "(^|[^a-z0-9_])${t}([^a-z0-9_]|$)"; then
-            MISSING_TBL="$MISSING_TBL $t"
-          elif ! printf '%s\n' "$ADDED_COL_TABLES" | grep -qxF "$t"; then
-            UNADDED_TBL="$UNADDED_TBL $t"
+        while IFS=$'\t' read -r r_ln r_tbl r_kind r_cols r_raw; do
+          [ -z "$r_tbl" ] && continue
+          if ! echo "$OPT_OUT" | grep -qiE "(^|[^a-z0-9_])${r_tbl}([^a-z0-9_]|$)"; then
+            case " $MISSING_TBL " in
+              *" $r_tbl "*) ;;
+              *) MISSING_TBL="$MISSING_TBL $r_tbl" ;;
+            esac
+            continue
           fi
-        done <<< "$REWRITE_TABLES"
+          if [ -z "$r_cols" ]; then
+            UNADDED_TBL="$UNADDED_TBL ${r_tbl}(line ${r_ln}: ${r_kind} assigns no column this migration adds)"
+            continue
+          fi
+          for r_col in $r_cols; do
+            if ! printf '%s\n' "$ADDED_COLS" | grep -qxF "$(printf '%s\t%s' "$r_tbl" "$r_col")"; then
+              UNADDED_TBL="$UNADDED_TBL ${r_tbl}.${r_col}"
+            fi
+          done
+        done <<< "$REWRITES"
         if [ -n "$MISSING_TBL" ]; then
           echo "VIOLATION: $file"
           echo "  APPROVED_SET_DIGEST: NOT-REQUIRED does not name every table it waives."
@@ -567,8 +670,8 @@ for file in $ALL_SQL; do
         elif [ -n "$UNADDED_TBL" ]; then
           echo "VIOLATION: $file"
           echo "  APPROVED_SET_DIGEST: NOT-REQUIRED is only for backfilling a column this"
-          echo "  migration adds. These tables are rewritten but get no ADD COLUMN here:$UNADDED_TBL"
-          echo "  Existing rows are being rewritten — bind them with an approved-set digest."
+          echo "  migration adds. These writes hit columns it does not add:$UNADDED_TBL"
+          echo "  Pre-existing values are being rewritten — bind them with an approved-set digest."
           echo ""
           VIOLATIONS=$((VIOLATIONS + 1))
         else
@@ -583,7 +686,7 @@ for file in $ALL_SQL; do
       else
         echo "VIOLATION: $file"
         echo "  Rewrites existing business rows without binding to the approved set:"
-        printf '%s\n' "$REWRITES" | awk -F'\t' '{ printf "    line %s: %s\n", $1, $3 }'
+        printf '%s\n' "$REWRITES" | awk -F'\t' '{ printf "    line %s (%s): %s\n", $1, $3, $5 }'
         [ -n "$DIGEST_WHY" ] && echo "  Digest present but not enforced: $DIGEST_WHY"
         echo "  Counts are not identity. Add to the migration EITHER:"
         echo "    -- APPROVED_SET_DIGEST: <sha256 of the sorted approved ids + before-values>"

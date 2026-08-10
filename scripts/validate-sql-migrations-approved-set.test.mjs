@@ -29,8 +29,14 @@ const OTHER_HEX = 'b'.repeat(64);
  * hex characters, and an md5 fixture would compare a 32-character value to it
  * and could never match. The fixture has to be a migration someone could
  * actually ship, or it tests the guard against a shape that does not exist.
+ *
+ * The hashed material is `id || ':' || total_profit` — the row identity AND the
+ * before-value of the column being rewritten. Identity alone is not an approved
+ * set: a population with the same ids but different money would still pass.
  */
-const HASH_EXPR = `encode(digest(string_agg(id::text, ',' ORDER BY id), 'sha256'), 'hex')`;
+const HASH_EXPR = `encode(digest(string_agg(id::text || ':' || total_profit::text, ',' ORDER BY id), 'sha256'), 'hex')`;
+/** A real hash, correctly assigned — but over a constant. Binds nothing. */
+const CONST_HASH_EXPR = `encode(digest('approved', 'sha256'), 'hex')`;
 const GOOD_DIGEST_BLOCK = `DO $$
 DECLARE actual text;
 BEGIN
@@ -152,6 +158,70 @@ const CASES = [
       `UPDATE public.orders SET total_profit = 0;\n`,
   },
   {
+    // An UPSERT never spells UPDATE first, but DO UPDATE rewrites rows that
+    // already exist — the same money mutation wearing a different keyword.
+    name: 'INSERT ... ON CONFLICT DO UPDATE rewrites existing rows',
+    expect: 'violation',
+    sql:
+      `INSERT INTO public.orders (id, total_profit) VALUES (1, 0)\n` +
+      `ON CONFLICT (id) DO UPDATE SET total_profit = EXCLUDED.total_profit;\n`,
+  },
+  {
+    name: 'MERGE INTO ... WHEN MATCHED THEN UPDATE rewrites existing rows',
+    expect: 'violation',
+    sql:
+      `MERGE INTO public.orders t\nUSING (SELECT 1 AS id) s ON t.id = s.id\n` +
+      `WHEN MATCHED THEN UPDATE SET total_profit = 0;\n`,
+  },
+  {
+    // A real hash, correctly assigned to the compared variable — of a constant.
+    // It proves the migration can call digest(), and nothing else.
+    name: 'hash of a constant, not of the rows being rewritten',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
+      `  SELECT ${CONST_HASH_EXPR} INTO actual;\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n    RAISE EXCEPTION 'drift';\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    name: 'hash of an unrelated table',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.app_settings;\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n    RAISE EXCEPTION 'drift';\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    name: 'hash covers row ids but not the column being rewritten',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
+      `  SELECT encode(digest(string_agg(id::text, ',' ORDER BY id), 'sha256'), 'hex')\n` +
+      `    INTO actual FROM public.orders;\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n    RAISE EXCEPTION 'drift';\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0;\nEND $$;\n`,
+  },
+  {
+    // Adds a harmless column, then rides that waiver into a pre-existing money
+    // column. Table-level waiver checking cannot see this; column-level can.
+    name: 'waiver adds one column but rewrites a pre-existing money column too',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: NOT-REQUIRED (orders) - backfills a column this migration adds\n` +
+      `ALTER TABLE public.orders ADD COLUMN note text;\n` +
+      `UPDATE public.orders SET note = 'x', total_profit = 0;\n`,
+  },
+  {
+    name: 'waiver on a DELETE, which backfills nothing',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: NOT-REQUIRED (invoice_items) - cleanup\n` +
+      `ALTER TABLE public.invoice_items ADD COLUMN note text;\n` +
+      `DELETE FROM public.invoice_items WHERE id IS NOT NULL;\n`,
+  },
+  {
     name: 'inventory is covered, not just the ordering tables',
     expect: 'violation',
     sql: `UPDATE public.inventory SET quantity_on_hand = 0;\n`,
@@ -194,6 +264,13 @@ const CASES = [
     name: 'a non-business table is not in scope',
     expect: 'silent',
     sql: `UPDATE public.app_settings SET value = 'x';\n`,
+  },
+  {
+    // A plain INSERT adds rows; it rewrites no approved population. Flagging it
+    // would make the guard noise, and noise is how a guard gets switched off.
+    name: 'a plain INSERT with no ON CONFLICT DO UPDATE is not a rewrite',
+    expect: 'silent',
+    sql: `INSERT INTO public.orders (id, total_profit) VALUES (1, 0);\n`,
   },
 ];
 
