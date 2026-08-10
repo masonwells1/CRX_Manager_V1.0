@@ -9,6 +9,37 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-10 — Data migrations bind approval to a digest, not to row counts
+
+**Source:** Codex exact-SHA review of PR #364, 2026-08-10 (`CODEX_PROOF_VERDICT: BLOCKERS`, finding 1).
+
+**Background.** `20260810022500_backfill_stale_line_profit.sql` gates its write on three
+cardinalities — 37 rows, 17 orders, 11 fractional-price rows — and only then captures the ids it
+writes. Codex' objection is that cardinalities are not identity: a different population that happens
+to have the same three counts would satisfy the guard, and the migration would rewrite rows nobody
+approved.
+
+**Decision.** The objection is accepted as a **forward-looking rule** and is *not* retrofitted to
+that migration, which was already applied live (ledger version `20260810025159`). Editing an applied
+migration is forbidden by `AGENTS.md`, and Codex' own remediation text says the same: if it has
+already applied, do not edit it, reconcile forward. The concrete risk cannot now materialise on that
+file either — it early-returns on zero stale rows, and the count guard raises `APPROVED_SET_DRIFTED`
+rather than writing, so a re-run fails closed instead of touching an unapproved population.
+
+**Operative rule.** Any future migration that rewrites existing business rows must bind its approval
+to a **digest of the sorted approved record ids plus the material before-values** (for money, the
+stored cents), asserted before the write. Row counts, order counts and similar cardinalities may
+accompany that digest but may never be the only thing standing between an approval and a write.
+
+**Also settled here.** The permission entry `Read(//c/CRX_Manager/**)` was removed from the tracked
+`.claude/settings.local.json` (Codex finding 2). It had been added by an auto-approved prompt during
+the backfill work. Because it is recursive, standing, and *tracked*, it silently granted every future
+session in this repository read access to `C:\CRX_Manager\.env` — a real file holding live keys —
+without an approval prompt. Rule: never commit a recursive `Read()` grant rooted above the checkout;
+scope permission grants to tracked source paths.
+
+---
+
 ## 2026-08-09 — Stale line-level profit is repaired to match the canonical rule
 
 **Source:** Mason in chat, 2026-08-09. Migration `20260810022500_backfill_stale_line_profit.sql`.
