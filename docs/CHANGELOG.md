@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-09 — Backfilled stale line-level profit through the canonical live trigger
+
+Backfilled stale line-level profit through the canonical live trigger. Applied live as ledger version 20260810025159 after both sanctioned gpt-5.6-sol high-effort reviewers returned CLEAN against the exact SQL hash. Data-only, no new formula: the migration re-writes total_price to itself on the affected primary keys so the existing BEFORE trigger re-derives each value, keeping the trigger the single definition of the rule. Reporting correction only; AR is driven by invoices.balance_cents and is untouched. Post-apply readback confirmed zero remaining disagreeing lines, every repaired order header agreeing with its own lines, and an aggregate change matching the pre-apply measurement exactly. Deliberate residuals recorded in docs/manual/KNOWN_ISSUES.md.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `a0a69a62 fix(money): backfill stale line-level profit through the canonical trigger`
+  - `0528fe28 Merge remote-tracking branch 'origin/main' into claude/session-orchestration-setup-d73e6c`
+  - `8ec20cc0 test: give the two ExcelJS workbook round-trip tests explicit timeouts`
+  - `1c880b0c docs(changelog): redact live financial detail from the 2026-08-09 entry`
+  - `a33778d0 Merge branch 'main' into claude/session-orchestration-setup-d73e6c`
+  - `bc094c43 docs(changelog): record 2026-08-09 live profit rounding repair and dependency merges`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260810025159_backfill_stale_line_profit.sql`
+
 ## 2026-08-09 — Line-profit precision repair (live), dependency updates, and a public-repo disclosure guard
 
 Orchestration session. No application code was authored here. Two durable outcomes: one
