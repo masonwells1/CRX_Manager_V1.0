@@ -66,6 +66,21 @@ environment, not the check. The suite also pins the number of CI checkout steps
 so each new one gets a least-privilege review, and this job's checkout drops the
 GitHub token like the other four.
 
+Running on Windows for the first time then exposed a second dormant case. One
+assertion checks that a forbidden `private-artifacts` name fails closed before
+any reparse point is dereferenced, and it built that link as a junction aimed at
+a file. A junction is a directory-only reparse point, so aimed at a file it is a
+broken link Git cannot open (`could not open directory ... Not a directory`),
+the entry never reaches the name rule, and the assertion fails. It had gone
+unnoticed because it sat behind a Windows *file* symlink whose creation needs a
+privilege an ordinary account lacks — the resulting `EPERM` skipped the block on
+every Windows machine except an elevated CI runner. The junction case now stands
+in its own block and aims at a directory, so it executes on an ordinary Windows
+account too; it was confirmed red against the old shape and green against the new
+one on a non-elevated machine. The guard is again unchanged, and was verified
+directly: a junction pointing at a real directory of packets — the shape that
+could actually carry private data — was already rejected.
+
 Raised by CodeRabbit on PR #359 and deferred there only because a new commit
 would have discarded that PR's banked Vercel status while the daily build
 quota was exhausted.

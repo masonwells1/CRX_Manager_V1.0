@@ -888,8 +888,21 @@ git() { return 0; }
     symlinkSync(ignoredLinkTarget, path.join(ignoredLinkRepo, 'ordinary-tool-link.ignored'), 'file');
     mkdirSync(path.join(ignoredLinkRepo, 'ordinary-bin')); symlinkSync(ignoredLinkTarget, path.join(ignoredLinkRepo, 'ordinary-bin', 'tool'), 'file');
     await fixtureContainment(ignoredLinkRepo);
-    symlinkSync(ignoredLinkTarget, path.join(ignoredLinkRepo, 'private-artifacts'), 'junction');
-    await assert.rejects(() => fixtureContainment(ignoredLinkRepo), error => error.message === 'private Phase 3C artifact containment failure: private-artifacts (private-artifacts directory)');
+  } catch (error) { if (!['EPERM', 'EACCES', 'UNKNOWN'].includes(error?.code)) throw error; }
+  // The forbidden-name rule fires before any reparse point is dereferenced.
+  // This assertion stands apart from the tool-link block above because creating
+  // a Windows file symlink needs a privilege an ordinary account lacks: folded
+  // into that block, its EPERM skipped this case on every Windows machine
+  // except an elevated CI runner. A junction is a directory-only reparse point,
+  // so the target must be a directory for Git to enumerate the entry at all —
+  // aimed at a file it is a broken junction Git cannot open. The target holds
+  // only ordinary content, so the rejection is attributable to the
+  // `private-artifacts` name alone. Git reports the link itself on POSIX and
+  // the walked-through path on win32; both must fail closed.
+  const forbiddenLinkTarget = path.join(temp, 'ordinary-forbidden-link-target'); mkdirSync(forbiddenLinkTarget, { recursive: true }); writeFileSync(path.join(forbiddenLinkTarget, 'ordinary-content.txt'), 'ordinary target\n');
+  try {
+    symlinkSync(forbiddenLinkTarget, path.join(ignoredLinkRepo, 'private-artifacts'), 'junction');
+    await assert.rejects(() => fixtureContainment(ignoredLinkRepo), error => /^private Phase 3C artifact containment failure: private-artifacts(\/ordinary-content\.txt)? \(private-artifacts directory\)$/.test(error.message));
   } catch (error) { if (!['EPERM', 'EACCES', 'UNKNOWN'].includes(error?.code)) throw error; }
   const embeddedRepo = fixtureRepo('containment-ignored-embedded-repository'); writeFileSync(path.join(embeddedRepo, '.gitignore'), 'nested/\n'); git(embeddedRepo, ['add', '.gitignore']); git(embeddedRepo, ['commit', '--quiet', '-m', 'ignore nested repository']); const nestedRepo = path.join(embeddedRepo, 'nested'); git(embeddedRepo, ['init', '--quiet', nestedRepo]); writeFileSync(path.join(nestedRepo, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
   await assert.rejects(() => fixtureContainment(embeddedRepo), /nested\/? \(embedded Git repository\)/);
