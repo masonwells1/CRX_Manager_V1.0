@@ -97,7 +97,7 @@ VITE_SENTRY_DSN=https://your-sentry-dsn (optional)
 - [ ] All TODO comments addressed
 
 ### Testing
-- [ ] All unit tests pass (`npm test` — 2,005 tests)
+- [ ] All unit tests pass (`npm test`)
 - [ ] All E2E tests pass (`npm run test:e2e`)
 - [ ] Manual testing completed on staging
 - [ ] Mobile responsiveness verified
@@ -119,8 +119,10 @@ VITE_SENTRY_DSN=https://your-sentry-dsn (optional)
 
 ### Supabase Edge Function Secrets
 
-The following secrets **must** be set on your Supabase project before
-Edge Functions (`create-user`, `process-blend-ticket`, `process-document`) will work in production.
+Seven JWT-protected Edge Functions were active in production when verified on 2026-08-09:
+`create-user`, `setup-blend-tickets-storage`, `process-blend-ticket`, `process-document`,
+`send-email`, `reset-user-password`, and `epa-lookup`. The function-specific secrets below must be
+present wherever the corresponding function uses them.
 
 | Secret | Purpose | How to set |
 |--------|---------|------------|
