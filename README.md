@@ -50,7 +50,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 | `npm run dev` | Start development server (port 5173) |
 | `npm run build` | Build for production |
 | `npm run preview` | Preview production build locally |
-| `npm test` | Run all 2,005 unit tests |
+| `npm test` | Run the full unit-test suite |
 | `npm run test:watch` | Run unit tests in watch mode |
 | `npm run typecheck` | Check TypeScript errors |
 | `npm run lint` | Run ESLint |
@@ -106,7 +106,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 
 ## Database
 
-96 tables (+2 views) in Supabase PostgreSQL with Row Level Security (RLS) on all tables. ~225 RPC functions. 455 migration files in `supabase/migrations/`. 6 Edge Functions for user creation, OCR processing, email, and storage setup.
+Production currently has 156 public base tables (+2 views), 440 callable function overloads across 432 names, and 128 trigger-function overloads. The repository contains 863 migration files, including local candidates that may not yet be live. Seven JWT-protected Edge Functions are active in production.
 
 See [CLAUDE.md](./CLAUDE.md) for the complete table list, RLS policy matrix, and RPC function inventory.
 
@@ -126,9 +126,9 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environme
 
 ## Current State
 
-- **68 pages**, fully lazy-loaded
-- **2,005 unit tests** passing (139 test files, 70 skipped) + **94 E2E spec files**
-- **96 database tables** (+2 views), ~225 RPC functions, 455 migrations
+- **80 pages**, fully lazy-loaded across **88 routes**
+- **323 unit-test files** + **94 E2E spec files** (pass totals come from the current test run)
+- **156 live database tables** (+2 views), 440 callable function overloads, 863 migration files on disk
 - **0 ESLint errors**, 0 TypeScript errors
 - **Pre-commit hook** blocks commits if build or tests fail
 - **Deployed to Vercel** at [croprxsolutions.app](https://croprxsolutions.app) (live)
