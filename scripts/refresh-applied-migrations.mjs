@@ -57,9 +57,36 @@ try {
 }
 
 // Locate the row array wherever the MCP response wraps it.
+// Accept an array only if it actually looks like ledger rows. Taking the first
+// array reached would happily adopt some unrelated list of strings and turn it
+// into "applied migration names". (CodeRabbit, PR #348.)
+// A bare array of strings is NOT enough. `["note", "20260808170000"]` passed the
+// first version of this predicate and then satisfied the timestamp check below,
+// so findRows could adopt some unrelated list and write it out as ordering
+// evidence. (CodeRabbit, PR #354.) Strings must now look like an actual
+// migration identifier, and objects must carry a real ledger field.
+const LEDGER_NAME = /^(?:.*\/)?\d{14}(?:_[^/]*)?(?:\.sql)?$/;
+
+function looksLikeLedgerRow(r) {
+  if (typeof r === "string") return LEDGER_NAME.test(r.trim());
+  if (!r || typeof r !== "object") return false;
+  if (!("name" in r) && !("version" in r)) return false;
+  // The canonical ledger row is version-keyed; a 14-digit version is the one
+  // field that cannot be mistaken for arbitrary data.
+  const version = (r.version ?? "").toString().trim();
+  if (/^\d{14}$/.test(version)) return true;
+  // Tolerate a version-less row only when its name is itself migration-shaped.
+  return LEDGER_NAME.test((r.name ?? "").toString().trim());
+}
+
+function looksLikeLedgerRows(arr) {
+  if (!arr.length) return false;
+  return arr.every(looksLikeLedgerRow);
+}
+
 function findRows(node, depth = 0) {
   if (depth > 6) return null;
-  if (Array.isArray(node)) return node;
+  if (Array.isArray(node)) return looksLikeLedgerRows(node) ? node : null;
   if (node && typeof node === "object") {
     for (const key of ["applied", "result", "rows", "data"]) {
       if (key in node) {
@@ -111,6 +138,21 @@ if (withoutTimestamp.length) {
     `refresh-applied-migrations: ${withoutTimestamp.length} row(s) carry no 14-digit timestamp ` +
     `and cannot constrain ordering, e.g. ${withoutTimestamp.slice(0, 3).join(", ")}`
   );
+}
+
+// A snapshot where NOTHING is timestamped is worse than no snapshot: it is
+// fresh and non-empty, so it satisfies the guard's presence and freshness
+// checks, and then the ordering comparison has nothing to work with. Refuse to
+// write it rather than manufacture evidence that answers no question.
+// (CodeRabbit, PR #348.)
+if (!applied.some((n) => TS.test(n))) {
+  console.error(
+    "refresh-applied-migrations: not one row carries a 14-digit migration timestamp, so this " +
+    "snapshot could not constrain ordering at all. Refusing to write it — a snapshot that looks " +
+    "valid but answers nothing would silently disable the guard. Check that the query selected " +
+    "both `version` and `name` from supabase_migrations.schema_migrations."
+  );
+  process.exit(1);
 }
 
 if (!applied.length) {
